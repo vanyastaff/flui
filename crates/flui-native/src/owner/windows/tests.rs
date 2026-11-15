@@ -174,7 +174,7 @@ fn created(hwnd: HWND) -> CreatedWindow {
         hwnd,
         identity: WindowIdentity::mint_from(&std::sync::atomic::AtomicU64::new(1)),
         client_size: (0, 0),
-        scale: super::WindowScale::new(96),
+        scale: super::WindowScale::unscaled(),
         delivery: Arc::new(crate::owner::window_delivery::WindowDelivery::new(
             flui_testing::window_handler::RecordingWindowHandler::new(),
             flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
@@ -488,17 +488,29 @@ fn a_window_opens_at_one_dpi_its_hooks_share() {
         (0, 0.0, 96),
     ] {
         assert_eq!(
-            super::window_table::opening_dpi(reported, placed_at),
+            super::window_table::opening_dpi(reported, placed_at).get(),
             dpi,
             "reported {reported}, placed at {placed_at}"
         );
     }
     let scale = super::WindowScale::at_open(0, 1.5);
     let read_by_a_hook = scale.clone();
-    assert_eq!(scale.rescale(192), 1.5);
+    assert_eq!(scale.rescale(192), Some(1.5));
     assert_eq!(
         read_by_a_hook.scale(),
         2.0,
         "a hook reads the window's new scale"
     );
+}
+
+/// A DPI of zero is no DPI: a window told to take it keeps the one it has,
+/// so its scale stays a number the window's rectangles can be divided by.
+#[test]
+fn a_window_takes_no_dpi_of_zero() {
+    let scale = super::WindowScale::at_open(0, 1.5);
+    assert_eq!(scale.rescale(0), None);
+    assert_eq!(scale.dpi(), 144, "the DPI it had");
+    assert_eq!(scale.scale(), 1.5);
+    assert_eq!(scale.rescale(96), Some(1.5), "and takes the next real one");
+    assert_eq!(scale.scale(), 1.0);
 }

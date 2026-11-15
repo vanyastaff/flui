@@ -36,10 +36,13 @@ fn metrics(width: i32, scale: f64) -> WindowMetrics {
 /// A shown, focused, running window at 800×600 and scale 1.
 fn shown() -> WindowState {
     let size = Size::new(800.0, 600.0);
-    WindowState::new(WindowGeometry::new(None, size), size)
-        .with_visible(true)
-        .with_focused(true)
-        .with_metrics(Some(metrics(800, 1.0)))
+    WindowState::new(
+        WindowGeometry::try_new(None, size).expect("a finite size"),
+        flui_platform::WindowExtent::try_new(size).expect("a finite size"),
+    )
+    .with_visible(true)
+    .with_focused(true)
+    .with_metrics(Some(metrics(800, 1.0)))
 }
 
 /// The events each snapshot of `snapshots` brings, after the first as seed.

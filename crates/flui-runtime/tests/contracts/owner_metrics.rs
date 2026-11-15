@@ -2462,8 +2462,9 @@ impl flui_platform::WindowControl for SharedControl {
         let (position, revision) = *self.0.position.lock().expect("position");
         let size = Size::new(40.0, 40.0);
         let mut state = flui_platform::WindowState::new(
-            flui_platform::WindowGeometry::new(Some(position), size),
-            size,
+            flui_platform::WindowGeometry::try_new(Some(position), size)
+                .expect("a finite rectangle"),
+            flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         );
         state.revision = revision;
         state

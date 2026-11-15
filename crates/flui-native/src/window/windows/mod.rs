@@ -222,6 +222,7 @@ pub(crate) mod material {
         use super::{SystemBackdrop, below_the_gate, gate};
         use crate::version::gate::testing::row;
         use crate::version::gate::windows::WindowsBuild;
+        use crate::window::capabilities::CapabilityReading as _;
 
         /// One row per build around the gate: below it a window has no
         /// material and admission refuses one with `NotOnThisDevice`; from it
@@ -253,7 +254,7 @@ pub(crate) mod material {
                     }
                     _ => false,
                 };
-                if capabilities.material != wanted || !answer_holds {
+                if capabilities.material.availability() != wanted || !answer_holds {
                     failures.push(format!(
                         "{build}: material {:?}, admission {admission:?}, wanted {wanted:?}",
                         capabilities.material

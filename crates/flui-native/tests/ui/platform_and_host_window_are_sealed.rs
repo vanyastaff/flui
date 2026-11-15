@@ -136,7 +136,7 @@ impl PlatformWindow for OutsideWindow {
     fn request_redraw(&self) {}
 
     fn state(&self) -> WindowState {
-        WindowState::new(WindowGeometry::new(None, Size::default()), Size::default())
+        WindowState::new(WindowGeometry::EMPTY, flui_platform::WindowExtent::ZERO)
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {

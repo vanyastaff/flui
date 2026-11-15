@@ -136,11 +136,21 @@ fn a_refused_command_is_never_queued() {
     let rig_all = rig(&all, 3);
     assert_eq!(
         rig_all.handle.set_size(Size::new(f64::NAN, 10.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
+            flui_platform::InvalidGeometry::Extent {
+                width: f64::NAN,
+                height: 10.0
+            }
+        )))
     );
     assert_eq!(
         rig_all.handle.set_position(Point::new(f64::INFINITY, 0.0)),
-        Err(SubmitError::Admission(AdmissionError::InvalidGeometry))
+        Err(SubmitError::Admission(AdmissionError::InvalidGeometry(
+            flui_platform::InvalidGeometry::Position {
+                x: f64::INFINITY,
+                y: 0.0
+            }
+        )))
     );
     assert_eq!(
         rig_none.wakes.get() + rig_all.wakes.get(),
@@ -172,7 +182,7 @@ fn a_material_goes_through_the_window_queue() {
     assert_eq!(mock.materials(), [flui_platform::WindowMaterial::System]);
 
     let mut without = WindowCapabilities::ALL;
-    without.material = flui_platform::Availability::Unavailable;
+    without.material = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     let none = headless_window(without);
     let rig_none = rig(&none, 22);
     assert_eq!(
@@ -203,7 +213,7 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
         .expect("accepted");
 
     let mut revised = WindowCapabilities::ALL;
-    revised.maximizes = flui_platform::Availability::Unavailable;
+    revised.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     host.as_any()
         .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless window")
@@ -237,7 +247,7 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
 /// ends the batch.
 fn a_refused_close_keeps_the_work_queued_behind_it() {
     let mut cannot_close = WindowCapabilities::ALL;
-    cannot_close.closes = flui_platform::Availability::Unavailable;
+    cannot_close.closes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     let window = headless_window(cannot_close);
     let rig = rig_with(
         &window,
@@ -322,6 +332,11 @@ struct RecordingWindow {
     applied: Mutex<Vec<WindowCommand>>,
     fail_titles: bool,
     during_apply: Option<fn()>,
+    /// How many times its state was read.
+    reads: Cell<usize>,
+    /// Run once from inside the next read of its state, as a window that
+    /// calls its handler from a read does.
+    on_read: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl PlatformWindow for RecordingWindow {
@@ -341,13 +356,17 @@ impl PlatformWindow for RecordingWindow {
         Ok(())
     }
     fn state(&self) -> WindowState {
-        WindowState::new(
-            flui_platform::WindowGeometry::new(None, Size::new(10.0, 10.0)),
-            Size::new(10.0, 10.0),
-        )
-        .with_visible(true)
-        .with_focused(true)
-        .with_capabilities(WindowCapabilities::ALL)
+        self.reads.set(self.reads.get() + 1);
+        let on_read = self.on_read.borrow_mut().take();
+        if let Some(on_read) = on_read {
+            on_read();
+        }
+        let extent =
+            flui_platform::WindowExtent::try_new(Size::new(10.0, 10.0)).expect("a finite extent");
+        WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
+            .with_visible(true)
+            .with_focused(true)
+            .with_capabilities(WindowCapabilities::ALL)
     }
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         let command = command.against(&self.state().capabilities)?;
@@ -379,6 +398,8 @@ fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Rc<RecordingWindo
         applied: Mutex::new(Vec::new()),
         fail_titles,
         during_apply,
+        reads: Cell::new(0),
+        on_read: RefCell::new(None),
     })
 }
 
@@ -500,6 +521,58 @@ fn a_window_closed_between_the_request_and_the_lookup_has_no_handle() {
         rig.queues.handle_for(address(14)).is_none(),
         "closed, though its source has not been dropped yet"
     );
+}
+
+/// Looking a window up asks only whether it is open, and reads nothing of it.
+/// A window is an open trait, and one may run its handler from inside a read
+/// of its state; that handler is the application's code and may come back to
+/// the queues (a state change that opens a window registers its queue), which
+/// the lookup holds borrowed.
+fn looking_a_window_up_reads_nothing_of_it() {
+    let window = recording(false, None);
+    let as_platform: Rc<dyn PlatformWindow> = window.clone();
+    let queues = Rc::new(WindowCommandQueues::default());
+    let source = window_source(
+        &as_platform,
+        address(21),
+        &queues,
+        Rc::new(|| true),
+        Rc::new(CloseRequestRouter::new()),
+    );
+    let opened_from_a_read = Rc::new(RefCell::new(None));
+    let (reentered, kept) = (Rc::clone(&queues), Rc::clone(&opened_from_a_read));
+    let reads_before = window.reads.get();
+    *window.on_read.borrow_mut() = Some(Box::new(move || {
+        let another: Rc<dyn PlatformWindow> = recording(false, None);
+        *kept.borrow_mut() = Some(window_source(
+            &another,
+            address(22),
+            &reentered,
+            Rc::new(|| true),
+            Rc::new(CloseRequestRouter::new()),
+        ));
+    }));
+
+    assert!(
+        queues.handle_for(address(21)).is_some(),
+        "the open window has a handle"
+    );
+    assert_eq!(
+        window.reads.get(),
+        reads_before,
+        "the lookup read the window's state"
+    );
+    assert!(
+        opened_from_a_read.borrow().is_none(),
+        "nothing ran from inside the lookup"
+    );
+    // A read by the handle's owner, outside the queues' borrow, may run it.
+    let _ = source.handle().state();
+    assert!(
+        opened_from_a_read.borrow().is_some(),
+        "the window's read runs its handler"
+    );
+    assert!(queues.handle_for(address(22)).is_some());
 }
 
 fn a_dead_window_takes_its_queued_commands_with_it() {
@@ -738,6 +811,10 @@ fn window_handle_contract() {
             (
                 "a_window_closed_between_the_request_and_the_lookup_has_no_handle",
                 a_window_closed_between_the_request_and_the_lookup_has_no_handle as fn(),
+            ),
+            (
+                "looking_a_window_up_reads_nothing_of_it",
+                looking_a_window_up_reads_nothing_of_it as fn(),
             ),
             (
                 "a_dead_window_takes_its_queued_commands_with_it",

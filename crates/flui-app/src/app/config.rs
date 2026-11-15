@@ -96,10 +96,10 @@ pub struct AppConfig {
     pub size: Size,
 
     /// Minimum window size.
-    pub min_size: Option<Size>,
+    pub min_size: Option<flui_platform::WindowExtent>,
 
     /// Maximum window size.
-    pub max_size: Option<Size>,
+    pub max_size: Option<flui_platform::WindowExtent>,
 
     /// Initial outer position in global logical pixels; `None` lets the system
     /// place the window. A platform that cannot place a window ignores it.
@@ -454,24 +454,34 @@ impl AppConfig {
     }
 
     /// Set the initial window size: the content area, in logical pixels, which
-    /// is what the window reports as its content size once it is open.
+    /// is what the window reports as its content size once it is open. A side
+    /// of zero is no size a window can be asked for: the application does not
+    /// start, on any platform, and `run` answers
+    /// [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// naming `size`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(width as f64, height as f64);
         self
     }
 
-    /// Set the minimum window size.
+    /// Set the minimum window size. A side of zero, or a minimum above the
+    /// [maximum](Self::max_size) in either dimension, is a limit no window can
+    /// be asked for: the application does not start, on any platform, and
+    /// `run` answers [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// naming the limit and its numbers.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn min_size(mut self, width: u32, height: u32) -> Self {
-        self.min_size = Some(Size::new(width as f64, height as f64));
+        self.min_size = Some(window_extent(width, height));
         self
     }
 
-    /// Set the maximum window size.
+    /// Set the maximum window size. A side of zero, or a maximum below the
+    /// [minimum](Self::min_size), refuses the start as
+    /// [`min_size`](Self::min_size) says.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn max_size(mut self, width: u32, height: u32) -> Self {
-        self.max_size = Some(Size::new(width as f64, height as f64));
+        self.max_size = Some(window_extent(width, height));
         self
     }
 
@@ -480,7 +490,11 @@ impl AppConfig {
     /// Applied where the backend places a window at open
     /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
     /// a backend that does not report it (the Wayland host, where the
-    /// compositor places windows) leaves the place to the system.
+    /// compositor places windows) leaves the place to the system. A coordinate
+    /// that is NaN or infinite is no place: the application does not start,
+    /// on any platform, and `run` answers
+    /// [`LaunchError::InvalidWindowOption`](crate::app::LaunchError::InvalidWindowOption)
+    /// naming `position`.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn position(mut self, at: Point<f64>) -> Self {
         self.position = Some(at);
@@ -750,6 +764,12 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             .input_latency(config.input_latency)
             .os_options(os_options_for(config))
     }
+}
+
+/// A size in whole logical pixels as a window extent.
+fn window_extent(width: u32, height: u32) -> flui_platform::WindowExtent {
+    flui_platform::WindowExtent::try_new(Size::new(f64::from(width), f64::from(height)))
+        .expect("BUG: a side in whole pixels is finite and not negative")
 }
 
 /// The application's per-system window options, with the Android window's

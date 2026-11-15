@@ -327,7 +327,7 @@ pub(crate) struct ContentPlacement {
 impl ContentPlacement {
     pub(crate) fn of(state: &flui_platform::WindowState) -> Self {
         Self {
-            position: state.outer.position,
+            position: state.outer.position(),
             display: state.display,
             frame: state.frame,
         }

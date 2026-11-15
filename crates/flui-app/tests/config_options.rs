@@ -6,8 +6,8 @@ use flui_app::AppConfig;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::os_options::{OsWindowOptions, Win32WindowOptions, WindowsCornerPreference};
 use flui_platform::{
-    AppTitleBar, ControlsOffset, InputLatency, SystemControls, WindowFrame, WindowMode,
-    WindowOptions, WindowReveal,
+    AppTitleBar, ControlsOffset, InputLatency, SystemControls, WindowExtent, WindowFrame,
+    WindowMode, WindowOptions, WindowReveal,
 };
 
 fn options(config: &AppConfig) -> WindowOptions {
@@ -27,8 +27,14 @@ fn the_size_is_kept() {
 
 fn the_limits_are_kept() {
     let converted = options(&AppConfig::new().min_size(300, 200).max_size(1600, 1200));
-    assert_eq!(converted.min_size, Some(Size::new(300.0, 200.0)));
-    assert_eq!(converted.max_size, Some(Size::new(1600.0, 1200.0)));
+    assert_eq!(
+        converted.min_size.map(WindowExtent::get),
+        Some(Size::new(300.0, 200.0))
+    );
+    assert_eq!(
+        converted.max_size.map(WindowExtent::get),
+        Some(Size::new(1600.0, 1200.0))
+    );
 }
 
 fn the_frame_flags_are_kept() {

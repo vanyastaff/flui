@@ -459,7 +459,7 @@ mod cases {
             .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
         fixture.settle();
         assert_eq!(fixture.material(), Some(WindowMaterial::System));
-        let claimed = fixture.window.state().capabilities.presentation_feedback();
+        let claimed = fixture.window.state().capabilities.reports_presentation;
         let request = fixture
             .present_and_request_frame()
             .expect("the window asks for a frame");
@@ -467,7 +467,7 @@ mod cases {
         // behind a backdrop or anywhere, as the window says.
         assert_eq!(
             request.presented.is_some(),
-            claimed.is_ok(),
+            claimed.is_available(),
             "a frame shown behind a backdrop, where presentation feedback is {claimed:?}: \
              {request:?}"
         );
@@ -587,10 +587,9 @@ mod cases {
         let max = Size::new(640.0, 480.0);
         fixture
             .window
-            .admit_and_apply(WindowCommand::SetConstraints(SizeConstraints::new(
-                Some(min),
-                Some(max),
-            )))
+            .admit_and_apply(WindowCommand::SetConstraints(
+                SizeConstraints::try_new(Some(min), Some(max)).expect("finite limits"),
+            ))
             .unwrap_or_else(|refusal| panic!("SetConstraints was refused: {refusal:?}"));
         for (asked, held) in [
             (Size::new(200.0, 100.0), min),

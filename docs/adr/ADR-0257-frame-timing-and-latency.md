@@ -116,7 +116,7 @@ and `Mailbox` needs a pacer FLUI does not have.
    judges how far ahead a stamp may lie. `HostInput::Frame` carries the report, and so does a
    recording.
 7. **Whether a window reports is a capability,** `WindowCapabilities::reports_presentation`, with
-   its reason kept beside it (`presentation_feedback() -> Result<Availability, Unsupported>`): no
+   its reason kept in it (a `WindowCapability`, `Absent` with the `CapabilityAbsence`): no
    verb answers for it, as a verb answers for the frame-rate hint.
 8. **Where only the presenter can read it, the presenter hands it to the surface target**
    (`SurfaceTarget::pre_present_notify(SwapChainStatistics)`): DXGI's frame statistics belong to

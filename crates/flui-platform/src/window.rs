@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{IdExhausted, IdMint};
 
 use crate::os_options::OsWindowOptions;
-use crate::{Unsupported, WindowFrame, WindowGeometry, WindowMode};
+use crate::{Unsupported, WindowExtent, WindowFrame, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -108,10 +108,12 @@ pub struct WindowOptions {
     /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
     /// mobile and web, retain their native frame policy.
     pub frame: WindowFrame,
-    /// Minimum window size
-    pub min_size: Option<Size<f64>>,
-    /// Maximum window size
-    pub max_size: Option<Size<f64>>,
+    /// The smallest content size, if limited. A limit that encloses no area,
+    /// or a minimum above [`max_size`](Self::max_size), refuses the open
+    /// ([`geometry`](Self::geometry)).
+    pub min_size: Option<WindowExtent>,
+    /// The largest content size, if limited.
+    pub max_size: Option<WindowExtent>,
     /// The display `position` and `normal_geometry` are measured on; `None`
     /// measures them in global logical pixels. A display that no longer exists
     /// is treated as `None`.
@@ -181,16 +183,62 @@ impl WindowOptions {
 
     /// Set the minimum content size.
     #[must_use]
-    pub const fn min_size(mut self, min_size: Option<Size<f64>>) -> Self {
+    pub const fn min_size(mut self, min_size: Option<WindowExtent>) -> Self {
         self.min_size = min_size;
         self
     }
 
     /// Set the maximum content size.
     #[must_use]
-    pub const fn max_size(mut self, max_size: Option<Size<f64>>) -> Self {
+    pub const fn max_size(mut self, max_size: Option<WindowExtent>) -> Self {
         self.max_size = max_size;
         self
+    }
+
+    /// The numbers these options open a window at, each checked by the same
+    /// check as the command that sets it later: [`size`](Self::size) as
+    /// [`WindowCommand::SetSize`](crate::WindowCommand::SetSize),
+    /// [`min_size`](Self::min_size) and [`max_size`](Self::max_size) as
+    /// [`WindowCommand::SetConstraints`](crate::WindowCommand::SetConstraints),
+    /// [`position`](Self::position) as
+    /// [`WindowCommand::SetPosition`](crate::WindowCommand::SetPosition).
+    /// ([`normal_geometry`](Self::normal_geometry) is a
+    /// [`WindowGeometry`], valid by its type.)
+    ///
+    /// Every host opens a window through here, before it takes an id for it,
+    /// and refuses the open for numbers a command would be refused for.
+    ///
+    /// # Errors
+    /// [`InvalidWindowOption`], naming the option and the numbers: a size or
+    /// position that is not finite, a size or limit that encloses no area, a
+    /// minimum above the maximum.
+    pub fn geometry(&self) -> Result<OpeningGeometry, InvalidWindowOption> {
+        let refused = |option| move |refused| InvalidWindowOption { option, refused };
+        let content =
+            crate::window_state::asked_size(self.size).map_err(refused(WindowOption::Size))?;
+        let min = self
+            .min_size
+            .map(crate::WindowExtent::area)
+            .transpose()
+            .map_err(refused(WindowOption::MinSize))?;
+        let max = self
+            .max_size
+            .map(crate::WindowExtent::area)
+            .transpose()
+            .map_err(refused(WindowOption::MaxSize))?;
+        let constraints = crate::SizeConstraints::new(min, max)
+            .asked()
+            .map_err(refused(WindowOption::Limits))?;
+        let position = self
+            .position
+            .map(crate::window_geometry::finite_position)
+            .transpose()
+            .map_err(refused(WindowOption::Position))?;
+        Ok(OpeningGeometry {
+            content,
+            constraints,
+            position,
+        })
     }
 
     /// Set the display the position is measured on.
@@ -257,6 +305,97 @@ impl Default for WindowOptions {
         }
     }
 }
+
+/// The numbers a window opens at, each checked as the command that sets it
+/// is ([`WindowOptions::geometry`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct OpeningGeometry {
+    /// The content extent asked for ([`WindowOptions::size`]): finite and
+    /// enclosing an area.
+    pub content: crate::WindowExtent,
+    /// The limits asked for ([`WindowOptions::min_size`],
+    /// [`WindowOptions::max_size`]): each enclosing an area, the minimum not
+    /// above the maximum.
+    pub constraints: crate::SizeConstraints,
+    /// The position asked for ([`WindowOptions::position`]), finite.
+    pub position: Option<Point<f64>>,
+}
+
+/// A [`WindowOptions`] field whose numbers no window can be asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WindowOption {
+    /// [`WindowOptions::size`].
+    Size,
+    /// [`WindowOptions::min_size`].
+    MinSize,
+    /// [`WindowOptions::max_size`].
+    MaxSize,
+    /// The two limits together: the minimum is above the maximum.
+    Limits,
+    /// [`WindowOptions::position`].
+    Position,
+}
+
+impl std::fmt::Display for WindowOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Size => "size",
+            Self::MinSize => "min_size",
+            Self::MaxSize => "max_size",
+            Self::Limits => "min_size, max_size",
+            Self::Position => "position",
+        })
+    }
+}
+
+/// Why a window was not opened: an option asks for numbers that a command
+/// setting them would be refused for. It names the option and the numbers,
+/// so an application author knows what to change.
+///
+/// ```
+/// use flui_foundation::geometry::Size;
+/// use flui_platform::{WindowExtent, WindowOptions};
+///
+/// let options = WindowOptions::default()
+///     .min_size(Some(WindowExtent::try_new(Size::new(0.0, 600.0))?));
+/// let refused = options.geometry().expect_err("a minimum with no area");
+/// assert_eq!(
+///     refused.to_string(),
+///     "the window option `min_size` describes no window: window size 0x600 encloses no area"
+/// );
+/// # Ok::<(), flui_platform::InvalidGeometry>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InvalidWindowOption {
+    /// The option refused.
+    pub option: WindowOption,
+    /// Its numbers, as the command would have refused them.
+    pub refused: crate::InvalidGeometry,
+}
+
+impl std::fmt::Display for InvalidWindowOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let refused = self.refused;
+        match self.option {
+            WindowOption::Limits => write!(
+                f,
+                "the window options `min_size` and `max_size` describe no window: {refused}"
+            ),
+            option @ (WindowOption::Size
+            | WindowOption::MinSize
+            | WindowOption::MaxSize
+            | WindowOption::Position) => write!(
+                f,
+                "the window option `{option}` describes no window: {refused}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for InvalidWindowOption {}
 
 // ==================== Identity and mode ====================
 
@@ -390,7 +529,7 @@ impl From<WindowAppearance> for crate::Brightness {
 /// The vocabulary every host shares: each material is one every window
 /// system that has materials at all can draw, so a host whose
 /// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
-/// not `Unavailable` draws each of them. A material only one operating system
+/// is available draws each of them. A material only one operating system
 /// has (Mica Alt and Acrylic on Windows, the `NSVisualEffectView` materials
 /// and Liquid Glass on macOS) is reached through that system's extension
 /// (`flui::native::windows`, `flui::native::macos`).

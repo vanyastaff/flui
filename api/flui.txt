@@ -16,8 +16,8 @@ field flui::AppConfig::frame_failure_handler: Option<flui::app::FrameFailureHand
 field flui::AppConfig::frame_latency: flui::app::FrameLatency // at 13
 field flui::AppConfig::input_latency: flui::platform::InputLatency // at 14
 field flui::AppConfig::input_tap: Option<flui::app::InputTapFactory> // at 20
-field flui::AppConfig::max_size: Option<flui::geometry::Size> // at 6
-field flui::AppConfig::min_size: Option<flui::geometry::Size> // at 5
+field flui::AppConfig::max_size: Option<flui::platform::WindowExtent> // at 6
+field flui::AppConfig::min_size: Option<flui::platform::WindowExtent> // at 5
 field flui::AppConfig::mode: flui::platform::WindowMode // at 8
 field flui::AppConfig::motion_override: flui::animation::MotionOverride // at 2
 field flui::AppConfig::os_options: flui::platform::os_options::OsWindowOptions // at 11
@@ -159,11 +159,12 @@ impl core::error::Error for flui::LaunchError
 impl core::fmt::Debug for flui::LaunchError
 impl core::fmt::Display for flui::LaunchError
 variant flui::LaunchError::CapabilityConflict(flui_runtime::capability::CapabilityConflict) // at 0
-variant flui::LaunchError::InitialWindow(flui::AppWindowError) // at 3
-variant flui::LaunchError::NoAndroidEntry // at 6
-variant flui::LaunchError::OnReadyPanicked // at 4
-variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 2
-variant flui::LaunchError::Service { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 5
+variant flui::LaunchError::InitialWindow(flui::AppWindowError) // at 4
+variant flui::LaunchError::InvalidWindowOption(flui::platform::InvalidWindowOption) // at 2
+variant flui::LaunchError::NoAndroidEntry // at 7
+variant flui::LaunchError::OnReadyPanicked // at 5
+variant flui::LaunchError::Platform { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 3
+variant flui::LaunchError::Service { source: alloc::rcs::arc::Arc<dyn core::error::Error + Send + Sync> } // at 6
 variant flui::LaunchError::UnsupportedSystem(flui::UnsupportedSystem) // at 1
 #[non_exhaustive] pub enum flui::UnsupportedSystem
 #[non_exhaustive] variant flui::UnsupportedSystem::MissingRequirement { environment: flui::platform::Environment, requirement: &'static str } // at 1
@@ -11851,7 +11852,7 @@ impl core::fmt::Debug for flui::platform::AdmissionError
 impl core::fmt::Display for flui::platform::AdmissionError
 impl core::marker::StructuralPartialEq for flui::platform::AdmissionError
 pub const fn flui::platform::AdmissionError::unsupported(&self) -> Option<flui::platform::Unsupported>
-variant flui::platform::AdmissionError::InvalidGeometry // at 1
+variant flui::platform::AdmissionError::InvalidGeometry(flui::platform::InvalidGeometry) // at 1
 variant flui::platform::AdmissionError::Unsupported(flui::platform::Unsupported) // at 0
 pub struct flui::platform::AdmittedCommand { .. }
 impl PartialEq for flui::platform::AdmittedCommand
@@ -11949,33 +11950,34 @@ pub const flui::platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM: Self = _
 pub const flui::platform::CapabilityAbsence::NOT_YET_ON_THIS_HOST: Self = _
 pub const fn flui::platform::CapabilityAbsence::reason(self) -> flui::platform::UnsupportedReason
 pub struct flui::platform::CapabilityParts
-field flui::platform::CapabilityParts::activates: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 12
-field flui::platform::CapabilityParts::app_title_bar: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 6
-field flui::platform::CapabilityParts::closes: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 13
-field flui::platform::CapabilityParts::enters_fullscreen: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 9
+field flui::platform::CapabilityParts::activates: flui::platform::WindowCapability // at 12
+field flui::platform::CapabilityParts::app_title_bar: flui::platform::WindowCapability // at 6
+field flui::platform::CapabilityParts::closes: flui::platform::WindowCapability // at 13
+field flui::platform::CapabilityParts::enters_fullscreen: flui::platform::WindowCapability // at 9
 field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 21
-field flui::platform::CapabilityParts::hides: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 10
-field flui::platform::CapabilityParts::material: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 14
-field flui::platform::CapabilityParts::maximizes: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 8
-field flui::platform::CapabilityParts::minimizes: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 7
+field flui::platform::CapabilityParts::hides: flui::platform::WindowCapability // at 10
+field flui::platform::CapabilityParts::material: flui::platform::WindowCapability // at 14
+field flui::platform::CapabilityParts::maximizes: flui::platform::WindowCapability // at 8
+field flui::platform::CapabilityParts::minimizes: flui::platform::WindowCapability // at 7
 field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 19
 field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 18
 field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 20
-field flui::platform::CapabilityParts::reports_keyboard_inset: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 16
-field flui::platform::CapabilityParts::reports_presentation: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 15
-field flui::platform::CapabilityParts::reports_system_gestures: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 17
-field flui::platform::CapabilityParts::sets_constraints: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 3
-field flui::platform::CapabilityParts::sets_frame: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 5
-field flui::platform::CapabilityParts::sets_position: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 1
-field flui::platform::CapabilityParts::sets_resizable: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 4
-field flui::platform::CapabilityParts::sets_size: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 2
-field flui::platform::CapabilityParts::sets_title: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 0
-field flui::platform::CapabilityParts::shows: Result<flui::platform::Availability, flui::platform::CapabilityAbsence> // at 11
+field flui::platform::CapabilityParts::reports_keyboard_inset: flui::platform::WindowCapability // at 16
+field flui::platform::CapabilityParts::reports_presentation: flui::platform::WindowCapability // at 15
+field flui::platform::CapabilityParts::reports_system_gestures: flui::platform::WindowCapability // at 17
+field flui::platform::CapabilityParts::sets_constraints: flui::platform::WindowCapability // at 3
+field flui::platform::CapabilityParts::sets_frame: flui::platform::WindowCapability // at 5
+field flui::platform::CapabilityParts::sets_position: flui::platform::WindowCapability // at 1
+field flui::platform::CapabilityParts::sets_resizable: flui::platform::WindowCapability // at 4
+field flui::platform::CapabilityParts::sets_size: flui::platform::WindowCapability // at 2
+field flui::platform::CapabilityParts::sets_title: flui::platform::WindowCapability // at 0
+field flui::platform::CapabilityParts::shows: flui::platform::WindowCapability // at 11
 impl Clone for flui::platform::CapabilityParts
 impl Copy for flui::platform::CapabilityParts
 impl Eq for flui::platform::CapabilityParts
 impl PartialEq for flui::platform::CapabilityParts
 impl core::fmt::Debug for flui::platform::CapabilityParts
+impl core::hash::Hash for flui::platform::CapabilityParts
 impl core::marker::StructuralPartialEq for flui::platform::CapabilityParts
 pub const fn flui::platform::CapabilityParts::into_capabilities(self) -> flui::platform::WindowCapabilities
 #[non_exhaustive] pub enum flui::platform::ClipboardError
@@ -12528,6 +12530,18 @@ impl core::error::Error for flui::platform::InvalidControlsOffset
 impl core::fmt::Debug for flui::platform::InvalidControlsOffset
 impl core::fmt::Display for flui::platform::InvalidControlsOffset
 impl core::marker::StructuralPartialEq for flui::platform::InvalidControlsOffset
+#[non_exhaustive] pub enum flui::platform::InvalidGeometry
+impl Clone for flui::platform::InvalidGeometry
+impl Copy for flui::platform::InvalidGeometry
+impl Eq for flui::platform::InvalidGeometry
+impl PartialEq for flui::platform::InvalidGeometry
+impl core::error::Error for flui::platform::InvalidGeometry
+impl core::fmt::Debug for flui::platform::InvalidGeometry
+impl core::fmt::Display for flui::platform::InvalidGeometry
+variant flui::platform::InvalidGeometry::Empty { width: f64, height: f64 } // at 2
+variant flui::platform::InvalidGeometry::Extent { width: f64, height: f64 } // at 1
+variant flui::platform::InvalidGeometry::Limits { min: flui::platform::WindowExtent, max: flui::platform::WindowExtent } // at 3
+variant flui::platform::InvalidGeometry::Position { x: f64, y: f64 } // at 0
 pub struct flui::platform::InvalidHeadroom;
 impl Clone for flui::platform::InvalidHeadroom
 impl Copy for flui::platform::InvalidHeadroom
@@ -12596,6 +12610,17 @@ impl core::fmt::Display for flui::platform::InvalidRegionalFormat
 impl core::marker::StructuralPartialEq for flui::platform::InvalidRegionalFormat
 variant flui::platform::InvalidRegionalFormat::NumberingSystem // at 0
 variant flui::platform::InvalidRegionalFormat::Region // at 1
+#[non_exhaustive] pub struct flui::platform::InvalidWindowOption
+field flui::platform::InvalidWindowOption::option: flui::platform::WindowOption // at 0
+field flui::platform::InvalidWindowOption::refused: flui::platform::InvalidGeometry // at 1
+impl Clone for flui::platform::InvalidWindowOption
+impl Copy for flui::platform::InvalidWindowOption
+impl Eq for flui::platform::InvalidWindowOption
+impl PartialEq for flui::platform::InvalidWindowOption
+impl core::error::Error for flui::platform::InvalidWindowOption
+impl core::fmt::Debug for flui::platform::InvalidWindowOption
+impl core::fmt::Display for flui::platform::InvalidWindowOption
+impl core::marker::StructuralPartialEq for flui::platform::InvalidWindowOption
 reexport flui::platform::Key => flui::interaction::Key
 reexport flui::platform::KeyEvent => flui::interaction::KeyEvent
 reexport flui::platform::KeyState => flui::interaction::KeyState
@@ -12774,6 +12799,15 @@ impl core::fmt::Debug for flui::platform::OpenedFile
 pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
+#[non_exhaustive] pub struct flui::platform::OpeningGeometry
+field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
+field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
+field flui::platform::OpeningGeometry::position: Option<flui::geometry::Point<f64>> // at 2
+impl Clone for flui::platform::OpeningGeometry
+impl Copy for flui::platform::OpeningGeometry
+impl PartialEq for flui::platform::OpeningGeometry
+impl core::fmt::Debug for flui::platform::OpeningGeometry
+impl core::marker::StructuralPartialEq for flui::platform::OpeningGeometry
 pub struct flui::platform::OsRelease(_)
 impl Clone for flui::platform::OsRelease
 impl Eq for flui::platform::OsRelease
@@ -13088,8 +13122,8 @@ variant flui::platform::SessionEndSupport::Delay { max: core::time::Duration } /
 variant flui::platform::SessionEndSupport::Hold // at 0
 variant flui::platform::SessionEndSupport::NotifyOnly // at 2
 pub struct flui::platform::SizeConstraints
-field flui::platform::SizeConstraints::max: Option<flui::geometry::Size<f64>> // at 1
-field flui::platform::SizeConstraints::min: Option<flui::geometry::Size<f64>> // at 0
+field flui::platform::SizeConstraints::max: Option<flui::platform::WindowExtent> // at 1
+field flui::platform::SizeConstraints::min: Option<flui::platform::WindowExtent> // at 0
 impl Clone for flui::platform::SizeConstraints
 impl Copy for flui::platform::SizeConstraints
 impl Default for flui::platform::SizeConstraints
@@ -13097,7 +13131,8 @@ impl PartialEq for flui::platform::SizeConstraints
 impl core::fmt::Debug for flui::platform::SizeConstraints
 impl core::marker::StructuralPartialEq for flui::platform::SizeConstraints
 pub const flui::platform::SizeConstraints::NONE: Self = _
-pub const fn flui::platform::SizeConstraints::new(min: Option<flui::geometry::Size<f64>>, max: Option<flui::geometry::Size<f64>>) -> Self
+pub const fn flui::platform::SizeConstraints::new(min: Option<flui::platform::WindowExtent>, max: Option<flui::platform::WindowExtent>) -> Self
+pub fn flui::platform::SizeConstraints::try_new(min: Option<flui::geometry::Size<f64>>, max: Option<flui::geometry::Size<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
 #[non_exhaustive] pub struct flui::platform::SmartZoomEvent { .. }
 field flui::platform::SmartZoomEvent::modifiers: flui::interaction::Modifiers // at 3
 field flui::platform::SmartZoomEvent::position: flui::interaction::PointerPosition // at 2
@@ -13453,28 +13488,28 @@ variant flui::platform::WindowAt::Outside // at 1
 variant flui::platform::WindowAt::Unknown // at 2
 variant flui::platform::WindowAt::Window { window: flui::platform::WindowId, position: flui::geometry::Point<f64> } // at 0
 #[non_exhaustive] pub struct flui::platform::WindowCapabilities { .. }
-field flui::platform::WindowCapabilities::activates: flui::platform::Availability // at 12
-field flui::platform::WindowCapabilities::app_title_bar: flui::platform::Availability // at 6
-field flui::platform::WindowCapabilities::closes: flui::platform::Availability // at 13
-field flui::platform::WindowCapabilities::enters_fullscreen: flui::platform::Availability // at 9
-field flui::platform::WindowCapabilities::frame_rate_hint: flui::platform::Availability // at 17
-field flui::platform::WindowCapabilities::hides: flui::platform::Availability // at 10
-field flui::platform::WindowCapabilities::material: flui::platform::Availability // at 18
-field flui::platform::WindowCapabilities::maximizes: flui::platform::Availability // at 8
-field flui::platform::WindowCapabilities::minimizes: flui::platform::Availability // at 7
-field flui::platform::WindowCapabilities::observes_minimized: flui::platform::Availability // at 15
-field flui::platform::WindowCapabilities::observes_position: flui::platform::Availability // at 14
-field flui::platform::WindowCapabilities::places_at_open: flui::platform::Availability // at 16
-field flui::platform::WindowCapabilities::reports_keyboard_inset: flui::platform::Availability // at 20
-field flui::platform::WindowCapabilities::reports_presentation: flui::platform::Availability // at 19
-field flui::platform::WindowCapabilities::reports_system_gestures: flui::platform::Availability // at 21
-field flui::platform::WindowCapabilities::sets_constraints: flui::platform::Availability // at 3
-field flui::platform::WindowCapabilities::sets_frame: flui::platform::Availability // at 5
-field flui::platform::WindowCapabilities::sets_position: flui::platform::Availability // at 1
-field flui::platform::WindowCapabilities::sets_resizable: flui::platform::Availability // at 4
-field flui::platform::WindowCapabilities::sets_size: flui::platform::Availability // at 2
-field flui::platform::WindowCapabilities::sets_title: flui::platform::Availability // at 0
-field flui::platform::WindowCapabilities::shows: flui::platform::Availability // at 11
+field flui::platform::WindowCapabilities::activates: flui::platform::WindowCapability // at 12
+field flui::platform::WindowCapabilities::app_title_bar: flui::platform::WindowCapability // at 6
+field flui::platform::WindowCapabilities::closes: flui::platform::WindowCapability // at 13
+field flui::platform::WindowCapabilities::enters_fullscreen: flui::platform::WindowCapability // at 9
+field flui::platform::WindowCapabilities::frame_rate_hint: flui::platform::Availability // at 21
+field flui::platform::WindowCapabilities::hides: flui::platform::WindowCapability // at 10
+field flui::platform::WindowCapabilities::material: flui::platform::WindowCapability // at 14
+field flui::platform::WindowCapabilities::maximizes: flui::platform::WindowCapability // at 8
+field flui::platform::WindowCapabilities::minimizes: flui::platform::WindowCapability // at 7
+field flui::platform::WindowCapabilities::observes_minimized: flui::platform::Availability // at 19
+field flui::platform::WindowCapabilities::observes_position: flui::platform::Availability // at 18
+field flui::platform::WindowCapabilities::places_at_open: flui::platform::Availability // at 20
+field flui::platform::WindowCapabilities::reports_keyboard_inset: flui::platform::WindowCapability // at 16
+field flui::platform::WindowCapabilities::reports_presentation: flui::platform::WindowCapability // at 15
+field flui::platform::WindowCapabilities::reports_system_gestures: flui::platform::WindowCapability // at 17
+field flui::platform::WindowCapabilities::sets_constraints: flui::platform::WindowCapability // at 3
+field flui::platform::WindowCapabilities::sets_frame: flui::platform::WindowCapability // at 5
+field flui::platform::WindowCapabilities::sets_position: flui::platform::WindowCapability // at 1
+field flui::platform::WindowCapabilities::sets_resizable: flui::platform::WindowCapability // at 4
+field flui::platform::WindowCapabilities::sets_size: flui::platform::WindowCapability // at 2
+field flui::platform::WindowCapabilities::sets_title: flui::platform::WindowCapability // at 0
+field flui::platform::WindowCapabilities::shows: flui::platform::WindowCapability // at 11
 impl Clone for flui::platform::WindowCapabilities
 impl Copy for flui::platform::WindowCapabilities
 impl Eq for flui::platform::WindowCapabilities
@@ -13483,20 +13518,25 @@ impl core::fmt::Debug for flui::platform::WindowCapabilities
 impl core::hash::Hash for flui::platform::WindowCapabilities
 pub const flui::platform::WindowCapabilities::ALL: Self = _
 pub const flui::platform::WindowCapabilities::NONE: Self = _
-pub const fn flui::platform::WindowCapabilities::availability(&self, command: &flui::platform::WindowCommand) -> flui::platform::Availability
+pub const fn flui::platform::WindowCapabilities::capability(&self, command: &flui::platform::WindowCommand) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::into_parts(self) -> flui::platform::CapabilityParts
-pub const fn flui::platform::WindowCapabilities::keyboard_inset(&self) -> Result<flui::platform::Availability, flui::platform::Unsupported>
 pub const fn flui::platform::WindowCapabilities::owned_by(self, owner: flui::platform::CapabilitiesOwner) -> Self
 pub const fn flui::platform::WindowCapabilities::permits(&self, command: &flui::platform::WindowCommand) -> bool
-pub const fn flui::platform::WindowCapabilities::presentation_feedback(&self) -> Result<flui::platform::Availability, flui::platform::Unsupported>
-pub const fn flui::platform::WindowCapabilities::refusal(&self, command: &flui::platform::WindowCommand) -> flui::platform::CapabilityAbsence
 pub const fn flui::platform::WindowCapabilities::revision(&self) -> flui::platform::WindowRevision
-pub const fn flui::platform::WindowCapabilities::system_gestures(&self) -> Result<flui::platform::Availability, flui::platform::Unsupported>
 pub const fn flui::platform::WindowCapabilities::unavailable(self, command: &flui::platform::WindowCommand, absence: flui::platform::CapabilityAbsence) -> Self
-pub const fn flui::platform::WindowCapabilities::without_app_title_bar(self, absence: flui::platform::CapabilityAbsence) -> Self
-pub const fn flui::platform::WindowCapabilities::without_keyboard_inset(self, absence: flui::platform::CapabilityAbsence) -> Self
-pub const fn flui::platform::WindowCapabilities::without_presentation_feedback(self, absence: flui::platform::CapabilityAbsence) -> Self
-pub const fn flui::platform::WindowCapabilities::without_system_gestures(self, absence: flui::platform::CapabilityAbsence) -> Self
+pub enum flui::platform::WindowCapability
+impl Clone for flui::platform::WindowCapability
+impl Copy for flui::platform::WindowCapability
+impl Eq for flui::platform::WindowCapability
+impl PartialEq for flui::platform::WindowCapability
+impl core::fmt::Debug for flui::platform::WindowCapability
+impl core::hash::Hash for flui::platform::WindowCapability
+impl core::marker::StructuralPartialEq for flui::platform::WindowCapability
+pub const flui::platform::WindowCapability::NOT_ON_THIS_PLATFORM: Self = _
+pub const fn flui::platform::WindowCapability::is_available(self) -> bool
+variant flui::platform::WindowCapability::Absent(flui::platform::CapabilityAbsence) // at 2
+variant flui::platform::WindowCapability::Emulated // at 1
+variant flui::platform::WindowCapability::Native // at 0
 #[non_exhaustive] pub enum flui::platform::WindowCommand
 impl Clone for flui::platform::WindowCommand
 impl PartialEq for flui::platform::WindowCommand
@@ -13544,6 +13584,22 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowExecutionState
 variant flui::platform::WindowExecutionState::Detached // at 2
 variant flui::platform::WindowExecutionState::Running // at 0
 variant flui::platform::WindowExecutionState::Suspended // at 1
+pub struct flui::platform::WindowExtent(_)
+impl Clone for flui::platform::WindowExtent
+impl Copy for flui::platform::WindowExtent
+impl Default for flui::platform::WindowExtent
+impl Eq for flui::platform::WindowExtent
+impl From<flui::platform::WindowExtent> for flui::geometry::Size<f64>
+impl PartialEq for flui::platform::WindowExtent
+impl PartialEq<flui::geometry::Size> for flui::platform::WindowExtent
+impl PartialEq<flui::platform::WindowExtent> for flui::geometry::Size<f64>
+impl core::fmt::Debug for flui::platform::WindowExtent
+impl core::marker::StructuralPartialEq for flui::platform::WindowExtent
+pub const flui::platform::WindowExtent::ZERO: Self = _
+pub const fn flui::platform::WindowExtent::get(self) -> flui::geometry::Size<f64>
+pub const fn flui::platform::WindowExtent::height(self) -> f64
+pub const fn flui::platform::WindowExtent::width(self) -> f64
+pub fn flui::platform::WindowExtent::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 #[non_exhaustive] pub enum flui::platform::WindowFrame
 impl Clone for flui::platform::WindowFrame
 impl Copy for flui::platform::WindowFrame
@@ -13556,15 +13612,20 @@ pub const fn flui::platform::WindowFrame::has_system_title_bar(self) -> bool
 variant flui::platform::WindowFrame::AppTitleBar(flui::platform::AppTitleBar) // at 1
 variant flui::platform::WindowFrame::None // at 2
 variant flui::platform::WindowFrame::System // at 0
-pub struct flui::platform::WindowGeometry
-field flui::platform::WindowGeometry::position: Option<flui::geometry::Point<f64>> // at 0
-field flui::platform::WindowGeometry::size: flui::geometry::Size<f64> // at 1
+pub struct flui::platform::WindowGeometry { .. }
 impl Clone for flui::platform::WindowGeometry
 impl Copy for flui::platform::WindowGeometry
+impl Eq for flui::platform::WindowGeometry
 impl PartialEq for flui::platform::WindowGeometry
 impl core::fmt::Debug for flui::platform::WindowGeometry
 impl core::marker::StructuralPartialEq for flui::platform::WindowGeometry
-pub const fn flui::platform::WindowGeometry::new(position: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>) -> Self
+pub const flui::platform::WindowGeometry::EMPTY: Self = _
+pub const fn flui::platform::WindowGeometry::extent(self) -> flui::platform::WindowExtent
+pub const fn flui::platform::WindowGeometry::position(self) -> Option<flui::geometry::Point<f64>>
+pub const fn flui::platform::WindowGeometry::size(self) -> flui::geometry::Size<f64>
+pub const fn flui::platform::WindowGeometry::unplaced(extent: flui::platform::WindowExtent) -> Self
+pub fn flui::platform::WindowGeometry::at(self, position: Option<flui::geometry::Point<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
+pub fn flui::platform::WindowGeometry::try_new(position: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
 pub trait flui::platform::WindowHandler
 fn flui::platform::WindowHandler::close_requested(&self) -> flui::platform::CloseDecision
 fn flui::platform::WindowHandler::closed(&self)
@@ -13626,12 +13687,26 @@ variant flui::platform::WindowMode::Fullscreen // at 3
 variant flui::platform::WindowMode::Maximized // at 2
 variant flui::platform::WindowMode::Minimized // at 1
 variant flui::platform::WindowMode::Normal // at 0
+#[non_exhaustive] pub enum flui::platform::WindowOption
+impl Clone for flui::platform::WindowOption
+impl Copy for flui::platform::WindowOption
+impl Eq for flui::platform::WindowOption
+impl PartialEq for flui::platform::WindowOption
+impl core::fmt::Debug for flui::platform::WindowOption
+impl core::fmt::Display for flui::platform::WindowOption
+impl core::hash::Hash for flui::platform::WindowOption
+impl core::marker::StructuralPartialEq for flui::platform::WindowOption
+variant flui::platform::WindowOption::Limits // at 3
+variant flui::platform::WindowOption::MaxSize // at 2
+variant flui::platform::WindowOption::MinSize // at 1
+variant flui::platform::WindowOption::Position // at 4
+variant flui::platform::WindowOption::Size // at 0
 #[non_exhaustive] pub struct flui::platform::WindowOptions
 field flui::platform::WindowOptions::display: Option<flui::platform::DisplayId> // at 8
 field flui::platform::WindowOptions::frame: flui::platform::WindowFrame // at 5
 field flui::platform::WindowOptions::input_latency: flui::platform::InputLatency // at 12
-field flui::platform::WindowOptions::max_size: Option<flui::geometry::Size<f64>> // at 7
-field flui::platform::WindowOptions::min_size: Option<flui::geometry::Size<f64>> // at 6
+field flui::platform::WindowOptions::max_size: Option<flui::platform::WindowExtent> // at 7
+field flui::platform::WindowOptions::min_size: Option<flui::platform::WindowExtent> // at 6
 field flui::platform::WindowOptions::mode: flui::platform::WindowMode // at 10
 field flui::platform::WindowOptions::normal_geometry: Option<flui::platform::WindowGeometry> // at 11
 field flui::platform::WindowOptions::os_options: flui::platform::os_options::OsWindowOptions // at 13
@@ -13647,8 +13722,8 @@ impl core::fmt::Debug for flui::platform::WindowOptions
 pub const fn flui::platform::WindowOptions::display(self, display: Option<flui::platform::DisplayId>) -> Self
 pub const fn flui::platform::WindowOptions::frame(self, frame: flui::platform::WindowFrame) -> Self
 pub const fn flui::platform::WindowOptions::input_latency(self, input_latency: flui::platform::InputLatency) -> Self
-pub const fn flui::platform::WindowOptions::max_size(self, max_size: Option<flui::geometry::Size<f64>>) -> Self
-pub const fn flui::platform::WindowOptions::min_size(self, min_size: Option<flui::geometry::Size<f64>>) -> Self
+pub const fn flui::platform::WindowOptions::max_size(self, max_size: Option<flui::platform::WindowExtent>) -> Self
+pub const fn flui::platform::WindowOptions::min_size(self, min_size: Option<flui::platform::WindowExtent>) -> Self
 pub const fn flui::platform::WindowOptions::mode(self, mode: flui::platform::WindowMode) -> Self
 pub const fn flui::platform::WindowOptions::normal_geometry(self, normal_geometry: Option<flui::platform::WindowGeometry>) -> Self
 pub const fn flui::platform::WindowOptions::position(self, position: Option<flui::geometry::Point<f64>>) -> Self
@@ -13656,6 +13731,7 @@ pub const fn flui::platform::WindowOptions::resizable(self, resizable: bool) -> 
 pub const fn flui::platform::WindowOptions::reveal(self, reveal: flui::platform::WindowReveal) -> Self
 pub const fn flui::platform::WindowOptions::size(self, size: flui::geometry::Size<f64>) -> Self
 pub const fn flui::platform::WindowOptions::visible(self, visible: bool) -> Self
+pub fn flui::platform::WindowOptions::geometry(&self) -> Result<flui::platform::OpeningGeometry, flui::platform::InvalidWindowOption>
 pub fn flui::platform::WindowOptions::os_options(self, os_options: flui::platform::os_options::OsWindowOptions) -> Self
 pub fn flui::platform::WindowOptions::title(self, title: impl Into<String>) -> Self
 #[non_exhaustive] pub struct flui::platform::WindowPlacement
@@ -13714,7 +13790,7 @@ field flui::platform::WindowState::active: bool // at 18
 field flui::platform::WindowState::appearance: flui::platform::WindowAppearance // at 14
 field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 19
 field flui::platform::WindowState::constraints: flui::platform::SizeConstraints // at 9
-field flui::platform::WindowState::content_size: flui::geometry::Size<f64> // at 2
+field flui::platform::WindowState::content_size: flui::platform::WindowExtent // at 2
 field flui::platform::WindowState::display: Option<flui::platform::DisplayId> // at 12
 field flui::platform::WindowState::execution: flui::platform::WindowExecutionState // at 16
 field flui::platform::WindowState::focused: bool // at 7
@@ -13736,7 +13812,7 @@ impl core::fmt::Debug for flui::platform::WindowState
 impl core::marker::StructuralPartialEq for flui::platform::WindowState
 pub fn flui::platform::WindowState::into_parts(self) -> flui::platform::WindowStateParts
 pub fn flui::platform::WindowState::is_seen(&self) -> bool
-pub fn flui::platform::WindowState::new(outer: flui::platform::WindowGeometry, content_size: flui::geometry::Size<f64>) -> Self
+pub fn flui::platform::WindowState::new(outer: flui::platform::WindowGeometry, content_size: flui::platform::WindowExtent) -> Self
 pub fn flui::platform::WindowState::successor(&self, sample: Self) -> Result<Self, flui::platform::WindowRevisionExhausted>
 pub fn flui::platform::WindowState::with_active(self, active: bool) -> Self
 pub fn flui::platform::WindowState::with_appearance(self, appearance: flui::platform::WindowAppearance) -> Self
@@ -13760,7 +13836,7 @@ field flui::platform::WindowStateParts::active: bool // at 17
 field flui::platform::WindowStateParts::appearance: flui::platform::WindowAppearance // at 13
 field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 18
 field flui::platform::WindowStateParts::constraints: flui::platform::SizeConstraints // at 8
-field flui::platform::WindowStateParts::content_size: flui::geometry::Size<f64> // at 1
+field flui::platform::WindowStateParts::content_size: flui::platform::WindowExtent // at 1
 field flui::platform::WindowStateParts::display: Option<flui::platform::DisplayId> // at 11
 field flui::platform::WindowStateParts::execution: flui::platform::WindowExecutionState // at 15
 field flui::platform::WindowStateParts::focused: bool // at 6
@@ -24790,6 +24866,7 @@ impl Clone for flui::view::WindowHandle
 impl core::fmt::Debug for flui::view::WindowHandle
 pub fn flui::view::WindowHandle::activate(&self) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::hide(&self) -> Result<(), flui::platform::SubmitError>
+pub fn flui::view::WindowHandle::is_open(&self) -> bool
 pub fn flui::view::WindowHandle::request_close(&self) -> Result<(), flui::view::WindowClosed>
 pub fn flui::view::WindowHandle::set_constraints(&self, constraints: flui::platform::SizeConstraints) -> Result<(), flui::platform::SubmitError>
 pub fn flui::view::WindowHandle::set_frame(&self, frame: flui::platform::WindowFrame) -> Result<(), flui::platform::SubmitError>
@@ -35548,9 +35625,9 @@ variant flui_runtime::sink::SubmitVerdict::Failed // at 6
 variant flui_runtime::sink::SubmitVerdict::NoPresent // at 1
 variant flui_runtime::sink::SubmitVerdict::NotShown // at 2
 variant flui_runtime::sink::SubmitVerdict::Presented // at 0
-variant flui_runtime::sink::SubmitVerdict::Refused // at 7
 variant flui_runtime::sink::SubmitVerdict::Queued // at 8
 variant flui_runtime::sink::SubmitVerdict::QueuedReplacing(flui::foundation::FrameEpoch) // at 9
+variant flui_runtime::sink::SubmitVerdict::Refused // at 7
 variant flui_runtime::sink::SubmitVerdict::Retry // at 3
 variant flui_runtime::sink::SubmitVerdict::SurfaceStale // at 4
 #[non_exhaustive] pub struct flui_runtime::testing::SceneTotals

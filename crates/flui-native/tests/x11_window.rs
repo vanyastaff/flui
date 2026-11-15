@@ -744,11 +744,11 @@ mod cases {
         );
         let state = fixture.window.state();
         assert_eq!(
-            state.outer.position,
+            state.outer.position(),
             Some(flui_foundation::geometry::Point::new(120.0, 90.0))
         );
         assert_eq!(
-            state.outer.size,
+            state.outer.size(),
             Size::new(400.0 + as_f64(left + right), 300.0 + as_f64(top + bottom)),
             "the outer size is the content's grown by the frame"
         );
@@ -1368,7 +1368,9 @@ mod cases {
     /// only a window manager carries out, and takes the focus from the
     /// server. A window manager that starts later is followed again.
     fn a_window_outlives_a_window_manager_that_was_killed() {
-        use flui_platform::Availability;
+        use flui_platform::WindowCapability;
+        const UNAVAILABLE: WindowCapability =
+            WindowCapability::Absent(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE);
 
         let mut fixture = X11Fixture::open("orphaned");
         fixture
@@ -1378,7 +1380,7 @@ mod cases {
         fixture.settle();
         let managed = fixture.window.state();
         assert_eq!(managed.mode, WindowMode::Minimized);
-        assert_eq!(managed.capabilities.minimizes, Availability::Native);
+        assert_eq!(managed.capabilities.minimizes, WindowCapability::Native);
 
         kill_window_manager();
         let started_again = StartedAgain;
@@ -1401,12 +1403,12 @@ mod cases {
         assert_eq!(state.mode, WindowMode::Normal, "nobody holds it iconic");
         assert!(state.visible, "the server mapped it again");
         assert_eq!(
-            state.capabilities.minimizes,
-            Availability::Unavailable,
+            state.capabilities.minimizes, UNAVAILABLE,
             "nobody minimizes it now"
         );
         assert_eq!(
-            state.outer.size, state.content_size,
+            state.outer.size(),
+            state.content_size,
             "the dead window manager's frame is gone"
         );
         fixture
@@ -1428,7 +1430,7 @@ mod cases {
         fixture.settle();
         assert_eq!(
             fixture.window.state().capabilities.minimizes,
-            Availability::Native,
+            WindowCapability::Native,
             "the window manager that started is followed"
         );
     }
@@ -1442,13 +1444,15 @@ mod cases {
     /// window manager carries out, and the focus is taken from the server,
     /// not asked of the window manager that is gone.
     fn a_handler_in_the_turn_a_window_manager_dies_acts_without_it() {
-        use flui_platform::Availability;
+        use flui_platform::WindowCapability;
+        const UNAVAILABLE: WindowCapability =
+            WindowCapability::Absent(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE);
         use x11rb::protocol::xproto::InputFocus;
 
         let handler = RecordingWindowHandler::new();
         let mut fixture = X11Fixture::open_with("bereaved", Rc::clone(&handler));
         let managed = fixture.window.state().capabilities;
-        assert_eq!(managed.minimizes, Availability::Native);
+        assert_eq!(managed.minimizes, WindowCapability::Native);
         // Admitted while the window manager runs, applied in the turn that
         // hears it go, before anything reads the window.
         let maximize = WindowCommand::SetMode(WindowMode::Maximized)
@@ -1513,7 +1517,7 @@ mod cases {
         );
         assert_eq!(
             read.get(),
-            Some(Availability::Unavailable),
+            Some(UNAVAILABLE),
             "the handler read the window as nobody manages it"
         );
         let focus = fixture
@@ -1537,7 +1541,9 @@ mod cases {
     /// events the platform hears of it), so it follows the window manager's
     /// list again once the property names it back.
     fn a_check_window_that_is_no_window_managers_is_refused() {
-        use flui_platform::Availability;
+        use flui_platform::WindowCapability;
+        const UNAVAILABLE: WindowCapability =
+            WindowCapability::Absent(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE);
 
         let mut fixture = X11Fixture::open("checked");
         let root = fixture.root();
@@ -1562,14 +1568,14 @@ mod cases {
             fixture.settle();
             assert_eq!(
                 fixture.window.state().capabilities.enters_fullscreen,
-                Availability::Unavailable,
+                UNAVAILABLE,
                 "{case}: no window manager that lists fullscreen is named"
             );
             name(&fixture.server, root, window_manager);
             fixture.settle();
             assert_eq!(
                 fixture.window.state().capabilities.enters_fullscreen,
-                Availability::Native,
+                WindowCapability::Native,
                 "{case}: the root's property changes are still heard"
             );
             if named != root {
@@ -1588,7 +1594,9 @@ mod cases {
     /// ICCCM §4.1.4) reads minimized and shown, and `Show` maps it again. Once
     /// it goes, its selection window with it, what it wrote says nothing.
     fn a_window_manager_without_ewmh_is_followed() {
-        use flui_platform::Availability;
+        use flui_platform::WindowCapability;
+        const UNAVAILABLE: WindowCapability =
+            WindowCapability::Absent(flui_platform::CapabilityAbsence::NOT_ON_THIS_DEVICE);
 
         kill_window_manager();
         let started_again = StartedAgain;
@@ -1610,7 +1618,7 @@ mod cases {
         fixture.settle();
         assert_eq!(
             fixture.window.state().capabilities.minimizes,
-            Availability::Unavailable,
+            UNAVAILABLE,
             "nobody iconifies the window"
         );
 
@@ -1653,7 +1661,7 @@ mod cases {
         fixture.settle();
         assert_eq!(
             fixture.window.state().capabilities.minimizes,
-            Availability::Native,
+            WindowCapability::Native,
             "the window manager that took the selection iconifies the window"
         );
 

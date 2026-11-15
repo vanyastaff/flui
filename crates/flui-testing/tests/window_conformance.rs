@@ -14,7 +14,7 @@ use flui_platform::{
     WindowMode, WindowState,
 };
 use flui_platform::{
-    Availability, CapabilityAbsence, EventTime, FramePresented, FrameRequest, WindowCapabilities,
+    Availability, EventTime, FramePresented, FrameRequest, WindowCapabilities, WindowCapability,
     WindowOptions,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
@@ -26,13 +26,18 @@ use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 /// publishes a snapshot without the facts the window system reports
 /// ([`Fault::SnapshotWithoutFacts`]). It reports the id it is given, which is
 /// the window's own unless the fault is [`Fault::ReissuesAClosedId`].
-struct Faulty(Rc<dyn PlatformWindow>, Fault, WindowId);
+struct Faulty(Rc<dyn PlatformWindow>, Fault, WindowId, KeptSnapshot);
+
+/// The snapshot a window with [`Fault::DropsFactsWithABadReport`] keeps
+/// answering while its window system reports no window: set when the report
+/// comes, cleared by the next resize.
+type KeptSnapshot = Rc<std::cell::RefCell<Option<WindowState>>>;
 
 impl Faulty {
     /// `window` with `fault`, reporting its own id.
-    fn new(window: Rc<dyn PlatformWindow>, fault: Fault) -> Self {
+    fn new(window: Rc<dyn PlatformWindow>, fault: Fault, kept: KeptSnapshot) -> Self {
         let id = window.id();
-        Self(window, fault, id)
+        Self(window, fault, id, kept)
     }
 }
 
@@ -53,6 +58,11 @@ impl PlatformWindow for Faulty {
         }
     }
     fn state(&self) -> WindowState {
+        if let Some(kept) = self.3.borrow().clone() {
+            // A host that drops a whole sample for one bad value: nothing
+            // else the window system says reaches the snapshot.
+            return kept;
+        }
         let mut state = self.0.state();
         match self.1 {
             // The snapshot of a window that keeps its metrics to itself.
@@ -60,18 +70,20 @@ impl PlatformWindow for Faulty {
             Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
             Fault::HidesWhenMinimized => state.visible &= state.mode != WindowMode::Minimized,
             Fault::ClaimsPresentation => {
-                state.capabilities.reports_presentation = Availability::Native;
+                state.capabilities.reports_presentation = WindowCapability::Native;
             }
             Fault::DisclaimsPresentation => {
-                state.capabilities = state
-                    .capabilities
-                    .without_presentation_feedback(CapabilityAbsence::NOT_ON_THIS_PLATFORM);
+                state.capabilities.reports_presentation = WindowCapability::NOT_ON_THIS_PLATFORM;
             }
             _ => {}
         }
         state
     }
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+        if matches!(command.command(), WindowCommand::SetSize(_)) {
+            // A resize is a report that describes a window again.
+            self.3.borrow_mut().take();
+        }
         if command.command() == &WindowCommand::Close && matches!(self.1, Fault::IgnoresClose) {
             return Ok(());
         }
@@ -103,9 +115,16 @@ impl PlatformWindow for Faulty {
         &self,
         regions: &[flui_platform::input_regions::InputRegion],
     ) -> Result<(), flui_platform::Unsupported> {
-        match self.1 {
-            Fault::VerbsIgnoreTheirCapabilities => Ok(()),
-            _ => self.0.set_input_regions(regions),
+        match (self.1, self.0.set_input_regions(regions)) {
+            (Fault::VerbsIgnoreTheirCapabilities, _) => Ok(()),
+            // A window that keeps the regions of a window that is gone and
+            // says it took them.
+            (Fault::TakesInputRegionsAfterClose, Err(gone))
+                if gone.reason == flui_platform::UnsupportedReason::NoWindow =>
+            {
+                Ok(())
+            }
+            (_, answer) => answer,
         }
     }
 
@@ -162,6 +181,8 @@ struct Fixture {
     /// The handler the window was opened with, which hears its frames.
     handler: Rc<RecordingWindowHandler>,
     fault: Option<Fault>,
+    /// What a window with [`Fault::DropsFactsWithABadReport`] keeps answering.
+    kept: KeptSnapshot,
 }
 
 impl Fixture {
@@ -209,6 +230,16 @@ enum Fault {
     /// The window opened after the one under test closed reports the closed
     /// one's id, as a host that took a recycled handle for an id would.
     ReissuesAClosedId,
+    /// The window publishes a report whose numbers describe no window as an
+    /// empty window, the way a host that reads a size it cannot build as
+    /// zero (`unwrap_or_default`) would.
+    PublishesAReportOfNoWindow,
+    /// While its window system reports numbers that describe no window, the
+    /// window publishes nothing else either: one bad value costs the whole
+    /// sample, its title, focus and close among them.
+    DropsFactsWithABadReport,
+    /// The window answers `Ok` to the input regions of a window that closed.
+    TakesInputRegionsAfterClose,
 }
 
 impl Fixture {
@@ -231,6 +262,7 @@ impl Fixture {
         let model = platform
             .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
             .expect("a headless window opens");
+        let kept = KeptSnapshot::default();
         let window: Rc<dyn PlatformWindow> = match fault {
             Some(
                 fault @ (Fault::ClaimsWhatItCannot
@@ -238,11 +270,13 @@ impl Fixture {
                 | Fault::IgnoresClose
                 | Fault::IgnoresTheToken
                 | Fault::VerbsIgnoreTheirCapabilities
+                | Fault::TakesInputRegionsAfterClose
                 | Fault::PresentNotifyBlocks
                 | Fault::ClaimsPresentation
                 | Fault::DisclaimsPresentation
-                | Fault::HidesWhenMinimized),
-            ) => Rc::new(Faulty::new(Rc::clone(&model) as _, fault)),
+                | Fault::HidesWhenMinimized
+                | Fault::DropsFactsWithABadReport),
+            ) => Rc::new(Faulty::new(Rc::clone(&model) as _, fault, Rc::clone(&kept))),
             _ => Rc::clone(&model) as _,
         };
         Self {
@@ -251,6 +285,7 @@ impl Fixture {
             model,
             handler,
             fault,
+            kept,
         }
     }
 }
@@ -264,9 +299,12 @@ impl WindowFixture for Fixture {
             .open_window(WindowOptions::default(), RecordingWindowHandler::new())
             .expect("a headless window opens");
         Some(match self.fault {
-            Some(fault @ Fault::ReissuesAClosedId) => {
-                Rc::new(Faulty(another as _, fault, self.window.id()))
-            }
+            Some(fault @ Fault::ReissuesAClosedId) => Rc::new(Faulty(
+                another as _,
+                fault,
+                self.window.id(),
+                KeptSnapshot::default(),
+            )),
             _ => another as _,
         })
     }
@@ -333,6 +371,28 @@ impl WindowFixture for Fixture {
         true
     }
 
+    /// The simulated window system reports a size that is no extent, which
+    /// the headless window refuses as a host refuses a rectangle over a
+    /// scale of zero.
+    fn report_no_window(&mut self) -> bool {
+        match self.fault {
+            Some(Fault::PublishesAReportOfNoWindow) => {
+                // What a host that reads the size it cannot build as zero
+                // publishes for the report.
+                let mut collapsed = self.model.state();
+                collapsed.outer = flui_platform::WindowGeometry::EMPTY;
+                collapsed.content_size = flui_platform::WindowExtent::ZERO;
+                self.mock().simulate_state(collapsed);
+            }
+            Some(Fault::DropsFactsWithABadReport) => {
+                *self.kept.borrow_mut() = Some(self.window.state());
+                self.mock().simulate_resize(f64::NAN, f64::INFINITY);
+            }
+            _ => self.mock().simulate_resize(f64::NAN, f64::INFINITY),
+        }
+        true
+    }
+
     fn input_capabilities(&self) -> flui_platform::input_capabilities::InputCapabilities {
         self.mock().window_system().input_capabilities
     }
@@ -378,16 +438,16 @@ impl WindowFixture for Fixture {
 
 fn only_the_move_and_size_commands() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::NONE;
-    capabilities.sets_position = flui_platform::Availability::Native;
-    capabilities.sets_size = flui_platform::Availability::Native;
+    capabilities.sets_position = flui_platform::WindowCapability::Native;
+    capabilities.sets_size = flui_platform::WindowCapability::Native;
     capabilities.observes_position = flui_platform::Availability::Native;
     capabilities
 }
 
 fn no_fullscreen_or_minimize() -> WindowCapabilities {
     let mut capabilities = WindowCapabilities::ALL;
-    capabilities.enters_fullscreen = flui_platform::Availability::Unavailable;
-    capabilities.minimizes = flui_platform::Availability::Unavailable;
+    capabilities.enters_fullscreen = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
+    capabilities.minimizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     capabilities.observes_minimized = flui_platform::Availability::Unavailable;
     capabilities
 }
@@ -424,9 +484,14 @@ fn a_window_whose_verbs_ignore_their_capabilities_is_caught() {
         .into_iter()
         .map(|violation| violation.check)
         .collect();
+        // A window that takes every verb takes the input regions of a closed
+        // window too.
         assert_eq!(
             checks,
-            ["per_frame_verbs_report_unsupported_exactly_when_unavailable"]
+            [
+                "per_frame_verbs_report_unsupported_exactly_when_unavailable",
+                "a_closed_window_refuses"
+            ]
         );
     }
 }
@@ -472,6 +537,27 @@ fn a_host_that_reissues_a_closed_windows_id_is_caught() {
     assert_eq!(
         caught(Fault::ReissuesAClosedId),
         ["a_window_opened_after_a_close_has_an_id_of_its_own"]
+    );
+}
+
+fn a_window_that_publishes_a_report_of_no_window_is_caught() {
+    assert_eq!(
+        caught(Fault::PublishesAReportOfNoWindow),
+        ["a_report_that_describes_no_window_publishes_nothing"]
+    );
+}
+
+fn a_window_that_drops_its_facts_with_a_bad_report_is_caught() {
+    assert_eq!(
+        caught(Fault::DropsFactsWithABadReport),
+        ["a_report_that_describes_no_window_publishes_nothing"]
+    );
+}
+
+fn a_closed_window_that_takes_input_regions_is_caught() {
+    assert_eq!(
+        caught(Fault::TakesInputRegionsAfterClose),
+        ["a_closed_window_refuses"]
     );
 }
 
@@ -582,6 +668,18 @@ fn window_conformance_checks() {
             (
                 "a_window_that_ignores_the_token_is_caught",
                 a_window_that_ignores_the_token_is_caught as fn(),
+            ),
+            (
+                "a_window_that_publishes_a_report_of_no_window_is_caught",
+                a_window_that_publishes_a_report_of_no_window_is_caught as fn(),
+            ),
+            (
+                "a_window_that_drops_its_facts_with_a_bad_report_is_caught",
+                a_window_that_drops_its_facts_with_a_bad_report_is_caught as fn(),
+            ),
+            (
+                "a_closed_window_that_takes_input_regions_is_caught",
+                a_closed_window_that_takes_input_regions_is_caught as fn(),
             ),
             (
                 "a_surface_target_that_blocks_or_withholds_is_caught",

@@ -230,6 +230,12 @@ pub enum LaunchError {
     /// The system is below FLUI's floor (ADR-0244 §3). Nothing started.
     #[error("this system cannot run FLUI: {0}")]
     UnsupportedSystem(#[source] UnsupportedSystem),
+    /// The configuration's window options ask for numbers no window can be
+    /// asked for (`AppConfig::size`, `min_size`, `max_size`, `position`);
+    /// the error names the option. Found before anything starts, on every
+    /// platform.
+    #[error("{0}")]
+    InvalidWindowOption(#[source] flui_platform::InvalidWindowOption),
     /// The platform could not be initialized, or its event loop failed.
     #[error("platform startup or event loop failed: {source}")]
     Platform {

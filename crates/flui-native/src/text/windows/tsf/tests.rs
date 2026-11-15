@@ -54,7 +54,7 @@ fn window_ref(hwnd: HWND) -> crate::owner::windows::WindowRef {
 
 /// The scale of services activated directly: 100%.
 fn unscaled() -> crate::owner::windows::WindowScale {
-    crate::owner::windows::WindowScale::new(96)
+    crate::owner::windows::WindowScale::unscaled()
 }
 
 /// An entry into this thread's STA (nested in the platform's) for services

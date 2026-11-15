@@ -3,7 +3,8 @@
 //!
 //! The model is what two or more platforms share: the published state, its
 //! staleness and the mode decided from a window system's flags ([`state`]),
-//! what the X11 host decides about a window before it opens (`plan`), and the
+//! what the X11 host decides about a window before it opens (`plan`), what an
+//! Activity's window asks of the system when it opens (`activity`), and the
 //! acknowledgement a host waits for before it publishes a window it attached
 //! ([`installation`]); beside it is the window
 //! configuration the Win32 host is built with (`config`). Each platform file
@@ -21,6 +22,8 @@ pub(crate) mod installation;
 pub(crate) mod plan;
 pub(crate) mod state;
 
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod activity;
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
