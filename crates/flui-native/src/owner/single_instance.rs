@@ -1,5 +1,5 @@
 //! What a desktop host's first instance keeps of the launches later processes
-//! of its application hand it (the activation spec, design §5): the name an
+//! of its application hand it (ADR-0254 §4): the name an
 //! app id gives the instance, and the inbox the launches wait in until the
 //! owner takes them. The transport is the host's: the session bus on Linux
 //! (`owner::linux::single_instance`), a named pipe on Windows

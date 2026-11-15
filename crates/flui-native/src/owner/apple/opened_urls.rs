@@ -1,5 +1,5 @@
-//! What an Apple platform asks an application to open (the activation spec,
-//! design §4): the `NSURL`s AppKit hands `application:openURLs:`, and on iOS
+//! What an Apple platform asks an application to open (ADR-0330 §5):
+//! the `NSURL`s AppKit hands `application:openURLs:`, and on iOS
 //! the URL contexts and web-browsing activities a scene connects with or
 //! receives (`scene:openURLContexts:`, `scene:continueUserActivity:`). A
 //! document comes as a `file:` URL and a link as any other.

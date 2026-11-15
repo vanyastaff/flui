@@ -1,5 +1,5 @@
 //! Registering the URL schemes and the file types an unpackaged Windows
-//! application opens (ADR-0307 §4, the activation spec's AC11): after the
+//! application opens (ADR-0307 §4): after the
 //! main window's first frame, the run writes each declared scheme's key and
 //! each file type's ProgID under the user's classes on the IO pool
 //! (`flui_native::associations`), so a link or a file launches the

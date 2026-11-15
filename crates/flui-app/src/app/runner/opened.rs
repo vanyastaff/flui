@@ -1,5 +1,5 @@
 //! What the operating system opens the application with, routed to the
-//! application (activation spec, AC5): files to its
+//! application (ADR-0330 §5): files to its
 //! [`on_open_files`](crate::Application::on_open_files) callback, URLs to
 //! the presentation they address, where the UI runtime parses and admits
 //! each one by the application's declarations and opens it in that
