@@ -9,7 +9,7 @@
 //!
 //! - **Capabilities are honest.** Admission refuses a command as
 //!   [`Unsupported`](AdmissionError::Unsupported) exactly when its capability
-//!   is `Unavailable`, for good — its reason is not one worth asking again
+//!   is `Absent`, for good — its reason is not one worth asking again
 //!   ([`Unsupported::is_retryable`](flui_platform::Unsupported::is_retryable))
 //!   — and the window applies every command its capabilities admitted: never
 //!   claimed and then refused.

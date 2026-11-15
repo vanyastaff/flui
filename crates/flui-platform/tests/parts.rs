@@ -132,8 +132,8 @@ fn a_window_state_round_trips_through_its_parts() {
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
-        state.capabilities.reports_keyboard_inset.absence(),
-        Some(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
+        state.capabilities.reports_keyboard_inset,
+        WindowCapability::NOT_ON_THIS_PLATFORM
     );
     assert_eq!(parts.capabilities.sets_title, WindowCapability::Native);
     assert_eq!(parts.capabilities.frame_rate_hint, Availability::Native);

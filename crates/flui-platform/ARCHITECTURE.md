@@ -114,7 +114,7 @@ this one path (ADR-0151 §9).
   `AdmittedCommand`, and `PlatformWindow::apply` takes nothing else
   (`tests/compile_fail/{admitted_command_has_one_constructor,
   apply_takes_only_an_admitted_command}.rs`). Admission refuses with
-  `AdmissionError::Unsupported` exactly when the capability is `Unavailable`
+  `AdmissionError::Unsupported` exactly when the capability is `Absent`
   and with `InvalidGeometry` before that. The token carries the capabilities'
   owner and revision, which `WindowState::successor` alone keeps: the owner is
   the `CapabilitiesOwner` the host stamped on the window's first snapshot,

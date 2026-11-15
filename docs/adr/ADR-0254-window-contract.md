@@ -11,15 +11,6 @@
   `FrameOutcome { Produced, Declined }`, because without it the host cannot tell a frame that was
   served from one nothing ran, and a wake deadline delivered to a handler with nothing to draw
   with re-arms on every paint and spins the loop.
-- **Amended:** 2026-10-27 — decision 6, following the owner's decision of 2026-10-27 that adds
-  `NotYetOnThisHost` to the reasons (ADR-0152): a command's capability carries where it is
-  missing, a `CapabilityAbsence` (an `UnsupportedReason` narrowed to `NotOnThisPlatform`,
-  `NotOnThisDevice` or `NotYetOnThisHost`, one byte; converting from a reason refuses the rest),
-  set with `WindowCapabilities::unavailable(command, absence)`, and admission refuses the command
-  with that reason. The type admits no retryable reason, since a capability stays `Unavailable`
-  until the host publishes it again; an absence counts for equality only while its capability is
-  unavailable. The verbs outside the command queue (the frame-rate hint, the input regions) answer
-  their reason themselves: nothing admits them against the capabilities.
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: `AppHandler::exit_policy` answers
   an `ExitAnswer { End, KeepRunning, HostDecides }` instead of a `bool`. An application with no
   exit policy of its own had to answer `false`, which silently changed the hosts' behaviour (the
@@ -41,24 +32,6 @@
   slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
   its display from the platform's `DisplayConnection`, never from a window's target, because wgpu
   reads the instance's display at every surface it makes. The target's obligations are unchanged.
-- **Amended:** 2026-11-15 — decisions 1, 4 and 6, recording what the code does under them; no
-  decision changed. (1) The snapshot's rectangles are valid by construction: `WindowGeometry`
-  holds a finite position and a `WindowExtent` (each side finite and not negative), the content
-  size is a `WindowExtent`, and so is each bound of `SizeConstraints`. Decision 1's "a report that
-  is not a drawable area is never published" holds for them as it held for the metrics: a host
-  builds them with `try_new`, and a read whose numbers describe no window (a rectangle over a
-  scale of zero) publishes nothing, decided once in the hosts' state cell. (2) A revision that a
-  read publishes (`PlatformWindow::state` finding the window system ahead of the snapshot) is
-  announced as decision 4 says every `state_changed` is, at the owner's turn and outside any
-  borrow: the read answers with the new snapshot and the call waits in the window's FIFO, where
-  it used to run from inside the read, under whatever the reader held. A change the window
-  system reports is still announced from the host's own callback. (3) A capability and the reason
-  it is missing are one value, `WindowCapability { Native, Emulated, Absent(CapabilityAbsence) }`,
-  in `WindowCapabilities` and in `CapabilityParts` alike. Decision 6's `Availability` is what
-  `WindowCapability::availability` answers, and the absence of the 2026-10-27 amendment is the one
-  `Absent` holds, so it cannot outlive or contradict the availability;
-  `WindowCapabilities::unavailable(command, absence)` stays, and the readers and setters that
-  repeated a field (`presentation_feedback`, `without_keyboard_inset` and the like) are the field.
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves
@@ -260,6 +233,15 @@ OS reports, an equal sample keeps the revision, an exhausted revision refuses. T
   (ADR-0035); a report that is not a drawable area (a zero size, a scale that is not finite and
   positive) is never published. Only where the value is read and how its change is announced
   move.
+- **The geometry is valid by its types.** `WindowGeometry` holds a finite position, where the
+  window system reports one, and a `WindowExtent`, whose sides are finite and not negative; the
+  content size is a `WindowExtent`, and so is each bound of `SizeConstraints`. Each is built with
+  `try_new`, which refuses with an `InvalidGeometry` that carries the numbers. A host reads its
+  window into a sample that holds the other facts and the geometry as a `Result`, and the hosts'
+  one state cell composes them: a read whose rectangles describe no window (a rectangle over a
+  scale of zero, a NaN a compositor sent) keeps the published geometry and drawable metrics, and
+  the read's other facts (focus, visibility, mode, occlusion, execution state, a close) are
+  published as any read's are. One bad value never holds back the rest of a report.
 
 A consumer that needs to know which fact changed compares the new snapshot with the last one it
 saw; revision equality is the cheap test ADR-0237 already provides. Input-derived values are not
@@ -281,14 +263,17 @@ was opened with; there is nothing for the embedder to call.
 Admission is a type:
 
 - `WindowCommand::admit(&WindowCapabilities) -> Result<AdmittedCommand, AdmissionError>` is the
-  only constructor of `AdmittedCommand`. It refuses invalid geometry before any OS call and
-  refuses a command whose capability is `Unavailable`. The token carries the capabilities revision
+  only constructor of `AdmittedCommand`. It refuses invalid geometry before any OS call, reading
+  the command's numbers through the snapshot's own geometry types, and refuses a command whose
+  capability is absent (decision 6). An opening is held to the same numbers: a `WindowOptions`
+  size or limit that a command would be refused for refuses the open with the same
+  `InvalidGeometry`. The token carries the capabilities revision
   it was admitted against: the revision of the capabilities in the snapshot, which moves when what
   the window honours changes and not with every state change.
 - `PlatformWindow::apply(AdmittedCommand) -> Result<(), ApplyError>`. A host can no longer
   receive an unvalidated command, and its `apply` has no admission arm to remember.
 - The errors are split by who can cause them. `AdmissionError` is `Unsupported(Unsupported)` or
-  `InvalidGeometry`, the caller's. `ApplyError` is `Closed`, `Superseded` or `Platform`, the
+  `InvalidGeometry(InvalidGeometry)`, the caller's. `ApplyError` is `Closed`, `Superseded` or `Platform`, the
   world's. `Superseded` means the capabilities revision moved between admission and application
   (commands apply at the owner's next turn, so a change can land in between): the command was
   checked against capabilities the window no longer has, and the caller admits it again. Without
@@ -334,7 +319,7 @@ none has a default body:
 | Method | Called when | Returns |
 |---|---|---|
 | `input` | A platform input event for this window arrives. The first is the capability snapshot, `PlatformInput::Capabilities` | `DispatchEventResult`, with its deferred forms for an event queued behind a reentrant callback (ADR-0207) |
-| `state_changed` | A new snapshot has been published, outside any lock or borrow of the host | Nothing; no payload, the handler re-reads the snapshot |
+| `state_changed` | A new snapshot has been published, outside any lock or borrow of the host. A change the window system reported is announced from the host's own callback; a revision that a read publishes (`PlatformWindow::state` finding the window system ahead of the snapshot) is announced at the owner's turn, in the window's FIFO, never from inside the read, which answers with the new snapshot | Nothing; no payload, the handler re-reads the snapshot |
 | `frame_requested` | The platform wants a frame for this window | A `FrameOutcome`: `Produced` when a frame ran, `Declined` when the handler had nothing to run one with, `Failed` when the frame ran and the handler contained its failure ([ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §4). A frame that ran, produced or failed, counts as serving work due at one instant (a wake deadline); a declined one does not |
 | `close_requested` | The user, the OS or `WindowControl::request_close` asks the window to close | A `CloseDecision`: proceed, or veto and keep the window |
 | `closed` | The window has closed, once, after it left the host's tracking | Nothing |
@@ -464,9 +449,18 @@ may succeed), `NotRegistered` and `NoWindow`. A window builds the value with
 `Unsupported::new(reason)`; `Unsupported::of::<C>(reason)`, which names a capability, is for the
 seam.
 
-- `Availability` (`Native`, `Emulated`, `Unavailable`; ADR-0213) extends from `InputCapabilities`
-  to `WindowCapabilities`. A capability that can be honoured approximately says `Emulated`, which
-  a boolean cannot. A command is refused exactly when its capability is `Unavailable`.
+- A command's capability in `WindowCapabilities` (and in `CapabilityParts`) is one value,
+  `WindowCapability { Native, Emulated, Absent(CapabilityAbsence) }`: a capability that can be
+  honoured approximately says `Emulated`, which a boolean cannot, and an absent one carries where
+  it is missing. `CapabilityAbsence` is an `UnsupportedReason` narrowed to `NotOnThisPlatform`,
+  `NotOnThisDevice` or `NotYetOnThisHost`, one byte; converting from any other reason refuses.
+  It admits no retryable reason: an absent capability stays absent until the host publishes it
+  again. A command is refused exactly when its capability is `Absent`, and the refusal carries
+  that absence's reason, so a capability and its reason cannot disagree. ADR-0213's
+  `Availability` (`Native`, `Emulated`, `Unavailable`) stays where no command answers to the
+  slot: in `InputCapabilities`, and in what the window observes (its position, a minimized mode),
+  whether it places a window at open, and the frame-rate hint, whose verb answers its reason
+  itself (decision 3).
 - **OS versions never appear in the contract.** `NotOnThisDevice` names no version, and no
   accessor orders the running OS. The gate that produced it stays a `Since<F>` proof in the
   host (ADR-0244), so `if sdk >= 29` cannot be written outside FLUI.
@@ -573,9 +567,17 @@ on that platform.
   `flui_testing::window_conformance` that every host's conformance test runs
   (`the_headless_window_conforms_under_every_capability_set`, `the_win32_window_conforms`,
   `the_x11_window_conforms`, `the_wayland_window_conforms`): each command whose capability is
-  `Unavailable` is refused by `admit`, and each other one is admitted and takes effect or is
-  clamped, as the next snapshot shows. A capability change publishes a new revision and one
-  `state_changed` (the superseded-command test below).
+  `Absent` is refused by `admit` with that absence's reason, and each other one is admitted
+  and takes effect or is clamped, as the next snapshot shows. A capability change publishes a
+  new revision and one `state_changed` (the superseded-command test below).
+- `a_report_that_describes_no_window_publishes_nothing`, a check of the same suite, which the
+  headless and Win32 fixtures run: a report whose numbers describe no window publishes nothing of
+  its geometry, and a title the window takes while it stands is published;
+  `a_bad_report_keeps_the_geometry_and_publishes_the_rest` (flui-native, headless) holds a focus
+  change and a close behind such a report to the same rule.
+- `a_revision_a_read_published_is_announced_at_the_owners_turn` (flui-native's window delivery
+  table): a revision a read publishes reaches `state_changed` in the window's FIFO, not inside the
+  read.
 - `admitted_command_has_one_constructor` (compile-fail pair in the contract crate's
   `tests/compile_fail/`): building an `AdmittedCommand` outside `admit` does not compile, and
   neither does passing a bare `WindowCommand` to `apply`.

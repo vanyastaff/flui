@@ -249,9 +249,39 @@ pub(crate) fn pointer_icon_absence(api: AndroidApi) -> CapabilityAbsence {
     }
 }
 
+/// A capability read the two ways a test compares it: how it is delivered,
+/// and why it is missing.
+#[cfg(test)]
+pub(crate) trait CapabilityReading {
+    /// How the capability is delivered, without the reason it is not.
+    fn availability(self) -> flui_platform::Availability;
+    /// Why the window lacks the capability; `None` while it has it.
+    fn absence(self) -> Option<CapabilityAbsence>;
+}
+
+#[cfg(test)]
+impl CapabilityReading for WindowCapability {
+    fn availability(self) -> flui_platform::Availability {
+        match self {
+            Self::Native => flui_platform::Availability::Native,
+            Self::Emulated => flui_platform::Availability::Emulated,
+            Self::Absent(_) => flui_platform::Availability::Unavailable,
+        }
+    }
+
+    fn absence(self) -> Option<CapabilityAbsence> {
+        match self {
+            Self::Absent(absence) => Some(absence),
+            Self::Native | Self::Emulated => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_platform::{Availability, CapabilityAbsence};
+
+    use super::CapabilityReading as _;
 
     use super::{
         ActivityFacts, AppleVersion, MacOSVersion, PointerInteraction, ViewDisplayLink,

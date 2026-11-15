@@ -130,15 +130,19 @@ enum Delivery {
     /// one of its handler's methods), so every delivery queued ahead of it,
     /// the close's `closed` included, reaches the handler first.
     Clear(Option<RetirementNotice>),
-    /// What the window's state cell has to say, said in the window's turn
+    /// A diagnostic the window has to say, said in the window's turn
     /// ([`WindowDelivery::diagnose`]); said also after `closed`, as it is no
     /// obligation of the handler.
-    Diagnostic(crate::window::state::StateDiagnostic),
+    Diagnostic(Diagnostic),
 }
 
 /// Run by a queued clear once the handler is let go (Win32 orders its
 /// window-destroyed notice after the handler's release this way).
 type RetirementNotice = Box<dyn FnOnce() + Send>;
+
+/// A diagnostic a window hands its delivery to be said in the window's turn,
+/// outside whatever borrows the code that found it held.
+type Diagnostic = Box<dyn FnOnce() + Send>;
 
 /// Closes a window whose queued close request the handler granted, without
 /// asking it again.
@@ -587,15 +591,15 @@ impl WindowDelivery {
         let _asked = self.ask_for_owner_turn();
     }
 
-    /// Say what the window's state cell has to say, in the window's turn and
+    /// Say a diagnostic of the window (its state cell's), in the window's turn and
     /// never here: whoever reads the window may hold borrows a `tracing`
     /// subscriber takes again. It waits in the FIFO as an announcement after
     /// a read does ([`Self::state_changed_after_read`]).
-    pub(crate) fn diagnose(&self, diagnostic: crate::window::state::StateDiagnostic) {
+    pub(crate) fn diagnose(&self, diagnostic: impl FnOnce() + Send + 'static) {
         self.dispatch
             .lock()
             .pending
-            .push_back(Delivery::Diagnostic(diagnostic));
+            .push_back(Delivery::Diagnostic(Box::new(diagnostic)));
         let _asked = self.ask_for_owner_turn();
     }
 
@@ -679,7 +683,7 @@ impl WindowDelivery {
             return None;
         }
         if let Delivery::Diagnostic(diagnostic) = delivery {
-            contain_owner_callback(|| diagnostic.emit());
+            contain_owner_callback(diagnostic);
             return None;
         }
         if self.closed.load(Ordering::SeqCst) {

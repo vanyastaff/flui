@@ -506,6 +506,7 @@ impl WindowsWindow {
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
                 scale: scale.clone(),
+                refusing_zero_dpi: std::cell::Cell::new(false),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,

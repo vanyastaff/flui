@@ -3210,8 +3210,8 @@ requests focus; operating-system focus policy still decides whether focus moves.
 AppKit deminiaturizes then orders the window forward. Win32 queries
 `WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
 placement, using `SW_SHOW` for non-minimized windows.
-A window whose capabilities leave `shows` and `activates` `Unavailable` makes `admit` refuse the
-command before any mutation. A closed window refuses every command with `Closed`.
+A window whose capabilities leave `shows` and `activates` `Absent` makes `admit` refuse the
+command before any mutation, with the absence's reason. A closed window refuses every command with `Closed`.
 
 Source: [Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
 Headless tests model minimized independently from maximized/fullscreen.

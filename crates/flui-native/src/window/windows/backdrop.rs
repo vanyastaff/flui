@@ -677,6 +677,7 @@ mod material_tests {
     use crate::host_window::HostWindow;
     use crate::platform::Platform as _;
     use crate::version::gate::windows::WindowsBuild;
+    use crate::window::capabilities::CapabilityReading as _;
 
     const NOT_ON_THIS_DEVICE: Unsupported = Unsupported::new(UnsupportedReason::NotOnThisDevice);
 

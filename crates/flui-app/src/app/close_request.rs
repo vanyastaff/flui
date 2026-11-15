@@ -248,7 +248,7 @@ pub enum CloseRequestError {
     NoHostedRuntime,
     /// The window does not close: its window system lets the application
     /// close none of its windows (Android's one window, whose `closes`
-    /// capability is `Unavailable`).
+    /// capability is `Absent`).
     #[error("the window at {address:?} refused to close")]
     Refused {
         /// The address that was asked for.

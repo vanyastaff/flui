@@ -2,7 +2,7 @@
 //! `PlatformWindow` surface of the headless platform: every command changes the
 //! snapshot and advances its revision by one, a repeat changes nothing, the
 //! host's clamps and refusals show in the snapshot, admission refuses a
-//! command whose capability is `Unavailable` with `Unsupported` and no change,
+//! command whose capability is `Absent` with `Unsupported` and no change,
 //! and a command admitted before the capabilities changed is `Superseded`.
 
 use flui_platform::CommandRefusal;

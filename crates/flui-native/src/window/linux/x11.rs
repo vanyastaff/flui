@@ -472,6 +472,7 @@ pub(crate) mod support {
         };
 
         use super::*;
+        use crate::window::capabilities::CapabilityReading as _;
 
         const ATOMS: SupportAtoms = SupportAtoms {
             maximized_horz: 302,

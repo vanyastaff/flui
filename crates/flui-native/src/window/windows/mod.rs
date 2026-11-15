@@ -222,6 +222,7 @@ pub(crate) mod material {
         use super::{SystemBackdrop, below_the_gate, gate};
         use crate::version::gate::testing::row;
         use crate::version::gate::windows::WindowsBuild;
+        use crate::window::capabilities::CapabilityReading as _;
 
         /// One row per build around the gate: below it a window has no
         /// material and admission refuses one with `NotOnThisDevice`; from it

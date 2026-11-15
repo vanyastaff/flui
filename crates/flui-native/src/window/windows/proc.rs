@@ -208,6 +208,9 @@ pub(crate) struct WindowContext {
     ///
     /// [`CreatedWindow::scale`]: crate::owner::windows::CreatedWindow::scale
     pub(crate) scale: crate::owner::windows::WindowScale,
+    /// A `WM_DPICHANGED` naming a DPI of zero was refused and no valid one
+    /// came since: a sender that repeats it is reported once, not per message.
+    pub(crate) refusing_zero_dpi: std::cell::Cell<bool>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -1942,9 +1945,14 @@ impl WindowContext {
         use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
         let Some(old_scale) = self.scale.rescale(u32::from(dpi)) else {
-            tracing::warn!("a DPI change to zero is ignored: the window keeps its scale");
+            // Once per run of them: any process can send the message in a
+            // loop, and each warning is a call into the subscriber.
+            if !self.refusing_zero_dpi.replace(true) {
+                tracing::warn!("a DPI change to zero is ignored: the window keeps its scale");
+            }
             return;
         };
+        self.refusing_zero_dpi.set(false);
         let new_scale = self.scale.scale();
         tracing::info!(dpi, new_scale, "DPI changed");
         // The display's scale changed, so its snapshot entry did.

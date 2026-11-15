@@ -498,10 +498,10 @@ impl WindowStateCell {
             )
         };
         if let Some(refused) = refusal {
-            delivery.diagnose(StateDiagnostic::Refused(refused));
+            delivery.diagnose(move || StateDiagnostic::Refused(refused).emit());
         }
         if let Some(error) = freeze {
-            delivery.diagnose(StateDiagnostic::Frozen(error));
+            delivery.diagnose(move || StateDiagnostic::Frozen(error).emit());
         }
     }
 

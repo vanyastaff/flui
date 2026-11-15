@@ -23,13 +23,11 @@ use crate::{
 /// changes: a capability stays absent until the window publishes it again.
 ///
 /// ```
-/// use flui_platform::{Availability, CapabilityAbsence, WindowCapability};
+/// use flui_platform::{CapabilityAbsence, WindowCapability};
 ///
 /// let blur = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
 /// assert!(!blur.is_available());
-/// assert_eq!(blur.availability(), Availability::Unavailable);
-/// assert_eq!(blur.absence(), Some(CapabilityAbsence::NOT_YET_ON_THIS_HOST));
-/// assert_eq!(WindowCapability::Emulated.absence(), None);
+/// assert!(WindowCapability::Emulated.is_available());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(
@@ -55,25 +53,6 @@ impl WindowCapability {
     #[must_use]
     pub const fn is_available(self) -> bool {
         !matches!(self, Self::Absent(_))
-    }
-
-    /// How the capability is delivered, without the reason it is not.
-    #[must_use]
-    pub const fn availability(self) -> Availability {
-        match self {
-            Self::Native => Availability::Native,
-            Self::Emulated => Availability::Emulated,
-            Self::Absent(_) => Availability::Unavailable,
-        }
-    }
-
-    /// Why the window lacks the capability; `None` while it has it.
-    #[must_use]
-    pub const fn absence(self) -> Option<CapabilityAbsence> {
-        match self {
-            Self::Absent(absence) => Some(absence),
-            Self::Native | Self::Emulated => None,
-        }
     }
 }
 

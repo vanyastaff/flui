@@ -922,16 +922,12 @@ fn the_presentation_report_answers_why_it_is_missing() {
         WindowCapability::Native
     );
     assert_eq!(
-        WindowCapabilities::NONE.reports_presentation.absence(),
-        Some(CapabilityAbsence::NOT_ON_THIS_PLATFORM),
+        WindowCapabilities::NONE.reports_presentation,
+        WindowCapability::NOT_ON_THIS_PLATFORM,
         "a window that reports nothing: the platform's"
     );
     let mut host = WindowCapabilities::ALL;
     host.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-    assert_eq!(
-        host.reports_presentation.availability(),
-        Availability::Unavailable
-    );
     assert!(!host.reports_presentation.is_available());
     let mut device = WindowCapabilities::ALL;
     device.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);

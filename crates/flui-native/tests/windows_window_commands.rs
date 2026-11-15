@@ -1483,6 +1483,55 @@ fn a_dpi_change_announces_one_whole_snapshot() {
     dpi_changed(&window, 96, now);
 }
 
+/// Counts the warnings a window sends its `tracing` subscriber.
+struct Warnings(Arc<AtomicUsize>);
+
+impl tracing::Subscriber for Warnings {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() == tracing::Level::WARN {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A `WM_DPICHANGED` naming a DPI of zero, which any process can send in a
+/// loop, is reported once per run of them, not once per message: each report
+/// is a call into the application's subscriber. A real DPI ends the run.
+fn a_run_of_zero_dpi_messages_is_reported_once() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let warnings = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(Warnings(Arc::clone(&warnings)), || {
+        for _ in 0..5 {
+            send(&window, WM_DPICHANGED, 0, 0);
+        }
+    });
+    assert_eq!(warnings.load(Ordering::SeqCst), 1, "one run, one warning");
+    dpi_changed(&window, 96, rect(&window));
+    let after = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(Warnings(Arc::clone(&after)), || {
+        send(&window, WM_DPICHANGED, 0, 0);
+    });
+    assert_eq!(after.load(Ordering::SeqCst), 1, "a new run is reported");
+}
+
 /// Activation is a fact of its own: a window whose keyboard focus went
 /// elsewhere (an owned popup, here none) is still the active one.
 fn activation_is_a_fact_apart_from_focus() {
@@ -2146,6 +2195,10 @@ fn native_window_commands() {
         (
             "a_dpi_change_announces_one_whole_snapshot",
             a_dpi_change_announces_one_whole_snapshot,
+        ),
+        (
+            "a_run_of_zero_dpi_messages_is_reported_once",
+            a_run_of_zero_dpi_messages_is_reported_once,
         ),
         (
             "activation_is_a_fact_apart_from_focus",
