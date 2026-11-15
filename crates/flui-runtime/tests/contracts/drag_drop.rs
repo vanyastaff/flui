@@ -39,6 +39,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::protocol::BoxProtocol;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher, RuntimeOperation};
 use flui_runtime::presentation::PresentationWindow;
+use flui_runtime::sink::SubmitVerdict;
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_view::{Child, RenderObjectContext, RenderView, impl_render_view};
 use flui_widgets::SizedBox;
@@ -218,6 +219,89 @@ impl OwnerEffects for Effects {
     }
 }
 
+/// A sink that answers every frame with its verdict.
+struct Answering(SubmitVerdict);
+
+impl flui_runtime::sink::FrameSink for Answering {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (800, 600)
+    }
+    fn submit(
+        &mut self,
+        _epoch: flui_foundation::FrameEpoch,
+        _: flui_layer::ScenePublication,
+    ) -> SubmitVerdict {
+        self.0
+    }
+}
+
+/// [`Effects`] whose frames are drawn, through a sink that answers them with its verdict.
+struct Framing(SubmitVerdict);
+
+impl OwnerEffects for Framing {
+    fn finish_install(
+        &self,
+        address: PresentationAddress,
+        outcome: flui_runtime::owner::InitializationOutcome,
+        recovery: flui_runtime::owner::RecoveryState,
+    ) {
+        Effects.finish_install(address, outcome, recovery);
+    }
+    fn runtime_lifecycle(
+        &self,
+        id: flui_foundation::UiRuntimeId,
+        state: flui_scheduler::AppLifecycleState,
+    ) {
+        Effects.runtime_lifecycle(id, state);
+    }
+    fn runtimes_stopped(&self, recovery: flui_runtime::owner::RecoveryState) {
+        Effects.runtimes_stopped(recovery);
+    }
+    fn frame(&self, _: PresentationAddress, runtime: &mut UiRuntime) {
+        let _ = runtime.pump(
+            &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+            &mut Answering(self.0),
+        );
+    }
+    fn commit_install(
+        &self,
+        token: flui_runtime::owner::InstallToken,
+        recovery: flui_runtime::owner::RecoveryState,
+    ) -> Option<flui_runtime::owner::InstallInitialization> {
+        Effects.commit_install(token, recovery)
+    }
+    fn retire_host(
+        &self,
+        addresses: &[PresentationAddress],
+        recovery: flui_runtime::owner::RecoveryState,
+    ) {
+        Effects.retire_host(addresses, recovery);
+    }
+    fn cancel_install(
+        &self,
+        token: flui_runtime::owner::InstallToken,
+        recovery: flui_runtime::owner::RecoveryState,
+    ) {
+        Effects.cancel_install(token, recovery);
+    }
+    fn resize_surface(
+        &self,
+        address: PresentationAddress,
+        metrics: flui_foundation::geometry::WindowMetrics,
+    ) {
+        Effects.resize_surface(address, metrics);
+    }
+    fn retire_presentation(&self, address: PresentationAddress, next: Option<PresentationAddress>) {
+        Effects.retire_presentation(address, next);
+    }
+    fn after_turn(&self, recovery: flui_runtime::owner::RecoveryState) {
+        Effects.after_turn(recovery);
+    }
+    fn request_continuation(&self) -> bool {
+        Effects.request_continuation()
+    }
+}
+
 fn nonce() -> ProcessNonce {
     ProcessNonce::from_raw(NonZeroU64::new(0x000d_15c0).expect("nonzero"))
 }
@@ -284,9 +368,18 @@ fn mount(runtime: &mut UiRuntime, presentation: PresentationId, root: &ReceiverA
 /// Publish `runtime` and route each window's input to its presentation through the owner.
 fn publish(
     owner: &OwnerHost,
-    mut runtime: UiRuntime,
+    runtime: UiRuntime,
     windows: &[(&Window, PresentationId)],
 ) -> Vec<PresentationDispatcher> {
+    publish_at(owner, runtime, windows).0
+}
+
+/// [`publish`], with the address the runtime was published at.
+fn publish_at(
+    owner: &OwnerHost,
+    mut runtime: UiRuntime,
+    windows: &[(&Window, PresentationId)],
+) -> (Vec<PresentationDispatcher>, PresentationAddress) {
     let _ = runtime.pump(
         &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
         &mut Sink,
@@ -296,7 +389,7 @@ fn publish(
         .publication(owner.prepare_runtime(runtime))
         .expect("publish")
         .commit();
-    windows
+    let dispatchers = windows
         .iter()
         .map(|(window, presentation)| {
             let dispatcher = owner
@@ -312,7 +405,8 @@ fn publish(
             });
             dispatcher
         })
-        .collect()
+        .collect();
+    (dispatchers, address)
 }
 
 struct World {
@@ -325,6 +419,8 @@ struct World {
     first: Window,
     second: Window,
     dispatchers: Vec<PresentationDispatcher>,
+    /// Where the runtime was published, which names each presentation's frame authority.
+    address: PresentationAddress,
     _platform: HeadlessPlatform,
 }
 
@@ -362,12 +458,18 @@ fn world_on(platform: HeadlessPlatform, first: &ReceiverAnchor, second: &Receive
     let primary = runtime.presentation_id();
     let assembled = runtime.assemble_presentation(presentation_b);
     let secondary = runtime.install_presentation(assembled);
-    mount(&mut runtime, primary, first);
+    // A pump submits the scene of one presentation, so each window's tree is shown by a frame
+    // of its own: a drag answers from the tree its window shows (ADR-0211 §16).
     mount(&mut runtime, secondary, second);
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut Sink,
+    );
+    mount(&mut runtime, primary, first);
     let handle = runtime.drag_handle();
     let id = runtime.id();
     let owner = OwnerHost::new();
-    let dispatchers = publish(
+    let (dispatchers, address) = publish_at(
         &owner,
         runtime,
         &[(&window_a, primary), (&window_b, secondary)],
@@ -382,11 +484,30 @@ fn world_on(platform: HeadlessPlatform, first: &ReceiverAnchor, second: &Receive
         first: window_a,
         second: window_b,
         dispatchers,
+        address,
         _platform: platform,
     }
 }
 
 impl World {
+    /// Draw a frame of the first window's whole tree, answered `verdict`: a `NotShown` one leaves
+    /// the window showing a frame its tree has moved past.
+    fn draw_first(&self, verdict: SubmitVerdict) {
+        let frames = self
+            .owner
+            .frame_dispatcher(PresentationAddress {
+                presentation_id: self.primary,
+                ..self.address
+            })
+            .expect("frame authority");
+        frames
+            .surface_restored(&Framing(verdict))
+            .expect("the owner admits the repaint");
+        frames
+            .deliver(crate::VSYNC, &Framing(verdict))
+            .expect("the owner admits the frame");
+    }
+
     /// Run `body` in an owner callback of the first presentation, as pointer dispatch runs.
     fn in_callback(&self, body: impl FnOnce() + 'static) {
         self.dispatchers[0]
@@ -547,6 +668,100 @@ fn a_drop_stays_open_at_the_os_until_its_request_resolves() {
         0,
         "the runtime's next turn tells the OS the target is done"
     );
+}
+
+/// A drag from another application over the first window, offering text and allowing a copy.
+fn start_foreign(world: &World) {
+    world
+        .dnd
+        .start_foreign(
+            vec![(
+                TransferFormat::Text,
+                TransferPayload::Text("held".to_owned()),
+            )],
+            COPY,
+        )
+        .expect("no session runs yet");
+}
+
+fn a_drag_over_a_window_whose_frame_was_withheld_waits_for_the_frame_that_shows_the_tree() {
+    let (seen, first) = receiver(Some(COPY), false);
+    let (_unused, second) = receiver(None, false);
+    let world = world(&first, &second, OsDragStart::OnLeavingWindow);
+    world.draw_first(SubmitVerdict::NotShown);
+    start_foreign(&world);
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
+    assert!(
+        events(&seen).is_empty(),
+        "no receiver answers from a tree its window does not show"
+    );
+    assert_eq!(
+        world.dnd.cached_feedback(),
+        Some(DropFeedback { accept: None }),
+        "the OS keeps the answer it had"
+    );
+    world.draw_first(SubmitVerdict::Presented);
+    assert_eq!(
+        events(&seen),
+        ["enter"],
+        "the frame that shows the tree delivers the hover"
+    );
+    assert_eq!(
+        world.dnd.cached_feedback(),
+        Some(DropFeedback { accept: Some(COPY) })
+    );
+    assert_eq!(world.dnd.drop_here().expect("a session runs"), Some(COPY));
+    assert_eq!(
+        events(&seen),
+        ["enter".to_owned(), format!("dropped {}", COPY.bits())]
+    );
+}
+
+fn a_drop_on_a_window_whose_frame_was_withheld_lands_where_the_os_was_told() {
+    let (seen, first) = receiver(Some(COPY), false);
+    let (_unused, second) = receiver(None, false);
+    let world = world(&first, &second, OsDragStart::OnLeavingWindow);
+    start_foreign(&world);
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
+    assert_eq!(events(&seen), ["enter"]);
+    world.draw_first(SubmitVerdict::NotShown);
+    // Off the receiver, in the tree the window does not show yet: the move waits.
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(900.0, 700.0))
+        .expect("a session runs");
+    assert_eq!(events(&seen), ["enter"], "the move waits for the tree");
+    assert_eq!(
+        world.dnd.drop_here().expect("a session runs"),
+        Some(COPY),
+        "the OS resolves the drop from the answer the window gave"
+    );
+    assert_eq!(
+        events(&seen),
+        ["enter".to_owned(), format!("dropped {}", COPY.bits())],
+        "the receiver whose answer the OS took takes the drop at once"
+    );
+    assert_eq!(world.dnd.open_offers(), 0, "and the OS is told it is done");
+}
+
+fn a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once() {
+    let (seen, first) = receiver(Some(COPY), false);
+    let (_unused, second) = receiver(None, false);
+    let world = world(&first, &second, OsDragStart::OnLeavingWindow);
+    start_foreign(&world);
+    world
+        .dnd
+        .hover(world.first.id(), Point::new(10.0, 10.0))
+        .expect("a session runs");
+    world.draw_first(SubmitVerdict::NotShown);
+    world.dnd.leave();
+    assert_eq!(events(&seen), ["enter", "left"]);
 }
 
 fn a_drag_between_presentations_of_one_runtime_redeems_its_value() {
@@ -1045,6 +1260,18 @@ fn drag_and_drop_reaches_the_runtime() {
             (
                 "a_drop_stays_open_at_the_os_until_its_request_resolves",
                 a_drop_stays_open_at_the_os_until_its_request_resolves,
+            ),
+            (
+                "a_drag_over_a_window_whose_frame_was_withheld_waits_for_the_frame_that_shows_the_tree",
+                a_drag_over_a_window_whose_frame_was_withheld_waits_for_the_frame_that_shows_the_tree,
+            ),
+            (
+                "a_drop_on_a_window_whose_frame_was_withheld_lands_where_the_os_was_told",
+                a_drop_on_a_window_whose_frame_was_withheld_lands_where_the_os_was_told,
+            ),
+            (
+                "a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once",
+                a_drag_that_leaves_a_window_whose_frame_was_withheld_leaves_its_receivers_at_once,
             ),
             (
                 "a_drag_between_presentations_of_one_runtime_redeems_its_value",

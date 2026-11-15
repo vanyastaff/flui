@@ -57,10 +57,11 @@ delivers held input once the surface returns, bounds the attempts, and keeps the
 transient at the display rate.
 
 - **§1.** A frame that settles `NotShown` commits nothing: the tree revision stays uncommitted, the
-  input regions of the last presented frame stay in force, pointer input is held for the frame that
-  shows the tree, its layer reads park for a later scene, and its frame-aligned haptics wait. It
-  does not end the dropped-frame streak (ADR-0334 §2). An inline `NotShown` supersedes none of the
-  frames still queued, which their settlements may still show.
+  input regions of the last presented frame stay in force, pointer input and an OS drag's hover are
+  held for the frame that shows the tree (ADR-0211 §16), its layer reads park for a later scene,
+  and its frame-aligned haptics wait. It does not end the dropped-frame streak (ADR-0334 §2). An
+  inline `NotShown` supersedes none of the frames still queued, which their settlements may still
+  show.
 - **§2.** The first `MAX_NOT_SHOWN_RETRIES` consecutive withheld attempts are retried on the next
   display period. Each attempt past them counts into the dropped-frame streak
   (`note_frame_failure`) and waits out the dropped-frame backoff (`failure_retry_delay`, doubling

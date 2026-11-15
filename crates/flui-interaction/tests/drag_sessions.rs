@@ -1831,6 +1831,41 @@ fn a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop() {
         );
         assert_eq!(count(&f.log, "K:dropped COPY"), 0, "{:?}", logged(&f.log));
         assert_eq!(count(&f.log, "K:left"), 1);
+
+        // Unmounted by a build, with no turn before the OS resolves a drop: the answer is
+        // withdrawn when the build ends, so the OS never resolves a drop from it.
+        let built_away = f.unregistered("B", Some(COPY), None);
+        let ticket = f.register(&built_away, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: Some(COPY) }))
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.owner.withdraw_unregistered_answers();
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: None })),
+            "the OS hears that nothing accepts as soon as the build ends"
+        );
+        assert_eq!(
+            count(&f.log, "B:left"),
+            0,
+            "the receiver leaves at the next tick"
+        );
+        f.owner.tick(time_at(300));
+        assert_eq!(count(&f.log, "B:left"), 1);
     });
 }
 

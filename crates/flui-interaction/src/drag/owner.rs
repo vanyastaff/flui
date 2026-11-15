@@ -473,13 +473,19 @@ impl DragOwner {
                         ViewParts::of_entry(&state, entry),
                     )
                 });
-            let incoming = state.incoming.iter().map(|incoming| {
-                (
-                    Hovered::Offer(incoming.presentation, incoming.offer.id()),
-                    incoming.tracker.clone(),
-                    ViewParts::of_incoming(incoming),
-                )
-            });
+            // A held hover waits for its tree: no spring-loading or autoscroll under a position
+            // the drag has left.
+            let incoming = state
+                .incoming
+                .iter()
+                .filter(|incoming| incoming.held_position.is_none())
+                .map(|incoming| {
+                    (
+                        Hovered::Offer(incoming.presentation, incoming.offer.id()),
+                        incoming.tracker.clone(),
+                        ViewParts::of_incoming(incoming),
+                    )
+                });
             sessions.chain(incoming).collect()
         };
         for (hovered, tracker, parts) in live {
@@ -563,7 +569,13 @@ impl DragOwner {
             .entries
             .iter()
             .map(|(_, entry)| &entry.tracker)
-            .chain(state.incoming.iter().map(|incoming| &incoming.tracker))
+            .chain(
+                state
+                    .incoming
+                    .iter()
+                    .filter(|incoming| incoming.held_position.is_none())
+                    .map(|incoming| &incoming.tracker),
+            )
             .filter_map(DropTracker::next_deadline)
             .min()
     }
@@ -642,6 +654,127 @@ impl DragOwner {
         }
     }
 
+    /// Take an OS drag event for `presentation` while its window does not show the tree a hit
+    /// test would read: a frame of it was painted and is not on screen yet (ADR-0211 §16).
+    ///
+    /// An enter or a move is held: the offer is admitted and the actions the source permits are
+    /// kept, while the hover's last position waits for [`release_held`](Self::release_held), so
+    /// receivers answer from the tree the user sees, and the OS keeps the answer it was last given.
+    /// A drop and a leave are not held, since the OS has already acted on them: the returned event
+    /// is the caller's to [`deliver`](Self::deliver) now. A drop comes back without its position,
+    /// so it lands on the receiver that accepted the last delivered move, whose answer the OS
+    /// resolved the drop from, and a held position goes with it.
+    ///
+    /// Runs no user code.
+    #[must_use = "a drop or a leave comes back to be delivered at once"]
+    pub fn hold(
+        &self,
+        presentation: PresentationId,
+        event: DragDropEvent,
+    ) -> Option<DragDropEvent> {
+        let (id, allowed, position) = match event {
+            DragDropEvent::Entered {
+                offer,
+                allowed,
+                position,
+            } => {
+                let id = offer.id();
+                self.admit_offer(presentation, offer, allowed);
+                (id, None, position)
+            }
+            DragDropEvent::Moved {
+                id,
+                allowed,
+                position,
+            } => (id, Some(allowed), Some(position)),
+            DragDropEvent::Dropped { id, action, .. } => {
+                if let Some(incoming) = self.shared.borrow_mut().incoming_mut(presentation, id) {
+                    incoming.held_position = None;
+                }
+                return Some(DragDropEvent::Dropped {
+                    id,
+                    action,
+                    position: None,
+                });
+            }
+            exited @ DragDropEvent::Exited { .. } => return Some(exited),
+        };
+        let mut state = self.shared.borrow_mut();
+        if let Some(incoming) = state.incoming_mut(presentation, id)
+            && !incoming.dropped
+        {
+            if let Some(allowed) = allowed {
+                incoming.os_allowed = allowed;
+            }
+            if let Some(position) = position {
+                incoming.held_position = Some(Offset::new(position.x, position.y));
+            }
+        }
+        None
+    }
+
+    /// Withdraw from the OS each answer whose receiver went away: when a build unmounts the
+    /// receiver that accepted an OS drag's last move, the OS is told at once that nothing accepts
+    /// the drag, before it can resolve a drop from that answer, and the drop gets no recipient
+    /// (ADR-0211 §16). The receivers that went leave at the next [`tick`](Self::tick). The
+    /// runtime calls this after each frame's build. Runs no receiver.
+    pub fn withdraw_unregistered_answers(&self) {
+        let gone: Vec<(PresentationId, DataTransferId)> = {
+            let state = self.shared.borrow();
+            state
+                .incoming
+                .iter()
+                .filter(|incoming| {
+                    !incoming.dropped && incoming.tracker.forget_unregistered_acceptance()
+                })
+                .map(|incoming| (incoming.presentation, incoming.offer.id()))
+                .collect()
+        };
+        for (presentation, id) in gone {
+            self.accepting_gone(Hovered::Offer(presentation, id));
+        }
+    }
+
+    /// Whether [`hold`](Self::hold) kept a hover position for `presentation` that
+    /// [`release_held`](Self::release_held) has not delivered yet.
+    #[must_use]
+    pub fn has_held(&self, presentation: PresentationId) -> bool {
+        self.shared.borrow().incoming.iter().any(|incoming| {
+            incoming.presentation == presentation && incoming.held_position.is_some()
+        })
+    }
+
+    /// Deliver what [`hold`](Self::hold) kept for `presentation` now that its window shows the
+    /// tree `hit` reads: each held hover moves to its last position, in the order the hovers
+    /// entered. A receiver that fails keeps the other hovers' deliveries; the first failure
+    /// propagates after them.
+    pub fn release_held(
+        &self,
+        presentation: PresentationId,
+        hit: &mut dyn FnMut(Offset<f64>, PointerKind) -> Option<Vec<HitTestEntry>>,
+    ) {
+        let held: Vec<(DataTransferId, Offset<f64>)> = {
+            let mut state = self.shared.borrow_mut();
+            state
+                .incoming
+                .iter_mut()
+                .filter(|incoming| incoming.presentation == presentation)
+                .filter_map(|incoming| {
+                    let position = incoming.held_position.take()?;
+                    Some((incoming.offer.id(), position))
+                })
+                .collect()
+        };
+        if held.is_empty() {
+            return;
+        }
+        let mut failure = ClosePanic::new();
+        for (id, position) in held {
+            failure.invoke(|| self.update_incoming(presentation, id, position, hit));
+        }
+        failure.finish();
+    }
+
     fn admit_offer(
         &self,
         presentation: PresentationId,
@@ -698,6 +831,7 @@ impl DragOwner {
             dropped: false,
             position: None,
             pointer,
+            held_position: None,
         });
     }
 
@@ -717,6 +851,8 @@ impl DragOwner {
                 return;
             }
             incoming.position = Some(position);
+            // A position delivered is newer than one held.
+            incoming.held_position = None;
             let found = (incoming.tracker.clone(), ViewParts::of_incoming(incoming));
             if let Some(offer) = state.offer_mut(id) {
                 offer.answering = Some(presentation);
@@ -756,6 +892,8 @@ impl DragOwner {
             if std::mem::replace(&mut incoming.dropped, true) {
                 return;
             }
+            // A dropped hover moves no more.
+            incoming.held_position = None;
             let found = (incoming.tracker.clone(), ViewParts::of_incoming(incoming));
             if let Some(offer) = state.offer_mut(id) {
                 offer.dropped = true;

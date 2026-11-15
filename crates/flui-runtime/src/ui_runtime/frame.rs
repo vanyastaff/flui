@@ -802,11 +802,23 @@ impl UiRuntime {
         subscriber_panic
     }
 
+    /// Replays the input `presentation` held for a commit: its pointer input, then the OS drag
+    /// hovers it held. A failure in the pointer replay does not strand the hovers; the first
+    /// failure resumes after both.
+    pub(super) fn replay_committed_held_input(&self, presentation: &PresentationState) {
+        let mut held = FirstPanic::new();
+        held.contain(|| self.replay_committed_held_pointer_input(presentation));
+        held.contain(|| self.release_committed_held_drags(presentation));
+        if let Some(payload) = held.into_payload() {
+            resume_unwind(payload);
+        }
+    }
+
     /// Replays the pointer input `presentation` held for a commit, by the rule that held it:
     /// only while the presentation is `Committed`. A commit that leaves it uncommitted (an older
     /// frame settled while a later one waits, a text barrier, a segment in flight) leaves the
     /// input held for the commit that clears it.
-    pub(super) fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
+    fn replay_committed_held_pointer_input(&self, presentation: &PresentationState) {
         if presentation.frame_commit_state() != FrameCommitState::Committed {
             return;
         }
@@ -944,6 +956,9 @@ impl UiRuntime {
             .with(PipelineOwner::device_pixel_ratio);
         let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
         let (producer_id, outcome, any_retry_needed) = self.draw_frame_entered(constraints);
+        // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
+        // told before it can resolve a drop from that answer (ADR-0211 §16).
+        self.drag.withdraw_unregistered_answers();
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a
         // secondary and exercises this attribution. Production secondary
@@ -1187,7 +1202,7 @@ impl UiRuntime {
         // Held input the commit released replays before the first panic resumes, as a queued
         // frame's settlement does, so a panic that came first does not strand it.
         if replay_committed_input {
-            hover_panic.contain(|| self.replay_committed_held_pointer_input(producer));
+            hover_panic.contain(|| self.replay_committed_held_input(producer));
         }
         if let Some(payload) = hover_panic.into_payload() {
             resume_unwind(payload);

@@ -307,7 +307,7 @@ impl UiRuntime {
         // replays it is decided with the verdict (`owe_current_tree`), and the replay runs only
         // while the presentation is committed, the rule that held it.
         if replay_committed_input {
-            held.contain(|| self.replay_committed_held_pointer_input(producer));
+            held.contain(|| self.replay_committed_held_input(producer));
         }
         if let Some(style) = overlay_style {
             held.contain(|| {

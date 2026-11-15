@@ -344,6 +344,25 @@ impl DropTracker {
         }
     }
 
+    /// Forget the receiver that accepted the last move once its ticket no longer holds it, so no
+    /// drop goes to it; whether it did. No receiver runs: the ones that went leave at the next
+    /// [`tick`](Self::tick).
+    pub(crate) fn forget_unregistered_acceptance(&self) -> bool {
+        let mut state = self.0.borrow_mut();
+        if state.ended {
+            return false;
+        }
+        let gone = state.accepting.as_ref().is_some_and(|accepting| {
+            !state.entered.iter().any(|entered| {
+                entered.is(accepting.key, &accepting.receiver) && entered.is_registered()
+            })
+        });
+        if gone {
+            state.accepting = None;
+        }
+        gone
+    }
+
     /// Leave every entered receiver whose ticket no longer holds it; whether
     /// the one that accepted the last move was among them.
     fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) -> bool {
