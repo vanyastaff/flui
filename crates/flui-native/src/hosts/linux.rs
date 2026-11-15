@@ -8,11 +8,11 @@
 //! selection positions with its seats' selections, X11 with the `CLIPBOARD`
 //! and `PRIMARY` selections on a connection of its own. Wayland fills the
 //! text position with its seats' `zwp_text_input_v3` and the drag position
-//! with drops on its windows through `wl_data_device`; X11 fills the drag
-//! position with XDND drops on its windows and the sessions they start.
-//! X11's text input is `Absent` until the host speaks its protocol, and no
-//! Wayland window starts a drag yet; a desktop has no haptics and no system
-//! bars.
+//! with drops on its windows and the sessions they start through
+//! `wl_data_device`; X11 fills the text position with IBus or Fcitx5 over
+//! D-Bus, and XIM where neither answers, and the drag position with XDND
+//! drops on its windows and the sessions they start. A desktop has no
+//! haptics and no system bars.
 
 use std::sync::Arc;
 

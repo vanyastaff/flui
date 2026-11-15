@@ -105,7 +105,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - No rich formats: the clipboard reads and writes plain text until a widget needs more, and the shape of that read is reserved by ADR-0312 §7 ([Accepted ADR sections not built yet](#accepted-adr-sections-not-built-yet)).
 - Android reads and writes the system `ClipboardManager` through JNI; type-checked, no device run yet.
 - The native X11 host owns and reads the `CLIPBOARD` selection on a connection of its own, run between two of its clipboards on Xvfb (2026-10-30); what it owns is gone when the application exits, as it hands nothing to a clipboard manager yet.
-- The native Wayland host reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13 (2026-10-30), and its primary selection through `zwp_primary_selection_device_manager_v1`, run between two clients of sway 1.9 (2026-10-30); no widget claims or pastes the primary selection yet.
+- The native Wayland host reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13 (2026-10-30), and its primary selection through `zwp_primary_selection_device_manager_v1`, run between two clients of sway 1.9 (2026-10-30); `EditableText` and `SelectionArea` claim it for their selection and a middle press in a field pastes it, checked on the headless host, not between two applications.
 - The Web reads the system clipboard through `navigator.clipboard` asynchronously, falling back to its own writes where the browser refuses; no browser run yet.
 
 ### File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere
@@ -113,7 +113,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Every document app; any app with a link · **Parity:** [System services](platform-parity.md#system-services)
 
 - The cross-platform surface is `flui_platform::launch` (open a URI or a file, reveal, trash, with the scheme policy in `ExternalUri`) and `flui-system`'s file dialogs (modal to the widget's window, one at a time), behind the facade's `system` feature ([ADR-0154](adr/ADR-0154-capability-crates.md) §11).
-- **Linux** provides both through the XDG desktop portal (`OpenURI`, `Trash`, `FileChooser`) on zbus's own runtime, run against a stand-in portal on a private bus, not on a desktop. A dialog is modal to an X11 window; on Wayland it is not modal until the host exports an `xdg-foreign` handle.
+- **Linux** provides both through the XDG desktop portal (`OpenURI`, `Trash`, `FileChooser`) on zbus's own runtime, run against a stand-in portal on a private bus, not on a desktop. A dialog is modal to an X11 window; on Wayland it is not modal: the window exports its `xdg-foreign` handle where the compositor offers the protocol, but the contract's `WindowRef` does not carry it yet, so the portal provider reads none.
 - **Still missing:** Windows, the Web, Apple and Android answer `Unsupported(NotYetOnThisHost)` through `flui-system`; the core `Platform`'s `open_url` (Windows and Web, nothing calls it) and file dialogs (Windows only, every other host answers "cancelled") go once each host has its provider.
 
 ### No native drag and drop
@@ -210,7 +210,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** various · **Who it hurts:** Pen, trackpad and iPad users · **Parity:** [Input](platform-parity.md#input)
 
-- **Missing:** no pen on macOS or Linux; no iPad hardware keyboard; the iPad pointer (trackpad scroll, pinch, rotation, hover and the secondary button) is type-checked only, never run on an iPad; no cursors on mobile; keyboard layout read on Windows only.
+- **Missing:** no pen on macOS or Linux; no iPad hardware keyboard; the iPad pointer (trackpad scroll, pinch, rotation, hover and the secondary button) is type-checked only, never run on an iPad; no cursors on mobile; keyboard layout read on Windows, Wayland and X11 only (not on macOS, iOS, Android or the Web).
 - Windows: the precision-touchpad pan and pinch (DirectManipulation) have never run on a touchpad, and no injector reaches it, so its golden recording can only come from a `native-capture` run on one (injected touch, pen, mouse and wheel already record theirs through a manual Windows run).
 - Android: touchpad pinch and two-finger scroll and its pen hover and tilt ran only from `uinput` devices through a manual Android run, with no hardware touchpad or stylus. Its widgets ran with `uinput` touches, `input` stylus and mouse events and hardware key events through a manual Android run, with no physical keyboard, key repeat or dead key.
 - Android: a touch held while the app goes to the background makes the system report it not responding ten seconds later. The loop reads its input queue only while the Activity is resumed, so the cancel the system sends for the window it took away is never answered (seen on a Galaxy S21 by holding a touch and pressing Home).
