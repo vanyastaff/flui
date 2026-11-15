@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
     InvalidGeometry, WindowAppearance, WindowCapabilities, WindowExecutionState, WindowExtent,
-    WindowGeometry, WindowInsets, WindowState,
+    WindowGeometry, WindowInsets, WindowMode, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -133,6 +133,37 @@ impl From<WindowState> for Sample {
             refused: None,
         }
     }
+}
+
+/// `sample`, a read whose geometry was refused, on the geometry `published`
+/// holds, or on no geometry for a window's first read (`None`). The one rule
+/// for a refused geometry, at a window's opening and after it:
+///
+/// - the outer rectangle and the content extent are the published ones;
+/// - the drawable metrics go with them: the sample carries none, so the
+///   published ones stand (`WindowState::successor` keeps them for none) and a
+///   first snapshot has none, never a drawable area on an empty window;
+/// - `normal_geometry` is what the contract says it is, the rectangle a
+///   window in another mode than normal returns to, whatever mode the read
+///   reports: none for a normal window; the published outer rectangle for a
+///   window that left the normal mode since, since that is where it was in
+///   it; the published one for a window that was already away from it.
+fn on_published_geometry(mut sample: WindowState, published: Option<&WindowState>) -> WindowState {
+    sample.metrics = None;
+    let Some(published) = published else {
+        sample.outer = WindowGeometry::EMPTY;
+        sample.content_size = WindowExtent::ZERO;
+        sample.normal_geometry = None;
+        return sample;
+    };
+    sample.outer = published.outer;
+    sample.content_size = published.content_size;
+    sample.normal_geometry = match (published.mode, sample.mode) {
+        (_, WindowMode::Normal) => None,
+        (WindowMode::Normal, _) => Some(published.outer),
+        _ => published.normal_geometry,
+    };
+    sample
 }
 
 /// What the cell has to say about its window, said by the window's delivery
@@ -386,6 +417,9 @@ impl WindowStateCell {
             state: mut initial,
             refused,
         } = first_read;
+        if refused.is_some() {
+            initial = on_published_geometry(initial, None);
+        }
         initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         let journal = {
@@ -510,8 +544,15 @@ impl WindowStateCell {
     /// and says nothing: a host reads through [`Self::read`],
     /// [`Self::refresh`] or [`Self::publish_report`].
     ///
+    /// A read that announces and says nothing, for a test that only needs the
+    /// cell current.
+    #[cfg(test)]
+    pub(crate) fn read_quietly(&self, sample: impl FnOnce() -> Sample) -> Published {
+        self.state_with(sample)
+    }
+
     /// `sample` runs with no lock held, so it may call the OS.
-    pub(crate) fn state_with(&self, sample: impl FnOnce() -> Sample) -> Published {
+    fn state_with(&self, sample: impl FnOnce() -> Sample) -> Published {
         let invalidations = self.invalidations.load(Ordering::Acquire);
         {
             let slot = self.last.lock();
@@ -553,12 +594,7 @@ impl WindowStateCell {
         match refused {
             None => slot.refusing = false,
             Some(refused) => {
-                // The geometry is the published one; the drawable metrics go
-                // with it (`successor` keeps the published ones for none).
-                sample.outer = slot.state.outer;
-                sample.content_size = slot.state.content_size;
-                sample.normal_geometry = slot.state.normal_geometry;
-                sample.metrics = None;
+                sample = on_published_geometry(sample, Some(&slot.state));
                 if !std::mem::replace(&mut slot.refusing, true) {
                     slot.unreported_refusal = Some(refused);
                 }
@@ -723,6 +759,92 @@ mod tests {
         cell.invalidate();
         let unchanged = cell.state_with(|| read(f64::INFINITY, true));
         assert!(!unchanged.changed, "nothing else changed");
+    }
+
+    /// A read of a window `width` wide with `facts` put on it.
+    fn read_as(width: f64, facts: impl FnOnce(WindowState) -> WindowState) -> Sample {
+        let geometry =
+            WindowExtent::try_new(Size::new(width, 100.0)).map(|extent| SampledGeometry {
+                outer: WindowGeometry::unplaced(extent),
+                content: extent,
+                normal: None,
+            });
+        Sample::read(geometry, facts)
+    }
+
+    fn metrics(scale: f64) -> flui_foundation::geometry::WindowMetrics {
+        flui_foundation::geometry::WindowMetrics::try_new(Size::new(200, 100), scale)
+            .expect("drawable metrics")
+    }
+
+    /// The drawable metrics go with the geometry: a refused read whose own
+    /// metrics are drawable (a scale its window system reported apart from
+    /// the rectangle) publishes none of them over the published geometry.
+    #[test]
+    fn a_refused_geometry_keeps_the_published_metrics() {
+        let cell = WindowStateCell::new(window(1.0));
+        let first =
+            cell.state_with(|| read_as(2.0, |state| state.with_metrics(Some(metrics(1.0)))));
+        cell.invalidate();
+        let refused = cell.state_with(|| {
+            read_as(f64::NAN, |state| {
+                state.with_metrics(Some(metrics(2.0))).with_focused(true)
+            })
+        });
+        assert!(refused.changed, "the focus is published");
+        assert_eq!(refused.state.metrics, first.state.metrics);
+    }
+
+    /// A first read whose geometry is refused follows the rule every later
+    /// one does: no geometry, and so no drawable metrics either.
+    #[test]
+    fn a_refused_first_read_opens_with_no_metrics() {
+        let cell = WindowStateCell::open(read_as(f64::NAN, |state| {
+            state.with_metrics(Some(metrics(2.0)))
+        }));
+        let opened = cell.last.lock().state.clone();
+        assert_eq!(opened.content_size, WindowExtent::ZERO);
+        assert_eq!(opened.metrics, None);
+    }
+
+    /// On a refused read the rectangle a window returns to stays what the
+    /// contract says it is, whatever mode the read reports: the last
+    /// published rectangle for a window that left the normal mode, none for
+    /// one that came back to it.
+    #[test]
+    fn a_refused_geometry_keeps_the_normal_geometry_true_to_the_mode() {
+        use flui_platform::WindowMode;
+
+        let cell = WindowStateCell::new(window(1.0));
+        let normal = cell.state_with(|| state(2.0)).state;
+        cell.invalidate();
+        let maximized = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Maximized)))
+            .state;
+        assert_eq!(maximized.mode, WindowMode::Maximized);
+        assert_eq!(
+            maximized.normal_geometry,
+            Some(normal.outer),
+            "it returns to where it was"
+        );
+        cell.invalidate();
+        let fullscreen = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Fullscreen)))
+            .state;
+        assert_eq!(
+            fullscreen.normal_geometry,
+            Some(normal.outer),
+            "and still does"
+        );
+        cell.invalidate();
+        let restored = cell
+            .state_with(|| read_as(f64::NAN, |state| state.with_mode(WindowMode::Normal)))
+            .state;
+        assert_eq!(restored.mode, WindowMode::Normal);
+        assert_eq!(
+            restored.normal_geometry, None,
+            "a normal window returns nowhere"
+        );
     }
 
     /// The first refusal of a run of refused reads is said, once; a read that

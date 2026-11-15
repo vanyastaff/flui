@@ -141,7 +141,9 @@ enum Delivery {
 type RetirementNotice = Box<dyn FnOnce() + Send>;
 
 /// A diagnostic a window hands its delivery to be said in the window's turn,
-/// outside whatever borrows the code that found it held.
+/// outside whatever borrows the code that found it held. One that panics (a
+/// `tracing` subscriber's panic) is contained, logged and discarded, as on
+/// every owner callback path, and the queue goes on.
 type Diagnostic = Box<dyn FnOnce() + Send>;
 
 /// Closes a window whose queued close request the handler granted, without
