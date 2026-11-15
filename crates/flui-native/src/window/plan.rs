@@ -388,16 +388,13 @@ mod tests {
                 Some(Point::new(1920, 1)),
             ),
             ("no position", None, DISPLAY, None),
+            // A position that is not finite is refused with the options
+            // (`WindowOptions::geometry`); a finite one can still leave the
+            // finite numbers once it is scaled.
             (
-                "infinite",
-                Some(Point::new(f64::INFINITY, 0.0)),
-                DISPLAY,
-                None,
-            ),
-            (
-                "not a number",
-                Some(Point::new(0.0, f64::NAN)),
-                DISPLAY,
+                "scaled past every number",
+                Some(Point::new(f64::MAX, 0.0)),
+                scaled,
                 None,
             ),
             (

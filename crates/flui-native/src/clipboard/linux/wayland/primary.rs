@@ -24,7 +24,7 @@
 //! - **A read of the application's own selection** asks its closure at
 //!   once, again with nothing held.
 
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
@@ -44,7 +44,7 @@ use super::{MAX_WRITERS, Shared, TRANSFER_TIMEOUT};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::clipboard::text::TextForm;
 use crate::owner::linux::wayland::WaylandState;
-use crate::transfer::linux::wayland::{OfferData, pipe};
+use crate::transfer::linux::wayland::{DeviceOffers, OfferData, pipe};
 
 /// The primary selection's part of the clipboard's state, reached on the
 /// owner thread.
@@ -62,18 +62,21 @@ pub(super) struct Primary {
     retired: Vec<SelectionText>,
     /// The `send`s recorded since the last turn.
     sends: Vec<Request>,
+    /// The reads of other clients' selections under way.
+    reads: super::SelectionReads,
 }
 
 struct PrimaryDevice {
     seat: WlSeat,
     device: ZwpPrimarySelectionDeviceV1,
-    /// The offer of the seat's primary selection.
-    selection: Option<ZwpPrimarySelectionOfferV1>,
+    /// The offer of the seat's primary selection, and the one the device
+    /// introduced last that no `selection` named yet.
+    offers: DeviceOffers<ZwpPrimarySelectionOfferV1>,
 }
 
 impl PrimaryDevice {
     fn release(self) {
-        if let Some(offer) = self.selection {
+        for offer in self.offers.into_held() {
             offer.destroy();
         }
         self.device.destroy();
@@ -117,7 +120,9 @@ struct Request {
 enum Read {
     Now(ClipboardRead),
     Ask(SelectionText),
-    Pipe(OwnedFd, TextForm),
+    /// Another client owns the selection: its offer is asked for the text
+    /// in this form, under the MIME type its owner offered it under.
+    Offer(ZwpPrimarySelectionOfferV1, TextForm, String),
 }
 
 impl Primary {
@@ -181,7 +186,7 @@ impl Primary {
                 self.devices.push(PrimaryDevice {
                     seat: seat.clone(),
                     device,
-                    selection: None,
+                    offers: DeviceOffers::default(),
                 });
             }
         }
@@ -294,30 +299,20 @@ impl super::SeatClipboard {
                         primary
                             .devices
                             .iter()
-                            .find(|device| device.selection.is_some())
+                            .find(|device| device.offers.selection().is_some())
                     });
                 if let Some(owned) = &primary.owned
                     && owned.holds(device.map(|device| &device.seat))
                 {
                     return Read::Ask(Rc::clone(&owned.text));
                 }
-                let Some((offer, (form, mime))) = device
-                    .and_then(|device| device.selection.as_ref())
-                    .and_then(|offer| Some((offer, super::preferred(offer.data::<OfferData>()?)?)))
-                else {
-                    return Read::Now(Ok(None));
-                };
-                match rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC) {
-                    Ok((reader, writer)) => {
-                        offer.receive(mime, writer.as_fd());
-                        drop(writer);
-                        Read::Pipe(reader, form)
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "no pipe for a primary selection read");
-                        Read::Now(Err(ClipboardError::Unavailable))
-                    }
-                }
+                device
+                    .and_then(|device| device.offers.selection())
+                    .and_then(|offer| {
+                        let (form, mime) = super::preferred(offer.data::<OfferData>()?)?;
+                        Some(Read::Offer(offer.clone(), form, mime))
+                    })
+                    .unwrap_or(Read::Now(Ok(None)))
             })
             .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
         match read {
@@ -325,17 +320,14 @@ impl super::SeatClipboard {
             Read::Now(text) => drop(answer.resolve(text)),
             // Asked with nothing held: the closure may call back in.
             Read::Ask(text) => answer_with(text, answer),
-            Read::Pipe(reader, form) => {
-                let spawned = std::thread::Builder::new()
-                    .name("flui-wayland-primary".to_owned())
-                    .spawn(move || {
-                        let text =
-                            super::read_selection(reader).and_then(|bytes| form.answer(bytes));
-                        let _ = answer.resolve(text);
-                    });
-                if let Err(error) = spawned {
-                    tracing::warn!(%error, "no thread for a primary selection read");
-                }
+            Read::Offer(offer, form, mime) => {
+                let admitted = self
+                    .shared
+                    .primary
+                    .with(|primary| primary.reads.admit(offer.id(), answer));
+                super::read_offer(admitted, form, "flui-wayland-primary", |pipe| {
+                    offer.receive(mime, pipe);
+                });
             }
         }
     }
@@ -444,22 +436,34 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, DeviceData> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let zwp_primary_selection_device_v1::Event::Selection { id } = event else {
-            return;
-        };
         let Some(shared) = data.shared.upgrade() else {
             return;
         };
-        let foreign = id.is_some();
-        let replaced = shared
+        let unheld = shared
             .primary
             .with(|primary| {
-                let held = primary
+                use zwp_primary_selection_device_v1::Event;
+
+                let Some(held) = primary
                     .devices
                     .iter_mut()
-                    .find(|held| held.device == *device)?;
-                let replaced = std::mem::replace(&mut held.selection, id)
-                    .filter(|offer| Some(offer) != held.selection.as_ref());
+                    .find(|held| held.device == *device)
+                else {
+                    // A device let go of holds nothing: the offer its event
+                    // brings goes as it comes.
+                    return match event {
+                        Event::DataOffer { offer } => Some(offer),
+                        Event::Selection { id } => id,
+                        _ => None,
+                    };
+                };
+                let id = match event {
+                    Event::DataOffer { offer } => return held.offers.introduce(offer),
+                    Event::Selection { id } => id,
+                    _ => return None,
+                };
+                let foreign = id.is_some();
+                let replaced = held.offers.select(id);
                 // A selection held in this process with no source is the
                 // selection until another client's arrives; its closure is
                 // dropped at the next turn, outside the dispatch.
@@ -475,7 +479,7 @@ impl Dispatch<ZwpPrimarySelectionDeviceV1, DeviceData> for WaylandState {
                 replaced
             })
             .flatten();
-        if let Some(offer) = replaced {
+        if let Some(offer) = unheld {
             offer.destroy();
         }
     }

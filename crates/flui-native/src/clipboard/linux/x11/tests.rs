@@ -476,7 +476,7 @@ fn silent_owner() -> RustConnection {
     owner
 }
 
-/// Past [`MAX_READERS`](super::selection::MAX_READERS) reads waiting, a
+/// Past [`MAX_READERS`](crate::clipboard::linux::MAX_READERS) reads waiting, a
 /// read is refused at once rather than queue behind them; the reads
 /// waiting go on waiting.
 #[test]
@@ -488,7 +488,7 @@ fn a_read_past_the_waiting_limit_is_refused_at_once() {
     let answers = Answers::new();
     let reader = clipboard();
     let mut waiting: Vec<Completion<ClipboardRead>> = Vec::new();
-    for _ in 0..super::selection::MAX_READERS {
+    for _ in 0..crate::clipboard::linux::MAX_READERS {
         let (completion, resolver) = answers.source.pending::<ClipboardRead>();
         NativeClipboard::read_text(&reader, resolver);
         waiting.push(completion);

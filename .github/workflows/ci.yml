@@ -451,6 +451,36 @@ jobs:
       - name: cargo xtask test --fast
         run: cargo xtask test --fast
 
+      # Weston 13 has no xdg-decoration, wp_fractional_scale_v1, xdg-foreign
+      # or xdg-activation, and headless it has no seat: the cases of the
+      # Wayland suite about them (`wayland_window::optional`) said above what
+      # they skipped. A headless sway offers all of them, so the task runs
+      # those cases again against it and requires them
+      # (`FLUI_REQUIRE_COMPOSITOR`): none passes on a skip. Its outputs are
+      # scaled 1.5, which makes a surface's preferred scale a fraction, and
+      # the window titled "a floating frame" floats, where sway honours a
+      # request for the client's own frame. The backend and the renderer are
+      # named, and the job's `WAYLAND_DISPLAY` is kept from it: that is the
+      # Weston's, which wlroots would nest under.
+      - name: cargo xtask wayland-optional (the cases Weston cannot run, under a headless sway)
+        run: |
+          runtime_dir="$RUNNER_TEMP/sway-runtime"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          printf '%s\n' 'output * scale 1.5' \
+            'for_window [title="a floating frame"] floating enable' > "$runtime_dir/sway.conf"
+          env -u WAYLAND_DISPLAY -u DISPLAY XDG_RUNTIME_DIR="$runtime_dir" \
+            WLR_BACKENDS=headless WLR_RENDERER=pixman \
+            nohup sway --config "$runtime_dir/sway.conf" > "$RUNNER_TEMP/sway.log" 2>&1 &
+          socket=
+          for _ in $(seq 1 100); do
+            socket="$(find "$runtime_dir" -maxdepth 1 -type s -name 'wayland-*' -printf '%f\n' | head -n 1)"
+            [ -n "$socket" ] && break
+            sleep 0.1
+          done
+          [ -n "$socket" ] || { cat "$RUNNER_TEMP/sway.log"; exit 1; }
+          XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$socket" cargo xtask wayland-optional
+
       # The GPU readback suites once per backend the Linux renderer can pick:
       # Vulkan first, then the GLES fallback it takes without one. The
       # fallback runs on main only: pull requests take the Vulkan pass.

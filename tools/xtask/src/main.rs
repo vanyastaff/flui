@@ -80,6 +80,8 @@ enum Command {
     PlatformTest(tasks::PlatformTestArgs),
     /// Run the CLI suite on this host.
     CliTest(tasks::CliTestArgs),
+    /// Run the Wayland cases CI's Weston cannot, against a compositor that offers their subjects.
+    WaylandOptional(tasks::WaylandOptionalArgs),
     /// Link the examples and benches with the test suite's features.
     BuildAllTargets(tasks::BuildAllTargetsArgs),
     /// `gate`, `test` and the doctests: the local mirror of CI's required checks.
@@ -207,6 +209,7 @@ fn main() -> ExitCode {
         Command::Test(args) => tasks::test(&args),
         Command::PlatformTest(args) => tasks::platform_test(&args),
         Command::CliTest(args) => tasks::cli_test(&args),
+        Command::WaylandOptional(args) => tasks::wayland_optional(&args),
         Command::BuildAllTargets(args) => tasks::build_all_targets_task(&args),
         Command::Ci(args) => tasks::ci(&args),
         Command::CiFull(args) => tasks::ci_full(&args),

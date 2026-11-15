@@ -133,7 +133,7 @@ impl SizeConstraints {
     /// These limits, when a window may be asked to hold them: each encloses
     /// an area and the minimum does not exceed the maximum. The one check a
     /// command ([`WindowCommand::validate`]) and an opening
-    /// ([`WindowOptions::constraints`](crate::WindowOptions::constraints))
+    /// ([`WindowOptions::geometry`](crate::WindowOptions::geometry))
     /// both make.
     ///
     /// # Errors

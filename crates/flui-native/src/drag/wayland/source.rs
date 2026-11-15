@@ -169,6 +169,7 @@ impl SeatDrag {
             action: TransferActions::empty(),
             grab: (grab.seat.clone(), grab.serial),
         };
+        self.shared.last_input.watch(grab.seat.clone(), grab.serial);
         self.shared
             .sources
             .with(|sources| sources.session = Some(session));
@@ -186,13 +187,14 @@ impl SeatDrag {
             self.source_wire(&source, wire);
         }
         // A release reached the window under the grab the session started
-        // under: the compositor took no drag from it, and says nothing.
+        // under, so the compositor took no drag from it, or the grab's seat
+        // went: the compositor says nothing of a drag in either case.
         let ignored = self
             .shared
             .sources
             .with(|sources| {
                 let (seat, serial) = &sources.session.as_ref()?.grab;
-                Some(self.shared.last_input.released_grab(seat, *serial))
+                Some(self.shared.last_input.watched_ended(seat, *serial))
             })
             .flatten()
             .unwrap_or(false);
@@ -246,8 +248,15 @@ impl SeatDrag {
     }
 
     /// Write the representation `mime` names into `fd`, from a thread of
-    /// its own; the provider is asked with no cell borrowed.
+    /// its own. The write takes its place among the writers before the
+    /// provider is asked or its payload made into bytes, so a `send` past
+    /// them costs the application nothing: its descriptor closes here, which
+    /// ends its reader's read. The provider is asked with no cell borrowed.
     fn serve(&self, mime: &str, fd: OwnedFd) {
+        let Some(permit) = self.shared.writers.permit() else {
+            tracing::debug!("a drag's write past {MAX_WRITERS} at once was refused");
+            return;
+        };
         let taken = self
             .shared
             .sources
@@ -286,10 +295,6 @@ impl SeatDrag {
                 return;
             }
             None => return,
-        };
-        let Some(permit) = self.shared.writers.permit() else {
-            tracing::debug!("a drag's write past {MAX_WRITERS} at once was refused");
-            return;
         };
         let spawned = std::thread::Builder::new()
             .name("flui-wayland-drag".to_owned())

@@ -14,3 +14,10 @@ pub(crate) mod owners;
 pub(crate) mod wayland;
 #[cfg(x11_host)]
 pub(crate) mod x11;
+
+/// The most reads of one selection waiting at once, on either host. A
+/// handle shares one read among all its readers, so each waiting read is
+/// another handle's; more are refused at once as
+/// [`ClipboardError::Unavailable`](flui_platform::ClipboardError::Unavailable).
+#[cfg(any(wayland_host, x11_host))]
+pub(crate) const MAX_READERS: usize = 4;

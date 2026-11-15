@@ -168,6 +168,16 @@ mod cases {
             Some("selected in the second"),
             "the first client reads the second's selection"
         );
+        // Ten reads before the selection's owner answered one are one read
+        // of its offer: the four that may wait share its answer, and the
+        // rest are refused at once.
+        assert_eq!(
+            first.reads_at_once(10, "selected in the second", |answer| {
+                selection.read_text(answer);
+            }),
+            (4, 6),
+            "(answered, refused)"
+        );
         stop.send(()).expect("the second client listens");
         second.join().expect("the second client ends");
         first.window.close_for_cleanup();

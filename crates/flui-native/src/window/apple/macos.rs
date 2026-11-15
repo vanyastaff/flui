@@ -296,6 +296,15 @@ fn objc_address(object: &AnyObject) -> ObjcId {
     std::ptr::from_ref(object).cast_mut()
 }
 
+/// A window's options and the numbers checked from them
+/// (`WindowOptions::geometry`), which travel together: the options carry
+/// what the check does not read (title, frame, mode, the position made
+/// global), and the checked numbers are what the window is built at.
+pub(crate) struct Opening {
+    options: WindowOptions,
+    geometry: flui_platform::OpeningGeometry,
+}
+
 fn defers_first_reveal(options: &WindowOptions) -> bool {
     options.visible && options.reveal == WindowReveal::AfterFirstFrame
 }
@@ -324,30 +333,16 @@ impl MacOSWindow {
     /// # Errors
     /// [`OpenWindowError::Backend`] when AppKit refuses to allocate the
     /// NSWindow.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the window's identity, its checked options and the owner's shares, handed over once"
-    )]
     pub(crate) fn try_new(
         mtm: MainThreadMarker,
         id: WindowId,
-        options: WindowOptions,
-        opening: flui_platform::OpeningGeometry,
+        opening: Opening,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
         view_hooks: ViewHooks,
     ) -> Result<Rc<Self>, OpenWindowError> {
-        Self::new_inner(
-            mtm,
-            id,
-            options,
-            opening,
-            handler,
-            windows_map,
-            windows,
-            view_hooks,
-        )
+        Self::new_inner(mtm, id, opening, handler, windows_map, windows, view_hooks)
     }
 
     /// Hand this window the platform's display registry, and read which display
@@ -435,8 +430,7 @@ impl MacOSWindow {
     fn new_inner(
         _main: MainThreadMarker,
         id: WindowId,
-        mut options: WindowOptions,
-        opening: flui_platform::OpeningGeometry,
+        opening: Opening,
         handler: Rc<dyn WindowHandler>,
         windows_map: WindowRegistry,
         windows: &MacOSWindows,
@@ -446,7 +440,8 @@ impl MacOSWindow {
             content,
             constraints,
             ..
-        } = opening;
+        } = opening.geometry;
+        let mut options = opening.options;
         // A window's owner lane is the AppKit main queue — the one lane all
         // other process AppKit traffic already serializes on (see
         // `owner::apple::macos::owner_lane`) — which runs on the main thread
@@ -1261,8 +1256,10 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         let window = MacOSWindow::try_new(
             main,
             id?,
-            options,
-            opening,
+            Opening {
+                options,
+                geometry: opening,
+            },
             handler,
             Arc::clone(&owner.windows),
             windows,

@@ -202,15 +202,51 @@ fn platform_suite_linux() -> Cmd {
 /// missing compositor fails them; elsewhere they skip themselves without one.
 const WAYLAND_TESTS: &str = "test(/^wayland_window::/)";
 
-/// [`WAYLAND_TESTS`] with every feature, as the X11 suite builds them.
+/// [`WAYLAND_TESTS`] with every feature, as the X11 suite builds them. Each
+/// case's output is shown at the end of the run: a case whose subject the
+/// compositor lacks says there what it skipped.
 fn wayland_suite_linux() -> Cmd {
     Cmd::cargo(["nextest", "run", "-p", "flui-native"]).args([
         "--locked",
         "--all-features",
         "--no-fail-fast",
+        "--success-output",
+        "final",
         "-E",
         WAYLAND_TESTS,
     ])
+}
+
+/// The cases of [`WAYLAND_TESTS`] whose subject a compositor may not offer
+/// (`wayland_window::optional`): a protocol beside xdg-shell, or a seat.
+const WAYLAND_OPTIONAL_TESTS: &str = "test(/^wayland_window::optional::/)";
+
+/// What a headless sway offers of those subjects and CI's headless Weston
+/// lacks, as `FLUI_REQUIRE_COMPOSITOR` lists it: a case that finds one of
+/// them missing fails instead of saying it skipped it.
+const SWAY_OFFERS: &str = "fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign";
+
+/// [`WAYLAND_OPTIONAL_TESTS`] against the compositor `WAYLAND_DISPLAY` names,
+/// which must offer [`SWAY_OFFERS`]: CI starts a headless sway for it. One
+/// case at a time: a tiling compositor resizes a window as another opens.
+fn wayland_optional_plan() -> Vec<Step> {
+    vec![
+        Cmd::cargo(["nextest", "run", "-p", "flui-native"])
+            .args([
+                "--locked",
+                "--all-features",
+                "--no-fail-fast",
+                "--test-threads",
+                "1",
+                "--success-output",
+                "final",
+                "-E",
+                WAYLAND_OPTIONAL_TESTS,
+            ])
+            .env("FLUI_REQUIRE_WAYLAND", "1")
+            .env("FLUI_REQUIRE_COMPOSITOR", SWAY_OFFERS)
+            .into(),
+    ]
 }
 
 /// The X11 and headless suite, which leaves the Wayland tests to their own
@@ -999,6 +1035,20 @@ pub(crate) fn cli_test(args: &CliTestArgs) -> anyhow::Result<ExitCode> {
     done(args.run.runner().steps(&cli_test_plan()))
 }
 
+/// Arguments for `cargo xtask wayland-optional`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct WaylandOptionalArgs {
+    #[command(flatten)]
+    pub(crate) run: RunOpts,
+}
+
+/// `cargo xtask wayland-optional`: the Wayland cases whose subject CI's
+/// Weston lacks, against the compositor `WAYLAND_DISPLAY` names, which must
+/// offer it (a headless sway does).
+pub(crate) fn wayland_optional(args: &WaylandOptionalArgs) -> anyhow::Result<ExitCode> {
+    done(args.run.runner().steps(&wayland_optional_plan()))
+}
+
 /// Arguments for `cargo xtask build-all-targets`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct BuildAllTargetsArgs {
@@ -1356,7 +1406,7 @@ mod tests {
     const LINUX_PLATFORM_SUITE: &str = "$ FLUI_HEADLESS=1 WAYLAND_DISPLAY='' xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) | test(/^wayland_window::/))'";
 
     /// The native Wayland host's tests, against the compositor CI starts.
-    const LINUX_WAYLAND_SUITE: &str = "$ cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'test(/^wayland_window::/)'";
+    const LINUX_WAYLAND_SUITE: &str = "$ cargo nextest run -p flui-native --locked --all-features --no-fail-fast --success-output final -E 'test(/^wayland_window::/)'";
 
     const SCOPE: &str = "--workspace --exclude flui-native --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/native";
 
@@ -1382,6 +1432,14 @@ mod tests {
         assert_eq!(
             lines(&cli_test_plan()),
             ["$ cargo nextest run -p flui-cli --locked --no-fail-fast"]
+        );
+        // The cases Weston cannot run, where a compositor that lacks one of
+        // their subjects fails them: no optional case passes on a skip.
+        assert_eq!(
+            lines(&wayland_optional_plan()),
+            [
+                "$ FLUI_REQUIRE_WAYLAND=1 FLUI_REQUIRE_COMPOSITOR=fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign cargo nextest run -p flui-native --locked --all-features --no-fail-fast --test-threads 1 --success-output final -E 'test(/^wayland_window::optional::/)'"
+            ]
         );
     }
 

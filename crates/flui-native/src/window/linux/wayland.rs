@@ -81,6 +81,7 @@ pub(crate) use toplevel::{WaylandWindow, WaylandWindows};
 pub(crate) mod activation;
 pub(crate) mod client_frame;
 pub(crate) mod decoration;
+pub(crate) mod scale;
 
 pub(crate) mod configure {
     //! What a configure from the compositor means for a Wayland window: the
@@ -1019,109 +1020,6 @@ pub(crate) mod frame {
     }
 }
 
-pub(crate) mod scale {
-    //! The scale a Wayland window's buffer is drawn at.
-    //!
-    //! With `wp_viewporter` the surface's destination is its logical size and
-    //! the buffer any size, so the buffer is drawn at the scale the compositor
-    //! prefers: a fractional one where it offers `wp_fractional_scale_v1`
-    //! (`preferred_scale`, as a numerator over 120), else the whole one `wl_surface`
-    //! version 6 prefers, else that of the output the surface entered.
-    //! Without the viewporter the buffer is the surface's size: scale 1, and
-    //! the compositor scales it.
-
-    #![forbid(unsafe_code)]
-
-    /// What the compositor said of the scale a surface is drawn at.
-    #[derive(Debug, Clone, Copy, Default, PartialEq)]
-    pub(crate) struct ScaleTold {
-        /// `wp_fractional_scale_v1.preferred_scale`, as a numerator over 120.
-        pub(crate) fractional: Option<u32>,
-        /// `wl_surface.preferred_buffer_scale`.
-        pub(crate) preferred: Option<i32>,
-        /// The scale of the output the surface is on.
-        pub(crate) output: Option<f64>,
-    }
-
-    /// A fractional scale as the protocol carries it, as a numerator over 120; `None` for
-    /// zero, which is no scale.
-    fn over_120(numerator: u32) -> Option<f64> {
-        (numerator > 0).then(|| f64::from(numerator) / 120.0)
-    }
-
-    /// The scale the window's buffer is drawn at, finite and positive.
-    pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold) -> f64 {
-        if !viewported {
-            return 1.0;
-        }
-        told.fractional
-            .and_then(over_120)
-            .or_else(|| told.preferred.filter(|scale| *scale > 0).map(f64::from))
-            .or(told.output)
-            .filter(|scale| scale.is_finite() && *scale > 0.0)
-            .unwrap_or(1.0)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        /// The fractional scale wins over the whole ones, and each falls back
-        /// to the next where the compositor said nothing usable.
-        #[test]
-        fn a_buffer_is_drawn_at_the_scale_the_compositor_prefers() {
-            let told = |fractional, preferred, output| ScaleTold {
-                fractional,
-                preferred,
-                output,
-            };
-            for (case, viewported, told, expected) in [
-                ("nothing said", true, told(None, None, None), 1.0),
-                (
-                    "a fractional scale",
-                    true,
-                    told(Some(180), Some(2), Some(2.0)),
-                    1.5,
-                ),
-                (
-                    "a whole preferred scale",
-                    true,
-                    told(None, Some(2), Some(1.0)),
-                    2.0,
-                ),
-                ("the output's", true, told(None, None, Some(3.0)), 3.0),
-                ("a zero fraction", true, told(Some(0), Some(2), None), 2.0),
-                (
-                    "a zero preferred scale",
-                    true,
-                    told(None, Some(0), Some(1.25)),
-                    1.25,
-                ),
-                (
-                    "a broken output scale",
-                    true,
-                    told(None, None, Some(f64::NAN)),
-                    1.0,
-                ),
-                (
-                    "no viewporter",
-                    false,
-                    told(Some(180), Some(2), Some(2.0)),
-                    1.0,
-                ),
-                (
-                    "a numerator over 120",
-                    true,
-                    told(Some(150), None, None),
-                    1.25,
-                ),
-            ] {
-                assert_eq!(buffer_scale(viewported, told), expected, "{case}");
-            }
-        }
-    }
-}
-
 pub(crate) mod presented {
     //! When the compositor showed a window's commit, as
     //! `wp_presentation_feedback.presented` carries it: a time on the clock
@@ -1251,7 +1149,7 @@ mod toplevel {
     use std::sync::{Arc, Weak};
 
     use cursor_icon::CursorIcon;
-    use flui_foundation::geometry::{Size, WindowMetrics};
+    use flui_foundation::geometry::Size;
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
@@ -1300,7 +1198,7 @@ mod toplevel {
     use super::foreign::PortalParent;
     use super::frame::{Pacing, Sight, first_live, waiting_on_callback};
     use super::presented;
-    use super::scale::{ScaleTold, buffer_scale};
+    use super::scale::{self, BufferScale, ScaleTold, buffer_scale};
     use crate::executor::NativeExecutor;
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
@@ -1584,7 +1482,7 @@ mod toplevel {
         client_frame: RefCell<Option<ClientFrame>>,
         /// What the pointer does over that frame, which the seats' input
         /// records.
-        frame_record: Arc<FrameRecord>,
+        frame_record: Rc<FrameRecord>,
         /// The fonts its title is drawn with, shared by the host's windows.
         title_fonts: TitleFonts,
         /// The loop's background work, which reads the host's fonts.
@@ -1641,7 +1539,7 @@ mod toplevel {
 
     impl Sample<'_> {
         /// The output the window is on, and the scale its buffer is drawn at.
-        fn output_and_scale(&self) -> (Option<OutputFacts>, f64) {
+        fn output_and_scale(&self) -> (Option<OutputFacts>, BufferScale) {
             let applied = self.applied;
             let entered = first_live(&applied.told.outputs, |output| self.live.contains(output));
             let output = entered.and_then(|output| self.displays.output(output));
@@ -1652,6 +1550,10 @@ mod toplevel {
                     preferred: applied.told.preferred_scale,
                     output: output.map(|output| output.scale),
                 },
+                // The content is the one surface drawn at the scale: the
+                // frame's title bar spans its width, and its margins are a
+                // pixel the viewport stretches (`client_frame::margin_size`).
+                applied.sizing.content(),
             );
             (output, scale)
         }
@@ -1691,7 +1593,7 @@ mod toplevel {
                     .with_frame(applied.reported_frame(decoration))
                     .with_display(output.map(|output| output.display));
                 ReportedFacts {
-                    metrics: WindowMetrics::from_logical(content, scale).ok(),
+                    metrics: scale::metrics(content, scale),
                     appearance: self.portal.appearance(),
                     insets: flui_platform::WindowInsets::ZERO,
                     execution: WindowExecutionState::Running,
@@ -1894,7 +1796,7 @@ mod toplevel {
                 offers_decorations: protocol.decoration.is_some(),
                 frame_globals,
                 client_frame: RefCell::new(None),
-                frame_record: Arc::new(FrameRecord::default()),
+                frame_record: Rc::new(FrameRecord::default()),
                 title_fonts: windows.title_fonts.clone(),
                 executor,
                 presentation: protocol.presentation,
@@ -1932,7 +1834,7 @@ mod toplevel {
                         .and_then(|state| state.published().metrics)
                         .map_or(1.0, |metrics| metrics.scale().get())
                 }),
-                frame: Arc::clone(&window.frame_record) as _,
+                frame: Rc::clone(&window.frame_record) as _,
                 text: Arc::clone(&window.facets.text).seat_text(),
             });
             // From here a failure retires the window like any other close.
@@ -1995,7 +1897,7 @@ mod toplevel {
         }
 
         /// The scale the window's buffers are drawn at now.
-        fn buffer_scale(&self, applied: &Applied) -> f64 {
+        fn buffer_scale(&self, applied: &Applied) -> BufferScale {
             Sample {
                 applied,
                 displays: self.displays.as_ref(),
@@ -2045,7 +1947,7 @@ mod toplevel {
                     *client_frame = Some(ClientFrame::new(
                         &self.surface.0,
                         globals.clone(),
-                        Arc::clone(&self.frame_record),
+                        Rc::clone(&self.frame_record),
                         &fonts,
                     ));
                 }
@@ -3357,6 +3259,10 @@ mod toplevel {
         pub(crate) pieces: Vec<(client_frame::Piece, client_frame::Rect)>,
         /// The moves, resizes and menus carried out, with their serials.
         pub(crate) carried: Vec<(Action, u32)>,
+        /// The most buffers any piece keeps.
+        pub(crate) buffers: usize,
+        /// The most buffers any piece made.
+        pub(crate) made: usize,
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -3381,17 +3287,18 @@ mod toplevel {
 
         /// The frame the window draws itself: the window geometry it sent
         /// last, each piece shown with its rectangle relative to the content,
-        /// and the moves, resizes and menus it carried out with the serial
-        /// each named.
+        /// the moves, resizes and menus it carried out with the serial each
+        /// named, and the most buffers a piece keeps.
         pub(crate) fn client_frame_said(&self) -> ClientFrameSaid {
+            let client_frame = self.client_frame.borrow();
             ClientFrameSaid {
                 geometry: self.applied.borrow().geometry,
-                pieces: self
-                    .client_frame
-                    .borrow()
-                    .as_ref()
-                    .map_or_default(ClientFrame::shown),
+                pieces: client_frame.as_ref().map_or_default(ClientFrame::shown),
                 carried: self.frame_record.carried_out(),
+                buffers: client_frame
+                    .as_ref()
+                    .map_or_default(ClientFrame::most_buffers),
+                made: client_frame.as_ref().map_or_default(ClientFrame::most_made),
             }
         }
 
@@ -3483,7 +3390,7 @@ mod toplevel {
             pool.destroy();
             let surface = &self.surface.0;
             surface.attach(Some(&buffer), 0, 0);
-            surface.damage_buffer(0, 0, width, height);
+            client_frame::surfaces::damage_all(surface);
             surface.commit();
             true
         }

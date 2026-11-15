@@ -482,6 +482,12 @@ impl X11Window {
         self.displays.snapshot().ok()
     }
 
+    /// The focus the window last told its accessibility bridge of.
+    #[cfg(test)]
+    pub(crate) fn told_focus(&self) -> bool {
+        self.record.borrow().focus_told
+    }
+
     /// What the window's state publisher does (a hover the input reports):
     /// the window is marked like for any event of the server's, and the
     /// loop's read this turn publishes and announces the revision. A pointer
@@ -557,10 +563,12 @@ impl X11Window {
         self.unread.set(false);
         let published = self.cell.read_unannounced(&self.delivery, || self.sample());
         let unannounced = self.unannounced.take();
-        if published.changed || unannounced {
-            self.delivery.dispatch_state_changed();
-        }
         let state = published.state;
+        // The window's own record and what follows from it come first, and
+        // the handler, code the host does not own, last: a command the
+        // handler applies follows the window again inside it, and must find
+        // this read already committed, not have its newer focus put back by
+        // this one afterwards.
         let (focus_changed, resized) = {
             let mut record = self.record.borrow_mut();
             let focus_changed =
@@ -580,6 +588,9 @@ impl X11Window {
         }
         if resized {
             self.request_redraw();
+        }
+        if published.changed || unannounced {
+            self.delivery.dispatch_state_changed();
         }
     }
 

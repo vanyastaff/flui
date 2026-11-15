@@ -23,10 +23,17 @@
 //!   serial of the pointer grab its origin surface holds
 //!   ([`DataDevices::start_drag`]).
 //!
+//! An offer is an object the compositor makes the client hold: a device
+//! introduces it (`data_offer`) before the event that says what it is. Each
+//! device keeps the one it introduced last until a `selection` or an `enter`
+//! names it, and destroys it when it introduces the next or goes
+//! ([`DeviceOffers`]), so a compositor introducing offers it never names
+//! leaves one a device. An offer an event names on a device already let go
+//! of is destroyed as it comes.
+//!
 //! The dispatch records what the compositor said and runs no handler; a
 //! listener hears it with nothing of the devices held.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
 
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
@@ -117,20 +124,112 @@ struct State {
     devices: Vec<SeatDevice>,
 }
 
+/// The offers one device holds: the one it introduced last that no event
+/// named yet, the seat's selection, and a drag's. Every offer a device
+/// introduces is in one of the three or handed back to be destroyed, so the
+/// device holds three at most whatever the compositor sends.
+#[derive(Debug)]
+pub(crate) struct DeviceOffers<Offer> {
+    /// The offer introduced last (`data_offer`) and named by no event yet.
+    introduced: Option<Offer>,
+    /// The offer of the seat's selection; `None` when it holds none.
+    selection: Option<Offer>,
+    /// The offer of a drag over one of the client's surfaces, held here only
+    /// while no [`DragListener`] takes it.
+    dragged: Option<Offer>,
+}
+
+impl<Offer> Default for DeviceOffers<Offer> {
+    fn default() -> Self {
+        Self {
+            introduced: None,
+            selection: None,
+            dragged: None,
+        }
+    }
+}
+
+impl<Offer: PartialEq> DeviceOffers<Offer> {
+    /// The device introduced `offer`. Hands back the one it introduced
+    /// before, which no event named and none will: to be destroyed.
+    #[must_use]
+    pub(crate) fn introduce(&mut self, offer: Offer) -> Option<Offer> {
+        self.introduced.replace(offer)
+    }
+
+    /// An event named `offer`, which is something from now on: no longer
+    /// the one waiting for its name.
+    pub(crate) fn name(&mut self, offer: &Offer) {
+        if self.introduced.as_ref() == Some(offer) {
+            self.introduced = None;
+        }
+    }
+
+    /// The seat's selection is `offer` now. Hands back the selection it
+    /// replaces, to be destroyed, unless it is still held.
+    #[must_use]
+    pub(crate) fn select(&mut self, offer: Option<Offer>) -> Option<Offer> {
+        if let Some(offer) = &offer {
+            self.name(offer);
+        }
+        let replaced = std::mem::replace(&mut self.selection, offer);
+        self.unless_held(replaced)
+    }
+
+    /// A drag entered offering `offer`, which no listener takes. Hands back
+    /// the drag's offer it replaces, to be destroyed, unless it is still
+    /// held.
+    #[must_use]
+    pub(crate) fn drag(&mut self, offer: Option<Offer>) -> Option<Offer> {
+        if let Some(offer) = &offer {
+            self.name(offer);
+        }
+        let replaced = std::mem::replace(&mut self.dragged, offer);
+        self.unless_held(replaced)
+    }
+
+    /// The drag left or dropped. Hands back its offer, to be destroyed,
+    /// unless it is the selection's too.
+    #[must_use]
+    pub(crate) fn end_drag(&mut self) -> Option<Offer> {
+        let ended = self.dragged.take();
+        self.unless_held(ended)
+    }
+
+    /// The offer of the seat's selection; `None` when it holds none.
+    pub(crate) const fn selection(&self) -> Option<&Offer> {
+        self.selection.as_ref()
+    }
+
+    /// Every offer held, each once, as the device goes: to be destroyed.
+    pub(crate) fn into_held(self) -> impl Iterator<Item = Offer> {
+        let Self {
+            introduced,
+            selection,
+            dragged,
+        } = self;
+        let dragged = dragged.filter(|offer| Some(offer) != selection.as_ref());
+        [introduced, selection, dragged].into_iter().flatten()
+    }
+
+    /// `replaced` unless an event named it again as what is held now.
+    fn unless_held(&self, replaced: Option<Offer>) -> Option<Offer> {
+        replaced.filter(|offer| {
+            Some(offer) != self.selection.as_ref() && Some(offer) != self.dragged.as_ref()
+        })
+    }
+}
+
 /// One seat's data device and the offers it holds.
 struct SeatDevice {
     seat: WlSeat,
     device: WlDataDevice,
-    /// The offer of the seat's selection; `None` when it holds none.
-    selection: Option<WlDataOffer>,
-    /// The offer of a drag over one of the client's surfaces, held here only
-    /// while no [`DragListener`] takes it.
-    dragged: Option<WlDataOffer>,
+    offers: DeviceOffers<WlDataOffer>,
 }
 
 impl SeatDevice {
     fn release(self) {
-        for offer in [self.selection, self.dragged].into_iter().flatten() {
+        for offer in self.offers.into_held() {
             offer.destroy();
         }
         // `release` exists from version 2; below it the proxy is just
@@ -253,8 +352,7 @@ impl DataDevices {
                         state.devices.push(SeatDevice {
                             seat: seat.clone(),
                             device,
-                            selection: None,
-                            dragged: None,
+                            offers: DeviceOffers::default(),
                         });
                     }
                 }
@@ -285,11 +383,11 @@ impl DataDevices {
                         state
                             .devices
                             .iter()
-                            .find(|device| device.selection.is_some())
+                            .find(|device| device.offers.selection().is_some())
                     })?;
                 Some(SeatSelection {
                     seat: device.seat.clone(),
-                    offer: device.selection.clone(),
+                    offer: device.offers.selection().cloned(),
                 })
             })
             .flatten()
@@ -306,8 +404,9 @@ impl DataDevices {
                     .devices
                     .iter()
                     .find(|device| device.seat == *seat)?
-                    .selection
-                    .clone()
+                    .offers
+                    .selection()
+                    .cloned()
             })
             .flatten()
     }
@@ -382,28 +481,29 @@ pub(crate) struct DeviceData {
 /// A data offer's user data: the MIME types it offers, as its `offer`
 /// events name them, read on the owner thread alone.
 pub(crate) struct OfferData {
+    told: OwnerCell<OfferTold>,
+}
+
+/// What the compositor told of one offer.
+#[derive(Default)]
+struct OfferTold {
     /// Each type offered, once, in the order first offered: at most
     /// [`MAX_TYPES`], none longer than [`MAX_TYPE_LEN`], however often the
     /// owner repeats an `offer` event.
-    types: OwnerCell<Vec<String>>,
-    /// The actions a drag's source permits (`source_actions`, version 3),
-    /// [`UNTOLD`] before the compositor told them.
-    source_actions: AtomicU32,
-    /// The action the compositor chose for a drag (`action`, version 3),
-    /// [`UNTOLD`] before it chose one.
-    action: AtomicU32,
+    types: Vec<String>,
+    /// The actions a drag's source permits (`source_actions`, version 3);
+    /// `None` before the compositor told them.
+    source_actions: Option<DndAction>,
+    /// The action the compositor chose for a drag (`action`, version 3);
+    /// `None` before it chose one.
+    action: Option<DndAction>,
 }
-
-/// An action set the compositor has not told: no `DndAction` has every bit.
-const UNTOLD: u32 = u32::MAX;
 
 impl OfferData {
     /// An offer's data, made by the dispatch on the owner thread.
     pub(crate) fn new() -> Self {
         Self {
-            types: OwnerCell::new(),
-            source_actions: AtomicU32::new(UNTOLD),
-            action: AtomicU32::new(UNTOLD),
+            told: OwnerCell::new(),
         }
     }
 
@@ -413,9 +513,9 @@ impl OfferData {
         if mime_type.len() > MAX_TYPE_LEN {
             return;
         }
-        self.types.with(|types| {
-            if types.len() < MAX_TYPES && !types.contains(&mime_type) {
-                types.push(mime_type);
+        self.told.with(|told| {
+            if told.types.len() < MAX_TYPES && !told.types.contains(&mime_type) {
+                told.types.push(mime_type);
             }
         });
     }
@@ -423,26 +523,25 @@ impl OfferData {
     /// Run `f` with the types offered, in the order first offered; `None`
     /// off the owner thread.
     pub(crate) fn types<R>(&self, f: impl FnOnce(&[String]) -> R) -> Option<R> {
-        self.types.with(|types| f(types))
+        self.told.with(|told| f(&told.types))
     }
 
     /// The actions a drag's source permits; `None` before the compositor
     /// told them, as below version 3 it never does.
     pub(crate) fn source_actions(&self) -> Option<DndAction> {
-        told(self.source_actions.load(Ordering::Acquire))
+        self.told.with(|told| told.source_actions).flatten()
     }
 
     /// The action the compositor chose for a drag; `None` before it chose
     /// one, as below version 3 it never does.
     pub(crate) fn action(&self) -> Option<DndAction> {
-        told(self.action.load(Ordering::Acquire))
+        self.told.with(|told| told.action).flatten()
     }
 }
 
-/// The actions `bits` name, unless [`UNTOLD`]; bits no action has are
-/// dropped.
-fn told(bits: u32) -> Option<DndAction> {
-    (bits != UNTOLD).then(|| DndAction::from_bits_truncate(bits))
+/// The actions `bits` name; bits no action has are dropped.
+fn actions(bits: u32) -> DndAction {
+    DndAction::from_bits_truncate(bits)
 }
 
 impl Dispatch<WlDataDeviceManager, ()> for WaylandState {
@@ -501,11 +600,19 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
                 let seat = shared
                     .state
                     .with(|state| {
-                        state
+                        let held = state
                             .devices
-                            .iter()
-                            .find(|held| held.device == *device)
-                            .map(|held| held.seat.clone())
+                            .iter_mut()
+                            .find(|held| held.device == *device)?;
+                        // The listener's from here: the device waits on no
+                        // name for it.
+                        if let DragWire::Enter {
+                            offer: Some(offer), ..
+                        } = &wire
+                        {
+                            held.offers.name(offer);
+                        }
+                        Some(held.seat.clone())
                     })
                     .flatten();
                 match (drags, seat) {
@@ -526,32 +633,32 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
             Err(event) => event,
         };
         let selection = matches!(&event, wl_data_device::Event::Selection { id: Some(_) });
-        let replaced = shared
+        let unheld = shared
             .state
             .with(|state| {
-                let held = state
-                    .devices
-                    .iter_mut()
-                    .find(|held| held.device == *device)?;
-                let replaced = match event {
-                    wl_data_device::Event::Selection { id } => {
-                        std::mem::replace(&mut held.selection, id)
-                    }
-                    wl_data_device::Event::Enter { id, .. } => {
-                        std::mem::replace(&mut held.dragged, id)
-                    }
+                let Some(held) = state.devices.iter_mut().find(|held| held.device == *device)
+                else {
+                    // A device let go of holds nothing: the offer its event
+                    // brings goes as it comes.
+                    return match event {
+                        wl_data_device::Event::DataOffer { id } => Some(id),
+                        wl_data_device::Event::Selection { id }
+                        | wl_data_device::Event::Enter { id, .. } => id,
+                        _ => None,
+                    };
+                };
+                match event {
+                    wl_data_device::Event::DataOffer { id } => held.offers.introduce(id),
+                    wl_data_device::Event::Selection { id } => held.offers.select(id),
+                    wl_data_device::Event::Enter { id, .. } => held.offers.drag(id),
                     wl_data_device::Event::Leave | wl_data_device::Event::Drop => {
-                        held.dragged.take()
+                        held.offers.end_drag()
                     }
                     _ => None,
-                };
-                // An offer named again is the one already held.
-                replaced.filter(|offer| {
-                    Some(offer) != held.selection.as_ref() && Some(offer) != held.dragged.as_ref()
-                })
+                }
             })
             .flatten();
-        if let Some(offer) = replaced {
+        if let Some(offer) = unheld {
             offer.destroy();
         }
         if selection {
@@ -586,11 +693,14 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
     ) {
         match event {
             wl_data_offer::Event::Offer { mime_type } => data.offer(mime_type),
-            wl_data_offer::Event::SourceActions { source_actions } => data
-                .source_actions
-                .store(u32::from(source_actions), Ordering::Release),
+            wl_data_offer::Event::SourceActions { source_actions } => {
+                data.told.with(|told| {
+                    told.source_actions = Some(actions(u32::from(source_actions)));
+                });
+            }
             wl_data_offer::Event::Action { dnd_action } => {
-                data.action.store(u32::from(dnd_action), Ordering::Release);
+                data.told
+                    .with(|told| told.action = Some(actions(u32::from(dnd_action))));
             }
             _ => {}
         }
@@ -600,6 +710,44 @@ impl Dispatch<WlDataOffer, OfferData> for WaylandState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A compositor that introduces offer after offer and names none leaves
+    /// a device one: each is handed back for its destruction as the next
+    /// comes. An offer an event names is held as what the event says, and
+    /// handed back when the next of its kind replaces it; one named again is
+    /// the one held; and the device's end hands back all it holds, each
+    /// once.
+    #[test]
+    fn a_device_holds_one_offer_no_event_named() {
+        let mut offers = DeviceOffers::default();
+        let mut destroyed = Vec::new();
+        for offer in 0..10_000_u32 {
+            destroyed.extend(offers.introduce(offer));
+        }
+        assert_eq!(destroyed, (0..9_999).collect::<Vec<u32>>());
+
+        assert_eq!(offers.select(Some(9_999)), None, "the first selection");
+        assert_eq!(offers.selection(), Some(&9_999));
+        assert_eq!(
+            offers.introduce(10_000),
+            None,
+            "a named offer waits no more"
+        );
+        assert_eq!(offers.select(Some(10_000)), Some(9_999), "the one replaced");
+        assert_eq!(offers.select(Some(10_000)), None, "named again");
+
+        assert_eq!(offers.introduce(10_001), None);
+        assert_eq!(offers.drag(Some(10_001)), None);
+        assert_eq!(offers.drag(Some(10_000)), Some(10_001), "a second enter");
+        assert_eq!(offers.end_drag(), None, "the selection's offer stays");
+        assert_eq!(offers.select(None), Some(10_000), "the selection cleared");
+
+        assert_eq!(offers.introduce(1), None);
+        assert_eq!(offers.introduce(2), Some(1));
+        assert_eq!(offers.select(Some(3)), None);
+        assert_eq!(offers.drag(Some(3)), None);
+        assert_eq!(offers.into_held().collect::<Vec<u32>>(), [2, 3]);
+    }
 
     /// An owner that repeats its `offer` events grows nothing past one entry
     /// per type, keeps the order first offered, and keeps nothing past

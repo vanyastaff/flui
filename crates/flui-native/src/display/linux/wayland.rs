@@ -33,7 +33,6 @@ use flui_platform::ColorGamut;
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
     backend::{ReadEventsGuard, WaylandError},
-    globals::{GlobalListContents, registry_queue_init},
     protocol::{
         wl_output::{self, WlOutput},
         wl_registry::{self, WlRegistry},
@@ -56,7 +55,9 @@ use super::source::LinuxDisplays;
 use super::view::OutputView;
 use super::wayland_model::{ColorEvent, OutputEvent, TransferRange, WaylandOutputs};
 use crate::error::PlatformError;
-use crate::owner::linux::wayland::{MAX_OUTPUTS, OutputFacts, OutputName, WaylandDisplays};
+use crate::owner::linux::wayland::{
+    MAX_OUTPUTS, OutputFacts, OutputName, WaylandDisplays, bindable,
+};
 use crate::owner::notices::StaleOnWake;
 use crate::owner::signal::OwnerSignal;
 use crate::owner::watch::Watch;
@@ -356,22 +357,22 @@ impl State {
     }
 }
 
-impl Dispatch<WlRegistry, GlobalListContents> for State {
+impl Dispatch<WlRegistry, ()> for State {
     fn event(
         state: &mut Self,
         registry: &WlRegistry,
         event: wl_registry::Event,
-        _: &GlobalListContents,
+        (): &(),
         _: &Connection,
         queue: &QueueHandle<Self>,
     ) {
-        match event {
-            wl_registry::Event::Global {
+        match bindable(event) {
+            Some(wl_registry::Event::Global {
                 name,
                 interface,
                 version,
-            } => state.bind_global(registry, name, &interface, version, queue),
-            wl_registry::Event::GlobalRemove { name } => state.remove_global(name),
+            }) => state.bind_global(registry, name, &interface, version, queue),
+            Some(wl_registry::Event::GlobalRemove { name }) => state.remove_global(name),
             _ => {}
         }
     }
@@ -586,7 +587,7 @@ impl WaylandSession {
         let stream = UnixStream::connect(&path)
             .map_err(|source| error(format!("cannot connect to {}: {source}", path.display())))?;
         let connection = Connection::from_socket(stream).map_err(error)?;
-        let (globals, mut queue) = registry_queue_init::<State>(&connection).map_err(error)?;
+        let mut queue = connection.new_event_queue::<State>();
         let mut state = State {
             outputs: WaylandOutputs::default(),
             bound: Vec::new(),
@@ -595,21 +596,13 @@ impl WaylandSession {
             next_description: Some(0),
             changed: false,
         };
-        let queue_handle = queue.handle();
-        let advertised = globals.contents().with_list(<[_]>::to_vec);
-        // The manager is bound with the outputs, in whatever order they come.
-        for global in advertised {
-            state.bind_global(
-                globals.registry(),
-                global.name,
-                &global.interface,
-                global.version,
-                &queue_handle,
-            );
-        }
-        // The first round trip delivers the outputs' bursts and their image
-        // descriptions' readiness, which request their information; the second
-        // delivers that and the xdg-outputs.
+        let _registry = connection.display().get_registry(&queue.handle(), ());
+        // The first round trip delivers the globals, which the registry's
+        // dispatch binds as they come and keeps no list of: the outputs and
+        // the managers, in whatever order. The second delivers the outputs'
+        // bursts and their image descriptions' readiness, which request their
+        // information; the third delivers that and the xdg-outputs.
+        queue.roundtrip(&mut state).map_err(error)?;
         queue.roundtrip(&mut state).map_err(error)?;
         queue.roundtrip(&mut state).map_err(error)?;
         state.changed = false;
