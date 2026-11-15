@@ -197,15 +197,25 @@ impl<T> std::ops::Deref for ContainedIvars<T> {
 )]
 impl<T> Drop for ContainedIvars<T> {
     fn drop(&mut self) {
-        // The ivars' type is logged with a failure: every class's `dealloc`
-        // is this one entry.
-        let ivars = std::any::type_name::<T>();
-        os_entry("dealloc", ivars, AfterPanic::Answer(|_| ()), || {
-            // SAFETY: the value is initialized from `new` on, this is the
-            // only place that destroys it, and `drop` runs once: nothing
-            // reads it afterwards.
-            unsafe { std::mem::ManuallyDrop::drop(&mut self.0) }
-        });
+        // Every class's `dealloc` is this one entry, so the answer after a
+        // panic names the ivars whose destructor failed. It runs inside the
+        // boundary, as an argument computed before the call would not.
+        os_entry(
+            "dealloc",
+            (),
+            AfterPanic::Answer(|()| {
+                tracing::error!(
+                    ivars = std::any::type_name::<T>(),
+                    "the destructor that panicked was of these ivars"
+                );
+            }),
+            || {
+                // SAFETY: the value is initialized from `new` on, this is the
+                // only place that destroys it, and `drop` runs once: nothing
+                // reads it afterwards.
+                unsafe { std::mem::ManuallyDrop::drop(&mut self.0) }
+            },
+        );
     }
 }
 
@@ -354,6 +364,7 @@ mod tests {
             match field.name() {
                 "panic" => self.0.push(format!("logged: {value}")),
                 "args" => self.0.push(format!("args: {value}")),
+                "ivars" => self.0.push(format!("ivars: {value}")),
                 _ => {}
             }
         }
@@ -520,8 +531,8 @@ mod tests {
         assert_eq!(
             *seen.lock().expect("the recorder is not poisoned"),
             [
-                format!("args: {:?}", std::any::type_name::<Ivars>()),
-                "logged: a destructor's failure".to_owned()
+                "logged: a destructor's failure".to_owned(),
+                format!("ivars: {}", std::any::type_name::<Ivars>()),
             ],
             "the failure names the class's ivars"
         );
