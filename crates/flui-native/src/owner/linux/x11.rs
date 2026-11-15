@@ -1630,6 +1630,51 @@ mod tests {
         );
     }
 
+    /// A command that reads its window anew publishes a revision nobody has
+    /// been told of yet, and asks the loop for a turn: a command that then
+    /// ends early (refused, failed, unwound) leaves the announcement to that
+    /// turn, not to whatever else wakes the loop. Here the window was moved
+    /// behind its back and the move heard, and a command reads it. On the X
+    /// server `DISPLAY` names; passes as untested where none answers.
+    #[test]
+    fn a_command_that_reads_its_window_anew_asks_for_a_turn() {
+        use flui_platform::WindowCommand;
+        use rustix::event::{PollFd, PollFlags, Timespec, poll};
+        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt as _};
+
+        let Ok(platform) = crate::X11Platform::try_new() else {
+            eprintln!("no X server answers: nothing to run");
+            return;
+        };
+        let owner = platform.owner();
+        let (window, xid) = hidden_window(&platform);
+        owner.windows.read_stale();
+        let title = WindowCommand::SetTitle("read anew".to_owned())
+            .admit(&window.state().capabilities)
+            .expect("a window takes a title");
+
+        let xcb = owner.connection.xcb();
+        xcb.configure_window(xid, &ConfigureWindowAux::new().x(37).y(41))
+            .expect("request");
+        xcb.get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the server answers");
+        owner.windows.event(&configured(xid));
+        let rung = || {
+            let mut fds = [PollFd::new(&*owner.doorbell.0, PollFlags::IN)];
+            let now = Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            poll(&mut fds, Some(&now)).expect("the doorbell can be polled") > 0
+        };
+        owner.doorbell.answer();
+        assert!(!rung(), "nothing rang since the doorbell was answered");
+        window.apply(title).expect("the window takes its title");
+        assert!(rung(), "the read asked the loop for a turn");
+    }
+
     /// A flood is served turn after turn with no sleep between: a turn that
     /// stopped at its cap left events the connection has already read, where
     /// `poll` cannot see them, and the step before the wait takes one of

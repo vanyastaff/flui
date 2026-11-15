@@ -489,23 +489,35 @@ impl X11Window {
         Publication::Held
     }
 
-    /// The mode a command acts on: the window's now, read from the server if
+    /// The window a command acts on: as it is now, read from the server if
     /// an event marked the window since its last snapshot. A command that
     /// went by the last snapshot would act on what the window was a turn
-    /// ago (leave an iconic window unmapped, say).
+    /// ago (leave an iconic window unmapped, say, or ask a window manager
+    /// that is gone for a mode).
     ///
     /// Nobody is told of a revision this read publishes: the command is half
     /// way through, with its own state not committed yet, and a handler that
     /// ran here could command the window again under it. The revision is
     /// announced by the next read that may ([`PlatformWindow::state`]): the
-    /// command's own at its end, or the turn's.
-    fn mode_now(&self) -> WindowMode {
+    /// command's own at its end, or the next turn's, which the read asks for
+    /// so that a command that ends early (refused, failed, unwound) leaves
+    /// nobody waiting for something else to wake the loop.
+    fn state_now(&self) -> WindowState {
         let published = self.cell.state_with(|| self.sample());
         if published.changed {
             self.unannounced.set(true);
             self.owe_a_read();
+            // Nothing is reported here, where a `tracing` subscriber would
+            // run inside the command: a ring fails only with the loop's own
+            // descriptor, and then no turn is left to announce anything.
+            let _: Result<(), crate::PlatformError> = self.doorbell.ring();
         }
-        published.state.mode
+        published.state
+    }
+
+    /// The mode a command acts on: [`state_now`](Self::state_now)'s.
+    fn mode_now(&self) -> WindowMode {
+        self.state_now().mode
     }
 
     /// The loop has the window follow its state at the turn's read.
@@ -1631,7 +1643,10 @@ impl PlatformWindow for X11Window {
         if self.closed.get() {
             return Err(ApplyError::Closed);
         }
-        let command = command.against(&self.cell.published_capabilities())?;
+        // Checked against what the window honours now: an event that marked
+        // it (the window manager's end) may have taken a mode away since the
+        // revision the command was admitted against.
+        let command = command.against(&self.state_now().capabilities)?;
         match command {
             WindowCommand::SetTitle(title) => {
                 self.write_title(&title);

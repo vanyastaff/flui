@@ -1435,27 +1435,37 @@ mod cases {
 
     /// A handler that runs in the turn that hears the window manager die acts
     /// without it. The turn hears the window manager's own window go, then a
-    /// close request whose handler reads the window and asks it for the
-    /// focus, before the turn's read of what the window manager supports:
-    /// the state it reads honours nothing only a window manager carries out,
-    /// and the focus is taken from the server, not asked of the window
-    /// manager that is gone.
+    /// close request whose handler applies a maximize admitted while the
+    /// window manager ran, then reads the window and asks it for the focus,
+    /// all before the turn's read of what the window manager supports: the
+    /// maximize is superseded, the state it reads honours nothing only a
+    /// window manager carries out, and the focus is taken from the server,
+    /// not asked of the window manager that is gone.
     fn a_handler_in_the_turn_a_window_manager_dies_acts_without_it() {
         use flui_platform::Availability;
         use x11rb::protocol::xproto::InputFocus;
 
         let handler = RecordingWindowHandler::new();
         let mut fixture = X11Fixture::open_with("bereaved", Rc::clone(&handler));
-        assert_eq!(
-            fixture.window.state().capabilities.minimizes,
-            Availability::Native
-        );
+        let managed = fixture.window.state().capabilities;
+        assert_eq!(managed.minimizes, Availability::Native);
+        // Admitted while the window manager runs, applied in the turn that
+        // hears it go, before anything reads the window.
+        let maximize = WindowCommand::SetMode(WindowMode::Maximized)
+            .admit(&managed)
+            .expect("the window manager maximizes");
+        let maximized = Rc::new(RefCell::new(None));
         let read = Rc::new(std::cell::Cell::new(None));
         let window = Rc::downgrade(&fixture.window);
         handler.react_to_close_request({
             let read = Rc::clone(&read);
+            let maximized = Rc::clone(&maximized);
+            let maximize = RefCell::new(Some(maximize));
             move || {
                 if let Some(window) = window.upgrade() {
+                    if let Some(maximize) = maximize.borrow_mut().take() {
+                        *maximized.borrow_mut() = Some(window.apply(maximize));
+                    }
                     let state = window.state();
                     read.set(Some(state.capabilities.minimizes));
                     let activate = WindowCommand::Activate
@@ -1493,6 +1503,14 @@ mod cases {
 
         fixture.settle();
         assert_eq!(handler.count(&HandlerCall::CloseRequested), 1);
+        let maximized = maximized.borrow_mut().take();
+        assert!(
+            matches!(
+                maximized,
+                Some(Err(flui_platform::ApplyError::Superseded { .. }))
+            ),
+            "a maximize admitted under the window manager is superseded once it went: {maximized:?}"
+        );
         assert_eq!(
             read.get(),
             Some(Availability::Unavailable),
