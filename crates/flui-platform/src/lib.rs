@@ -161,10 +161,10 @@ pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
 pub use display::{
-    ColorGamut, ColorParts, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
     DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
-    DynamicRange, FrameRateHint, Headroom, InvalidDisplayColor, InvalidHeadroom,
-    InvalidRefreshPeriod, RefreshPeriod, SurfaceColorSpace, WindowDisplay,
+    DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
+    SurfaceColorSpace, WindowDisplay,
 };
 pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;

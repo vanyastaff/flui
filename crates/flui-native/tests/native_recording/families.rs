@@ -180,13 +180,7 @@ impl ReplayTarget for PlatformTarget<'_> {
                 let mut infos = Vec::with_capacity(displays.len());
                 for display in displays {
                     let id = self.labels.id(display.label);
-                    infos.push(
-                        display
-                            .parts
-                            .clone()
-                            .try_into_info(id)
-                            .expect("a display the recording read is valid"),
-                    );
+                    infos.push(display.parts.clone().into_info(id));
                 }
                 self.sources
                     .displays
@@ -459,7 +453,7 @@ fn platform_recordings_replay_on_the_headless_host() {
     let built_in = &displays[0].1;
     assert!(built_in.is_primary);
     assert_eq!(
-        built_in.color.map(|color| color.headroom),
+        built_in.color.map(flui_platform::DisplayColor::headroom),
         Ok(Ok(Headroom::try_new(2.5).expect("finite, at least 1"))),
         "the headroom survives the read"
     );
@@ -478,12 +472,19 @@ fn platform_recordings_replay_on_the_headless_host() {
         displays[0]
             .1
             .color
-            .map(|color| (color.dynamic_range, color.headroom)),
+            .map(|color| (color.color_space().dynamic_range, color.headroom())),
         Ok((
             flui_platform::DynamicRange::High,
             Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         )),
         "a high-range display whose peak the system does not report"
+    );
+    assert_eq!(
+        displays[1].1.color,
+        Ok(flui_platform::DisplayColor::Standard(
+            flui_platform::ColorGamut::Srgb
+        )),
+        "a standard-range display, written with SDR white"
     );
 
     assert_eq!(labels.len(), 2, "one id for each label, kept across reads");

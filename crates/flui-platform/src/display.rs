@@ -394,7 +394,7 @@ impl DisplayInfo {
     /// [`NotYetOnThisHost`](crate::UnsupportedReason::NotYetOnThisHost).
     pub fn color_space(&self) -> Result<SurfaceColorSpace, Unsupported> {
         self.color
-            .map(|color| color.color_space)
+            .map(DisplayColor::color_space)
             .map_err(Unsupported::from)
     }
 
@@ -405,7 +405,7 @@ impl DisplayInfo {
     /// this display, or gives one in a high-range mode without its headroom.
     pub fn headroom(&self) -> Result<Headroom, Unsupported> {
         self.color
-            .and_then(|color| color.headroom)
+            .and_then(DisplayColor::headroom)
             .map_err(Unsupported::from)
     }
 
@@ -548,86 +548,49 @@ impl Headroom {
 /// A [`Headroom`] holds no NaN, so its equality is total.
 impl Eq for Headroom {}
 
-/// A display's colour profile in the contract's terms: the colour space it
-/// shows surfaces in, and how far above SDR white it can go.
+/// A display's colour profile in the contract's terms: the gamut it shows
+/// surfaces in, its dynamic range, and how far above SDR white it can go.
 ///
-/// A standard-range display always has [`Headroom::SDR`]: the fields are
-/// private, [`standard`](Self::standard) and [`high`](Self::high) build
-/// nothing else, and [`ColorParts::try_into_color`] refuses parts that say
-/// otherwise.
+/// The headroom belongs to the high range alone, so a standard-range display
+/// has none to carry: its headroom is [`Headroom::SDR`] by its variant, and a
+/// colour that says otherwise cannot be written.
 ///
-/// ```compile_fail,E0616
+/// ```compile_fail,E0061
 /// use flui_platform::{ColorGamut, DisplayColor, Headroom};
 ///
-/// let mut color = DisplayColor::standard(ColorGamut::Srgb);
-/// // A standard-range display cannot be given a headroom afterwards.
-/// color.headroom = Ok(Headroom::try_new(4.0).unwrap());
+/// // A standard-range display takes no headroom.
+/// let _ = DisplayColor::Standard(ColorGamut::Srgb, Ok(Headroom::try_new(4.0).unwrap()));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DisplayColor {
-    color_space: SurfaceColorSpace,
-    headroom: Result<Headroom, CapabilityAbsence>,
+#[non_exhaustive]
+pub enum DisplayColor {
+    /// A standard-range display in this gamut: SDR white is its peak.
+    Standard(ColorGamut),
+    /// A high-range display in this gamut, with the headroom its operating
+    /// system reports now, or why it reports none.
+    High(ColorGamut, Result<Headroom, CapabilityAbsence>),
 }
-
-/// Display colour parts that contradict each other: a standard dynamic range
-/// with a headroom other than [`Headroom::SDR`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("a standard-range display has no headroom over SDR white")]
-pub struct InvalidDisplayColor;
 
 impl DisplayColor {
     /// The colour space surfaces are shown in.
     #[must_use]
     pub const fn color_space(self) -> SurfaceColorSpace {
-        self.color_space
+        match self {
+            Self::Standard(gamut) => SurfaceColorSpace::new(gamut, DynamicRange::Standard),
+            Self::High(gamut, _) => SurfaceColorSpace::new(gamut, DynamicRange::High),
+        }
     }
 
-    /// The headroom now, or why there is none to read: a high-range display
-    /// whose operating system does not report its peak.
+    /// The headroom now: [`Headroom::SDR`] for a standard-range display, and
+    /// what a high-range one reports.
     ///
     /// # Errors
-    /// The [`CapabilityAbsence`] the platform gave for the missing peak.
+    /// The [`CapabilityAbsence`] of a high-range display whose operating
+    /// system does not report its peak.
     pub const fn headroom(self) -> Result<Headroom, CapabilityAbsence> {
-        self.headroom
-    }
-
-    /// A standard-range display in `gamut`, with no headroom.
-    #[must_use]
-    pub const fn standard(gamut: ColorGamut) -> Self {
-        Self {
-            color_space: SurfaceColorSpace::new(gamut, DynamicRange::Standard),
-            headroom: Ok(Headroom::SDR),
-        }
-    }
-
-    /// A high-range display in `gamut`, with the headroom its operating system
-    /// reports, or why it reports none.
-    #[must_use]
-    pub const fn high(gamut: ColorGamut, headroom: Result<Headroom, CapabilityAbsence>) -> Self {
-        Self {
-            color_space: SurfaceColorSpace::new(gamut, DynamicRange::High),
-            headroom,
-        }
-    }
-
-    /// The colour of a display that shows surfaces in `color_space`, with
-    /// `headroom` or why there is none to read: for a caller that holds the
-    /// two as values, a decoded record among them.
-    ///
-    /// # Errors
-    /// [`InvalidDisplayColor`] for a standard dynamic range with a headroom
-    /// other than [`Headroom::SDR`], which no display has: what
-    /// [`standard`](Self::standard) and [`high`](Self::high) cannot build.
-    pub fn try_new(
-        color_space: SurfaceColorSpace,
-        headroom: Result<Headroom, CapabilityAbsence>,
-    ) -> Result<Self, InvalidDisplayColor> {
-        match color_space.dynamic_range {
-            DynamicRange::Standard if headroom != Ok(Headroom::SDR) => Err(InvalidDisplayColor),
-            DynamicRange::Standard | DynamicRange::High => Ok(Self {
-                color_space,
-                headroom,
-            }),
+        match self {
+            Self::Standard(_) => Ok(Headroom::SDR),
+            Self::High(_, headroom) => headroom,
         }
     }
 }
@@ -867,7 +830,7 @@ mod tests {
 /// instead of dropping it from a recording. The id stays apart because it is
 /// issued by a [`DisplayRegistry`] and means nothing outside it: a mirror
 /// writes a label for it and the reader mints its own
-/// ([`DisplayInfo::into_parts`], [`Self::try_into_info`]).
+/// ([`DisplayInfo::into_parts`], [`Self::into_info`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayParts {
     /// [`DisplayInfo::name`].
@@ -884,20 +847,9 @@ pub struct DisplayParts {
     pub is_primary: bool,
     /// [`DisplayInfo::persistent_key`].
     pub persistent_key: Option<String>,
-    /// [`DisplayInfo::color`], taken apart.
-    pub color: Result<ColorParts, CapabilityAbsence>,
-}
-
-/// The fields of a [`DisplayColor`] and its [`SurfaceColorSpace`], public, for
-/// the same mirrors and for the same reason as [`DisplayParts`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ColorParts {
-    /// [`SurfaceColorSpace::gamut`].
-    pub gamut: ColorGamut,
-    /// [`SurfaceColorSpace::dynamic_range`].
-    pub dynamic_range: DynamicRange,
-    /// [`DisplayColor::headroom`].
-    pub headroom: Result<Headroom, CapabilityAbsence>,
+    /// [`DisplayInfo::color`]. A mirror matches the colour's variants, each
+    /// of which holds all it says.
+    pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
 impl DisplayInfo {
@@ -925,20 +877,17 @@ impl DisplayInfo {
                 refresh_period,
                 is_primary,
                 persistent_key,
-                color: color.map(DisplayColor::into_parts),
+                color,
             },
         )
     }
 }
 
 impl DisplayParts {
-    /// The display these fields describe, under `id`.
-    ///
-    /// # Errors
-    /// [`InvalidDisplayColor`] when the colour's parts contradict each other
-    /// ([`ColorParts::try_into_color`]); every other field is valid by its
-    /// type.
-    pub fn try_into_info(self, id: DisplayId) -> Result<DisplayInfo, InvalidDisplayColor> {
+    /// The display these fields describe, under `id`; every field is valid by
+    /// its type.
+    #[must_use]
+    pub fn into_info(self, id: DisplayId) -> DisplayInfo {
         let Self {
             name,
             bounds,
@@ -949,11 +898,7 @@ impl DisplayParts {
             persistent_key,
             color,
         } = self;
-        let color = match color {
-            Ok(parts) => Ok(parts.try_into_color()?),
-            Err(absence) => Err(absence),
-        };
-        Ok(DisplayInfo {
+        DisplayInfo {
             id,
             name,
             bounds,
@@ -963,41 +908,6 @@ impl DisplayParts {
             is_primary,
             persistent_key,
             color,
-        })
-    }
-}
-
-impl DisplayColor {
-    /// Take the colour apart into its fields.
-    #[must_use]
-    pub const fn into_parts(self) -> ColorParts {
-        let Self {
-            color_space:
-                SurfaceColorSpace {
-                    gamut,
-                    dynamic_range,
-                },
-            headroom,
-        } = self;
-        ColorParts {
-            gamut,
-            dynamic_range,
-            headroom,
         }
-    }
-}
-
-impl ColorParts {
-    /// The colour these fields describe.
-    ///
-    /// # Errors
-    /// [`InvalidDisplayColor`], as [`DisplayColor::try_new`] gives it.
-    pub fn try_into_color(self) -> Result<DisplayColor, InvalidDisplayColor> {
-        let Self {
-            gamut,
-            dynamic_range,
-            headroom,
-        } = self;
-        DisplayColor::try_new(SurfaceColorSpace::new(gamut, dynamic_range), headroom)
     }
 }

@@ -7,13 +7,12 @@ use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, ColorParts,
-    DisplayColor, DisplayInfo, DisplayKey, DisplayRegistry, DynamicRange, GesturePreferences,
-    Headroom, HourCycle, InvalidDisplayColor, KeyboardInset, Locale, MeasurementSystem,
-    MotionPreference, NumberingSystem, RegionOverride, RegionalFormats, SizeConstraints,
-    SurfaceColorSpace, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences,
-    WheelStep, WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState,
-    WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
+    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor,
+    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
+    SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    WindowAppearance, WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame,
+    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowState,
 };
 
 fn preferences_round_trip_through_their_parts() {
@@ -70,81 +69,13 @@ fn a_display_round_trips_through_its_parts() {
     .with_primary(true)
     .with_refresh_period(Duration::from_micros(16_667))
     .with_persistent_key("studio")
-    .with_color(Ok(DisplayColor::high(
+    .with_color(Ok(DisplayColor::High(
         ColorGamut::DisplayP3,
         Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     )));
     let (taken, parts) = display.clone().into_parts();
     assert_eq!(taken, id);
-    assert_eq!(parts.try_into_info(id), Ok(display));
-}
-
-/// A standard-range display has [`Headroom::SDR`] and nothing else: a
-/// colour that gives it another headroom, or none, is refused, from values
-/// and from parts alike, and so is a display made of such parts. A
-/// high-range display takes any headroom or its absence.
-fn a_display_colour_takes_only_a_headroom_its_range_has() {
-    let brighter = Headroom::try_new(4.0).expect("finite, at least 1");
-    let absent = CapabilityAbsence::NOT_ON_THIS_DEVICE;
-    let gamut = ColorGamut::DisplayP3;
-    let parts = |dynamic_range, headroom| ColorParts {
-        gamut,
-        dynamic_range,
-        headroom,
-    };
-    let standard = DisplayColor::standard(gamut);
-    assert_eq!(standard.headroom(), Ok(Headroom::SDR));
-    for (dynamic_range, headroom, expected) in [
-        (DynamicRange::Standard, Ok(Headroom::SDR), Ok(standard)),
-        (
-            DynamicRange::Standard,
-            Ok(brighter),
-            Err(InvalidDisplayColor),
-        ),
-        (
-            DynamicRange::Standard,
-            Err(absent),
-            Err(InvalidDisplayColor),
-        ),
-        (
-            DynamicRange::High,
-            Ok(Headroom::SDR),
-            Ok(DisplayColor::high(gamut, Ok(Headroom::SDR))),
-        ),
-        (
-            DynamicRange::High,
-            Ok(brighter),
-            Ok(DisplayColor::high(gamut, Ok(brighter))),
-        ),
-        (
-            DynamicRange::High,
-            Err(absent),
-            Ok(DisplayColor::high(gamut, Err(absent))),
-        ),
-    ] {
-        let color_space = SurfaceColorSpace::new(gamut, dynamic_range);
-        assert_eq!(
-            DisplayColor::try_new(color_space, headroom),
-            expected,
-            "{dynamic_range:?} with {headroom:?}"
-        );
-        assert_eq!(
-            parts(dynamic_range, headroom).try_into_color(),
-            expected,
-            "the parts of {dynamic_range:?} with {headroom:?}"
-        );
-        if let Ok(color) = expected {
-            assert_eq!(color.color_space(), color_space);
-            assert_eq!(color.headroom(), headroom);
-            assert_eq!(color.into_parts().try_into_color(), Ok(color));
-        }
-    }
-
-    let registry = DisplayRegistry::new();
-    let id = registry.mint(&DisplayKey::Injected(3)).expect("id");
-    let (_, mut display) = DisplayInfo::new(id, "d", Bounds::default(), 1.0).into_parts();
-    display.color = Ok(parts(DynamicRange::Standard, Ok(brighter)));
-    assert_eq!(display.try_into_info(id), Err(InvalidDisplayColor));
+    assert_eq!(parts.into_info(id), display);
 }
 
 fn a_window_state_round_trips_through_its_parts() {
@@ -242,10 +173,6 @@ fn parts_table() {
             (
                 "a_display_round_trips_through_its_parts",
                 a_display_round_trips_through_its_parts as fn(),
-            ),
-            (
-                "a_display_colour_takes_only_a_headroom_its_range_has",
-                a_display_colour_takes_only_a_headroom_its_range_has,
             ),
             (
                 "a_window_state_round_trips_through_its_parts",

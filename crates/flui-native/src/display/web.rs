@@ -1116,9 +1116,9 @@ pub(crate) mod color_query {
             ColorGamut::Srgb
         };
         if matches(HIGH_RANGE) {
-            DisplayColor::high(gamut, Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
+            DisplayColor::High(gamut, Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM))
         } else {
-            DisplayColor::standard(gamut)
+            DisplayColor::Standard(gamut)
         }
     }
 
@@ -1139,15 +1139,15 @@ pub(crate) mod color_query {
             };
             assert_eq!(
                 matching(false, false, false),
-                DisplayColor::standard(ColorGamut::Srgb)
+                DisplayColor::Standard(ColorGamut::Srgb)
             );
             assert_eq!(
                 matching(false, false, true),
-                DisplayColor::standard(ColorGamut::DisplayP3)
+                DisplayColor::Standard(ColorGamut::DisplayP3)
             );
             assert_eq!(
                 matching(true, true, true),
-                DisplayColor::high(
+                DisplayColor::High(
                     ColorGamut::Rec2020,
                     Err(CapabilityAbsence::NOT_ON_THIS_PLATFORM)
                 ),

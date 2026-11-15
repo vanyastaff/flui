@@ -151,7 +151,7 @@ fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAb
         .transfer
         .ok_or(CapabilityAbsence::NOT_YET_ON_THIS_HOST)?
     {
-        TransferRange::Standard => return Ok(DisplayColor::standard(gamut)),
+        TransferRange::Standard => return Ok(DisplayColor::Standard(gamut)),
         TransferRange::Pq => description.target_max,
         TransferRange::Extended => description.target_max.or(description.max),
     };
@@ -163,7 +163,7 @@ fn color_of(description: &ColorDescription) -> Result<DisplayColor, CapabilityAb
             Headroom::from_luminance(peak as f32, reference as f32)
                 .map_err(|_| CapabilityAbsence::NOT_ON_THIS_DEVICE)
         });
-    Ok(DisplayColor::high(gamut, headroom))
+    Ok(DisplayColor::High(gamut, headroom))
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -890,11 +890,11 @@ mod tests {
         };
         assert_eq!(
             colour_of(&SDR_SRGB),
-            Ok(DisplayColor::standard(ColorGamut::Srgb))
+            Ok(DisplayColor::Standard(ColorGamut::Srgb))
         );
         assert_eq!(
             colour_of(&HDR10),
-            Ok(DisplayColor::high(
+            Ok(DisplayColor::High(
                 ColorGamut::Rec2020,
                 Ok(Headroom::try_new(5.0).expect("headroom"))
             )),
@@ -906,12 +906,12 @@ mod tests {
                 ColorEvent::Primaries { red_x: 680_000 },
                 ColorEvent::Transfer(TransferRange::Standard),
             ]),
-            Ok(DisplayColor::standard(ColorGamut::DisplayP3)),
+            Ok(DisplayColor::Standard(ColorGamut::DisplayP3)),
             "an unclassed named set falls to the chromaticities"
         );
         assert_eq!(
             colour_of(&HDR10[..4]),
-            Ok(DisplayColor::high(
+            Ok(DisplayColor::High(
                 ColorGamut::Rec2020,
                 Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             )),
@@ -927,7 +927,7 @@ mod tests {
                     reference: 203,
                 },
             ]),
-            Ok(DisplayColor::high(
+            Ok(DisplayColor::High(
                 ColorGamut::Rec2020,
                 Ok(Headroom::try_new(4.0).expect("headroom"))
             )),
@@ -943,7 +943,7 @@ mod tests {
                 },
                 ColorEvent::TargetLuminance { max: 150 },
             ]),
-            Ok(DisplayColor::high(ColorGamut::Rec2020, Ok(Headroom::SDR))),
+            Ok(DisplayColor::High(ColorGamut::Rec2020, Ok(Headroom::SDR))),
             "a target peak below the reference white is no headroom"
         );
         assert_eq!(
@@ -955,7 +955,7 @@ mod tests {
                     reference: 0,
                 },
             ]),
-            Ok(DisplayColor::high(
+            Ok(DisplayColor::High(
                 ColorGamut::Rec2020,
                 Err(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             )),
@@ -1000,7 +1000,7 @@ mod tests {
         );
         assert_eq!(
             only(&outputs).color,
-            Ok(DisplayColor::standard(ColorGamut::Srgb))
+            Ok(DisplayColor::Standard(ColorGamut::Srgb))
         );
 
         assert!(describe(&mut outputs, 3, &HDR10), "HDR on is a change");

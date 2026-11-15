@@ -125,8 +125,8 @@ pub(crate) mod screen {
         let gamut = crate::display::source::p3_or_srgb(p3);
         // A finite `f64` beyond `f32` becomes infinite here, which `try_new` refuses.
         match potential.and_then(|value| Headroom::try_new(value as f32).ok()) {
-            Some(headroom) if headroom > Headroom::SDR => DisplayColor::high(gamut, Ok(headroom)),
-            _ => DisplayColor::standard(gamut),
+            Some(headroom) if headroom > Headroom::SDR => DisplayColor::High(gamut, Ok(headroom)),
+            _ => DisplayColor::Standard(gamut),
         }
     }
 
@@ -226,7 +226,7 @@ pub(crate) mod screen {
 
             assert_eq!(
                 screen_color(true, Some(16.0)),
-                DisplayColor::high(
+                DisplayColor::High(
                     ColorGamut::DisplayP3,
                     Ok(Headroom::try_new(16.0).expect("headroom"))
                 ),
@@ -234,18 +234,18 @@ pub(crate) mod screen {
             );
             assert_eq!(
                 screen_color(false, Some(1.0)),
-                DisplayColor::standard(ColorGamut::Srgb),
+                DisplayColor::Standard(ColorGamut::Srgb),
                 "an SDR monitor"
             );
             assert_eq!(
                 screen_color(true, None),
-                DisplayColor::standard(ColorGamut::DisplayP3),
+                DisplayColor::Standard(ColorGamut::DisplayP3),
                 "a system without the headroom report"
             );
             for broken in [f64::NAN, f64::INFINITY, 0.0, -3.0, f64::MAX] {
                 assert_eq!(
                     screen_color(false, Some(broken)),
-                    DisplayColor::standard(ColorGamut::Srgb),
+                    DisplayColor::Standard(ColorGamut::Srgb),
                     "{broken} publishes no extended range"
                 );
             }

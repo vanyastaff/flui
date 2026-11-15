@@ -239,8 +239,8 @@ fn a_windows_colour_and_latency_reach_the_backend_once_a_turn() {
     let _ = rig.frame(slot, generation, 0);
     let _ = rig.executor.turn();
     assert_eq!(rig.verdicts(slot), [(0, RasterVerdict::Presented)]);
-    let first = DisplayColor::standard(ColorGamut::Srgb);
-    let latest = DisplayColor::standard(ColorGamut::DisplayP3);
+    let first = DisplayColor::Standard(ColorGamut::Srgb);
+    let latest = DisplayColor::Standard(ColorGamut::DisplayP3);
     for change in [
         SlotChange::Color(first),
         SlotChange::Latency(FrameLatency::Low),

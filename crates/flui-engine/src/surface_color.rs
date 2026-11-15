@@ -302,7 +302,7 @@ impl ResolvedSurfaceColor {
 /// takes the surface's when that is over white. Without a platform colour, a
 /// surface that reports no headroom is taken as HDR-capable (wgpu reports
 /// `Some(1.0)` for a definitively-SDR display, and [`surface_headroom`] reads
-/// a figure that is no finite number the same way).
+/// a figure that is no usable number the same way).
 fn display_range(display: Option<DisplayColor>, hdr: &wgpu::DisplayHdrInfo) -> (bool, Option<f32>) {
     let surface = surface_headroom(hdr);
     match display {
@@ -321,28 +321,30 @@ fn display_range(display: Option<DisplayColor>, hdr: &wgpu::DisplayHdrInfo) -> (
 /// The headroom the surface reports for its display, `None` where it reports
 /// none.
 ///
-/// A figure that is no finite number (a NaN multiplier, a peak over a white
-/// level too small to divide by) is no headroom to tone-map to, so it reads
-/// as SDR white, `1.0`. wgpu answers such a figure with `None`, which would
-/// otherwise read as a display that says nothing and so as HDR-capable.
+/// Each figure the surface gives is checked before it is believed: a headroom
+/// multiplier is finite, and a luminance (the peak, the SDR white level) is
+/// finite and positive, since the headroom is one divided by the other. A
+/// figure that fails (NaN, an infinity, a white level of zero or below it, a
+/// ratio that overflows) is no headroom to tone-map to, so the display reads
+/// as SDR white, `1.0`. wgpu answers most such figures with `None`, which
+/// would otherwise read as a display that says nothing and so as
+/// HDR-capable.
 fn surface_headroom(hdr: &wgpu::DisplayHdrInfo) -> Option<f32> {
-    let reported = [
-        hdr.headroom.and_then(|headroom| headroom.current),
-        hdr.luminance.and_then(|luminance| luminance.max_nits),
-        hdr.luminance.and_then(|luminance| luminance.sdr_white_nits),
-    ];
-    match hdr.tone_map_headroom() {
-        Some(headroom) if headroom.is_finite() => Some(headroom),
-        Some(_) => Some(1.0),
-        None if reported
+    let multiplier = hdr.headroom.and_then(|headroom| headroom.current);
+    let luminances = hdr
+        .luminance
+        .map(|luminance| [luminance.max_nits, luminance.sdr_white_nits]);
+    let unusable = multiplier.is_some_and(|multiplier| !multiplier.is_finite())
+        || luminances
             .into_iter()
             .flatten()
-            .any(|figure| !figure.is_finite()) =>
-        {
-            Some(1.0)
-        }
-        None => None,
+            .flatten()
+            .any(|nits| !(nits.is_finite() && nits > 0.0));
+    if unusable {
+        return Some(1.0);
     }
+    hdr.tone_map_headroom()
+        .map(|headroom| if headroom.is_finite() { headroom } else { 1.0 })
 }
 
 /// The standard-dynamic-range sRGB configuration every request falls back to.
@@ -602,11 +604,11 @@ mod tests {
             (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
             (Format::Rgb10a2Unorm, Spaces::BT2100_PQ),
         ];
-        let windows_slider_above_peak = DisplayColor::high(
+        let windows_slider_above_peak = DisplayColor::High(
             ColorGamut::Rec2020,
             Ok(Headroom::from_luminance(400.0, 480.0).expect("headroom")),
         );
-        let wayland_peak_below_white = DisplayColor::high(
+        let wayland_peak_below_white = DisplayColor::High(
             ColorGamut::Rec2020,
             Ok(Headroom::from_luminance(150.0, 203.0).expect("headroom")),
         );
@@ -640,11 +642,11 @@ mod tests {
             .granted()
         };
         assert_eq!(
-            on(Some(DisplayColor::standard(ColorGamut::Srgb))),
+            on(Some(DisplayColor::Standard(ColorGamut::Srgb))),
             SurfaceColor::Srgb8
         );
         assert_eq!(
-            on(Some(DisplayColor::standard(ColorGamut::DisplayP3))),
+            on(Some(DisplayColor::Standard(ColorGamut::DisplayP3))),
             SurfaceColor::WideGamut
         );
         assert_eq!(on(None), SurfaceColor::WideGamut);
@@ -662,7 +664,7 @@ mod tests {
         // The platform says HDR is off; the surface's report of headroom does
         // not turn it on.
         let sdr = resolve_on(
-            DisplayColor::standard(ColorGamut::DisplayP3),
+            DisplayColor::Standard(ColorGamut::DisplayP3),
             &offered,
             &hdr_display(4.0),
         );
@@ -673,7 +675,7 @@ mod tests {
         // asks for extended range): the platform decides, with its headroom.
         let platform_headroom = Headroom::try_new(2.5).expect("headroom");
         let hdr = resolve_on(
-            DisplayColor::high(ColorGamut::DisplayP3, Ok(platform_headroom)),
+            DisplayColor::High(ColorGamut::DisplayP3, Ok(platform_headroom)),
             &offered,
             &hdr_display(1.0),
         );
@@ -681,7 +683,7 @@ mod tests {
         assert_eq!(hdr.headroom(), 2.5);
         assert_eq!(
             hdr.request().display,
-            Some(DisplayColor::high(
+            Some(DisplayColor::High(
                 ColorGamut::DisplayP3,
                 Ok(platform_headroom)
             )),
@@ -690,7 +692,7 @@ mod tests {
 
         // High range without a reported peak: the surface's headroom, then
         // the default.
-        let unreported = DisplayColor::high(
+        let unreported = DisplayColor::High(
             ColorGamut::Rec2020,
             Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
         );
@@ -782,6 +784,12 @@ mod tests {
             nits(f32::NAN, 200.0),
             nits(1000.0, f32::INFINITY),
             nits(f32::MAX, f32::MIN_POSITIVE),
+            nits(1000.0, 0.0),
+            nits(1000.0, -0.0),
+            nits(1000.0, -200.0),
+            nits(1000.0, 1.0e-45),
+            nits(0.0, 200.0),
+            nits(-1000.0, 200.0),
         ] {
             let resolved = resolve(SurfaceColor::Hdr, &offered, &sdr_display);
             assert_eq!(

@@ -209,7 +209,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     );
     let id = panel.id;
 
-    let hdr = DisplayColor::high(
+    let hdr = DisplayColor::High(
         ColorGamut::Rec2020,
         Ok(Headroom::try_new(2.5).expect("headroom")),
     );
@@ -230,7 +230,7 @@ fn a_profile_change_reaches_the_snapshot_as_a_new_revision() {
     controls
         .simulate_display_change(
             id,
-            DisplayChange::Color(Ok(DisplayColor::standard(ColorGamut::Srgb))),
+            DisplayChange::Color(Ok(DisplayColor::Standard(ColorGamut::Srgb))),
         )
         .expect("HDR off");
     let off = platform.display_snapshot().expect("snapshot");
