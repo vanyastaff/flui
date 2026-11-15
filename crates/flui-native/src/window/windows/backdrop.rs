@@ -121,6 +121,10 @@ pub enum Win32WindowError {
         /// The value it held.
         value: i32,
     },
+    /// The title bar colour is not opaque: the desktop window manager draws a
+    /// title bar without alpha.
+    #[error("a title bar colour is opaque; the desktop window manager draws it without alpha")]
+    NotOpaque,
 }
 
 impl Win32WindowError {
@@ -418,18 +422,12 @@ impl Win32Window<'_> {
     /// class's.
     fn live(self) -> Result<HWND, Win32WindowError> {
         let window = self.0;
-        match super::proc::with_window_context_checked(window.hwnd(), "Win32Window", |context| {
-            context.identity == window.identity
-        }) {
-            Ok(true) => Ok(window.hwnd()),
-            Ok(false)
-            | Err(
-                UserDataRefusal::WindowGone
-                | UserDataRefusal::ForeignThread
-                | UserDataRefusal::ForeignClass
-                | UserDataRefusal::EmptySlot,
-            ) => Err(Win32WindowError::CLOSED),
-        }
+        owns_its_handle(super::proc::with_window_context_checked(
+            window.hwnd(),
+            "Win32Window",
+            |context| context.identity == window.identity,
+        ))?;
+        Ok(window.hwnd())
     }
 
     /// Set the material behind the window, through the same build gate as
@@ -540,16 +538,17 @@ impl Win32Window<'_> {
         })
     }
 
-    /// Draw the title bar in `color`, or in the system's colour for `None`
-    /// (Windows 11). The desktop window manager draws a title bar opaque: the
-    /// colour's alpha is not drawn.
+    /// Draw the title bar in `color`, an opaque one, or in the system's
+    /// colour for `None` (Windows 11).
     ///
     /// # Errors
-    /// [`Win32WindowError`]: the window is closed, or the system refused
+    /// [`Win32WindowError`]: the window is closed, the colour is not opaque
+    /// ([`NotOpaque`](Win32WindowError::NotOpaque): the desktop window
+    /// manager draws a title bar without alpha), or the system refused
     /// (Windows 10 has no caption colour).
     pub fn set_title_bar_color(self, color: Option<Color>) -> Result<(), Win32WindowError> {
         let hwnd = self.live()?;
-        set(hwnd, CAPTION_COLOR, caption_color(color))
+        set(hwnd, CAPTION_COLOR, caption_color(color)?)
     }
 
     /// The window's DPI.
@@ -567,13 +566,41 @@ impl Win32Window<'_> {
     }
 }
 
+/// What a view answers for the check of its window's handle: `Ok` when the
+/// window behind the handle is the view's (`Ok(true)`), closed otherwise.
+/// Another window behind the handle, no window, another class's, an empty
+/// slot and another thread's window are all a handle the view's window no
+/// longer owns: the view borrows a window that is neither `Send` nor `Sync`,
+/// so another thread answering for the handle is the system having given the
+/// value to a window of that thread.
+fn owns_its_handle(checked: Result<bool, UserDataRefusal>) -> Result<(), Win32WindowError> {
+    match checked {
+        Ok(true) => Ok(()),
+        Ok(false)
+        | Err(
+            UserDataRefusal::WindowGone
+            | UserDataRefusal::ForeignThread
+            | UserDataRefusal::ForeignClass
+            | UserDataRefusal::EmptySlot,
+        ) => Err(Win32WindowError::CLOSED),
+    }
+}
+
 /// The `COLORREF` (0x00BBGGRR) the desktop window manager draws a caption
 /// in: `color`'s red, green and blue, or the system's colour for `None`.
-fn caption_color(color: Option<Color>) -> u32 {
-    color.map_or(DWMWA_COLOR_DEFAULT, |color| {
-        let [red, green, blue, _alpha] = color.to_rgba8();
-        (u32::from(blue) << 16) | (u32::from(green) << 8) | u32::from(red)
-    })
+///
+/// # Errors
+/// [`Win32WindowError::NotOpaque`] for a colour that is not opaque: a
+/// `COLORREF` has no alpha.
+fn caption_color(color: Option<Color>) -> Result<u32, Win32WindowError> {
+    let Some(color) = color else {
+        return Ok(DWMWA_COLOR_DEFAULT);
+    };
+    if !color.is_opaque() {
+        return Err(Win32WindowError::NotOpaque);
+    }
+    let [red, green, blue, _opaque] = color.to_rgba8();
+    Ok((u32::from(blue) << 16) | (u32::from(green) << 8) | u32::from(red))
 }
 
 #[cfg(test)]
@@ -740,19 +767,50 @@ mod tests {
     use flui_painting::styling::Color;
     use windows::Win32::Graphics::Dwm::DWMWA_COLOR_DEFAULT;
 
-    use super::{BACKDROPS, CORNERS, caption_color, from_system, to_system};
+    use crate::owner::hwnd_affinity::UserDataRefusal;
 
-    /// A caption colour is the `COLORREF` of its red, green and blue, without
-    /// its alpha; `None` is the system's colour.
+    use super::{
+        BACKDROPS, CORNERS, Win32WindowError, caption_color, from_system, owns_its_handle,
+        to_system,
+    };
+
+    /// An opaque caption colour is the `COLORREF` of its red, green and blue;
+    /// one with alpha is refused, since a `COLORREF` has none; `None` is the
+    /// system's colour.
     #[test]
     fn a_caption_colour_is_its_colorref() {
         for (color, colorref) in [
-            (Some(Color::rgb(0x12, 0x34, 0x56)), 0x0056_3412),
-            (Some(Color::rgba(0x12, 0x34, 0x56, 0x80)), 0x0056_3412),
-            (Some(Color::rgb(0xFF, 0, 0)), 0x0000_00FF),
-            (None, DWMWA_COLOR_DEFAULT),
+            (Some(Color::rgb(0x12, 0x34, 0x56)), Ok(0x0056_3412)),
+            (Some(Color::rgb(0xFF, 0, 0)), Ok(0x0000_00FF)),
+            (
+                Some(Color::rgba(0x12, 0x34, 0x56, 0x80)),
+                Err(Win32WindowError::NotOpaque),
+            ),
+            (
+                Some(Color::rgba(0x12, 0x34, 0x56, 0xFE)),
+                Err(Win32WindowError::NotOpaque),
+            ),
+            (None, Ok(DWMWA_COLOR_DEFAULT)),
         ] {
             assert_eq!(caption_color(color), colorref, "{color:?}");
+        }
+    }
+
+    /// A view's window owns its handle only when the window behind it is the
+    /// view's; every refusal of the handle check, another thread's window
+    /// included, answers that the window is closed.
+    #[test]
+    fn a_handle_the_window_no_longer_owns_answers_closed() {
+        let closed = Err(Win32WindowError::CLOSED);
+        for (checked, answer) in [
+            (Ok(true), Ok(())),
+            (Ok(false), closed),
+            (Err(UserDataRefusal::WindowGone), closed),
+            (Err(UserDataRefusal::ForeignThread), closed),
+            (Err(UserDataRefusal::ForeignClass), closed),
+            (Err(UserDataRefusal::EmptySlot), closed),
+        ] {
+            assert_eq!(owns_its_handle(checked), answer, "{checked:?}");
         }
     }
 

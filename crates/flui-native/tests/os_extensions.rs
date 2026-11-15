@@ -187,8 +187,9 @@ mod cases {
         );
     }
 
-    /// The title bar takes a colour and gives the system's back for `None`
-    /// on a live window; Windows 10 has no caption colour, and refuses. The
+    /// The title bar takes an opaque colour and gives the system's back for
+    /// `None` on a live window, and refuses a colour with alpha, which it
+    /// cannot draw; Windows 10 has no caption colour, and refuses. The
     /// desktop window manager does not read the caption colour back
     /// (`E_INVALIDARG`), so the `COLORREF` each colour becomes is checked
     /// beside the conversion, in `a_caption_colour_is_its_colorref`.
@@ -206,6 +207,11 @@ mod cases {
             )
             .expect("a Win32 window opens");
         let win32 = window.win32().expect("a Win32 window has its view");
+        assert_eq!(
+            win32.set_title_bar_color(Some(Color::rgba(0x12, 0x80, 0x90, 0x80))),
+            Err(Win32WindowError::NotOpaque),
+            "a title bar has no alpha"
+        );
         match win32.set_title_bar_color(Some(Color::rgb(0x12, 0x80, 0x90))) {
             Ok(()) => assert_eq!(win32.set_title_bar_color(None), Ok(())),
             Err(Win32WindowError::Refused { .. }) => {
@@ -432,7 +438,7 @@ mod cases {
             AppKitWindowError, MacOSCollectionBehavior, MacOSSpaces, MacOSWindowAlpha,
             MacOSWindowExt, MacOSWindowLevel,
         };
-        use flui_platform::{PlatformWindow as _, Unsupported, UnsupportedReason, WindowReveal};
+        use flui_platform::{Unsupported, UnsupportedReason, WindowReveal};
         use objc2_app_kit::NSWindowCollectionBehavior;
 
         let platform: Box<dyn Platform> =

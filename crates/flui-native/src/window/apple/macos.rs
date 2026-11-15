@@ -465,10 +465,9 @@ impl MacOSWindow {
         // the window is made on.
         let owner = crate::owner::apple::macos::owner_queue();
         let owner_is_main = true;
-        options.frame = options.frame.at_open(&appkit_window_capabilities(
-            owner_is_main,
-            windows.presentation,
-        ));
+        options.frame = options
+            .frame
+            .at_open(&appkit_window_capabilities(windows.presentation));
         let style = FrameStyle::of(options.frame);
         // SAFETY: AppKit makes and configures an NSWindow only on the main
         // thread, which the `MainThreadMarker` this takes proves this is; all
@@ -1318,7 +1317,7 @@ impl host::Window<MacOSLoop> for MacOSWindow {
     fn capabilities(_: &MacOSLoop, windows: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
         // (`MacOSWindow::try_new`).
-        appkit_window_capabilities(true, windows.presentation)
+        appkit_window_capabilities(windows.presentation)
     }
 
     fn frame_inset(owner: &MacOSLoop, _: &MacOSWindows, _scale_factor: f64) -> Size<f64> {
@@ -1867,7 +1866,7 @@ impl MacOSWindow {
             let capabilities = capabilities_of(
                 flags,
                 heading,
-                appkit_window_capabilities(self.owner_is_main, self.presentation),
+                appkit_window_capabilities(self.presentation),
             );
             Sample::read(geometry, |state| {
                 let state = state

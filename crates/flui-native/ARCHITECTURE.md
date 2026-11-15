@@ -141,50 +141,54 @@ trait depends on `flui-platform` instead.
   answers `None` for another host's window, and otherwise a view of the OS's
   window (`Win32Window`, `AppKitWindow`) whose commands cannot meet another
   host's. The facade publishes the `os` modules, through `flui_app::native`,
-  as `flui::native::<os>` behind its `native` feature (ADR-0254 §8), and
-  a widget reaches the window it is drawn in through
-  `flui_app::native::NativeWindowCapability`, code that holds a presentation's
-  address through `flui_app::native::with_window`. A view's method does what it says or reports that it cannot. A
-  `Win32Window` command or query first checks that its window still owns the
-  handle (`Unsupported` with `NoWindow`); the view borrows a window that is
-  neither `Send` nor `Sync`, so it is on the owner thread by its type, and a
-  handle another thread answers for is a recycled one, refused as closed. A
-  view has no command that overlaps the contract: what `WindowCommand` does
-  (the frame, the maximize box, the mode, the material) is a command, not a
-  method of the view, which would leave the snapshot behind. A refusal of the
-  desktop window manager is `Refused` with its `HRESULT`; each attribute is a
-  constant that pairs its ordinal with its value's type, and each mapping is
-  one table read both ways. The contract's material
-  (`WindowCommand::SetMaterial`) is a window command: the Win32 window set
-  reads the build once, and the `SystemBackdrop` gate (build 22621,
-  `window::windows::material`) is the one gate of `DWMWA_SYSTEMBACKDROP_TYPE`.
-  Below it the window's `material` capability is unavailable on this device,
-  so admission refuses with `NotOnThisDevice`, and `Win32Window::set_backdrop`
-  answers the same; every write of the attribute takes the gate's proof. A
-  refusal of the desktop window manager is `ApplyError::Platform`. A Win32
-  window opens on Mica through the same gate. AppKit draws `System` as
-  `NSVisualEffectView`'s window-background material behind FLUI's view, for
-  windows on the main lane. Where the OS draws a material and the host does
-  not yet (UIKit, Android from API 31 with cross-window blur on, an AppKit
-  window off the main lane), the capability is unavailable with
-  `NotYetOnThisHost`; below the version gate, or with the device's blur off,
-  `NotOnThisDevice`. The rules are pure (`window::capabilities`), and their
-  table tests run on every host.
-  The AppKit backdrop (`AppKitWindow::set_backdrop`)
-  is an `NSVisualEffectView` material or Liquid Glass, an
-  `NSGlassEffectView` looked up by name (macOS 26; `Unsupported` with `NotOnThisDevice` before),
-  holding FLUI's view; it answers `MacOSBackdropError` for a closed window, a
-  content view something else put there, a view AppKit did not create and a
-  corner radius that is not finite. Every other `AppKitWindow` command (tabs,
-  level, collection behavior, shadow, alpha) answers `AppKitWindowError` for a
-  closed window; an AppKit window is made on the main thread and is neither
-  `Send` nor `Sync`, so its view needs no lane check. The values it takes are
-  FLUI's: a level and a collection behavior are named choices, converted to
-  AppKit's constants inside the crate, and a collection behavior always keeps
-  `FullScreenPrimary`, which the contract's full-screen mode needs. The
-  application's alpha (`MacOSWindowAlpha`, never NaN or outside `0..=1`) is
-  kept in the window's state: a deferred first reveal reveals the window at
-  it instead of at 1. What a
+  as `flui::native::<os>` behind its `native` feature (ADR-0254 §8). A widget
+  reaches the window it is drawn in through
+  `flui_app::native::NativeWindowCapability`, and code that holds a
+  presentation's address through `flui_app::native::with_window`. A view's
+  method does what it says or reports that it cannot. A `Win32Window` command
+  or query first checks that its window still owns the handle (`Unsupported`
+  with `NoWindow`); the view borrows a window that is neither `Send` nor
+  `Sync`, so it is on the owner thread by its type, and a handle another
+  thread answers for is a recycled one, refused as closed. A view has no
+  command that overlaps the contract: what `WindowCommand` does (the frame
+  and its maximize box, the mode) is a command, not a method of the view,
+  which would leave the snapshot behind, and the scale is the snapshot's. A
+  refusal of the desktop window manager is `Refused` with its `HRESULT`, and a
+  value it cannot draw is refused before the call (`NotOpaque`: a title bar
+  has no alpha); each attribute is a constant that pairs its ordinal with its
+  value's type, and each mapping is one table read both ways. The contract's
+  material (`WindowCommand::SetMaterial`) is a window command: the Win32
+  window set reads the build once, and the `SystemBackdrop` gate (build
+  22621, `window::windows::material`) is the one gate of
+  `DWMWA_SYSTEMBACKDROP_TYPE`. Below it the window's `material` capability is
+  unavailable on this device, so admission refuses with `NotOnThisDevice`,
+  and `Win32Window::set_backdrop` answers the same; every write of the
+  attribute takes the gate's proof. A refusal of the desktop window manager
+  is `ApplyError::Platform`. A Win32 window opens on Mica through the same
+  gate. AppKit draws `System` as `NSVisualEffectView`'s window-background
+  material behind FLUI's view, on the main thread every AppKit window is
+  made on. Where the OS draws a material and the host does not yet (UIKit,
+  Android from API 31 with cross-window blur on), the capability is
+  unavailable with `NotYetOnThisHost`; below the version gate, or with the
+  device's blur off, `NotOnThisDevice`. The rules are pure
+  (`window::capabilities`), and their table tests run on every host. The
+  AppKit backdrop (`AppKitWindow::set_backdrop`) is an `NSVisualEffectView`
+  material or Liquid Glass, an `NSGlassEffectView` looked up by name
+  (macOS 26; `Unsupported` with `NotOnThisDevice` before), holding FLUI's
+  view; it answers `MacOSBackdropError` for a closed window, a content view
+  something else put there, a view AppKit did not create and a corner radius
+  that is not finite. Every other `AppKitWindow` command (tabs, level,
+  collection behavior, shadow, alpha) answers `AppKitWindowError`, and a tab
+  join `TabJoinError`, each with `Unsupported` and `NoWindow` for a closed
+  window; an AppKit window is made on the main thread (`new_inner` takes its
+  `MainThreadMarker`) and is neither `Send` nor `Sync`, so its view needs no
+  lane check. The values it takes are FLUI's: a level and a collection
+  behavior are named choices, converted to AppKit's constants inside the
+  crate, and a collection behavior always keeps `FullScreenPrimary`, which
+  the contract's full-screen mode needs. The application's alpha
+  (`MacOSWindowAlpha`, never NaN or outside `0..=1`) is kept in the window's
+  state: a deferred first reveal reveals the window at it instead of at 1.
+  What a
   window is created with on one OS is not an extension but that OS's field of
   the contract's `WindowOptions::os_options`, which only that OS's host reads:
   the Win32 window opens with its corners and title-bar theme
@@ -3706,14 +3710,15 @@ behavior: Android execution remains unavailable on this host.
 
 ### AppKit tab joins borrow live windows
 
-`MacOSWindowExt::add_tab_to_window` takes `&dyn HostWindow` and answers whether
-AppKit received the join (`None` when the receiving window is not an AppKit
-window). A numeric ID cannot establish ownership of an
-Objective-C object. The backend rejects a different backend, different owner
-lanes, non-main lanes, closed windows and joining a window to itself before
-messaging AppKit. Both borrowed wrappers own their NSWindows, which are created
-with `releasedWhenClosed:NO`; explicit native retains span the callback-capable
-join on their shared main owner lane. No state or registry mutex spans that call.
+`AppKitWindow::add_tab_to_window` takes `&dyn HostWindow` and answers whether
+AppKit received the join (`TabJoinError` when it did not). A numeric ID cannot
+establish ownership of an Objective-C object. The backend rejects a window of
+another host, a closed window (`Unsupported` with `NoWindow`, as every view
+command answers) and joining a window to itself before messaging AppKit; both
+windows are on the main thread that made them, since neither is `Send` nor
+`Sync`. Both borrowed wrappers own their NSWindows, which are created with
+`releasedWhenClosed:NO`; explicit native retains span the callback-capable
+join. No state or registry mutex spans that call.
 
 The method's public compile-fail doctest rejects numeric IDs, and its compiling
 example pins the borrowed-window signature and its `Option<bool>` answer. These

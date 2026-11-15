@@ -90,14 +90,13 @@ pub(crate) fn pointer_absence(version: AppleVersion, shows_a_pointer: bool) -> C
 /// What every AppKit window honours and observes, known before one exists
 /// (`Platform::window_capabilities`). Each field is named, so a command added
 /// to the contract is unavailable here until `apply` carries it out. The
-/// material is an `NSVisualEffectView` behind FLUI's view, which lives on the
-/// main thread: a window whose owner is not the AppKit main lane draws none,
-/// which the host could reach through the main lane and does not yet. The
+/// material is an `NSVisualEffectView` behind FLUI's view, on the main thread
+/// every AppKit window is made on (`MacOSWindow::new_inner` takes its
+/// `MainThreadMarker`). The
 /// window reports when its frames reached the screen unless `presentation`
 /// names why the machine's display cannot tell ([`appkit_presentation`]).
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const fn appkit_window_capabilities(
-    owner_is_main: bool,
     presentation: Option<CapabilityAbsence>,
 ) -> WindowCapabilities {
     use WindowCapability::{Absent, Native};
@@ -126,11 +125,7 @@ pub(crate) const fn appkit_window_capabilities(
     // A title bar of the application's is drawn under the system's, made
     // transparent (`fullSizeContentView`), with the traffic lights over it.
     capabilities.app_title_bar = Native;
-    capabilities.material = if owner_is_main {
-        Native
-    } else {
-        Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
-    };
+    capabilities.material = Native;
     capabilities
 }
 
@@ -308,7 +303,7 @@ mod tests {
         let ios = AppleVersion::new;
         let macos = MacOSVersion::new;
         let api = AndroidApi::from_level;
-        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 25] = [
+        let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
             (
                 "UIKit material",
                 scene_capabilities().material.absence(),
@@ -330,20 +325,13 @@ mod tests {
                 Some(DEVICE),
             ),
             (
-                "AppKit material on the main lane",
-                appkit_window_capabilities(true, None).material.absence(),
+                "AppKit material",
+                appkit_window_capabilities(None).material.absence(),
                 None,
             ),
             (
-                "AppKit material off the main lane",
-                appkit_window_capabilities(false, None).material.absence(),
-                Some(HOST),
-            ),
-            (
                 "AppKit title bar of the application's",
-                appkit_window_capabilities(true, None)
-                    .app_title_bar
-                    .absence(),
+                appkit_window_capabilities(None).app_title_bar.absence(),
                 None,
             ),
             (
@@ -383,14 +371,14 @@ mod tests {
             ),
             (
                 "AppKit presentation report on a Mac",
-                appkit_window_capabilities(true, appkit_presentation(false))
+                appkit_window_capabilities(appkit_presentation(false))
                     .reports_presentation
                     .absence(),
                 None,
             ),
             (
                 "AppKit presentation report on a hypervisor's guest",
-                appkit_window_capabilities(true, appkit_presentation(true))
+                appkit_window_capabilities(appkit_presentation(true))
                     .reports_presentation
                     .absence(),
                 Some(DEVICE),

@@ -109,9 +109,15 @@ pub enum TabJoinError {
     /// The two are one window.
     #[error("a window cannot be a tab of itself")]
     SameWindow,
+    /// Not here, in the contract's vocabulary: one of the windows is closed
+    /// ([`UnsupportedReason::NoWindow`]).
+    #[error(transparent)]
+    Unsupported(#[from] Unsupported),
+}
+
+impl TabJoinError {
     /// One of the windows is closed.
-    #[error("one of the windows is closed")]
-    Closed,
+    const CLOSED: Self = Self::Unsupported(Unsupported::new(UnsupportedReason::NoWindow));
 }
 
 // ============================================================================
@@ -189,32 +195,35 @@ pub enum MacOSWindowLevel {
 }
 
 impl MacOSWindowLevel {
-    /// Every level and AppKit's value for it, read both ways.
-    fn table() -> [(Self, NSWindowLevel); 7] {
-        [
-            (Self::Normal, NSNormalWindowLevel),
-            (Self::Floating, NSFloatingWindowLevel),
-            (Self::ModalPanel, NSModalPanelWindowLevel),
-            (Self::MainMenu, NSMainMenuWindowLevel),
-            (Self::Status, NSStatusWindowLevel),
-            (Self::PopUpMenu, NSPopUpMenuWindowLevel),
-            (Self::ScreenSaver, NSScreenSaverWindowLevel),
-        ]
-    }
+    /// Every level, which [`from_appkit`](Self::from_appkit) searches.
+    const ALL: [Self; 7] = [
+        Self::Normal,
+        Self::Floating,
+        Self::ModalPanel,
+        Self::MainMenu,
+        Self::Status,
+        Self::PopUpMenu,
+        Self::ScreenSaver,
+    ];
 
     /// AppKit's value for this level.
     fn to_appkit(self) -> NSWindowLevel {
-        Self::table()
-            .into_iter()
-            .find_map(|(level, value)| (level == self).then_some(value))
-            .expect("BUG: the level table names every level")
+        match self {
+            Self::Normal => NSNormalWindowLevel,
+            Self::Floating => NSFloatingWindowLevel,
+            Self::ModalPanel => NSModalPanelWindowLevel,
+            Self::MainMenu => NSMainMenuWindowLevel,
+            Self::Status => NSStatusWindowLevel,
+            Self::PopUpMenu => NSPopUpMenuWindowLevel,
+            Self::ScreenSaver => NSScreenSaverWindowLevel,
+        }
     }
 
     /// The level AppKit's `value` is, if one is.
     fn from_appkit(value: NSWindowLevel) -> Option<Self> {
-        Self::table()
+        Self::ALL
             .into_iter()
-            .find_map(|(level, held)| (held == value).then_some(level))
+            .find(|level| level.to_appkit() == value)
     }
 }
 
@@ -409,13 +418,13 @@ impl<'a> AppKitWindow<'a> {
             // retains keep both receivers alive through synchronous AppKit
             // callback reentry.
             if this.closed.load(Ordering::Acquire) || other.closed.load(Ordering::Acquire) {
-                return Err(TabJoinError::Closed);
+                return Err(TabJoinError::CLOSED);
             }
             let Some(_this_pin) = objc2::rc::Retained::retain(this.ns_window) else {
-                return Err(TabJoinError::Closed);
+                return Err(TabJoinError::CLOSED);
             };
             let Some(_other_pin) = objc2::rc::Retained::retain(other.ns_window) else {
-                return Err(TabJoinError::Closed);
+                return Err(TabJoinError::CLOSED);
             };
             let _: () = msg_send![this.ns_window, addTabbedWindow:other.ns_window ordered:0]; // NSWindowAbove
             Ok(())
@@ -545,11 +554,9 @@ mod tests {
     /// Each level is one AppKit value and back, and no two levels share one.
     #[test]
     fn each_level_is_one_appkit_value_read_both_ways() {
-        let table = MacOSWindowLevel::table();
-        for (level, value) in table {
-            assert_eq!(level.to_appkit(), value, "{level:?}");
+        for level in MacOSWindowLevel::ALL {
             assert_eq!(
-                MacOSWindowLevel::from_appkit(value),
+                MacOSWindowLevel::from_appkit(level.to_appkit()),
                 Some(level),
                 "{level:?}"
             );

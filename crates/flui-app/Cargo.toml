@@ -165,8 +165,15 @@ flui-testing = { workspace = true }
 flui-foundation = { workspace = true, features = ["testing"] }
 # The `testing` kit, for this crate's integration tests; `http`, so the
 # built-in HTTP provider is tested with the crate; and the multi-window
-# entry points.
-flui-app = { path = ".", features = ["testing", "http", "unstable-windows", "single-instance"] }
+# entry points; `native`, so the escape hatch's capability is tested through
+# the public API.
+flui-app = { path = ".", features = [
+    "testing",
+    "http",
+    "unstable-windows",
+    "single-instance",
+    "native",
+] }
 static_assertions.workspace = true
 # A throwaway data root for the host storage tests.
 tempfile.workspace = true

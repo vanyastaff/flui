@@ -1,13 +1,15 @@
 ### Added
 
 - **`flui`**: the `native` feature, off by default, and `flui::native`, the escape hatch
-  (ADR-0254 §8): `HostWindow`, `with_window` and, on Windows, `flui::native::windows`
-  (`WindowsWindowExt`, `Win32Window`, `Win32WindowError`, `WindowsBackdrop`), on macOS
-  `flui::native::macos` (`MacOSWindowExt`, `AppKitWindow`, `MacOSBackdrop`, `MacOSMaterial`,
-  `LiquidGlass`, `GlassStyle`, `GlassTint`, `MacOSBackdropError`, `MacOSWindowLevel`,
-  `MacOSCollectionBehavior`, `TabJoinError`). It is Evolving, not Stable (ADR-0089 §5). Each
-  extension narrows a window to its OS's view and answers `None` for a window of another host.
-  The facade's feature turns on `flui-app`'s new `native` feature.
+  (ADR-0254 §8): `HostWindow`, `with_window`, `NativeWindowCapability` and its handle
+  `NativeWindow` and, on Windows, `flui::native::windows` (`WindowsWindowExt`, `Win32Window`,
+  `Win32WindowError`, `WindowsBackdrop`), on macOS `flui::native::macos` (`MacOSWindowExt`,
+  `AppKitWindow`, `AppKitWindowError`, `MacOSBackdrop`, `MacOSMaterial`, `LiquidGlass`,
+  `GlassStyle`, `GlassTint`, `MacOSBackdropError`, `MacOSWindowLevel`, `MacOSCollectionBehavior`,
+  `MacOSSpaces`, `MacOSMissionControl`, `MacOSWindowCycle`, `MacOSWindowAlpha`,
+  `InvalidWindowAlpha`, `TabJoinError`). It is Evolving, not Stable (ADR-0089 §5). Each extension
+  narrows a window to its OS's view and answers `None` for a window of another host. The facade's
+  feature turns on `flui-app`'s new `native` feature.
 - **`flui-app`**: `native::with_window(address, f)` runs `f` on the host window the presentation
   at `address` is drawn in, on the thread that runs the application; `None` elsewhere, for an
   address nothing is presented at and once the presentation is gone.
@@ -19,21 +21,21 @@
 - **`flui-native`**: Liquid Glass returns: `AppKitWindow::set_backdrop(MacOSBackdrop::Glass(..))`
   puts an `NSGlassEffectView` (macOS 26, found by name at run time) with its style, tint and
   corner radius behind FLUI's view; `MacOSBackdrop::Material(..)` puts an `NSVisualEffectView`
-  material there; `clear_backdrop` takes either away. Each
-  answers `MacOSBackdropError`: a closed window, a window off the AppKit main lane, a system
-  without Liquid Glass (`Unsupported` with `NotOnThisDevice`), a content view something else put there, a view
-  AppKit did not create, a corner radius that is not finite or is negative.
+  material there; `clear_backdrop` takes either away. Each answers `MacOSBackdropError`: a closed
+  window, a system without Liquid Glass (`Unsupported` with `NotOnThisDevice`), a content view
+  something else put there, a view AppKit did not create, a corner radius that is not finite or
+  is negative.
 
 ### Changed
 
 - **`flui-native`**: the OS extensions moved from the crate root to `flui_native::os::windows` and
   `flui_native::os::macos`, the modules the facade publishes.
 - **`flui-native`**: every `Win32Window` command and query returns `Result<_, Win32WindowError>`:
-  `Unsupported` (`NoWindow` for a closed window, `NotOnThisPlatform` for a contract value newer than the host), `NotOnTheOwnerThread`, `Refused` (the system refused, with its `HRESULT`; a corner
-  preference on Windows 10), `Unrecognized` (a value the system reported that has no FLUI value).
-  None reaches a handle the window no longer owns. Renamed with it: `enable_snap_layouts` and
-  `disable_snap_layouts` are `set_snap_layouts(bool)`, `is_snap_layouts_enabled` is
-  `snap_layouts`, `enable_blur_behind` is `set_blur_behind`, `is_dark_mode` is `dark_mode`.
+  `Unsupported` (`NoWindow` for a closed window, `NotYetOnThisHost` for a contract value newer
+  than the host), `Refused` (the system refused, with its `HRESULT`; a corner preference on
+  Windows 10), `Unrecognized` (a value the system reported that has no FLUI value),
+  `NotOpaque` (a title bar colour with alpha). None reaches a handle the window no longer owns.
+  `is_dark_mode` is `dark_mode`.
 - **`flui-native`**: `WindowsBackdrop` is `#[non_exhaustive]` and gains `Auto`; `Tabbed`, the
   same material as `MicaAlt`, is gone, with `to_dwm_value` and `requires_windows_11`.
 - **`flui-native`**: a Win32 window opens with the corners and title-bar theme of its

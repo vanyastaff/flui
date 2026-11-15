@@ -125,9 +125,8 @@ fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     });
     // The escape hatch from a widget: its window as the core host hands it out.
     #[cfg(feature = "native")]
-    registrar.provide::<super::native_window::NativeWindowCapability>(
-        super::native_window::HostNativeWindow,
-    );
+    registrar
+        .provide::<super::native_window::NativeWindowCapability>(super::native_window::provide);
     registrar
 }
 
