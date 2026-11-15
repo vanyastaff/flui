@@ -14,6 +14,10 @@
   behaviour, as the section says: since Rust 1.81 it aborts the process, with nothing in FLUI's
   diagnostics; out of an `extern "C-unwind"` frame it unwinds through foreign frames not written
   for it. Containment buys a logged failure and an answer the OS understands.
+- **Amended:** 2026-11-15 — section 16: the `dealloc` objc2 generates for a class the host
+  declares is an OS entry with no body in the crate. A class keeps its Rust state in
+  `owner::panic_boundary::ContainedIvars`, whose destructor is the boundary's call, and the gate
+  holds every `define_class!` to that type and a class's own `Drop` to the entry rule.
 - **Amended:** 2026-10-27 — sections 2 and 7: three items stay in the contract. `TransferCompleter`
   is the producer half every source makes with its request (`TransferRequest::pending()` returns
   both, so nothing claims a delivery before the request exists), test sources included;

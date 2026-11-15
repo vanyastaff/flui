@@ -22,6 +22,11 @@
 //! - a method of `define_class!` marked `#[unsafe(method(…))]` or
 //!   `#[unsafe(method_id(…))]`, which objc2 turns into an `extern "C-unwind"`
 //!   function;
+//! - the destructor of a class `define_class!` declares: objc2 generates the
+//!   class's `dealloc`, an `extern "C-unwind"` method with no body in this
+//!   crate, which runs the class's own `Drop` and then drops its
+//!   `#[ivars = …]` in place, on whatever thread and under whatever frames
+//!   the last release comes from;
 //! - a method of an `impl I…_Impl for …`, windows-rs's interface traits: a COM
 //!   vtable entry;
 //! - a method of an AccessKit handler (`ActionHandler`, `ActivationHandler`,
@@ -53,6 +58,16 @@
 //! `owner::panic_boundary`; any other item, module or import under the name
 //! `os_entry` or `panic_boundary` is a finding, so the name the rule reads is
 //! the function. There is no allowlist: an entry passes or the gate fails.
+//!
+//! A class's ivars go through the boundary when they are declared as
+//! `ContainedIvars<…>` (written `…panic_boundary::ContainedIvars`, or imported
+//! from it): the boundary's own type, defined once beside `os_entry`, whose
+//! `Drop` is judged by the rule above and so destroys what it holds inside
+//! the boundary. Ivars of any other type are a finding, whatever they hold,
+//! since a type's destructor is out of the gate's reach; a class with no
+//! ivars has nothing to destroy. A class's own `Drop` is judged like any
+//! entry, and the name `ContainedIvars` is held to the boundary's module as
+//! `os_entry` is.
 //!
 //! **Limits.** Functions and constructors of OS crates are caught by their
 //! path; methods are not, since a receiver's type is out of the gate's

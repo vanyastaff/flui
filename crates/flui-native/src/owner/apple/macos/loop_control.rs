@@ -32,7 +32,7 @@ use crate::{
     owner::apple::terminate_gate::TerminateGate,
     owner::apple::terminate_gate::Termination,
     owner::call_point::Called,
-    owner::panic_boundary::{AfterPanic, contain_os_entry, os_entry},
+    owner::panic_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry},
     owner::signal::OwnerTurnSlot,
 };
 
@@ -542,7 +542,7 @@ define_class!(
     // SAFETY: NSObject has no additional subclass invariants; ivars are Rust-owned.
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
-    #[ivars = Weak<LoopControl>]
+    #[ivars = ContainedIvars<Weak<LoopControl>>]
     /// Private, loop-scoped delegate routing native quit and reopen requests.
     struct LoopDelegate;
     // SAFETY: NSObjectProtocol has no additional requirements.
@@ -697,7 +697,8 @@ impl LoopOwnership {
             return Err(PlatformError::EventLoop { message: "FLUI requires a standalone NSApplication with no running loop or existing delegate".into() });
         }
         let mtm = MainThreadMarker::new().expect("BUG: AppKit ownership is acquired on main");
-        let allocated = LoopDelegate::alloc(mtm).set_ivars(Arc::downgrade(&control));
+        let allocated =
+            LoopDelegate::alloc(mtm).set_ivars(ContainedIvars::new(Arc::downgrade(&control)));
         // SAFETY: NSObject initialization of our newly allocated subclass.
         let delegate: Retained<LoopDelegate> = unsafe { msg_send![super(allocated), init] };
         let previous_policy = app.activationPolicy();
