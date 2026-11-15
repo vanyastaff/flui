@@ -1203,7 +1203,7 @@ mod toplevel {
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
     use crate::owner::OpenWindowError;
-    use crate::owner::handlers::{PresentationReports, rebased};
+    use crate::owner::frame_timing::{PresentationReports, rebased};
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{

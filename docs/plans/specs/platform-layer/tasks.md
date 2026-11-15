@@ -5780,6 +5780,66 @@ graph LR
   support I/O timeouts»).
   Не запущено: сборки Android, iOS и macOS (нет SDK, устройства и Mac; `stage_macos_app` на этом
   хосте не компилируется); Linux и wasm32 — на CI.
+- [ ] **LY107** — ветка `platform/owner-core`. Десять находок аудита проверены по `main` до
+  правки; все подтвердились. (1) Обработчик раскладки — один `owner::layout_callback::LayoutCallback`
+  (`HandlerSlot`) у headless, Win32, X11 и Wayland: вторая регистрация заменяет первую, заменённый
+  сбрасывается вне слота; паника обработчика — отказ хода, как у обработчика окна. У headless
+  появился `HeadlessInputDevices::set_keyboard_layout`. `OwnerTurnSlot` реализует `HandlerSlot`,
+  `OwnerTurn::drive_in` зовёт через точку вызова (`LeasedTurn`). Тесты: `owner::layout_callback::tests`,
+  строка «a layout callback registered twice is replaced» таблицы
+  `handlers_run_outside_every_lock_of_the_headless_platform`, `a_second_layout_callback_replaces_the_first`
+  на X11 (`tests/x11_input.rs`) и Wayland (`tests/wayland_input.rs`); откат X11 к `main` —
+  «the first callback was kept beside the second». На X11 обработчик слышит смену раскладки в
+  `settle` хода, после его событий: `a_panicking_layout_callback_costs_no_key_of_its_turn`
+  (откат — нажатие хода теряется, тест ждёт его до срока). (2) Паника `exit_policy` терминальна
+  (ADR-0258 §2) и решается в `AppDelivery::exit_policy` на всех хостах: исполняется ответ хоста
+  по умолчанию (`ExitAnswer::ends_loop`), паника паркуется как первый отказ прогона и
+  поднимается из `run` после конца цикла впереди любой более поздней паники (цикл идёт под
+  `FirstPanic`, `resume_after_run`; Win32, X11, Wayland, AppKit) или в вызвавший код
+  (headless), политика больше не спрашивается. Тесты: `a_panicking_exit_policy_is_terminal`
+  (`app_delivery_contracts`), `a_panicking_exit_policy_is_terminal_after_the_hosts_answer`
+  (headless), Win32 `panicking_exit_policy_ends_the_loop_and_resumes_after_it` и
+  `failing_exit_policy_leaves_the_exit_to_the_host` заменили тесты вето;
+  `a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one` на headless, X11 и Wayland (откат
+  порядка — выходит «a later handler»). Wayland теперь, как X11 и Win32, не кончает цикл, если
+  политика открыла окно. (3) `question` хранит
+  ответ, а паника отчёта после него идёт путём того же отчёта, доставленного отдельно (`Asked`:
+  ОС-вызов логирует и сохраняет ответ, Rust-кадр получает панику), ничего не паркуется:
+  `a_question_keeps_its_answer_when_a_report_after_it_panics`,
+  `a_report_after_the_wake_deadline_is_no_terminal_failure`,
+  `a_panicking_report_after_a_session_end_answer_is_no_terminal_failure` (с паркованием паника
+  отчёта выходила только при выходе приложения). (4) Частично: правило срока одно только на Windows. Модальный цикл Win32 берёт срок
+  через `WakeDeadline`, `ModalDelivery` удалён;
+  `a_due_deadline_gets_one_modal_frame_per_generation` проверяет темп таймера (без исправления
+  ожидание 1 мс вместо `MODAL_FRAME_PACE_MS`). Насос AppKit и цикл Android не переведены: их окна не
+  считают кадры, а этот хост их не компилирует — запись в
+  [`docs/gaps.md`](../../../gaps.md#the-appkit-pump-and-the-android-loop-keep-their-own-due-deadline-rule).
+  Задача поэтому не отмечена. (5) У `Services::page_origin` и у
+  `Platform::{primary_selection, page_origin}` нет тел; каждый цикл пишет `page_origin`;
+  trybuild `host_table_names_every_position` ждёт и пропущенный `page_origin`, фикстура печати
+  `Platform` пишет оба метода. (6) `bind` ставит `delivering` (`awaiting_ready`):
+  `a_report_between_bind_and_ready_waits_for_ready` (без исправления отчёт слышен до `Ready`).
+  (7) `owner/handlers.rs` → `owner/frame_timing.rs`, `OpenWindows` — в `owner/mod.rs`, тесты
+  `OwnerSignal` — `owner/signal/tests.rs` (`the_owner_signal_honours_its_contracts`), остальные
+  строки старой таблицы — у своих модулей (`identity_exhaustion_acquires_nothing`,
+  `an_off_owner_resource_stays_off_its_owner_whatever_its_report_does`,
+  `owner_callback_and_capture_panics_do_not_replace_an_existing_unwind`). (8) Лестница хостов в
+  `lib.rs` — простые `target_os` и псевдонимы `build.rs`. (9) Маркеры `(US3)`, «Issue #937»,
+  `owner/winit.rs` в фикстуре `globals`, формулировки удержания убраны; `FLUI_HEADLESS=0` и пустое
+  значение не выбирают headless (строки в `tests/headless.rs`; все читатели в CI и xtask ставят
+  `1`). (10) Правило хода после паники обработчика записано один раз в `ARCHITECTURE.md` («A turn
+  after a handler's panic»): ход доставляет всё взятое и поднимает первую панику после; Win32 и
+  Apple кончают процесс в точке входа ОС (это навязано ОС, ADR-0258 §4). Wayland приведён к X11:
+  `a_handlers_panic_leaves_the_rest_of_the_turn_delivered` на Weston (откат — `[Down]` вместо
+  `[Down, Up]`); местная свёртка первой паники ввода X11 заменена `FirstPanic`.
+  Проверки на Windows: clippy `-p flui-native --all-targets -D warnings`, `--affected` clippy,
+  nextest `-p flui-native` (кроме `an_intent_opens_its_link_or_documents`, падает только на
+  Windows, файл не тронут), trybuild обеих изменённых фикстур локально проходит
+  (`owner_platform_is_not_send` локально расходится из-за отсутствия `rust-src`), `xtask checks`,
+  `doc-strict`, `expectations`. В WSL (Ubuntu 24.04): clippy с `--all-features` и без, nextest
+  `-p flui-native --all-features` под `xvfb-run` — все, `wayland_input` под Weston — 4 из 4.
+  Не компилировалось: macOS, iOS, Android, wasm32 (правки `owner/apple/macos/loop_control.rs`,
+  `owner/apple/{macos,ios}.rs`, `owner/android/looper.rs` прочитаны).
 
 - [ ] **LY110** — ветка `platform/escape-hatch`, на ревью.
   Построено: команды `AppKitWindow` (`enable_tabbing`, `disable_tabbing`, `set_window_level`,

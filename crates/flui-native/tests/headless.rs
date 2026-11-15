@@ -12,29 +12,53 @@
 use flui_native::testing::app;
 
 use app::{AppCall, AppLog, run_keeping_owner};
-use flui_native::{HeadlessPlatform, current_platform};
+use flui_native::{CurrentHost, HeadlessPlatform, current_host, current_platform};
 use flui_platform::WindowOptions;
 use flui_testing::window_commands::AdmitAndApply as _;
 
+/// `FLUI_HEADLESS` is a switch: unset, empty or `0` is off and leaves the choice
+/// to the target (where it has no host to start, that is an error, never the
+/// headless host); any other value, `false` and `no` included, selects the
+/// headless host.
 fn flui_headless_env_var_selects_the_headless_platform() {
-    // Set environment variable
     // SAFETY: no other thread reads the environment concurrently — supplied
-    // by nextest's process-per-test isolation, not by any `--test-threads`
-    // setting. See the file header.
+    // by nextest's process-per-test isolation (see the file header).
+    unsafe { std::env::remove_var("FLUI_HEADLESS") };
+    let unset = current_host();
+    assert!(
+        !matches!(unset, Ok(CurrentHost::Headless)),
+        "FLUI_HEADLESS unset chose {unset:?}"
+    );
+    for (value, headless) in [
+        ("1", true),
+        ("yes", true),
+        ("false", true),
+        ("no", true),
+        ("0", false),
+        ("", false),
+    ] {
+        // SAFETY: no other thread reads the environment concurrently — supplied
+        // by nextest's process-per-test isolation, not by any `--test-threads`
+        // setting. See the file header.
+        unsafe { std::env::set_var("FLUI_HEADLESS", value) };
+        let chosen = current_host();
+        assert_eq!(
+            matches!(chosen, Ok(CurrentHost::Headless)),
+            headless,
+            "FLUI_HEADLESS={value:?} chose {chosen:?}"
+        );
+    }
+
+    // SAFETY: as above.
     unsafe { std::env::set_var("FLUI_HEADLESS", "1") };
-
     let platform = current_platform().expect("Failed to get platform");
-
     assert_eq!(
         platform.name(),
         "Headless",
         "Expected headless platform when FLUI_HEADLESS=1"
     );
 
-    // Clean up
-    // SAFETY: no other thread reads the environment concurrently — supplied
-    // by nextest's process-per-test isolation, not by any `--test-threads`
-    // setting. See the file header.
+    // SAFETY: as above.
     unsafe { std::env::remove_var("FLUI_HEADLESS") };
 }
 

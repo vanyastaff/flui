@@ -11,12 +11,13 @@
 //! when the next deadline is. The window arms and stops that timer; its
 //! [`ModalPacing`] counts its modal loops and keeps its frames.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use super::{ClassWindows, FrameCount, ModalDelivery, WindowsLoop};
+use super::{ClassWindows, FrameCount, WindowsLoop};
 use crate::owner::app_delivery::AppDelivery;
+use crate::owner::wake_deadline::WakeDeadline;
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
 pub(crate) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
@@ -30,7 +31,7 @@ pub(crate) struct ModalFrames {
     app: Arc<AppDelivery>,
     windows: Weak<dyn ClassWindows>,
     frames: Rc<FrameCount>,
-    delivered: ModalDelivery,
+    deadline: RefCell<WakeDeadline>,
 }
 
 impl ModalFrames {
@@ -43,42 +44,43 @@ impl ModalFrames {
             app,
             windows,
             frames,
-            delivered: ModalDelivery::default(),
+            deadline: RefCell::default(),
         }
     }
 
     /// A modal loop starts: the deadline an earlier one delivered does not
     /// hold back its first.
     pub(crate) fn start(&self) {
-        self.delivered.clear();
+        *self.deadline.borrow_mut() = WakeDeadline::default();
     }
 
     /// What the main loop would deliver, while the modal loop stands in for it
     /// and dispatches neither deadlines nor paints: a due wake deadline is
     /// delivered as the main loop delivers it, once per frame generation, and
     /// every window with an invalid region is painted, so every runtime on the
-    /// thread keeps getting frames. Returns how many milliseconds to wait
-    /// before the next request. The application's handler is user code, asked
-    /// with no borrow held and in the main loop's custody; a caller holds its
-    /// own clone of `self`, since that code may close the window that keeps
-    /// it.
+    /// thread keeps getting frames. The deadline is armed and taken by the
+    /// main loop's own rule ([`WakeDeadline`]), so an instant no frame has
+    /// serviced since its delivery is neither delivered again nor waited for.
+    /// Returns how many milliseconds to wait before the next request. The
+    /// application's handler is user code, asked with no borrow held and in
+    /// the main loop's custody; a caller holds its own clone of `self`, since
+    /// that code may close the window that keeps it.
     pub(crate) fn deliver(&self) -> u32 {
-        let deadline = WindowsLoop::ask_wake_deadline(&self.app);
+        let answer = WindowsLoop::ask_wake_deadline(&self.app);
         let now = web_time::Instant::now();
-        match deadline {
-            Some(due) if due <= now && self.delivered.admits(due, self.frames.get()) => {
-                if let Some(windows) = self.windows.upgrade() {
-                    self.delivered.record(due, self.frames.get());
-                    windows.redraw_for_deadline();
-                }
-            }
-            Some(_) => {}
-            None => self.delivered.clear(),
+        let frames = self.frames.get();
+        let (armed, due) = {
+            let mut deadline = self.deadline.borrow_mut();
+            let armed = deadline.arm(answer, frames);
+            (armed, deadline.take_due(now, frames))
+        };
+        if due && let Some(windows) = self.windows.upgrade() {
+            windows.redraw_for_deadline();
         }
         if let Some(windows) = self.windows.upgrade() {
             windows.paint_invalid();
         }
-        crate::owner::modal_pace::modal_frame_wait_ms(deadline, now)
+        crate::owner::modal_pace::modal_frame_wait_ms(armed, now)
     }
 }
 

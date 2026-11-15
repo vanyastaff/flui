@@ -29,7 +29,7 @@ consolidation"). The measured state on `main` at `8b2b210`:
 
 | Fact | Evidence |
 |---|---|
-| The loop and its window state are `Send + Sync` | `pub trait Loop: Send + Sync` with `type Shared: Send + Sync` (`crates/flui-native/src/host.rs:137-138`), `OpenWindows: Send + Sync` (`owner/handlers.rs`), `HeadlessWindows { tracked: Mutex<Tracked> }` holding `WindowFacets` (`window/headless.rs`) |
+| The loop and its window state are `Send + Sync` | `pub trait Loop: Send + Sync` with `type Shared: Send + Sync` (`crates/flui-native/src/host.rs:137-138`), `OpenWindows: Send + Sync` (`owner/mod.rs`), `HeadlessWindows { tracked: Mutex<Tracked> }` holding `WindowFacets` (`window/headless.rs`) |
 | The platform trait is `Send + Sync` and checked by debug assertions | `pub trait Platform: sealed::Sealed + Send + Sync` (`platform.rs:155`), `OwnerAffinity` (ADR-0039, "Implementation status"), `SharedPlatform { platform: Arc<dyn Platform> }` (`owner/mod.rs:367`) |
 | An owner-only value inside a `Send` window is refused at run time | `OwnerSlot`/`OwnerCell`/`OwnerMap` (`owner/slot.rs`), `an_input_callback_registered_off_the_owner_thread_is_refused` |
 | `unsafe impl Send/Sync` exist only to satisfy the loop's bound | `MacOSLoop` (`owner/apple/macos.rs`), `WebLoop` (`owner/web.rs`) |

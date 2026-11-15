@@ -354,7 +354,7 @@ impl TextInputHandle {
 **Win32-unit** — `#[cfg(all(test, target_os = "windows"))]` модуль
 `platforms/windows/text_services/tests.rs`, таблица
 `the_text_services_bridge_honours_the_tsf_contract` (как
-`the_owner_thread_machinery_honours_its_contracts`): mock-sink `#[implement(ITextStoreACPSink)]`
+`the_owner_signal_honours_its_contracts`): mock-sink `#[implement(ITextStoreACPSink)]`
 со сценарием в `OnLockGranted`, mock `TsfThread` для отказов, настоящий `ITfThreadMgr` для
 фокуса; CI — clippy, прогон на Windows прикладывается к PR; пишется до кода (test-first, W6);
 **виджет** — `crates/flui-widgets/tests/editable_text.rs`, модуль `text_store`

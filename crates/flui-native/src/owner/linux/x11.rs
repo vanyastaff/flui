@@ -101,8 +101,8 @@ use x11rb::xcb_ffi::XCBConnection;
 use crate::error::PlatformError;
 use crate::executor::NativeExecutor;
 use crate::host;
+use crate::owner::OpenWindows;
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::single_instance::FirstInstance;
 use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
@@ -113,7 +113,7 @@ use crate::owner::wake_deadline::WakeDeadline;
 use crate::owner::watch::Watch;
 use crate::owner::window_delivery::WindowDelivery;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
-use crate::platform::{AppHandler, PathPromptOptions, Platform};
+use crate::platform::{AppHandler, ExitAnswer, PathPromptOptions, Platform};
 use crate::task::Task;
 
 /// The connection to the X server the platform reads events from and its
@@ -932,7 +932,10 @@ impl X11Loop {
     /// Ask the application whether the loop may end now that no window is
     /// open; with no policy of its own, the loop ends, as a desktop loop does.
     fn exit_allowed(&self) -> bool {
-        self.app.exit_policy().or_resume(true)
+        self.app
+            .exit_policy()
+            .or_resume(ExitAnswer::HostDecides)
+            .ends_loop(true)
     }
 
     /// The colour scheme the portal reported, to each window.
@@ -1505,9 +1508,14 @@ impl host::Loop for X11Loop {
             &self.background_executor,
             &self.signal,
         ));
-        let result = self.run_loop(guard.host_notices.as_deref());
+        // A turn's panic leaves the loop here, and the teardown runs; then
+        // the exit policy's parked panic, the run's first failure, comes out
+        // ahead of it (`AppDelivery::resume_after_run`).
+        let mut failure = FirstPanic::new();
+        let result = failure.contain(|| self.run_loop(guard.host_notices.as_deref()));
         drop(guard);
-        result
+        self.app.resume_after_run(failure);
+        result.expect("BUG: a loop that raised no panic returned its result")
     }
 
     fn quit(&self) {
@@ -1583,6 +1591,11 @@ fn no_file_prompt() -> PlatformError {
 }
 
 impl host::Services for X11Loop {
+    /// Only a page has an origin.
+    fn page_origin(&self) -> Option<String> {
+        None
+    }
+
     fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
         host::environment_launch_value(key)
     }

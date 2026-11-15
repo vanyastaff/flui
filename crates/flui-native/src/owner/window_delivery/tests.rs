@@ -18,7 +18,7 @@ use flui_platform::{
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 
 use super::WindowDelivery;
-use crate::owner::handlers::frame_request_now;
+use crate::owner::frame_timing::frame_request_now;
 
 fn ime() -> PlatformInput {
     PlatformInput::Ime(ImeEvent::Enabled)

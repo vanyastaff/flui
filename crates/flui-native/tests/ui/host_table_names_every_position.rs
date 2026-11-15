@@ -1,5 +1,6 @@
-//! A host's table names a type for every position of the closed list: one
-//! left out is a compile error, never an inert default.
+//! A host's table names a type for every position of the closed list, and its
+//! loop writes every service, `page_origin` included: one left out is a compile
+//! error, never an inert default.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;

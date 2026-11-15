@@ -1367,10 +1367,10 @@ mod live {
     use crate::input::availability;
     use crate::input::event_timestamp_ns;
     use crate::input::linux::xkb::{Keyboard, KeymapSource};
+    use crate::owner::layout_callback::LayoutCallback;
     use crate::owner::linux::x11::{
         InputTarget, LoopInput, LoopText, PointerRun, WindowRef, X11Connection, X11Key,
     };
-    use crate::owner::panic_boundary::contain_owner_callback;
 
     use crate::owner::window_delivery::WindowDelivery;
 
@@ -1443,7 +1443,11 @@ mod live {
         state: Rc<RefCell<State>>,
         /// The name of the layout the keyboard is in.
         layout: RefCell<String>,
-        layout_listeners: RefCell<Vec<Box<dyn FnMut()>>>,
+        /// The application's keyboard layout callback.
+        layout_callback: LayoutCallback,
+        /// The layout's name moved this turn: the callback hears it at the
+        /// turn's settle.
+        layout_moved: Cell<bool>,
         /// The server's keymap changed since it was last read: it is read
         /// again before the next event that reads it, or once the turn's
         /// events are heard, so a burst of changes costs one read.
@@ -1688,7 +1692,8 @@ mod live {
                 labels,
                 state: Rc::new(RefCell::new(state)),
                 layout: RefCell::new(layout),
-                layout_listeners: RefCell::new(Vec::new()),
+                layout_callback: LayoutCallback::default(),
+                layout_moved: Cell::new(false),
                 keymap_stale: Cell::new(false),
                 text,
             });
@@ -1889,16 +1894,11 @@ mod live {
             changed
         }
 
-        /// Tell every listener the layout changed, with none of the input's
-        /// locks held: a listener may register another.
+        /// Note that the layout's name moved: the application's callback hears
+        /// it once the turn's events are delivered (`settle`), so its
+        /// panic cannot cost the event that noticed the change.
         fn layout_changed(&self) {
-            let mut listeners = std::mem::take(&mut *self.layout_listeners.borrow_mut());
-            for listener in &mut listeners {
-                contain_owner_callback(listener);
-            }
-            let mut kept = self.layout_listeners.borrow_mut();
-            listeners.append(&mut kept);
-            *kept = listeners;
+            self.layout_moved.set(true);
         }
 
         /// What a pointer, touch or gesture event delivers.
@@ -2183,30 +2183,17 @@ mod live {
     /// handler's panic leaves the rest delivered, and the first is raised
     /// again after.
     fn deliver(deliveries: Vec<(Arc<WindowDelivery>, Delivery)>) {
-        let mut first = None;
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         for (delivery, item) in deliveries {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: one handler's panic leaves the remaining deliveries delivered"
-            )]
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match item {
+            failure.contain(|| match item {
                 Delivery::Input(input) => {
                     delivery.dispatch_input(input);
                 }
                 Delivery::Hover(hovered) => delivery.report_hover(hovered),
                 Delivery::Present(capabilities) => delivery.set_input_capabilities(capabilities),
-            }));
-            if let Err(payload) = result {
-                if first.is_some() {
-                    flui_foundation::panic::discard_payload(payload);
-                } else {
-                    first = Some(payload);
-                }
-            }
+            });
         }
-        if let Some(payload) = first {
-            std::panic::resume_unwind(payload);
-        }
+        failure.resume();
     }
 
     impl LoopInput for X11Input {
@@ -2364,6 +2351,11 @@ mod live {
 
         fn settle(&self) {
             self.read_stale_keymap();
+            // After the turn's events: the callback's panic is the turn's
+            // failure, raised once every event was heard.
+            if self.layout_moved.take() {
+                self.layout_callback.changed().or_resume(());
+            }
         }
 
         fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError> {
@@ -2422,7 +2414,7 @@ mod live {
         }
 
         fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
-            self.layout_listeners.borrow_mut().push(callback);
+            self.layout_callback.register(callback);
         }
     }
 

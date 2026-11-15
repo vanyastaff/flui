@@ -650,6 +650,7 @@ mod event_loop {
     use std::time::Duration;
 
     use cursor_icon::CursorIcon;
+    use flui_foundation::panic::FirstPanic;
     use flui_platform::data_transfer::DragTransport;
     use flui_platform::drag::PlatformDragSource;
     use flui_platform::{
@@ -690,6 +691,7 @@ mod event_loop {
     use crate::executor::NativeExecutor;
     use crate::host;
     use crate::owner::app_delivery::AppDelivery;
+    use crate::owner::call_point::Called;
     use crate::owner::linux::single_instance::FirstInstance;
     use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
@@ -700,7 +702,7 @@ mod event_loop {
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
-    use crate::platform::{AppHandler, Platform};
+    use crate::platform::{AppHandler, ExitAnswer, Platform};
     use crate::transfer::linux::wayland::DataDevices;
 
     /// The newest `wl_compositor` the loop understands: version 6 gives a
@@ -2405,17 +2407,22 @@ mod event_loop {
             // The input the seats reported reaches the windows before they
             // settle, so a frame they deliver follows the input it shows.
             // Neither holds a lock of the loop: a handler may open, close or
-            // quit.
-            self.input.deliver();
+            // quit. What the dispatch recorded is off the queue and nothing
+            // else would deliver it, so a handler's panic in one step leaves
+            // the steps after it delivered, and the first is raised after the
+            // last, as the X11 loop does with its turn's events.
+            let mut failure = FirstPanic::new();
+            failure.contain(|| self.input.deliver());
             // The application's selection is asked for its text here, at the
             // turn, not inside the dispatch that recorded the request.
-            self.clipboard.deliver();
+            failure.contain(|| self.clipboard.deliver());
             // The drags the devices recorded reach their windows, and each
             // drag's source is answered, with no lock of the loop held.
-            self.drag.deliver();
+            failure.contain(|| self.drag.deliver());
             for window in self.windows.values() {
-                window.settle();
+                failure.contain(|| window.settle());
             }
+            failure.resume();
             let turn = self.signal.begin_turn();
             self.deliver_host_notices();
             if turn.drive_in(&self.turn) || self.exit_due() {
@@ -2509,7 +2516,14 @@ mod event_loop {
             if !(emptied || reevaluate) || !self.windows.is_empty() {
                 return false;
             }
-            self.app.exit_policy().or_resume(true)
+            self.app
+                .exit_policy()
+                .or_resume(ExitAnswer::HostDecides)
+                .ends_loop(true)
+                // Asked with no lock held, the policy may have opened a
+                // window: one opened meanwhile keeps the loop, as on X11 and
+                // Win32.
+                && self.windows.is_empty()
         }
 
         /// Block until the compositor sends something, another producer
@@ -2617,7 +2631,7 @@ mod event_loop {
         /// End the run: the sources stop, every window still open lets go of
         /// its handler and surface, and the application hears the quit, once,
         /// before its handler is released.
-        fn finish(&self) {
+        fn finish(&self, mut failure: FirstPanic) {
             self.stop_sources();
             for window in self.windows.values() {
                 window.release();
@@ -2628,7 +2642,12 @@ mod event_loop {
             self.devices.release();
             let quit = self.app.quit_requested();
             self.app.release();
-            quit.or_resume(());
+            // The exit policy's parked panic is the run's first failure: it
+            // comes out ahead of the loop's (`failure`) and the quit's.
+            if let Called::Panicked(quit) = quit {
+                failure.record(quit.into_payload());
+            }
+            self.app.resume_after_run(failure);
         }
     }
 
@@ -2675,25 +2694,29 @@ mod event_loop {
             self.app.resume_through_signal(&self.signal);
             let mut guard = RunGuard(Some(&self));
             self.start_sources();
-            let outcome = self
-                .app
-                .ready(OwnerPlatform::new(platform, Rc::clone(&hooks)))
-                .map_err(PlatformError::bootstrap)
-                .and_then(|()| {
-                    self.signal
-                        .start()
-                        .map_err(|error| PlatformError::EventLoop {
-                            message: error.to_string(),
-                        })?;
-                    self.start_host_notices();
-                    while !self.turn(None)? {}
-                    Ok(())
-                });
+            // A turn's panic leaves the loop here and the run still ends in
+            // order; the exit policy's parked panic comes out ahead of it.
+            let mut failure = FirstPanic::new();
+            let outcome = failure.contain(|| {
+                self.app
+                    .ready(OwnerPlatform::new(platform, Rc::clone(&hooks)))
+                    .map_err(PlatformError::bootstrap)
+                    .and_then(|()| {
+                        self.signal
+                            .start()
+                            .map_err(|error| PlatformError::EventLoop {
+                                message: error.to_string(),
+                            })?;
+                        self.start_host_notices();
+                        while !self.turn(None)? {}
+                        Ok(())
+                    })
+            });
             guard.0 = None;
-            self.finish();
-            drop(hooks);
             tracing::info!("the Wayland loop ended");
-            outcome
+            self.finish(failure);
+            drop(hooks);
+            outcome.expect("BUG: a loop that raised no panic returned its outcome")
         }
 
         fn quit(&self) {
@@ -2710,6 +2733,11 @@ mod event_loop {
     }
 
     impl host::Services for WaylandLoop {
+        /// Only a page has an origin.
+        fn page_origin(&self) -> Option<String> {
+            None
+        }
+
         fn launch_value(&self, key: flui_platform::LaunchKey) -> Option<String> {
             host::environment_launch_value(key)
         }

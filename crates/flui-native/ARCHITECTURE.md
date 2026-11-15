@@ -215,7 +215,7 @@ trait depends on `flui-platform` instead.
   `owner::call_point` the one point where the
   platform calls a handler, `owner::app_delivery` what a loop delivers to the
   application's handler, `owner::window_delivery` what a window delivers to
-  its own, `owner::handlers` what a loop asks of the windows it holds,
+  its own, `owner::frame_timing` a frame's times on the event clock,
   `owner::notices` the trait a loop pushes system notices through
   (`NoticeChannel`, which the lifecycle feature implements over the loop's
   delivery; a wake marks the display and window caches that registered
@@ -758,7 +758,7 @@ trait depends on `flui-platform` instead.
     the two cannot see different windows; the platform passes it to every
     call of the position.
   - **The loops' hooks.** Each loop declares what it asks of its windows, and
-    the window file implements it: `owner::handlers::OpenWindows` (whether
+    the window file implements it: `owner::OpenWindows` (whether
     any window is open), shared by the hooks that extend it, and a window's
     delivery to its handler reached through `HostWindow`
     (`owner::window_delivery::WindowDelivery`); `owner::windows::ClassWindows` (the
@@ -840,9 +840,11 @@ trait depends on `flui-platform` instead.
   `web::pinch`, `web::wheel`) are `pub(crate)` and tested beside them.
 - **The platform calls a handler at one point, with no lock or borrow held
   (ADR-0151 §10).** `owner::call_point::call` takes the handler out of its
-  `HandlerSlot` (the application's or a window's handler in an owner slot, a
-  field of a host's state mutex or `RefCell` for the callbacks a host still
-  keeps) under the slot's own lock or borrow, releases it, runs the handler in
+  `HandlerSlot` (the application's or a window's handler in an owner slot, the
+  keyboard layout callback in the `owner::layout_callback::LayoutCallback`
+  every loop keeps, the owner-turn callback in its `OwnerTurnSlot`, a UIKit
+  scene's consumer in a field of its state) under the slot's own lock or
+  borrow, releases it, runs the handler in
   a panic boundary and puts it back unless one was installed meanwhile: the
   newer one stays and the one that ran is retired once the lock is released. A
   slot can refuse the handler back (a window that cleared, a loop that stopped
@@ -851,9 +853,9 @@ trait depends on `flui-platform` instead.
   again from inside it. `install` replaces a handler and `retire` drops any
   other user-owned value the same way, so a capture's destructor may call the
   platform. A handler's panic is the call's `Failure`: the caller resumes it
-  where a Rust frame waits (headless, a window's FIFO) or contains it
-  where the operating system called (Win32's exit policy and session end,
-  AppKit, UIKit); a handler displaced during a failed call is dropped,
+  where a Rust frame waits (headless, a window's FIFO, a Linux turn) or
+  contains it where the operating system called and has an answer (Win32's
+  session end, AppKit, UIKit); a handler displaced during a failed call is dropped,
   contained, its panic discarded (ADR-0281). `AppDelivery` and
   `WindowDelivery` call only through it. Tests: `owner::call_point::tests`;
   the public-API tables in `tests/handler_reentry.rs` (headless and Win32, each case on a
@@ -870,25 +872,51 @@ trait depends on `flui-platform` instead.
   owner thread in an owner slot, with the platform and the owner hooks held
   weakly (the platform owns the loop that owns the delivery), and each call
   mints the capability it borrows. A report (quit, reopen, notice) goes
-  through one FIFO: accepted before the handler is bound, while `ready` or
+  through one FIFO: accepted before the handler is bound, between the bind and
+  the call of `ready` (the bind holds the queue for it), while `ready` or
   another method runs, or on another thread, it waits and is delivered in
   order on the owner thread (an owner turn of the loop's signal for a report
   from another thread); the quit is heard once per run. A question (session
   end, exit policy, wake deadline) is asked at once, re-entrantly if need be,
-  and a report it raises is delivered right after its answer; with no handler
-  bound the host answers it itself (proceed, its own exit default, no
-  deadline), and so it does for an exit the handler leaves to it
-  (`ExitAnswer::HostDecides`). A panicking method is contained, the tail behind
+  and a report it raises is delivered right after its answer; the answer is
+  kept beside the panic of a report delivered after it (`Asked`), and that
+  panic takes the path the same report's takes delivered alone, whether or
+  not an answer came: an OS caller keeps the answer and logs the panic (a
+  blocked session end stays blocked), a caller with a Rust frame gets the
+  panic, and nothing is parked. With no handler bound the host answers
+  it itself (proceed, its own exit default, no deadline), and so it does for
+  an exit the handler leaves to it (`ExitAnswer::HostDecides`): the desktop
+  hosts end the loop, the headless platform keeps running. An exit policy
+  that panics is terminal (ADR-0258 §2), decided once, in
+  `AppDelivery::exit_policy`, for every host: the host's default answers so
+  the teardown can proceed, the panic is parked as the run's first failure,
+  and the policy is not asked again, so one that panics on every call neither
+  spins nor floods. Each loop only carries it out: the Win32, X11, Wayland
+  and AppKit loops run their loop under a `FirstPanic` and resume it out of
+  `run` once the quit is delivered and the handler released, ahead of any
+  panic the loop raised after it (`AppDelivery::resume_after_run`), where a
+  Rust frame waits
+  even though the question was asked inside a window procedure; the headless
+  platform resumes it into the call that asked (a window's close, the
+  reevaluation's `drive`) or into its quit; a loop that never returns to a
+  Rust frame (UIKit, the web page, the Android Activity) never asks the exit
+  policy, so nothing parks there (ADR-0258 §3: iOS logs what reaches
+  `applicationWillTerminate:`, which `Asked::or_contain` does at once). A
+  panicking method is contained, the tail behind
   it still delivered, the first panic returned. The loop releases the handler
   when its run ends; a release made while a delivery runs (the web page and the
   Android Activity end from inside a method) waits for that delivery, so the
-  quit it queued is heard first. One released while an unwind is under way is
-  retained, never left in the owner thread's table to be dropped when the
-  thread exits. The handlers tests run a platform with are
-  `testing::app` (the `testing` feature). The
+  quit it queued is heard first, and one made before `ready` was called
+  releases at once. The released handler is dropped contained, never left in
+  the owner thread's table to be dropped when the thread exits. The handlers
+  tests run a platform with are `testing::app` (the `testing` feature). The
   lifecycle position keeps only the release of a held session end and the
   activation; the keyboard layout callback stays a registration until nothing
-  above the host reads it. Tests: `owner::app_delivery::tests::app_delivery_contracts`,
+  above the host reads it: one `LayoutCallback` per loop, where a registration
+  replaces the callback before it on every host, and a callback's panic is
+  its turn's failure (below). Tests: `owner::app_delivery::tests::app_delivery_contracts`,
+  `owner::layout_callback::tests`, the row "a layout callback registered twice
+  is replaced" of `handlers_run_outside_every_lock_of_the_headless_platform`,
   `tests/app_handler.rs::app_handler_obligation_table` and the application
   rows of `tests/handler_reentry.rs`.
 - **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
@@ -1003,7 +1031,7 @@ trait depends on `flui-platform` instead.
     `presentedTime`, rebased from `CACurrentMediaTime` onto the event clock,
     with the refresh of the window's display.
     Each reports into the window's
-    `handlers::PresentationReports`, which the `WindowDelivery` keeps and
+    `frame_timing::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
     (`FrameRequest::presented`): the newest report wins, a report no later
     than one kept or carried is dropped. A stamp ahead of the event clock's
@@ -1554,9 +1582,7 @@ even when input or focus callbacks synchronously trigger opposing transitions.
 Accepted native focus and visibility observations also finish their commits and notifications
 after a dispatch unwind. Recovery retains the same FIFO so a reentrant
 observation follows the already accepted tail; ordinary aborted events are
-discarded. `the_owner_thread_machinery_honours_its_contracts` pins single,
-opposing and reentrant observations, a competing notification panic and the
-next healthy observation through the private backend commit seam.
+discarded.
 
 Native pointer capture custody is published on the exact canvas claim, apart
 from its Rust buttons cache. A live body rechecks its admission after DOM
@@ -2480,8 +2506,8 @@ as permanent exhaustion. Both normal windows and owner-control windows reserve
 identity before creating a native HWND, so a capacity failure cannot leak an
 already acquired window. Catching that failure cannot reissue an old identity.
 
-The Windows row `window_identity_exhaustion_permanently_refuses_retries` joins
-`the_owner_thread_machinery_honours_its_contracts`. It drives
+The row `window_identity_exhaustion_permanently_refuses_retries` of
+`identity_exhaustion_acquires_nothing` (`owner/windows/tests.rs`) drives
 `WindowIdentity::admit`, the admission `WindowsWindow::try_new` runs around
 `CreateWindowExW`, from a local counter with an acquisition that records
 native creation, checks repeated refusal and verifies that refused admission
@@ -2756,14 +2782,58 @@ message from any thread (refused once the owner window is closed). The owner
 procedure then checks that no window is tracked and no quit is under way, asks
 the application's handler through the call point with no borrow held, and
 checks the window count again, since the handler may have opened a replacement
-window. A handler that panics is contained as a veto. An allowed exit ends the
+window. A handler that panics gets the host's answer (the exit), and its
+panic resumes out of `run` once the loop ended, as on every host
+(`AppDelivery::exit_policy`). An allowed exit ends the
 loop the way `quit` does. A run with no handler bound allows the exit. Deferring the
 decision keeps the handler, which re-enters the embedder,
 out of a `WM_DESTROY` nested inside
 embedder code that closed the window. The native rows in `tests/contract.rs`
 (`closing_the_last_window_ends_the_loop`,
 `exit_policy_veto_holds_until_a_reevaluation_allows_exit`,
-`window_opened_by_the_exit_policy_keeps_the_loop`) run the real message loop.
+`window_opened_by_the_exit_policy_keeps_the_loop`,
+`panicking_exit_policy_ends_the_loop_and_resumes_after_it`) run the real message loop.
+
+### A turn after a handler's panic
+
+**Rule:** what a turn took off the operating system's queue is delivered whatever
+a handler does with part of it, and the first panic of the turn is raised
+after the last delivery (AGENTS.md "Current forms", `FirstPanic`; ADR-0281
+§4). A handler is a window's or the application's, the keyboard layout
+callback, or a field's text store. Where a Rust frame waits on the loop (the
+headless platform's caller, the X11 and Wayland `run`), the panic then unwinds
+out of it. Where the operating system called, an unwind cannot leave the
+entry (ADR-0258 §4, ADR-0151 §16): Win32's window procedure and the AppKit and
+UIKit entries deliver the rest of what they were handed (a window's FIFO) and
+then end the process through `os_entry`'s `AfterPanic::Abort`. That is the
+one difference, and the operating system forces it. A panic reaching the
+platform at all is a defect of `flui-app`'s handlers, which contain every
+application panic (ADR-0258 §4), so the rule decides how such a defect ends,
+not whether an application survives one. The keyboard layout callback's panic
+on X11 and Wayland, and a Wayland field's text store's, used to be contained
+and logged; they follow the rule now, like every other handler's.
+
+- X11: `dispatch_events` hears every event of the turn in its own containment
+  and raises the first panic after the last (`hear_all`); a feature's
+  deliveries to several windows fold the same way. A layout change an event
+  notices is told to the callback at the turn's `settle`, after the events,
+  so the callback's panic costs no key or state event of its turn.
+- Wayland: `turn` runs the input's, the clipboard's and the drag's deliveries
+  and each window's settle in one `FirstPanic`, and the input delivers every
+  recorded wire, each window's share of an input, the capabilities and the
+  layout callback in one too.
+- Headless: a handler's panic resumes into the test's call after the queued
+  tail is heard (`AppDelivery`, `WindowDelivery`).
+
+Tests: `a_panicking_method_keeps_the_first_panic` (headless,
+`tests/app_handler.rs`), `window_handler_obligation_table`, the row "a layout
+callback registered twice is replaced" (headless),
+`a_window_follows_its_focus_when_a_handler_panics_at_its_loss` and
+`a_panicking_layout_callback_costs_no_key_of_its_turn` (X11,
+`tests/x11_input.rs`) and `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`
+(Wayland on Weston, `tests/wayland_input.rs`); a second layout callback
+replaces the first on X11 and Wayland too
+(`a_second_layout_callback_replaces_the_first` in both files).
 
 ### The surface-availability signal is a handler method, not a polled query
 
@@ -3679,7 +3749,7 @@ failure is contained independently; it cannot restore a destructor obligation on
 the wrong thread or replace an unwind already in progress.
 
 The private shared `retain_off_owner_resource` seam is used by both adapter
-Drop paths. `the_owner_thread_machinery_honours_its_contracts` exercises the same
+Drop paths. `an_off_owner_resource_stays_off_its_owner_whatever_its_report_does` exercises the same
 production boundary with an opaque aggregate resource surrogate: successful
 reporting, an opaque reporting failure, an earlier teardown failure alone and
 competing with reporting, and a subsequent callback. These rows do not execute real UIA or

@@ -4,6 +4,7 @@
 //! assembled, through a window's callbacks (`HeadlessHostWindow`).
 
 use std::num::NonZeroU64;
+use std::rc::Rc;
 
 use flui_foundation::IdMint;
 use flui_platform::input_capabilities::PointerKindSet;
@@ -12,7 +13,7 @@ use flui_platform::{EventTime, PlatformInput};
 
 use crate::host::{self, Host};
 use crate::input::assembly::{DeviceRegistry, NativeDevice};
-use crate::owner::call_point::{Field, install};
+
 use crate::owner::headless::{HeadlessLoop, HeadlessState, SimulatedDevices};
 use crate::platform::HostPlatform;
 
@@ -54,10 +55,8 @@ impl host::Input<HeadlessLoop> for HeadlessInputDevices {
     }
 
     fn on_keyboard_layout_change(owner: &HeadlessLoop, callback: Box<dyn FnMut()>) {
-        install(
-            &Field::new(&*owner.state, |state| &mut state.keyboard_layout_changed),
-            callback,
-        );
+        let slot = owner.with_state(|state| Rc::clone(&state.layout_callback));
+        slot.register(callback);
     }
 }
 
@@ -95,6 +94,29 @@ impl HeadlessInputDevices {
             callbacks.set_input_capabilities(callbacks.input_capabilities().with_present(present));
         }
         Some(change.device)
+    }
+
+    /// Switch the simulated system's keyboard layout to `name`, as a user
+    /// switching layouts does: when the name moved, the registered keyboard
+    /// layout callback (`Platform::on_keyboard_layout_change`) is called, with
+    /// no lock of the platform held; its panic resumes here, the caller's
+    /// frame, as a handler's does on the headless host. `false` once the
+    /// platform is gone.
+    pub fn set_keyboard_layout(&self, name: &str) -> bool {
+        let Some(state) = self.state.upgrade() else {
+            return false;
+        };
+        let changed = {
+            let mut state = state.borrow_mut();
+            (state.keyboard_layout != name).then(|| {
+                name.clone_into(&mut state.keyboard_layout);
+                Rc::clone(&state.layout_callback)
+            })
+        };
+        if let Some(callback) = changed {
+            callback.changed().or_resume(());
+        }
+        true
     }
 
     /// Remove the device `id` named: every open window receives

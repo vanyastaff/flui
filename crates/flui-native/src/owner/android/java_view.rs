@@ -1059,7 +1059,7 @@ fn rebased_start(start_nanos: jlong) -> Option<flui_platform::EventTime> {
             .map(std::time::Duration::from_nanos)
     };
     let platform_now = nanos(super::frame_clock::monotonic_nanos())?;
-    Some(crate::owner::handlers::rebased(
+    Some(crate::owner::frame_timing::rebased(
         platform_now,
         nanos(start_nanos)?,
     ))

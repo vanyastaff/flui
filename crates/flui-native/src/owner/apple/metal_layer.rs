@@ -34,7 +34,9 @@ pub(crate) fn presented(
     }
     let stamp = Duration::try_from_secs_f64(presented_secs).ok()?;
     let now = Duration::try_from_secs_f64(media_now_secs).ok()?;
-    let report = FramePresented::new(crate::owner::handlers::rebased_at(event_now, now, stamp));
+    let report = FramePresented::new(crate::owner::frame_timing::rebased_at(
+        event_now, now, stamp,
+    ));
     Some(match refresh {
         Some(refresh) => report.with_refresh(refresh),
         None => report,
@@ -100,7 +102,7 @@ mod layer {
     use objc2_metal::MTLDrawable;
     use objc2_quartz_core::{CACurrentMediaTime, CALayer, CAMetalDrawable, CAMetalLayer};
 
-    use crate::owner::handlers::PresentationReports;
+    use crate::owner::frame_timing::PresentationReports;
     use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 
     /// What a layer reports to: its window's reports, set once the window

@@ -219,3 +219,72 @@ fn retiring_during_an_unwind_destroys_the_value() {
     );
     assert!(observed.dropped.load(Ordering::SeqCst));
 }
+
+/// A one-shot callback a destructor runs (as the Win32 run guard tells the
+/// application it quits) that panics: its panic and its capture's drop never
+/// replace an unwind already under way, and the capture is dropped either way.
+#[test]
+fn owner_callback_and_capture_panics_do_not_replace_an_existing_unwind() {
+    struct Capture(Arc<AtomicUsize>);
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    // A teardown that runs a one-shot callback from a destructor, as the
+    // Win32 run guard tells the application it quits: the callback is
+    // taken for good, so a failed call does not put it
+    // back for the guard's own drop.
+    struct OneShot<'a>(&'a Mutex<Option<Box<dyn FnMut() + Send>>>);
+    impl super::HandlerSlot for OneShot<'_> {
+        type Handler = Box<dyn FnMut() + Send>;
+        fn take(&self) -> Option<Self::Handler> {
+            self.0.lock().take()
+        }
+        fn restore(&self, handler: Self::Handler) -> Option<Self::Handler> {
+            Some(handler)
+        }
+        fn replace(&self, handler: Self::Handler) -> Option<Self::Handler> {
+            self.0.lock().replace(handler)
+        }
+    }
+    struct Guard(Mutex<Option<Box<dyn FnMut() + Send>>>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            call(&OneShot(&self.0), |callback| {
+                callback();
+            })
+            .or_contain((), "the guarded callback");
+        }
+    }
+    for already_unwinding in [false, true] {
+        let invoked = Arc::new(AtomicUsize::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let capture = Capture(Arc::clone(&dropped));
+        let observed = Arc::clone(&invoked);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let guard = Guard(Mutex::new(Some(Box::new(move || {
+                let _ = &capture;
+                observed.fetch_add(1, Ordering::SeqCst);
+                panic!("callback failure");
+            }))));
+            assert!(!already_unwinding, "original bootstrap panic");
+            drop(guard);
+        }));
+        if already_unwinding {
+            assert_eq!(
+                *outcome
+                    .expect_err("original panic")
+                    .downcast::<&str>()
+                    .expect("original identity"),
+                "original bootstrap panic"
+            );
+        } else {
+            assert!(outcome.is_ok());
+        }
+        assert_eq!(invoked.load(Ordering::SeqCst), 1);
+        // `call` drops the displaced handler after a failed call too,
+        // contained (ADR-0281).
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+}

@@ -11,8 +11,10 @@
 //!   window handler, with no lock or borrow held;
 //! - `app_delivery`: what a loop delivers to the application's handler, the
 //!   one passed to `run`, through one causal queue;
-//! - [`handlers`]: what a loop asks of the windows it holds, and the frame
-//!   requests a host stamps;
+//! - [`frame_timing`]: a frame's times on the event clock: the frame request
+//!   a host stamps, a platform's stamp rebased onto it, and the presentation
+//!   reports a window's next request carries; `OpenWindows`, beside the
+//!   capability, is what a loop asks of the windows it holds;
 //! - `window_delivery`: what a window delivers to the handler it was opened
 //!   with, through one causal queue;
 //! - [`notices`]: the channel a loop pushes system notices through, which the
@@ -85,10 +87,11 @@ pub(crate) mod call_point;
 pub(crate) mod file_uri;
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32", test))]
 pub(crate) mod frame_demand;
-pub mod handlers;
+pub mod frame_timing;
 pub(crate) mod headless;
 #[cfg(any(windows, x11_host, wayland_host, test))]
 pub(crate) mod launch_arguments;
+pub(crate) mod layout_callback;
 #[cfg(any(wayland_host, x11_host, test))]
 pub(crate) mod linux;
 #[cfg(any(test, windows))]
@@ -152,6 +155,13 @@ use crate::platform::Platform;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{WindowHandler, WindowId, WindowOptions};
 use signal::{OwnerSignal, OwnerTurnSlot, SignalTransport};
+
+/// The windows a loop holds through its hook, as one object: the window
+/// feature's. Each loop's hook extends it with what that loop asks of them.
+pub(crate) trait OpenWindows {
+    /// Whether no window is open.
+    fn is_empty(&self) -> bool;
+}
 
 // ============================================================================
 // OwnerPlatform
@@ -556,7 +566,7 @@ impl WindowRequest {
 impl WindowRequest {
     /// Run the factory, once, on the owner thread: the window's options and
     /// its handler. The factory is application code: its panic is contained
-    /// here (logged, its payload retained) and the open fails with what it
+    /// here (logged, its payload discarded) and the open fails with what it
     /// said, so a loop draining requests carries on.
     pub(crate) fn build_on_owner(
         self,
