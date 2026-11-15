@@ -691,6 +691,7 @@ mod event_loop {
     use crate::executor::NativeExecutor;
     use crate::host;
     use crate::owner::app_delivery::AppDelivery;
+    use crate::owner::call_point::Called;
     use crate::owner::linux::single_instance::FirstInstance;
     use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoop, xdg_open};
     use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
@@ -2634,7 +2635,17 @@ mod event_loop {
             self.devices.release();
             let quit = self.app.quit_requested();
             self.app.release();
-            quit.or_resume(());
+            // A terminal failure the run parked (an exit policy that
+            // panicked) is the first: it resumes here, the quit's contained.
+            match self.app.take_terminal() {
+                Some(first) => {
+                    if let Called::Panicked(later) = quit {
+                        later.contain("the application's quit");
+                    }
+                    first.resume();
+                }
+                None => quit.or_resume(()),
+            }
         }
     }
 

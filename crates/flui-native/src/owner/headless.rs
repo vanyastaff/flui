@@ -23,6 +23,7 @@ use parking_lot::Mutex;
 
 use crate::host::{self, Host};
 use crate::owner::app_delivery::AppDelivery;
+use crate::owner::call_point::Called;
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
 use crate::{
@@ -435,7 +436,18 @@ fn finish_quit(state: &std::cell::RefCell<HeadlessState>) {
     if let Some(turn) = turn {
         turn.clear();
     }
-    app.quit_requested().or_resume(());
+    // A terminal failure the run parked (an exit policy that panicked) is
+    // the first: it resumes here, after the quit was delivered.
+    let quit = app.quit_requested();
+    match app.take_terminal() {
+        Some(first) => {
+            if let Called::Panicked(later) = quit {
+                later.contain("the application's quit");
+            }
+            first.resume();
+        }
+        None => quit.or_resume(()),
+    }
 }
 
 /// Ask the application's handler whether the platform may quit now that no
@@ -461,6 +473,10 @@ pub(crate) fn consult_exit_policy(state: &std::cell::RefCell<HeadlessState>) -> 
     // otherwise.
     let allowed = app.exit_policy().ends_loop(false);
     if !allowed || !state.borrow_mut().windows.is_empty() {
+        // The answer is carried out (the platform keeps running); a policy
+        // that panicked resumes into the caller now, the headless run's
+        // Rust frame.
+        app.resume_terminal();
         return false;
     }
     finish_quit(state);

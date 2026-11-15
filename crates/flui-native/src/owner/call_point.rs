@@ -20,7 +20,7 @@
 //! [`Failure`] for the caller to resume or contain.
 
 use std::any::Any;
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
@@ -196,7 +196,7 @@ pub(crate) fn retire<T>(value: T) {
 
 /// State behind a lock or a `RefCell`, reached for the length of one closure:
 /// the guard or borrow ends before [`Guarded::with`] returns.
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 pub(crate) trait Guarded {
     /// What the lock or cell holds.
     type Target: ?Sized;
@@ -205,7 +205,7 @@ pub(crate) trait Guarded {
     fn with<R>(&self, body: impl FnOnce(&mut Self::Target) -> R) -> R;
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 impl<T: ?Sized> Guarded for Mutex<T> {
     type Target = T;
 
@@ -214,7 +214,7 @@ impl<T: ?Sized> Guarded for Mutex<T> {
     }
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 impl<T: ?Sized> Guarded for RefCell<T> {
     type Target = T;
 
@@ -266,14 +266,14 @@ impl<H> HandlerSlot for Mutex<Option<H>> {
 ///
 /// A handler goes back only while `accepts` answers `true` (asked under the
 /// lock), so a host that stopped can refuse the handler a call returns.
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 pub(crate) struct Field<'a, G: ?Sized + Guarded, H, A = fn() -> bool> {
     state: &'a G,
     project: fn(&mut G::Target) -> &mut Option<H>,
     accepts: A,
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 impl<'a, G: ?Sized + Guarded, H> Field<'a, G, H> {
     /// The field of `state` that `project` names.
     pub(crate) fn new(state: &'a G, project: fn(&mut G::Target) -> &mut Option<H>) -> Self {
@@ -296,7 +296,7 @@ impl<'a, G: ?Sized + Guarded, H> Field<'a, G, H> {
     }
 }
 
-#[cfg(any(target_os = "ios", test))]
+#[cfg(any(target_os = "ios", all(test, not(target_arch = "wasm32"))))]
 impl<G: ?Sized + Guarded, H, A: Fn() -> bool> HandlerSlot for Field<'_, G, H, A> {
     type Handler = H;
 

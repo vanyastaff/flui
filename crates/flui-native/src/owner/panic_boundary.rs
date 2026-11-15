@@ -324,7 +324,11 @@ fn contained<R>(
 /// Keep an owner-affine resource whose final owner was dropped on another thread.
 /// Retention precedes diagnostics: a subscriber panic must not retire the resource
 /// on the wrong thread, including while the caller is already unwinding.
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(test, not(target_arch = "wasm32"))
+))]
 pub(crate) fn retain_off_owner_resource<T>(resource: T, report: impl FnOnce()) {
     #[expect(
         clippy::mem_forget,

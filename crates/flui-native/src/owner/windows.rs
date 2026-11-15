@@ -1350,7 +1350,7 @@ impl host::Loop for WindowsLoop {
             Rc::clone(&platform),
             &self.owner_control,
         ));
-        let _guard = RunGuard(Rc::clone(&self));
+        let guard = RunGuard(Rc::clone(&self));
         self.app.bind(handler, &platform, &hooks);
         self.app.resume_through_signal(&self.owner_control.signal);
         self.app
@@ -1362,7 +1362,13 @@ impl host::Loop for WindowsLoop {
             .map_err(|error| PlatformError::EventLoop {
                 message: error.to_string(),
             })?;
-        self.run_message_loop()
+        let ran = self.run_message_loop();
+        // The quit is delivered and the handler released; a terminal failure
+        // the run parked (an exit policy that panicked inside the window
+        // procedure, where no unwind may go) resumes here, out of `run`.
+        drop(guard);
+        self.app.resume_terminal();
+        ran
     }
 
     fn quit(&self) {

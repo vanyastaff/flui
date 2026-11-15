@@ -861,18 +861,24 @@ trait depends on `flui-platform` instead.
   from another thread); the quit is heard once per run. A question (session
   end, exit policy, wake deadline) is asked at once, re-entrantly if need be,
   and a report it raises is delivered right after its answer; the answer is
-  the question's outcome, so a report after it that panics is contained and
-  logged and the answer still returned (a blocked session end stays blocked).
-  With no handler bound the host answers it itself (proceed, its own exit
-  default, no deadline), and so it does for an exit the handler leaves to it
-  (`ExitAnswer::HostDecides`). An exit policy that panics is decided once, in
-  `AppDelivery::exit_policy`, for every host: the panic is contained and
-  logged, and the answer is `HostDecides`. The question is asked with no
-  window left, so a veto could leave a loop waiting for nothing, and an
-  unwind out of `run` or into a window procedure would end the application
-  for a defect ADR-0258 §4 already keeps out of the platform (`flui-app`'s
-  handler contains every application panic); the host's default is what a
-  handler with no policy gets. A panicking method is contained, the tail behind
+  the question's outcome, which the host carries out (a blocked session end
+  stays blocked), and a report after it that panics is parked as the run's
+  terminal failure, never discarded. With no handler bound the host answers
+  it itself (proceed, its own exit default, no deadline), and so it does for
+  an exit the handler leaves to it (`ExitAnswer::HostDecides`): the desktop
+  hosts end the loop, the headless platform keeps running. An exit policy
+  that panics is terminal (ADR-0258 §2), decided once, in
+  `AppDelivery::exit_policy`, for every host: the host's default answers so
+  the teardown can proceed, the panic is parked as the run's first failure,
+  and the policy is not asked again, so one that panics on every call neither
+  spins nor floods. Each loop only carries it out: the Win32, X11, Wayland
+  and AppKit loops resume it out of `run` once the quit is delivered and the
+  handler released (`AppDelivery::take_terminal`), where a Rust frame waits
+  even though the question was asked inside a window procedure; the headless
+  platform resumes it into the call that asked (a window's close, the
+  reevaluation's `drive`) or into its quit; a loop that never returns to a
+  Rust frame (UIKit, the web page, the Android Activity) logs it as its
+  delivery goes. A panicking method is contained, the tail behind
   it still delivered, the first panic returned. The loop releases the handler
   when its run ends; a release made while a delivery runs (the web page and the
   Android Activity end from inside a method) waits for that delivery, so the
@@ -2752,7 +2758,8 @@ message from any thread (refused once the owner window is closed). The owner
 procedure then checks that no window is tracked and no quit is under way, asks
 the application's handler through the call point with no borrow held, and
 checks the window count again, since the handler may have opened a replacement
-window. A handler that panics leaves the exit to the host, as on every host
+window. A handler that panics gets the host's answer (the exit), and its
+panic resumes out of `run` once the loop ended, as on every host
 (`AppDelivery::exit_policy`). An allowed exit ends the
 loop the way `quit` does. A run with no handler bound allows the exit. Deferring the
 decision keeps the handler, which re-enters the embedder,
@@ -2761,7 +2768,7 @@ embedder code that closed the window. The native rows in `tests/contract.rs`
 (`closing_the_last_window_ends_the_loop`,
 `exit_policy_veto_holds_until_a_reevaluation_allows_exit`,
 `window_opened_by_the_exit_policy_keeps_the_loop`,
-`panicking_exit_policy_leaves_the_exit_to_the_host`) run the real message loop.
+`panicking_exit_policy_ends_the_loop_and_resumes_after_it`) run the real message loop.
 
 ### A turn after a handler's panic
 
@@ -2778,11 +2785,15 @@ then end the process through `os_entry`'s `AfterPanic::Abort`. That is the
 one difference, and the operating system forces it. A panic reaching the
 platform at all is a defect of `flui-app`'s handlers, which contain every
 application panic (ADR-0258 §4), so the rule decides how such a defect ends,
-not whether an application survives one.
+not whether an application survives one. The keyboard layout callback's panic
+on X11 and Wayland, and a Wayland field's text store's, used to be contained
+and logged; they follow the rule now, like every other handler's.
 
 - X11: `dispatch_events` hears every event of the turn in its own containment
   and raises the first panic after the last (`hear_all`); a feature's
-  deliveries to several windows fold the same way.
+  deliveries to several windows fold the same way. A layout change an event
+  notices is told to the callback at the turn's `settle`, after the events,
+  so the callback's panic costs no key or state event of its turn.
 - Wayland: `turn` runs the input's, the clipboard's and the drag's deliveries
   and each window's settle in one `FirstPanic`, and the input delivers every
   recorded wire, each window's share of an input, the capabilities and the
@@ -2793,7 +2804,8 @@ not whether an application survives one.
 Tests: `a_panicking_method_keeps_the_first_panic` (headless,
 `tests/app_handler.rs`), `window_handler_obligation_table`, the row "a layout
 callback registered twice is replaced" (headless),
-`a_window_follows_its_focus_when_a_handler_panics_at_its_loss` (X11,
+`a_window_follows_its_focus_when_a_handler_panics_at_its_loss` and
+`a_panicking_layout_callback_costs_no_key_of_its_turn` (X11,
 `tests/x11_input.rs`) and `a_handlers_panic_leaves_the_rest_of_the_turn_delivered`
 (Wayland on Weston, `tests/wayland_input.rs`); a second layout callback
 replaces the first on X11 and Wayland too

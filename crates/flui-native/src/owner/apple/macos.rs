@@ -381,6 +381,9 @@ impl host::Loop for MacOSLoop {
         ownership.run();
         drop(notice_watch);
         drop(ownership);
+        // AppKit returned through Rust cleanup: a terminal failure the run
+        // parked (an exit policy that panicked) resumes here, out of `run`.
+        self.app_delivery.resume_terminal();
 
         Ok(())
     }

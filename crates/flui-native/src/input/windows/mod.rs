@@ -49,7 +49,6 @@ use windows::Win32::{
 #[cfg(windows)]
 use crate::input::assembly::ContactRegistry;
 #[cfg(windows)]
-#[cfg(windows)]
 use crate::owner::windows::control::OwnerPreferences;
 #[cfg(windows)]
 use crate::owner::windows::{

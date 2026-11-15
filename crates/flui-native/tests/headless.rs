@@ -16,12 +16,19 @@ use flui_native::{CurrentHost, HeadlessPlatform, current_host, current_platform}
 use flui_platform::WindowOptions;
 use flui_testing::window_commands::AdmitAndApply as _;
 
-/// `FLUI_HEADLESS` is a switch: set to anything but empty or `0` it selects
-/// the headless host, and `0` or empty leaves the choice to the target, as
-/// unset does (where the target has no host to start, that is an error, never
-/// the headless host).
+/// `FLUI_HEADLESS` is a switch: unset, empty or `0` is off and leaves the choice
+/// to the target (where it has no host to start, that is an error, never the
+/// headless host); any other value, `false` and `no` included, selects the
+/// headless host.
 fn flui_headless_env_var_selects_the_headless_platform() {
-    for (value, headless) in [("1", true), ("yes", true), ("0", false), ("", false)] {
+    for (value, headless) in [
+        ("1", true),
+        ("yes", true),
+        ("false", true),
+        ("no", true),
+        ("0", false),
+        ("", false),
+    ] {
         // SAFETY: no other thread reads the environment concurrently — supplied
         // by nextest's process-per-test isolation, not by any `--test-threads`
         // setting. See the file header.

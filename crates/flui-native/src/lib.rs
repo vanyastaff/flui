@@ -343,7 +343,7 @@ pub use owner::{
 ///
 /// 1. **Runtime Environment Check** (executed first):
 ///    - Checks `FLUI_HEADLESS` environment variable
-///    - If set to anything but empty or `0`, returns `HeadlessPlatform`
+///    - If set to anything but empty or `0` (`headless_requested`), returns `HeadlessPlatform`
 ///      immediately; `0` and empty leave the choice to the target
 ///    - Bypasses all compile-time OS detection
 ///    - Used for CI/testing without GPU or display server
@@ -544,8 +544,8 @@ pub fn current_host() -> Result<CurrentHost, PlatformError> {
     }
 }
 
-/// Whether `FLUI_HEADLESS`, read as `value`, selects the headless host: set to anything but
-/// empty or `0`, as a boolean environment switch reads (`FLUI_HEADLESS=0` turns it off).
+/// Whether `FLUI_HEADLESS`, read as `value`, selects the headless host. The one rule: unset,
+/// empty or `0` is off; any other value is on, `false` and `no` included (no word list).
 fn headless_requested(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| !value.is_empty() && value != "0")
 }

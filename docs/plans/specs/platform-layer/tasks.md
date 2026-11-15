@@ -5789,21 +5789,26 @@ graph LR
   строка «a layout callback registered twice is replaced» таблицы
   `handlers_run_outside_every_lock_of_the_headless_platform`, `a_second_layout_callback_replaces_the_first`
   на X11 (`tests/x11_input.rs`) и Wayland (`tests/wayland_input.rs`); откат X11 к `main` —
-  «the first callback was kept beside the second». (2) Паника `exit_policy` решается в
-  `AppDelivery::exit_policy`: сдерживается и даёт `ExitAnswer::HostDecides` на всех хостах
-  (`ExitAnswer::ends_loop`); Win32 больше не ветирует, AppKit не выходит сам, X11 и Wayland не
-  разматываются из `run`. Тесты: `a_panicking_exit_policy_is_the_hosts_to_decide`
-  (`app_delivery_contracts`), `a_panicking_exit_policy_leaves_the_decision_to_the_host`
-  (headless, `app_handler_obligation_table`; без исправления паника выходит из `close_now`),
-  Win32 `panicking_exit_policy_leaves_the_exit_to_the_host` и
+  «the first callback was kept beside the second». На X11 обработчик слышит смену раскладки в
+  `settle` хода, после его событий: `a_panicking_layout_callback_costs_no_key_of_its_turn`
+  (откат — нажатие хода теряется, тест ждёт его до срока). (2) Паника `exit_policy` терминальна
+  (ADR-0258 §2) и решается в `AppDelivery::exit_policy` на всех хостах: исполняется ответ хоста
+  по умолчанию (`ExitAnswer::ends_loop`), паника паркуется как первый отказ прогона и
+  поднимается из `run` после конца цикла (Win32, X11, Wayland, AppKit) или в вызвавший код
+  (headless), политика больше не спрашивается. Тесты: `a_panicking_exit_policy_is_terminal`
+  (`app_delivery_contracts`), `a_panicking_exit_policy_is_terminal_after_the_hosts_answer`
+  (headless), Win32 `panicking_exit_policy_ends_the_loop_and_resumes_after_it` и
   `failing_exit_policy_leaves_the_exit_to_the_host` заменили тесты вето. (3) `question` хранит
-  ответ, когда падает отчёт после него: `a_question_keeps_its_answer_when_a_report_after_it_panics`,
+  ответ, когда падает отчёт после него, а панику отчёта паркует так же:
+  `a_question_keeps_its_answer_when_a_report_after_it_panics`,
   `a_session_end_answer_survives_a_panicking_report_after_it` (без исправления — паника вместо
-  `Block`). (4) Модальный цикл Win32 берёт срок через `WakeDeadline`, `ModalDelivery` удалён;
+  `Block`). (4) Частично: правило срока одно только на Windows. Модальный цикл Win32 берёт срок
+  через `WakeDeadline`, `ModalDelivery` удалён;
   `a_due_deadline_gets_one_modal_frame_per_generation` проверяет темп таймера (без исправления
   ожидание 1 мс вместо `MODAL_FRAME_PACE_MS`). Насос AppKit и цикл Android не переведены: их окна не
-  считают кадры, а этот хост их не компилирует — запись в `docs/gaps.md` («The AppKit pump and the
-  Android loop keep their own due-deadline rule»). (5) У `Services::page_origin` и у
+  считают кадры, а этот хост их не компилирует — запись в
+  [`docs/gaps.md`](../../../gaps.md#the-appkit-pump-and-the-android-loop-keep-their-own-due-deadline-rule).
+  Задача поэтому не отмечена. (5) У `Services::page_origin` и у
   `Platform::{primary_selection, page_origin}` нет тел; каждый цикл пишет `page_origin`;
   trybuild `host_table_names_every_position` ждёт и пропущенный `page_origin`, фикстура печати
   `Platform` пишет оба метода. (6) `bind` ставит `delivering` (`awaiting_ready`):

@@ -436,8 +436,8 @@ mod native_windows {
             window_opened_by_the_exit_policy_keeps_the_loop,
         ),
         (
-            "panicking_exit_policy_leaves_the_exit_to_the_host",
-            panicking_exit_policy_leaves_the_exit_to_the_host,
+            "panicking_exit_policy_ends_the_loop_and_resumes_after_it",
+            panicking_exit_policy_ends_the_loop_and_resumes_after_it,
         ),
         (
             "press_captures_the_mouse_until_the_last_release",
@@ -5634,22 +5634,31 @@ mod native_windows {
         );
     }
 
-    /// An exit policy that panics inside the owner procedure leaves the exit
-    /// to the host: the panic is contained, and the loop ends with its last
-    /// window as a desktop loop does, instead of waiting with no window left.
-    fn panicking_exit_policy_leaves_the_exit_to_the_host() {
+    /// An exit policy that panics inside the owner procedure is terminal
+    /// (ADR-0258 §2): the host's default is carried out (the loop ends with
+    /// its last window, instead of waiting with no window left), and the
+    /// panic, which may not unwind through the window procedure, resumes out
+    /// of `run` once the loop ended.
+    fn panicking_exit_policy_ends_the_loop_and_resumes_after_it() {
         let platform = WindowsPlatform::try_new().expect("native Windows platform");
         let calls = Arc::new(AtomicUsize::new(0));
-        run_loop(platform, {
-            let calls = Arc::clone(&calls);
-            move |log, owner| {
-                log.answer_exit_with(move || {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    panic!("the exit-policy answer panics");
-                });
-                post_close(&open_owned(&owner));
-            }
-        });
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_loop(platform, {
+                let calls = Arc::clone(&calls);
+                move |log, owner| {
+                    log.answer_exit_with(move || {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        panic!("the exit-policy answer panics");
+                    });
+                    post_close(&open_owned(&owner));
+                }
+            });
+        }));
+        let payload = ran.expect_err("the exit policy's panic was lost");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"the exit-policy answer panics")
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,

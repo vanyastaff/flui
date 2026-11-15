@@ -99,16 +99,12 @@ fn the_exit_policy_is_asked_when_the_last_window_closes() {
     );
 }
 
-/// An exit policy that panics leaves the decision to the host, as
-/// `ExitAnswer::HostDecides` does: the panic is contained, the headless
-/// platform keeps running (its own default), and the next ask is answered.
-fn a_panicking_exit_policy_leaves_the_decision_to_the_host() {
+/// An exit policy that panics is terminal (ADR-0258 §2): the host's own
+/// default is carried out first (the headless platform keeps running), then
+/// the panic resumes into the caller, and the policy is not asked again.
+fn a_panicking_exit_policy_is_terminal_after_the_hosts_answer() {
     let log = AppLog::new();
-    let first = Cell::new(true);
-    log.answer_exit_with(move || {
-        assert!(!first.replace(false), "the first exit-policy answer panics");
-        true
-    });
+    log.answer_exit_with(|| panic!("the exit policy"));
     let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
     let close = || {
         owner
@@ -118,23 +114,20 @@ fn a_panicking_exit_policy_leaves_the_decision_to_the_host() {
             .expect("at once")
             .close_now();
     };
-    let closed = catch_unwind(AssertUnwindSafe(close));
-    assert!(closed.is_ok(), "the exit policy's panic left the platform");
+    let closed = catch_unwind(AssertUnwindSafe(close)).expect_err("the panic was lost");
+    assert_eq!(closed.downcast_ref::<&str>(), Some(&"the exit policy"));
     assert_eq!(log.calls(), [AppCall::Ready, AppCall::ExitPolicy]);
     close();
     assert_eq!(
         log.calls(),
-        [
-            AppCall::Ready,
-            AppCall::ExitPolicy,
-            AppCall::ExitPolicy,
-            AppCall::Quit
-        ]
+        [AppCall::Ready, AppCall::ExitPolicy],
+        "a failed policy is not asked again, and the platform keeps running"
     );
 }
 
 /// A session end's answer survives a report raised while it answered whose
-/// handler panics: the session is still held as the handler said.
+/// handler panics: the session is still held as the handler said, and the
+/// report's panic is the run's terminal failure, raised when it quits.
 fn a_session_end_answer_survives_a_panicking_report_after_it() {
     let platform = HeadlessPlatform::new();
     let events = platform.host_events();
@@ -146,7 +139,7 @@ fn a_session_end_answer_survives_a_panicking_report_after_it() {
         AppCall::Notice(SystemNotice::Sleep) => panic!("the report after the answer"),
         _ => {}
     });
-    let _owner = run_keeping_owner(Box::new(platform), &log);
+    let owner = run_keeping_owner(Box::new(platform), &log);
     let answer = catch_unwind(AssertUnwindSafe(|| {
         events.session_end(SessionEndPhase::Query)
     }));
@@ -162,6 +155,12 @@ fn a_session_end_answer_survives_a_panicking_report_after_it() {
             AppCall::Notice(SystemNotice::Sleep),
         ]
     );
+    let quit = catch_unwind(AssertUnwindSafe(|| owner.quit())).expect_err("the panic was lost");
+    assert_eq!(
+        quit.downcast_ref::<&str>(),
+        Some(&"the report after the answer")
+    );
+    assert_eq!(log.count(AppCall::Quit), 1, "the quit was heard first");
 }
 
 /// What the platform reports before `run` binds the handler, and while its
@@ -280,8 +279,8 @@ fn app_handler_obligation_table() {
                 the_exit_policy_is_asked_when_the_last_window_closes,
             ),
             (
-                "a panicking exit policy leaves the decision to the host",
-                a_panicking_exit_policy_leaves_the_decision_to_the_host,
+                "a panicking exit policy is terminal after the host's answer",
+                a_panicking_exit_policy_is_terminal_after_the_hosts_answer,
             ),
             (
                 "a session end answer survives a panicking report after it",

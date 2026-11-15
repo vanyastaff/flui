@@ -1445,6 +1445,9 @@ mod live {
         layout: RefCell<String>,
         /// The application's keyboard layout callback.
         layout_callback: LayoutCallback,
+        /// The layout's name moved this turn: the callback hears it at the
+        /// turn's settle.
+        layout_moved: Cell<bool>,
         /// The server's keymap changed since it was last read: it is read
         /// again before the next event that reads it, or once the turn's
         /// events are heard, so a burst of changes costs one read.
@@ -1690,6 +1693,7 @@ mod live {
                 state: Rc::new(RefCell::new(state)),
                 layout: RefCell::new(layout),
                 layout_callback: LayoutCallback::default(),
+                layout_moved: Cell::new(false),
                 keymap_stale: Cell::new(false),
                 text,
             });
@@ -1890,12 +1894,11 @@ mod live {
             changed
         }
 
-        /// Tell the application's callback the layout changed, with none of
-        /// the input's borrows held: it may register another. Its panic
-        /// unwinds into the turn, which hears the rest of its events and
-        /// raises it after.
+        /// Note that the layout's name moved: the application's callback hears
+        /// it once the turn's events are delivered (`settle`), so its
+        /// panic cannot cost the event that noticed the change.
         fn layout_changed(&self) {
-            self.layout_callback.changed().or_resume(());
+            self.layout_moved.set(true);
         }
 
         /// What a pointer, touch or gesture event delivers.
@@ -2348,6 +2351,11 @@ mod live {
 
         fn settle(&self) {
             self.read_stale_keymap();
+            // After the turn's events: the callback's panic is the turn's
+            // failure, raised once every event was heard.
+            if self.layout_moved.take() {
+                self.layout_callback.changed().or_resume(());
+            }
         }
 
         fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError> {

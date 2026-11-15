@@ -5,7 +5,7 @@ pipeline and the operating system's windowing, input, and event-loop APIs.
 
 `flui-native` defines the `Platform` trait family and ships one backend per
 target. `current_platform()` selects in two stages: a runtime `FLUI_HEADLESS`
-environment check first (any value but empty or `0` forces the headless backend — the CI/test
+environment check first (unset, empty or `0` is off; any other value, `false` included, forces the headless backend — the CI/test
 path), then compile-time `#[cfg]` picks the OS backend:
 
 | Backend | Target | Status |

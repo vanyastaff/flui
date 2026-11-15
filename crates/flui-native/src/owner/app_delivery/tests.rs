@@ -142,8 +142,16 @@ fn a_report_between_bind_and_ready_waits_for_ready() {
     assert!(matches!(run.delivery.wake_deadline(), Called::Vacant));
 }
 
+/// The text of a parked terminal failure, resumed.
+fn terminal_text(delivery: &AppDelivery) -> Option<&'static str> {
+    let failure = delivery.take_terminal()?;
+    let payload = catch_unwind(AssertUnwindSafe(|| failure.resume())).expect_err("resumed");
+    payload.downcast_ref::<&str>().copied()
+}
+
 /// A question's answer stands when a report raised while it answered
-/// panics after it: the report's panic is contained, the answer returned.
+/// panics after it: the answer is returned for the host to carry out, and
+/// the report's panic is parked as the run's terminal failure, not lost.
 fn a_question_keeps_its_answer_when_a_report_after_it_panics() {
     let app = AppLog::new();
     let run = bound(app.clone());
@@ -168,11 +176,13 @@ fn a_question_keeps_its_answer_when_a_report_after_it_panics() {
             SLEEP
         ]
     );
+    assert_eq!(terminal_text(&run.delivery), Some("the report"));
 }
 
-/// An exit policy that panics leaves the decision to the host, as one that
-/// answers `HostDecides` does, and the delivery carries on.
-fn a_panicking_exit_policy_is_the_hosts_to_decide() {
+/// An exit policy that panics is terminal: the host's default answers, the
+/// panic is parked as the run's first failure, and the policy is not asked
+/// again, so one that panics on every call does not flood.
+fn a_panicking_exit_policy_is_terminal() {
     let app = AppLog::new();
     let run = bound(app.clone());
     app.react(|call, _| {
@@ -181,6 +191,9 @@ fn a_panicking_exit_policy_is_the_hosts_to_decide() {
         }
     });
     assert_eq!(run.delivery.exit_policy(), ExitAnswer::HostDecides);
+    assert_eq!(run.delivery.exit_policy(), ExitAnswer::HostDecides);
+    assert_eq!(app.count(AppCall::ExitPolicy), 1, "not asked again");
+    assert_eq!(terminal_text(&run.delivery), Some("the policy"));
     assert!(matches!(run.delivery.reopen(), Called::Returned(())));
 }
 
@@ -599,8 +612,8 @@ fn app_delivery_contracts() {
                 a_question_keeps_its_answer_when_a_report_after_it_panics,
             ),
             (
-                "a panicking exit policy is the host's to decide",
-                a_panicking_exit_policy_is_the_hosts_to_decide,
+                "a panicking exit policy is terminal",
+                a_panicking_exit_policy_is_terminal,
             ),
             (
                 "opened reports waiting for ready are bounded",

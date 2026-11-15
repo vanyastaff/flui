@@ -1507,6 +1507,9 @@ impl host::Loop for X11Loop {
         ));
         let result = self.run_loop(guard.host_notices.as_deref());
         drop(guard);
+        // The quit is delivered and the handler released; a terminal failure
+        // the run parked (an exit policy that panicked) resumes here.
+        self.app.resume_terminal();
         result
     }
 

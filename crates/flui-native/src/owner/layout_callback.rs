@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use super::call_point::{Called, HandlerSlot, call, install, retire};
+use super::call_point::{Called, HandlerSlot, call, install};
 
 /// A registered keyboard layout callback.
 type Callback = Box<dyn FnMut()>;
@@ -35,16 +35,10 @@ impl LayoutCallback {
 
     /// Drop the callback, contained: the loop let go of what the application
     /// gave it.
-    #[cfg_attr(
-        not(any(wayland_host, test)),
-        expect(
-            dead_code,
-            reason = "only the Wayland loop releases it apart from itself"
-        )
-    )]
+    #[cfg(any(wayland_host, all(test, not(target_arch = "wasm32"))))]
     pub(crate) fn release(&self) {
         let callback = self.0.borrow_mut().take();
-        retire(callback);
+        super::call_point::retire(callback);
     }
 }
 

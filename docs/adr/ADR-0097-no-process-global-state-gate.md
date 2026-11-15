@@ -192,7 +192,7 @@ runs on the pinned stable toolchain, which dylint does not.
 
 **Limits the gate does not claim to cover:**
 
-- Environment-variable selection: `FLUI_HEADLESS` (`crates/flui-native/src/lib.rs`),
+- Environment-variable selection: `FLUI_HEADLESS`, on when set to anything but empty or `0` (`crates/flui-native/src/lib.rs`),
   `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE` (in the winit owner,
   since deleted with that host), `FLUI_DX12_NO_DCOMP`
   (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.

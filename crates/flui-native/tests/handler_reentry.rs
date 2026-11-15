@@ -954,9 +954,9 @@ mod win32 {
     }
 
     /// An exit policy that panics inside the window procedure, with a
-    /// reevaluation it asked for still queued: the panic is contained, the
-    /// exit is the host's (the loop ends, as with no window left), `run`
-    /// returns, and the handler hears the quit once.
+    /// reevaluation it asked for still queued: the exit is the host's (the
+    /// loop ends, as with no window left), the policy is not asked again, the
+    /// handler hears the quit once, and the panic resumes out of `run`.
     fn failing_exit_policy_leaves_the_exit_to_the_host() {
         within("Win32 failing exit policy", || {
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
@@ -971,9 +971,11 @@ mod win32 {
                     panic!("first failure");
                 }
             });
-            Box::new(platform)
-                .run(Rc::clone(&log) as Rc<dyn AppHandler>)
-                .expect("the loop ends past the contained panic");
+            let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Box::new(platform).run(Rc::clone(&log) as Rc<dyn AppHandler>)
+            }));
+            let payload = ran.expect_err("the exit policy's panic was lost");
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"first failure"));
             assert_eq!(log.count(AppCall::ExitPolicy), 1, "decided once");
             assert_eq!(log.count(AppCall::Quit), 1, "the quit, once");
         });

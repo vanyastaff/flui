@@ -128,6 +128,9 @@ struct State {
     /// The run bound its handler and has yet to call `ready`: `delivering`
     /// holds the reports for it, and a release does not wait for it.
     awaiting_ready: bool,
+    /// The exit policy panicked: the run's end is decided, and the policy is
+    /// not asked again.
+    policy_failed: bool,
     /// The quit was accepted: a later one is the same quit.
     quit_accepted: bool,
     /// The loop ended while a delivery ran: the handler is released once the
@@ -152,15 +155,31 @@ impl State {
 }
 
 /// What a loop delivers to the application's handler. See the module docs.
-#[derive(Default)]
 pub(crate) struct AppDelivery {
     state: Mutex<State>,
     /// Asks the owner for a turn that delivers what another thread reported
     /// ([`Self::resume_through`]).
     owner_turn: Mutex<Option<WindowWake>>,
+    /// The run's terminal failure (ADR-0258 §2): a panic of the exit policy,
+    /// or of a report delivered right after a question's answer, parked so
+    /// the host can carry out the answer first. The loop resumes it once its
+    /// run ended ([`Self::take_terminal`]); a later one is contained.
+    terminal: Mutex<Option<Failure>>,
     /// The native capture this delivery reports to, in builds that have one.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     journal: crate::journal::capture::Journal,
+}
+
+/// A loop whose run cannot return to a Rust frame (UIKit never returns from
+/// `UIApplicationMain`; the web page and the Android Activity end inside a
+/// callback) never resumes a terminal failure: it is logged here, as
+/// ADR-0258 §3 has iOS log it, never dropped unseen.
+impl Drop for AppDelivery {
+    fn drop(&mut self) {
+        if let Some(failure) = self.terminal.get_mut().take() {
+            failure.contain("the application handler, at the run's end");
+        }
+    }
 }
 
 /// The bound handler as a call-point slot: a call takes a clone, so the
@@ -224,7 +243,9 @@ impl AppDelivery {
             journal: crate::journal::capture::Journal::open_stream(
                 flui_protocol::native_recording::Stream::App,
             ),
-            ..Self::default()
+            state: Mutex::default(),
+            owner_turn: Mutex::default(),
+            terminal: Mutex::default(),
         }
     }
 
@@ -253,6 +274,7 @@ impl AppDelivery {
             let mut state = self.state.lock();
             state.delivering = true;
             state.awaiting_ready = true;
+            state.policy_failed = false;
             state.binding.replace(Binding {
                 owned: Arc::new(slot),
             })
@@ -377,20 +399,58 @@ impl AppDelivery {
     /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
     ///
     /// [`ExitAnswer::HostDecides`] with no handler to ask, and when the
-    /// handler panics: the panic is contained and logged here, on every host,
-    /// and the host decides as it does for a handler that leaves the decision
-    /// to it ([`ExitAnswer::ends_loop`]). A panic reaching the platform is a
-    /// defect of the framework's own handler (ADR-0258 §4), and the question
-    /// is asked where no window is left, so neither a veto (a loop that may
-    /// wait for nothing) nor an unwind out of the loop is the answer.
+    /// handler panics. The question is asked as the loop may be ending, so
+    /// its panic is terminal (ADR-0258 §2), decided here for every host: the
+    /// host's default answer ([`ExitAnswer::ends_loop`]) lets the teardown
+    /// proceed, the panic is parked as the run's first failure, which the
+    /// loop resumes once its run ended ([`Self::take_terminal`]), and the
+    /// policy is not asked again, so one that panics on every call neither
+    /// spins nor floods.
     pub(crate) fn exit_policy(&self) -> ExitAnswer {
+        if self.state.lock().policy_failed {
+            return ExitAnswer::HostDecides;
+        }
         match self.question(<dyn AppHandler>::exit_policy) {
             Called::Returned(answer) => answer,
             Called::Vacant => ExitAnswer::HostDecides,
             Called::Panicked(failure) => {
-                failure.contain("the application's exit policy");
+                self.state.lock().policy_failed = true;
+                self.park(failure);
                 ExitAnswer::HostDecides
             }
+        }
+    }
+
+    /// The run's terminal failure, parked by [`Self::exit_policy`] or by a
+    /// report that panicked after a question's answer: the loop resumes it
+    /// once its run ended and the platform let go of its state, where a Rust
+    /// frame waits for the run (ADR-0258 §3).
+    #[must_use = "a parked failure is the run's first: resume it"]
+    pub(crate) fn take_terminal(&self) -> Option<Failure> {
+        self.terminal.lock().take()
+    }
+
+    /// Resume the run's terminal failure, if one is parked.
+    pub(crate) fn resume_terminal(&self) {
+        if let Some(failure) = self.take_terminal() {
+            failure.resume();
+        }
+    }
+
+    /// Park `failure` as the run's terminal failure; a later one is
+    /// contained and logged, the first kept.
+    fn park(&self, failure: Failure) {
+        let refused = {
+            let mut terminal = self.terminal.lock();
+            if terminal.is_some() {
+                Some(failure)
+            } else {
+                *terminal = Some(failure);
+                None
+            }
+        };
+        if let Some(later) = refused {
+            later.contain("the application handler");
         }
     }
 
@@ -611,11 +671,12 @@ impl AppDelivery {
 
     /// Ask the handler with `body` at once. A report raised while it answers
     /// waits for the answer, as one raised inside any method does, and is
-    /// delivered right after it. The answer is the question's outcome: a
-    /// report delivered after it that panics is an operation of its own, its
-    /// panic contained and logged, and the answer still returned (a session
-    /// end the handler blocked stays blocked). Only when no answer came does
-    /// the report's panic come back.
+    /// delivered right after it. The answer is the question's outcome, and the
+    /// host carries it out (a session end the handler blocked stays blocked):
+    /// a report delivered after it that panics is parked as the run's
+    /// terminal failure ([`Self::take_terminal`]), never discarded. When the
+    /// question itself panicked, that panic is the outcome and the report's is
+    /// contained; when no answer came, the report's panic comes back.
     fn question<R>(&self, body: impl FnOnce(&dyn AppHandler, &OwnerPlatform) -> R) -> Called<R> {
         let begun = {
             let mut state = self.state.lock();
@@ -634,7 +695,11 @@ impl AppDelivery {
         let answer = self.ask(body);
         walk.disarm();
         match (answer, self.drain()) {
-            (answer @ (Called::Returned(_) | Called::Panicked(_)), Called::Panicked(later)) => {
+            (answer @ Called::Returned(_), Called::Panicked(later)) => {
+                self.park(later);
+                answer
+            }
+            (answer @ Called::Panicked(_), Called::Panicked(later)) => {
                 later.contain("the application handler");
                 answer
             }
