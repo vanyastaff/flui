@@ -133,7 +133,7 @@ fn sample_state(
                     i32::try_from(state.backing.width).unwrap_or(i32::MAX),
                     i32::try_from(state.backing.height).unwrap_or(i32::MAX),
                 ),
-                state.scale_factor,
+                state.scale_factor.get(),
             )
             .ok(),
         )
@@ -288,7 +288,10 @@ struct WebWindowState {
     title: String,
     width: f64,
     height: f64,
-    scale_factor: f64,
+    scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    /// Whether the last pixel ratio read was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: crate::display::scale::ScaleStreak,
     /// The canvas's backing store, which is the surface's physical size.
     backing: DeviceSize,
     focused: bool,
@@ -488,13 +491,19 @@ impl WebWindow {
         // styling above is then overridden by the fixed size: a page that
         // gives the canvas no box at construction (a `display: none`
         // ancestor, say) gets the requested size rather than nothing.
-        let (width, height, scale_factor) = layout_size(&canvas).unwrap_or_else(|| {
+        let (width, height, reported_scale) = layout_size(&canvas).unwrap_or_else(|| {
             let style = canvas.style();
             let _ = style.set_property("width", &format!("{width}px"));
             let _ = style.set_property("height", &format!("{height}px"));
             (width, height, window.device_pixel_ratio())
         });
-        let backing = DeviceSize::estimate(width, height, scale_factor);
+        // The pixel ratio by the hosts' one rule; nothing is borrowed here.
+        let mut scale_streak = crate::display::scale::ScaleStreak::default();
+        let (scale_factor, refused) = scale_streak.read(reported_scale, "devicePixelRatio");
+        if let Some(refused) = refused {
+            refused.report();
+        }
+        let backing = DeviceSize::estimate(width, height, scale_factor.get());
         apply_backing_size(&canvas, backing);
 
         // Make canvas focusable for keyboard events
@@ -515,6 +524,7 @@ impl WebWindow {
             width,
             height,
             scale_factor,
+            scale_streak,
             backing,
             focused: effective_focus(&canvas),
             hidden: document.hidden(),
@@ -1068,15 +1078,25 @@ impl LayoutSync {
     /// new box. The state lock is released before the dispatch, which runs
     /// embedder callbacks.
     pub(crate) fn sync(&self) {
-        let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
+        let Some((width, height, reported_scale)) = layout_size(&self.canvas) else {
             return;
         };
+        // The pixel ratio by the hosts' one rule; a refusal is reported once
+        // the state is let go.
+        let (scale_factor, refused) = self
+            .state
+            .lock()
+            .scale_streak
+            .read(reported_scale, "devicePixelRatio");
+        if let Some(refused) = refused {
+            refused.report();
+        }
         let backing = self
             .observed
             .get()
-            .filter(|observed| observed.holds(width, height, scale_factor))
+            .filter(|observed| observed.holds(width, height, scale_factor.get()))
             .map_or_else(
-                || DeviceSize::estimate(width, height, scale_factor),
+                || DeviceSize::estimate(width, height, scale_factor.get()),
                 |observed| observed.device,
             );
         let changed = {
