@@ -443,6 +443,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The lane belongs on Web workers: a worker pool that runs a `ComputeJob` needs shared memory (`SharedArrayBuffer`, which needs cross-origin isolation headers) or a job shape that crosses `postMessage` by value.
 - The check is a browser run of a large image decode started through `Background::compute` with the frame clock showing no frame longer than its budget.
 
+### The Web never wakes for a deadline
+
+> **Environments:** Web · **Who it hurts:** Web apps whose frame was dropped · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- The native owners arm a timer on the deadline `AppHandler::wake_deadline` reports (`UiRuntime::next_wake`, `crates/flui-native/src/owner/wake_deadline.rs`); the web owner (`crates/flui-native/src/owner/web.rs`) asks for none, and its animation-frame loop stops when no frame is asked for.
+- So a page whose frame failed waits out the dropped-frame backoff (ADR-0334 §1) until input or another frame wakes it, and the post-frame callbacks and held input of its presentation wait with it.
+- The check is a browser run in which a sink answers `Failed` once and the page presents its tree within the backoff with no input.
+
 ### Images decode on the UI thread without background lanes
 
 > **Environments:** hosts without `BackgroundCapability` · **Who it hurts:** Embedders whose host registers no background lanes · **Parity:** [Quality bar](platform-parity.md#quality-bar)

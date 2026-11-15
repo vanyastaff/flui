@@ -244,9 +244,19 @@ fn completion_demand_waits_out_the_failed_frames_backoff() {
     runtime
         .attach_root_widget_with_size(&flui_widgets::Text::new("refused"), 400.0, 400.0)
         .expect("mount text");
-    let mut sink = Failing::new(SubmitVerdict::Failed, 1);
-    let failed_at = web_time::Instant::now();
+    // Four failed frames grow the wait to eight display periods, so the pumps below run inside
+    // it on a slow host too.
+    let mut sink = Failing::new(SubmitVerdict::Failed, 4);
+    let mut failed_at = web_time::Instant::now();
     assert!(!host_turn(&mut runtime, &mut sink), "the first frame fails");
+    for _ in 0..3 {
+        wait_out_the_backoff(&mut runtime, &mut sink, failed_at);
+        failed_at = web_time::Instant::now();
+        assert!(
+            !host_turn(&mut runtime, &mut sink),
+            "the retried frame fails again"
+        );
+    }
     let ran = Rc::new(Cell::new(false));
     let observed = Rc::clone(&ran);
     runtime
