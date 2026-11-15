@@ -5534,8 +5534,8 @@ graph LR
   находок двух проверок подтверждены чтением кода до правки. (1) Масштаб: масштаб буфера окна —
   тип `BufferScale` (`window::linux::wayland::scale`), который ни один масштаб композитора
   (дробный, предпочтительный, выхода) не поднимает выше `BufferScale::MAX`; им рисуются и
-  содержимое окна, и его собственная рамка; метрики окна (`scale::metrics`) не публикуются за
-  `MAX_CONTENT_EXTENT` пикселей устройства. У `Pixels` предел площади `MAX_PIXELS`, у каждой части
+  содержимое окна, и его собственная рамка; масштаб понижается, пока размер configure не уложится в
+  `MAX_CONTENT_EXTENT` (наибольшая поверхность движка, 16 384), так что окно рисуется, а рамка того же предела сохраняет заголовок. У `Pixels` предел площади `MAX_PIXELS`, у каждой части
   рамки `BufferSet` из `MAX_BUFFERS` буферов: отданный композитором рисуется заново, при
   композиторе, не отдающем ничего, старший уничтожается, все — вместе с рамкой; метка отдачи —
   `Rc<Cell<bool>>` через `OwnerSlot`. Тесты: `a_buffer_is_drawn_at_the_scale_the_compositor_prefers`,
@@ -5549,7 +5549,7 @@ graph LR
   `damage_buffer` с версии 4 `wl_surface` (`damage_is_sent_with_the_request_the_surface_has`).
   (4) Ушедший seat (`user_input::Inputs::seat_gone`) снимает grab и последний ввод, отпускает
   удержанные клавиши; сессия drag следит за своим grab (`Inputs::watch`) и кончается как
-  `Cancelled`, когда отпускание дошло до поверхности или seat ушёл, в любом порядке; рамка
+  `Cancelled`, когда отпускание дошло до поверхности, seat ушёл (в любом порядке) или указатель ушёл при удержанной кнопке; рамка
   окна при уходе seat снимает его move, resize и menu, а close, minimize и maximize оставляет.
   Тесты `a_seat_that_goes_leaves_no_input_behind`, `a_watched_grab_ends_when_its_seat_goes`,
   `a_grab_is_the_first_press_held_until_its_last_release`,
