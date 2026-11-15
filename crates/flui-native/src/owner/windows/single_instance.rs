@@ -1,5 +1,5 @@
-//! One instance of an application on a Windows session (the activation spec,
-//! design §5; ADR-0254): the first process of an application holds a mutex
+//! One instance of an application on a Windows session (ADR-0254 §4):
+//! the first process of an application holds a mutex
 //! and serves a named pipe, both named by its app id and the user's session;
 //! a later one, finding the mutex, hands the first the right to come to the
 //! foreground and what its own launch opens ([`Forwarded`], the pipe's

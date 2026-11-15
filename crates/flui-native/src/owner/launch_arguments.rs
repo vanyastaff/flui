@@ -1,6 +1,6 @@
 //! What a desktop launch's arguments open: the URLs and files a Windows or
-//! Linux desktop hands an application on its command line (the activation
-//! spec, design §4). A registered scheme or file type launches the
+//! Linux desktop hands an application on its command line (ADR-0330 §5).
+//! A registered scheme or file type launches the
 //! application with the link or the file as an argument (Windows' `"%1"`,
 //! a desktop entry's `%U`, which gives a file as a `file:` URI). The host
 //! reports what they open before `ready`, as a cold

@@ -1,5 +1,5 @@
 //! An unpackaged Windows application's registration of the URL schemes and
-//! the file types it opens (ADR-0307 §4, the activation spec's AC11), under
+//! the file types it opens (ADR-0307 §4), under
 //! the user's `HKCU\Software\Classes`:
 //!
 //! - a scheme is one key, named by the scheme, whose `shell\open\command`

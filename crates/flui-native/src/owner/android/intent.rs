@@ -1,5 +1,5 @@
-//! What an intent the Activity receives opens (the activation spec, design
-//! §4): the intent that launched it (`onCreate`) and each one that reaches it
+//! What an intent the Activity receives opens (ADR-0330 §5):
+//! the intent that launched it (`onCreate`) and each one that reaches it
 //! running (`onNewIntent`, the template's `launchMode="singleTop"`), as
 //! `FluiHost.record` lays them out on the Java side.
 //!

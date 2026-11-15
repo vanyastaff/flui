@@ -1,5 +1,5 @@
-//! One instance of an application on a Linux session (the activation spec,
-//! design §5): the first process of an application owns its app id as a
+//! One instance of an application on a Linux session (ADR-0254 §4):
+//! the first process of an application owns its app id as a
 //! name on the session bus and serves `org.freedesktop.Application` there, as
 //! GApplication does; a second, finding the name owned, hands the first what
 //! its own launch opens (`Open`, with the activation token its launcher gave

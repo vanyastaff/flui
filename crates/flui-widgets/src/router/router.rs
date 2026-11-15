@@ -85,6 +85,28 @@ type UnknownHook = Rc<dyn Fn(&RoutePath)>;
 /// matches is reported to [`on_unknown`](Self::on_unknown) and leaves the
 /// stack unchanged. A `Router` inside another's page owns no URL: its stack
 /// belongs to that page.
+///
+/// # Links
+///
+/// A link opens a page when the application declares what it opens in its
+/// manifest, which `#[flui::main]` reads and `flui build` writes into each
+/// platform's own manifest (ADR-0307):
+///
+/// ```toml
+/// [package.metadata.flui.declares]
+/// url-schemes = ["myapp"]
+/// associated-domains = ["notes.example.com"]
+/// ```
+///
+/// The page is the link's path, as Flutter and go_router read `uri.path`:
+/// `myapp:///note/3` and `https://notes.example.com/note/3` open `/note/3`,
+/// while `myapp://note/3` opens `/3`, its `note` being the host. A link that
+/// launches the application opens this stack on it before the first frame,
+/// with the pages below that [`Routable::back_stack`] gives; one that
+/// reaches the running application goes to the window the system names,
+/// else the one focused last, as a
+/// [`RouterHandle::go`]. A scheme or domain the application did not declare
+/// opens nothing.
 pub struct Router<R: Routable> {
     /// The stack the router opens with, bottom to top; never empty.
     initial: Vec<R>,
