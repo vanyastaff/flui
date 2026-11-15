@@ -1619,7 +1619,7 @@ impl UpdateScheduler {
     /// request cannot re-drive it. The owner's frame drive then gives the
     /// scope of a segment the aborted frame completed or left running
     /// completion demand for the callbacks it owes, which the runtime admits
-    /// through its own gates, and asks no frame for them
+    /// through its own gates; the scheduler asks no frame for them
     /// (`OwnerFrame::settle_aborted_segments`). It
     /// does not re-arm for the failure itself, which would hot-loop a caller
     /// that keeps re-driving a deterministically panicking frame; a caller

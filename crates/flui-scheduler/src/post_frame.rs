@@ -764,8 +764,9 @@ impl PresentationFrameScope {
     /// Reissue retained successor demand after the host clears its wake latch.
     /// The runtime calls this only for an eligible presentation; hidden or
     /// withdrawn geometry retains its debt without forcing an idle busy loop.
-    /// A scope an aborted frame settled (completed or suspended) with a callback
-    /// still waiting has demand, so its presentation is admitted to its next
+    /// A scope an aborted frame settled (its completed segment returned to idle,
+    /// or one left running suspended) with a callback still waiting has demand,
+    /// so its presentation is admitted to its next
     /// segment once its layout is published.
     pub fn rearm_completion_demand(&self) {
         if self.has_completion_demand()
