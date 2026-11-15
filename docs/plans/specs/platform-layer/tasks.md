@@ -4900,7 +4900,7 @@ graph LR
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
   публичный путь keyboard layout.
-- [ ] **LY108** — ветка `app/handler-answers`, шесть находок аудита.
+- [ ] **LY108** — ветка `app/handler-answers`, PR #2641, шесть находок аудита.
   1. Исправлено. Маршрут кадра теперь `FnMut(FrameRequest) -> FrameOutcome`, и у каждого runner
      это `dispatch_platform_frame`: принятый владельцем кадр — `Produced` (выполнен в вызове или
      встал в идущий ход, который его выполнит), отказ (`StaleRuntime`, `StalePresentation`,
