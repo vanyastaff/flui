@@ -92,11 +92,12 @@ impl DesktopBuilder {
         // Before the build: a Linux or Windows application that opens links
         // or files needs the code that keeps one instance of it, read from
         // the member the build compiles.
+        let package = selected.built_package();
         if target.contains("-linux-") || target.contains("-windows-") {
             crate::declarations::Declarations::collect_package(
                 &ctx.workspace_root,
                 &[&target],
-                selected.member(),
+                package.member(),
             )?
             .require_one_instance(&target)?;
         }
@@ -113,12 +114,7 @@ impl DesktopBuilder {
         Ok(BuildArtifacts {
             rust_libs: Vec::new(),
             executable: Some(executable),
-            metadata: serde_json::json!({
-                "target": target,
-                "kind": "executable",
-                "package": selected.member().name,
-                "links_dev_dependencies": selected.member().dev,
-            }),
+            package: Some(package),
         })
     }
 
@@ -194,34 +190,17 @@ impl DesktopBuilder {
 }
 
 impl DesktopBuilder {
-    /// What the application `artifacts` were built from declares for
-    /// `triple`: the member the build compiled, else the project at the
-    /// workspace root.
+    /// What the crates `artifacts` link for `triple` declare.
     fn declarations(
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
         triple: &str,
     ) -> BuildResult<crate::declarations::Declarations> {
-        let member = |package| crate::declarations::Member {
-            name: package,
-            dev: artifacts
-                .metadata
-                .get("links_dev_dependencies")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-        };
-        match artifacts
-            .metadata
-            .get("package")
-            .and_then(serde_json::Value::as_str)
-        {
-            Some(package) => crate::declarations::Declarations::collect_package(
-                &ctx.workspace_root,
-                &[triple],
-                member(package),
-            ),
-            None => crate::declarations::Declarations::collect(&ctx.workspace_root, &[triple]),
-        }
+        crate::declarations::Declarations::collect_built(
+            &ctx.workspace_root,
+            &[triple],
+            artifacts.package.as_ref(),
+        )
     }
 
     /// The Linux triple `ctx` builds for: its named target when that is a

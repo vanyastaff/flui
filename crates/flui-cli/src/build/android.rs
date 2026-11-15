@@ -318,7 +318,7 @@ impl AndroidBuilder {
         Ok(BuildArtifacts {
             rust_libs,
             executable: None,
-            metadata: serde_json::json!({}),
+            package: None,
         })
     }
 

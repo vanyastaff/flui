@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::BuildUnit;
+use crate::build::platform::{BuildUnit, BuiltPackage};
 
 pub(crate) struct CargoTarget {
     package: PackageId,
@@ -22,14 +22,12 @@ pub(crate) struct CargoTarget {
 impl CargoTarget {
     /// The workspace member the build compiles, and whether its target
     /// links the member's dev-dependencies (an example's does).
-    pub(crate) fn member(&self) -> crate::declarations::Member<'_> {
-        crate::declarations::Member {
-            name: &self.package_name,
-            dev: self.kind == TargetKind::Example,
+    pub(crate) fn built_package(&self) -> BuiltPackage {
+        BuiltPackage {
+            name: self.package_name.clone(),
+            version: self.version.clone(),
+            links_dev_dependencies: self.kind == TargetKind::Example,
         }
-    }
-    pub(crate) fn metadata(&self) -> serde_json::Value {
-        serde_json::json!({"package_name": self.package_name, "package_version": self.version})
     }
     pub(crate) fn cargo_args(&self) -> Vec<String> {
         let mut args = vec![

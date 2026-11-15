@@ -94,12 +94,16 @@ impl WebBuilder {
         for feature in &ctx.features {
             args.extend(["--features".to_owned(), feature.clone()]);
         }
-        crate::ui::debug(format!("building {} for {WASM_TARGET}", target.metadata()));
+        let package = target.built_package();
+        crate::ui::debug(format!(
+            "building {} {} for {WASM_TARGET}",
+            package.name, package.version
+        ));
         let wasm = cargo::build_artifact(dir, &args, &target, &[]).await?;
         Ok(BuildArtifacts {
             rust_libs: vec![wasm],
             executable: None,
-            metadata: target.metadata(),
+            package: Some(package),
         })
     }
 

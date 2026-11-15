@@ -301,7 +301,7 @@ fn worker(root: PathBuf, case: &str) {
                     artifacts.rust_libs[0].clone(),
                 ],
                 executable: None,
-                metadata: serde_json::json!({}),
+                package: None,
             };
             assert!(
                 runtime
@@ -337,7 +337,7 @@ fn worker(root: PathBuf, case: &str) {
             let one = crate::build::BuildArtifacts {
                 rust_libs: vec![inside],
                 executable: None,
-                metadata: serde_json::json!({}),
+                package: None,
             };
             let delivered_one = runtime
                 .block_on(builder.build_platform(&single, &one))
