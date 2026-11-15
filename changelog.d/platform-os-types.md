@@ -37,7 +37,7 @@
   The extensions' former methods are the views' (`Win32Window::set_backdrop`,
   `AppKitWindow::set_window_level`, …) and cannot fail for that reason.
   `AppKitWindow::add_tab_to_window` answers `Result<(), TabJoinError>`, which tells apart a
-  window of another host, the same window, windows off the AppKit main lane and a closed window.
+  window of another host, the same window and a closed window.
 - **`flui-native`**: the Android host starts through `flui_native::android_platform(app)`, which
   takes the `AndroidApp` the application's `android_main` was handed and returns the
   `Box<dyn Platform>` `AndroidPlatform::new(app)` built.

@@ -70,10 +70,15 @@ pub mod testing;
 /// core host's per-system extensions of [`HostWindow`](native::HostWindow),
 /// which the facade publishes as `flui::native` behind its `native` feature
 /// (ADR-0254 §8). Each answers `None` for a window of another host.
-/// [`with_window`](native::with_window) reaches the window a presentation is
-/// drawn in. Requires the `native` feature.
+///
+/// A widget reaches the window it is presented in through the
+/// [`NativeWindowCapability`](native::NativeWindowCapability), acquired in
+/// `create_state`; code that holds a presentation's address instead (a window
+/// request's answer, a close request) reaches it through
+/// [`with_window`](native::with_window). Requires the `native` feature.
 #[cfg(feature = "native")]
 pub mod native {
+    pub use crate::app::native_window::{NativeWindow, NativeWindowCapability};
     pub use flui_native::HostWindow;
     #[cfg(target_os = "macos")]
     pub use flui_native::os::macos;
@@ -85,7 +90,8 @@ pub mod native {
     ///
     /// The address is the one a window request resolves to (`WindowRequest`)
     /// or a close request names (`CloseRequest::address`), as for
-    /// `window_handle`. `f` runs on the calling
+    /// `window_handle`; a widget acquires its window as a
+    /// [`NativeWindowCapability`] instead. `f` runs on the calling
     /// thread, outside every borrow of the runtime, so it may open or close
     /// windows. `None`, and `f` does not run, on a thread other than the one
     /// running the application, when nothing is presented at `address` and

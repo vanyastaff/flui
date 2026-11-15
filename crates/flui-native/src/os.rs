@@ -16,7 +16,7 @@
 #[cfg(windows)]
 pub mod windows {
     //! What a Win32 window offers beyond the window contract: the desktop
-    //! window manager's backdrop, corners, title bar and theme, Snap Layouts,
+    //! window manager's backdrop, corners, title bar colour and theme,
     //! and the window's DPI. [`WindowsWindowExt::win32`] narrows a window to
     //! its [`Win32Window`] view, whose commands answer [`Win32WindowError`]
     //! when they did nothing.
@@ -31,14 +31,17 @@ pub mod windows {
 
 #[cfg(target_os = "macos")]
 pub mod macos {
-    //! What an AppKit window offers beyond the window contract: tabs, native
-    //! fullscreen, level, collection behavior, shadow, alpha, and what AppKit
-    //! draws behind the window's content, a material or Liquid Glass.
+    //! What an AppKit window offers beyond the window contract: tabs, level,
+    //! collection behavior, shadow, alpha, and what AppKit draws behind the
+    //! window's content, a material or Liquid Glass.
     //! [`MacOSWindowExt::appkit`] narrows a window to its [`AppKitWindow`]
-    //! view.
+    //! view, whose commands answer [`AppKitWindowError`] when they did
+    //! nothing.
 
     pub use crate::window::apple::macos::{
-        AppKitWindow, GlassStyle, GlassTint, LiquidGlass, MacOSBackdrop, MacOSBackdropError,
-        MacOSCollectionBehavior, MacOSMaterial, MacOSWindowExt, MacOSWindowLevel, TabJoinError,
+        AppKitWindow, AppKitWindowError, GlassStyle, GlassTint, InvalidWindowAlpha, LiquidGlass,
+        MacOSBackdrop, MacOSBackdropError, MacOSCollectionBehavior, MacOSMaterial,
+        MacOSMissionControl, MacOSSpaces, MacOSWindowAlpha, MacOSWindowCycle, MacOSWindowExt,
+        MacOSWindowLevel, TabJoinError,
     };
 }

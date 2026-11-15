@@ -75,3 +75,100 @@ fn with_window_reaches_the_host_window_of_its_presentation_and_no_other() {
         "the presentation is gone"
     );
 }
+
+/// The `NativeWindowCapability` handle a widget of a presentation acquires,
+/// as its acquisition in `create_state` makes it.
+fn acquire_native_window(dispatcher: PresentationDispatcher) -> crate::native::NativeWindow {
+    use std::cell::RefCell;
+
+    use flui_platform::capability::Capability as _;
+
+    use crate::native::{NativeWindow, NativeWindowCapability};
+
+    let acquired: Rc<RefCell<Option<NativeWindow>>> = Rc::default();
+    let into = Rc::clone(&acquired);
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::TestCallback(Box::new(move |ui_runtime| {
+            let handle = ui_runtime.widgets().with_build_owner(|owner| {
+                owner
+                    .capabilities()
+                    .capabilities
+                    .as_ref()
+                    .expect("a presentation's widgets acquire capabilities")
+                    .acquire(
+                        std::any::TypeId::of::<NativeWindowCapability>(),
+                        NativeWindowCapability::NAME,
+                    )
+                    .expect("the built-in provider hands a windowed widget its window")
+            });
+            let handle: Box<NativeWindow> = handle
+                .downcast()
+                .expect("the capability's handle is a NativeWindow");
+            into.replace(Some(*handle));
+        })),
+    )
+    .expect("acquire through the installed owner");
+    acquired
+        .borrow_mut()
+        .take()
+        .expect("the callback acquired the handle")
+}
+
+/// Each presentation's `NativeWindowCapability` handle reaches the host
+/// window that presentation is drawn in and no other: two presentations, two
+/// windows, each handle its own. A window that closed is reached by nobody,
+/// and once the runtime is gone neither is.
+#[test]
+fn each_presentations_native_window_reaches_its_own_window() {
+    let _clear = OwnerHostClearGuard::arm();
+    Box::new(HeadlessPlatform::new())
+        .run(crate::app::runner::app_handler(|owner| {
+            install_owner_platform(owner)?;
+            Ok(())
+        }))
+        .expect("headless run");
+    let open = || {
+        let host =
+            with_owner_platform(|owner| owner.open_routed(flui_platform::WindowOptions::default()))
+                .expect("an installed owner")
+                .and_then(flui_native::WindowOpen::try_ready)
+                .expect("headless windows are ready");
+        let window: Rc<dyn PlatformWindow> = Rc::clone(&host) as Rc<dyn PlatformWindow>;
+        let runtime =
+            build_ui_runtime(presentation_window(Rc::clone(&host)), 1.0).expect("runtime");
+        let dispatcher = install_ui_runtime_alongside(runtime, &window).expect("installed");
+        (host, acquire_native_window(dispatcher))
+    };
+    let (first, first_handle) = open();
+    let (second, second_handle) = open();
+
+    for (handle, own, other, which) in [
+        (&first_handle, &first, &second, "the first"),
+        (&second_handle, &second, &first, "the second"),
+    ] {
+        assert_eq!(
+            handle.with(|reached| (is(reached, own), is(reached, other))),
+            Some((true, false)),
+            "{which} presentation's handle reaches its own window and not the other"
+        );
+    }
+
+    use flui_testing::window_commands::AdmitAndApply as _;
+    first
+        .admit_and_apply(flui_platform::WindowCommand::Close)
+        .expect("the first window closes");
+    assert_eq!(
+        first_handle.with(|_| ()),
+        None,
+        "a closed window is reached by nobody"
+    );
+    assert_eq!(
+        second_handle.with(|reached| is(reached, &second)),
+        Some(true),
+        "the other window is still reached"
+    );
+
+    teardown_platform_ui_runtime();
+    assert_eq!(second_handle.with(|_| ()), None, "the runtime is gone");
+}

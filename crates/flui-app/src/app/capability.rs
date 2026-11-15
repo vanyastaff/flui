@@ -123,6 +123,10 @@ fn built_ins(slots: &CapabilitySlots) -> CapabilityRegistrar {
     registrar.provide::<PrimarySelectionCapability>(PlatformPrimarySelection {
         slot: Rc::clone(&slots.primary_selection),
     });
+    // The escape hatch from a widget: its window as the core host hands it out.
+    #[cfg(feature = "native")]
+    registrar
+        .provide::<super::native_window::NativeWindowCapability>(super::native_window::provide);
     registrar
 }
 

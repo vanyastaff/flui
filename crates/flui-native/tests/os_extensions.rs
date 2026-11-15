@@ -51,6 +51,11 @@ mod cases {
             "a_win32_view_refuses_a_closed_window",
             a_win32_view_refuses_a_closed_window,
         ),
+        #[cfg(target_os = "windows")]
+        (
+            "a_win32_title_bar_takes_its_colour",
+            a_win32_title_bar_takes_its_colour,
+        ),
         #[cfg(target_os = "macos")]
         (
             "the_macos_extension_has_no_view_of_another_hosts_window",
@@ -60,6 +65,11 @@ mod cases {
         (
             "an_appkit_backdrop_goes_behind_the_content_and_comes_away",
             an_appkit_backdrop_goes_behind_the_content_and_comes_away,
+        ),
+        #[cfg(target_os = "macos")]
+        (
+            "appkit_window_commands_do_what_they_say_or_answer_closed",
+            appkit_window_commands_do_what_they_say_or_answer_closed,
         ),
     ];
 
@@ -171,6 +181,45 @@ mod cases {
             closed
         );
         assert_eq!(win32.dpi().map(drop), closed);
+        assert_eq!(
+            win32.set_title_bar_color(Some(flui_painting::styling::Color::rgb(0x20, 0x40, 0x60))),
+            closed
+        );
+    }
+
+    /// The title bar takes an opaque colour and gives the system's back for
+    /// `None` on a live window, and refuses a colour with alpha, which it
+    /// cannot draw; Windows 10 has no caption colour, and refuses. The
+    /// desktop window manager does not read the caption colour back
+    /// (`E_INVALIDARG`), so the `COLORREF` each colour becomes is checked
+    /// beside the conversion, in `a_caption_colour_is_its_colorref`.
+    #[cfg(target_os = "windows")]
+    fn a_win32_title_bar_takes_its_colour() {
+        use flui_native::os::windows::{Win32WindowError, WindowsWindowExt};
+        use flui_painting::styling::Color;
+
+        let platform: Box<dyn Platform> =
+            Box::new(flui_native::WindowsPlatform::try_new().expect("the Win32 platform"));
+        let window = platform
+            .open_window(
+                hidden(),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("a Win32 window opens");
+        let win32 = window.win32().expect("a Win32 window has its view");
+        assert_eq!(
+            win32.set_title_bar_color(Some(Color::rgba(0x12, 0x80, 0x90, 0x80))),
+            Err(Win32WindowError::NotOpaque),
+            "a title bar has no alpha"
+        );
+        match win32.set_title_bar_color(Some(Color::rgb(0x12, 0x80, 0x90))) {
+            Ok(()) => assert_eq!(win32.set_title_bar_color(None), Ok(())),
+            Err(Win32WindowError::Refused { .. }) => {
+                eprintln!("skipped: this build of Windows has no caption colour");
+            }
+            Err(other) => panic!("a live window's caption colour: {other}"),
+        }
+        window.close_now();
     }
 
     #[cfg(target_os = "macos")]
@@ -376,5 +425,82 @@ mod cases {
         assert!(tree.flui_view_is_first_responder());
         assert_eq!(appkit.clear_backdrop(), Ok(()), "nothing to take away");
         window.close_now();
+    }
+
+    /// Each `AppKitWindow` command reaches AppKit, read back from the
+    /// `NSWindow`, and answers that the window is closed once it is. An alpha
+    /// given while the window waits for its first frame is the alpha it is
+    /// revealed at, not 1, and a collection behavior keeps the full-screen
+    /// behavior the contract's mode needs.
+    #[cfg(target_os = "macos")]
+    fn appkit_window_commands_do_what_they_say_or_answer_closed() {
+        use flui_native::os::macos::{
+            AppKitWindowError, MacOSCollectionBehavior, MacOSSpaces, MacOSWindowAlpha,
+            MacOSWindowExt, MacOSWindowLevel,
+        };
+        use flui_platform::{Unsupported, UnsupportedReason, WindowReveal};
+        use objc2_app_kit::NSWindowCollectionBehavior;
+
+        let platform: Box<dyn Platform> =
+            Box::new(flui_native::MacOSPlatform::try_new().expect("the AppKit platform"));
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .title("os extensions")
+                    .reveal(WindowReveal::AfterFirstFrame),
+                flui_testing::window_handler::RecordingWindowHandler::new(),
+            )
+            .expect("an AppKit window opens");
+        let appkit = window.appkit().expect("an AppKit window has its view");
+        let tree = AppKitTree::of(window.as_ref());
+
+        let half = MacOSWindowAlpha::try_new(0.5).expect("0.5 is an alpha");
+        assert_eq!(appkit.set_alpha(half), Ok(()));
+        assert!(
+            tree.window.alphaValue().abs() < f64::EPSILON,
+            "transparent until its first frame"
+        );
+        window.reveal_after_first_frame();
+        assert!(
+            (tree.window.alphaValue() - 0.5).abs() < f64::EPSILON,
+            "revealed at the application's alpha"
+        );
+        assert_eq!(appkit.alpha(), Ok(half));
+
+        assert_eq!(appkit.set_window_level(MacOSWindowLevel::Floating), Ok(()));
+        assert_eq!(appkit.window_level(), Ok(MacOSWindowLevel::Floating));
+        assert_eq!(
+            appkit.set_collection_behavior(
+                MacOSCollectionBehavior::default().spaces(MacOSSpaces::All)
+            ),
+            Ok(())
+        );
+        assert!(tree.window.collectionBehavior().contains(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenPrimary
+        ));
+        assert_eq!(appkit.set_has_shadow(false), Ok(()));
+        assert!(!tree.window.hasShadow());
+
+        window.close_now();
+        let closed = Err(AppKitWindowError::Unsupported(Unsupported::new(
+            UnsupportedReason::NoWindow,
+        )));
+        assert_eq!(appkit.set_has_shadow(true), closed);
+        assert_eq!(appkit.set_alpha(MacOSWindowAlpha::OPAQUE), closed);
+        assert_eq!(appkit.set_window_level(MacOSWindowLevel::Normal), closed);
+        assert_eq!(
+            appkit.window_level(),
+            closed.map(|()| MacOSWindowLevel::Normal)
+        );
+        assert_eq!(appkit.enable_tabbing(), closed);
+        assert_eq!(
+            appkit.set_collection_behavior(MacOSCollectionBehavior::default()),
+            closed
+        );
+        assert!(
+            !tree.window.hasShadow(),
+            "a closed window is left as it was"
+        );
     }
 }
