@@ -88,9 +88,13 @@ use flui_platform::{
     DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
     SystemPreferences, WindowAppearance, WindowId,
 };
+use rustc_hash::FxHashMap;
 use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
 use rustix::io::Errno;
 use x11rb::connection::Connection as _;
+use x11rb::cookie::VoidCookie;
+use x11rb::errors::ConnectionError;
+use x11rb::protocol::xproto::{ConnectionExt as _, EventMask};
 use x11rb::protocol::{Event, xproto};
 use x11rb::xcb_ffi::XCBConnection;
 
@@ -104,6 +108,7 @@ use crate::owner::linux::{LinuxNotices, LinuxPreferences, PortalSlot, SessionLoo
 use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
+use crate::owner::slot::OwnerCell;
 use crate::owner::wake_deadline::WakeDeadline;
 use crate::owner::watch::Watch;
 use crate::owner::window_delivery::WindowDelivery;
@@ -116,6 +121,9 @@ use crate::task::Task;
 pub(crate) struct X11Connection {
     xcb: XCBConnection,
     screen: usize,
+    /// What the platform's features asked to hear of each peer's window:
+    /// the events selected there are their union.
+    peers: OwnerCell<FxHashMap<xproto::Window, PeerSelection>>,
 }
 
 impl std::fmt::Debug for X11Connection {
@@ -150,7 +158,11 @@ impl X11Connection {
                 .and_then(|cookie| cookie.reply().ok())
                 .map(|version| (version.major_version, version.minor_version)),
         )?;
-        Ok(Arc::new(Self { xcb, screen }))
+        Ok(Arc::new(Self {
+            xcb,
+            screen,
+            peers: OwnerCell::new(),
+        }))
     }
 
     /// The connection, for requests.
@@ -193,7 +205,86 @@ impl X11Connection {
         let made_here = window & !setup.resource_id_mask == setup.resource_id_base;
         window != self.root() && !made_here
     }
+
+    /// Have `interest` hear `mask` of `window`, a peer's ([`is_peers`]):
+    /// the connection selects the union of what every interest asked of the
+    /// window, so one feature never replaces the events another hears there
+    /// (a transfer's requestor that is also the window manager's). `None`
+    /// for a window that is no peer's, or off the owner thread: nothing is
+    /// selected.
+    ///
+    /// [`is_peers`]: Self::is_peers
+    pub(crate) fn hear_peer(
+        &self,
+        window: xproto::Window,
+        interest: PeerInterest,
+        mask: EventMask,
+    ) -> Option<Result<VoidCookie<'_, XCBConnection>, ConnectionError>> {
+        if !self.is_peers(window) {
+            return None;
+        }
+        let union = self.peers.with(|peers| {
+            let asked = peers.entry(window).or_default();
+            asked[interest as usize] = u32::from(mask);
+            asked.iter().fold(0, |union, mask| union | mask)
+        })?;
+        Some(self.select_on_peer(window, union))
+    }
+
+    /// `interest` stops hearing `window`: the connection selects what the
+    /// other interests still ask of it, and nothing once none does. `None`
+    /// when `interest` heard nothing of it.
+    pub(crate) fn forget_peer(
+        &self,
+        window: xproto::Window,
+        interest: PeerInterest,
+    ) -> Option<Result<VoidCookie<'_, XCBConnection>, ConnectionError>> {
+        let union = self.peers.with(|peers| {
+            let asked = peers.get_mut(&window)?;
+            if std::mem::take(&mut asked[interest as usize]) == 0 {
+                return None;
+            }
+            let union = asked.iter().fold(0, |union, mask| union | mask);
+            if union == 0 {
+                peers.remove(&window);
+            }
+            Some(union)
+        })??;
+        Some(self.select_on_peer(window, union))
+    }
+
+    /// The server destroyed `window`: whatever any interest asked of it is
+    /// gone with it, and nothing is selected (the window is not there).
+    pub(crate) fn peer_destroyed(&self, window: xproto::Window) {
+        let _: Option<Option<PeerSelection>> = self.peers.with(|peers| peers.remove(&window));
+    }
+
+    fn select_on_peer(
+        &self,
+        window: xproto::Window,
+        mask: u32,
+    ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
+        self.xcb.change_window_attributes(
+            window,
+            &xproto::ChangeWindowAttributesAux::new().event_mask(EventMask::from(mask)),
+        )
+    }
 }
+
+/// Which of the platform's features hears a peer's window
+/// ([`X11Connection::hear_peer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PeerInterest {
+    /// The window manager's own window, whose end the windows hear.
+    WindowManager,
+    /// A transfer's `INCR` requestor, whose property deletions and end the
+    /// drag hears.
+    Transfer,
+}
+
+/// What each [`PeerInterest`] asked to hear of one peer window, by its
+/// index.
+type PeerSelection = [u32; 2];
 
 /// What wakes the loop from any thread: an eventfd the loop waits on beside
 /// the connection.
@@ -933,6 +1024,10 @@ impl X11Loop {
             tracing::debug!(?error, "the X server refused a request");
             return;
         }
+        // A peer's window that is gone takes what the features heard of it.
+        if let Event::DestroyNotify(destroyed) = event {
+            self.connection.peer_destroyed(destroyed.window);
+        }
         // A drag message, or the answer to a fetch, is the drag's alone;
         // the drag contains what a window's handler raises as it hears it.
         if self.drag.event(event) {
@@ -1627,6 +1722,94 @@ mod tests {
         assert!(
             sequence() - before > 1,
             "the configure behind the failure marked its window, which reads itself"
+        );
+    }
+
+    /// Two features that hear one peer's window (the window manager's that
+    /// is also a transfer's requestor) each keep what they asked for: the
+    /// connection selects their union, and one feature letting go keeps the
+    /// other's events. Read back as the server holds this connection's mask
+    /// on the window, on the X server `DISPLAY` names; passes as untested
+    /// where none answers.
+    #[test]
+    fn features_that_hear_one_peer_window_keep_each_others_events() {
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::xproto::{
+            ConnectionExt as _, CreateWindowAux, EventMask, WindowClass,
+        };
+        use x11rb::rust_connection::RustConnection;
+
+        use super::PeerInterest::{Transfer, WindowManager};
+
+        let Ok(platform) = crate::X11Platform::try_new() else {
+            eprintln!("no X server answers: nothing to run");
+            return;
+        };
+        let connection = &platform.owner().connection;
+        let (peer, _) = RustConnection::connect(None).expect("a second connection");
+        let window = peer.generate_id().expect("an id");
+        peer.create_window(
+            x11rb::COPY_DEPTH_FROM_PARENT,
+            window,
+            connection.root(),
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            x11rb::COPY_FROM_PARENT,
+            &CreateWindowAux::new(),
+        )
+        .expect("request");
+        peer.flush().expect("flush");
+        peer.get_input_focus()
+            .expect("request")
+            .reply()
+            .expect("the server answers");
+        let selected = || {
+            connection
+                .xcb()
+                .get_window_attributes(window)
+                .expect("request")
+                .reply()
+                .expect("the window's attributes")
+                .your_event_mask
+        };
+        let structure = EventMask::STRUCTURE_NOTIFY;
+        let transfer = EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY;
+        let hear = |interest, mask| {
+            connection
+                .hear_peer(window, interest, mask)
+                .expect("a peer's window")
+                .expect("request")
+                .check()
+                .expect("the server selects");
+        };
+        let forget = |interest| {
+            if let Some(cookie) = connection.forget_peer(window, interest) {
+                cookie
+                    .expect("request")
+                    .check()
+                    .expect("the server selects");
+            }
+        };
+
+        hear(WindowManager, structure);
+        hear(Transfer, transfer);
+        assert_eq!(selected(), transfer, "the union of both");
+        forget(Transfer);
+        assert_eq!(selected(), structure, "the window manager's events stay");
+        hear(Transfer, transfer);
+        forget(WindowManager);
+        assert_eq!(selected(), transfer, "the transfer's events stay");
+        forget(Transfer);
+        assert_eq!(selected(), EventMask::NO_EVENT, "nothing once both let go");
+        assert!(
+            connection
+                .hear_peer(connection.root(), Transfer, transfer)
+                .is_none(),
+            "the root is no peer's"
         );
     }
 

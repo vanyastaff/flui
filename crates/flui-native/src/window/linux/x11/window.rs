@@ -122,8 +122,8 @@ use crate::input::regions::presses::{
 use crate::owner::OpenWindowError;
 use crate::owner::handlers::OpenWindows;
 use crate::owner::linux::x11::{
-    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, WindowRef,
-    WindowScale, X11Connection, X11Loop,
+    Doorbell, HostDisplays, InputTarget, LoopDrag, LoopInput, LoopText, LoopWindows, PeerInterest,
+    WindowRef, WindowScale, X11Connection, X11Loop,
 };
 use crate::owner::slot::OwnerWeak;
 use crate::owner::wake_deadline::FrameCount;
@@ -1894,7 +1894,12 @@ impl X11Windows {
                 None => (WindowManager::Absent, None),
             },
         };
-        self.window_manager.set(watched);
+        let previous = self.window_manager.replace(watched);
+        if let Some(previous) = previous.filter(|previous| Some(*previous) != watched) {
+            // The window of a window manager that is replaced, or no longer
+            // names itself; one the server destroyed took its selection.
+            self.forget_window_manager(previous);
+        }
         let supported: Vec<u32> = self
             .connection
             .xcb()
@@ -1970,22 +1975,42 @@ impl X11Windows {
     /// manager's: whether it is heard. The window's events are selected once
     /// per window manager. It may go, and its id be given to another client's
     /// window, between the read and the selection, so `still` reads it again
-    /// after (as GDK's `fetch_net_wm_check_window` does).
+    /// after (as GDK's `fetch_net_wm_check_window` does). Its events are
+    /// selected beside what the platform's other features hear there
+    /// (`X11Connection::hear_peer`), and a window found not to be the window
+    /// manager's is let go of again.
     fn hear_end_of(
         &self,
         window: xproto::Window,
         still: impl FnOnce(xproto::Window) -> bool,
     ) -> bool {
-        self.window_manager.get() == Some(window)
-            || (self
-                .connection
-                .xcb()
-                .change_window_attributes(
-                    window,
-                    &ChangeWindowAttributesAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
-                )
-                .is_ok_and(|selected| selected.check().is_ok())
-                && still(window))
+        if self.window_manager.get() == Some(window) {
+            return true;
+        }
+        let heard = self
+            .connection
+            .hear_peer(
+                window,
+                PeerInterest::WindowManager,
+                EventMask::STRUCTURE_NOTIFY,
+            )
+            .is_some_and(|selected| selected.is_ok_and(|cookie| cookie.check().is_ok()));
+        if heard && still(window) {
+            return true;
+        }
+        self.forget_window_manager(window);
+        false
+    }
+
+    /// Stop hearing `window`, no longer the window manager's: what the
+    /// platform's other features hear there stays selected.
+    fn forget_window_manager(&self, window: xproto::Window) {
+        if let Some(cookie) = self
+            .connection
+            .forget_peer(window, PeerInterest::WindowManager)
+        {
+            let _: Result<(), _> = cookie.map(x11rb::cookie::VoidCookie::ignore_error);
+        }
     }
 
     /// What the window manager supports now. An event that said it may have

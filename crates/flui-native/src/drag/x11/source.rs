@@ -56,9 +56,9 @@ use x11rb::errors::ConnectionError;
 use x11rb::protocol::Event;
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    self, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask,
-    KeyButMask, PropMode, Property, PropertyNotifyEvent, SELECTION_NOTIFY_EVENT,
-    SelectionNotifyEvent, SelectionRequestEvent, WindowClass,
+    self, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, KeyButMask, PropMode, Property,
+    PropertyNotifyEvent, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, SelectionRequestEvent,
+    WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
@@ -66,7 +66,7 @@ use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 use super::model::{self, IncrWrite, IncrWrites, Reply};
 use super::{Atoms, X11Drag};
 use crate::drag::offers::{bytes_of, names_of};
-use crate::owner::linux::x11::WindowRef;
+use crate::owner::linux::x11::{PeerInterest, WindowRef};
 use crate::owner::panic_boundary::contain_owner_callback;
 
 /// How long a target has to finish a drop before the session ends as
@@ -1247,16 +1247,16 @@ impl X11Drag {
         let xcb = self.connection.xcb();
         // Heard before the announcement is written: the requestor's first
         // deletion may follow at once.
-        let heard = if self.connection.is_peers(requestor) {
-            xcb.change_window_attributes(
+        // Selected only on a peer's window, beside what the platform's other
+        // features hear there (`X11Connection::hear_peer`).
+        let heard = self
+            .connection
+            .hear_peer(
                 requestor,
-                &ChangeWindowAttributesAux::new()
-                    .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
+                PeerInterest::Transfer,
+                EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY,
             )
-            .map(drop)
-        } else {
-            Ok(())
-        };
+            .map_or(Ok(()), |selected| selected.map(drop));
         let announced = heard.and_then(|()| {
             xcb.change_property32(
                 PropMode::REPLACE,
@@ -1342,13 +1342,14 @@ impl X11Drag {
     /// Stop hearing `requestor`, another client's window, once no `INCR`
     /// answer is written to it.
     fn forget_requestor(&self, session: &Session, requestor: xproto::Window) {
-        if session.incr.writes_to(requestor) || !self.connection.is_peers(requestor) {
+        if session.incr.writes_to(requestor) {
             return;
         }
-        if let Err(error) = self.connection.xcb().change_window_attributes(
-            requestor,
-            &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
-        ) {
+        // What the platform's other features hear there stays selected.
+        if let Some(Err(error)) = self
+            .connection
+            .forget_peer(requestor, PeerInterest::Transfer)
+        {
             self.report(Report::Failed {
                 what: "cannot stop hearing a drag's INCR requestor",
                 error,
