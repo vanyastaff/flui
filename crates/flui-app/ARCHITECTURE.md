@@ -477,6 +477,27 @@ diverges from a single total FIFO across independent native and owner-local
 ingress: responsiveness has priority, while per-queue FIFO and terminal
 ordering remain explicit and tested.
 
+### A frame route answers what became of its request
+
+A window's handler answers `frame_requested` with a `FrameOutcome`
+(ADR-0254 §4), and a loop that waits on a wake deadline asks again for the
+same due instant only after a frame that ran. Once a window's frame route is
+set the route gives the answer (`WindowRoutes::route_frame_requested` takes
+`FnMut(FrameRequest) -> FrameOutcome`), and every runner's route is
+`dispatch_platform_frame`:
+
+- a frame the owner accepted is `Produced`, whether it ran in the call or
+  joined the owner turn that is running. That turn runs it, and the platform
+  has no later moment to count it, so answering `Declined` would leave work
+  the frame put back at the same instant unasked for;
+- a request the owner refused (the UI runtime was replaced, the presentation
+  is gone or closing, the host is shut) is `Declined`: no frame ran and none
+  will, and `Produced` would have the loop arm the same due instant on every
+  iteration for as long as a deadline nothing serves stays due.
+
+`a_frame_request_is_answered_by_what_became_of_it` holds the mapping, and
+`window_routes_contract` that the window passes the route's answer on.
+
 ### Native execution caps remain presentation-local
 
 ADR-0072 adds a window execution observation to the existing presentation facts.

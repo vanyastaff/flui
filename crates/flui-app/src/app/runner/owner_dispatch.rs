@@ -626,6 +626,38 @@ pub(super) fn dispatch_platform_ui_runtime(
     dispatch_owner_turn(OwnerTurn::Presentation(dispatcher, event))
 }
 
+/// Deliver a window's frame request to the presentation `binding` was
+/// installed for, and answer the platform with what became of it
+/// (ADR-0254 §4): the answer every frame route gives.
+///
+/// A frame the owner accepted answers `Produced`, whether it ran in this call
+/// or joined the turn that is running: that turn runs it, and the platform
+/// has no later moment to count it, so a `Declined` here would leave work the
+/// frame put back at the same instant unasked for. A request the owner
+/// refused answers `Declined`: its runtime or presentation is gone or closing,
+/// so no frame ran and none will, and a platform told otherwise would ask for
+/// the same due instant again on every turn of its loop.
+pub(super) fn dispatch_platform_frame(
+    dispatcher: PresentationDispatcher,
+    binding: super::frame_driver::FrameBinding,
+    request: flui_platform::FrameRequest,
+) -> flui_platform::FrameOutcome {
+    use flui_runtime::owner::Delivery;
+
+    let turn = OwnerTurn::Presentation(dispatcher, RuntimeTask::Frame(binding, request));
+    match dispatch_owner_turn_delivery(turn) {
+        Ok(Delivery::Driven | Delivery::Queued) => flui_platform::FrameOutcome::Produced,
+        Err(refusal) => {
+            tracing::trace!(
+                ?dispatcher,
+                ?refusal,
+                "a frame request reached no presentation"
+            );
+            flui_platform::FrameOutcome::Declined
+        }
+    }
+}
+
 /// Apply the commands application code queued for its windows, when this is the
 /// owner thread and no owner callback is running. Applying one may re-enter the
 /// window procedure, so it never runs inside user code: a call from inside a

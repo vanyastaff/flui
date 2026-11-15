@@ -633,6 +633,7 @@ mod tests {
                     })
                     .unwrap_or(false);
                 saw_marker_window_cb.store(matches_marker, Ordering::SeqCst);
+                flui_platform::FrameOutcome::Produced
             },
         );
 

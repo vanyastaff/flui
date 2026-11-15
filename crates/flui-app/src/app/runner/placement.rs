@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use flui_foundation::PresentationAddress;
-use flui_platform::DisplaySnapshot;
-use flui_platform::WindowOptions;
+use flui_platform::{DisplaySnapshot, Storage, StorageName, WindowOptions, WindowPlacement};
 
 use super::host::{APP_RUNTIME, runtime_storage, with_owner_platform};
 use crate::app::AppConfig;
@@ -17,60 +16,79 @@ use crate::app::placement_recorder::{
     FLUSH_BUDGET, PlacementRecorder, recall, restore_into, settle,
 };
 
+/// What a window that remembers its placement opened with: where the
+/// placement is kept, and the one read there before the window opened.
+///
+/// [`restore`] makes it and [`keep`] takes it, so storage is resolved and
+/// read once for a window, before it opens, and the recorder starts from the
+/// placement the window really opened from.
+pub(super) struct RememberedPlacement {
+    storage: Arc<dyn Storage>,
+    name: StorageName,
+    /// `None` on a first run, and when the stored value could not be used.
+    recalled: Option<WindowPlacement>,
+}
+
 /// Open `options` where `config`'s window was last time, when the
 /// configuration asks to remember placement and the host has storage for it.
+/// Returns what [`keep`] records the window's placement with; `None` for a
+/// window that remembers nothing.
 ///
 /// The fit uses what the platform says of its windows before one exists: the
 /// capabilities (a platform that cannot place a window at open keeps size and
 /// mode only) and the frame a decorated window adds to its content size.
-pub(super) fn restore(options: &mut WindowOptions, config: &AppConfig) {
-    let Some(name) = config.placement else {
-        return;
-    };
+pub(super) fn restore(
+    options: &mut WindowOptions,
+    config: &AppConfig,
+) -> Option<RememberedPlacement> {
+    let name = config.placement?;
     let Some(storage) = runtime_storage() else {
         tracing::warn!(
             storage = name.as_str(),
             "a window asks to remember its placement but the host has no storage; \
-             give the application an identifier or set `with_storage_dir`"
+             give the application an identifier or set `AppConfig::storage_dir`"
         );
-        return;
+        return None;
     };
-    let Some(placement) = recall(&*storage, &name) else {
-        return;
-    };
-    let restored = with_owner_platform(|owner| {
-        let displays = owner.display_snapshot().ok()?;
-        restore_into(
-            options,
-            &placement,
-            &displays,
-            &owner.window_capabilities(),
-            |scale| owner.window_frame_inset(scale),
-        );
-        Some(())
-    });
-    if restored.flatten().is_none() {
-        tracing::debug!(
-            storage = name.as_str(),
-            "no platform or displays to fit the stored window placement to"
-        );
+    let recalled = recall(&*storage, &name);
+    if let Some(placement) = &recalled {
+        let restored = with_owner_platform(|owner| {
+            let displays = owner.display_snapshot().ok()?;
+            restore_into(
+                options,
+                placement,
+                &displays,
+                &owner.window_capabilities(),
+                |scale| owner.window_frame_inset(scale),
+            );
+            Some(())
+        });
+        if restored.flatten().is_none() {
+            tracing::debug!(
+                storage = name.as_str(),
+                "no platform or displays to fit the stored window placement to"
+            );
+        }
     }
+    Some(RememberedPlacement {
+        storage,
+        name,
+        recalled,
+    })
 }
 
-/// Start recording the placement of the window presented at `address`, if its
-/// configuration asks for it.
-pub(super) fn keep(config: &AppConfig, address: PresentationAddress) {
-    let Some(name) = config.placement else {
-        return;
-    };
-    let Some(storage) = runtime_storage() else {
-        return;
-    };
+/// Start recording the placement of the window presented at `address`, which
+/// opened with `remembered`.
+pub(super) fn keep(remembered: RememberedPlacement, address: PresentationAddress) {
+    let RememberedPlacement {
+        storage,
+        name,
+        recalled,
+    } = remembered;
     let Some(handle) = APP_RUNTIME.with(|slot| slot.borrow().window_commands.handle_for(address))
     else {
         return;
     };
-    let recalled = recall(&*storage, &name);
     // Storage answers on its own thread: wake the owner, which takes the answer
     // at its next turn.
     let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {

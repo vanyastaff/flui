@@ -13,9 +13,10 @@ use super::frame_pacing::{
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
-    PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_ui_runtime,
-    install_input_wiring, prepare_ui_runtime_alongside,
+    PresentationDispatcher, close_this_window, dispatch_platform_frame, install_input_wiring,
+    prepare_ui_runtime_alongside,
 };
+use super::placement::RememberedPlacement;
 use super::raster_host::RasterSlot;
 use crate::app::AppConfig;
 
@@ -53,20 +54,29 @@ impl Drop for InstallRollback {
 /// and a content-bearing secondary window — ask for it. `run_direct` and the
 /// bare `open_secondary_window` convert `AppConfig` directly and reveal at
 /// open, because nothing in them would ever perform the reveal.
-pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
+///
+/// A window that remembers its placement opens where it was: the second
+/// value is what it opened with, which [`install_desktop_window`] takes to
+/// record the placement from then on.
+pub(super) fn rendered_window_options(
+    config: &AppConfig,
+) -> (flui_platform::WindowOptions, Option<RememberedPlacement>) {
     let mut options = flui_platform::WindowOptions::from(config)
         .reveal(flui_platform::WindowReveal::AfterFirstFrame);
     // Read before the window opens, so its first reveal is already in place.
-    super::placement::restore(&mut options, config);
-    options
+    let remembered = super::placement::restore(&mut options, config);
+    (options, remembered)
 }
 
+/// Install `root` in `host`, a window opened with
+/// [`rendered_window_options`], whose `remembered` placement it is given.
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
     worker_reload: WorkerReload,
     host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
+    remembered: Option<RememberedPlacement>,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
     V: View + Clone + 'static,
@@ -252,7 +262,7 @@ where
         })?;
     let binding = frame.binding;
     super::window_routes::WindowRoutes::of(&*window).route_frame_requested(move |request| {
-        let _ = dispatch_platform_ui_runtime(owner_dispatch, RuntimeTask::Frame(binding, request));
+        dispatch_platform_frame(owner_dispatch, binding, request)
     });
 
     // 8. Lifecycle callbacks
@@ -287,7 +297,9 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
-    super::placement::keep(config, owner_dispatch.address);
+    if let Some(remembered) = remembered {
+        super::placement::keep(remembered, owner_dispatch.address);
+    }
     installation.on_close(move || {
         tracing::info!("Window closed");
         super::placement::finish(owner_dispatch.address);

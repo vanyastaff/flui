@@ -270,11 +270,8 @@ where
             // them waiting.
             super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
             super::owner_dispatch::with_owner_callback(|_| {
-                let _ = dispatch_platform_ui_runtime(
-                    owner_dispatch,
-                    RuntimeTask::Frame(binding, request),
-                );
-            });
+                super::owner_dispatch::dispatch_platform_frame(owner_dispatch, binding, request)
+            })
         });
 
         // 8. Lifecycle callbacks

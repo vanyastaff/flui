@@ -893,7 +893,6 @@ where
     V: View + Clone + 'static,
 {
     use flui_native::WindowOpen;
-    use flui_platform::WindowOptions;
     warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
@@ -912,7 +911,7 @@ where
     let reservation = reserve_window()?;
     // Deferred reveal: the content install below goes through
     // `install_desktop_window`, which performs the reveal.
-    let options: WindowOptions = super::desktop::rendered_window_options(&config);
+    let (options, remembered) = super::desktop::rendered_window_options(&config);
     let routes = super::window_routes::WindowRoutes::new();
     let open = with_owner_platform(|owner| owner.open_window(options, routes.clone()))
         .ok_or(AppWindowError::NoOwnerLoop)?
@@ -953,6 +952,7 @@ where
                             reload,
                             Rc::clone(&window),
                             host,
+                            remembered,
                         )
                         .map(|rendered| rendered.installation)
                     })),

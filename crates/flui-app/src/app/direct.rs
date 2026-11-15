@@ -48,7 +48,7 @@ use std::sync::Arc;
 
 use flui_engine::{EngineError, Recoverability, Renderer};
 use flui_layer::{Scene, SceneBuilder};
-use flui_platform::{DispatchEventResult, PlatformInput, WindowOptions};
+use flui_platform::{DispatchEventResult, FrameOutcome, PlatformInput, WindowOptions};
 use parking_lot::Mutex;
 
 use super::AppConfig;
@@ -187,8 +187,9 @@ pub fn run_direct(
             let mut r = renderer_frame.lock();
             let (w, h) = r.size();
 
+            // A surface with no area has nothing to draw into: no frame ran.
             if w == 0 || h == 0 {
-                return;
+                return FrameOutcome::Declined;
             }
 
             // Mark full repaint every frame in direct mode (no damage tracking)
@@ -239,6 +240,7 @@ pub fn run_direct(
                     }
                 }
             }
+            FrameOutcome::Produced
         });
 
         // 5. Follow the window's snapshot: a change of its drawable metrics

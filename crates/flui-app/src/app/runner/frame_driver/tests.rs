@@ -14,7 +14,7 @@ use flui_runtime::{sink::SubmitVerdict, testing::ScriptedSink, ui_runtime::UiRun
 
 use super::super::host::OwnerHostClearGuard;
 use super::super::owner_dispatch::{
-    DispatchError, PresentationDispatcher, RuntimeTask, close_this_window,
+    DispatchError, PresentationDispatcher, RuntimeTask, close_this_window, dispatch_platform_frame,
     dispatch_platform_ui_runtime, prepare_replacement_ui_runtime, teardown_platform_ui_runtime,
 };
 use super::super::window_install::WindowInstall;
@@ -203,6 +203,81 @@ fn an_old_frame_binding_never_reaches_a_new_runtime() {
         new_scenes.load(Ordering::SeqCst),
         1,
         "new binding delivered its own scene"
+    );
+    teardown_platform_ui_runtime();
+}
+
+/// What a window's frame route answers the platform: `Produced` for a frame
+/// the owner ran, or took into the turn that is running, and `Declined` for a
+/// request whose runtime or presentation is gone. The platform asks again for
+/// work due at one instant after a frame that ran, so a refused request
+/// answered `Produced` would have it ask on every turn of its loop.
+fn a_frame_request_is_answered_by_what_became_of_it() {
+    use flui_platform::FrameOutcome;
+
+    let _clear = OwnerHostClearGuard::arm();
+    let replaced = prepared_runtime();
+    let replaced_dispatcher = replaced.dispatcher();
+    let replaced_frame = installed_driver(replaced, counting_sink(Arc::default()), None);
+    let installation = prepared_runtime();
+    let dispatcher = installation.dispatcher();
+    let scenes = Arc::new(AtomicUsize::new(0));
+    let frame = installed_driver(installation, counting_sink(Arc::clone(&scenes)), None);
+
+    // (case, dispatcher, binding, answer)
+    let rows = [
+        (
+            "a runtime that was replaced",
+            replaced_dispatcher,
+            replaced_frame.binding,
+            FrameOutcome::Declined,
+        ),
+        (
+            "a binding of another presentation",
+            dispatcher,
+            replaced_frame.binding,
+            FrameOutcome::Declined,
+        ),
+        (
+            "the installed presentation",
+            dispatcher,
+            frame.binding,
+            FrameOutcome::Produced,
+        ),
+    ];
+    for (case, dispatcher, binding, answer) in rows {
+        assert_eq!(
+            dispatch_platform_frame(dispatcher, binding, flui_native::frame_request_now()),
+            answer,
+            "{case}"
+        );
+    }
+    assert_eq!(
+        scenes.load(Ordering::SeqCst),
+        1,
+        "only the installed presentation ran a frame"
+    );
+
+    // Asked from inside the owner turn that is running, the frame joins that
+    // turn: the owner accepted it, so it counts.
+    let nested = Rc::new(std::cell::Cell::new(None));
+    let answered = Rc::clone(&nested);
+    let binding = frame.binding;
+    dispatch_platform_ui_runtime(
+        dispatcher,
+        RuntimeTask::TestCallback(Box::new(move |_| {
+            answered.set(Some(dispatch_platform_frame(
+                dispatcher,
+                binding,
+                flui_native::frame_request_now(),
+            )));
+        })),
+    )
+    .expect("the outer turn");
+    assert_eq!(
+        nested.get(),
+        Some(FrameOutcome::Produced),
+        "a frame queued behind the running turn"
     );
     teardown_platform_ui_runtime();
 }
@@ -944,6 +1019,10 @@ fn installed_frame_driver_contract() {
             (
                 "an_old_frame_binding_never_reaches_a_new_runtime",
                 an_old_frame_binding_never_reaches_a_new_runtime as fn(),
+            ),
+            (
+                "a_frame_request_is_answered_by_what_became_of_it",
+                a_frame_request_is_answered_by_what_became_of_it as fn(),
             ),
             (
                 "close_refuses_async_publication_without_cancelling_the_accepted_frame",

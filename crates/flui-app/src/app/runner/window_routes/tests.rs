@@ -54,7 +54,8 @@ fn the_input_route_hears_everything_before_it_in_order() {
 
 /// A state change, a frame request and a surface change that arrive before
 /// their route are kept, the newest of each, and handed over when it is set;
-/// the frame request was declined when it arrived.
+/// the frame request was declined when it arrived, and one that arrives
+/// after the route is answered by the route.
 fn state_frame_and_surface_wait_for_their_routes() {
     let routes = WindowRoutes::new();
     routes.state_changed();
@@ -74,16 +75,31 @@ fn state_frame_and_surface_wait_for_their_routes() {
 
     let frames = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&frames);
-    routes.route_frame_requested(move |request| log.borrow_mut().push(request.vsync));
+    let answer = Rc::new(Cell::new(FrameOutcome::Produced));
+    let answering = Rc::clone(&answer);
+    routes.route_frame_requested(move |request| {
+        log.borrow_mut().push(request.vsync);
+        answering.get()
+    });
     assert_eq!(
         *frames.borrow(),
         [EventTime::from_nanos(2)],
         "the newest request"
     );
-    assert_eq!(
-        routes.frame_requested(FrameRequest::new(EventTime::from_nanos(3))),
-        FrameOutcome::Produced
-    );
+    // A routed request is answered by its route: a route that ran no frame
+    // says so, and the window does not answer `Produced` in its place.
+    for outcome in [
+        FrameOutcome::Produced,
+        FrameOutcome::Declined,
+        FrameOutcome::Failed,
+    ] {
+        answer.set(outcome);
+        assert_eq!(
+            routes.frame_requested(FrameRequest::new(EventTime::from_nanos(3))),
+            outcome,
+            "the route's answer is the window's"
+        );
+    }
 
     let surfaces = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&surfaces);
