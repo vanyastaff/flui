@@ -128,6 +128,30 @@ fn publish(
     }
 }
 
+/// Accept the portal's text scale. A factor outside what a snapshot admits
+/// is not an observation, and is reported once the observation is unlocked:
+/// a `tracing` subscriber is the application's code, which may sample the
+/// preferences as it hears the report.
+fn accept_text_scale(observation: &Mutex<Observation>, signal: &Weak<OwnerSignal>, scale: f64) {
+    let mut refusal = None;
+    publish(observation, signal, |observation| {
+        match observation.accepted.clone().with_text_scale(scale) {
+            Ok(accepted) if accepted != observation.accepted => {
+                observation.accepted = accepted;
+                true
+            }
+            Ok(_) => false,
+            Err(error) => {
+                refusal = Some(error);
+                false
+            }
+        }
+    });
+    if let Some(error) = refusal {
+        tracing::warn!(scale, %error, "portal text-scaling-factor refused");
+    }
+}
+
 async fn observe(
     observation: Arc<Mutex<Observation>>,
     signal: Weak<OwnerSignal>,
@@ -238,20 +262,7 @@ async fn refresh(
     }
     let text_scale = read_text_scale(proxy).await;
     if let Ok(Some(scale)) = text_scale {
-        publish(observation, signal, |observation| {
-            // A factor outside what a snapshot admits is not an observation.
-            match observation.accepted.clone().with_text_scale(scale) {
-                Ok(accepted) if accepted != observation.accepted => {
-                    observation.accepted = accepted;
-                    true
-                }
-                Ok(_) => false,
-                Err(error) => {
-                    tracing::warn!(scale, %error, "portal text-scaling-factor refused");
-                    false
-                }
-            }
-        });
+        accept_text_scale(observation, signal, scale);
     }
     let clock = read_clock_format(proxy).await;
     if let Ok(Some(hour_cycle)) = clock {
@@ -368,5 +379,65 @@ async fn read(proxy: &Proxy<'_>, namespace: &str, key: &str) -> zbus::Result<Own
             }
         }
         result => result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// Counts the diagnostics emitted, and those emitted while the
+    /// observation was locked: a subscriber that sampled the preferences then
+    /// would wait on that lock for good.
+    struct LockedAtDiagnostic {
+        observation: Arc<Mutex<Observation>>,
+        events: Arc<AtomicUsize>,
+        locked: Arc<AtomicUsize>,
+    }
+
+    impl tracing::Subscriber for LockedAtDiagnostic {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {
+            self.events.fetch_add(1, Ordering::SeqCst);
+            if self.observation.try_lock().is_none() {
+                self.locked.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// A text scale the snapshot refuses is reported with the observation
+    /// unlocked, and leaves what was accepted before as it was.
+    #[test]
+    fn a_refused_text_scale_is_reported_with_the_observation_unlocked() {
+        let observation = Arc::new(Mutex::new(Observation {
+            active: true,
+            accepted: SystemPreferences::default(),
+            appearance: WindowAppearance::Light,
+        }));
+        let events = Arc::new(AtomicUsize::new(0));
+        let locked = Arc::new(AtomicUsize::new(0));
+        let subscriber = LockedAtDiagnostic {
+            observation: Arc::clone(&observation),
+            events: Arc::clone(&events),
+            locked: Arc::clone(&locked),
+        };
+        tracing::subscriber::with_default(subscriber, || {
+            accept_text_scale(&observation, &Weak::new(), 1.5);
+            accept_text_scale(&observation, &Weak::new(), f64::NAN);
+        });
+        assert_eq!(events.load(Ordering::SeqCst), 1, "the refusal is reported");
+        assert_eq!(locked.load(Ordering::SeqCst), 0, "reported under the lock");
+        assert_eq!(observation.lock().accepted.text_scale(), Some(1.5));
     }
 }

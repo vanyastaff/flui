@@ -98,13 +98,14 @@ pub(crate) enum Publication {
     Changed,
     /// The window reads as published already, or is gone.
     Unchanged,
-    /// The window holds its publishing back while a change of several steps
-    /// is half made; the host publishes and announces once it ends.
+    /// The window holds its publishing back, and the host publishes and
+    /// announces later: the Win32 window while a change of several steps is
+    /// half made, the X11 window until its loop's one read of the turn.
     #[cfg_attr(
-        not(windows),
+        not(any(windows, x11_host)),
         expect(
             dead_code,
-            reason = "only the Win32 window holds its publishing back (a DPI change)"
+            reason = "only the Win32 and X11 windows hold their publishing back"
         )
     )]
     Held,

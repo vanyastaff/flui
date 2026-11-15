@@ -5525,6 +5525,83 @@ graph LR
   `xtask checks` зелёный; `xtask expectations`: изменение не трогает ни одного ожидания. Не
   запускалось: Linux, wasm32, Android и Apple; правки `window/android.rs` и `window/web.rs`
   впервые собирает CI.
+- [x] **LY105** — ветка `platform/x11-peer-bounds`, PR #2645. Все девять находок подтверждены
+  кодом и исправлены; неверных нет. (1) Оконный менеджер, который убит, не меняет свойств
+  корневого окна: платформа слушает конец окна `_NET_SUPPORTING_WM_CHECK` (`StructureNotify`, как
+  `fetch_net_wm_check_window` в GDK 4.16; Qt 6.8 перечитывает `_NET_SUPPORTED` только по
+  `PropertyNotify` корня и держит список убитого менеджера) и перечитывает поддержку; без
+  менеджера то, что он оставил на окне (`WM_STATE`, `_NET_WM_STATE`, `_NET_FRAME_EXTENTS`),
+  ничего не значит (`WindowManagerSupport::kept`); свёрнутое окно, которое приложение скрыло,
+  читается скрытым. (2) Изменение иерархии читается по флагам (`decode::HierarchyInfo`): сервер
+  присылает удалённое устройство без `use`; `X11Pointers::removed` стал приватным, тесты идут
+  через `hierarchy`. (3) Ход цикла берёт не больше 256 событий (`MAX_TURN_EVENTS`); событие,
+  которое может изменить снимок окна, только помечает окно, и окно читает себя один раз за ход
+  после событий (`LoopWindows::read_stale`), как и поддержка менеджера; подряд идущие движения
+  одного указателя над одним окном — одно событие, ввод доставляет один `Move` с историей (до
+  100 позиций); паника обработчика не бросает остаток событий хода. (4) `XkbMapNotify` помечает
+  keymap, она читается один раз перед следующей клавишей или в конце событий
+  (`LoopInput::settle`). (5) Мониторы и опрашиваемые выходы RandR ограничены (по 64), из режимов
+  остаются те, что ведёт CRTC; смена рабочего стола читает только рабочую область. (6) Ответ на
+  чтение выделения принимается только как байты типа запрошенной формы, иначе запрашивается
+  следующая форма; то же для куска `INCR`. (7) `pump_for` и `run_loop` берут один `X11Loop::turn`.
+  (8) Изменение иерархии не спрашивает сервер об устройствах, которым нет места, и делает не
+  больше 128 запросов. (9) Отказ в масштабе текста сообщается после снятия мьютекса наблюдения.
+  По ходу найдено и исправлено: отчёт о hover читал окно на каждое пересечение границы
+  (издатель окна теперь помечает, `Publication::Held`); команда читает режим, по которому
+  действует, если окно помечено (`mode_now`). Тесты и результат с откатом исправления (WSL
+  Ubuntu 24.04, Xvfb + openbox, 2026-11-15): `a_window_outlives_a_window_manager_that_was_killed`
+  и `what_a_window_manager_wrote_stands_while_it_runs` — `Minimized` вместо `Normal`;
+  `a_minimized_window_that_is_hidden_reads_hidden` — падает 3 из 3;
+  `a_stream_of_events_leaves_the_frames_their_turns` — «0 frames were delivered while 200
+  events streamed», 3 из 3 (откат обеих половин старого цикла: разбор до пустой очереди и чтение
+  на событие); `a_turn_takes_a_bounded_number_of_events` — 10 000 вместо 256;
+  `a_burst_of_state_events_reads_each_window_once` — 8 000 запросов на 1 000 событий вместо 0
+  (и для hover); `a_command_acts_on_the_window_as_it_is_now` — окно остаётся `Minimized`, 3 из 3;
+  `a_pointers_motions_fold_into_the_last`, `a_run_of_motions_is_one_move_through_them`,
+  `a_burst_of_motion_is_one_move_through_it` — 40 `Move` вместо одного;
+  `a_hierarchy_change_is_read_from_its_flags`, `a_removed_master_pointer_ends_its_press`,
+  `a_pen_plugged_back_in_under_its_id_is_a_new_pen`,
+  `a_master_pointer_comes_and_goes_with_the_hierarchy` — удаление мастера не объявлено;
+  `a_hierarchy_change_asks_only_for_what_it_names` — 10 000 запросов вместо 127;
+  `a_burst_of_keymap_changes_reads_the_keymap_once` — 12 запросов там, где должно быть 0;
+  `x11_output_model` (`a_list_without_end_is_read_as_far_as_its_cap`) — 10 000 мониторов вместо
+  64; `a_randr_reconfiguration_on_a_real_server_is_published` — 8 запросов на смену рабочего
+  стола; `an_answer_that_is_not_the_form_asked_for_is_passed_over` — `ABCDEFGH` вместо `plain`;
+  `a_refused_text_scale_is_reported_with_the_observation_unlocked` — сообщение под мьютексом.
+  Проверки: Linux (WSL) — `x11_window` 28 (29 с `native-capture`), `--lib` 740, clippy
+  `-p flui-native --all-targets -D warnings`; Windows — clippy тот же, nextest `-p flui-native`
+  без группы trybuild 643 из 644, `xtask checks` зелёные (`typos` — после замены одного слова в
+  тесте). Не относятся к PR, файлы не тронуты: на Windows падают
+  `an_intent_opens_its_link_or_documents` и trybuild `owner_platform_is_not_send`; на WSL
+  `file_store_interruption_matrix` падал 2 раза из 5 в общем параллельном прогоне и проходит
+  отдельно. Не запускалось: wasm32, Android, Apple; настольный оконный менеджер, кроме openbox;
+  сенсорный экран, планшет и тачпад.
+
+  Ревью (два раунда и Codex): шаг дисплеев, остановившийся на `MAX_STEP_EVENTS`, возвращается за
+  остатком, а не ждёт сокет; всё, что ход запускает для своих событий (в том числе отчёт об
+  ошибке сервера через `tracing`), в одном `FirstPanic`; поддержка менеджера читается там, где её
+  спрашивают; окно проверки, которое корень или своё окно, менеджера не называет
+  (`X11Connection::is_peers`, то же правило у requestor-а `INCR`); менеджер только с ICCCM
+  (владелец `WM_S<n>` без `_NET_SUPPORTING_WM_CHECK`) считается работающим
+  (`WindowManager::Icccm`), его конец и `MANAGER` слышны; команда сообщает обработчику о
+  прочитанном только в конце; пачка движений — один `PointerRun`. Тесты, каждый падает при
+  откате (WSL, Xvfb + openbox): `a_randr_reconfiguration_on_a_real_server_is_published` —
+  «no change was published» через 20 с;
+  `a_failure_while_an_event_is_heard_leaves_the_rest_of_the_turn_heard` — configure за паникой не
+  услышан; `a_handler_in_the_turn_a_window_manager_dies_acts_without_it` — `Native` вместо
+  `Unavailable`; `a_check_window_that_is_no_window_managers_is_refused` — то же для fullscreen;
+  `a_window_manager_without_ewmh_is_followed` — `Unavailable` вместо `Native`;
+  `a_window_minimized_as_it_hears_its_show_stays_minimized` — `Normal` вместо `Minimized`.
+  `x11_window` 32, `--lib` 742 из 743 (нестабильный `file_store_interruption_matrix`).
+  Повторное чтение: команда сверяется с тем, что окно исполняет сейчас (`Superseded` для режима,
+  принятого при умершем менеджере); чтение внутри команды звонит в doorbell цикла; поток дисплеев
+  смотрит на stop между шагами; маска соединения на чужом окне — объединение того, что просили
+  функции (`X11Connection::hear_peer`). Тесты с откатом: тот же
+  `a_handler_in_the_turn_a_window_manager_dies_acts_without_it` — `Some(Ok(()))`;
+  `a_command_that_reads_its_window_anew_asks_for_a_turn` — звонка нет;
+  `a_session_that_never_waits_still_stops` — join ждал 10 с;
+  `features_that_hear_one_peer_window_keep_each_others_events` — маска 0 вместо
+  `STRUCTURE_NOTIFY`. `--lib` 745 из 745.
 - [x] **LY109** — ветка `platform/presentation-colour-boundary` (#2644). Семь находок проверки
   готовых задач; шесть исправлены, одна (п. 7) проверена и оказалась покрытой.
   (1) Отчёт о показе кадра со штампом далеко в будущем (насыщенный rebase, произвольный

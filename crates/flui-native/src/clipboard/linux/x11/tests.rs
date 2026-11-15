@@ -857,3 +857,171 @@ fn an_offer_ends_with_its_thread() {
     assert!(held.upgrade().is_none(), "the turn dropped the closure");
     assert_eq!(asked.get(), 0);
 }
+
+/// What a client that owns `CLIPBOARD` writes for one target it is asked.
+#[derive(Clone)]
+enum Written {
+    /// Bytes, typed as the atom this names.
+    Bytes(&'static str, &'static [u8]),
+    /// 32-bit words, typed as the atom this names.
+    Words(&'static str, &'static [u32]),
+}
+
+/// A client that owns `CLIPBOARD` and answers each target it is asked with
+/// what stands beside it, refusing every other, until it is dropped.
+struct AnsweringOwner {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AnsweringOwner {
+    fn start(answers: &[(&'static str, Written)]) -> Self {
+        use std::sync::atomic::Ordering;
+        use x11rb::wrapper::ConnectionExt as _;
+
+        let owner = silent_owner();
+        let answers: Vec<(xproto::Atom, xproto::Atom, Written)> = answers
+            .iter()
+            .map(|(target, written)| {
+                let (Written::Bytes(kind, _) | Written::Words(kind, _)) = written;
+                (atom(target), atom(kind), written.clone())
+            })
+            .collect();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            while !stopped.load(Ordering::Acquire) {
+                let Some(x11rb::protocol::Event::SelectionRequest(request)) =
+                    owner.poll_for_event().expect("the connection holds")
+                else {
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                };
+                let written = answers
+                    .iter()
+                    .find(|(target, _, _)| *target == request.target);
+                let (requestor, property) = (request.requestor, request.property);
+                let property = match written {
+                    Some((_, kind, Written::Bytes(_, bytes))) => owner
+                        .change_property8(
+                            xproto::PropMode::REPLACE,
+                            requestor,
+                            property,
+                            *kind,
+                            bytes,
+                        )
+                        .map(|_| property),
+                    Some((_, kind, Written::Words(_, words))) => owner
+                        .change_property32(
+                            xproto::PropMode::REPLACE,
+                            requestor,
+                            property,
+                            *kind,
+                            words,
+                        )
+                        .map(|_| property),
+                    None => Ok(x11rb::NONE),
+                }
+                .expect("the request is sent");
+                owner
+                    .send_event(
+                        false,
+                        requestor,
+                        xproto::EventMask::NO_EVENT,
+                        xproto::SelectionNotifyEvent {
+                            response_type: xproto::SELECTION_NOTIFY_EVENT,
+                            sequence: 0,
+                            time: request.time,
+                            requestor,
+                            selection: request.selection,
+                            target: request.target,
+                            property,
+                        },
+                    )
+                    .expect("the request is sent");
+                owner.flush().expect("the request is sent");
+            }
+        });
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for AnsweringOwner {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// An owner answers a form with bytes typed as that form. An answer of
+/// another type or width is not the text asked for, whatever its bytes
+/// decode to: the read passes it over and asks the next form, and reads as
+/// nothing once no form was answered with text.
+#[test]
+fn an_answer_that_is_not_the_form_asked_for_is_passed_over() {
+    use Written::{Bytes, Words};
+
+    const UTF8: &str = "UTF8_STRING";
+    const PLAIN: &str = "text/plain;charset=utf-8";
+    const LATIN1: &str = "STRING";
+    // Words whose bytes read as text in either byte order.
+    const WORDS: &[u32] = &[0x4443_4241, 0x4847_4645];
+    /// A case, what the owner writes for each target, what the read answers.
+    type Row = (
+        &'static str,
+        &'static [(&'static str, Written)],
+        Option<&'static str>,
+    );
+
+    let Some(_server) = server() else {
+        return;
+    };
+    let table: [Row; 5] = [
+        (
+            "the form asked for",
+            &[(UTF8, Bytes(UTF8, b"text"))],
+            Some("text"),
+        ),
+        (
+            "words where bytes were asked for",
+            &[(UTF8, Words(UTF8, WORDS)), (PLAIN, Bytes(PLAIN, b"plain"))],
+            Some("plain"),
+        ),
+        (
+            "a list of atoms",
+            &[
+                (UTF8, Words("ATOM", WORDS)),
+                (LATIN1, Bytes(LATIN1, b"\xe9t\xe9")),
+            ],
+            Some("\u{e9}t\u{e9}"),
+        ),
+        (
+            "bytes typed as another form",
+            &[
+                (UTF8, Bytes(LATIN1, b"\xe9t\xe9")),
+                (PLAIN, Bytes(PLAIN, b"plain")),
+            ],
+            Some("plain"),
+        ),
+        (
+            "no form answered with text",
+            &[
+                (UTF8, Words("ATOM", WORDS)),
+                (PLAIN, Bytes("INTEGER", b"1234")),
+                (LATIN1, Words(LATIN1, WORDS)),
+            ],
+            None,
+        ),
+    ];
+    for (case, written, expected) in table {
+        let _owner = AnsweringOwner::start(written);
+        let answers = Answers::new();
+        let reader = clipboard();
+        assert_eq!(answers.read(&reader).as_deref(), expected, "{case}");
+    }
+}

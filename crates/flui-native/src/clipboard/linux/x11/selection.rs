@@ -589,18 +589,7 @@ impl Selection {
             return Ok(());
         }
         if event.property == NONE {
-            let next = READ_ORDER
-                .iter()
-                .skip_while(|form| **form != reading.form)
-                .nth(1);
-            match next {
-                Some(&form) => {
-                    reading.form = form;
-                    self.convert(connection, window, atoms)?;
-                }
-                None => self.answer(Ok(None)),
-            }
-            return Ok(());
+            return self.ask_next_form(connection, window, atoms);
         }
         let form = reading.form;
         let reply = self.take_property(connection, window, MAX_TEXT)?;
@@ -628,6 +617,12 @@ impl Selection {
             }
             return Ok(());
         }
+        if !is_form(&reply, atoms.form(form)) {
+            // The owner answered, but not with the text asked for: bytes of
+            // another type or width are not that text, whatever they decode
+            // to.
+            return self.ask_next_form(connection, window, atoms);
+        }
         let text = if reply.bytes_after == 0 {
             form.answer(reply.value)
         } else {
@@ -637,12 +632,38 @@ impl Selection {
         Ok(())
     }
 
+    /// The owner did not give the form asked for (it refused, or answered
+    /// with something else): ask for the next of [`READ_ORDER`], or answer
+    /// that the selection holds no text once each was asked.
+    fn ask_next_form(
+        &mut self,
+        connection: &RustConnection,
+        window: xproto::Window,
+        atoms: &Atoms,
+    ) -> Result<(), ReplyOrIdError> {
+        let Some(reading) = &mut self.reading else {
+            return Ok(());
+        };
+        let next = READ_ORDER
+            .iter()
+            .skip_while(|form| **form != reading.form)
+            .nth(1);
+        let Some(&form) = next else {
+            self.answer(Ok(None));
+            return Ok(());
+        };
+        reading.form = form;
+        reading.incremental = None;
+        self.convert(connection, window, atoms)
+    }
+
     /// The owner wrote an `INCR` chunk: read at most what the read has left
     /// of [`MAX_TEXT`], the first chunk kept as it came.
     fn read_chunk(
         &mut self,
         connection: &RustConnection,
         window: xproto::Window,
+        atoms: &Atoms,
     ) -> Result<(), ReplyOrIdError> {
         let Some(received) = self
             .reading
@@ -659,6 +680,12 @@ impl Selection {
         let Some(bytes) = &mut reading.incremental else {
             return Ok(());
         };
+        if !reply.value.is_empty() && !is_form(&reply, atoms.form(reading.form)) {
+            // A chunk that is not the text asked for: the owner's transfer
+            // goes on where no read looks, and the next form is asked.
+            self.destination = (self.destination + 1) % DESTINATIONS;
+            return self.ask_next_form(connection, window, atoms);
+        }
         // A chunk past what the read has left reads as empty with bytes after
         // it, which is not the end of the transfer.
         let admitted = admit_text(bytes.len() + reply.value.len());
@@ -706,6 +733,14 @@ impl Selection {
             self.answer(Err(ClipboardError::Timeout));
         }
     }
+}
+
+/// Whether `reply` holds text in the form whose target is `form`: bytes,
+/// typed as that form, as an owner writes its answer to a conversion (ICCCM
+/// §2.6.2). A property of another type or width (a list of atoms, an image)
+/// is not text in that form, though its bytes would decode as some.
+fn is_form(reply: &GetPropertyReply, form: xproto::Atom) -> bool {
+    reply.format == 8 && reply.type_ == form
 }
 
 /// How a request is answered.
@@ -907,7 +942,7 @@ impl Selections {
                         if event.atom == selection.destination()
                             && event.state == Property::NEW_VALUE
                         {
-                            return selection.read_chunk(connection, window);
+                            return selection.read_chunk(connection, window, atoms);
                         }
                     }
                 }

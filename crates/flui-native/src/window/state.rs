@@ -140,7 +140,7 @@ impl Sample {
     }
 }
 
-/// What a read found for its window to say ([`Sample::noting`]).
+/// What a read found for its window to say (`Sample::noting`).
 pub(crate) struct Note(Box<dyn FnOnce() + Send>);
 
 impl std::fmt::Debug for Note {
@@ -528,6 +528,21 @@ impl WindowStateCell {
         self.invalidate();
         let published = self.noted_read(delivery, sample);
         published.outcome()
+    }
+
+    /// The published snapshot, read again with `sample` when something
+    /// invalidated the cell, announcing nothing: for a host that announces a
+    /// revision itself, later or under its own rule (the X11 window reads
+    /// inside a command and announces at the command's end, or follows a
+    /// marked window once a turn). What the cell has to say goes to
+    /// `delivery` as from every read.
+    #[cfg(x11_host)]
+    pub(crate) fn read_unannounced(
+        &self,
+        delivery: &WindowDelivery,
+        sample: impl FnOnce() -> Sample,
+    ) -> Published {
+        self.noted_read(delivery, sample)
     }
 
     /// The window system reported a change, or a command was just carried
