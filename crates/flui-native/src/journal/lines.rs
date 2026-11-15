@@ -33,8 +33,9 @@ pub struct StreamLine<'a> {
     /// The source the line is of, numbered in the order the capture saw them open.
     pub stream: u32,
     /// Whether it is a header or a row that sets up what later rows are read against: a device
-    /// added or removed, the click thresholds, the preferences, the displays or a window's
-    /// state. A sink keeps these for a reader that joins later.
+    /// added or removed, the click thresholds, the preferences, the displays, a window's
+    /// state or the text store its input method serves.
+    /// A sink keeps these for a reader that joins later.
     pub setup: bool,
     /// The line with its text kept, when it was made.
     pub kept: Option<&'a wire::Line>,
@@ -203,5 +204,6 @@ const fn is_setup(call: Captured<'_>) -> bool {
             | Captured::Preferences(_)
             | Captured::Displays(_)
             | Captured::WindowState(_)
+            | Captured::StoreFocus(_)
     )
 }

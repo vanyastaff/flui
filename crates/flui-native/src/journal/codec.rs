@@ -14,8 +14,9 @@
 //! header, unknown fields skipped and an unknown variant a typed error, never
 //! a skipped row.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::num::{NonZeroU8, NonZeroU64};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,16 +27,17 @@ use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
     ScrollPrecision, ScrollUnit,
 };
+use flui_platform::text_store::TextStore;
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ControlsOffset,
-    DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom, HourCycle,
-    ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
-    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
-    SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
-    TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowMode,
-    WindowState, WindowStateParts,
+    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, CloseDecision, ColorGamut,
+    ControlsOffset, DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom,
+    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
+    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
+    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
+    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -49,8 +51,9 @@ use crate::input::assembly::{
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
-pub use wire::{Backend, FORMAT_VERSION, FailureKind, Stream};
+pub use wire::{Backend, CloseAnswer, CloseCause, FORMAT_VERSION, FailureKind, Stream};
 
+use super::store::{self, RecordedStore, StoreDivergence, StoreFocus, StoreLock};
 use crate::error::PlatformError;
 
 /// Why a native recording could not be read or written.
@@ -60,6 +63,23 @@ pub enum CodecError {
     /// Reading or writing the stream failed.
     #[error("native recording I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    /// Line `line` is longer than [`wire::MAX_LINE_BYTES`]: refused before it
+    /// is parsed.
+    #[error("line {line} of the native recording is longer than {limit} bytes")]
+    LineTooLong {
+        /// The 1-based line, the header being line 1.
+        line: u64,
+        /// The bound.
+        limit: usize,
+    },
+    /// Line `line` is past the [`wire::MAX_ROWS`] rows a recording holds.
+    #[error("line {line} is past the {limit} rows a native recording holds")]
+    TooManyRows {
+        /// The 1-based line.
+        line: u64,
+        /// The bound.
+        limit: usize,
+    },
     /// Line `line` is not a well-formed object.
     #[error("line {line} of the native recording is malformed: {source}")]
     Json {
@@ -307,6 +327,29 @@ pub enum Row {
         /// refuses the row.
         redacted: bool,
     },
+    /// The window was told which text store its input method serves, or
+    /// that it serves none (a `window` stream).
+    StoreFocus(Option<StoreFocus>),
+    /// The window's input method held a lock on a text store and made these
+    /// calls in it (a `window` stream).
+    StoreLock {
+        /// The lock.
+        lock: StoreLock,
+        /// Its text was replaced before writing (ADR-0215 §5): replay
+        /// refuses the row.
+        redacted: bool,
+    },
+    /// The window system asked to close the window, and its handler
+    /// answered (a `window` stream).
+    CloseRequest {
+        /// What the handler answered.
+        answer: CloseAnswer,
+        /// The request waited behind a running method of the handler, or came
+        /// from another thread: the window system was told to keep the window.
+        queued: bool,
+    },
+    /// The window closed (a `window` stream).
+    Closed(CloseCause),
 }
 
 /// What one read of the system preferences returned.
@@ -492,12 +535,18 @@ impl Row {
             Self::Preferences(_) => "preferences",
             Self::Displays { .. } => "displays",
             Self::State { .. } => "state",
+            Self::StoreFocus(_) => "store_focus",
+            Self::StoreLock { .. } => "store_lock",
+            Self::CloseRequest { .. } => "close_request",
+            Self::Closed(_) => "closed",
         }
     }
 }
 
-/// Why a recording could not be replayed: a row the target does not take, or
-/// one whose text was redacted. Replay stops there, never skipping a row.
+/// Why a recording could not be replayed: a row the target does not take,
+/// one whose text was redacted or that holds only part of what happened, or
+/// one the target reproduced otherwise than recorded. Replay stops there,
+/// never skipping a row.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ReplayError {
@@ -518,6 +567,42 @@ pub enum ReplayError {
         /// The row's name in the schema.
         row: &'static str,
     },
+    /// Line `line` holds only part of what happened (a text store lock past
+    /// the journal's bounds, a handler that panicked while it answered).
+    #[error("line {line} is an incomplete `{row}` row, which cannot be replayed")]
+    Incomplete {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+    },
+    /// Line `line` was reproduced otherwise than recorded.
+    #[error("line {line} (`{row}`) replayed otherwise than recorded: {divergence}")]
+    Diverged {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+        /// How.
+        divergence: Divergence,
+    },
+}
+
+/// How a replayed row departed from its recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum Divergence {
+    /// The replaying window's handler decided a close request otherwise.
+    #[error("the close request was answered {replayed:?}, recorded {recorded:?}")]
+    CloseDecision {
+        /// What the recorded handler decided.
+        recorded: CloseDecision,
+        /// What the replaying handler decided.
+        replayed: CloseDecision,
+    },
+    /// A text store lock replayed to another answer.
+    #[error(transparent)]
+    Store(#[from] StoreDivergence),
 }
 
 /// A target's refusal of a kind of row it does not reproduce.
@@ -577,6 +662,36 @@ pub trait ReplayTarget {
         let _ = state;
         Err(Unsupported)
     }
+
+    /// The window was told to serve `focus`'s store, or none: the target
+    /// makes the store it replays that store's locks on, starting with the
+    /// recorded status. A store it was told about earlier stays: a lock
+    /// deferred past a focus change still runs on it.
+    fn store_focus(&mut self, focus: Option<&StoreFocus>) -> Result<(), Unsupported> {
+        let _ = focus;
+        Err(Unsupported)
+    }
+
+    /// The store the target replays `store`'s locks on, which an earlier
+    /// `store_focus` row named; `None` refuses the row.
+    fn text_store(&mut self, store: RecordedStore) -> Option<Rc<dyn TextStore>> {
+        let _ = store;
+        None
+    }
+
+    /// The window system asks to close the window: the target asks its
+    /// window's handler and returns what was decided.
+    fn close_request(&mut self) -> Result<CloseDecision, Unsupported> {
+        Err(Unsupported)
+    }
+
+    /// The window closed: after a close request its handler granted, the
+    /// target's window already has; otherwise the target closes it without
+    /// asking.
+    fn closed(&mut self, cause: CloseCause) -> Result<(), Unsupported> {
+        let _ = cause;
+        Err(Unsupported)
+    }
 }
 
 /// The target [`NativeRecording::replay`] collects a registry's input into.
@@ -599,14 +714,17 @@ pub struct NativeRecording {
 }
 
 impl NativeRecording {
-    /// Read a whole recording.
+    /// Read a whole recording. A recording is untrusted input: a line longer
+    /// than [`wire::MAX_LINE_BYTES`] is refused before it is parsed, a row
+    /// past [`wire::MAX_ROWS`] is refused, and each row's values are checked
+    /// against their ranges before the row is built.
     ///
     /// # Errors
     ///
     /// [`CodecError`] for the first line that cannot be read.
     pub fn read(mut input: impl BufRead) -> Result<Self, CodecError> {
         let mut buffer = String::new();
-        input.read_line(&mut buffer)?;
+        read_bounded_line(&mut input, &mut buffer, 1)?;
         let value: serde_json::Value =
             serde_json::from_str(&buffer).map_err(|source| CodecError::Json {
                 line: 1,
@@ -628,13 +746,18 @@ impl NativeRecording {
         let declared = dto.devices.clone();
         let header = header_from_wire(dto).map_err(|error| error.at(1))?;
         let mut rows = Vec::new();
-        let mut line = 1;
+        let mut line: u64 = 1;
         loop {
-            buffer.clear();
-            if input.read_line(&mut buffer)? == 0 {
+            line += 1;
+            if read_bounded_line(&mut input, &mut buffer, line)? == 0 {
                 break;
             }
-            line += 1;
+            if usize::try_from(line - 1).map_or(true, |rows| rows > wire::MAX_ROWS) {
+                return Err(CodecError::TooManyRows {
+                    line,
+                    limit: wire::MAX_ROWS,
+                });
+            }
             if buffer.trim().is_empty() {
                 continue;
             }
@@ -782,8 +905,25 @@ impl NativeRecording {
                 Row::Notice(notice) => target.notice(*notice).map_err(unsupported)?,
                 Row::SessionEnd(phase) => target.session_end(*phase).map_err(unsupported)?,
                 Row::Reopen => target.reopen().map_err(unsupported)?,
-                Row::Ime { redacted: true, .. } | Row::State { redacted: true, .. } => {
+                Row::Ime { redacted: true, .. }
+                | Row::State { redacted: true, .. }
+                | Row::StoreLock { redacted: true, .. } => {
                     return Err(ReplayError::Redacted {
+                        line,
+                        row: row.name(),
+                    });
+                }
+                Row::StoreLock { lock, .. } if lock.incomplete => {
+                    return Err(ReplayError::Incomplete {
+                        line,
+                        row: row.name(),
+                    });
+                }
+                Row::CloseRequest {
+                    answer: CloseAnswer::Panicked,
+                    ..
+                } => {
+                    return Err(ReplayError::Incomplete {
                         line,
                         row: row.name(),
                     });
@@ -792,6 +932,38 @@ impl NativeRecording {
                 Row::Preferences(read) => target.preferences(read).map_err(unsupported)?,
                 Row::Displays { read, .. } => target.displays(read).map_err(unsupported)?,
                 Row::State { state, .. } => target.window_state(state).map_err(unsupported)?,
+                Row::StoreFocus(focus) => {
+                    target.store_focus(focus.as_ref()).map_err(unsupported)?;
+                }
+                Row::StoreLock { lock, .. } => {
+                    let store = target
+                        .text_store(lock.store)
+                        .ok_or(ReplayError::Unsupported {
+                            line,
+                            row: row.name(),
+                        })?;
+                    lock.replay_on(&*store)
+                        .map_err(|divergence| ReplayError::Diverged {
+                            line,
+                            row: row.name(),
+                            divergence: divergence.into(),
+                        })?;
+                }
+                Row::CloseRequest { answer, .. } => {
+                    let replayed = target.close_request().map_err(unsupported)?;
+                    let recorded = match answer {
+                        CloseAnswer::KeepOpen | CloseAnswer::Closing => CloseDecision::KeepOpen,
+                        _ => CloseDecision::Close,
+                    };
+                    if replayed != recorded {
+                        return Err(ReplayError::Diverged {
+                            line,
+                            row: row.name(),
+                            divergence: Divergence::CloseDecision { recorded, replayed },
+                        });
+                    }
+                }
+                Row::Closed(cause) => target.closed(*cause).map_err(unsupported)?,
             }
             for input in out {
                 target.input(input).map_err(unsupported)?;
@@ -829,7 +1001,11 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::Ime { .. }
         | Row::Preferences(_)
         | Row::Displays { .. }
-        | Row::State { .. } => Vec::new(),
+        | Row::State { .. }
+        | Row::StoreFocus(_)
+        | Row::StoreLock { .. }
+        | Row::CloseRequest { .. }
+        | Row::Closed(_) => Vec::new(),
     };
     readings
         .into_iter()
@@ -839,7 +1015,7 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
 
 /// A conversion failure, before its line is known.
 #[derive(Debug)]
-enum DtoError {
+pub(super) enum DtoError {
     /// The schema has a variant this codec does not read.
     UnknownSpelling(String),
     Invalid(String),
@@ -857,15 +1033,39 @@ impl DtoError {
     }
 }
 
-type DtoResult<T> = Result<T, DtoError>;
+pub(super) type DtoResult<T> = Result<T, DtoError>;
 
-fn invalid(what: impl Into<String>) -> DtoError {
+pub(super) fn invalid(what: impl Into<String>) -> DtoError {
     DtoError::Invalid(what.into())
 }
 
 /// A schema variant this codec does not read, by its spelling.
-fn unread(tag: &str) -> DtoError {
+pub(super) fn unread(tag: &str) -> DtoError {
     DtoError::UnknownSpelling(tag.to_owned())
+}
+
+/// Read line `line` into `buffer`, replacing what it held: how many bytes
+/// were read, zero at the end. A line longer than [`wire::MAX_LINE_BYTES`]
+/// is refused once that many bytes and one more were read, so no longer line
+/// is ever held.
+fn read_bounded_line(
+    input: &mut impl BufRead,
+    buffer: &mut String,
+    line: u64,
+) -> Result<usize, CodecError> {
+    buffer.clear();
+    // The bound, its line ending ("\r\n") and one byte that shows it overran.
+    let most = u64::try_from(wire::MAX_LINE_BYTES)
+        .unwrap_or(u64::MAX)
+        .saturating_add(3);
+    let read = Read::take(&mut *input, most).read_line(buffer)?;
+    if buffer.trim_end_matches(['\n', '\r']).len() > wire::MAX_LINE_BYTES {
+        return Err(CodecError::LineTooLong {
+            line,
+            limit: wire::MAX_LINE_BYTES,
+        });
+    }
+    Ok(read)
 }
 
 /// A parse failure, with serde's unknown-variant refusal typed.
@@ -1537,6 +1737,18 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
             state: window_state_to_wire(state)?,
             redacted: *redacted,
         },
+        Row::StoreFocus(focus) => wire::Row::StoreFocus {
+            focus: focus.as_ref().map(store::focus_to_wire).transpose()?,
+        },
+        Row::StoreLock { lock, redacted } => wire::Row::StoreLock {
+            lock: store::lock_to_wire(lock),
+            redacted: *redacted,
+        },
+        Row::CloseRequest { answer, queued } => wire::Row::CloseRequest {
+            answer: *answer,
+            queued: *queued,
+        },
+        Row::Closed(cause) => wire::Row::Closed { cause: *cause },
     })
 }
 
@@ -1696,6 +1908,15 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             state: window_state_from_wire(state)?,
             redacted,
         },
+        wire::Row::StoreFocus { focus } => {
+            Row::StoreFocus(focus.map(store::focus_from_wire).transpose()?)
+        }
+        wire::Row::StoreLock { lock, redacted } => Row::StoreLock {
+            lock: store::lock_from_wire(lock)?,
+            redacted,
+        },
+        wire::Row::CloseRequest { answer, queued } => Row::CloseRequest { answer, queued },
+        wire::Row::Closed { cause } => Row::Closed(cause),
         _ => return Err(unread("Row")),
     })
 }

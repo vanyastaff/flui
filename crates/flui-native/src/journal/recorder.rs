@@ -13,6 +13,7 @@ use super::codec::{
     Backend, DisplayRead, Header, NativeRecording, PreferenceRead, ReadFailure, RecordedDisplay,
     RecordedWindowState, Row,
 };
+use super::store::StoreLock;
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -21,7 +22,8 @@ use super::codec::{
     reason = "a recorder redacts text or keeps it, the one opt-in"
 )]
 pub enum Privacy {
-    /// Input method text and window titles are replaced, and each row that
+    /// Input method text, the text a text store lock read and wrote, and
+    /// window titles are replaced, and each row that
     /// lost text is marked redacted, which its replay refuses. A display's
     /// name is replaced and its persistent key pseudonymized, which keeps its
     /// row replayable.
@@ -267,6 +269,19 @@ pub(super) fn fold(
                 }
             }
         }
+        Captured::StoreFocus(focus) => Row::StoreFocus(focus),
+        Captured::StoreLock(lock) => match privacy {
+            Privacy::KeepText => Row::StoreLock {
+                lock: lock.clone(),
+                redacted: false,
+            },
+            Privacy::Redact => {
+                let (lock, redacted) = redacted_lock(lock);
+                Row::StoreLock { lock, redacted }
+            }
+        },
+        Captured::CloseRequest { answer, queued } => Row::CloseRequest { answer, queued },
+        Captured::Closed(cause) => Row::Closed(cause),
         Captured::Started { .. } | Captured::Opened(_) => {
             unreachable!("BUG: a source opens once, before its other calls")
         }
@@ -287,6 +302,35 @@ fn redacted(event: &ImeEvent) -> (ImeEvent, bool) {
         ImeEvent::Commit(_) => (ImeEvent::Commit(REDACTED.to_owned()), true),
         other => (other.clone(), false),
     }
+}
+
+/// `lock` with every text it carries (the document it found, the text read
+/// and written) replaced, and whether it carried any.
+fn redacted_lock(lock: &StoreLock) -> (StoreLock, bool) {
+    let mut redacted = lock.opened.is_some();
+    let steps = lock
+        .steps
+        .iter()
+        .map(|step| {
+            let (step, carried) = step.redacted(REDACTED);
+            redacted |= carried;
+            step
+        })
+        .collect();
+    let opened = lock.opened.clone().map(|mut document| {
+        REDACTED.clone_into(&mut document.text);
+        document
+    });
+    (
+        StoreLock {
+            opened,
+            steps,
+            store: lock.store,
+            kind: lock.kind,
+            incomplete: lock.incomplete,
+        },
+        redacted,
+    )
 }
 
 /// The pseudonyms one recording gives the displays' persistent keys: a

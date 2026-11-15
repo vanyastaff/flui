@@ -325,6 +325,11 @@ pub struct WindowDelivery {
     /// The native capture this delivery reports to, in builds that have one.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     journal: crate::journal::capture::Journal,
+    /// The keys the window's journaled text store hosts give the stores they
+    /// are told to serve, one domain for every host handed out for the
+    /// window, so no two stores of its stream share one.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    store_keys: Arc<crate::journal::store_capture::StoreKeys>,
 }
 
 impl WindowDelivery {
@@ -378,7 +383,28 @@ impl WindowDelivery {
             journal: crate::journal::capture::Journal::open_stream(
                 flui_protocol::native_recording::Stream::Window,
             ),
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            store_keys: Arc::default(),
         }
+    }
+
+    /// `host`, journaling into this window's stream what its input method
+    /// does to the stores it serves; `host` itself when no capture was
+    /// installed as the window opened.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(crate) fn journaled_store_host(
+        &self,
+        host: Rc<dyn flui_platform::text_store::TextStoreHost>,
+    ) -> Rc<dyn flui_platform::text_store::TextStoreHost> {
+        crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, &self.store_keys)
+    }
+
+    /// Journal a close request's answer or the close, in the window's turn and
+    /// before the delivery acts on it. A sink that panics ends its capture and
+    /// does not stop the close.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    fn journal_close(&self, call: crate::journal::capture::Captured<'_>) {
+        contain_owner_callback(|| self.journal.record(call));
     }
 
     /// Call `hook` on the owner thread after each run of the window's FIFO,
@@ -735,6 +761,17 @@ impl WindowDelivery {
             .or_resume(()),
             Delivery::Closed => {
                 self.closed.store(true, Ordering::SeqCst);
+                #[cfg(all(debug_assertions, feature = "native-capture"))]
+                {
+                    use flui_protocol::native_recording::CloseCause;
+                    self.journal_close(crate::journal::capture::Captured::Closed(
+                        if self.close_granted.load(Ordering::SeqCst) {
+                            CloseCause::GrantedRequest
+                        } else {
+                            CloseCause::NoRequest
+                        },
+                    ));
+                }
                 call(&self.handler(), |handler| {
                     handler.closed();
                 })
@@ -744,13 +781,31 @@ impl WindowDelivery {
                 if self.close_granted.load(Ordering::SeqCst) {
                     // An earlier request was granted and the window is
                     // closing: there is nothing left to ask.
+                    #[cfg(all(debug_assertions, feature = "native-capture"))]
+                    self.journal_close(crate::journal::capture::Captured::CloseRequest {
+                        answer: flui_protocol::native_recording::CloseAnswer::Closing,
+                        queued: later.is_some(),
+                    });
                     if later.is_none() {
                         *self.close_answer.lock() = Some(CloseDecision::KeepOpen);
                     }
                     return None;
                 }
-                let decision = call(&self.handler(), |handler| handler.close_requested())
-                    .or_resume(CloseDecision::Close);
+                let called = call(&self.handler(), |handler| handler.close_requested());
+                #[cfg(all(debug_assertions, feature = "native-capture"))]
+                {
+                    use flui_protocol::native_recording::CloseAnswer;
+                    self.journal_close(crate::journal::capture::Captured::CloseRequest {
+                        answer: match &called {
+                            Called::Vacant => CloseAnswer::NoHandler,
+                            Called::Returned(CloseDecision::Close) => CloseAnswer::Close,
+                            Called::Returned(CloseDecision::KeepOpen) => CloseAnswer::KeepOpen,
+                            Called::Panicked(_) => CloseAnswer::Panicked,
+                        },
+                        queued: later.is_some(),
+                    });
+                }
+                let decision = called.or_resume(CloseDecision::Close);
                 if decision == CloseDecision::Close {
                     self.close_granted.store(true, Ordering::SeqCst);
                 }

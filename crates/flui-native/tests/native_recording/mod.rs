@@ -851,6 +851,79 @@ fn a_native_recording_outside_its_format_is_refused() {
     ));
 }
 
+/// A recording is untrusted input: a line past the line bound is refused
+/// before it is parsed, a row past the row bound is refused, and a store
+/// lock past its bounds, with an edit under a read lock, an inverted range
+/// or an answer and an error at once is refused naming its line, before any
+/// of its calls is built.
+fn a_native_recording_past_its_bounds_is_refused() {
+    use flui_protocol::native_recording::{
+        MAX_LINE_BYTES, MAX_ROWS, MAX_STORE_STEPS, MAX_STORE_TEXT_BYTES,
+    };
+
+    let window =
+        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+    let long = format!(
+        "{window}\n{{\"row\":\"reopen\",\"pad\":\"{}\"}}\n",
+        "x".repeat(MAX_LINE_BYTES)
+    );
+    assert!(matches!(
+        read_error(&long),
+        CodecError::LineTooLong { line: 2, limit } if limit == MAX_LINE_BYTES
+    ));
+    let many = format!("{window}\n{}", "\n".repeat(MAX_ROWS + 1));
+    assert!(matches!(
+        read_error(&many),
+        CodecError::TooManyRows { line, limit } if limit == MAX_ROWS && line == MAX_ROWS as u64 + 2
+    ));
+    let selection = r#"{"call":"selection","selection":[0,0]}"#;
+    let steps = |count: usize| vec![selection; count].join(",");
+    let text = "x".repeat(MAX_STORE_TEXT_BYTES + 1);
+    for (case, lock) in [
+        (
+            "too many calls",
+            format!(r#"{{"store":1,"kind":"read","steps":[{}]}}"#, steps(MAX_STORE_STEPS + 1)),
+        ),
+        (
+            "too much text",
+            format!(r#"{{"store":1,"kind":"read","opened":{{"text":"{text}","selection":[0,0]}}}}"#),
+        ),
+        (
+            "an edit under a read lock",
+            r#"{"store":1,"kind":"read","steps":[{"call":"set_selection","selection":[0,0]}]}"#
+                .to_owned(),
+        ),
+        (
+            "an inverted range",
+            r#"{"store":1,"kind":"read","steps":[{"call":"text","range":[2,1],"text":""}]}"#
+                .to_owned(),
+        ),
+        (
+            "an answer and an error",
+            r#"{"store":1,"kind":"read","steps":[{"call":"text","range":[0,0],"text":"","error":"protected"}]}"#
+                .to_owned(),
+        ),
+        (
+            "store zero",
+            r#"{"store":0,"kind":"read"}"#.to_owned(),
+        ),
+    ] {
+        let recording = format!("{window}\n{{\"row\":\"store_lock\",\"lock\":{lock}}}\n");
+        assert!(
+            matches!(read_error(&recording), CodecError::Invalid { line: 2, .. }),
+            "{case}"
+        );
+    }
+    let within = format!(
+        "{window}\n{{\"row\":\"store_lock\",\"lock\":{{\"store\":1,\"kind\":\"read\",\"steps\":[{}]}}}}\n",
+        steps(MAX_STORE_STEPS)
+    );
+    assert!(
+        NativeRecording::read(within.as_bytes()).is_ok(),
+        "a lock at its bounds reads"
+    );
+}
+
 #[test]
 fn native_recording_contracts() {
     crate::run_table("native_recording_contracts", &contracts());
@@ -922,6 +995,10 @@ pub(crate) fn contracts() -> Vec<(&'static str, fn())> {
         (
             "a_native_recording_outside_its_format_is_refused",
             a_native_recording_outside_its_format_is_refused,
+        ),
+        (
+            "a_native_recording_past_its_bounds_is_refused",
+            a_native_recording_past_its_bounds_is_refused,
         ),
     ];
     let cases = [cases, families::CASES.to_vec()].concat();

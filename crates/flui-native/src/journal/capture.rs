@@ -31,7 +31,7 @@ use flui_platform::pointer::PointerKind;
 use flui_platform::{
     DisplaySnapshot, ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences, WindowState,
 };
-use flui_protocol::native_recording::Stream;
+use flui_protocol::native_recording::{CloseAnswer, CloseCause, Stream};
 use parking_lot::{Mutex, ReentrantMutex};
 
 use crate::error::PlatformError;
@@ -40,6 +40,7 @@ use crate::input::assembly::{
     NativeDevice, NativeReading, NativeSurface, WheelReading,
 };
 use crate::input::assembly::{TouchpadFrame, ViewportReading};
+use crate::journal::store::{StoreFocus, StoreLock};
 
 /// One registry call, as a native recording holds it.
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +154,22 @@ pub enum Captured<'a> {
     Displays(Result<&'a DisplaySnapshot, &'a PlatformError>),
     /// A window published a snapshot that differs from the one before it.
     WindowState(&'a WindowState),
+    /// The window was told which text store its input method serves, or that
+    /// it serves none.
+    StoreFocus(Option<StoreFocus>),
+    /// The window's input method was granted a lock on a text store, and
+    /// made these calls in it.
+    StoreLock(&'a StoreLock),
+    /// The window system asked to close the window, and its handler answered.
+    CloseRequest {
+        /// What the handler answered.
+        answer: CloseAnswer,
+        /// The request waited behind a running method of the handler, or came
+        /// from another thread: the window system was told to keep the window.
+        queued: bool,
+    },
+    /// The window closed: its handler heard `closed`.
+    Closed(CloseCause),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in
@@ -216,13 +233,22 @@ pub fn capture(sink: impl FnMut(CaptureSource, Captured<'_>) + Send + 'static) -
     CaptureGuard { session }
 }
 
-/// A registry's link to the capture it reports to, if any.
-#[derive(Debug, Default)]
+/// A registry's link to the capture it reports to, if any. A clone reports
+/// to the same source: a window's text store host journals into its
+/// delivery's stream.
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Journal {
     session: Option<(Weak<Session>, CaptureSource)>,
 }
 
 impl Journal {
+    /// Whether a call recorded now would reach a capture.
+    pub(crate) fn is_reporting(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|(session, _)| session.strong_count() > 0)
+    }
+
     /// The journal of a registry created now on `clock`, which it reports
     /// first: numbered within the installed capture, or reporting nowhere
     /// when none is installed or the capture has numbered every source it
