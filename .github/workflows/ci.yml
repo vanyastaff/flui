@@ -1136,7 +1136,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test without debug assertions (flui-app, the agent's launch)
-        run: cargo test --locked -p flui-app --lib agent::
+        run: cargo test --locked -p flui-app --lib "agent::"
 
   # ─────────────────────────────────────────────────────────────────────────
   # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain
