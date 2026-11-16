@@ -372,7 +372,7 @@ GPU-память простаивающего или невидимого окн
 | **LY119** | **Поле говорит ОС действие Enter, капитализацию и исправление; предредактирование сохраняет свой отрезок.** Сейчас `TextStoreStatus` — только `protected`, `single_line` и `purpose` (`crates/flui-platform/src/text_store/session.rs`): нет действия Enter, авто-капитализации, переключателей автоисправления и подсказок, десятичных и знаковых чисел, различия нового и текущего пароля для автозаполнения; хосты угадывают (`enterkeyhint` Web из `purpose` и `single_line`); многострочный статус достижим только правкой `pub`-поля. `project_ime_event` оставляет лишь конец `Preedit::cursor` (`text_store/projection.rs`): целевой отрезок метода ввода теряется, и поле не подчёркивает то, что конвертируется. После: `enter_action`, `capitalization`, `suggestions`, `autofill` и вид числа с builder на каждое поле; проекция несёт целевой диапазон; Web, iOS, Android, IBus и TSF отображают статус из полей, а не из догадки | LY74 | `crates/flui-platform/src/text_store/{session.rs,projection.rs,ime.rs}`, отображения статуса в `crates/flui-native/src/text/*` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck`, `android-dex` | таблица «статус → атрибуты» на каждом хосте (Web `enterkeyhint`, Android `imeOptions`/`inputType`, iOS traits); предредактирование с целевым отрезком доходит до поля диапазоном; каждый падает при откате | L + T; Dev: iOS, Android, Web |
 | **LY120** | **Запрос OS-drag держит свои инварианты типом.** Сейчас `OsDragRequest` (`crates/flui-platform/src/drag.rs`) обещает только в доках, что `allowed` не пуст и представления кончаются тождественным; поля `pub`, конструктора нет, и нарушающий запрос доходит до бэкенда; нативное событие названо переиспользуемым `PointerId`, так что поздно начатый запрос берёт serial следующего касания; картинки и hotspot нет, хотя `IDragSourceHelper`, `NSDraggingItem` и `UIDragPreview` их берут. После: `try_new` с типизированной ошибкой, выданный хостом токен нажатия вместо id, `preview: Option<DragPreview { image, hotspot }>` | — | `crates/flui-platform/src/drag.rs`, владелец drag в `crates/flui-interaction`, источники drag хостов в `crates/flui-native/src/drag/*` | `workspace`, `try-new`, гейт API-замыкания, `public-api`, `cross-typecheck` | таблица `try_new`: пустые действия и представления без тождественного отказывают; запрос со старым токеном нажатия отказывает вместо чужого serial; каждый падает при откате | L + W + T |
 | **LY121** | **Курсор: видимость, захват, относительное движение, картинка; окно: уровень, шаг размера, соотношение сторон; живой resize в снимке.** Сейчас у контракта только `set_cursor(CursorIcon)`: нет скрытия, захвата (confine и lock), относительного движения при захвате, warp и своей картинки с hotspot, которых требуют холст, CAD, 3D и pointer lock Web; Rune и Raven скрывают курсор и ставят свою картинку. Нет уровня окна (поверх всех), шага размера и соотношения сторон, обработчик не знает начала и конца живого resize (AppKit `windowWillStartLiveResize`, Win32 `WM_ENTERSIZEMOVE`). Ни `WindowCommand`, ни `docs/gaps.md` их не называют. После: `SetCursorGrab(CursorGrab::{None, Confined, Locked})` и видимость курсора со слотами возможностей, `PointerEvent::RawMotion` при захвате; захват кончается с потерей фокуса и публикуется в снимке; своя картинка курсора; уровень, шаг и соотношение — команды со слотами; `resizing` — факт снимка, а не новый метод обработчика; запись gaps — до постройки | LY118 | `crates/flui-platform/src/{window_state.rs,window_capabilities.rs,pointer/*}`, хосты `crates/flui-native/src/{window,input}/*`, `docs/gaps.md` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck`, `module-dag` | conformance: захват снимается с потерей фокуса, и снимок это показывает; `resizing` между началом и концом перетаскивания на Win32; команда без возможности отказывает `Unsupported`; каждый падает при откате | L + W + T; Dev: macOS, Linux (Wayland, X11) |
-| **LY122** | **Clipboard Win32 переживает занятый буфер и читает не на потоке владельца.** Сейчас `ClipboardSession::open` (`crates/flui-native/src/clipboard/windows.rs`) зовёт `OpenClipboard` один раз: пока менеджер буфера, `rdpclip.exe` или Office держит его несколько миллисекунд, чтение отвечает `Unavailable`, а запись логируется и теряется — `write_now` возвращает `()`, вызывающий не узнаёт; тестовый помощник того же файла повторяет попытку, production — нет. Предположительно: `read_text` отвечает своему `Resolver` синхронно, и `GetClipboardData` у владельца с отложенной отрисовкой, который завис, вешает поток UI. После: ограниченный повтор открытия; `write_now` возвращает `Result<(), ClipboardError>`, и отказ записи доходит до вызывающего; чтение идёт на потоке `flui-clipboard-owner` и разрешает `Resolver` оттуда | — | `crates/flui-native/src/{clipboard/windows.rs,host/clipboard.rs}` | `workspace`, `globals` | поток держит буфер 20 мс, начатая в это время запись удаётся после закрытия; при подтверждении — владелец с отложенным форматом, не отвечающий `WM_RENDERFORMAT`: `read_text` возвращается сразу; каждый падает при откате | W |
+| **LY122** | **Clipboard Win32 переживает занятый буфер и читает не на потоке владельца.** Сейчас `ClipboardSession::open` (`crates/flui-native/src/clipboard/windows.rs`) зовёт `OpenClipboard` один раз: пока менеджер буфера, `rdpclip.exe` или Office держит его несколько миллисекунд, чтение отвечает `Unavailable`, а запись логируется и теряется — `write_now` возвращает `()`, вызывающий не узнаёт; тестовый помощник того же файла повторяет попытку, production — нет. Предположительно: `read_text` отвечает своему `Resolver` синхронно, и `GetClipboardData` у владельца с отложенной отрисовкой, который завис, вешает поток UI. После: ограниченный повтор открытия; `write_now` возвращает `Result<(), ClipboardError>`, и отказ записи доходит до вызывающего; чтение и запись идут на потоке `flui-clipboard` и разрешают свой `Resolver` оттуда | — | `crates/flui-native/src/{clipboard/windows.rs,host/clipboard.rs}` | `workspace`, `globals` | поток держит буфер 20 мс, начатая в это время запись удаётся после закрытия; при подтверждении — владелец с отложенным форматом, не отвечающий `WM_RENDERFORMAT`: `read_text` возвращается сразу; каждый падает при откате | W |
 | **LY123** | **Отказанный post на Win32 не теряет принятой работы; кадры скрытого окна сливаются.** Сейчас запасной путь через событие ядра есть только у `WAKE` сигнала владельца, а `crates/flui-native/ARCHITECTURE.md` обещает его всей доставке: `DELIVER_QUEUED`, `EXIT_POLICY`, `CLOSE_WINDOW` разрешённого закрытия и `REQUEST_FRAME` при отказе `PostMessageW` (квота очереди) логируются и теряются — доставка с другого потока ждёт в очереди окна, цикл без окон не кончается, разрешённое закрытие оставляет окно открытым, таймеры скрытого окна встают (`window/windows/proc.rs`, `owner/windows/control.rs`). Путь подтверждён, вызывающий отказ — предположительно. Скрытое или свёрнутое окно ставит по `REQUEST_FRAME` на каждый `request_redraw` (`window/windows/window.rs`), не сливая: тысяча пробуждений даёт тысячу кадров и подводит очередь к квоте. После: у каждого post Win32 один путь назад — работа окна идёт через `OwnerSignal::run_for_window` или флаг долга, который выбирает следующий ход владельца; кадр скрытого окна поставлен не больше одного раза до исполнения; `ARCHITECTURE.md` говорит правду | — | `crates/flui-native/src/{window/windows/proc.rs,window/windows/window.rs,owner/windows/control.rs,owner/window_delivery.rs}`, `crates/flui-native/ARCHITECTURE.md` | `module-dag`, `globals`, `panic-boundary` | `failed_native_posts_still_deliver_owner_turns_and_quit` с отказом в пути post окна: доставка с рабочего потока на скрытое окно доходит, закрытие последнего окна кончает цикл; тысяча `request_redraw` на скрытом окне и один ход — один `frame_requested`; каждый падает при откате | W |
 | **LY124** | **Полноэкранный режим решает приложение, и выход из него возвращает прежнее состояние.** Сейчас только хост Windows держит встроенную клавишу F11 (`WindowConfiguration::default`, `crates/flui-native/src/window/config.rs`; тип `pub(crate)`, отключить нельзя): приложение, обработавшее F11 без запрета действия по умолчанию, ещё и переключает режим, а комментарий о «conventional» F11 на всех платформах неверен. Выход по переключателю (F11, `toggle_fullscreen`, `set_fullscreen(false)`) возвращает развёрнутое окно в `Normal`: `NativeMode::Fullscreen` хранит только прямоугольник, тогда как AppKit, Weston, Chromium и winit возвращают развёрнутым. После: клавиши в хосте нет, полноэкранность — `WindowCommand::SetMode`, клавиша — дело фреймворка или приложения; режим помнит, во что вернуться; явный `SetMode(Normal)` по-прежнему кончает в `Normal` | — | `crates/flui-native/src/window/{config.rs,windows/mod.rs,windows/proc.rs,windows/set.rs}`, `crates/flui-native/tests/windows_window_commands.rs` | `module-dag`, `file-length` | F11, на которое обработчик ответил без запрета, не меняет `state().mode`; строка `windows_window_commands`: `SetMode(Maximized)`, дважды `toggle_fullscreen()` — `IsZoomed` и `mode == Maximized`; каждый падает при откате | W |
 | **LY125** | **Windows: модальный цикл не опрашивает, один хук cloak на все окна, слушатель активации может публиковать.** Сейчас `modal_frame_wait_ms(None, _)` отвечает 16 мс (`crates/flui-native/src/owner/modal_pace.rs`): открытое системное меню опрашивает обработчик и все окна 60 раз в секунду, пока открыто. Каждое окно ставит свой процессный out-of-context хук `SetWinEventHook` на cloak (`window/windows/proc.rs`): N окон — N хуков, каждый будит каждое событие cloak любого процесса. Латентно: синхронный слушатель активации, публикующий внутри `request_initial_tree`, снова занимает `RefCell` AccessKit (`accessibility/{bridge.rs,windows.rs}`), паника сдерживается, но мост считает себя неактивным, когда AccessKit активен. После: без срока таймер снят, ход владельца ставит его, когда срок появился; один хук на поток владельца с поиском окна по handle; публикация внутри активации удерживается и отдаётся из `retained()`, доки слушателя запрещают синхронную публикацию | LY123 | `crates/flui-native/src/{owner/modal_pace.rs,owner/windows/modal_loop.rs,owner/windows/control.rs,window/windows/proc.rs,accessibility/bridge.rs,accessibility/windows.rs}` | `module-dag`, `globals`, `panic-boundary` | `modal_frame_wait_ms(None, now)` — «без таймера», ход, поставивший срок в модальном цикле, ставит таймер; два окна — одна установка хука; слушатель, публикующий полное дерево в активации: первый `WM_GETOBJECT` отвечает им, `is_active()` истинно; каждый падает при откате | W |
@@ -6189,6 +6189,104 @@ GPU-память простаивающего или невидимого окн
   `os_extensions`, пример собран и запущен.
   Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
   (`docs/gaps.md`); кнопки примера не нажимались.
+
+- [x] **LY122** — ветка `native/win32-clipboard-contention`. Строимая часть сделана и проверена;
+  должное записано в `docs/gaps.md` и строке паритета «Plain-text clipboard» (перенос чтения с
+  потока владельца на AppKit, UIKit и Android ждёт замера на Mac и устройстве). Строка называет
+  поток `flui-clipboard`, как код: он обслуживает и запись, и чтение.
+  После независимого чтения: всё, что поток исполняет не своё (задание, события `tracing`,
+  доставка ответа, отчёт о панике), сдерживается; ответ хранится отдельно от задания, поэтому
+  запрос, чьё задание упало, получает `Unavailable`, а поток берёт следующий
+  (`a_panicking_subscriber_leaves_the_clipboard_thread_serving`; без сдерживания — ответ
+  `ProviderDropped` и поток мёртв). Отказанная запись не читается обратно: Win32 готовит память
+  всех форматов до `EmptyClipboard` (`a_write_that_cannot_be_made_leaves_the_clipboard_as_it_was`;
+  с очисткой до подготовки — буфер пуст), Wayland без ввода отказывает `Denied`, а не держит
+  текст в процессе, и отказывает скрытой записи, которую подал бы источник без подсказки
+  (`a_write_answers_ok_only_where_the_clipboard_serves_it`), веб держит текст записи только после
+  согласия буфера (`clipboard::page`, `a_refused_write_is_not_read_back`; иначе — читается
+  отказанный текст).
+  Владелец, который не
+  рисует, — `a_read_of_text_never_rendered_in_time_answers_timeout` (30 с Win32). Ответ вырезания
+  — под правилом вставки (`a_cut_answered_after_its_field_left_deletes_nothing`; со старой
+  проверкой — поле без фокуса теряет текст). Тесты Win32 берут замок модуля и возвращают буфер.
+  После повторного чтения: вырезание начинается под тем же правилом, что проверяет его ответ, как
+  вставка (`a_toolbar_cut_at_a_field_without_the_focus_is_refused`; без проверки на старте буфер
+  берёт текст, поле его не теряет), путь вспомогательных технологий фокусирует поле
+  (`assistive_technology_cuts_and_pastes_in_an_unfocused_field`). `Resolver::is_awaited` снят:
+  общее чтение ручки ждёт ответа хоста, поэтому брошенное чтение всё равно выполняется. `Ok`
+  значит «системный буфер взял текст» на каждом хосте; страница без Clipboard API отвечает
+  `ClipboardError::ApplicationOnly` и держит текст для своих чтений, вырезание на нём не удаляет.
+  Wayland забывает последний ввод, когда клавиатура ушла с окна
+  (`the_keyboard_leaving_ends_the_last_input_it_had`): запись после этого — `Denied`; композитор
+  не подтверждает `set_selection`, это названо в контракте. Терпение открытия считается от
+  очереди запроса, время в очереди ограничено `LONGEST_QUEUED`; перезапуски потока считаются
+  (`restarts_are_counted_within_a_window`). Страж тестов не паникует в `Drop` и сохраняет только
+  стандартные форматы без дескрипторов.
+  После третьего чтения (решение координатора): `ApplicationOnly` — один исход на каждом хосте
+  («системный буфер не берёт сейчас, текст сохранён для самого приложения»); вырезание на нём
+  удаляет, вставка возвращает (`a_cut_the_application_alone_keeps_deletes_and_pastes_back`; без
+  правки — вырезание ничего не делает); Wayland без серийного номера снова держит текст без
+  места и отвечает `ApplicationOnly` (`write_effect`, модель `owners`). Двойник буфера кладёт
+  текст при любом ответе `Ok`/`ApplicationOnly` через новый `Script::on_answer` и держит один
+  порядок чтений и записей (`every_ok_answer_to_a_scripted_write_lands_its_text`,
+  `the_scripted_clipboard_keeps_one_order_across_reads_and_writes`; без правки — обе падают);
+  удержание записей — страж. Исключение AppKit (`clearContents` до записи) названо в
+  контракте. Постоянный отказ — `ClipboardError::Gone`; недостижимый цикл перезапуска потока
+  удалён. Cut и Paste доступны только пока поле берёт правку.
+  После четвёртого и пятого чтений (решения координатора; решение четвёртого о «долге» отменено
+  в пятом): запись Wayland без серийного номера ввода в фокусе отвечает `Unavailable` и ничего не
+  хранит — отложенное предложение перезаписало бы копию, сделанную пользователем в другом
+  приложении (`a_write_answers_ok_only_where_the_clipboard_serves_it`); сиденье без устройства
+  данных и композитор без менеджера отвечают `ApplicationOnly` и держат текст до новой записи
+  или первого пришедшего выделения (`kept_text_gives_way_to_a_newer_write_or_a_selection`).
+  Клавиатура, ушедшая с окна, и закрытое окно снимают серийный номер для буфера и первичного
+  выделения, активация как на `main`
+  (`the_keyboard_leaving_ends_the_last_input_for_a_selection_alone`,
+  `a_closed_window_leaves_no_input_behind`). Команда X11 должна ответ до взятия потоком
+  (`a_command_dropped_untaken_answers_gone`); Android без менеджера и первичное выделение после
+  освобождения отвечают `Gone`. `Gone` — единственный ответ
+  «повтор не поможет»: освобождённый Wayland, кончившийся поток X11
+  (`a_clipboard_whose_thread_ended_answers_gone`), UIKit вне главного потока, кончившийся поток
+  Win32 (ответ запроса должен до расчёта, `a_request_dropped_unanswered_answers_gone`). Граница
+  очереди Win32 — состояние запроса (`Waiting`, затем ход с попытками): запрос, чей ход настал,
+  держит терпение (`the_queue_bound_ends_at_a_requests_turn` через `serve`; со старым кодом —
+  `Timeout` через ~100 мс); очередь ограничена и байтами текста
+  (`the_queue_holds_write_text_up_to_its_byte_bound`), текст кодируется прямо в глобальную
+  память (`a_writes_text_is_encoded_straight_into_its_memory`). Двойник: наблюдатели скрипта
+  добавляются, а не заменяют; удержания записей считаются; завершение записи, отвеченной не по
+  порядку, наступает после её текста (`a_tests_observer_and_two_holds_leave_the_clipboard_serving`,
+  `the_scripted_clipboard_keeps_one_order_across_reads_and_writes`).
+  Подтверждено до правки на Windows 11: буфер, который другой поток держит открытым 100 мс, читается
+  как `Unavailable` за 2 мс, а запись теряется молча (после неё буфер держит старый текст); чтение
+  текста, который владелец рисует по запросу (`SetClipboardData(format, NULL)`) с задержкой 3 с,
+  держит читающий поток 3,0 с, а владелец, который не отвечает, — 30,0 с, после чего
+  `GetClipboardData` падает с `ERROR_TIMEOUT`. На этой машине `msrdc.exe` (WSLg) читает каждое
+  изменение буфера, не глядя на маркеры исключения, и держит буфер, пока владелец рисует.
+  Построено (ADR-0337): запись отвечает — `ClipboardWritten`, `ClipboardBackend::write` и
+  `NativeClipboard::write` берут `Resolver`, `ClipboardHandle::write` возвращает `Completion`;
+  отвечают все хосты (X11 — когда владеет выделением, записи, которые новая заменила до владения,
+  получают её ответ; Wayland — `Denied` без ввода, под который ставить выделение; веб — по
+  обещанию браузера; AppKit, UIKit, Android, память, отсутствующий буфер — сразу). Буфер Win32
+  обслуживает свой поток `flui-clipboard` с окном-владельцем: поток владельца только кладёт запрос
+  в канал на `MAX_WAITING`; занятый буфер повторяется по расписанию `clipboard::patience` (4 мс,
+  удвоение до 64 мс, терпение 500 мс от приёма запроса, затем `Unavailable`), между попытками поток
+  ждёт в `MsgWaitForMultipleObjectsEx` и прокачивает сообщения; `ERROR_TIMEOUT` чтения —
+  `Timeout`; паника задания или доставки сдерживается на потоке. Процессная блокировка
+  `clipboard::lock` удалена: сессии открывает один поток. Вырезание в `EditableText` удаляет
+  выделение только после ответа `Ok` и только если поле и текст те же.
+  Тесты, в скобках результат без исправления: `a_write_and_a_read_while_the_clipboard_is_held_for_a_moment_land_once_it_is_let_go`
+  (терпение 0: запись `Err(Unavailable)`), `a_read_of_text_rendered_late_never_holds_the_caller`
+  (вызывающий ждёт чтения: возврат через 1,52 с вместо мгновенного; без повтора — `Unavailable`
+  из-за `msrdc.exe`), `a_clipboard_held_past_the_patience_refuses_the_write`,
+  `a_burst_of_clipboard_writes_is_answered_in_full`, тесты расписания в `clipboard::patience`;
+  `a_clipboard_write_answers_once_it_owns_the_selection` (X11); `a_refused_write_answers_its_refusal`
+  (`flui-testing`); `a_cut_deletes_only_what_the_clipboard_took` (`flui-widgets`).
+  Класс: перетаскивание OLE читает `HGLOBAL` источника с проверкой размера до копии
+  (`drag::windows::read_global`), а `GetData` к другому процессу идёт через модальный цикл COM,
+  который прокачивает сообщения потока; не измерено. AppKit, UIKit и Android читают на потоке
+  владельца — записано в `docs/gaps.md` и в строке паритета.
+  Не запущено и не компилировалось здесь: macOS, iOS, Android, wasm32 (правки
+  `clipboard/apple/{macos,ios}.rs`, `clipboard/android.rs`, `clipboard/web.rs` прочитаны).
 
 - [x] **LY114** — ветка `platform/admission-integrity`, решение — ADR-0341 (заменяет связку токена
   из ADR-0254 §2). Подтверждено на `main` @ `ab45cd94c` тестом через публичный API: три подделки

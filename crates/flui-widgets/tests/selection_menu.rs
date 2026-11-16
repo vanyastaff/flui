@@ -442,6 +442,90 @@ pub(crate) fn the_menu_key_and_assistive_technology_open_the_popup() {
     assert!(scene.field_focus.has_focus(), "the menu focused the field");
 }
 
+/// Assistive technology cuts and pastes in a field that does not hold the
+/// focus: it opens the field's popup, which focuses the field, and clicks
+/// Cut, then Paste. The cut deletes once the clipboard took the text, and
+/// the paste puts it back, both under the one rule their answers re-check.
+///
+/// Red-check: refuse an assistive edit at a field without the focus at its
+/// start (the popup focuses the field first, so both still land).
+pub(crate) fn assistive_technology_cuts_and_pastes_in_an_unfocused_field() {
+    let mut scene = Scene::plain();
+    scene.controller.set_selection(0, 5);
+    let _ = scene.elsewhere.request_focus();
+    scene.settle();
+    assert!(!scene.field_focus.has_focus());
+
+    let assistive_click = |scene: &mut Scene, action: Action, role: Option<(Role, &str)>| {
+        let tree = scene.tree();
+        let target = match role {
+            Some((role, label)) => tree
+                .find_by_role_and_label(role, label)
+                .ok()
+                .map(|node| node.id()),
+            None => tree
+                .nodes()
+                .find(|node| node.role() == Role::TextInput)
+                .map(|node| node.id()),
+        }
+        .expect("the node assistive technology acts on");
+        scene
+            .laid
+            .invoke_semantics_action(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: target,
+                data: None,
+            })
+            .expect("the node takes the action");
+        scene.settle();
+    };
+
+    assistive_click(&mut scene, Action::ShowContextMenu, None);
+    assistive_click(&mut scene, Action::Click, Some((Role::MenuItem, "Cut")));
+    assert_eq!(scene.laid.clipboard().text().as_deref(), Some("alpha"));
+    assert!(
+        !scene.controller.text().starts_with("alpha"),
+        "the cut deleted what the clipboard took"
+    );
+
+    scene.controller.set_caret_byte_offset(0);
+    assistive_click(&mut scene, Action::ShowContextMenu, None);
+    assistive_click(&mut scene, Action::Click, Some((Role::MenuItem, "Paste")));
+    assert_eq!(scene.controller.text(), WORDS, "the paste put it back");
+}
+
+/// A toolbar's Cut clicked after the field lost the focus is refused, as a
+/// paste is: nothing is written and nothing deleted, rather than the
+/// clipboard taking text the cut's answer then never deletes.
+///
+/// Red-check: let the cut start at a field without the focus (the clipboard
+/// takes "beta" and the field keeps it).
+pub(crate) fn a_toolbar_cut_at_a_field_without_the_focus_is_refused() {
+    let mut scene = Scene::plain();
+    scene.long_press(scene.along(width_of("alpha be")));
+    assert_eq!(scene.toolbar(), strings(&EDITING));
+    let cut = scene
+        .tree()
+        .find_by_role_and_label(Role::Button, "Cut")
+        .expect("the toolbar offers Cut")
+        .id();
+    let _ = scene.elsewhere.request_focus();
+    assert!(!scene.field_focus.has_focus());
+    scene
+        .laid
+        .invoke_semantics_action(ActionRequest {
+            action: Action::Click,
+            target_tree: TreeId::ROOT,
+            target_node: cut,
+            data: None,
+        })
+        .expect("the button takes Click");
+    scene.settle();
+    assert_eq!(scene.laid.clipboard().text(), None, "nothing was written");
+    assert_eq!(scene.controller.text(), WORDS, "nothing was deleted");
+}
+
 /// Assistive technology's click on a toolbar button performs it and takes
 /// the toolbar away, as a tap does.
 ///

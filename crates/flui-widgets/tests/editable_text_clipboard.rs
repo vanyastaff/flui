@@ -95,6 +95,137 @@ pub(crate) fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_an
     assert_eq!(controller.text(), "secret", "cut deleted nothing");
 }
 
+/// A cut deletes the selection once the clipboard answers that it took the
+/// text, and a cut whose write the clipboard refuses (another application
+/// held it) keeps the text.
+///
+/// Fails without the change: the cut deleted the selection inside the
+/// chord, whether the clipboard took it or not.
+pub(crate) fn a_cut_deletes_only_what_the_clipboard_took() {
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, _node) = mount_field(&controller, |field| field);
+    let cut = |harness: &crate::common::harness::Harness| {
+        harness
+            .focus_manager()
+            .dispatch_key_event(&chord("x", command()))
+            .is_handled()
+    };
+
+    harness
+        .clipboard()
+        .fail_writes_with(flui_platform::ClipboardError::Unavailable);
+    controller.set_selection(0, 3);
+    assert!(cut(&harness), "cut consumes the chord");
+    harness.tick();
+    assert_eq!(controller.text(), "abc", "a refused cut deletes nothing");
+    assert_eq!(harness.clipboard().text(), None);
+
+    harness.clipboard().stop_failing_writes();
+    assert!(cut(&harness), "cut consumes the chord");
+    assert_eq!(
+        controller.text(),
+        "abc",
+        "the cut waits for the clipboard's answer, which settles at the next owner turn"
+    );
+    harness.tick();
+    assert_eq!(controller.text(), "");
+    assert_eq!(harness.clipboard().text().as_deref(), Some("abc"));
+}
+
+/// A cut whose text only the application can read back (the system
+/// clipboard cannot take it now: a web page without the Clipboard API, a
+/// Wayland write with no input serial) deletes the selection, and a paste in
+/// the application puts it back: nothing is lost (ADR-0337 §1).
+///
+/// Fails without the change: the cut deleted only on `Ok`, so on such a
+/// host Cut consumed the chord and did nothing.
+pub(crate) fn a_cut_the_application_alone_keeps_deletes_and_pastes_back() {
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, _node) = mount_field(&controller, |field| field);
+    harness
+        .clipboard()
+        .fail_writes_with(flui_platform::ClipboardError::ApplicationOnly);
+    controller.set_selection(0, 3);
+    let consumed = harness
+        .focus_manager()
+        .dispatch_key_event(&chord("x", command()))
+        .is_handled();
+    assert!(consumed, "cut consumes the chord");
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "",
+        "the cut deletes what the application kept"
+    );
+    assert_eq!(harness.clipboard().text().as_deref(), Some("abc"));
+
+    let _ = harness
+        .focus_manager()
+        .dispatch_key_event(&chord("v", command()))
+        .is_handled();
+    harness.tick();
+    assert_eq!(controller.text(), "abc", "a paste puts it back");
+}
+
+/// A cut whose answer arrives after its field lost the focus, or was
+/// disposed, deletes nothing: the answer applies under the rule a paste's
+/// does. A field that took the focus back before the answer deletes.
+///
+/// Fails without the change: the answer checked only that the field was
+/// enabled and drove the same controller, so both fields lost their text.
+pub(crate) fn a_cut_answered_after_its_field_left_deletes_nothing() {
+    let cut = |harness: &crate::common::harness::Harness| {
+        harness
+            .focus_manager()
+            .dispatch_key_event(&chord("x", command()))
+            .is_handled()
+    };
+
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, node) = mount_field(&controller, |field| field);
+    let hold = harness.clipboard().hold_writes();
+    controller.set_selection(0, 3);
+    assert!(cut(&harness), "cut consumes the chord");
+    node.unfocus();
+    assert_eq!(hold.held(), 1);
+    drop(hold);
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "abc",
+        "a field that lost the focus keeps its text"
+    );
+
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, _node) = mount_field(&controller, |field| field);
+    let hold = harness.clipboard().hold_writes();
+    controller.set_selection(0, 3);
+    assert!(cut(&harness), "cut consumes the chord");
+    harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
+    assert_eq!(hold.held(), 1);
+    drop(hold);
+    harness.tick();
+    assert_eq!(controller.text(), "abc", "a disposed field keeps its text");
+
+    // Focus lost and taken back before the answer: the field takes an edit
+    // again, with the text and selection the cut wrote, so the cut deletes.
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, node) = mount_field(&controller, |field| field);
+    let hold = harness.clipboard().hold_writes();
+    controller.set_selection(0, 3);
+    assert!(cut(&harness), "cut consumes the chord");
+    node.unfocus();
+    let _ = node.request_focus();
+    assert_eq!(hold.held(), 1);
+    drop(hold);
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "",
+        "a field focused again deletes what it cut"
+    );
+}
+
 pub(crate) fn select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit()
  {
     crate::common::cases::run_cases(

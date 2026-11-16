@@ -103,13 +103,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 ### Clipboard is broken on two environments
 
-> **Environments:** Android, Web; all for rich · **Who it hurts:** Every app with copy and paste · **Parity:** [Clipboard](platform-parity.md#clipboard-and-drag-and-drop)
+> **Environments:** Android, Web; macOS and iOS for an item provided lazily; all for rich · **Who it hurts:** Every app with copy and paste · **Parity:** [Clipboard](platform-parity.md#clipboard-and-drag-and-drop)
 
 - No rich formats: the clipboard reads and writes plain text until a widget needs more, and the shape of that read is reserved by ADR-0312 §7 ([Accepted ADR sections not built yet](#accepted-adr-sections-not-built-yet)).
 - Android reads and writes the system `ClipboardManager` through JNI; type-checked, no device run yet.
 - The native X11 host owns and reads the `CLIPBOARD` selection on a connection of its own, run between two of its clipboards on Xvfb (2026-10-30); what it owns is gone when the application exits, as it hands nothing to a clipboard manager yet.
 - The native Wayland host reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13 (2026-10-30), and its primary selection through `zwp_primary_selection_device_manager_v1`, run between two clients of sway 1.9 (2026-10-30); `EditableText` and `SelectionArea` claim it for their selection and a middle press in a field pastes it, checked on the headless host, not between two applications.
 - The Web reads the system clipboard through `navigator.clipboard` asynchronously, falling back to its own writes where the browser refuses; no browser run yet.
+- AppKit, UIKit and Android read the clipboard on the owner thread: a pasteboard item another application provides only when asked (`NSPasteboardItemDataProvider`, a lazily loaded `NSItemProvider`), or an Android clip whose text `coerceToText` reads from another application's content URI, holds the owner thread while that application answers. Windows reads on a clipboard thread of its own (ADR-0337 §3); these three hosts need the same move, and a run that measures the wait first, which needs a Mac and a device.
 
 ### File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere
 
