@@ -1,4 +1,4 @@
-# ADR-0344: A key-down says its kind, a dead key its accent, and a scroll its direction
+# ADR-0346: A key-down says its kind, a dead key its accent, and a scroll its direction
 
 - **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16

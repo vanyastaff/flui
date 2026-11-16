@@ -6600,7 +6600,7 @@ GPU-память простаивающего или невидимого окн
   `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,
   `tests/wasm32/web_page_lifecycle.rs`.
 
-- [x] **LY117** — ветка `platform/input-vocabulary`, решение — ADR-0344 (заменяет в ADR-0143
+- [x] **LY117** — ветка `platform/input-vocabulary`, решение — ADR-0346 (заменяет в ADR-0143
   §1 приватные `state`/`repeat` события клавиши, в §2 и §3 — `KeyRepeat` и мёртвую клавишу как
   именованную). Состояние клавиши — `KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})` или
   `Up`, поле `KeyEvent::state` открыто; `KeyRepeat`, `KeyRelease`, `repeat()`, `release()`,

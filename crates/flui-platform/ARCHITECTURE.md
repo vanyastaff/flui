@@ -504,7 +504,7 @@ pan/zoom stream whose transform is cumulative since its `Start`; the pen eraser
 is a tool, not a button; a cancelled sequence says why. A key-down says its
 kind in its state (`KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})`),
 so a release carries no repeat, and a dead key is `Key::Dead` with the accent
-it leaves pending, never a named key (ADR-0344). A variant has a producer: a
+it leaves pending, never a named key (ADR-0346). A variant has a producer: a
 pointer revision or a pen squeeze joins the vocabulary with the host that
 reports it (`docs/gaps.md`). A value is checked once, where it is built, so the
 framework never re-checks finiteness downstream.

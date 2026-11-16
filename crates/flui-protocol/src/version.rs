@@ -139,7 +139,7 @@ pub const BREAKING: &[Break] = &[
     },
     Break {
         version: ProtocolVersion::new(0, 16),
-        adr: "ADR-0344",
+        adr: "ADR-0346",
         // A recorded key's state says whether it repeated or has no release, so its `repeat`
         // and `unreleased` flags went; the pointer revision and the pen squeeze, which no host
         // produced, left the input vocabulary; a recorded key may be `dead` and a key state
