@@ -1,4 +1,4 @@
-﻿//! Focus transitions and key delivery through the public focus API: notification
+//! Focus transitions and key delivery through the public focus API: notification
 //! order, refused nested replacement, stale widget nodes, removal of the focused
 //! node, traversal units, the key ledger and input modality.
 
@@ -15,7 +15,7 @@ use flui_interaction::focus::{
 use flui_interaction::ids::FocusNodeId;
 use flui_platform::{
     EventTime,
-    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey},
+    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey},
 };
 
 fn run_rows(rows: &[(&str, fn())]) {
@@ -639,12 +639,12 @@ fn key(state: KeyState, key: Key, code: Code) -> KeyEvent {
     KeyEvent::new(state, key, code, EventTime::from_nanos(0))
 }
 
-fn enter(state: KeyState, repeat: KeyRepeat) -> KeyEvent {
-    key(state, Key::Named(NamedKey::Enter), Code::Enter).with_repeat(repeat)
+fn enter(state: KeyState) -> KeyEvent {
+    key(state, Key::Named(NamedKey::Enter), Code::Enter)
 }
 
-fn tab(repeat: KeyRepeat) -> KeyEvent {
-    key(KeyState::Down, Key::Named(NamedKey::Tab), Code::Tab).with_repeat(repeat)
+fn tab(press: KeyPress) -> KeyEvent {
+    key(KeyState::Down(press), Key::Named(NamedKey::Tab), Code::Tab)
 }
 
 /// Count every key event that reaches `node`'s handler.
@@ -745,23 +745,23 @@ fn key_repeats_follow_their_key_down() {
 
     assert!(
         manager
-            .dispatch_key_event(&enter(KeyState::Down, KeyRepeat::First))
+            .dispatch_key_event(&enter(KeyState::Down(KeyPress::First)))
             .is_handled()
     );
     assert!(nodes[1].has_primary_focus());
     for _ in 0..5 {
-        let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
+        let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::AutoRepeat)));
     }
-    let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Up));
     assert_eq!(
         page.get(),
         0,
         "the held key's repeats and release did nothing"
     );
 
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::First));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::First)));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::AutoRepeat)));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Up));
     assert_eq!(page.get(), 3, "a press on the new focus delivers all of it");
 }
 
@@ -770,7 +770,11 @@ fn record_cancels(node: &Rc<FocusNode>) -> (Rc<RefCell<Vec<Code>>>, FocusNodeReg
     let cancelled = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&cancelled);
     let registration = node.register_on_key_cancel(Rc::new(move |press: &KeyEvent| {
-        assert_eq!(press.state(), KeyState::Down, "told of the key-down");
+        assert_eq!(
+            press.state,
+            KeyState::Down(KeyPress::First),
+            "told of the key-down"
+        );
         seen.borrow_mut().push(press.code);
     }));
     (cancelled, registration)
@@ -788,8 +792,8 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
     let presser = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&presser);
     nodes[0].set_on_key_event(Rc::new(move |event| {
-        seen.borrow_mut().push(event.state());
-        if event.state() == KeyState::Down {
+        seen.borrow_mut().push(event.state);
+        if matches!(event.state, KeyState::Down(_)) {
             KeyEventResult::Handled
         } else {
             KeyEventResult::Ignored
@@ -798,7 +802,7 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
     let releases = Rc::new(Cell::new(0));
     let bound = Rc::clone(&releases);
     root.set_on_key_event(Rc::new(move |event| {
-        if event.state() == KeyState::Up {
+        if event.state == KeyState::Up {
             bound.set(bound.get() + 1);
         }
         KeyEventResult::Ignored
@@ -809,10 +813,10 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
     let since = count_keys(&nodes[1]);
     let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
 
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     assert!(manager.focus_next(), "focus moves to another unit");
     assert!(nodes[1].has_primary_focus());
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down).with_repeat(KeyRepeat::AutoRepeat));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::AutoRepeat)));
     assert!(
         pressed_cancels.borrow().is_empty(),
         "a held key is not cancelled before its release"
@@ -820,7 +824,7 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
     let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
     assert_eq!(
         *presser.borrow(),
-        [KeyState::Down],
+        [KeyState::Down(KeyPress::First)],
         "the press's node hears neither the repeats nor the release"
     );
     assert_eq!(
@@ -844,7 +848,7 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
     // A cancel handler that panics: the rest of the path is still told, and
     // the first panic propagates once.
     let _ = nodes[1].request_focus();
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     let failing = nodes[1].register_on_key_cancel(Rc::new(|_: &KeyEvent| {
         panic!("cancel handler failed");
     }));
@@ -859,10 +863,13 @@ fn a_release_after_focus_moved_only_cancels_its_press() {
         "after the panic the path is still told"
     );
     drop(failing);
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     assert_eq!(
         *presser.borrow(),
-        [KeyState::Down, KeyState::Down],
+        [
+            KeyState::Down(KeyPress::First),
+            KeyState::Down(KeyPress::First)
+        ],
         "the next press is delivered"
     );
 }
@@ -879,9 +886,9 @@ fn a_press_again_without_its_release_cancels_the_first() {
     let second = count_keys(&nodes[1]);
     let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
 
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     assert!(manager.focus_next(), "focus moves to another unit");
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     assert_eq!(
         *first_cancels.borrow(),
         [Code::ArrowDown],
@@ -895,8 +902,8 @@ fn a_press_again_without_its_release_cancels_the_first() {
 
     // Pressed again in the same unit, the next release still reaches the
     // press's path: nothing is cancelled.
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
     assert!(second_cancels.borrow().is_empty());
 }
@@ -916,9 +923,9 @@ fn a_cancellation_that_moves_focus_takes_the_new_press_along() {
     let moved = count_keys(&nodes[2]);
     let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
 
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     let _ = nodes[1].request_focus();
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     assert!(nodes[2].has_primary_focus(), "the cancellation moved focus");
     assert_eq!(
         moved.get(),
@@ -945,9 +952,9 @@ fn a_cancellation_that_forgets_held_keys_keeps_the_new_press() {
     let second = count_keys(&nodes[1]);
     let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
 
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     let _ = nodes[1].request_focus();
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     let _ = manager.dispatch_key_event(&arrow(KeyState::Up));
     assert_eq!(
         second.get(),
@@ -972,12 +979,12 @@ fn a_failing_cancellation_stays_the_first_failure() {
     let second = count_keys(&nodes[1]);
     let arrow = |state| key(state, Key::Named(NamedKey::ArrowDown), Code::ArrowDown);
 
-    let _ = manager.dispatch_key_event(&arrow(KeyState::Down));
+    let _ = manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)));
     let _ = nodes[1].request_focus();
     manager.note_pointer_input();
     let _subscription = nodes[1].subscribe(|| panic!("modality failure"));
     let failure = catch_unwind(AssertUnwindSafe(|| {
-        manager.dispatch_key_event(&arrow(KeyState::Down))
+        manager.dispatch_key_event(&arrow(KeyState::Down(KeyPress::First)))
     }))
     .expect_err("the failures propagate");
     assert_eq!(
@@ -1001,9 +1008,9 @@ fn traversal_hands_repeats_to_the_new_focus() {
             KeyEventResult::Handled
         }));
     let _ = nodes[0].request_focus();
-    let _ = manager.dispatch_key_event(&tab(KeyRepeat::First));
-    let _ = manager.dispatch_key_event(&tab(KeyRepeat::AutoRepeat));
-    let _ = manager.dispatch_key_event(&tab(KeyRepeat::AutoRepeat));
+    let _ = manager.dispatch_key_event(&tab(KeyPress::First));
+    let _ = manager.dispatch_key_event(&tab(KeyPress::AutoRepeat));
+    let _ = manager.dispatch_key_event(&tab(KeyPress::AutoRepeat));
     assert!(nodes[3].has_primary_focus());
 }
 
@@ -1026,14 +1033,14 @@ fn repeats_inside_a_unit_follow_the_unit() {
     }));
     let _ = fixture.rows[0].request_focus();
     let down = key(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::Named(NamedKey::ArrowDown),
         Code::ArrowDown,
     );
     let _ = fixture.manager.dispatch_key_event(&down);
-    let _ = fixture
-        .manager
-        .dispatch_key_event(&down.with_repeat(KeyRepeat::AutoRepeat));
+    let mut repeat = down;
+    repeat.state = KeyState::Down(KeyPress::AutoRepeat);
+    let _ = fixture.manager.dispatch_key_event(&repeat);
     assert_eq!(presses.get(), 2);
     assert!(fixture.rows[2].has_primary_focus());
 }
@@ -1048,8 +1055,8 @@ fn orphan_releases_reach_only_global_handlers() {
         seen.set(seen.get() + 1);
         KeyEventResult::Ignored
     }));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Up));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::AutoRepeat)));
     assert_eq!(node_keys.get(), 0);
     assert_eq!(global.get(), 2);
 }
@@ -1058,12 +1065,15 @@ fn input_method_keys_never_reach_the_walk() {
     let (manager, nodes, _attachments) = manager_with_nodes(1);
     let _ = nodes[0].request_focus();
     let node_keys = count_keys(&nodes[0]);
-    let composing =
-        enter(KeyState::Down, KeyRepeat::First).with_composition(ImeComposition::Active);
+    let composing = enter(KeyState::Down(KeyPress::First)).with_composition(ImeComposition::Active);
     let _ = manager.dispatch_key_event(&composing);
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
-    let process = key(KeyState::Down, Key::Named(NamedKey::Process), Code::KeyA);
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::AutoRepeat)));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Up));
+    let process = key(
+        KeyState::Down(KeyPress::First),
+        Key::Named(NamedKey::Process),
+        Code::KeyA,
+    );
     let _ = manager.dispatch_key_event(&process);
     let _ = manager.dispatch_key_event(&key(KeyState::Up, Key::character("a"), Code::KeyA));
     assert_eq!(node_keys.get(), 0);
@@ -1074,15 +1084,15 @@ fn forgotten_keys_stop_repeating() {
     let _ = nodes[0].request_focus();
     let node_keys = count_keys(&nodes[0]);
     let (cancelled, _registration) = record_cancels(&nodes[0]);
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::First));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::First)));
     manager.forget_pressed_keys();
     assert_eq!(
         *cancelled.borrow(),
         [Code::Enter],
         "the held key's path is told it ended"
     );
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::AutoRepeat)));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Up));
     assert_eq!(node_keys.get(), 1);
     assert_eq!(cancelled.borrow().len(), 1, "once");
 }
@@ -1095,8 +1105,11 @@ fn a_key_down_no_release_follows_is_held_by_nobody() {
     let _ = nodes[0].request_focus();
     let node_keys = count_keys(&nodes[0]);
     let (cancelled, _registration) = record_cancels(&nodes[0]);
-    let stray = key(KeyState::Down, Key::character("Ã©"), Code::Unidentified)
-        .with_release(KeyRelease::Never);
+    let stray = key(
+        KeyState::Down(KeyPress::Unpaired),
+        Key::character("Ã©"),
+        Code::Unidentified,
+    );
     assert!(manager.dispatch_key_event(&stray).is_handled());
     assert_eq!(node_keys.get(), 1, "the character reaches the focus");
     manager.forget_pressed_keys();
@@ -1175,11 +1188,11 @@ fn panicking_handler_keeps_its_keys_record() {
         KeyEventResult::Handled
     }));
     let failed = catch_unwind(AssertUnwindSafe(|| {
-        manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::First))
+        manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::First)))
     }));
     assert!(failed.is_err());
-    let _ = manager.dispatch_key_event(&enter(KeyState::Down, KeyRepeat::AutoRepeat));
-    let _ = manager.dispatch_key_event(&enter(KeyState::Up, KeyRepeat::First));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Down(KeyPress::AutoRepeat)));
+    let _ = manager.dispatch_key_event(&enter(KeyState::Up));
     assert_eq!(calls.get(), 3);
 }
 
@@ -1201,7 +1214,11 @@ fn focus_is_visible_after_keyboard_and_assistive_moves() {
 
     manager.note_pointer_input();
     assert!(!nodes[0].has_visible_focus(), "a pointer press hides it");
-    let alt = key(KeyState::Down, Key::Named(NamedKey::Alt), Code::AltLeft);
+    let alt = key(
+        KeyState::Down(KeyPress::First),
+        Key::Named(NamedKey::Alt),
+        Code::AltLeft,
+    );
     let _ = manager.dispatch_key_event(&alt);
     let _ =
         manager.dispatch_key_event(&key(KeyState::Up, Key::Named(NamedKey::Alt), Code::AltLeft));
@@ -1209,7 +1226,11 @@ fn focus_is_visible_after_keyboard_and_assistive_moves() {
         !nodes[0].has_visible_focus(),
         "a modifier alone does not show it"
     );
-    let _ = manager.dispatch_key_event(&key(KeyState::Down, Key::character("a"), Code::KeyA));
+    let _ = manager.dispatch_key_event(&key(
+        KeyState::Down(KeyPress::First),
+        Key::character("a"),
+        Code::KeyA,
+    ));
     assert!(nodes[0].has_visible_focus(), "any other key-down shows it");
 
     manager.note_pointer_input();

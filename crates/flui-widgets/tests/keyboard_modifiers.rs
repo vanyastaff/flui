@@ -2,7 +2,7 @@
 use flui_interaction::focus::FocusNode;
 use flui_platform::{
     EventTime, PlatformInput,
-    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey},
+    keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
 };
 use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::prelude::*;
@@ -65,7 +65,7 @@ impl Fixture {
         }
     }
 
-    fn dispatch(&self, text: &str, modifiers: Modifiers, state: KeyState, repeat: KeyRepeat) {
+    fn dispatch(&self, text: &str, modifiers: Modifiers, state: KeyState) {
         self.host.dispatch(PlatformInput::Keyboard(
             KeyEvent::new(
                 state,
@@ -73,8 +73,7 @@ impl Fixture {
                 Code::KeyQ,
                 EventTime::from_nanos(1),
             )
-            .with_modifiers(modifiers)
-            .with_repeat(repeat),
+            .with_modifiers(modifiers),
         ));
     }
 }
@@ -94,7 +93,7 @@ pub(crate) fn explicit_altgraph_character_reaches_text_instead_of_a_command() {
         ),
     ] {
         let fixture = Fixture::new(true, SingleActivator::character("@").control());
-        fixture.dispatch("@", modifiers, KeyState::Down, KeyRepeat::First);
+        fixture.dispatch("@", modifiers, KeyState::Down(KeyPress::First));
         let actual = (fixture.controller.text(), fixture.commands.get());
         eprintln!("{name}: text={:?}, commands={}", actual.0, actual.1);
         if actual != ("@".into(), 0) {
@@ -102,10 +101,10 @@ pub(crate) fn explicit_altgraph_character_reaches_text_instead_of_a_command() {
         }
         let field = Fixture::new(true, SingleActivator::character("@").control());
         field.controller.insert_str("seed");
-        field.dispatch("a", modifiers, KeyState::Down, KeyRepeat::First);
+        field.dispatch("a", modifiers, KeyState::Down(KeyPress::First));
         let after_a = field.controller.text();
         let selected = field.controller.has_selection();
-        field.dispatch("z", Modifiers::NONE, KeyState::Down, KeyRepeat::First);
+        field.dispatch("z", Modifiers::NONE, KeyState::Down(KeyPress::First));
         let after_z = field.controller.text();
         eprintln!(
             "default select-all {name}: text={after_a:?}, selected={selected}, next={after_z:?}"
@@ -140,7 +139,7 @@ pub(crate) fn altgraph_preserves_glyph_shortcuts_without_claiming_ctrl_alt_comma
         ),
     ] {
         let fixture = Fixture::new(false, activator);
-        fixture.dispatch("@", modifiers, KeyState::Down, KeyRepeat::First);
+        fixture.dispatch("@", modifiers, KeyState::Down(KeyPress::First));
         eprintln!("{name}: commands={}", fixture.commands.get());
         let expected = usize::from(name == "bare character");
         if fixture.commands.get() != expected {
@@ -159,8 +158,7 @@ pub(crate) fn ctrl_alt_fallback_depends_on_whether_a_text_field_is_focused() {
         fixture.dispatch(
             "s",
             Modifiers::CONTROL | Modifiers::ALT,
-            KeyState::Down,
-            KeyRepeat::First,
+            KeyState::Down(KeyPress::First),
         );
         assert_eq!(fixture.controller.text(), if field { "s" } else { "" });
         assert_eq!(fixture.commands.get(), usize::from(!field));
@@ -192,8 +190,7 @@ pub(crate) fn locks_release_repeat_and_next_operation_preserve_existing_behavior
         fixture.dispatch(
             "S",
             Modifiers::CONTROL | locks,
-            KeyState::Down,
-            KeyRepeat::First,
+            KeyState::Down(KeyPress::First),
         );
         assert_eq!(
             fixture.commands.get(),
@@ -201,17 +198,11 @@ pub(crate) fn locks_release_repeat_and_next_operation_preserve_existing_behavior
             "locks do not defeat the existing command"
         );
         assert_eq!(fixture.controller.text(), "", "command never inserts text");
+        fixture.dispatch("S", Modifiers::CONTROL | locks, KeyState::Up);
         fixture.dispatch(
             "S",
             Modifiers::CONTROL | locks,
-            KeyState::Up,
-            KeyRepeat::AutoRepeat,
-        );
-        fixture.dispatch(
-            "S",
-            Modifiers::CONTROL | locks,
-            KeyState::Down,
-            KeyRepeat::AutoRepeat,
+            KeyState::Down(KeyPress::AutoRepeat),
         );
         assert_eq!(
             fixture.commands.get(),
@@ -221,27 +212,19 @@ pub(crate) fn locks_release_repeat_and_next_operation_preserve_existing_behavior
         fixture.dispatch(
             "q",
             Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::ALT | locks,
-            KeyState::Down,
-            KeyRepeat::First,
+            KeyState::Down(KeyPress::First),
         );
         fixture.dispatch(
             "q",
             Modifiers::ALT_GRAPH | Modifiers::CONTROL | Modifiers::ALT | locks,
-            KeyState::Down,
-            KeyRepeat::AutoRepeat,
+            KeyState::Down(KeyPress::AutoRepeat),
         );
-        fixture.dispatch(
-            "q",
-            Modifiers::ALT_GRAPH | locks,
-            KeyState::Up,
-            KeyRepeat::First,
-        );
-        fixture.dispatch("z", locks, KeyState::Down, KeyRepeat::First);
+        fixture.dispatch("q", Modifiers::ALT_GRAPH | locks, KeyState::Up);
+        fixture.dispatch("z", locks, KeyState::Down(KeyPress::First));
         fixture.dispatch(
             "S",
             Modifiers::CONTROL | locks,
-            KeyState::Down,
-            KeyRepeat::First,
+            KeyState::Down(KeyPress::First),
         );
         assert_eq!(
             fixture.controller.text(),
@@ -288,7 +271,7 @@ pub(crate) fn lock_states_do_not_disable_slider_navigation() {
         );
         proposals.borrow_mut().clear();
         let event = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::Named(NamedKey::ArrowRight),
             Code::ArrowRight,
             EventTime::from_nanos(1),
@@ -313,7 +296,7 @@ pub(crate) fn a_composing_key_does_not_fire_shortcuts() {
         let fixture = Fixture::new(field, SingleActivator::character("s").control());
         fixture.host.dispatch(PlatformInput::Keyboard(
             KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 Key::character("s"),
                 Code::KeyS,
                 EventTime::from_nanos(1),
@@ -329,7 +312,7 @@ pub(crate) fn a_composing_key_does_not_fire_shortcuts() {
             failures.push((field, fixture.commands.get()));
         }
         let before = fixture.commands.get();
-        fixture.dispatch("s", Modifiers::CONTROL, KeyState::Down, KeyRepeat::First);
+        fixture.dispatch("s", Modifiers::CONTROL, KeyState::Down(KeyPress::First));
         assert_eq!(
             fixture.commands.get(),
             before + 1,
@@ -354,7 +337,7 @@ pub(crate) fn a_composing_key_does_not_fire_shortcuts() {
         assert!(node.has_primary_focus());
         host.dispatch(PlatformInput::Keyboard(
             KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 key.clone(),
                 Code::Unidentified,
                 EventTime::from_nanos(1),
@@ -371,7 +354,7 @@ pub(crate) fn a_composing_key_does_not_fire_shortcuts() {
         }
         let before = controller.text();
         host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("z"),
             Code::KeyZ,
             EventTime::from_nanos(2),
@@ -450,7 +433,7 @@ pub(crate) fn both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs() {
             ),
         ] {
             let fixture = Fixture::with_boundary(field, activator, callback);
-            fixture.dispatch("का", modifiers, KeyState::Down, KeyRepeat::First);
+            fixture.dispatch("का", modifiers, KeyState::Down(KeyPress::First));
             assert_eq!(
                 fixture.commands.get(),
                 commands,
@@ -465,7 +448,7 @@ pub(crate) fn both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs() {
         let fixture =
             Fixture::with_boundary(false, SingleActivator::character("s").control(), callback);
         let composing = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("s"),
             Code::KeyS,
             EventTime::from_nanos(1),
@@ -481,8 +464,7 @@ pub(crate) fn both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs() {
         fixture.dispatch(
             "S",
             Modifiers::CONTROL | Modifiers::CAPS_LOCK,
-            KeyState::Down,
-            KeyRepeat::First,
+            KeyState::Down(KeyPress::First),
         );
         assert_eq!(
             fixture.commands.get(),
@@ -494,15 +476,15 @@ pub(crate) fn both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs() {
             SingleActivator::character("का").allow_repeats(false),
             callback,
         );
-        fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::First);
-        fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::AutoRepeat);
-        fixture.dispatch("का", aliases, KeyState::Up, KeyRepeat::First);
+        fixture.dispatch("का", aliases, KeyState::Down(KeyPress::First));
+        fixture.dispatch("का", aliases, KeyState::Down(KeyPress::AutoRepeat));
+        fixture.dispatch("का", aliases, KeyState::Up);
         assert_eq!(
             fixture.commands.get(),
             1,
             "excluded repeat and Up, callback={callback}"
         );
-        fixture.dispatch("का", aliases, KeyState::Down, KeyRepeat::First);
+        fixture.dispatch("का", aliases, KeyState::Down(KeyPress::First));
         assert_eq!(
             fixture.commands.get(),
             2,
@@ -555,7 +537,7 @@ pub(crate) fn altgraph_word_aliases_preserve_character_movement() {
         fixture.controller.set_caret_byte_offset(6);
         fixture.host.dispatch(PlatformInput::Keyboard(
             KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 Key::Named(key),
                 Code::Unidentified,
                 EventTime::from_nanos(1),
@@ -599,7 +581,7 @@ pub(crate) fn source_composition_preserves_editing_and_submit() {
         let _ = node.request_focus();
         let manager = harness.focus_manager();
         let event = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             key.clone(),
             Code::Unidentified,
             EventTime::from_nanos(1),
@@ -615,7 +597,7 @@ pub(crate) fn source_composition_preserves_editing_and_submit() {
         assert!(
             manager
                 .dispatch_key_event(&KeyEvent::new(
-                    KeyState::Down,
+                    KeyState::Down(KeyPress::First),
                     Key::character("z"),
                     Code::KeyZ,
                     EventTime::from_nanos(2)
@@ -638,7 +620,7 @@ pub(crate) fn source_composition_preserves_editing_and_submit() {
     });
     assert_eq!(controller.composing_range(), Some(0..2));
     let event = KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::character("x"),
         Code::KeyX,
         EventTime::from_nanos(1),
@@ -696,7 +678,7 @@ pub(crate) fn source_composition_leaves_traversal_and_activation_unclaimed() {
         let _ = left.request_focus();
         let manager = harness.focus_manager();
         let event = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             key.clone(),
             Code::Unidentified,
             EventTime::from_nanos(1),
@@ -799,7 +781,7 @@ pub(crate) fn slider_glyph_and_composition_policy() {
         proposals.borrow_mut().clear();
         let manager = laid.focus_manager();
         let event = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             key.clone(),
             Code::Unidentified,
             EventTime::from_nanos(1),
@@ -828,7 +810,7 @@ pub(crate) fn slider_glyph_and_composition_policy() {
         assert!(
             manager
                 .dispatch_key_event(&KeyEvent::new(
-                    KeyState::Down,
+                    KeyState::Down(KeyPress::First),
                     Key::Named(NamedKey::ArrowRight),
                     Code::ArrowRight,
                     EventTime::from_nanos(3)

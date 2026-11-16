@@ -757,7 +757,7 @@ mod input {
         shift: bool,
         uptime_ms: i64,
     ) -> [flui_platform::PlatformInput; 2] {
-        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers};
+        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers};
         let time = flui_platform::EventTime::from_nanos(
             u64::try_from(uptime_ms)
                 .unwrap_or(0)
@@ -768,7 +768,7 @@ mod input {
         } else {
             Modifiers::NONE
         };
-        [KeyState::Down, KeyState::Up].map(|state| {
+        [KeyState::Down(KeyPress::First), KeyState::Up].map(|state| {
             flui_platform::PlatformInput::Keyboard(
                 KeyEvent::new(state, Key::Named(key), Code::Unidentified, time)
                     .with_modifiers(modifiers),

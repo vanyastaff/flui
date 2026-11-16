@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_view::prelude::*;
@@ -27,7 +27,7 @@ impl Intent for AddToCounter {}
 /// Ctrl+A, the key every test here binds to `AddToCounter`.
 fn ctrl_a() -> KeyEvent {
     KeyEventBuilder::new(Code::Unidentified)
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .key(Key::character("a"))
         .modifiers(Modifiers::CONTROL)
         .build()

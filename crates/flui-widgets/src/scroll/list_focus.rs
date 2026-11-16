@@ -431,7 +431,7 @@ impl ListFocusController {
 
     /// The list node's key handler.
     fn handle_key(&self, event: &KeyEvent) -> KeyEventResult {
-        if event.state() != KeyState::Down {
+        if !matches!(event.state, KeyState::Down(_)) {
             return KeyEventResult::Ignored;
         }
         let modified = [

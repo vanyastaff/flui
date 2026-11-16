@@ -10,7 +10,7 @@ use flui_interaction::focus::FocusNode;
 use flui_objects::RenderEditable;
 use flui_platform::{
     EventTime,
-    keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+    keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
 };
 use flui_widgets::{EditableText, TextEditingController};
 
@@ -859,7 +859,7 @@ fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_platform
 
 fn character_key_event(ch: char) -> KeyEvent {
     KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::character(ch.to_string()),
         Code::KeyA,
         EventTime::from_nanos(0),
@@ -1445,7 +1445,7 @@ pub(crate) fn a_pointer_down_and_a_paste_commit_the_composition_first() {
             .focus_manager()
             .dispatch_key_event(
                 &KeyEvent::new(
-                    KeyState::Down,
+                    KeyState::Down(KeyPress::First),
                     Key::character("v"),
                     Code::KeyV,
                     EventTime::from_nanos(0)
@@ -2656,7 +2656,7 @@ pub(crate) mod text_store {
     fn long_input_reports_the_visible_candidate_area() {
         use flui_platform::{
             EventTime,
-            keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+            keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
         };
         use flui_widgets::SizedBox;
 
@@ -2689,7 +2689,7 @@ pub(crate) mod text_store {
         assert_visible(&harness);
         for key in [NamedKey::Home, NamedKey::End] {
             let event = KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 Key::Named(key),
                 Code::Home,
                 EventTime::from_nanos(0),
@@ -2722,7 +2722,7 @@ pub(crate) mod text_store {
         use flui_platform::text_store::{PointMode, TextStoreError, Utf16Range};
         use flui_platform::{
             EventTime,
-            keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+            keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
         };
         use flui_widgets::SizedBox;
 
@@ -2793,7 +2793,7 @@ pub(crate) mod text_store {
         assert!(full.clipped, "long document exceeds the visible field");
         for key in [NamedKey::Home, NamedKey::End, NamedKey::Home, NamedKey::End] {
             let event = KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 Key::Named(key),
                 Code::Home,
                 EventTime::from_nanos(0),
@@ -2809,7 +2809,7 @@ pub(crate) mod text_store {
         }
 
         let select = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::Named(NamedKey::ArrowLeft),
             Code::ArrowLeft,
             EventTime::from_nanos(0),
@@ -2832,7 +2832,7 @@ pub(crate) mod text_store {
             "the selected adjacent grapheme uses viewport coordinates"
         );
         let end = KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::Named(NamedKey::End),
             Code::End,
             EventTime::from_nanos(0),

@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Matrix4, Point, Rect};
-use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::display_list::DrawOp;
 use flui_painting::paint::Clip;
@@ -73,7 +73,7 @@ fn action(app: &LaidOut, id: NodeId, action: Action) {
 fn key(app: &LaidOut, key: Key) -> bool {
     app.enter_owner_scope(|| {
         let manager = app.focus_manager();
-        [KeyState::Down, KeyState::Up]
+        [KeyState::Down(KeyPress::First), KeyState::Up]
             .into_iter()
             .map(|state| {
                 manager

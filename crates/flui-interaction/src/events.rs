@@ -16,12 +16,13 @@ pub mod keyboard {
 }
 
 pub use cursor_icon::CursorIcon;
-pub use keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
     PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, SmartZoomEvent,
+    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, ScrollInversion,
+    SmartZoomEvent,
 };
 
 /// The interaction clock: `clock`'s current reading on the event timeline
@@ -77,8 +78,6 @@ pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {
         PointerEvent::Scroll(data) => Some(&data.pointer),
         PointerEvent::PanZoom(data) => Some(data.pointer()),
         PointerEvent::SmartZoom(data) => Some(data.pointer()),
-        PointerEvent::Revise(data) => Some(&data.pointer),
-        PointerEvent::PenSqueeze(data) => Some(&data.pointer),
         // Device lifecycle names a device, not a contact; a variant added
         // later carries no contact until it is named above.
         _ => None,
@@ -96,8 +95,6 @@ fn pointer_sample(event: &PointerEvent) -> Option<&PointerSample> {
             Some(&data.sample)
         }
         PointerEvent::Move(data) => Some(data.current()),
-        PointerEvent::Revise(data) => Some(&data.sample),
-        PointerEvent::PenSqueeze(data) => data.hover.as_ref(),
         // The others carry a position without sensors, or none.
         _ => None,
     }
@@ -122,8 +119,6 @@ pub(crate) fn event_time(event: &PointerEvent) -> Option<flui_platform::EventTim
         | PointerEvent::Leave(data)
         | PointerEvent::ScrollInertiaCancel(data) => data.time,
         PointerEvent::DeviceAdded(data) | PointerEvent::DeviceRemoved(data) => data.time,
-        PointerEvent::Revise(data) => data.sample.time,
-        PointerEvent::PenSqueeze(data) => data.time,
         // A variant added later has no known time until it is named here.
         _ => return None,
     })

@@ -58,7 +58,7 @@ use flui_platform::haptics::{
 };
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
@@ -1066,7 +1066,7 @@ impl SharedAssembly {
                 } else {
                     Modifiers::NONE
                 };
-                [KeyState::Down, KeyState::Up]
+                [KeyState::Down(KeyPress::First), KeyState::Up]
                     .into_iter()
                     .map(|state| {
                         PlatformInput::Keyboard(
@@ -1086,7 +1086,7 @@ impl SharedAssembly {
                 } else {
                     key_composition(false, ESCAPE_KEY_CODE, host_composing)
                 };
-                [KeyState::Down, KeyState::Up]
+                [KeyState::Down(KeyPress::First), KeyState::Up]
                     .into_iter()
                     .map(|state| {
                         PlatformInput::Keyboard(
@@ -1754,12 +1754,14 @@ impl BackendUnderTest for X11Decoder {
                         Modifiers::NONE
                     };
                     let key = x11_keys::key_of(keysym, "");
-                    inputs.extend([KeyState::Down, KeyState::Up].map(|state| {
-                        PlatformInput::Keyboard(
-                            KeyEvent::new(state, key.clone(), Code::Unidentified, EPOCH)
-                                .with_modifiers(modifiers),
-                        )
-                    }));
+                    inputs.extend(
+                        [KeyState::Down(KeyPress::First), KeyState::Up].map(|state| {
+                            PlatformInput::Keyboard(
+                                KeyEvent::new(state, key.clone(), Code::Unidentified, EPOCH)
+                                    .with_modifiers(modifiers),
+                            )
+                        }),
+                    );
                 }
             }
         }

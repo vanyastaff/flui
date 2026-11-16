@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
-    events::{Code, Key, KeyState, NamedKey},
+    events::{Code, Key, KeyPress, KeyState, NamedKey},
     focus::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
 };
 use flui_widgets::TextEditingController;
@@ -73,7 +73,7 @@ impl Drop for FocusGuard {
 /// wrong method were called.
 fn make_editable_text_handler(controller: TextEditingController) -> KeyEventHandler {
     Rc::new(move |event| {
-        if event.state() != KeyState::Down {
+        if !matches!(event.state, KeyState::Down(_)) {
             return KeyEventResult::Ignored;
         }
         match &event.key {
@@ -134,7 +134,7 @@ pub(crate) fn focused_character_key_inserts_into_controller() {
 
     let event = KeyEventBuilder::new(Code::KeyH)
         .key(Key::character("h"))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .build();
     let _ = manager.dispatch_key_event(&event).is_handled();
 
@@ -159,7 +159,7 @@ pub(crate) fn unfocused_field_does_not_receive_key_events() {
     // Dispatch a character key — with no node focused, the handler must not fire.
     let event = KeyEventBuilder::new(Code::KeyX)
         .key(Key::character("x"))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .build();
     let _ = manager.dispatch_key_event(&event).is_handled();
 

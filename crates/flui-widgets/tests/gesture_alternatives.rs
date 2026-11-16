@@ -228,7 +228,7 @@ pub(crate) fn a_press_off_the_revealed_control_frees_the_trailing_edge() {
     laid.enable_semantics();
     laid.pump();
     let tab = flui_platform::keyboard::KeyEvent::new(
-        flui_platform::keyboard::KeyState::Down,
+        flui_platform::keyboard::KeyState::Down(flui_platform::keyboard::KeyPress::First),
         flui_platform::keyboard::Key::Named(NamedKey::Tab),
         flui_platform::keyboard::Code::Unidentified,
         flui_platform::EventTime::from_nanos(0),
@@ -888,7 +888,9 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
         match entry {
             RowFocus::Tab => {
                 let tab = flui_platform::keyboard::KeyEvent::new(
-                    flui_platform::keyboard::KeyState::Down,
+                    flui_platform::keyboard::KeyState::Down(
+                        flui_platform::keyboard::KeyPress::First,
+                    ),
                     flui_platform::keyboard::Key::Named(NamedKey::Tab),
                     flui_platform::keyboard::Code::Unidentified,
                     flui_platform::EventTime::from_nanos(0),
@@ -969,7 +971,7 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
         // Revealed again, then within one frame focus leaves the row and a
         // pointer puts it back: the leaving counted, so nothing reveals it.
         let _ = manager.dispatch_key_event(&flui_platform::keyboard::KeyEvent::new(
-            flui_platform::keyboard::KeyState::Down,
+            flui_platform::keyboard::KeyState::Down(flui_platform::keyboard::KeyPress::First),
             flui_platform::keyboard::Key::Named(NamedKey::Tab),
             flui_platform::keyboard::Code::Unidentified,
             flui_platform::EventTime::from_nanos(0),
@@ -1258,7 +1260,7 @@ pub(crate) fn the_revealed_menu_control_names_its_target() {
         );
         let manager = laid.focus_manager();
         let tab = flui_platform::keyboard::KeyEvent::new(
-            flui_platform::keyboard::KeyState::Down,
+            flui_platform::keyboard::KeyState::Down(flui_platform::keyboard::KeyPress::First),
             flui_platform::keyboard::Key::Named(NamedKey::Tab),
             flui_platform::keyboard::Code::Unidentified,
             flui_platform::EventTime::from_nanos(0),
@@ -1308,7 +1310,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
     );
     laid.pump();
     let tab = flui_platform::keyboard::KeyEvent::new(
-        flui_platform::keyboard::KeyState::Down,
+        flui_platform::keyboard::KeyState::Down(flui_platform::keyboard::KeyPress::First),
         flui_platform::keyboard::Key::Named(NamedKey::Tab),
         flui_platform::keyboard::Code::Unidentified,
         flui_platform::EventTime::from_nanos(0),

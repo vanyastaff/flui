@@ -28,7 +28,7 @@ use std::rc::Rc;
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_platform::TargetPlatform;
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -195,10 +195,10 @@ impl SingleActivator {
     pub fn matches(&self, event: &KeyEvent) -> bool {
         let modifiers = command_modifiers(event.modifiers);
         let phase = if self.on_release {
-            event.state() == KeyState::Up
+            event.state == KeyState::Up
         } else {
-            event.state() == KeyState::Down
-                && (self.include_repeats || event.repeat() == KeyRepeat::First)
+            matches!(event.state, KeyState::Down(_))
+                && (self.include_repeats || event.state != KeyState::Down(KeyPress::AutoRepeat))
         };
         phase
             && event.composition != ImeComposition::Active

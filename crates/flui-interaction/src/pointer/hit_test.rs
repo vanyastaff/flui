@@ -1096,12 +1096,6 @@ pub(crate) fn transform_pointer_event(
                 event.position = Some(transform_position(position, transform)?);
             }
         }
-        PointerEvent::Revise(event) => event.sample = transform_sample(event.sample, transform)?,
-        PointerEvent::PenSqueeze(event) => {
-            if let Some(sample) = event.hover {
-                event.hover = Some(transform_sample(sample, transform)?);
-            }
-        }
         // Cancel and device lifecycle carry no geometry; a variant added later
         // is delivered unlocalized until it is named above.
         _ => {}

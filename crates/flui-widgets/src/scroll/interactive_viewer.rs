@@ -101,7 +101,7 @@ use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, ImeComposition, Key, KeyPress, KeyState, NamedKey};
 use flui_platform::{
     keyboard::Modifiers,
     pointer::{PanZoomEvent, PanZoomPhase, PointerKind, ScrollEvent, ScrollPhase, ScrollUnit},
@@ -1313,7 +1313,7 @@ impl ViewerCore {
 
     /// An arrow key: one step of the keyboard sequence its press began.
     fn key_pan(&self, event: &flui_platform::keyboard::KeyEvent) -> KeyEventResult {
-        if event.state() == KeyState::Up {
+        if event.state == KeyState::Up {
             self.leaf.key_released(event.code);
             return KeyEventResult::Ignored;
         }
@@ -1337,7 +1337,7 @@ impl ViewerCore {
             direction.x * step(viewport.width()),
             direction.y * step(viewport.height()),
         );
-        let repeated = event.repeat() == KeyRepeat::AutoRepeat;
+        let repeated = event.state == KeyState::Down(KeyPress::AutoRepeat);
         let id = match self.leaf.key_sequence(event.code) {
             Some(id) if repeated => Some(id),
             _ => self.leaf.mint(),

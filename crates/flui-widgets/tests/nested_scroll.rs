@@ -3329,7 +3329,7 @@ pub(crate) fn shared_connection_hears_a_sequence_once() {
 // Keyboard
 // ---------------------------------------------------------------------------
 
-use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Code, Key, KeyPress, KeyState, Modifiers, NamedKey};
 
 /// Key events into the focus tree of a mounted tree.
 pub(crate) struct Keys {
@@ -3343,26 +3343,30 @@ impl Keys {
         }
     }
 
-    fn send(&self, code: Code, key: Key, state: KeyState, repeat: bool, mods: Modifiers) -> bool {
+    fn send(&self, code: Code, key: Key, state: KeyState, mods: Modifiers) -> bool {
         let event = flui_interaction::testing::input::KeyEventBuilder::new(code)
             .state(state)
             .key(key)
-            .repeat(repeat)
             .modifiers(mods)
             .build();
         self.manager.dispatch_key_event(&event).is_handled()
     }
 
     pub(crate) fn down(&self, code: Code, key: Key) -> bool {
-        self.send(code, key, KeyState::Down, false, Modifiers::NONE)
+        self.send(code, key, KeyState::Down(KeyPress::First), Modifiers::NONE)
     }
 
     pub(crate) fn repeat(&self, code: Code, key: Key) -> bool {
-        self.send(code, key, KeyState::Down, true, Modifiers::NONE)
+        self.send(
+            code,
+            key,
+            KeyState::Down(KeyPress::AutoRepeat),
+            Modifiers::NONE,
+        )
     }
 
     pub(crate) fn up(&self, code: Code, key: Key) {
-        self.send(code, key, KeyState::Up, false, Modifiers::NONE);
+        self.send(code, key, KeyState::Up, Modifiers::NONE);
     }
 }
 
@@ -3445,8 +3449,7 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
     assert!(keys.send(
         Code::Space,
         Key::character(" "),
-        KeyState::Down,
-        false,
+        KeyState::Down(KeyPress::First),
         Modifiers::SHIFT,
     ));
     settle(&mut laid);
@@ -3456,8 +3459,7 @@ pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
         !keys.send(
             Code::ArrowDown,
             down.clone(),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
             Modifiers::CONTROL,
         ),
         "a command chord is not a scroll key"

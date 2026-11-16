@@ -1,7 +1,5 @@
 ### Changed
 
-- Windows: the fullscreen hotkey (F11 by default) is a default the app can prevent. It toggles
-  after the key reaches the app, on a message of its own, instead of inside the keystroke.
 - Windows: a resize that is not a live drag (a window command, a mode change, a DPI change)
   asks for one frame after the change instead of drawing inside `WM_SIZE`, and window commands
   apply on the owner's wake, not inside a frame. The window class no longer sets

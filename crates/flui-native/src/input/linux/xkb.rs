@@ -16,7 +16,7 @@
 //!   from a `KeymapSource`, which names where a host reads it: the X server's
 //!   core keyboard (the X11 host, whose server keeps the state and reports it
 //!   in XKB's `StateNotify`). A press feeds compose: a dead key or a sequence in
-//!   progress is [`NamedKey::Dead`](flui_platform::keyboard::NamedKey::Dead),
+//!   progress is [`Key::Dead`](flui_platform::keyboard::Key::Dead) with the accent its keysym names,
 //!   and the key that completes it carries the composed text; a window losing
 //!   the keyboard ends the sequence.
 //!
@@ -327,13 +327,29 @@ mod meaning {
             let index = usize::try_from(keysym - FUNCTION_KEYS.0).ok()?;
             return FUNCTIONS.get(index).copied();
         }
-        if (DEAD_KEYS.0..=DEAD_KEYS.1).contains(&keysym) {
-            return Some(NamedKey::Dead);
-        }
         NAMED
             .iter()
             .find(|(named, _)| *named == keysym)
             .map(|(_, key)| *key)
+    }
+
+    /// The accents of the dead keysyms `dead_grave` to `dead_iota`, in keysym
+    /// order, as the layout prints them on the key (`keysymdef.h`).
+    const DEAD_ACCENTS: [char; 14] = [
+        '`', '\u{b4}', '^', '~', '\u{af}', '\u{2d8}', '\u{2d9}', '\u{a8}', '\u{2da}', '\u{2dd}',
+        '\u{2c7}', '\u{b8}', '\u{2db}', '\u{37a}',
+    ];
+
+    /// The dead key `keysym` is, with the accent it leaves pending (none for
+    /// an accent with no spacing form here: `dead_belowdot`, `dead_greek`, …),
+    /// or `None` when it is no dead key.
+    #[must_use]
+    pub fn dead_key(keysym: u32) -> Option<Key> {
+        if !(DEAD_KEYS.0..=DEAD_KEYS.1).contains(&keysym) {
+            return None;
+        }
+        let index = usize::try_from(keysym - DEAD_KEYS.0).ok()?;
+        Some(Key::Dead(DEAD_ACCENTS.get(index).copied()))
     }
 
     /// What a key whose keysym is `keysym` means, given the text XKB says it
@@ -342,6 +358,9 @@ mod meaning {
     /// character (Ctrl+S types `0x13`) is no text.
     #[must_use]
     pub fn key_of(keysym: u32, text: &str) -> Key {
+        if let Some(dead) = dead_key(keysym) {
+            return dead;
+        }
         if let Some(named) = keysym_key(keysym) {
             return Key::Named(named);
         }
@@ -528,17 +547,17 @@ mod keyboard {
     use std::sync::Arc;
 
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use xkbcommon_dl::{
         XkbCommon, XkbCommonCompose, xkb_compose_feed_result, xkb_compose_state,
         xkb_compose_status, xkb_compose_table, xkb_context, xkb_keymap, xkb_mod_index_t, xkb_state,
         xkb_state_component,
     };
 
-    use super::{EVDEV_OFFSET, XkbModifier, code_of, key_of, modifiers_of};
+    use super::{EVDEV_OFFSET, XkbModifier, code_of, dead_key, key_of, modifiers_of};
     #[cfg(wayland_host)]
     use super::{group_names, keymap_text};
-    use crate::input::keys::{UnplacedKeys, location_for_code};
+    use crate::input::keys::{PressedAs, location_for_code};
     #[cfg(x11_host)]
     use crate::owner::linux::x11::X11Connection;
 
@@ -708,7 +727,7 @@ mod keyboard {
         held: Vec<u32>,
         /// The keys of [`held`](Self::held) the kernel names no code for, with
         /// the key each was pressed as.
-        unplaced: UnplacedKeys<u32>,
+        pressed_as: PressedAs<u32>,
     }
 
     /// The keys a keyboard holds down at once. A full-size keyboard has 104
@@ -762,7 +781,7 @@ mod keyboard {
                 modifiers,
                 keycodes,
                 held: Vec::new(),
-                unplaced: UnplacedKeys::default(),
+                pressed_as: PressedAs::default(),
             })
         }
 
@@ -979,7 +998,9 @@ mod keyboard {
             }
             // SAFETY: the live compose state.
             match unsafe { (compose.api.xkb_compose_state_get_status)(state) } {
-                xkb_compose_status::XKB_COMPOSE_COMPOSING => Some(Key::Named(NamedKey::Dead)),
+                xkb_compose_status::XKB_COMPOSE_COMPOSING => {
+                    Some(dead_key(keysym).unwrap_or(Key::Dead(None)))
+                }
                 xkb_compose_status::XKB_COMPOSE_COMPOSED => {
                     let mut buffer = [0 as c_char; 64];
                     // SAFETY: the live compose state, the buffer and its length.
@@ -1037,10 +1058,9 @@ mod keyboard {
             &mut self,
             keycode: u32,
             state: KeyState,
-            repeat: bool,
             time: EventTime,
         ) -> Option<KeyEvent> {
-            let (event, keysym) = self.key_held(keycode, state, repeat, time)?;
+            let (event, keysym) = self.key_held(keycode, state, time)?;
             Some(self.key_typed(keycode, keysym, event))
         }
 
@@ -1052,7 +1072,6 @@ mod keyboard {
             &mut self,
             keycode: u32,
             state: KeyState,
-            repeat: bool,
             time: EventTime,
         ) -> Option<(KeyEvent, u32)> {
             let releases_held = state == KeyState::Up && self.held.contains(&keycode);
@@ -1060,13 +1079,13 @@ mod keyboard {
                 return None;
             }
             match state {
-                KeyState::Down if !self.held.contains(&keycode) => {
+                KeyState::Down(_) if !self.held.contains(&keycode) => {
                     if self.held.len() >= MAX_HELD_KEYS {
                         return None;
                     }
                     self.held.push(keycode);
                 }
-                KeyState::Down => {}
+                KeyState::Down(_) => {}
                 KeyState::Up => self.held.retain(|held| *held != keycode),
             }
             // SAFETY: the live state; any key code may be asked.
@@ -1076,12 +1095,7 @@ mod keyboard {
             let code = code_of(keycode.saturating_sub(EVDEV_OFFSET));
             let event = KeyEvent::new(state, key, code, time)
                 .with_location(location_for_code(code))
-                .with_modifiers(self.modifiers())
-                .with_repeat(if repeat {
-                    KeyRepeat::AutoRepeat
-                } else {
-                    KeyRepeat::First
-                });
+                .with_modifiers(self.modifiers());
             Some((event, keysym))
         }
 
@@ -1093,13 +1107,12 @@ mod keyboard {
             keysym: u32,
             mut event: KeyEvent,
         ) -> KeyEvent {
-            if event.state() == KeyState::Down
-                && event.repeat() == KeyRepeat::First
+            if event.state == KeyState::Down(KeyPress::First)
                 && let Some(composed) = self.compose(keysym)
             {
                 event.key = composed;
             }
-            self.unplaced.settle(Some(keycode), event)
+            self.pressed_as.settle(Some(keycode), event)
         }
 
         /// The keyboard leaves its window: the compose sequence in progress
@@ -1110,7 +1123,7 @@ mod keyboard {
             self.held
                 .clone()
                 .into_iter()
-                .filter_map(|keycode| self.key(keycode, KeyState::Up, false, time))
+                .filter_map(|keycode| self.key(keycode, KeyState::Up, time))
                 .collect()
         }
     }
@@ -1118,7 +1131,7 @@ mod keyboard {
     #[cfg(all(test, wayland_host))]
     mod tests {
         use flui_platform::EventTime;
-        use flui_platform::keyboard::{Key, KeyState, NamedKey};
+        use flui_platform::keyboard::{Key, KeyPress, KeyState};
 
         use super::{Keyboard, KeymapSource, MAX_HELD_KEYS};
         use crate::input::linux::xkb::EVDEV_OFFSET;
@@ -1170,13 +1183,13 @@ xkb_symbols \"flui\" {
             let time = EventTime::from_nanos(1);
             let press = |keyboard: &mut Keyboard, code: u32| {
                 let key = keyboard
-                    .key(code + EVDEV_OFFSET, KeyState::Down, false, time)
+                    .key(code + EVDEV_OFFSET, KeyState::Down(KeyPress::First), time)
                     .expect("the keymap defines the key")
                     .key;
-                keyboard.key(code + EVDEV_OFFSET, KeyState::Up, false, time);
+                keyboard.key(code + EVDEV_OFFSET, KeyState::Up, time);
                 key
             };
-            assert_eq!(press(&mut keyboard, 40), Key::Named(NamedKey::Dead));
+            assert_eq!(press(&mut keyboard, 40), Key::Dead(Some('\u{b4}')));
             assert_eq!(press(&mut keyboard, 18), Key::character("é"));
             assert_eq!(
                 press(&mut keyboard, 18),
@@ -1197,13 +1210,13 @@ xkb_symbols \"flui\" {
                 KeymapSource::compositor(COMPOSITOR_KEYMAP.to_vec()).expect("the keymap is text");
             let mut keyboard = Keyboard::try_new(&source).expect("the keymap compiles");
             let time = EventTime::from_nanos(1);
-            for state in [KeyState::Down, KeyState::Up] {
+            for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
                 keyboard
-                    .key_held(40 + EVDEV_OFFSET, state, false, time)
+                    .key_held(40 + EVDEV_OFFSET, state, time)
                     .expect("the keymap defines the key");
             }
             let (event, keysym) = keyboard
-                .key_held(18 + EVDEV_OFFSET, KeyState::Down, false, time)
+                .key_held(18 + EVDEV_OFFSET, KeyState::Down(KeyPress::First), time)
                 .expect("the keymap defines the key");
             assert_eq!(
                 keyboard.key_typed(18 + EVDEV_OFFSET, keysym, event).key,
@@ -1237,18 +1250,22 @@ xkb_symbols \"flui\" { };
             let time = EventTime::from_nanos(1);
             for outside in [0, 30_000] {
                 assert!(
-                    keyboard.key(outside, KeyState::Down, false, time).is_none(),
+                    keyboard
+                        .key(outside, KeyState::Down(KeyPress::First), time)
+                        .is_none(),
                     "key code {outside}, outside the keymap's, is refused"
                 );
             }
             let pressed = (0..10_000)
-                .filter_map(|code| keyboard.key(code + EVDEV_OFFSET, KeyState::Down, false, time))
+                .filter_map(|code| {
+                    keyboard.key(code + EVDEV_OFFSET, KeyState::Down(KeyPress::First), time)
+                })
                 .count();
             assert_eq!(pressed, MAX_HELD_KEYS);
             assert_eq!(keyboard.leave(time).len(), MAX_HELD_KEYS);
             assert!(
                 keyboard
-                    .key(EVDEV_OFFSET, KeyState::Down, false, time)
+                    .key(EVDEV_OFFSET, KeyState::Down(KeyPress::First), time)
                     .is_some(),
                 "leaving frees the keys"
             );
@@ -1317,7 +1334,14 @@ mod tests {
                 "dead acute",
                 keysym::DEAD_ACUTE,
                 "",
-                Key::Named(NamedKey::Dead),
+                Key::Dead(Some('\u{b4}')),
+            ),
+            ("dead circumflex", 0xfe52, "", Key::Dead(Some('^'))),
+            (
+                "dead below dot, no spacing form",
+                0xfe60,
+                "",
+                Key::Dead(None),
             ),
             ("super", 0xffeb, "", Key::Named(NamedKey::Meta)),
             ("AltGr", 0xfe03, "", Key::Named(NamedKey::AltGraph)),

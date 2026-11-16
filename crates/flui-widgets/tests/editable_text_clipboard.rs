@@ -8,7 +8,7 @@
 use flui_view::LifecycleContext;
 use std::rc::Rc;
 
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_widgets::{EditableText, TextEditingController};
@@ -22,7 +22,7 @@ fn command() -> Modifiers {
 fn chord(character: &str, modifiers: Modifiers) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyC)
         .key(Key::character(character))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .modifiers(modifiers)
         .build()
 }
@@ -725,7 +725,7 @@ pub(crate) fn a_field_follows_the_platform_convention_it_is_built_under() {
     let arrow = |modifiers: Modifiers| {
         KeyEventBuilder::new(Code::ArrowRight)
             .key(Key::Named(NamedKey::ArrowRight))
-            .state(KeyState::Down)
+            .state(KeyState::Down(KeyPress::First))
             .modifiers(modifiers)
             .build()
     };

@@ -36,6 +36,9 @@ struct Table {
     summary: &'static str,
     /// A variant whose W3C spelling is its name, for the generated example.
     example: &'static str,
+    /// Upstream variants FLUI carries as a `Key` variant of its own, with a payload the W3C
+    /// value has no room for; each must exist upstream, so a rename fails the run.
+    carried_by_key: &'static [&'static str],
 }
 
 const TABLES: [Table; 2] = [
@@ -46,8 +49,11 @@ const TABLES: [Table; 2] = [
         summary: "A key the W3C names: the `key` value of a key that produces no character.\n\n\
                   The variants are the [UI Events `key` values](https://w3c.github.io/uievents-key/).\n\
                   A value the specification adds before FLUI regenerates this table arrives as\n\
-                  [`NamedKey::Unidentified`].",
+                  [`NamedKey::Unidentified`]. A dead key is not one of them: it is\n\
+                  [`Key::Dead`](super::Key::Dead), which carries its accent.",
         example: "Enter",
+        // `Key::Dead` carries the accent the dead key leaves pending.
+        carried_by_key: &["Dead"],
     },
     Table {
         name: "Code",
@@ -58,6 +64,7 @@ const TABLES: [Table; 2] = [
                   A value the specification adds before FLUI regenerates this table arrives as\n\
                   [`Code::Unidentified`].",
         example: "KeyA",
+        carried_by_key: &[],
     },
 ];
 
@@ -167,13 +174,13 @@ struct Variant {
 /// The generated file for `table`, from the upstream source text.
 fn generate(table: Table, source: &str, version: &str) -> anyhow::Result<String> {
     let file = syn::parse_file(source).context("parsing the upstream file")?;
-    let variants = variants(&file, table.name)?;
+    let variants = variants(&file, table.name, table.carried_by_key)?;
     let mut out = String::new();
     write_file(&mut out, table, version, &variants)?;
     Ok(out)
 }
 
-fn variants(file: &syn::File, name: &str) -> anyhow::Result<Vec<Variant>> {
+fn variants(file: &syn::File, name: &str, carried_by_key: &[&str]) -> anyhow::Result<Vec<Variant>> {
     let item = file
         .items
         .iter()
@@ -193,8 +200,19 @@ fn variants(file: &syn::File, name: &str) -> anyhow::Result<Vec<Variant>> {
     if spellings.arms.is_empty() {
         bail!("no `impl Display for {name}` upstream");
     }
+    for carried in carried_by_key {
+        if !item.variants.iter().any(|variant| variant.ident == carried) {
+            bail!("{name}::{carried}, which `Key` carries, is gone upstream");
+        }
+    }
     let mut variants = Vec::new();
     'variants: for variant in &item.variants {
+        if carried_by_key
+            .iter()
+            .any(|carried| variant.ident == carried)
+        {
+            continue;
+        }
         if !matches!(variant.fields, syn::Fields::Unit) {
             bail!("{name}::{} carries data", variant.ident);
         }
@@ -432,6 +450,8 @@ pub enum NamedKey {
     Enter,
     #[deprecated = "legacy"]
     Hyper,
+    /// A dead key, which `Key` carries.
+    Dead,
     /// A key spelled differently.
     Spelled,
 }
@@ -443,6 +463,7 @@ impl Display for NamedKey {
             Unidentified => f.write_str("Unidentified"),
             Enter => f.write_str("Enter"),
             Hyper => f.write_str("Hyper"),
+            Dead => f.write_str("Dead"),
             Spelled => f.write_str("W3cSpelling"),
         }
     }
@@ -462,6 +483,13 @@ fn self_test() -> anyhow::Result<ExitCode> {
     .collect();
     if generated.contains("Hyper") {
         missed.push("the deprecated variant is generated");
+    }
+    if generated.contains("    Dead,") || generated.contains("Self::Dead") {
+        missed.push("the variant `Key` carries is generated");
+    }
+    let carried_gone = SELF_TEST_FIXTURE.replace("Dead", "Deceased");
+    if generate(table, &carried_gone, "0.0.0").is_ok() {
+        missed.push("a carried variant gone upstream is accepted");
     }
     let unknown_attribute =
         SELF_TEST_FIXTURE.replace("#[doc(alias = \"Return\")]", "#[cfg(feature = \"x\")]");

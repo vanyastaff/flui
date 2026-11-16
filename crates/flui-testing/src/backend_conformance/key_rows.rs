@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use flui_platform::PlatformInput;
-use flui_platform::keyboard::{ImeComposition, Key, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_runtime::HostInput;
 
 use super::rows::Outcome;
@@ -36,8 +36,8 @@ pub(super) fn menu_keys_arrive_as_the_bindings_name_them<B: BackendUnderTest>(
                 _ => None,
             })
             .collect();
-        for state in [KeyState::Down, KeyState::Up] {
-            let Some(event) = events.iter().find(|event| event.state() == state) else {
+        for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
+            let Some(event) = events.iter().find(|event| event.state == state) else {
                 return Err(format!("{key:?}: no {state:?} event among {events:?}"));
             };
             if event.key != Key::Named(expected) {
@@ -83,8 +83,8 @@ pub(super) fn a_key_during_composition_is_the_input_methods<B: BackendUnderTest>
             _ => None,
         })
         .collect();
-    for state in [KeyState::Down, KeyState::Up] {
-        let Some(event) = events.iter().find(|event| event.state() == state) else {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
+        let Some(event) = events.iter().find(|event| event.state == state) else {
             return Err(format!("no {state:?} event among {events:?}"));
         };
         if event.composition != ImeComposition::Active {

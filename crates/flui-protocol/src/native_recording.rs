@@ -235,6 +235,20 @@ vocabulary! {
 }
 
 vocabulary! {
+    /// Whether a scroll's delta runs the way the device moved or the reverse.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeScrollInversion"))]
+    pub enum ScrollInversion {
+        /// The way the device moved.
+        FromDevice => "from_device",
+        /// The platform reversed it (natural scrolling).
+        InvertedFromDevice => "inverted_from_device",
+    }
+}
+
+vocabulary! {
     /// The unit a scroll's delta is in.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -709,6 +723,12 @@ pub struct Scroll {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub notched: bool,
+    /// Whether the platform reversed the device's direction, when it says.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub inversion: Option<ScrollInversion>,
     /// When, on the event timeline.
     pub time_ns: u64,
     /// The modifiers held.
