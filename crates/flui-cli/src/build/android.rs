@@ -300,6 +300,24 @@ impl AndroidBuilder {
         // The compiler target cargo-ndk will actually use.
         environment::require_rust_target(&self.workspace_root, rust_target(abi))?;
 
+        // The packager without Gradle needs build-tools and an Android
+        // platform at FLUI's targetSdk: a missing one is named now, not after
+        // the native build. Gradle resolves its own.
+        let gradle_wrapper = if cfg!(target_os = "windows") {
+            "gradlew.bat"
+        } else {
+            "gradlew"
+        };
+        if !self
+            .workspace_root
+            .join("platforms")
+            .join("android")
+            .join(gradle_wrapper)
+            .exists()
+        {
+            super::android_package::BuildTools::locate(&self.android_home, None)?;
+        }
+
         if self.workspace_root.join("flui.toml").is_file() {
             self.package_facts(profile)?;
         }

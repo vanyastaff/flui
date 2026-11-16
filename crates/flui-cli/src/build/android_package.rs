@@ -121,14 +121,7 @@ impl BuildTools {
             ),
             install_hint: format!("sdkmanager \"build-tools;{TARGET_SDK}.0.0\""),
         })?;
-        let (platform, _) = newest_platform(&sdk_root.join("platforms"))
-            .filter(|(_, level)| *level >= MIN_COMPILE_SDK)
-            .ok_or_else(|| BuildError::ToolNotFound {
-                tool: format!(
-                    "an Android platform (android.jar) at API {MIN_COMPILE_SDK} or later"
-                ),
-                install_hint: format!("sdkmanager \"platforms;android-{MIN_COMPILE_SDK}\""),
-            })?;
+        let platform = compile_platform(&sdk_root.join("platforms"))?;
         let exe = |name: &str| {
             let candidates = if cfg!(windows) {
                 vec![format!("{name}.bat"), format!("{name}.exe")]
@@ -148,7 +141,7 @@ impl BuildTools {
             aapt2: exe("aapt2")?,
             zipalign: exe("zipalign")?,
             apksigner: exe("apksigner")?,
-            android_jar: platform.join("android.jar"),
+            android_jar: platform,
             java_home,
         })
     }
@@ -344,15 +337,51 @@ fn newest_platform(platforms: &Path) -> Option<(PathBuf, u32)> {
     let dir = newest_version_dir_where(platforms, |name| {
         name.starts_with("android-") && platforms.join(name).join("android.jar").is_file()
     })?;
-    let level = dir
-        .file_name()?
-        .to_str()?
-        .strip_prefix("android-")?
+    let level = platform_level(dir.file_name()?.to_str()?)?;
+    Some((dir, level))
+}
+
+/// The API level of a `platforms/android-<N>` directory name (`android-36`,
+/// or `android-36-ext15` for an extension level of 36).
+fn platform_level(name: &str) -> Option<u32> {
+    name.strip_prefix("android-")?
         .split(|c: char| !c.is_ascii_digit())
         .next()?
         .parse()
-        .ok()?;
-    Some((dir, level))
+        .ok()
+}
+
+/// The `android.jar` the APK links against: the highest installed platform,
+/// which must not be below [`MIN_COMPILE_SDK`], the `targetSdk` FLUI declares.
+///
+/// The target stays FLUI's whatever the machine has: it names the behaviour
+/// changes FLUI meets (ADR-0255 decision 7), so a build never lowers it to
+/// fit an older SDK; it refuses before anything is packaged instead.
+///
+/// # Errors
+///
+/// [`BuildError::AndroidPlatformMissing`] naming the levels installed and the
+/// one needed.
+pub(crate) fn compile_platform(platforms: &Path) -> BuildResult<PathBuf> {
+    match newest_platform(platforms) {
+        Some((dir, level)) if level >= MIN_COMPILE_SDK => Ok(dir.join("android.jar")),
+        _ => {
+            let mut installed: Vec<u32> = std::fs::read_dir(platforms)
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().join("android.jar").is_file())
+                .filter_map(|entry| platform_level(entry.file_name().to_str()?))
+                .collect();
+            installed.sort_unstable_by(|left, right| right.cmp(left));
+            installed.dedup();
+            Err(BuildError::AndroidPlatformMissing {
+                needed: MIN_COMPILE_SDK,
+                installed,
+                platforms: platforms.to_path_buf(),
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -507,15 +536,38 @@ mod tests {
 
     fn a_platform_older_than_the_target_is_refused() {
         let sdk = sdk(&["36.0.0"], &[30, TARGET_SDK - 1]);
-        let Err(BuildError::ToolNotFound { tool, install_hint }) =
-            BuildTools::locate(sdk.path(), None)
-        else {
-            panic!("an android.jar below targetSdk {TARGET_SDK} was accepted");
+        // A directory without an `android.jar` is no installed platform.
+        std::fs::create_dir_all(sdk.path().join("platforms").join("android-99"))
+            .expect("an empty platform directory");
+        let refusal = match BuildTools::locate(sdk.path(), None) {
+            Err(error @ BuildError::AndroidPlatformMissing { .. }) => error,
+            other => panic!(
+                "an android.jar below targetSdk {TARGET_SDK} was accepted: {:?}",
+                other.map(|tools| tools.android_jar)
+            ),
         };
-        assert!(tool.contains(&format!("API {TARGET_SDK}")), "{tool}");
+        let BuildError::AndroidPlatformMissing {
+            needed, installed, ..
+        } = &refusal
+        else {
+            unreachable!("matched above");
+        };
+        assert_eq!(
+            (*needed, installed.as_slice()),
+            (TARGET_SDK, [TARGET_SDK - 1, 30].as_slice())
+        );
+        let message = refusal.to_string();
         assert!(
-            install_hint.contains(&format!("platforms;android-{TARGET_SDK}")),
-            "{install_hint}"
+            message.contains(&format!("targetSdk {TARGET_SDK}"))
+                && message.contains(&format!("has android-{}, android-30", TARGET_SDK - 1))
+                && message.contains(&format!("platforms;android-{TARGET_SDK}")),
+            "{message}"
+        );
+        let empty = tempfile::tempdir().expect("an SDK without platforms");
+        assert!(
+            compile_platform(&empty.path().join("platforms"))
+                .is_err_and(|error| error.to_string().contains("has no platform")),
+            "no platform at all"
         );
     }
 

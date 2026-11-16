@@ -129,6 +129,20 @@ fn main() {
     let ndk = sdk.join("ndk").join("29.0.0");
     std::fs::create_dir_all(&ndk).expect("NDK fixture");
     std::fs::create_dir_all(sdk.join("ndk").join("9.0.0")).expect("older NDK fixture");
+    // The packager without Gradle finds its build-tools and a platform at or
+    // above FLUI's targetSdk before anything compiles.
+    let build_tools = sdk.join("build-tools").join("99.0.0");
+    std::fs::create_dir_all(&build_tools).expect("build-tools fixture");
+    for tool in ["aapt2", "zipalign", "apksigner"] {
+        std::fs::write(
+            build_tools.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)),
+            b"",
+        )
+        .expect("build-tool fixture");
+    }
+    let platform = sdk.join("platforms").join("android-99");
+    std::fs::create_dir_all(&platform).expect("platform fixture");
+    std::fs::write(platform.join("android.jar"), b"").expect("android.jar fixture");
     let path = std::env::join_paths(std::iter::once(tools).chain(std::env::split_paths(
         &std::env::var_os("PATH").expect("PATH"),
     )))

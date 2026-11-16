@@ -28,11 +28,17 @@ pub(crate) enum BuildError {
         install_hint: String,
     },
 
-    /// Platform target not installed
-    #[error("Rust target '{target}' is not installed; install with: {install_cmd}")]
+    /// The toolchain can build no standard library for the target
+    #[error(
+        "Rust target '{target}' has no standard library in {toolchain}; install with: \
+         {install_cmd}, or build it from source with `[unstable] build-std` in \
+         .cargo/config.toml and the `rust-src` component"
+    )]
     TargetNotInstalled {
         /// Rust target triple (e.g., "aarch64-linux-android")
         target: String,
+        /// The toolchain looked at: its release and sysroot
+        toolchain: String,
         /// Command to install the target
         install_cmd: String,
     },
@@ -105,6 +111,23 @@ pub(crate) enum BuildError {
     #[error("flui.toml: [app] {0}")]
     AppVersion(#[from] crate::build::app_version::AppVersionError),
 
+    /// The SDK has no Android platform the APK can be linked against
+    #[error(
+        "the APK declares targetSdk {needed} (FLUI's, from platform-support.toml), so it links \
+         against the android.jar of API {needed} or later; {} has {}; install with: \
+         sdkmanager \"platforms;android-{needed}\"",
+        .platforms.display(),
+        platform_levels(.installed)
+    )]
+    AndroidPlatformMissing {
+        /// The lowest API level whose `android.jar` the APK can link against
+        needed: u32,
+        /// The API levels installed, highest first
+        installed: Vec<u32>,
+        /// The SDK's `platforms` directory
+        platforms: PathBuf,
+    },
+
     /// Gradle wrote an APK that is not signed, which no device installs
     #[error(
         "Gradle wrote the unsigned {}: the project's app/build.gradle.kts gives its release \
@@ -126,6 +149,19 @@ pub(crate) enum BuildError {
 }
 
 // Conversion from String for convenience
+/// Installed Android API levels as a refusal lists them: `android-35,
+/// android-34`, or `no platform` when there is none.
+pub(crate) fn platform_levels(levels: &[u32]) -> String {
+    if levels.is_empty() {
+        return "no platform".to_owned();
+    }
+    levels
+        .iter()
+        .map(|level| format!("android-{level}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl From<String> for BuildError {
     fn from(s: String) -> Self {
         Self::Other(s)

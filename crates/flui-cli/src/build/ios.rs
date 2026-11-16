@@ -23,22 +23,18 @@ impl IosBuilder {
         check_command_exists("xcodebuild")?;
 
         // At least one iOS target: a device's or a simulator's.
-        let mut any_installed = false;
-        for triple in [
-            "aarch64-apple-ios",
-            "aarch64-apple-ios-sim",
-            "x86_64-apple-ios",
-        ] {
-            if environment::rust_target_installed(Path::new("."), triple)? {
-                any_installed = true;
+        let mut any_buildable = false;
+        for triple in ["aarch64-apple-ios-sim", "x86_64-apple-ios"] {
+            if environment::rust_target_support(Path::new("."), triple)?
+                != environment::TargetSupport::Missing
+            {
+                any_buildable = true;
                 break;
             }
         }
-        if !any_installed {
-            return Err(BuildError::TargetNotInstalled {
-                target: "aarch64-apple-ios".to_string(),
-                install_cmd: "rustup target add aarch64-apple-ios".to_string(),
-            });
+        if !any_buildable {
+            // Refuses, naming the toolchain, unless the device target builds.
+            environment::require_rust_target(Path::new("."), "aarch64-apple-ios")?;
         }
 
         crate::ui::debug("iOS environment validation passed".to_string());

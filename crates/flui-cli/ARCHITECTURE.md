@@ -27,8 +27,21 @@ The run session reads the selected device's ordered ABI list before invoking
 cargo-ndk. It chooses the first supported ABI instead of forcing ARM64 on x86
 emulators. Environment validation checks that ABI's exact Rust target in the
 project's toolchain (`rustc --print target-libdir --target <triple>` under a
-deadline, so a toolchain without rustup is read too) and reports its
-`rustup target add` command before invoking cargo-ndk if it is missing. A failed build with hot reload disabled exits as a build failure;
+deadline, so a toolchain without rustup is read too). A target without
+libraries still builds when the project's cargo configuration (or
+`CARGO_UNSTABLE_BUILD_STD`) asks for `build-std` and the toolchain has
+`rust-src` (`a_target_is_buildable_from_its_libraries_or_from_source`);
+otherwise the refusal names the toolchain looked at (release and sysroot), its
+`rustup target add` command and the `build-std` alternative, before cargo-ndk
+runs. The tool installs nothing itself.
+
+The `targetSdk` is FLUI's declared value from `platform-support.toml`, never
+lowered to fit the machine: it names the behaviour changes FLUI meets. The
+packager without Gradle links against the highest installed `android.jar`,
+which must not be below it, and checks that, with the build-tools, before the
+native build; a missing platform is `BuildError::AndroidPlatformMissing`, naming
+the levels installed and the one needed (`a_platform_older_than_the_target_is_refused`
+in `the_apk_meets_the_store_levels`). A failed build with hot reload disabled exits as a build failure;
 there is no watcher that could repair it. `android_run_builds_the_selected_device_native_abi`
 pins the target argument, missing-target admission and bounded failure through the CLI process.
 

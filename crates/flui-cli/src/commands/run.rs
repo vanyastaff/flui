@@ -1579,10 +1579,23 @@ fn environment_error(error: crate::build::error::BuildError) -> CliError {
         },
         BuildError::TargetNotInstalled {
             target,
+            toolchain,
             install_cmd,
         } => CliError::ToolNotFound {
-            tool: format!("Rust target {target}"),
-            suggestion: format!("install with: {install_cmd}"),
+            tool: format!("Rust target {target} in {toolchain}"),
+            suggestion: format!(
+                "install with: {install_cmd}, or build it from source with `[unstable] \
+                 build-std` in .cargo/config.toml and the `rust-src` component"
+            ),
+        },
+        BuildError::AndroidPlatformMissing {
+            needed, installed, ..
+        } => CliError::ToolNotFound {
+            tool: format!(
+                "an Android platform at API {needed} or later (installed: {})",
+                crate::build::error::platform_levels(&installed)
+            ),
+            suggestion: format!("install with: sdkmanager \"platforms;android-{needed}\""),
         },
         BuildError::EnvVarError { var, reason } => CliError::ToolNotFound {
             tool: var,
