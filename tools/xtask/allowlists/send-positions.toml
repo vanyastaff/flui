@@ -47,6 +47,8 @@ positions = [
     { item = "flui_layer::tree::layer_tree::LayerTree::find_annotation", at = "bound", marker = "Sync", crosses = "snapshot" },
     { item = "flui_layer::tree::layer_tree::LayerTree::find_annotations", at = "bound", marker = "Send", crosses = "snapshot" },
     { item = "flui_layer::tree::layer_tree::LayerTree::find_annotations", at = "bound", marker = "Sync", crosses = "snapshot" },
+    { item = "flui_platform::capability::activity_result::JavaReference", at = "supertrait", marker = "Send", crosses = "handle" },
+    { item = "flui_platform::capability::activity_result::JavaReference", at = "supertrait", marker = "Sync", crosses = "handle" },
     { item = "flui_platform::capability::owner::PendingCompletions::retire", at = "dyn", marker = "Send", crosses = "panic-payload" },
     { item = "flui_platform::data_transfer::DragTransport", at = "supertrait", marker = "Send" },
     { item = "flui_platform::data_transfer::DragTransport", at = "supertrait", marker = "Sync" },

@@ -693,7 +693,7 @@ fn result_keys_and_codes_hold_their_rules() {
         ("", Err(InvalidResultKey::Empty)),
         (long, Err(InvalidResultKey::TooLong)),
         ("with space", Err(InvalidResultKey::NotPrintable)),
-        ("caf\u{e9}", Err(InvalidResultKey::NotPrintable)),
+        ("\u{e9}t\u{e9}", Err(InvalidResultKey::NotPrintable)),
     ] {
         assert_eq!(
             ResultKey::try_new(name).map(ResultKey::as_str),
