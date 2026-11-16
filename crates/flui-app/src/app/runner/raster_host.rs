@@ -548,12 +548,13 @@ struct HostSlot {
     /// size the device refused waits for the window's next size, not its
     /// pace.
     wanted: Option<DeviceSize>,
-    /// The surface a frame of the slot last settled stale on because its
-    /// resize or upload panicked, until a frame settles otherwise: the first
-    /// such frame is retried, and another on that surface is refused, the
-    /// size's or the driver's failure rather than the moment's. Kept by
-    /// surface, not by frame, so a frame queued behind the panicked one and
-    /// the retry count as one retry, in whatever order they settle.
+    /// The surface a frame of the slot last settled stale on with the slot's
+    /// panic (its own mark, or a taint): the first such frame is retried, and
+    /// another on that surface is refused, the size's or the driver's failure
+    /// rather than the moment's. Any other settlement but a panicked render's
+    /// ends it. Kept by surface, not by frame, so a frame queued behind the
+    /// panicked one and the retry count as one retry, in whatever order they
+    /// settle.
     stale_panic: Option<SurfaceKey>,
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
@@ -1962,11 +1963,21 @@ impl RasterHost {
             slot.base.forget();
             return Some(verdict);
         }
-        // A frame that settled without a panic ends the surface's retry. One
-        // whose turn settled nothing says nothing of the surface, and one held
-        // when its slot's panic was taken may have lost its own mark.
-        if settled.is_some() && !tainted {
-            slot.stale_panic = None;
+        match settled {
+            // Nothing settled says nothing of the surface.
+            None => {}
+            // A frame held when its slot's panic was taken may have met the
+            // panic and lost its mark: settled stale, it counts as the
+            // panicked frame does.
+            Some(RasterVerdict::SurfaceStale) if tainted => {
+                if slot.stale_panic == Some(key) {
+                    slot.base.forget();
+                    return Some(SubmitVerdict::Refused);
+                }
+                slot.stale_panic = Some(key);
+            }
+            // Any other settlement ends the surface's retry.
+            Some(_) => slot.stale_panic = None,
         }
         if stuck {
             slot.base.forget();
@@ -2010,13 +2021,16 @@ impl RasterHost {
         // reports; which frame it came with is each settlement's own mark,
         // since the thread may settle more after this drain. Taking it ends
         // the mark, so a frame held now may settle unmarked though the panic
-        // came with its turn: it is tainted, and its settlement does not
-        // move the base.
+        // came with its turn: it is tainted, its settlement does not move the
+        // base, and settled stale it counts toward the surface's retry.
         if Self::take_slot_failure(placed, address) == SlotTurn::Panicked
             && let Some(slot) = placed.slots.get_mut(&address)
         {
+            // A frame whose settlement is in this drain carries its own mark.
             for held in &mut slot.pending {
-                held.tainted = true;
+                held.tainted |= !settlements
+                    .iter()
+                    .any(|settlement| settlement.epoch == held.epoch);
             }
         }
         let turned = |settlement: &SlotSettlement| {

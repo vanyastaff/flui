@@ -1617,18 +1617,30 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
         settle(placed, 2, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::Refused)
     );
-    // A frame whose turn settled nothing, and one held when the slot's panic
-    // was taken (whose own mark may be gone), do not end the retry.
-    let _nothing = settle(placed, 3, None, false, super::SlotTurn::Clean);
-    let _tainted = settle(placed, 4, stale, true, super::SlotTurn::Clean);
+    // A frame whose turn settled nothing says nothing of the surface, and one
+    // held when the slot's panic was taken (whose own mark may be gone) is
+    // counted as the panicked one: refused, the retry spent.
+    assert_eq!(settle(placed, 3, None, false, super::SlotTurn::Clean), None);
+    assert_eq!(
+        settle(placed, 4, stale, true, super::SlotTurn::Clean),
+        Some(SubmitVerdict::Refused)
+    );
     assert_eq!(
         settle(placed, 5, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::Refused)
     );
     // A frame that settles without a panic ends the surface's retry.
-    let _clean = settle(placed, 6, stale, false, super::SlotTurn::Clean);
     assert_eq!(
-        settle(placed, 7, stale, false, super::SlotTurn::Panicked),
+        settle(placed, 6, stale, false, super::SlotTurn::Clean),
         Some(SubmitVerdict::SurfaceStale)
+    );
+    // A tainted frame can be the first on the surface: it takes the retry.
+    assert_eq!(
+        settle(placed, 7, stale, true, super::SlotTurn::Clean),
+        Some(SubmitVerdict::SurfaceStale)
+    );
+    assert_eq!(
+        settle(placed, 8, stale, false, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::Refused)
     );
 }
