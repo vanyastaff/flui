@@ -80,6 +80,10 @@ public class FluiActivity extends NativeActivity {
 
     /** What API 30 adds. */
     private static final class Api30 {
+        // Deprecated from API 35, where an app targeting it is edge to edge
+        // already and the call changes nothing; below that target it is the
+        // call that makes the window edge to edge.
+        @SuppressWarnings("deprecation")
         static void edgeToEdge(Window window) {
             window.setDecorFitsSystemWindows(false);
         }

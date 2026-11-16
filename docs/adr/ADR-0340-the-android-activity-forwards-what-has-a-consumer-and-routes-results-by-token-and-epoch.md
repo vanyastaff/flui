@@ -115,7 +115,8 @@ input method's inset to the views and leaves the content, and so the surface, at
 - Good, because one soft-input mode holds on the whole supported range, the mode Flutter's
   embedding uses.
 - Bad, because the Java and JNI halves are type-checked by CI and run only on a device, and the
-  edge-to-edge setup below API 30 rests on flags Android deprecated (they remain honoured).
+  edge-to-edge setup rests on calls Android deprecated (the layout flags below API 30,
+  `setDecorFitsSystemWindows` from API 35, where an app targeting it is edge to edge already).
 - Neutral, because the reattachment by key is the provider's to call as it starts; one that does
   not hears nothing of an earlier Activity's answer, which is let go when the Activity ends.
 
