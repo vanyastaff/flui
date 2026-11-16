@@ -405,6 +405,10 @@ fn a_failed_bootstrap_keeps_the_reports() {
         fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
             self.0.wake_deadline(owner)
         }
+
+        fn turn_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
+            self.0.turn_deadline(owner)
+        }
     }
     let app = AppLog::new();
     let delivery = Arc::new(AppDelivery::new());
@@ -595,6 +599,10 @@ fn a_released_handler_drops_outside_the_delivery_lock() {
             ExitAnswer::End
         }
         fn wake_deadline(&self, _: &OwnerPlatform) -> Option<web_time::Instant> {
+            None
+        }
+
+        fn turn_deadline(&self, _: &OwnerPlatform) -> Option<web_time::Instant> {
             None
         }
     }

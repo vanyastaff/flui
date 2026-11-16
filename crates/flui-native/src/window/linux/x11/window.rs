@@ -683,6 +683,9 @@ impl X11Window {
                     read.focused
                 },
                 capabilities,
+                // A move or resize the window manager runs for the user is
+                // not read yet (docs/gaps.md).
+                interaction: flui_platform::WindowInteraction::None,
             }
             .onto(state)
         })

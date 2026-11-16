@@ -1542,8 +1542,22 @@ pub struct WindowState {
     pub hovered: bool,
     /// Whether it is the active window of its desktop.
     pub active: bool,
+    /// Whether the user is placing it through the window system; absent while
+    /// not, and in recordings older than the fact.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "is_false"))]
+    pub user_placing: bool,
     /// Which commands it honours.
     pub capabilities: Capabilities,
+}
+
+/// Whether `value` is `false`, which a writer leaves out.
+#[cfg(feature = "serde")]
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's `skip_serializing_if` passes the field by reference"
+)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Whether all four insets are zero, which a writer leaves out.

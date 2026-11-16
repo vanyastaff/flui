@@ -34,8 +34,8 @@ use flui_platform::{
     NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
     SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
     TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets, WindowMode,
-    WindowState, WindowStateParts,
+    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
+    WindowInteraction, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -2406,6 +2406,7 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         execution,
         hovered,
         active,
+        interaction,
         capabilities,
     } = (*state.parts).clone();
     Ok(wire::WindowState {
@@ -2456,6 +2457,11 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         },
         hovered,
         active,
+        user_placing: match interaction {
+            WindowInteraction::UserPlacing => true,
+            WindowInteraction::None => false,
+            _ => return Err(DtoError::Unmirrored("WindowInteraction")),
+        },
         capabilities: capabilities_to_wire(capabilities),
     })
 }
@@ -2548,6 +2554,7 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         execution,
         hovered,
         active,
+        user_placing,
         capabilities,
     } = wire;
     let metrics = metrics
@@ -2613,6 +2620,11 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         },
         hovered,
         active,
+        interaction: if user_placing {
+            WindowInteraction::UserPlacing
+        } else {
+            WindowInteraction::None
+        },
         capabilities: capabilities_from_wire(capabilities)?,
     };
     Ok(RecordedWindowState {

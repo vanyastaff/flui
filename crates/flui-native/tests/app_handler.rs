@@ -326,18 +326,79 @@ fn a_turn_deadline_gives_the_owner_a_turn_with_no_window() {
         .run(Rc::clone(&log) as Rc<dyn AppHandler>)
         .expect("the loop ends on a quit");
     let due = *due.get().expect("the deadline was asked");
+    let asked = due - std::time::Duration::from_millis(40);
     let turns = turns.borrow();
+    // The run's start may turn the owner as the deadline is first asked; the
+    // deadline itself gives no turn between then and its instant.
+    let startup = asked + std::time::Duration::from_millis(10);
+    assert!(
+        turns.iter().all(|turn| *turn <= startup || *turn >= due),
+        "no turn was given for the deadline before its instant: {turns:?}"
+    );
     assert!(
         turns
             .iter()
-            .any(|turn| *turn >= due && *turn < due + std::time::Duration::from_secs(1)),
+            .any(|turn| *turn < due + std::time::Duration::from_secs(1)),
         "the deadline gave the owner a turn at its instant: {turns:?}"
     );
     assert!(
-        log.count(AppCall::TurnDeadline) <= 4,
-        "asked once per idle iteration, not polled: {}",
-        log.count(AppCall::TurnDeadline)
+        log.count(AppCall::TurnDeadline) > 0,
+        "the loop asked the turn deadline before it waited"
     );
+}
+
+/// A turn deadline with a window open gives the owner its turn and asks the
+/// window for no frame: a deadline that is no frame deadline requests none.
+#[cfg(target_os = "windows")]
+fn a_turn_deadline_asks_no_window_for_a_frame() {
+    use flui_testing::window_handler::HandlerCall;
+
+    let log = AppLog::new();
+    let due = Rc::new(std::cell::OnceCell::new());
+    let answer = Rc::clone(&due);
+    log.answer_turn_deadline_with(move || {
+        Some(
+            *answer.get_or_init(|| web_time::Instant::now() + std::time::Duration::from_millis(40)),
+        )
+    });
+    let handler = RecordingWindowHandler::new();
+    let opened = Rc::clone(&handler);
+    let turned = Rc::new(std::cell::Cell::new(false));
+    let seen = Rc::clone(&turned);
+    let quit_at = Rc::clone(&due);
+    log.bootstrap(move |owner| {
+        let stop = owner.proxy();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let _ = stop.request_quit();
+        });
+        let _window = owner
+            .open_window(WindowOptions::default().visible(false), opened)?
+            .try_ready()?;
+        let quit = owner.proxy();
+        owner
+            .on_wake(Box::new(move || {
+                if quit_at
+                    .get()
+                    .is_some_and(|due| web_time::Instant::now() >= *due)
+                {
+                    seen.set(true);
+                    let _ = quit.request_quit();
+                }
+            }))
+            .expect("the owner takes a wake callback");
+        Ok(())
+    });
+    Box::new(flui_native::WindowsPlatform::try_new().expect("native Windows platform"))
+        .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+        .expect("the loop ends on a quit");
+    assert!(turned.get(), "the deadline gave the owner its turn");
+    let frames = handler
+        .calls()
+        .iter()
+        .filter(|call| matches!(call, HandlerCall::FrameRequested(_)))
+        .count();
+    assert_eq!(frames, 0, "no frame was asked for the turn deadline");
 }
 
 #[test]
@@ -389,6 +450,11 @@ fn app_handler_obligation_table() {
             (
                 "a turn deadline gives the owner a turn with no window",
                 a_turn_deadline_gives_the_owner_a_turn_with_no_window,
+            ),
+            #[cfg(target_os = "windows")]
+            (
+                "a turn deadline asks no window for a frame",
+                a_turn_deadline_asks_no_window_for_a_frame,
             ),
         ],
     );

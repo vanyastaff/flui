@@ -70,14 +70,10 @@ fn content_size(run: &HeadlessRunHandle) -> Size<f64> {
     window.state().content_size.get()
 }
 
-/// The owner's turn a desktop loop gives at the application's turn
-/// deadline (`AppHandler::turn_deadline`); the headless loop has no idle wait
-/// and gives it here, as one wake.
-fn turn_at_deadline(run: &HeadlessRunHandle) {
-    crate::app::runner::host::with_owner_platform(|owner| owner.proxy().wake())
-        .expect("a running loop has an owner")
-        .expect("the owner takes a wake");
-    run.run_owner_turn();
+/// The headless loop's idle wait woken at the manual clock's time: the
+/// host gives the owner the turn its turn deadline asks for, if due.
+fn turn_at(run: &HeadlessRunHandle, clock: &ManualClock) {
+    run.run_owner_turn_at(flui_foundation::MonotonicClock::now(clock));
 }
 
 fn recording() -> usize {
@@ -158,7 +154,7 @@ fn a_window_opens_at_its_default_when_the_read_does_not_answer_in_time() {
     );
 
     clock.advance(RECALL_BOUND);
-    turn_at_deadline(&run);
+    turn_at(&run, &clock);
     let default = content_size(&run);
     assert_ne!(default, Size::new(640.0, 480.0), "it opened at its default");
 
@@ -270,7 +266,7 @@ fn the_host_acquires_the_storage_once_per_window() {
 #[test]
 fn a_close_that_finds_the_state_busy_is_carried_over() {
     let storage = MemoryStorage::new();
-    let (run, _clock) = start_on_manual_clock(remembering(&storage));
+    let (run, clock) = start_on_manual_clock(remembering(&storage));
     let shared = APP_RUNTIME.with(|slot| slot.borrow().placement.shared());
     let address = shared.live.borrow()[0].address;
     let close = super::PlacementClose::of(Rc::clone(&shared), address);
@@ -284,7 +280,7 @@ fn a_close_that_finds_the_state_busy_is_carried_over() {
         run.turn_deadline().is_some(),
         "the carried close asks the owner for a turn"
     );
-    turn_at_deadline(&run);
+    turn_at(&run, &clock);
     assert_eq!(recording(), 0, "the next turn carried the close out");
     assert!(
         shared.claims.0.borrow().is_empty(),
@@ -424,10 +420,10 @@ fn the_final_flush_takes_answers_posted_to_the_owner() {
 /// The window root of a session-end test: says whether it heard the
 /// session end.
 #[derive(Clone)]
-struct HearsSessionEnd(Rc<Cell<bool>>);
+struct HearsSessionEnd(Arc<std::sync::atomic::AtomicBool>);
 
 struct HearsSessionEndState {
-    heard: Rc<Cell<bool>>,
+    heard: Arc<std::sync::atomic::AtomicBool>,
     notices: Option<flui_view::HostNoticeSubscription>,
 }
 
@@ -436,7 +432,7 @@ impl flui_view::StatefulView for HearsSessionEnd {
 
     fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         HearsSessionEndState {
-            heard: Rc::clone(&self.0),
+            heard: Arc::clone(&self.0),
             notices: None,
         }
     }
@@ -444,13 +440,13 @@ impl flui_view::StatefulView for HearsSessionEnd {
 
 impl flui_view::ViewState<HearsSessionEnd> for HearsSessionEndState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        let heard = Rc::clone(&self.heard);
+        let heard = Arc::clone(&self.heard);
         self.notices = Some(
             ctx.lifecycle_handle()
                 .expect("a bound lifecycle")
                 .subscribe_notices(move |notice| {
                     if matches!(notice, flui_platform::HostNotice::SessionEnded) {
-                        heard.set(true);
+                        heard.store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                 })
                 .expect("the lifecycle is open"),
@@ -477,29 +473,91 @@ impl flui_view::View for HearsSessionEnd {
 /// still hears the session end with its budget.
 #[test]
 fn a_store_that_never_answers_leaves_the_session_end_its_budget() {
-    let provided = MemoryStorage::new();
-    let barrier = provided.hold_commits();
-    let heard = Rc::new(Cell::new(false));
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let inner = MemoryStorage::new();
+    let held = inner.clone();
+    let heard = Arc::new(AtomicBool::new(false));
+    let store = OrderedStore {
+        inner,
+        ending: Arc::default(),
+        heard: Arc::clone(&heard),
+        written_before_heard: Arc::default(),
+    };
+    let (ending, early) = (
+        Arc::clone(&store.ending),
+        Arc::clone(&store.written_before_heard),
+    );
+    let provided = Arc::new(store);
     let application = Application::new()
         .config(AppConfig::new().restore_placement(NAME))
         .capability::<StorageCapability>(move |_: &ProviderContext<'_>| {
-            Ok(StorageHandle::new(
-                Arc::new(provided.clone()) as Arc<dyn Storage>
-            ))
+            Ok(StorageHandle::new(Arc::clone(&provided) as Arc<dyn Storage>))
         });
-    let run = HeadlessRun::start(application, HearsSessionEnd(Rc::clone(&heard)));
+    let run = HeadlessRun::start(application, HearsSessionEnd(Arc::clone(&heard)));
     run.run_owner_turn();
     assert_eq!(run.open_windows().len(), 1, "the window opened");
+    // The placement the window opened at is stored; from here the store never
+    // answers. The move falls inside the write interval, so it is held, and
+    // the session end is what hands it to storage.
+    let barrier = held.hold_commits();
     run.open_windows()[0].simulate_move(Point::new(222.0, 111.0));
 
+    ending.store(true, Ordering::SeqCst);
     let started = std::time::Instant::now();
     run.end_session(flui_platform::SessionEndPhase::Ending);
     let spent = started.elapsed();
-    assert!(heard.get(), "the application heard the session end");
+    assert!(
+        heard.load(Ordering::SeqCst),
+        "the application heard the session end"
+    );
+    assert!(
+        !early.load(Ordering::SeqCst),
+        "no placement was written at the session end before the application heard it"
+    );
     assert!(
         spent < super::SESSION_END_PLACEMENT_BOUND + std::time::Duration::from_secs(1),
         "the placements took their own bound, not the budget: {spent:?}"
     );
     drop(barrier);
     run.join().expect("the run ends");
+}
+
+/// A store that says whether a write reached it during a session end before
+/// the application heard the session end.
+struct OrderedStore {
+    inner: MemoryStorage,
+    ending: Arc<std::sync::atomic::AtomicBool>,
+    heard: Arc<std::sync::atomic::AtomicBool>,
+    written_before_heard: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Storage for OrderedStore {
+    fn read(
+        &self,
+        name: &StorageName,
+        limit: u64,
+    ) -> flui_platform::StorageFuture<flui_platform::Stored> {
+        self.inner.read(name, limit)
+    }
+
+    fn publish(
+        &self,
+        name: &StorageName,
+        bytes: Vec<u8>,
+        mode: flui_platform::WriteMode,
+    ) -> flui_platform::StorageFuture<flui_platform::StoredVersion> {
+        use std::sync::atomic::Ordering;
+        if self.ending.load(Ordering::SeqCst) && !self.heard.load(Ordering::SeqCst) {
+            self.written_before_heard.store(true, Ordering::SeqCst);
+        }
+        self.inner.publish(name, bytes, mode)
+    }
+
+    fn copy_aside(
+        &self,
+        name: &StorageName,
+    ) -> flui_platform::StorageFuture<flui_platform::CopiedAside> {
+        self.inner.copy_aside(name)
+    }
 }

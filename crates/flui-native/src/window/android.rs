@@ -519,6 +519,8 @@ fn sample_state(
             // An Activity has no activation apart from its window's focus.
             active: focused,
             capabilities: activity_capabilities(activity_facts(api, displays)),
+            // An Activity's window is placed by the system, never by the user.
+            interaction: flui_platform::WindowInteraction::None,
         }
         .onto(state)
     })

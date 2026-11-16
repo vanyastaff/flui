@@ -1902,6 +1902,9 @@ impl MacOSWindow {
                     // the main window has no report of its own here.
                     active: focused,
                     capabilities,
+                    // AppKit's live resize and title-bar drag are not read
+                    // yet (docs/gaps.md).
+                    interaction: flui_platform::WindowInteraction::None,
                 }
                 .onto(state)
             })

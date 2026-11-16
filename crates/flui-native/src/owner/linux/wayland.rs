@@ -698,7 +698,7 @@ mod event_loop {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
     use crate::owner::slot::OwnerCell;
-    use crate::owner::wake_deadline::{FrameCount, TurnDeadline, WakeDeadline};
+    use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
@@ -2022,7 +2022,7 @@ mod event_loop {
         /// The wake deadline armed and the last one delivered.
         deadline: RefCell<WakeDeadline>,
         /// The application's turn deadline as the loop armed it.
-        turn_deadline: RefCell<TurnDeadline>,
+        turn_deadline: RefCell<WakeDeadline>,
         /// How many frames the windows' handlers produced, which tells the
         /// deadline a delivery a frame served from one that reached nothing.
         frames: FrameCount,
@@ -2428,7 +2428,10 @@ mod event_loop {
             failure.resume();
             // A due turn deadline is the owner's turn below, window or not,
             // and asks no window for a frame.
-            let turn_due = self.turn_deadline.borrow_mut().take_due(Instant::now());
+            let turn_due = self
+                .turn_deadline
+                .borrow_mut()
+                .take_due(Instant::now(), self.signal.turns());
             if turn_due && self.signal.accepting() {
                 let _ = self.signal.wake();
             }
@@ -2464,7 +2467,10 @@ mod event_loop {
             } else {
                 None
             };
-            let turn_deadline = self.turn_deadline.borrow_mut().arm(turn_answer);
+            let turn_deadline = self
+                .turn_deadline
+                .borrow_mut()
+                .arm(turn_answer, self.signal.turns());
             let timeout = poll_timeout(
                 LoopTurn {
                     frame_due,

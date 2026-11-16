@@ -13670,6 +13670,17 @@ pub const fn flui::platform::WindowInsets::with_keyboard(self, keyboard: flui::p
 pub fn flui::platform::WindowInsets::try_new(safe_area: flui::geometry::EdgeInsets, keyboard: flui::platform::KeyboardInset, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::WindowInsets::try_with_safe_area(self, safe_area: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
 pub fn flui::platform::WindowInsets::try_with_system_gestures(self, system_gestures: flui::geometry::EdgeInsets) -> Result<Self, flui::platform::InvalidInsets>
+#[non_exhaustive] pub enum flui::platform::WindowInteraction
+impl Clone for flui::platform::WindowInteraction
+impl Copy for flui::platform::WindowInteraction
+impl Default for flui::platform::WindowInteraction
+impl Eq for flui::platform::WindowInteraction
+impl PartialEq for flui::platform::WindowInteraction
+impl core::fmt::Debug for flui::platform::WindowInteraction
+impl core::hash::Hash for flui::platform::WindowInteraction
+impl core::marker::StructuralPartialEq for flui::platform::WindowInteraction
+variant flui::platform::WindowInteraction::None // at 0
+variant flui::platform::WindowInteraction::UserPlacing // at 1
 pub enum flui::platform::WindowMaterial
 impl Clone for flui::platform::WindowMaterial
 impl Copy for flui::platform::WindowMaterial
@@ -13795,7 +13806,7 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowRevisionExhaust
 #[non_exhaustive] pub struct flui::platform::WindowState
 field flui::platform::WindowState::active: bool // at 18
 field flui::platform::WindowState::appearance: flui::platform::WindowAppearance // at 14
-field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 19
+field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 20
 field flui::platform::WindowState::constraints: flui::platform::SizeConstraints // at 9
 field flui::platform::WindowState::content_size: flui::platform::WindowExtent // at 2
 field flui::platform::WindowState::display: Option<flui::platform::DisplayId> // at 12
@@ -13804,6 +13815,7 @@ field flui::platform::WindowState::focused: bool // at 7
 field flui::platform::WindowState::frame: flui::platform::WindowFrame // at 11
 field flui::platform::WindowState::hovered: bool // at 17
 field flui::platform::WindowState::insets: flui::platform::WindowInsets // at 15
+field flui::platform::WindowState::interaction: flui::platform::WindowInteraction // at 19
 field flui::platform::WindowState::metrics: Option<flui::geometry::WindowMetrics> // at 13
 field flui::platform::WindowState::mode: flui::platform::WindowMode // at 3
 field flui::platform::WindowState::normal_geometry: Option<flui::platform::WindowGeometry> // at 4
@@ -13831,6 +13843,7 @@ pub fn flui::platform::WindowState::with_focused(self, focused: bool) -> Self
 pub fn flui::platform::WindowState::with_frame(self, frame: flui::platform::WindowFrame) -> Self
 pub fn flui::platform::WindowState::with_hovered(self, hovered: bool) -> Self
 pub fn flui::platform::WindowState::with_insets(self, insets: flui::platform::WindowInsets) -> Self
+pub fn flui::platform::WindowState::with_interaction(self, interaction: flui::platform::WindowInteraction) -> Self
 pub fn flui::platform::WindowState::with_metrics(self, metrics: Option<flui::geometry::WindowMetrics>) -> Self
 pub fn flui::platform::WindowState::with_mode(self, mode: flui::platform::WindowMode) -> Self
 pub fn flui::platform::WindowState::with_normal_geometry(self, normal_geometry: Option<flui::platform::WindowGeometry>) -> Self
@@ -13841,7 +13854,7 @@ pub fn flui::platform::WindowState::with_visible(self, visible: bool) -> Self
 pub struct flui::platform::WindowStateParts
 field flui::platform::WindowStateParts::active: bool // at 17
 field flui::platform::WindowStateParts::appearance: flui::platform::WindowAppearance // at 13
-field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 18
+field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 19
 field flui::platform::WindowStateParts::constraints: flui::platform::SizeConstraints // at 8
 field flui::platform::WindowStateParts::content_size: flui::platform::WindowExtent // at 1
 field flui::platform::WindowStateParts::display: Option<flui::platform::DisplayId> // at 11
@@ -13850,6 +13863,7 @@ field flui::platform::WindowStateParts::focused: bool // at 6
 field flui::platform::WindowStateParts::frame: flui::platform::WindowFrame // at 10
 field flui::platform::WindowStateParts::hovered: bool // at 16
 field flui::platform::WindowStateParts::insets: flui::platform::WindowInsets // at 14
+field flui::platform::WindowStateParts::interaction: flui::platform::WindowInteraction // at 18
 field flui::platform::WindowStateParts::metrics: Option<flui::geometry::WindowMetrics> // at 12
 field flui::platform::WindowStateParts::mode: flui::platform::WindowMode // at 2
 field flui::platform::WindowStateParts::normal_geometry: Option<flui::platform::WindowGeometry> // at 3

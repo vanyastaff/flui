@@ -1,4 +1,5 @@
 //! Standalone AppKit loop ownership and orderly, policy-aware stopping.
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -33,7 +34,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::panic_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry},
     owner::signal::OwnerTurnSlot,
-    owner::wake_deadline::TurnDeadline,
+    owner::wake_deadline::WakeDeadline,
 };
 
 /// Whether finishing a session end also answers a waiting
@@ -82,13 +83,27 @@ pub(crate) struct LoopControl {
     /// turn the signal posts reaches it through this shared control.
     turn: OnceLock<NativeOwner<Rc<OwnerTurnSlot>>>,
     /// The application's turn deadline and the generation of the timer
-    /// scheduled for it: AppKit's loop has no idle wait of its own to bound,
-    /// so each answer schedules a timer on the main queue and supersedes the
-    /// last ([`Self::schedule_turn_deadline`]).
-    turn_deadline: Mutex<(TurnDeadline, u64)>,
+    /// scheduled for it: main-thread state, made there the first time the
+    /// owner asks. AppKit's loop has no idle wait of its own to bound, so each
+    /// answer schedules a timer on the main queue and supersedes the last
+    /// ([`Self::schedule_turn_deadline`]).
+    turn_deadline: OnceLock<NativeOwner<TurnTimer>>,
 }
 
+/// The turn deadline as AppKit arms it, keyed by the owner's turns, and the
+/// generation of the timer scheduled for it.
+type TurnTimer = Rc<RefCell<(WakeDeadline, u64)>>;
+
 impl LoopControl {
+    /// The turn deadline's state, on the main thread.
+    fn turn_timer(&self, main: MainThreadMarker) -> TurnTimer {
+        Rc::clone(
+            self.turn_deadline
+                .get_or_init(|| NativeOwner::new(Rc::default(), main))
+                .get(main),
+        )
+    }
+
     /// The slot the application's wake callback waits in between turns.
     pub(crate) fn turn(&self, main: MainThreadMarker) -> Rc<OwnerTurnSlot> {
         Rc::clone(
@@ -143,7 +158,7 @@ impl LoopControl {
                 app,
                 terminate_gate: Mutex::new(TerminateGate::new()),
                 turn: OnceLock::new(),
-                turn_deadline: Mutex::new((TurnDeadline::default(), 0)),
+                turn_deadline: OnceLock::new(),
             }
         })
     }
@@ -232,14 +247,19 @@ impl LoopControl {
     /// handler has bootstrapped; an answer supersedes the timer an earlier one
     /// scheduled, and an instant delivered once is not scheduled again.
     pub(crate) fn schedule_turn_deadline(self: &Arc<Self>) {
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
         let answer = if self.owner_signal.accepting() {
             self.app.turn_deadline().or_resume(None)
         } else {
             None
         };
+        let timer = self.turn_timer(main);
+        let turns = self.owner_signal.turns();
         let (armed, generation) = {
-            let mut slot = self.turn_deadline.lock();
-            let armed = slot.0.arm(answer);
+            let mut slot = timer.borrow_mut();
+            let armed = slot.0.arm(answer, turns);
             slot.1 = slot
                 .1
                 .checked_add(1)
@@ -251,9 +271,16 @@ impl LoopControl {
         };
         let delay = at.saturating_duration_since(web_time::Instant::now());
         self.run_after(delay, move |control| {
+            let Some(main) = MainThreadMarker::new() else {
+                return;
+            };
+            let timer = control.turn_timer(main);
+            let turns = control.owner_signal.turns();
+            // The main queue runs a timer at or after its delay, so a current
+            // one finds its instant due.
             let due = {
-                let mut slot = control.turn_deadline.lock();
-                slot.1 == generation && slot.0.take_due(web_time::Instant::now())
+                let mut slot = timer.borrow_mut();
+                slot.1 == generation && slot.0.take_due(web_time::Instant::now(), turns)
             };
             if due {
                 let _ = control.owner_signal.wake();

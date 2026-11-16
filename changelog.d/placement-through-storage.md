@@ -3,9 +3,18 @@
 - `flui_runtime::capability::HostCapabilities`: the scope a composition root
   acquires capabilities through for itself, outside every UI runtime, from the
   run's registry, with no window (ADR-0338).
-- `flui_native::AppHandler::turn_deadline`: an instant at which the loop gives
-  the owner a turn with or without a window open and asks no window for a
-  frame. Served by Win32 (its modal loops included), X11, Wayland and AppKit.
+- `flui_native::AppHandler::turn_deadline`, a required method: an instant at
+  which every host gives the owner a turn with or without a window open and
+  asks no window for a frame, again after a turn that left it in place
+  (ADR-0343). An existing handler answers `None`.
+- `flui::platform::WindowState::interaction` (`WindowInteraction`): whether
+  the user is placing the window through the window system. Win32 states it
+  during its size-move loop and the caption's maximize, minimize and restore;
+  the other hosts state `None` for now.
+- `flui_native::HeadlessOwnerTurns::drive_at` and
+  `HeadlessHostWindow::simulate_interaction`, and the app test kit's
+  `HeadlessRunHandle::turn_deadline` and `run_owner_turn_at`: a test serves the
+  turn deadline on its manual clock.
 - `flui::testing::MemoryStorage::hold_reads` (and `ReadHold`): a read asked
   while the hold lives answers only after it drops, as a slow store would.
 
@@ -23,9 +32,13 @@
   its configuration instead of failing the launch, and a placement read too
   late is never applied to the window.
 - A window that could not read its placement in time leaves the stored one
-  alone until the user moves, resizes or changes the mode of the window: a
-  display change, a scale change or a command of the application does not
-  overwrite it.
+  alone until the host reports the user moving, resizing or maximizing the
+  window: a display or scale change, a window manager's adjustment or a
+  command of the application does not overwrite it. On X11, Wayland and macOS,
+  which do not report that yet, it is not overwritten that run.
+- A window reopened while its predecessor's last write is still out takes that
+  write over: one writer per name, so storage never ends with the closed
+  window's placement.
 - A store that keeps refusing a window's placement is tried three times, each
   after twice the wait of the attempt before, and then not until the placement
   changes: an idle application no longer wakes every two seconds for it.
@@ -39,8 +52,7 @@
   application's time.
 - Two windows asking to remember their placement under one name no longer
   overwrite each other: the second opens from its configuration and is not
-  remembered. A window reopened while its predecessor's last write is still out
-  opens from that placement and still writes it if that write fails.
+  remembered.
 - A window's placement is written again when the displays change under it (a
   moved taskbar, a rearranged desktop), since it is kept relative to its
   display's usable area.

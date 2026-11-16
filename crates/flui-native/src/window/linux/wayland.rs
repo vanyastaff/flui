@@ -1613,6 +1613,9 @@ mod toplevel {
                     .occluded(),
                     hovered: self.hovered,
                     active: states.activated,
+                    // A move or resize the compositor runs for the user is not
+                    // read yet (docs/gaps.md).
+                    interaction: flui_platform::WindowInteraction::None,
                     capabilities: presented::reported(
                         capabilities(
                             applied.told.wm,

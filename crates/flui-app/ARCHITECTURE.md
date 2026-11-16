@@ -522,12 +522,16 @@ a cell of its own, borrowed only for a step that runs none of the
 application's code. Storage, a provider and a window's subscription always
 run with nothing borrowed.
 
-- **The owner's turns come from the turn deadline.** `AppRuntime::turn_deadline`
-  answers `AppHandler::turn_deadline` with the placements' next due instant
-  and the main window's read bound; a desktop loop gives the owner a turn at
-  it, with or without a window open, and asks no window for a frame
-  (`crates/flui-native/ARCHITECTURE.md`). Placement adds nothing to the frame
-  deadline.
+- **The owner's turns come from the turn deadline (ADR-0343 §1).**
+  `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
+  placements' next due instant and the main window's read bound; every host
+  gives the owner a turn at it, with or without a window open, asks no window
+  for a frame, and delivers it again after a turn that left it unserved.
+  Placement adds nothing to the frame deadline. A change made outside an owner
+  turn (a window's report, a close, a display change, a window queued for its
+  read) that moves the deadline asks for a turn
+  (`PlacementShared::announce_turn_deadline`), after which every host reads the
+  deadline again.
 - **The read never blocks the owner.** `PlacementRecall` starts the read
   before the window opens and settles with a typed outcome (`Recalled`). The
   window waits at most `RECALL_BOUND`, measured on the placement clock
@@ -546,11 +550,13 @@ run with nothing borrowed.
   discarded.
 - **Only the user overwrites a placement the run could not read.** After a
   read that timed out, was refused or panicked, the recorder holds
-  `StoredPlacement::Unknown`, which owes nothing until a change it attributes
-  to the user (`ChangeOrigin::User`): a report that differs from the last one
-  at the same scale, against the same display snapshot, with no command of
-  the application applied in between. Where the window opened, a display
-  change, a scale change and an application's command never write.
+  `StoredPlacement::Unknown`, which owes nothing until a change the host
+  states was the user's (`ChangeOrigin::User`): a report whose
+  `WindowState::interaction` is `UserPlacing`, or the report that ends one
+  (ADR-0343 §2). Nothing is inferred from what did not change: where the
+  window opened, a display or scale change, a window manager's adjustment and
+  an application's command never write, and on a host that cannot tell
+  nothing does until the read succeeds another run.
 - **Writes are bounded.** At most one every `WRITE_INTERVAL` while the window
   changes. A refused write is tried again after twice the wait of the attempt
   before, `WRITE_ATTEMPTS` times in all, and then not until the window's
@@ -564,11 +570,15 @@ run with nothing borrowed.
   names each placement storage did not take. A session end does the same after
   the application's own work and the documents, within what the budget has
   left and at most `SESSION_END_PLACEMENT_BOUND`.
-- **One window per name.** An open window holds its placement's
-  `StorageName`; a second window asking for it opens from its configuration
-  and is not remembered. A window reopened under a name whose last write is
-  still out opens from that window's placement and owes what it owed
-  (`PlacementRecorder::hand_over`).
+- **One window, and one writer, per name.** An open window holds its
+  placement's `StorageName`; a second window asking for it opens from its
+  configuration and is not remembered. A window reopened under a name whose
+  closed window still has a recorder takes that recorder's placement, its
+  knowledge of what storage holds and its write in flight
+  (`PlacementRecorder::hand_over`, `HandOver::Taken`): the new recorder takes
+  storage's answer to that write before it starts one, and the closed one owes
+  and writes nothing more. While storage's code is running that write
+  (`HandOver::Busy`), nothing moves and the reopened window is not remembered.
 
 `placement_recorder` (the model's table) and the runner's `placement::tests`
 hold each rule.

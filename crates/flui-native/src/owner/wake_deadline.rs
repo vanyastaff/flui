@@ -1,19 +1,24 @@
-//! The owner's wake deadline as a loop arms and delivers it: the instant the
-//! application's handler asks the loop to wake at
-//! (`AppHandler::wake_deadline`), and the rule that keeps a deadline no frame
-//! could service from spinning the loop. The Win32 loop and its modal loops,
-//! and the X11, Wayland and UIKit loops, wait on it.
+//! The owner's deadlines as a loop arms and delivers them, and the rule that
+//! keeps a deadline nothing serviced from spinning the loop and one left
+//! unserved from being dropped: the wake deadline (`AppHandler::wake_deadline`),
+//! delivered as frame requests and keyed by the frames that ran, and the turn
+//! deadline (`AppHandler::turn_deadline`), delivered as one owner turn with no
+//! frame and keyed by the owner turns that ran (`OwnerSignal::turns`). Every
+//! host waits on both (ADR-0343 §1).
 
 /// The last deadline the loop delivered. The application's handler answers
-/// with an instant only, so the same instant is either work no frame has had
-/// a chance to service, which must not spin, or work a frame left or accepted
-/// at the instant it just serviced (a queue of obligations all due at one
-/// instant answers the same instant once per item), which must get its frame.
-/// The frame count is the delivery generation that tells them apart. A run
-/// has one handler, so the instant alone names the answer.
+/// with an instant only, so the same instant is either work nothing has had a
+/// chance to service, which must not spin, or work left or accepted at the
+/// instant just serviced (a queue of obligations all due at one instant
+/// answers the same instant once per item), which must be delivered again.
+/// The count of what services it (frames for the wake deadline, owner turns
+/// for the turn deadline) is the delivery generation that tells them apart: an
+/// obligation is cleared by the code that served it, which moves the instant,
+/// never by its delivery. A run has one handler, so the instant alone names
+/// the answer.
 struct DeadlineDelivery {
     arm: DeadlineArm,
-    /// The platform's frame count when the delivery was made.
+    /// The count of what services the deadline when the delivery was made.
     frames: u64,
 }
 
@@ -103,83 +108,13 @@ impl WakeDeadline {
     }
 }
 
-/// The owner's turn deadline as a loop arms and delivers it
-/// (`AppHandler::turn_deadline`): a due instant gives the owner one turn
-/// (`OwnerSignal::wake`) and asks no window for a frame, so it holds with no
-/// window open. An instant is delivered once: the turn it brought is the
-/// handler's chance to move it, and an answer that stays on it is not waited
-/// for again, so a handler that does not move it cannot spin the loop.
-#[cfg_attr(
-    not(any(windows, target_os = "macos", linux_host, test)),
-    expect(
-        dead_code,
-        reason = "UIKit, Android, the web and headless do not serve turn deadlines"
-    )
-)]
-#[derive(Debug, Default)]
-pub(crate) struct TurnDeadline {
-    armed: Option<web_time::Instant>,
-    delivered: Option<web_time::Instant>,
-}
-
-#[cfg_attr(
-    not(any(windows, target_os = "macos", linux_host, test)),
-    expect(
-        dead_code,
-        reason = "UIKit, Android, the web and headless do not serve turn deadlines"
-    )
-)]
-impl TurnDeadline {
-    /// The handler answered `answer`: arm it unless it is the instant last
-    /// delivered. The instant to wait until, if any.
-    pub(crate) fn arm(&mut self, answer: Option<web_time::Instant>) -> Option<web_time::Instant> {
-        if answer.is_none() {
-            self.delivered = None;
-        }
-        self.armed = answer.filter(|at| self.delivered != Some(*at));
-        self.armed
-    }
-
-    /// Whether the armed instant is due at `now`; a due one is delivered and
-    /// disarmed, and the caller gives the owner its turn.
-    pub(crate) fn take_due(&mut self, now: web_time::Instant) -> bool {
-        let Some(at) = self.armed.take_if(|at| *at <= now) else {
-            return false;
-        };
-        self.delivered = Some(at);
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use web_time::Instant;
 
-    use super::{TurnDeadline, WakeDeadline};
-
-    /// A turn deadline is delivered once at its instant, never before, and
-    /// an answer that stays on the delivered instant is not armed again.
-    #[test]
-    fn a_turn_deadline_is_delivered_once_at_its_instant() {
-        let start = Instant::now();
-        let at = start + Duration::from_millis(5);
-        let mut deadline = TurnDeadline::default();
-        assert_eq!(deadline.arm(Some(at)), Some(at));
-        assert!(!deadline.take_due(start), "not before its instant");
-        assert!(deadline.take_due(at), "due at its instant");
-        assert!(!deadline.take_due(at), "delivered once");
-        assert_eq!(deadline.arm(Some(at)), None, "the same instant again");
-        let later = at + Duration::from_millis(5);
-        assert_eq!(deadline.arm(Some(later)), Some(later), "a new instant");
-        assert_eq!(deadline.arm(None), None);
-        assert_eq!(
-            deadline.arm(Some(at)),
-            Some(at),
-            "after a quiet answer, the old instant is new again"
-        );
-    }
+    use super::WakeDeadline;
 
     /// A deadline is armed when asked for, delivered once when due, and armed
     /// again for the same instant only after a frame ran: a deadline no frame

@@ -96,13 +96,15 @@ fn a_host_scope_contains_a_panicking_job() {
         .expect("the scope takes the post");
     assert_eq!(wakes.load(Ordering::SeqCst), 2, "each post woke the owner");
     assert_eq!(ran.load(Ordering::SeqCst), 0, "not run inline");
-    assert!(scope.has_posted());
 
     let first = scope.run_posted();
     assert!(first.held().is_some(), "the panic is handed to the owner");
     flui_foundation::panic::discard_payload(first.into_payload().expect("held"));
     assert_eq!(ran.load(Ordering::SeqCst), 1, "the job after it ran");
-    assert!(!scope.has_posted());
+    assert!(
+        scope.run_posted().held().is_none(),
+        "a second run finds nothing left"
+    );
 }
 
 /// Once retired, a post is refused, so a provider learns its owner is gone,
@@ -139,7 +141,10 @@ fn a_host_scope_refuses_posts_after_retirement() {
 
     assert!(scope.retire().held().is_none());
     assert_eq!(poster.post(|| {}), Err(OwnerRetired));
-    assert!(!scope.has_posted(), "a refused job is not queued");
+    assert!(
+        scope.run_posted().held().is_none(),
+        "a refused job is not queued"
+    );
 }
 
 #[test]

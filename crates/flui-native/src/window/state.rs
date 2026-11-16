@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
     InvalidGeometry, WindowAppearance, WindowCapabilities, WindowExecutionState, WindowExtent,
-    WindowGeometry, WindowInsets, WindowMode, WindowState,
+    WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -42,6 +42,10 @@ pub(crate) struct ReportedFacts {
     pub(crate) active: bool,
     /// What the window honours now.
     pub(crate) capabilities: WindowCapabilities,
+    /// Whether the user is placing the window through the window system, as
+    /// the host knows it; [`WindowInteraction::None`] where it cannot tell
+    /// (ADR-0343).
+    pub(crate) interaction: WindowInteraction,
 }
 
 impl ReportedFacts {
@@ -56,6 +60,7 @@ impl ReportedFacts {
             .with_hovered(self.hovered)
             .with_active(self.active)
             .with_capabilities(self.capabilities)
+            .with_interaction(self.interaction)
     }
 }
 

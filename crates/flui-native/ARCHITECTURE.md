@@ -863,26 +863,34 @@ trait depends on `flui-platform` instead.
   instead of hanging) and
   `web_session_end_handler_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
-- **A turn deadline is a promise of an owner turn, window or not.** The
-  application's handler answers two deadlines. `wake_deadline` is work a
-  frame serves: a loop asks its windows for frames at it
-  (`owner::wake_deadline::WakeDeadline`). `turn_deadline` is work no frame
+- **A turn deadline is a promise of an owner turn, window or not (ADR-0343
+  §1).** The application's handler answers two deadlines, each armed and
+  taken with `owner::wake_deadline::WakeDeadline`. `wake_deadline` is work a
+  frame serves: at it a loop asks its windows for frames, and the instant is
+  delivered again only after a frame ran. `turn_deadline` is work no frame
   serves (a bounded wait, a held write): at it the loop gives the owner one
-  turn through `OwnerSignal::wake`, with or without a window open, and asks no
-  window for a frame (`owner::wake_deadline::TurnDeadline`, which delivers an
-  instant once, so a handler that leaves it in place cannot spin the loop).
-  The Win32 loop and its modal loops, and the X11 and Wayland loops, wait on
-  both; the AppKit host asks the turn deadline after each owner turn and once
-  the handler bootstrapped, and schedules the turn on the main queue. UIKit,
-  Android, the web and headless do not ask it ([gaps](../../docs/gaps.md#uikit-android-and-the-web-give-no-owner-turn-at-a-turn-deadline)).
-  `a_turn_deadline_gives_the_owner_a_turn_with_no_window` (the `app_handler`
-  table, on Win32) and `a_turn_deadline_is_delivered_once_at_its_instant`
-  hold it.
+  turn through `OwnerSignal::wake`, with or without a window open, asks no
+  window for a frame, and delivers the instant again only after an owner turn
+  ran (`OwnerSignal::turns`), so the obligation stays until the handler moves
+  it at its turn. Every host asks it after every owner turn: the Win32 loop
+  and its modal loops and the X11, Wayland and Android loops before each wait;
+  AppKit, UIKit and the web after each turn and once the handler bootstrapped,
+  through a timer of the main queue or the page; the headless host when a test
+  drives `HeadlessOwnerTurns::drive_at(now)`. A handler that moves the deadline
+  outside an owner turn asks for one. `a_turn_deadline_gives_the_owner_a_turn_with_no_window`
+  (the `app_handler` table on Win32, `x11_window`, `wayland_window`),
+  `a_turn_deadline_asks_no_window_for_a_frame` and
+  `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` hold it.
+- **A window states when the user places it (ADR-0343 §2).** Each host fills
+  `ReportedFacts::interaction`: Win32 `UserPlacing` inside its size-move loop
+  and while the default procedure carries out `SC_MAXIMIZE`, `SC_MINIMIZE` or
+  `SC_RESTORE`; the headless host what `HeadlessHostWindow::simulate_interaction`
+  said; every other host `None` ([gaps](../../docs/gaps.md#x11-wayland-and-appkit-do-not-say-when-the-user-places-a-window)).
 - **The application's handler is passed to `run` (ADR-0254 §4).**
   `AppHandler` (in `platform.rs`) has one method per obligation:
   `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
-  `host_notice`, `exit_policy`, `wake_deadline` and `turn_deadline` (the one
-  with a default, `None`), each borrowing the owner capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
+  `host_notice`, `exit_policy`, `wake_deadline` and `turn_deadline`, each
+  borrowing the owner capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
   its sources report to from construction on: `run` binds the handler on the
   owner thread in an owner slot, with the platform and the owner hooks held
   weakly (the platform owns the loop that owns the delivery), and each call

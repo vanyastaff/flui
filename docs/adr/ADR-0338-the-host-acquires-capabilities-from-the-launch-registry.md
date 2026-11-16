@@ -2,8 +2,10 @@
 
 - **Status:** Accepted (2026-11-15)
 - **Date:** 2026-11-15
-- **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) §2 (the seam this extends: a
-  widget of a UI runtime acquires a capability in a lifecycle hook),
+- **Supersedes:** [ADR-0152](ADR-0152-capability-seam-revised.md) §2 item 2 in part (that
+  providers are acquired only per UI runtime; a widget still acquires in a lifecycle hook)
+- **Related:** [ADR-0343](ADR-0343-the-owner-promises-turn-deadlines-and-the-window-states-user-placement.md)
+  (the turn deadline and the user-placement fact placement relies on),
   [ADR-0237](ADR-0237-window-state-and-host-notices.md) decision 6 (window placement is FLUI's
   own value), [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md)
   (documents reach their bytes through `StorageCapability`),

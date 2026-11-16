@@ -393,13 +393,6 @@ impl HostCapabilities {
         first
     }
 
-    /// Whether a provider posted a job that [`run_posted`](Self::run_posted)
-    /// has not run yet.
-    #[must_use]
-    pub fn has_posted(&self) -> bool {
-        self.jobs.has_queued()
-    }
-
     /// The host retires the scope: its pending completions end, a job still
     /// queued is dropped unrun and a later post is refused with
     /// [`OwnerRetired`]. Returns the first panic of that.

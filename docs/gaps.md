@@ -604,12 +604,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui-view`, `flui-painting` and `flui-engine` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-native`, `flui-widgets` and `flui-interaction` the most.
 - A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
 
-### UIKit, Android and the web give no owner turn at a turn deadline
+### X11, Wayland and AppKit do not say when the user places a window
 
-> **Environments:** iOS, Android, Web, headless · **Who it hurts:** A future host-side client of `AppHandler::turn_deadline` on those hosts · **Parity:** none (owner core)
+> **Environments:** X11, Wayland, macOS · **Who it hurts:** Users whose window could not read its remembered placement at launch and who then move it · **Parity:** [Windows](platform-parity.md#windows)
 
-- `AppHandler::turn_deadline` promises the owner a turn at its instant with or without a window open (`crates/flui-native/ARCHITECTURE.md`). The Win32 loop and its modal loops, the X11 and Wayland loops and the AppKit host serve it; the UIKit loop, the Android looper and the web host never ask it, and the headless host has no idle wait. Their only client today, window placement, is desktop-only, so nothing waits on it there yet.
-- The entry closes when each of those hosts asks the turn deadline and gives the turn (UIKit through its run-loop timer, Android through the looper's timeout, the web through a timer of the page), each with the `app_handler` row's test where it runs.
+- `WindowState::interaction` states that the user is placing a window through the window system ([ADR-0343](adr/ADR-0343-the-owner-promises-turn-deadlines-and-the-window-states-user-placement.md) §2). Win32 states it from its size-move loop and the system commands; the X11, Wayland and AppKit hosts state `WindowInteraction::None` always. A placement the run could not read is replaced only by a change the user made, so on those hosts a window that opened at its default because its read timed out, was refused or panicked keeps the stored placement whatever the user does, and the user's move is not remembered that run.
+- Each host has a signal: AppKit's `inLiveResize` and the delegate's `windowWillMove:` during a title-bar drag, X11's `_NET_WM_MOVERESIZE` and a ConfigureNotify while the pointer button that started it is down, Wayland's `xdg_toplevel.move`/`resize`, which the client itself sends from a press.
+- The entry closes when each host states `UserPlacing` from its signal, with a test of the host that a move it reports during the signal reads `UserPlacing` and one after it reads `None`.
 
 ### Window placement restores neither a scale change on the same display nor an OS's tiled state
 

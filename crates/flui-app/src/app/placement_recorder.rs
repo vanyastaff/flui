@@ -37,7 +37,8 @@ use flui_foundation::panic::{FirstPanic, drop_contained};
 use flui_platform::WindowOptions;
 use flui_platform::{
     DisplaySnapshot, StorageError, StorageFuture, StorageName, Stored, StoredVersion,
-    WindowCapabilities, WindowGeometry, WindowMode, WindowPlacement, WindowState, WriteMode,
+    WindowCapabilities, WindowGeometry, WindowInteraction, WindowMode, WindowPlacement,
+    WindowState, WriteMode,
 };
 use flui_view::persist::StorageHandle;
 
@@ -148,9 +149,9 @@ pub(crate) enum StoredPlacement {
     Nothing,
     /// The run could not read what storage holds, so it may hold a placement
     /// the user kept. Nothing the host or the application did to the window
-    /// (where it opened, a display change, a scale change, a command) is
-    /// owed: only a change the user made to the window, after which
-    /// `user_changed` is `true` and the window's placement is owed.
+    /// is owed: only a change the host states the user made
+    /// ([`ChangeOrigin::User`]), after which `user_changed` is `true` and the
+    /// window's placement is owed.
     Unknown {
         /// Whether the user changed the window since.
         user_changed: bool,
@@ -168,16 +169,31 @@ impl StoredPlacement {
     }
 }
 
-/// Who changed a window between two of its reports, as far as the recorder
-/// can tell. A change is the user's only when nothing else explains it.
+/// Who changed a window between two of its reports. A change is the user's
+/// only when the host says so ([`WindowInteraction::UserPlacing`]); nothing is
+/// inferred from what did not change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeOrigin {
-    /// The user moved, resized or changed the mode of the window.
+    /// The host reported the user placing the window in this report or in the
+    /// one before it, whose placement this report ends.
     User,
-    /// The host or the application: where the window opened, the displays or
-    /// the window's scale changing under it, a command the application
-    /// applied, or a change the recorder could not attribute.
+    /// Anything else: where the window opened, a display or scale change, a
+    /// window manager's or compositor's adjustment, an application's command,
+    /// and every change on a host that cannot tell.
     Other,
+}
+
+impl ChangeOrigin {
+    /// Who changed a window whose last report said `before` and whose new one
+    /// says `now`, with `changed` whether its placement changed.
+    fn of(before: WindowInteraction, now: WindowInteraction, changed: bool) -> Self {
+        let user = |interaction| interaction == WindowInteraction::UserPlacing;
+        if changed && (user(now) || user(before)) {
+            Self::User
+        } else {
+            Self::Other
+        }
+    }
 }
 
 /// A read of one window's stored placement, from its start before the window
@@ -442,12 +458,6 @@ struct WriteRecord {
 struct Seen {
     state: WindowState,
     bytes: Vec<u8>,
-    /// The window's scale, as bits, so a scale change is told apart exactly.
-    scale: Option<u64>,
-    displays: flui_platform::DisplayRevision,
-    /// How many commands the application had applied to the window; `None`
-    /// when that could not be read.
-    commands: Option<u64>,
 }
 
 /// The write between the recorder and storage.
@@ -541,28 +551,18 @@ impl WriteRecord {
         false
     }
 
-    /// Who changed the window from its last report to one measured as
-    /// `bytes` at `scale`, against `displays`, with `commands` applied.
-    fn origin_of(
-        &self,
-        bytes: &[u8],
-        scale: Option<u64>,
-        displays: flui_platform::DisplayRevision,
-        commands: Option<u64>,
-    ) -> ChangeOrigin {
+    /// Who changed the window from its last report to `state`, measured as
+    /// `bytes`.
+    fn origin_of(&self, state: &WindowState, bytes: &[u8]) -> ChangeOrigin {
         let Some(seen) = &self.seen else {
             // The first report is where the window opened.
             return ChangeOrigin::Other;
         };
-        let explained = seen.scale != scale
-            || seen.displays != displays
-            || commands.is_none()
-            || seen.commands != commands;
-        if seen.bytes.as_slice() != bytes && !explained {
-            ChangeOrigin::User
-        } else {
-            ChangeOrigin::Other
-        }
+        ChangeOrigin::of(
+            seen.state.interaction,
+            state.interaction,
+            seen.bytes.as_slice() != bytes,
+        )
     }
 }
 
@@ -606,25 +606,47 @@ impl PlacementRecorder {
         self.name
     }
 
-    /// The window's newest placement and what storage holds as far as the
-    /// recorder knows, for a window reopened under the same name: it opens
-    /// from that placement, which no read racing this recorder's last write
-    /// could give, and takes over what this recorder still owes. `None` until
-    /// the window reported a placement.
-    pub(crate) fn hand_over(&self) -> Option<(Vec<u8>, StoredPlacement)> {
-        let record = self.record.borrow();
-        let latest = record.latest.clone()?;
-        // A write in flight may still land: until it answers, what storage
-        // holds is not known, and the placement stays owed unless storage
-        // already holds it.
-        let stored = match &record.stored {
-            StoredPlacement::Holds(held) if *held == latest => record.stored.clone(),
-            stored if record.write.is_idle() => stored.clone(),
-            StoredPlacement::Holds(_)
-            | StoredPlacement::Nothing
-            | StoredPlacement::Unknown { .. } => StoredPlacement::Nothing,
+    /// Give a window reopened under the same name everything this recorder
+    /// holds for the name: the window's newest placement, which the new
+    /// window opens from (no read racing this recorder's last write could give
+    /// it), what storage holds as far as this recorder knows, and the write it
+    /// has out. One recorder writes a name at a time: this one owes nothing and
+    /// writes nothing from here on, and the successor takes storage's answer
+    /// to the write in flight before it starts one of its own.
+    ///
+    /// [`HandOver::Busy`] while storage's code runs this recorder's write (the
+    /// call came back in from it), and [`HandOver::Nothing`] before the window
+    /// reported a placement.
+    pub(crate) fn hand_over(&self) -> HandOver {
+        let mut record = self.record.borrow_mut();
+        if matches!(record.write, Write::Starting | Write::Polling) {
+            return HandOver::Busy;
+        }
+        let Some(latest) = record.latest.take() else {
+            return HandOver::Nothing;
         };
-        Some((latest, stored))
+        let write = std::mem::replace(&mut record.write, Write::Idle);
+        let stored = std::mem::replace(&mut record.stored, StoredPlacement::Nothing);
+        record.given_up = None;
+        HandOver::Taken(Succession {
+            latest,
+            stored,
+            write,
+        })
+    }
+
+    /// A recorder that takes over `succession` from a closed window's
+    /// recorder for the same name.
+    pub(crate) fn succeeding(
+        storage: StorageHandle,
+        name: StorageName,
+        succession: Succession,
+        wake_owner: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        let Succession { stored, write, .. } = succession;
+        let recorder = Self::new(storage, name, stored, wake_owner);
+        recorder.record.borrow_mut().write = write;
+        recorder
     }
 
     /// Keep `subscription` alive as long as the recorder follows the window.
@@ -641,17 +663,10 @@ impl PlacementRecorder {
     }
 
     /// Take in the window's newest state at `now`, measured against
-    /// `displays`, with `commands` the count of commands the application has
-    /// applied to the window (`None` when it could not be read), and write it
-    /// when it is owed and [`WRITE_INTERVAL`] has passed since the last write.
-    pub(crate) fn observe(
-        &self,
-        state: &WindowState,
-        displays: &DisplaySnapshot,
-        commands: Option<u64>,
-        now: Instant,
-    ) {
-        self.measure(state, displays, commands, false);
+    /// `displays`, and write it when it is owed and [`WRITE_INTERVAL`] has
+    /// passed since the last write.
+    pub(crate) fn observe(&self, state: &WindowState, displays: &DisplaySnapshot, now: Instant) {
+        self.measure(state, displays, false);
         self.pump(now, false);
     }
 
@@ -665,22 +680,16 @@ impl PlacementRecorder {
             .borrow()
             .seen
             .as_ref()
-            .map(|seen| (seen.state.clone(), seen.commands));
-        if let Some((state, commands)) = last {
-            self.measure(&state, displays, commands, true);
+            .map(|seen| seen.state.clone());
+        if let Some(state) = last {
+            self.measure(&state, displays, true);
             self.pump(now, false);
         }
     }
 
     /// Record the window's `state`; `redisplay` marks a measure no change of
     /// the window caused.
-    fn measure(
-        &self,
-        state: &WindowState,
-        displays: &DisplaySnapshot,
-        commands: Option<u64>,
-        redisplay: bool,
-    ) {
+    fn measure(&self, state: &WindowState, displays: &DisplaySnapshot, redisplay: bool) {
         let mut record = self.record.borrow_mut();
         match state.mode {
             WindowMode::Maximized => record.maximized_before = true,
@@ -692,18 +701,14 @@ impl PlacementRecorder {
             return;
         };
         let bytes = placement.to_bytes();
-        let scale = state.metrics.map(|metrics| metrics.scale().get().to_bits());
         let origin = if redisplay {
             ChangeOrigin::Other
         } else {
-            record.origin_of(&bytes, scale, displays.revision(), commands)
+            record.origin_of(state, &bytes)
         };
         record.seen = Some(Seen {
             state: state.clone(),
             bytes: bytes.clone(),
-            scale,
-            displays: displays.revision(),
-            commands,
         });
         record.capture(bytes, origin);
     }
@@ -902,6 +907,27 @@ impl PlacementRecorder {
             );
         }
     }
+}
+
+/// What a closing recorder gives the recorder of a window reopened under its
+/// name ([`PlacementRecorder::hand_over`]).
+pub(crate) enum HandOver {
+    /// The name's placement, its stored state and its write, moved over.
+    Taken(Succession),
+    /// The closed window never reported a placement: nothing to take.
+    Nothing,
+    /// Storage's code is running this recorder's write: nothing is moved,
+    /// and the reopened window is not remembered, so two writers never race.
+    Busy,
+}
+
+/// The name's placement, what storage holds and the write in flight, as one
+/// recorder hands them to the next.
+pub(crate) struct Succession {
+    /// The closed window's newest placement, which the new window opens from.
+    pub(crate) latest: Vec<u8>,
+    stored: StoredPlacement,
+    write: Write,
 }
 
 /// Where a recorder's flush is.

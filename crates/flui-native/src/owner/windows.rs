@@ -91,7 +91,7 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
 pub(crate) use crate::owner::wake_deadline::FrameCount;
-use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
+use crate::owner::wake_deadline::WakeDeadline;
 use crate::{
     error::PlatformError, host, owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform,
     owner::hwnd_affinity::UserDataRefusal, owner::window_delivery::WindowDelivery,
@@ -1170,7 +1170,7 @@ impl WindowsLoop {
         tracing::info!("Starting Windows message loop");
 
         let mut deadline = WakeDeadline::default();
-        let mut turn_deadline = TurnDeadline::default();
+        let mut turn_deadline = WakeDeadline::default();
         // Shared with every window this platform opens; without an owner
         // there are no windows, so the count never moves.
         let shares = self.owner_control.shares("run message loop").ok();
@@ -1216,7 +1216,8 @@ impl WindowsLoop {
                 }
                 // A due turn deadline is the owner's turn, window or not,
                 // and asks no window for a frame.
-                if turn_deadline.take_due(web_time::Instant::now())
+                if turn_deadline
+                    .take_due(web_time::Instant::now(), self.owner_control.signal.turns())
                     && self.owner_control.signal.accepting()
                 {
                     let _ = self.owner_control.signal.wake();
@@ -1237,7 +1238,10 @@ impl WindowsLoop {
                 // The handler is asked with no borrow of `msg` and no lock
                 // held: it may close windows or quit before it answers.
                 let armed = deadline.arm(self.query_wake_deadline(), frame_count());
-                let turn_armed = turn_deadline.arm(self.query_turn_deadline());
+                let turn_armed = turn_deadline.arm(
+                    self.query_turn_deadline(),
+                    self.owner_control.signal.turns(),
+                );
 
                 let next_deadline = armed
                     .into_iter()

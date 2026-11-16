@@ -177,6 +177,8 @@ fn sample_state(
             // A page has no activation apart from the canvas's focus.
             active: focused,
             capabilities: page_capabilities(),
+            // A page's canvas is placed by the browser, never by the user.
+            interaction: flui_platform::WindowInteraction::None,
         }
         .onto(state)
     })

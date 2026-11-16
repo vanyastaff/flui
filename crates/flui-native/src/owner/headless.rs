@@ -237,6 +237,9 @@ pub(crate) struct HeadlessState {
     /// The windows the platform tracks: the window feature's.
     pub(crate) windows: Arc<dyn TrackedWindows>,
     pub(crate) keyboard_layout: String,
+    /// The application's turn deadline as [`HeadlessOwnerTurns::drive_at`]
+    /// armed it.
+    turn_deadline: crate::owner::wake_deadline::WakeDeadline,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
     /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
@@ -363,6 +366,7 @@ impl HeadlessLoop {
             is_running: false,
             windows,
             keyboard_layout: "en-US".to_string(),
+            turn_deadline: crate::owner::wake_deadline::WakeDeadline::default(),
             opened_urls: Vec::new(),
             deferred_window_open: false,
             pending_opens: Vec::new(),
@@ -809,6 +813,46 @@ impl HeadlessOwnerTurns {
                 finish_quit(&state);
             }
         }
+    }
+
+    /// The turn a desktop loop's idle wait gives when it wakes at `now`: the
+    /// application's turn deadline (`AppHandler::turn_deadline`) is asked
+    /// and, when it is due by `now`, gives the owner its turn, delivered again
+    /// only after a turn ran, as the native loops deliver it; then one owner
+    /// turn runs, as [`drive`](Self::drive) runs it. A test passes the time of
+    /// its manual clock, so a deadline is served with no real wait.
+    pub fn drive_at(&self, now: web_time::Instant) {
+        let (Some(state), Some(signal)) = (self.state.upgrade(), self.signal.upgrade()) else {
+            return;
+        };
+        // The handler is asked with no borrow of the state held.
+        let app = Arc::clone(&state.borrow().app);
+        let answer = if signal.accepting() {
+            app.turn_deadline().or_resume(None)
+        } else {
+            None
+        };
+        let turns = signal.turns();
+        let due = {
+            let mut state = state.borrow_mut();
+            let _: Option<web_time::Instant> = state.turn_deadline.arm(answer, turns);
+            state.turn_deadline.take_due(now, turns)
+        };
+        if due {
+            let _ = signal.wake();
+        }
+        self.drive();
+    }
+
+    /// The turn deadline the application asks for now
+    /// (`AppHandler::turn_deadline`), as a desktop loop asks it before it
+    /// waits: what a test advances its manual clock to before
+    /// [`drive_at`](Self::drive_at).
+    #[must_use]
+    pub fn turn_deadline(&self) -> Option<web_time::Instant> {
+        let state = self.state.upgrade()?;
+        let app = Arc::clone(&state.borrow().app);
+        app.turn_deadline().or_resume(None)
     }
 }
 

@@ -152,6 +152,27 @@ impl SizeConstraints {
     }
 }
 
+/// Whether the user is placing a window through the window system: a fact the
+/// host states, never one inferred from what changed (ADR-0343).
+///
+/// Code that keeps a window's placement for the user (`AppConfig::restore_placement`)
+/// tells a change the user made from one the host or the application made by
+/// this alone: a host that cannot tell says [`Self::None`], and such a change
+/// counts as not the user's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum WindowInteraction {
+    /// No placement by the user is under way, or the host cannot tell.
+    #[default]
+    None,
+    /// The user is moving or sizing the window by its frame or the keyboard,
+    /// or a system control the user worked (the caption's buttons, a double
+    /// click on the title bar, a snap gesture) is changing its placement: the
+    /// Win32 size-move loop and system commands, AppKit's live resize and
+    /// drag, a move or resize the window asked its window manager to start.
+    UserPlacing,
+}
+
 /// What the operating system reports about one window, at one revision.
 ///
 /// Built with [`new`](Self::new) and the `with_*` methods so a field can be
@@ -229,6 +250,10 @@ pub struct WindowState {
     /// focused). Where the window system has no notion apart from focus, it
     /// is the focus.
     pub active: bool,
+    /// Whether the user is placing the window through the window system
+    /// right now ([`WindowInteraction`]); [`WindowInteraction::None`] where the
+    /// host cannot tell.
+    pub interaction: WindowInteraction,
     /// Which commands the window honours. A change in what it honours (a
     /// compositor revising what it allows) is a state change like any other.
     pub capabilities: WindowCapabilities,
@@ -261,6 +286,7 @@ impl WindowState {
             execution: WindowExecutionState::Running,
             hovered: false,
             active: false,
+            interaction: WindowInteraction::None,
             capabilities: WindowCapabilities::NONE,
         }
     }
@@ -369,6 +395,13 @@ impl WindowState {
     #[must_use]
     pub fn with_hovered(mut self, hovered: bool) -> Self {
         self.hovered = hovered;
+        self
+    }
+
+    /// Set whether the user is placing the window through the window system.
+    #[must_use]
+    pub fn with_interaction(mut self, interaction: WindowInteraction) -> Self {
+        self.interaction = interaction;
         self
     }
 
@@ -821,6 +854,8 @@ pub struct WindowStateParts {
     pub hovered: bool,
     /// [`WindowState::active`].
     pub active: bool,
+    /// [`WindowState::interaction`].
+    pub interaction: WindowInteraction,
     /// [`WindowState::capabilities`], taken apart.
     pub capabilities: CapabilityParts,
 }
@@ -849,6 +884,7 @@ impl WindowState {
             execution,
             hovered,
             active,
+            interaction,
             capabilities,
         } = self;
         WindowStateParts {
@@ -870,6 +906,7 @@ impl WindowState {
             execution,
             hovered,
             active,
+            interaction,
             capabilities: capabilities.into_parts(),
         }
     }
@@ -900,6 +937,7 @@ impl WindowStateParts {
             execution,
             hovered,
             active,
+            interaction,
             capabilities,
         } = self;
         WindowState {
@@ -922,6 +960,7 @@ impl WindowStateParts {
             execution,
             hovered,
             active,
+            interaction,
             capabilities: capabilities.into_capabilities(),
         }
     }

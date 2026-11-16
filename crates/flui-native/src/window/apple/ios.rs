@@ -1491,6 +1491,8 @@ impl IOSWindow {
                 // A scene has no activation apart from its focus.
                 active: focused,
                 capabilities: scene_capabilities(),
+                // A scene is placed by the system, never by the user.
+                interaction: flui_platform::WindowInteraction::None,
             }
             .onto(state)
         });

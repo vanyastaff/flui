@@ -17,7 +17,7 @@
 //! borrowed only for a step that runs none of the application's code: storage,
 //! a provider and a window's subscription always run with nothing borrowed.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Wake, Waker};
@@ -34,7 +34,7 @@ use super::desktop::OpeningWindow;
 use super::host::{APP_RUNTIME, with_owner_platform};
 use crate::app::AppConfig;
 use crate::app::placement_recorder::{
-    FlushState, PlacementRecall, PlacementRecorder, Recalled, StoredPlacement, earliest_due,
+    FlushState, HandOver, PlacementRecall, PlacementRecorder, Recalled, Succession, earliest_due,
     restore_into, settle,
 };
 
@@ -68,6 +68,11 @@ pub(in crate::app) struct PlacementShared {
     awaiting: RefCell<Vec<AwaitingOpen>>,
     /// Closes that found [`Self::live`] busy: carried out at the next tick.
     deferred_closes: RefCell<Vec<PresentationAddress>>,
+    /// The turn deadline the loop was last told ([`PlacementHost::next_due`]).
+    announced: Cell<Option<Instant>>,
+    /// Asks the owner for a turn: set when the loop installs the host's
+    /// capabilities.
+    wake: RefCell<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Default for PlacementShared {
@@ -80,6 +85,8 @@ impl Default for PlacementShared {
             closing: RefCell::new(Vec::new()),
             awaiting: RefCell::new(Vec::new()),
             deferred_closes: RefCell::new(Vec::new()),
+            announced: Cell::new(None),
+            wake: RefCell::new(None),
         }
     }
 }
@@ -104,13 +111,36 @@ impl PlacementHost {
     /// window whose wait for its read ends. `None` while a list is busy:
     /// the turn that holds it asks again.
     pub(in crate::app) fn next_due(&self) -> Option<Instant> {
-        let shared = &self.shared;
-        let now = shared.now();
+        let due = self.shared.next_due();
+        // What the loop is told now: a change made outside an owner turn and
+        // already announced is not announced again.
+        self.shared.announced.set(due);
+        due
+    }
+
+    /// Measure placements on `clock` from now on.
+    #[cfg(all(test, feature = "testing"))]
+    pub(in crate::app) fn set_clock(&self, clock: Rc<dyn MonotonicClock>) {
+        self.shared.clock.replace(clock);
+    }
+
+    /// The state every window's close handle shares.
+    #[cfg(all(test, feature = "testing"))]
+    pub(in crate::app) fn shared(&self) -> Rc<PlacementShared> {
+        Rc::clone(&self.shared)
+    }
+}
+
+impl PlacementShared {
+    /// When the owner needs a turn for the placements; `None` while a list
+    /// is busy: the turn that holds it asks again.
+    fn next_due(&self) -> Option<Instant> {
+        let now = self.now();
         let (Ok(live), Ok(closing), Ok(awaiting), Ok(deferred)) = (
-            shared.live.try_borrow(),
-            shared.closing.try_borrow(),
-            shared.awaiting.try_borrow(),
-            shared.deferred_closes.try_borrow(),
+            self.live.try_borrow(),
+            self.closing.try_borrow(),
+            self.awaiting.try_borrow(),
+            self.deferred_closes.try_borrow(),
         ) else {
             return None;
         };
@@ -128,20 +158,21 @@ impl PlacementHost {
         writes.into_iter().chain(reads).min()
     }
 
-    /// Measure placements on `clock` from now on.
-    #[cfg(all(test, feature = "testing"))]
-    pub(in crate::app) fn set_clock(&self, clock: Rc<dyn MonotonicClock>) {
-        self.shared.clock.replace(clock);
+    /// The placements' turn deadline may have moved outside an owner turn
+    /// (a window's report, a close, a display change): when it differs from
+    /// what the loop was last told, ask for an owner turn, after which every
+    /// loop reads the turn deadline again (`AppHandler::turn_deadline`).
+    fn announce_turn_deadline(&self) {
+        let due = self.next_due();
+        if self.announced.replace(due) == due {
+            return;
+        }
+        let wake = self.wake.borrow().clone();
+        if let Some(wake) = wake {
+            wake();
+        }
     }
 
-    /// The state every window's close handle shares.
-    #[cfg(all(test, feature = "testing"))]
-    pub(in crate::app) fn shared(&self) -> Rc<PlacementShared> {
-        Rc::clone(&self.shared)
-    }
-}
-
-impl PlacementShared {
     fn now(&self) -> Instant {
         let clock = Rc::clone(&*self.clock.borrow());
         clock.now()
@@ -180,6 +211,11 @@ pub(super) fn install(registry: CapabilityRegistry) {
         return;
     };
     let owner = std::thread::current();
+    let turn = proxy.clone();
+    shared.wake.replace(Some(Arc::new(move || {
+        let _ = turn.wake();
+    })));
+    shared.announced.set(None);
     let capabilities = Rc::new(HostCapabilities::new(registry, move || {
         let _ = proxy.wake();
         owner.unpark();
@@ -201,9 +237,10 @@ pub(super) struct RememberedPlacement {
     storage: StorageHandle,
     claim: NameClaim,
     recall: PlacementRecall,
-    /// What storage holds as a closed window of the same name left it, when
-    /// the window opens from that window's placement instead of a read.
-    handed_over: Option<StoredPlacement>,
+    /// What a closed window of the same name handed over when the window
+    /// opens from that window's placement instead of a read: its stored state
+    /// and its write in flight, which the new recorder takes over.
+    succession: Option<Succession>,
 }
 
 impl RememberedPlacement {
@@ -213,9 +250,10 @@ impl RememberedPlacement {
     /// has no storage to keep it in.
     ///
     /// A window that closed this run under the same name while its last write
-    /// is still out leaves its newest placement and what it still owes: the
-    /// window opens from that placement, which no read racing that write could
-    /// give, and owes what the closed window did.
+    /// is still out hands over its newest placement, what storage holds and
+    /// that write: the window opens from that placement, which no read racing
+    /// the write could give, and its recorder is the name's one writer from
+    /// then on ([`PlacementRecorder::hand_over`]).
     pub(super) fn recall(config: &AppConfig) -> Option<Self> {
         let name = config.placement?;
         let shared = shared()?;
@@ -227,22 +265,37 @@ impl RememberedPlacement {
             );
             return None;
         };
-        let closing = shared
-            .closing
-            .borrow()
-            .iter()
-            .rev()
-            .find(|recorder| recorder.name() == name)
-            .cloned();
-        let handed = closing.and_then(|recorder| recorder.hand_over());
+        let closing = {
+            let mut closing = shared.closing.borrow_mut();
+            let at = closing.iter().rposition(|recorder| recorder.name() == name);
+            at.map(|at| closing.remove(at))
+        };
+        let handed = match &closing {
+            Some(recorder) => recorder.hand_over(),
+            None => HandOver::Nothing,
+        };
+        if let HandOver::Busy = handed {
+            // The closed window's write is with storage's code right now:
+            // moving it would race. It stays the name's writer.
+            shared.closing.borrow_mut().extend(closing);
+            tracing::warn!(
+                storage = name.as_str(),
+                "a window reopened while storage was answering its predecessor's write; it \
+                 opens from its configuration and is not remembered"
+            );
+            return None;
+        }
+        // The predecessor owes nothing now; its drop is the storage's code
+        // when it held a write, which was moved.
+        drop_contained(closing);
         let capabilities = shared.capabilities.borrow().clone();
         let storage = acquire_storage(capabilities.as_deref(), name)?;
-        let (recall, handed_over) = match handed {
-            Some((bytes, stored)) => (
-                PlacementRecall::settled(name, Recalled::of_bytes(&bytes, &name)),
-                Some(stored),
+        let (recall, succession) = match handed {
+            HandOver::Taken(succession) => (
+                PlacementRecall::settled(name, Recalled::of_bytes(&succession.latest, &name)),
+                Some(succession),
             ),
-            None => (
+            HandOver::Nothing | HandOver::Busy => (
                 PlacementRecall::start(&storage, name, shared.now(), owner_waker()?),
                 None,
             ),
@@ -252,7 +305,7 @@ impl RememberedPlacement {
             storage,
             claim,
             recall,
-            handed_over,
+            succession,
         })
     }
 
@@ -307,14 +360,12 @@ impl RememberedPlacement {
             storage,
             claim,
             recall,
-            handed_over,
+            succession,
         } = self;
         let name = recall.name();
-        let stored = handed_over.unwrap_or_else(|| {
-            recall
-                .outcome()
-                .map_or(Recalled::TimedOut.stored(), Recalled::stored)
-        });
+        let stored = recall
+            .outcome()
+            .map_or(Recalled::TimedOut.stored(), Recalled::stored);
         drop_contained(recall);
         let handle = APP_RUNTIME.with(|slot| {
             slot.try_borrow()
@@ -327,29 +378,25 @@ impl RememberedPlacement {
         let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.wake();
         });
-        let recorder = Rc::new(PlacementRecorder::new(storage, name, stored, wake_owner));
+        let recorder = Rc::new(match succession {
+            Some(succession) => {
+                PlacementRecorder::succeeding(storage, name, succession, wake_owner)
+            }
+            None => PlacementRecorder::new(storage, name, stored, wake_owner),
+        });
         let weak = Rc::downgrade(&recorder);
         // Weak: the recorder, in the shared lists, holds this subscription.
         let clock = Rc::downgrade(&shared);
         let Ok((state, subscription)) = handle.subscribe(move |state| {
             if let (Some(recorder), Some(shared)) = (weak.upgrade(), clock.upgrade()) {
-                recorder.observe(
-                    state,
-                    &current_displays(),
-                    applied_commands(address),
-                    shared.now(),
-                );
+                recorder.observe(state, &current_displays(), shared.now());
+                shared.announce_turn_deadline();
             }
         }) else {
             return None;
         };
         recorder.hold(subscription);
-        recorder.observe(
-            &state,
-            &current_displays(),
-            applied_commands(address),
-            shared.now(),
-        );
+        recorder.observe(&state, &current_displays(), shared.now());
         shared.live.borrow_mut().push(LiveWindow {
             address,
             recorder,
@@ -357,16 +404,6 @@ impl RememberedPlacement {
         });
         Some(PlacementClose { shared, address })
     }
-}
-
-/// How many of the application's commands were handed to the window at
-/// `address`; `None` when that cannot be read now.
-fn applied_commands(address: PresentationAddress) -> Option<u64> {
-    APP_RUNTIME.with(|slot| {
-        slot.try_borrow()
-            .ok()
-            .and_then(|runtime| runtime.window_commands.applied_commands(address))
-    })
 }
 
 /// The handle a remembered window's close goes through: it holds the
@@ -427,6 +464,7 @@ fn finish_in(shared: &PlacementShared, address: PresentationAddress) -> Closing 
     if recorder.continue_flush(now) == FlushState::Waiting {
         shared.closing.borrow_mut().push(recorder);
     }
+    shared.announce_turn_deadline();
     Closing::Started
 }
 
@@ -493,10 +531,13 @@ impl Wake for OwnerWake {
 /// `open` unrun.
 pub(super) fn when_recalled(opening: OpeningWindow, open: Box<dyn FnOnce(OpeningWindow)>) {
     match shared() {
-        Some(shared) => shared
-            .awaiting
-            .borrow_mut()
-            .push(AwaitingOpen { opening, open }),
+        Some(shared) => {
+            shared
+                .awaiting
+                .borrow_mut()
+                .push(AwaitingOpen { opening, open });
+            shared.announce_turn_deadline();
+        }
         None => drop_contained((opening, open)),
     }
 }
@@ -538,7 +579,22 @@ pub(super) fn flush_all_by(deadline: Instant) {
         );
         flui_foundation::panic::discard_payload(payload);
     }
+    // The flush polled the writes with a waker that unparks this thread. A
+    // session end that does not end the application goes on: the writes still
+    // out are polled once more with their own wakers, which wake the owner,
+    // and a closed window's unfinished write stays to be taken at a turn.
+    let now = shared.now();
+    for recorder in shared.live_recorders() {
+        recorder.tick(now);
+    }
+    let unfinished: Vec<Rc<PlacementRecorder>> = closed
+        .iter()
+        .filter(|recorder| recorder.continue_flush(now) == FlushState::Waiting)
+        .cloned()
+        .collect();
+    shared.closing.borrow_mut().extend(unfinished);
     drop_contained(closed);
+    shared.announce_turn_deadline();
 }
 
 /// Take what the owner's turn brought: what the host's providers posted,
@@ -625,6 +681,7 @@ pub(super) fn displays_changed() {
     for recorder in live {
         recorder.redisplay(&displays, now);
     }
+    shared.announce_turn_deadline();
 }
 
 /// The loop ends, after [`flush_all_by`]: the host's capabilities retire, a
@@ -636,6 +693,8 @@ pub(super) fn retire() -> FirstPanic {
         return first;
     };
     let capabilities = shared.capabilities.borrow_mut().take();
+    let wake = shared.wake.borrow_mut().take();
+    first.contain(|| drop(wake));
     let released = (
         std::mem::take(&mut *shared.awaiting.borrow_mut()),
         std::mem::take(&mut *shared.live.borrow_mut()),
