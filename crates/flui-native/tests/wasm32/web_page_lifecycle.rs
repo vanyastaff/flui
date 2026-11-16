@@ -456,7 +456,7 @@ async fn web_page_events_leave_with_the_window() {
 #[wasm_bindgen_test]
 async fn web_window_reports_what_a_page_can_do() {
     let (_probe, running, window) = page().await;
-    let mut expected = WindowCapabilities::NONE;
+    let mut expected = WindowCapabilities::NONE.into_parts();
     // An estimate from the visual viewport: the page has no
     // `navigator.virtualKeyboard`.
     expected.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
