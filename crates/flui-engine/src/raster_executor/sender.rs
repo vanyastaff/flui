@@ -612,50 +612,55 @@ impl RasterSender {
     /// Move `slot`'s undrained settlements, oldest first, into `into`, and
     /// answer how many moved.
     pub fn drain_settlements(&self, slot: SlotId, into: &mut Vec<SlotSettlement>) -> usize {
-        if self.shared.health() == ExecutorHealth::Died {
-            self.settle_after_death();
-        }
-        let Some(inbox) = self.inbox(slot) else {
-            return 0;
-        };
-        let mut state = inbox.lock();
-        let drained = state.settlements.len();
-        into.extend(state.settlements.drain(..));
-        drop(state);
-        if drained > 0 {
-            // A full ring held the slot's next frame: a raster thread may start it.
-            self.shared.ring();
-        }
-        drained
+        self.drain(slot, into, false).0
     }
 
     /// [`drain_settlements`](Self::drain_settlements) and
-    /// [`take_failure`](Self::take_failure) under one lock: a panic taken
-    /// here came with a settlement moved into `into`, marked, or with a frame
-    /// the slot has not settled yet, never with one an earlier drain took. An
-    /// owner that drains a raster thread's slot while the thread runs uses
-    /// this, so it can tell which frames may have lost their mark.
+    /// [`take_failure`](Self::take_failure) under one lock. A panic taken
+    /// here came with a settlement moved into `into`, marked; with a frame
+    /// the slot has not settled yet, which will settle unmarked; or with a
+    /// command that served no frame (a resize or a lifecycle call of its own
+    /// turn); never with a settlement an earlier drain took. An owner that
+    /// drains a raster thread's slot while the thread runs uses this, so it
+    /// can tell which of its frames may have lost their mark.
     #[must_use]
     pub fn drain_settlements_and_failure(
         &self,
         slot: SlotId,
         into: &mut Vec<SlotSettlement>,
     ) -> Option<SlotFailure> {
+        self.drain(slot, into, true).1
+    }
+
+    /// Drain `slot` into `into`, and take its failure under the same lock
+    /// when `take` is set.
+    fn drain(
+        &self,
+        slot: SlotId,
+        into: &mut Vec<SlotSettlement>,
+        take: bool,
+    ) -> (usize, Option<SlotFailure>) {
         if self.shared.health() == ExecutorHealth::Died {
             self.settle_after_death();
         }
-        let inbox = self.inbox(slot)?;
+        let Some(inbox) = self.inbox(slot) else {
+            return (0, None);
+        };
         let mut state = inbox.lock();
         let drained = state.settlements.len();
         into.extend(state.settlements.drain(..));
-        state.panicked = false;
-        let failure = state.failure.take();
+        let failure = if take {
+            state.panicked = false;
+            state.failure.take()
+        } else {
+            None
+        };
         drop(state);
         if drained > 0 {
             // A full ring held the slot's next frame: a raster thread may start it.
             self.shared.ring();
         }
-        failure
+        (drained, failure)
     }
 
     /// The failure `slot` holds since the last take: the first, or the first

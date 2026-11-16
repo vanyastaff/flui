@@ -897,6 +897,7 @@ fn a_slot_drains_with_its_failure_in_one_take() {
         "a panic the owner took marks no later frame: {later:?}"
     );
 }
+
 /// A frame renders only against the generation the slot's configuration
 /// has: one stamped zero, or before a resize the executor applied, settles
 /// `SurfaceStale` without reaching the backend.

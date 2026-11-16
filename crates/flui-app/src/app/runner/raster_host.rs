@@ -1271,7 +1271,10 @@ impl RasterHost {
     }
 
     /// Settle `failure`, taken from `slot`'s executor slot: a refusal is
-    /// logged, a panic held for the window's report.
+    /// logged, a panic held for the window's report. The log and the
+    /// refusal's drop run contained, their panic held with the slot's (a
+    /// subscriber is user code), so a caller that drained settlements with
+    /// the failure still hands them on.
     fn hold_slot_failure(slot: &mut HostSlot, failure: Option<SlotFailure>) -> SlotTurn {
         match failure {
             Some(SlotFailure::Panicked(payload)) => {
@@ -1279,11 +1282,17 @@ impl RasterHost {
                 SlotTurn::Panicked
             }
             Some(SlotFailure::Refused(error)) => {
-                tracing::warn!(%error, "raster host: the executor refused a window's command");
+                let _logged = slot.panic.contain(move || {
+                    tracing::warn!(%error, "raster host: the executor refused a window's command");
+                    drop(error);
+                });
                 SlotTurn::Clean
             }
             Some(failure) => {
-                tracing::warn!(?failure, "raster host: a window's slot failed");
+                let _logged = slot.panic.contain(move || {
+                    tracing::warn!(?failure, "raster host: a window's slot failed");
+                    drop(failure);
+                });
                 SlotTurn::Clean
             }
             None => SlotTurn::Clean,
@@ -2067,7 +2076,13 @@ impl RasterHost {
                 .iter()
                 .position(|held| held.epoch == settlement.epoch)
             else {
-                tracing::warn!(epoch = ?settlement.epoch, "raster host: a settlement for a frame the window does not hold");
+                let epoch = settlement.epoch;
+                let _logged = slot.panic.contain(move || {
+                    tracing::warn!(
+                        ?epoch,
+                        "raster host: a settlement for a frame the window does not hold"
+                    );
+                });
                 continue;
             };
             let frame = slot.pending.remove(at);
