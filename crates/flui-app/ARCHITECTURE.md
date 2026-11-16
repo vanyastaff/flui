@@ -524,12 +524,15 @@ run with nothing borrowed.
 
 - **The owner's turns come from the turn deadline (ADR-0343 §1).**
   `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
-  placements' next due instant and the main window's read bound, instants in
-  the future that something waits for; every host gives the owner a turn at
-  it, with or without a window open, and asks no window for a frame. A turn
-  serves every instant not later than its own time, so work ready now is no
-  deadline: a storage answer wakes the owner itself, and a close carried over
-  asks for a turn (`PlacementShared::ask_turn`).
+  placements' next due instant and the main window's read bound; every host
+  gives the owner a turn at it, with or without a window open, and asks no
+  window for a frame. The answer may be past: a held write's
+  `last_attempt + interval` is, when the change arrives after the interval
+  ended. That change, made outside a turn, asked for one turn
+  (`announce_turn_deadline`), and that turn serves the past answer; the seam
+  never arms an instant not later than the last turn it served. Work ready now
+  is no deadline: a storage answer wakes the owner itself, and a close carried
+  over asks for a turn (`PlacementShared::ask_turn`).
   Placement adds nothing to the frame deadline. A change made outside an owner
   turn (a window's report, a close, a display change, a window queued for its
   read) that moves the deadline asks for a turn

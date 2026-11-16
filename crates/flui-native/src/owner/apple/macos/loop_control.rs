@@ -257,8 +257,8 @@ impl LoopControl {
         } else {
             None
         };
-        let timer = self.turn_timer(main);
-        let (armed, generation) = {
+        let armed = {
+            let timer = self.turn_timer(main);
             let mut slot = timer.borrow_mut();
             let before = slot.0.armed();
             let armed = slot.0.arm(answer);
@@ -266,11 +266,28 @@ impl LoopControl {
                 // The timer scheduled for this instant still stands.
                 return;
             }
+            armed
+        };
+        self.schedule_turn_timer(main, armed);
+    }
+
+    /// Schedule the main-queue timer for `armed`, superseding the one
+    /// scheduled before; `None` only supersedes it. A timer that fires before
+    /// its instant schedules the rest of the wait, so the armed instant always
+    /// has a timer.
+    fn schedule_turn_timer(
+        self: &Arc<Self>,
+        main: MainThreadMarker,
+        armed: Option<web_time::Instant>,
+    ) {
+        let generation = {
+            let timer = self.turn_timer(main);
+            let mut slot = timer.borrow_mut();
             slot.1 = slot
                 .1
                 .checked_add(1)
                 .expect("BUG: a turn-deadline generation per owner turn fits in u64");
-            (armed, slot.1)
+            slot.1
         };
         let Some(at) = armed else {
             return;
@@ -280,22 +297,32 @@ impl LoopControl {
             let Some(main) = MainThreadMarker::new() else {
                 return;
             };
-            let timer = control.turn_timer(main);
-            // The main queue runs a timer at or after its delay, so a current
-            // one finds its instant due.
-            let due = {
+            let (current, due) = {
+                let timer = control.turn_timer(main);
                 let mut slot = timer.borrow_mut();
-                slot.1 == generation && slot.0.take_due(web_time::Instant::now())
+                let current = slot.1 == generation;
+                (
+                    current,
+                    current && slot.0.take_due(web_time::Instant::now()),
+                )
             };
             if due {
                 let _ = control.owner_signal.wake();
+            } else if current {
+                // The queue ran the timer before its instant: schedule the
+                // rest of the wait.
+                control.schedule_turn_timer(main, Some(at));
             }
         });
     }
 
     /// Run `body` on the owner lane after `delay`, if the control is still
     /// alive.
-    fn run_after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
+    fn run_after(
+        self: &Arc<Self>,
+        delay: Duration,
+        body: impl FnOnce(&Arc<Self>) + Send + 'static,
+    ) {
         let weak = Arc::downgrade(self);
         owner_queue().exec_after(delay, move || {
             os_entry(

@@ -57,8 +57,10 @@ Chosen option: 1.
    serves every deadline not later than that turn's own time, and an answer not later than the
    last time served is not armed again. A handler that keeps answering an instant already past gets
    one turn for it. Work that is ready now is no deadline: the application does it in the turn it
-   is in, or asks for one owner turn with `PlatformProxy::wake`, and answers only an instant in the
-   future that something waits for.
+   is in, or asks for one owner turn with `PlatformProxy::wake`. An answer may still be past (a
+   held write whose interval ended before the change that owes it arrived): the change asked for
+   one turn, that turn serves it, and the seam never arms an instant not later than the last time
+   it served.
    - **When a loop asks.** After every owner turn. The Win32 loop and its modal loops and the X11,
      Wayland and Android loops ask before each wait, which follows every turn; AppKit, UIKit and the
      web ask after each turn and once the handler bootstrapped, and schedule the turn on the main
@@ -92,10 +94,12 @@ Chosen option: 1.
   delivered again.
 - Bad, because work left at an instant already served waits for the application to ask for a
   turn itself; an answer repeated at the same past instant is not a request.
-- Bad, because on the hosts that state `Unknown`, and on Win32 for a snap by keyboard or a drag
-  that ends in a snap applied after `WM_EXITSIZEMOVE`, a placement the user makes after an
-  unreadable one is not remembered that run (`docs/gaps.md`); and on Win32 an application's
-  command applied in a turn the size-move loop gives counts as the user's.
+- Bad, because on the hosts that state `Unknown`, and on Win32 for a snap by keyboard, a
+  placement the user makes after an unreadable one is not remembered that run; so is a drag that
+  moved nothing during the loop (outline dragging, Snap Layouts) and ends in a snap applied after
+  `WM_EXITSIZEMOVE`, while a drag that moved the window already counts as the user's and the
+  snapped placement is written (`docs/gaps.md`). On Win32 an application's command applied in a
+  turn the size-move loop gives counts as the user's.
 - Neutral, because every `AppHandler` implementor answers `turn_deadline`, `None` when it has
   none.
 
