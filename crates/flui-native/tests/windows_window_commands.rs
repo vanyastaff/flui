@@ -891,6 +891,34 @@ fn a_hidden_windows_frame_request_reaches_its_frame_callback() {
         > 0));
 }
 
+/// Win32 folds a painted window's invalidations into one paint; a hidden
+/// window's frame requests fold the same way until it takes one, so a burst
+/// of wakes from another thread is one frame, not a thousand posts.
+fn a_burst_of_frame_requests_on_a_hidden_window_is_one_frame() {
+    let platform = platform();
+    let window = open(&platform, hidden());
+    settle();
+    let frames = count_frames(&window);
+    let requester = window.redraw_requester();
+    std::thread::spawn(move || {
+        for _ in 0..1000 {
+            requester.request_redraw();
+        }
+    })
+    .join()
+    .expect("the requesting thread");
+    assert!(pump_until(Duration::from_secs(2), || frames
+        .load(Ordering::SeqCst)
+        > 0));
+    settle();
+    assert_eq!(frames.load(Ordering::SeqCst), 1);
+    // Taken, the next request asks again.
+    window.request_redraw();
+    assert!(pump_until(Duration::from_secs(2), || frames
+        .load(Ordering::SeqCst)
+        > 1));
+}
+
 /// The window stays on its thread; another thread asks for a frame through
 /// its redraw requester, and the window's frame callback runs (ADR-0254 §5).
 fn a_redraw_asked_from_another_thread_reaches_the_window() {
@@ -2328,6 +2356,10 @@ fn native_window_commands() {
         (
             "a_hidden_windows_frame_request_reaches_its_frame_callback",
             a_hidden_windows_frame_request_reaches_its_frame_callback,
+        ),
+        (
+            "a_burst_of_frame_requests_on_a_hidden_window_is_one_frame",
+            a_burst_of_frame_requests_on_a_hidden_window_is_one_frame,
         ),
         (
             "a_redraw_asked_from_another_thread_reaches_the_window",

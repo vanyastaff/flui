@@ -94,6 +94,7 @@ impl WindowsHost for Windows {
         Rc::new(HostEvents::new(
             Arc::clone(owner.app),
             Arc::clone(owner.notices),
+            crate::owner::windows::control::OwnerQueue::new(Arc::downgrade(owner.signal)),
         ))
     }
 
