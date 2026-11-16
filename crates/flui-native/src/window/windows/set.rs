@@ -43,7 +43,7 @@ use crate::window::config::WindowConfiguration;
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
     /// The windows, which only the owner thread holds (ADR-0327 §5). The only
-    /// way from an HWND to a [`WindowId`]: a handle not in it names no window
+    /// way from an HWND to a [`WindowId`](flui_platform::WindowId): a handle not in it names no window
     /// of this platform.
     by_handle: RefCell<FxHashMap<isize, Rc<WindowsWindow>>>,
     /// Issues the id of every window the set opens,

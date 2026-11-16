@@ -12788,6 +12788,7 @@ variant flui::platform::OpenTarget::Window(flui::platform::WindowId) // at 0
 #[non_exhaustive] pub struct flui::platform::Opened
 field flui::platform::Opened::files: Vec<flui::platform::OpenedFile> // at 1
 field flui::platform::Opened::launch: flui::platform::Launch // at 3
+field flui::platform::Opened::overflow: flui::platform::OpenedOverflow // at 4
 field flui::platform::Opened::target: flui::platform::OpenTarget // at 2
 field flui::platform::Opened::urls: Vec<String> // at 0
 impl Clone for flui::platform::Opened
@@ -12806,6 +12807,17 @@ impl core::fmt::Debug for flui::platform::OpenedFile
 pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
+#[non_exhaustive] pub struct flui::platform::OpenedOverflow
+field flui::platform::OpenedOverflow::past_limit: usize // at 1
+field flui::platform::OpenedOverflow::too_long: usize // at 0
+impl Clone for flui::platform::OpenedOverflow
+impl Copy for flui::platform::OpenedOverflow
+impl Default for flui::platform::OpenedOverflow
+impl Eq for flui::platform::OpenedOverflow
+impl PartialEq for flui::platform::OpenedOverflow
+impl core::fmt::Debug for flui::platform::OpenedOverflow
+impl core::marker::StructuralPartialEq for flui::platform::OpenedOverflow
+pub const fn flui::platform::OpenedOverflow::is_empty(self) -> bool
 #[non_exhaustive] pub struct flui::platform::OpeningGeometry
 field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
 field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
@@ -12884,7 +12896,6 @@ fn flui::platform::PlatformHaptics::play(&self, pattern: &flui::platform::haptic
 pub enum flui::platform::PlatformInput
 impl Clone for flui::platform::PlatformInput
 impl core::fmt::Debug for flui::platform::PlatformInput
-pub fn flui::platform::PlatformInput::as_drag_drop(&self) -> Option<&flui::platform::DragDropEvent>
 pub fn flui::platform::PlatformInput::as_ime(&self) -> Option<&flui::platform::ImeEvent>
 pub fn flui::platform::PlatformInput::as_keyboard(&self) -> Option<&flui::interaction::KeyEvent>
 pub fn flui::platform::PlatformInput::as_pointer(&self) -> Option<&flui::interaction::PointerEvent>
@@ -13328,9 +13339,6 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::platform::TargetPlatform
 pub const fn flui::platform::TargetPlatform::as_str(self) -> &'static str
 pub const fn flui::platform::TargetPlatform::current() -> Self
 pub const fn flui::platform::TargetPlatform::is_apple(self) -> bool
-pub const fn flui::platform::TargetPlatform::is_desktop(self) -> bool
-pub const fn flui::platform::TargetPlatform::is_mobile(self) -> bool
-pub const fn flui::platform::TargetPlatform::is_touch_primary(self) -> bool
 variant flui::platform::TargetPlatform::Android // at 1
 variant flui::platform::TargetPlatform::Fuchsia // at 5
 variant flui::platform::TargetPlatform::Linux // at 2

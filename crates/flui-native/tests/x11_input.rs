@@ -9,7 +9,6 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
-use flui_native::Platform as _;
 use flui_native::testing::keyboard_layout;
 use flui_native::testing::x11::run_for;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
