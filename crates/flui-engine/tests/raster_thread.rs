@@ -353,7 +353,8 @@ fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
 /// this slot, this slot's queued frame settles failed only after that
 /// render's own settlement: the slot's settlements stay in order, so the
 /// render's answer folds no record and is not stale (ADR-0305 §9). A frame
-/// pending in a slot no render holds settles failed at once.
+/// pending in a slot no render holds settles failed at once, unless the
+/// owner detached that slot: its frame leaves with its presentation.
 ///
 /// Red-check: with the owner settling every pending inbox frame at the
 /// death, the queued frame settles while the render still holds the slot,
@@ -369,6 +370,7 @@ fn a_frame_queued_behind_a_wedged_render_settles_after_it() {
     assert!(hold.began_within(PATIENCE), "the thread starts the render");
     thread.sender.send(frame(wedged, 2)).expect("accepted");
     thread.sender.send(frame(idle, 1)).expect("accepted");
+    thread.sender.send(frame(other, 1)).expect("accepted");
     let waited = Duration::from_millis(50);
     assert_eq!(
         thread.handle.detach(&thread.sender, other.slot, waited),
@@ -380,6 +382,15 @@ fn a_frame_queued_behind_a_wedged_render_settles_after_it() {
         settled,
         Vec::new(),
         "the queued frame waits for the render the wedged thread holds"
+    );
+    let mut other_settled = Vec::new();
+    thread
+        .sender
+        .drain_settlements(other.slot, &mut other_settled);
+    assert_eq!(
+        other_settled,
+        Vec::new(),
+        "the detached slot's frame leaves with its presentation, unsettled"
     );
     let mut idle_settled = Vec::new();
     thread

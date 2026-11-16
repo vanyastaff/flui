@@ -448,10 +448,12 @@ executor and slot.
 
 - `ExecutorHealth { Running, ShutDown, Died }` rides the executor's record; the two non-running
   states log at `error`. Once it is not `Running`, every send answers `Gone` with its command, and
-  the owner settles every frame still pending in a slot's inbox `Failed`, since the executor no
-  longer can. A slot settles in order even then: the frame a wedged render holds settles only if
-  that render returns, and a frame queued behind it in that slot settles `Failed` after it, so a
-  late `Presented` never arrives for a frame whose record a later settlement already folded.
+  the owner settles every frame still pending in the inbox of a slot it has not detached `Failed`,
+  since the executor no longer can; a detached slot's frame leaves with its presentation,
+  unsettled, as the executor's own detach drops it. A slot settles in order even then: the frame
+  a wedged render holds settles only if that render returns, and a frame queued behind it in that
+  slot settles `Failed` after it, so a late `Presented` never arrives for a frame whose record a
+  later settlement already folded.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no

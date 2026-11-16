@@ -645,13 +645,23 @@ impl RasterSender {
     /// the wedged thread still holds waits for that render's settlement: it
     /// settles here on the first drain after that render returned, and never
     /// if it does not. Settled first, it would fold the render's record and
-    /// leave the render's own answer stale. The frames are dropped with no
+    /// leave the render's own answer stale. A slot whose detach the owner sent
+    /// settles nothing here: its frame leaves with its presentation, as the
+    /// executor's own detach drops it. The frames are dropped with no
     /// borrow or lock held: a scene's destructor can be user code.
     fn settle_after_death(&self) {
         let mut failed: Vec<flui_layer::SceneSnapshot> = Vec::new();
         {
             let slots = self.slots.borrow();
-            for owned in slots.entries.iter().flatten() {
+            // A detaching slot's frame leaves with its presentation unsettled, as
+            // the executor's own detach drops it: settling it here would race that
+            // detach once a held render returns.
+            for owned in slots
+                .entries
+                .iter()
+                .flatten()
+                .filter(|owned| !owned.detaching)
+            {
                 let mut state = owned.inbox.lock();
                 // In flight beyond the inbox's own frame: a render holds one.
                 let behind_a_render = state.in_flight > 1;
