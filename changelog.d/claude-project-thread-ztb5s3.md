@@ -19,3 +19,19 @@
   `HeadlessBinding`, `BuildCapabilities`, `MountOptions`, `MountOwners`, `Mounted`, `widgets`,
   `storage`, `replay`, `a11y` and `render_snapshot`. Use `Tester`,
   `flui::testing::find` and `Tester::inspect_render`.
+
+### Fixed
+
+- A window hidden from `Resumed` passes through `Inactive` before `Hidden`, for its lifecycle
+  subscribers and the scheduler's lifecycle listeners alike: a presentation now starts in the
+  state its window snapshot gives instead of none, and the application's aggregate lifecycle
+  walks the same ladder one state at a time (`Paused` back to `Resumed` climbs through `Hidden`
+  and `Inactive`).
+- A UI runtime starts in the lifecycle its window opens in: over a window that opens hidden,
+  unfocused or paused, `UpdateScheduler::lifecycle_state` starts there (frames disabled when
+  hidden or paused) instead of `Resumed`, and its listeners no longer hear a start-up change no
+  window made. The headless host's `open_window` reports the new window as it opened, as a
+  native host does, so a focused new window makes the first one `Inactive`.
+- A window installed beside a focused one no longer leaves that one holding its keys: installing
+  moves no focus, and the new window's snapshot takes it, so the window that loses it is told
+  each held key was cancelled.

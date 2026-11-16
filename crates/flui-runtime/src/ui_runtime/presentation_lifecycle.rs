@@ -429,6 +429,30 @@ impl UiRuntime {
         self.stop_presentation_after_failure(id, FirstPanic::new());
     }
 
+    /// Seed a new UI runtime: its primary presentation, then the scheduler's
+    /// aggregate from it, so the scheduler does not start from a state no
+    /// presentation was in (ADR-0345). Nothing has subscribed yet.
+    pub(super) fn seed_runtime_lifecycle(&self) {
+        self.seed_presentation_lifecycle(self.presentations.primary());
+        self.scheduler()
+            .handle_app_lifecycle_state_change(self.aggregate_lifecycle());
+    }
+
+    /// Commit the lifecycle `presentation` starts in, before anything can
+    /// subscribe: every later change is then a step down or up the ladder
+    /// from a known state, so the first one a subscriber sees passes through
+    /// each state in between (ADR-0345). Runs no user code.
+    pub(super) fn seed_presentation_lifecycle(
+        &self,
+        presentation: &crate::presentation::PresentationState,
+    ) {
+        let source = presentation.widgets().lifecycle_source();
+        if source.current().is_none() {
+            let seeded = source.commit(self.execution_lifecycle(presentation));
+            debug_assert!(seeded.is_ok(), "a new presentation's source is open");
+        }
+    }
+
     fn execution_lifecycle(
         &self,
         presentation: &crate::presentation::PresentationState,
@@ -527,26 +551,33 @@ impl UiRuntime {
         if first_panic.is_held() {
             self.seed_terminal_lifecycle_recovery();
         }
-        let transitions: Vec<_> = self
-            .presentations
-            .iter()
-            .map(|presentation| {
-                (
-                    presentation,
-                    presentation
-                        .widgets()
-                        .lifecycle_source()
-                        .current()
-                        .map_or_else(
-                            || vec![self.execution_lifecycle(presentation)],
-                            |old| lifecycle_ladder(old, self.execution_lifecycle(presentation)),
+        let transitions: Vec<_> =
+            self.presentations
+                .iter()
+                .map(|presentation| {
+                    (
+                        presentation,
+                        lifecycle_ladder(
+                            presentation.widgets().lifecycle_source().current().expect(
+                                "BUG: a presentation's lifecycle is seeded when it is created",
+                            ),
+                            self.execution_lifecycle(presentation),
                         ),
-                )
-            })
-            .collect();
+                    )
+                })
+                .collect();
+        // The application's lifecycle, the most active of its presentations',
+        // climbs or steps down the same ladder: a scheduler listener sees
+        // each state in between, as a presentation's observers do.
+        let aggregate_steps = lifecycle_ladder(
+            self.scheduler().lifecycle_state(),
+            self.aggregate_lifecycle(),
+        )
+        .len();
         let rounds = transitions
             .iter()
             .map(|(_, steps)| steps.len())
+            .chain([aggregate_steps])
             .max()
             .unwrap_or(0)
             .max(1);
@@ -637,9 +668,14 @@ impl UiRuntime {
                     presentation.suspend();
                 }
             }
-            let aggregate = self.aggregate_lifecycle();
-            if self.scheduler().lifecycle_state() != aggregate {
-                let step = aggregate;
+            // One step toward the aggregate as it stands now: a pass that a
+            // callback started inside this one may already have moved it.
+            if let Some(&step) = lifecycle_ladder(
+                self.scheduler().lifecycle_state(),
+                self.aggregate_lifecycle(),
+            )
+            .first()
+            {
                 // The scheduler's lifecycle handler runs contained so the rest run.
                 self.contain_lifecycle_step(&mut first_panic, || {
                     self.scheduler().handle_app_lifecycle_state_change(step);

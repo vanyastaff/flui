@@ -139,7 +139,7 @@ this one path (ADR-0151 §9).
   minimized window, so the three never overlap, and `WindowState::is_seen`
   (shown, not minimized, not occluded) is the one reading of "the surface is
   seen" that frame scheduling, haptics and the lifecycle aggregate
-  (ADR-0035 §4) take. Folding occlusion into `visible` made the hosts
+  (ADR-0345 §1) take. Folding occlusion into `visible` made the hosts
   disagree (X11 read a minimized window hidden, Win32 shown); a separate fact
   is what winit (`Occluded`), AppKit (`occlusionState` beside `isVisible`)
   and Chromium (`OcclusionState` visible/occluded/hidden) keep too.
