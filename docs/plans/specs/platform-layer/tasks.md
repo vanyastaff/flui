@@ -5409,6 +5409,10 @@ GPU-память простаивающего или невидимого окн
   файл, под `base_href`; отсутствующий ресурс, не-навигация, обход каталога (в том числе
   закодированный) и выход по символической ссылке получают 404 (`dev_server_contract`: с
   отключённым ответом страницей падают случаи навигации).
+  CI на `433049fb8` (слитом с `6dd8e52a4`, прогон 43795598465): `wasm-check`, `wasm-link`,
+  `wasm-test` (59 тестов Node во `flui-native`) и браузерный набор `web_browser` (51 тест в
+  headless Chrome) зелёные. Три теста `agent::browser` `flui-cli` на этом Windows-хосте падают
+  («named pipes do not support I/O timeouts») так же и на `main` в `6dd8e52a4`.
 - [x] **LY75** (закрыта: код и тесты в ветке `native/web-dom-root`; прогоны Safari iOS и Firefox
   записаны в `platform-parity.toml`, строка «Input purpose and hints») — атрибуты #2109
   (`3223e936d`). Скрытый textarea и поля дерева доступности получают `font-size: 16px`
