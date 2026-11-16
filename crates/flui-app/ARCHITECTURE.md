@@ -527,37 +527,26 @@ required. Scene migration and background owner waking remain explicit follow-ups
 
 ### What the operating system opens has one destination, decided at the runner
 
-`OpenRouting` (`runner/opened.rs`) decides, for every host and the headless one, where what the
-operating system opened goes (ADR-0330 §5, ADR-0254 §4). A host reports it (`AppHandler::opened`,
-or `take_launch_opened` in `ready`) and does nothing else for it.
+The rule is [ADR-0339](../../docs/adr/ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md);
+here is where the code keeps it.
 
-- Files go to `Application::on_open_files`, the application's own destination, which exists
-  without a window; with no callback they are logged and dropped.
-- A URL is admitted first, by the application's declarations and on the web the page's origin
-  (`OpenedUrl::parse`, `OpenDeclarations::admit`): one the application does not open is refused
-  as it arrives, before it is held or can make a window open.
-- An admitted URL goes to the presentation `WindowRegistry::open_target` names
-  (`OpenDestination`): the window's own, or for the application the window focused last, else
-  the first opened. URLs held for that target open before it, so the order is the operating
-  system's.
-- With no presentation yet (`Pending`) the URL is held for its target. When a URL is held for the
-  application as a whole and it has no window, the runner takes its reopen route, the one a Dock
-  click takes, which shows the main window `run` or `run_resident`'s factory builds; that
-  window's first Router opens on the URL. Once a quit was asked the route shows nothing, so a URL
-  that comes while the application quits waits and is refused when the run ends. A run with no
-  main window (iOS, Android, the web) routes no reopen: there the host opens the window the URL
-  waits for.
-- A URL addressed to a window that closed (`Closed`: the registry remembers the last
-  `MAX_OPENED_ITEMS` closed windows, whose ids no host issues again) is refused as it arrives.
-- Held URLs are bounded by `MAX_OPENED_ITEMS` URLs and `MAX_HELD_URL_BYTES` bytes across every
-  target; one past the bound is refused and those held first keep their place. They are refused,
-  by reason and never with the URL, when the bootstrap fails or panics (with the launch's files,
-  which the application then never hears) and when the run ends.
-
-A host that keeps one instance still asks `reopen` before a later launch while it shows no window
-(ADR-0254 §4): a later launch is the user starting the application again, as relaunching it is on
-macOS, and a launch that opens nothing never reaches the handler. For a launch that opens a URL the
-runner's own reopen follows; asked twice, the route only keeps the intent it set.
+- `OpenRouting` (`runner/opened.rs`) is the one place that decides, for every host and the
+  headless one. A host reports what it opened (`AppHandler::opened`, or `take_launch_opened` in
+  `ready`) and does nothing else for it.
+- Admission is `OpenDeclarations::admit`, the rule `UiRuntime::open_url` applies again; the runner
+  applies it before it holds a URL or asks for a window.
+- `InstalledHost::open_target` names the destination (`OpenDestination`): the window registry's
+  answer, with a window that has no presentation told apart by whether its installation is pending
+  or initializing. The registry remembers the last `MAX_OPENED_ITEMS` closed windows.
+- `HeldUrls` states each target's rule in its shape: the application's newest URL alone, and per
+  window being installed at most `MAX_HELD_PER_WINDOW`. Its `Debug` prints counts, never a URL.
+- `open_held_in` lends what it opens into a new UI runtime (`Lent`); `finish_install` commits the
+  loan or gives it back, and a loan to an installation that failed before it was submitted is
+  reclaimed by the next routing step (`reclaim_lent`).
+- `RunnerHandler::reopen_for_held_urls` takes the reopen route after each delivery and after the
+  bootstrap. `Ingress::request_native_show` keeps a reopen asked during a quit and shows it only if
+  the quit is abandoned.
+- Every refusal is one `tracing` warning with the count and `Refusal::reason`, never the URL.
 
 Pinned by `runner_open`'s rows and the failed-bootstrap rows of `app_handler_routes`.
 

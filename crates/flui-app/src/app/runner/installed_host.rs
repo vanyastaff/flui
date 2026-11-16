@@ -16,6 +16,7 @@ use super::display_host::DisplayHost;
 use super::host::APP_RUNTIME;
 use super::native_bindings::{NativeBindings, NativeInstallError, PreparedNativeWindow};
 use super::window_install::InstallationWindow;
+use crate::app::window_registry::{OpenDestination, WindowRegistry};
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub(super) enum InstallError {
@@ -201,6 +202,76 @@ impl InstalledHost {
     pub(in crate::app) fn has_pending_installs(&self) -> bool {
         !self.0.pending.borrow().is_empty() || !self.0.initializing.borrow().is_empty()
     }
+
+    /// Whether the installation of `address` is submitted and has not ended.
+    pub(super) fn is_installing(&self, address: PresentationAddress) -> bool {
+        self.0
+            .pending
+            .borrow()
+            .iter()
+            .any(|pending| pending.prepared.address() == address)
+            || self
+                .0
+                .initializing
+                .borrow()
+                .iter()
+                .any(|entry| entry.address == address)
+    }
+
+    /// Where what the operating system opened for `target` goes now: the
+    /// window registry's answer ([`WindowRegistry::open_target`]), with a
+    /// window that has no presentation told apart by whether its
+    /// installation is under way ([`OpenDestination::Pending`]) or not
+    /// ([`OpenDestination::NotOpen`]).
+    ///
+    /// [`WindowRegistry::open_target`]: crate::app::window_registry::WindowRegistry::open_target
+    pub(super) fn open_target(
+        &self,
+        target: flui_platform::OpenTarget,
+        active: Option<PresentationAddress>,
+    ) -> OpenDestination {
+        match self.0.native.open_target(target, active) {
+            OpenDestination::Pending if matches!(target, flui_platform::OpenTarget::Window(_)) => {
+                // The windows are platform code: asked with nothing borrowed.
+                let installing: Vec<Rc<dyn flui_platform::PlatformWindow>> = self
+                    .0
+                    .pending
+                    .borrow()
+                    .iter()
+                    .filter_map(|pending| pending.window.platform_window().cloned())
+                    .chain(
+                        self.0
+                            .initializing
+                            .borrow()
+                            .iter()
+                            .filter_map(|entry| entry.window.platform_window().cloned()),
+                    )
+                    .collect();
+                if installing
+                    .iter()
+                    .any(|window| WindowRegistry::names_window(target, window.as_ref()))
+                {
+                    OpenDestination::Pending
+                } else {
+                    OpenDestination::NotOpen
+                }
+            }
+            destination @ (OpenDestination::Presentation(_)
+            | OpenDestination::Pending
+            | OpenDestination::Closed
+            | OpenDestination::NotOpen) => destination,
+        }
+    }
+}
+
+/// Give back the URLs lent to the installation of `address`, which ended
+/// without committing ([`OpenRouting::install_failed`]).
+///
+/// [`OpenRouting::install_failed`]: super::opened::OpenRouting::install_failed
+fn install_failed(address: PresentationAddress) {
+    if let Some(routing) = super::host::current_open_routing() {
+        routing.install_failed(address);
+    }
 }
 
 impl HostState {
@@ -283,8 +354,10 @@ impl OwnerEffects for HostState {
     ) -> Option<InstallInitialization> {
         let pending = self.take_install(token);
         if pending.window.is_closed() {
+            let address = pending.prepared.address();
             pending.result.set(Some(Err(InstallError::WindowClosed)));
             drop(pending);
+            install_failed(address);
             return None;
         }
         self.initializing.borrow_mut().reserve(1);
@@ -301,6 +374,7 @@ impl OwnerEffects for HostState {
             Err(refused) => {
                 result.set(Some(Err(InstallError::Logical(refused.error))));
                 drop(refused);
+                install_failed(address);
                 return None;
             }
         };
@@ -308,6 +382,7 @@ impl OwnerEffects for HostState {
             result.set(Some(Err(InstallError::Native(error))));
             drop(permit);
             drop(native);
+            install_failed(address);
             return None;
         }
         let published = permit.commit();
@@ -357,6 +432,11 @@ impl OwnerEffects for HostState {
             if !first.is_held() && self.installation_is_live(&entry) {
                 entry.window.publish();
                 entry.result.set(Some(Ok(())));
+                // The URLs opened into its runtime before its root mounted
+                // are its now.
+                if let Some(routing) = super::host::current_open_routing() {
+                    routing.installed(address);
+                }
                 return;
             }
         }
@@ -376,6 +456,7 @@ impl OwnerEffects for HostState {
         self.native.retire_presentation(address);
         self.complete_native(&mut first);
         first.contain(|| drop(entry.window));
+        first.contain(|| install_failed(address));
         first.resume();
     }
 

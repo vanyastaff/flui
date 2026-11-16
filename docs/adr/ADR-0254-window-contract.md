@@ -4,6 +4,9 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0339](ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)
+  for §4's clause that the first instance hears a later launch after `reopen` whenever it shows no
+  window: only a launch that opens nothing asks for the reopen
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
   crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a

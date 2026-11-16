@@ -1,17 +1,17 @@
 //! What the operating system opens the application with, routed to the
-//! application (ADR-0330 §5), on every host and the headless one: files to
-//! its [`on_open_files`](crate::Application::on_open_files) callback, URLs it
+//! application on every host and the headless one (ADR-0339): files to its
+//! [`on_open_files`](crate::Application::on_open_files) callback, URLs it
 //! declares to the presentation they address, where the UI runtime opens
 //! each one in that presentation's `Router` (`UiRuntime::open_url`).
 //!
 //! The presentation is the window's own for [`OpenTarget::Window`] (an iOS
-//! scene, an Android activity), and for the application as a whole the one
-//! whose window was focused last, else the window opened first. A URL is
-//! admitted here first, so one the application does not open is refused
-//! before it is held or can make a window open. URLs that arrive before their
-//! presentation exists (a link that launched the application, one that came
-//! while it had no window) are held per target, in order and bounded, and
-//! queued for it as it is installed, ahead of its first frame, so its first
+//! scene), and for the application as a whole the one whose window was
+//! focused last, else the window opened first. A URL is admitted here first,
+//! so one the application does not open is refused before it is held or can
+//! make a window open. URLs that arrive before their presentation exists (a
+//! link that launched the application, one that came while it had no window)
+//! are held by their target's rule ([`HeldUrls`]) and opened in its UI
+//! runtime as it is installed, ahead of its first frame, so its first
 //! `Router` opens on the link instead of its initial page; for the
 //! application as a whole the run opens its main window for them
 //! ([`OpenRouting::waits_for_a_window`]).
@@ -22,9 +22,7 @@ use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
 use flui_foundation::panic::FirstPanic;
-use flui_platform::{
-    MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, PlatformWindow,
-};
+use flui_platform::{OpenTarget, Opened, OpenedFile, PlatformWindow};
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_view::navigation::{OpenDeclarations, OpenedUrl};
 
@@ -136,21 +134,24 @@ impl std::fmt::Debug for OpenSettings {
 }
 
 /// One run's routing of what the operating system opened: the application's
-/// settings, the presentation focused last and the URLs held for a
-/// presentation that does not exist yet. Owned by the run's application
-/// handler, so a run never sees another's.
+/// settings, the presentation focused last, the URLs held for a presentation
+/// that does not exist yet and those lent to a window being installed.
+/// Owned by the run's application handler, so a run never sees another's.
 ///
 /// Every opened URL ends one way: it is opened in a presentation's UI
-/// runtime, held for a presentation still to come (bounded, see
-/// [`HeldUrls`]), or refused with a [`Refusal`] that is logged by its reason.
-/// Held URLs are opened when their presentation is installed and refused
-/// when the bootstrap fails ([`Launching`]) or the run ends.
+/// runtime, held for a presentation still to come ([`HeldUrls`]), or refused
+/// with a [`Refusal`] that is logged by its reason. URLs opened into a window
+/// whose installation then fails come back to the hold ([`Lent`]). Held URLs
+/// are refused when the bootstrap fails ([`Launching`]) or the run ends.
 pub(crate) struct OpenRouting {
     settings: OpenSettings,
     /// The presentation whose window was focused last.
     active: Cell<Option<PresentationAddress>>,
     /// URLs admitted for a presentation that does not exist yet.
     held: RefCell<HeldUrls>,
+    /// URLs opened into the UI runtime of a window whose installation has
+    /// not committed yet.
+    lent: RefCell<Vec<Lent>>,
     /// The origin of the page the run is in on the web, whose URLs every UI
     /// runtime of the run admits beside the declarations.
     page_origin: RefCell<Option<PageOrigin>>,
@@ -164,12 +165,21 @@ struct PageOrigin {
     parsed: Option<OpenedUrl>,
 }
 
+/// URLs opened into the UI runtime of the presentation at `address` before
+/// its root mounted, kept until its installation commits: a failed
+/// installation drops the runtime, and they go back to the hold.
+struct Lent {
+    address: PresentationAddress,
+    urls: Vec<(OpenTarget, String)>,
+}
+
 impl OpenRouting {
     pub(crate) fn new(settings: OpenSettings) -> Self {
         Self {
             settings,
             active: Cell::new(None),
             held: RefCell::new(HeldUrls::default()),
+            lent: RefCell::new(Vec::new()),
             page_origin: RefCell::new(None),
         }
     }
@@ -218,11 +228,13 @@ impl OpenRouting {
 
     /// Route what the operating system opened: its files to the
     /// application's callback; each URL the application opens to its
-    /// presentation, behind the URLs held for it, or held until it exists,
-    /// or refused when its window closed or the held URLs fill their bound;
-    /// a URL the application does not open is refused as it arrives. Each
+    /// presentation, behind the URLs held for it, or held until it exists;
+    /// a URL the application does not open, one for a window that closed or
+    /// was never opened, and one past the hold's bound are refused. Each
     /// piece of user code (the callback, each URL's navigation) runs
-    /// contained, and the first panic resumes once every URL had its turn.
+    /// contained, and the first panic resumes once every URL had its turn,
+    /// which ends the run (ADR-0258 §4); what is held then is refused as the
+    /// run ends.
     ///
     /// The handler then asks [`waits_for_a_window`](Self::waits_for_a_window)
     /// whether the run should open one.
@@ -237,23 +249,26 @@ impl OpenRouting {
         self.files_to_callback(files, &mut first);
         let urls = self.admitted(urls);
         if !urls.is_empty() {
+            self.settle();
             match destination(target, self.active.get()) {
                 Destination::Open(host, address) => {
                     self.deliver_held_into(&mut first);
                     open_urls(&host, address, urls, &mut first);
                 }
                 Destination::Pending => self.hold(target, urls),
-                Destination::Closed => Refusal::WindowClosed.report_urls(urls.len()),
+                Destination::Refused(refusal) => refusal.report_urls(urls.len()),
             }
         }
         first.resume();
     }
 
-    /// Whether URLs are held for the application as a whole while it has no
-    /// presentation: the run then opens its main window for them, as a Dock
-    /// click does, and that window's first Router opens on them. A URL held
-    /// for one window waits for that window, which its host opens.
+    /// Whether a URL is held for the application as a whole while it has no
+    /// presentation: the run then opens its main window for it, as a Dock
+    /// click does, and that window's first Router opens on it. A URL held
+    /// for one window waits for that window's installation, which is under
+    /// way.
     pub(crate) fn waits_for_a_window(&self) -> bool {
+        self.settle();
         self.held.borrow().holds_for_application()
             && matches!(
                 destination(OpenTarget::Application, self.active.get()),
@@ -303,36 +318,26 @@ impl OpenRouting {
         }
     }
 
-    /// The URLs of `urls` the application opens: by its declarations, and on
-    /// the web its page's origin, as each UI runtime admits them
-    /// (`UiRuntime::open_url`). The rest are refused here, by reason, before
-    /// any is held or can make a window open.
+    /// The URLs of `urls` the application opens, by the rule each UI runtime
+    /// admits them by ([`OpenDeclarations::admit`]). The rest are refused
+    /// here, by reason, before any is held or can make a window open.
     fn admitted(&self, urls: Vec<String>) -> Vec<String> {
         if urls.is_empty() {
             return urls;
         }
         let declarations = self.declarations();
-        let mut refusals: Vec<&'static str> = Vec::new();
         // Cloned, so no borrow is held while parsing logs to a subscriber.
         let origin = self
             .page_origin
             .borrow()
             .as_ref()
             .and_then(|origin| origin.parsed.clone());
+        let mut refusals: Vec<&'static str> = Vec::new();
         let admitted: Vec<String> = urls
             .into_iter()
             .filter(|url| {
-                let admission = OpenedUrl::parse(url).and_then(|parsed| {
-                    if origin
-                        .as_ref()
-                        .is_some_and(|origin| origin.same_origin(&parsed))
-                    {
-                        Ok(())
-                    } else {
-                        declarations.admit(&parsed)
-                    }
-                });
-                admission
+                OpenedUrl::parse(url)
+                    .and_then(|parsed| declarations.admit(&parsed, origin.as_ref()))
                     .map_err(|refused| refusals.push(refused.reason()))
                     .is_ok()
             })
@@ -345,8 +350,13 @@ impl OpenRouting {
 
     /// Open the URLs held for the presentation `ui_runtime` is built for in
     /// `window`, in that runtime before its root mounts, so its first Router
-    /// opens on them (`UrlOwnerSlot::open_at`'s cold start).
+    /// opens on them (`UrlOwnerSlot::open_at`'s cold start). They are lent
+    /// to the installation: [`installed`](Self::installed) settles them, and
+    /// a failed installation gives them back to the hold.
     pub(crate) fn open_held_in(&self, ui_runtime: &UiRuntime, window: &dyn PlatformWindow) {
+        // What a window that failed before it was submitted was lent is held
+        // again, for this one.
+        self.reclaim_lent();
         let targets = self.held.borrow().targets();
         if targets.is_empty() {
             return;
@@ -357,9 +367,19 @@ impl OpenRouting {
             .filter(|target| WindowRegistry::opens_in(*target, window))
             .collect();
         let urls = self.held.borrow_mut().take(&opening);
+        if urls.is_empty() {
+            return;
+        }
         let presentation = ui_runtime.presentation_id();
+        self.lent.borrow_mut().push(Lent {
+            address: PresentationAddress {
+                ui_runtime_id: ui_runtime.id(),
+                presentation_id: presentation,
+            },
+            urls: urls.clone(),
+        });
         let mut first = FirstPanic::new();
-        for url in urls {
+        for (_, url) in urls {
             first.contain(|| {
                 if let Err(error) = ui_runtime.open_url(presentation, &url) {
                     tracing::info!(refusal = error.reason(), "an opened URL was not opened");
@@ -367,6 +387,88 @@ impl OpenRouting {
             });
         }
         first.resume();
+    }
+
+    /// The installation of `address` committed: the URLs lent to it are its.
+    pub(crate) fn installed(&self, address: PresentationAddress) {
+        self.lent
+            .borrow_mut()
+            .retain(|lent| lent.address != address);
+    }
+
+    /// The installation of `address` failed: the URLs lent to it come back to
+    /// the hold, and those for its own window are refused.
+    pub(crate) fn install_failed(&self, address: PresentationAddress) {
+        let returned = {
+            let mut lent = self.lent.borrow_mut();
+            lent.iter()
+                .position(|lent| lent.address == address)
+                .map(|index| lent.remove(index))
+        };
+        if let Some(returned) = returned {
+            self.give_back(returned);
+        }
+        self.settle();
+    }
+
+    /// Put lent URLs back in the hold; one it no longer takes is refused.
+    fn give_back(&self, returned: Lent) {
+        let mut refused = Vec::new();
+        {
+            let mut held = self.held.borrow_mut();
+            for (target, url) in returned.urls.into_iter().rev() {
+                if let Err(refusal) = held.give_back(target, url) {
+                    refused.push(refusal);
+                }
+            }
+        }
+        for refusal in refused {
+            refusal.report_urls(1);
+        }
+    }
+
+    /// Settle what waits on installations that ended without a word to the
+    /// router ([`reclaim_lent`](Self::reclaim_lent)), and refuse the URLs held
+    /// for a window whose installation is not under way, or that closed.
+    fn settle(&self) {
+        self.reclaim_lent();
+        let windows = self.held.borrow().window_targets();
+        for target in windows {
+            if let Destination::Refused(refusal) = destination(target, self.active.get()) {
+                let count = self.held.borrow_mut().drop_target(target);
+                refusal.report_urls(count);
+            }
+        }
+    }
+
+    /// URLs lent to an installation that neither runs nor committed (one
+    /// that failed before it was submitted, as when the GPU refuses its
+    /// window) come back to the hold; those of one that committed are its.
+    fn reclaim_lent(&self) {
+        let Some(host) = installed_host() else {
+            return;
+        };
+        let ended: Vec<Lent> = {
+            let mut lent = self.lent.borrow_mut();
+            // An installation still under way keeps what it was lent; one
+            // that ended registered committed, and what it was lent is its.
+            lent.retain(|lent| {
+                host.is_installing(lent.address) || !host.native().contains_address(lent.address)
+            });
+            let mut ended = Vec::new();
+            let mut index = 0;
+            while index < lent.len() {
+                if host.is_installing(lent[index].address) {
+                    index += 1;
+                } else {
+                    ended.push(lent.remove(index));
+                }
+            }
+            ended
+        };
+        for returned in ended {
+            self.give_back(returned);
+        }
     }
 
     /// Open the URLs held for a presentation that joined a UI runtime built
@@ -378,54 +480,63 @@ impl OpenRouting {
     }
 
     /// Open every held URL whose target has a presentation now, target by
-    /// target in the order of their first URL; a URL held for a window that
-    /// closed meanwhile is refused.
+    /// target; a URL held for a window that closed meanwhile is refused.
     fn deliver_held_into(&self, first: &mut FirstPanic) {
         let targets = self.held.borrow().targets();
         for target in targets {
             match destination(target, self.active.get()) {
                 Destination::Open(host, address) => {
                     let urls = self.held.borrow_mut().take(&[target]);
-                    open_urls(&host, address, urls, first);
+                    open_urls(&host, address, urls.into_iter().map(|(_, url)| url), first);
                 }
                 Destination::Pending => {}
-                Destination::Closed => {
-                    let urls = self.held.borrow_mut().take(&[target]);
-                    Refusal::WindowClosed.report_urls(urls.len());
+                Destination::Refused(refusal) => {
+                    let count = self.held.borrow_mut().drop_target(target);
+                    refusal.report_urls(count);
                 }
             }
         }
     }
 
-    /// Keep `urls` until `target` has a presentation, behind the URLs held
-    /// before them; those past the bound are refused.
+    /// Keep `urls` until `target` has a presentation, by the hold's rule for
+    /// the target ([`HeldUrls::hold`]); what the hold does not keep is
+    /// refused.
     fn hold(&self, target: OpenTarget, urls: Vec<String>) {
-        let mut over = 0_usize;
+        let mut refused = Vec::new();
         {
             let mut held = self.held.borrow_mut();
             for url in urls {
-                if held.hold(target, url).is_err() {
-                    over += 1;
+                if let Err(refusal) = held.hold(target, url) {
+                    refused.push(refusal);
                 }
             }
         }
-        Refusal::HeldFull.report_urls(over);
+        for refusal in refused {
+            refusal.report_urls(1);
+        }
     }
 
-    /// Refuse every held URL for `refusal`.
+    /// Refuse every held and lent URL for `refusal`.
     fn refuse_held(&self, refusal: Refusal) {
-        let count = self.held.borrow_mut().take_all();
-        refusal.report_urls(count);
+        let lent: usize = self
+            .lent
+            .borrow_mut()
+            .drain(..)
+            .map(|lent| lent.urls.len())
+            .sum();
+        let held = self.held.borrow_mut().take_all();
+        refusal.report_urls(held + lent);
     }
 }
 
 /// URLs still held when the run ends were accepted and never opened: their
 /// window never came. They are refused here, in the log, not dropped
-/// unseen.
+/// unseen; so are URLs lent to an installation the run never finished.
 impl Drop for OpenRouting {
     fn drop(&mut self) {
-        let count = self.held.get_mut().take_all();
-        Refusal::RunEnded.report_urls(count);
+        let lent: usize = self.lent.get_mut().iter().map(|lent| lent.urls.len()).sum();
+        let held = self.held.get_mut().take_all();
+        Refusal::RunEnded.report_urls(held + lent);
     }
 }
 
@@ -466,10 +577,9 @@ impl Drop for Launching {
     }
 }
 
-/// The most bytes of URL text the runner holds for presentations that do
-/// not exist yet, every target together: eight URLs of the longest an
-/// [`Opened`] carries, or [`MAX_OPENED_ITEMS`] ordinary ones.
-const MAX_HELD_URL_BYTES: usize = 8 * MAX_OPENED_URL_LEN;
+/// How many URLs one window still to be installed holds at most; each window
+/// holds its own, so one window's URLs never take another's place.
+const MAX_HELD_PER_WINDOW: usize = 8;
 
 /// Why an opened URL or file was not opened, logged by its
 /// [`reason`](Self::reason) and never with the URL, which may carry a token.
@@ -478,10 +588,16 @@ enum Refusal {
     /// The application does not open the URL: its
     /// [`OpenUrlRefused::reason`](flui_view::navigation::OpenUrlRefused::reason).
     NotAdmitted(&'static str),
-    /// The URLs held for windows still to open fill their bound.
+    /// A newer URL for the application as a whole took its place: the
+    /// window it waits for opens on one location.
+    Superseded,
+    /// The window it waits for holds [`MAX_HELD_PER_WINDOW`] URLs already.
     HeldFull,
     /// The window the URL was addressed to has closed.
     WindowClosed,
+    /// The window the URL was addressed to is not open and no installation
+    /// of it is under way, or its installation failed.
+    WindowNotOpen,
     /// The application's bootstrap failed or panicked.
     NotStarted,
     /// The run ended before a window opened for the URL.
@@ -492,8 +608,10 @@ impl Refusal {
     fn reason(self) -> &'static str {
         match self {
             Self::NotAdmitted(reason) => reason,
-            Self::HeldFull => "too many URLs wait for a window",
+            Self::Superseded => "a newer URL took its place",
+            Self::HeldFull => "too many URLs wait for its window",
             Self::WindowClosed => "its window closed",
+            Self::WindowNotOpen => "its window is not open",
             Self::NotStarted => "the application did not start",
             Self::RunEnded => "the run ended before a window opened",
         }
@@ -507,68 +625,144 @@ impl Refusal {
     }
 }
 
-/// URLs admitted for presentations that do not exist yet, in the order they
-/// arrived, each with the target it was addressed to; at most
-/// [`MAX_OPENED_ITEMS`] URLs and [`MAX_HELD_URL_BYTES`] bytes in all.
-#[derive(Debug, Default)]
+/// URLs admitted for presentations that do not exist yet, by the rule of
+/// their target:
+///
+/// - for the application as a whole, the newest alone: the window it opens
+///   in builds its first Router on one location (`UrlOwnerSlot::open_at`
+///   keeps the last), so a newer URL supersedes the held one;
+/// - for a window whose installation is under way, each in the order it
+///   arrived, at most [`MAX_HELD_PER_WINDOW`] per window, the later ones
+///   refused; a window's URLs never take another's place.
+///
+/// So the hold is bounded by one URL plus [`MAX_HELD_PER_WINDOW`] per window
+/// being installed, each URL at most
+/// [`MAX_OPENED_URL_LEN`](flui_platform::MAX_OPENED_URL_LEN) bytes.
+#[derive(Default)]
 struct HeldUrls {
-    entries: VecDeque<(OpenTarget, String)>,
-    bytes: usize,
+    application: Option<String>,
+    windows: Vec<(OpenTarget, VecDeque<String>)>,
 }
 
 impl HeldUrls {
-    /// Hold `url` for `target`, behind every URL held before it, or refuse it
-    /// when the bound is reached: the URLs held first keep their place.
+    /// Hold `url` for `target` by the target's rule.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Superseded`] when `url` replaced the application's held URL
+    /// (the older one is the refused one), [`Refusal::HeldFull`] for `url`
+    /// when its window holds as many as it may.
     fn hold(&mut self, target: OpenTarget, url: String) -> Result<(), Refusal> {
-        // Each URL is at most `MAX_OPENED_URL_LEN` bytes (`Opened::new`,
-        // `OpenedUrl::parse`) and `bytes` at most `MAX_HELD_URL_BYTES`.
-        let bytes = self.bytes + url.len();
-        if self.entries.len() == MAX_OPENED_ITEMS || bytes > MAX_HELD_URL_BYTES {
-            return Err(Refusal::HeldFull);
+        if let OpenTarget::Window(_) = target {
+            let urls = self.window_urls(target);
+            if urls.len() == MAX_HELD_PER_WINDOW {
+                return Err(Refusal::HeldFull);
+            }
+            urls.push_back(url);
+            return Ok(());
         }
-        self.bytes = bytes;
-        self.entries.push_back((target, url));
+        if self.application.replace(url).is_some() {
+            Err(Refusal::Superseded)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Put back a URL lent to an installation that failed, ahead of the URLs
+    /// its target holds: the application's only while it holds none newer.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Superseded`] when the application holds a newer URL,
+    /// [`Refusal::HeldFull`] when the window holds as many as it may.
+    fn give_back(&mut self, target: OpenTarget, url: String) -> Result<(), Refusal> {
+        if let OpenTarget::Window(_) = target {
+            let urls = self.window_urls(target);
+            if urls.len() == MAX_HELD_PER_WINDOW {
+                return Err(Refusal::HeldFull);
+            }
+            urls.push_front(url);
+            return Ok(());
+        }
+        if self.application.is_some() {
+            return Err(Refusal::Superseded);
+        }
+        self.application = Some(url);
         Ok(())
     }
 
-    /// The targets URLs are held for, each once, in the order of their first
-    /// URL.
+    /// The URLs held for the window `target` names, a new empty list when it
+    /// holds none.
+    fn window_urls(&mut self, target: OpenTarget) -> &mut VecDeque<String> {
+        let index = self
+            .windows
+            .iter()
+            .position(|(held, _)| *held == target)
+            .unwrap_or_else(|| {
+                self.windows.push((target, VecDeque::new()));
+                self.windows.len() - 1
+            });
+        &mut self.windows[index].1
+    }
+
+    /// The targets URLs are held for, each once.
     fn targets(&self) -> Vec<OpenTarget> {
-        let mut targets = Vec::new();
-        for (target, _) in &self.entries {
-            if !targets.contains(target) {
-                targets.push(*target);
-            }
-        }
-        targets
+        self.application
+            .iter()
+            .map(|_| OpenTarget::Application)
+            .chain(self.window_targets())
+            .collect()
+    }
+
+    /// The windows URLs are held for.
+    fn window_targets(&self) -> Vec<OpenTarget> {
+        self.windows.iter().map(|(target, _)| *target).collect()
     }
 
     /// Whether a URL is held for the application as a whole.
     fn holds_for_application(&self) -> bool {
-        self.entries
-            .iter()
-            .any(|(target, _)| *target == OpenTarget::Application)
+        self.application.is_some()
     }
 
-    /// Take the URLs held for any of `targets`, in the order they arrived.
-    fn take(&mut self, targets: &[OpenTarget]) -> Vec<String> {
+    /// Take the URLs held for any of `targets`, with their targets, each
+    /// window's in the order they arrived.
+    fn take(&mut self, targets: &[OpenTarget]) -> Vec<(OpenTarget, String)> {
         let mut taken = Vec::new();
-        self.entries.retain_mut(|(target, url)| {
+        if targets.contains(&OpenTarget::Application)
+            && let Some(url) = self.application.take()
+        {
+            taken.push((OpenTarget::Application, url));
+        }
+        self.windows.retain_mut(|(target, urls)| {
             if targets.contains(target) {
-                taken.push(std::mem::take(url));
+                taken.extend(urls.drain(..).map(|url| (*target, url)));
                 false
             } else {
                 true
             }
         });
-        self.bytes -= taken.iter().map(String::len).sum::<usize>();
         taken
+    }
+
+    /// Drop what `target` holds; how many URLs that was.
+    fn drop_target(&mut self, target: OpenTarget) -> usize {
+        self.take(&[target]).len()
     }
 
     /// Take every URL held; how many there were.
     fn take_all(&mut self) -> usize {
-        self.bytes = 0;
-        self.entries.drain(..).count()
+        let windows: usize = self.windows.drain(..).map(|(_, urls)| urls.len()).sum();
+        usize::from(self.application.take().is_some()) + windows
+    }
+}
+
+/// Counts only: a held URL may carry a token, which a log of this would print.
+impl std::fmt::Debug for HeldUrls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldUrls")
+            .field("application", &self.application.is_some())
+            .field("windows", &self.windows.len())
+            .finish()
     }
 }
 
@@ -578,24 +772,30 @@ enum Destination {
     Open(super::InstalledHost, PresentationAddress),
     /// No presentation yet, or the loop's state is busy: they wait.
     Pending,
-    /// The window they were addressed to has closed.
-    Closed,
+    /// They are refused for this reason.
+    Refused(Refusal),
 }
 
-/// Where what the operating system opened for `target` goes now
-/// ([`WindowRegistry::open_target`]).
-fn destination(target: OpenTarget, active: Option<PresentationAddress>) -> Destination {
-    let Some(host) = APP_RUNTIME.with(|slot| {
+/// The run's installed host, unless the loop's state is busy.
+fn installed_host() -> Option<super::InstalledHost> {
+    APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
             .map(|state| state.installed_host.clone())
-    }) else {
+    })
+}
+
+/// Where what the operating system opened for `target` goes now
+/// ([`InstalledHost::open_target`](super::InstalledHost::open_target)).
+fn destination(target: OpenTarget, active: Option<PresentationAddress>) -> Destination {
+    let Some(host) = installed_host() else {
         return Destination::Pending;
     };
-    match host.native().open_target(target, active) {
+    match host.open_target(target, active) {
         OpenDestination::Presentation(address) => Destination::Open(host, address),
         OpenDestination::Pending => Destination::Pending,
-        OpenDestination::Closed => Destination::Closed,
+        OpenDestination::Closed => Destination::Refused(Refusal::WindowClosed),
+        OpenDestination::NotOpen => Destination::Refused(Refusal::WindowNotOpen),
     }
 }
 
@@ -604,7 +804,7 @@ fn destination(target: OpenTarget, active: Option<PresentationAddress>) -> Desti
 fn open_urls(
     host: &super::InstalledHost,
     address: PresentationAddress,
-    urls: Vec<String>,
+    urls: impl IntoIterator<Item = String>,
     first: &mut FirstPanic,
 ) {
     for url in urls {

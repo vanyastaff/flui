@@ -390,7 +390,7 @@ GPU-память простаивающего или невидимого окн
 | **LY138** | **iOS: кадры идут, пока UIKit отслеживает; плавающая клавиатура закрывает то, что закрывает.** Правило в коде подтверждено, поведение UIKit предположительно. `CADisplayLink` добавлен только в `NSDefaultRunLoopMode` (`crates/flui-native/src/window/apple/ios.rs`), так что в `UITrackingRunLoopMode` кадров нет (scroll view, меню, лупа, интерактивное скрытие клавиатуры), а доки говорят обратное. `occlusion` (`window/keyboard.rs`) считает плавающую, отстыкованную или разделённую клавиатуру закрывающей всё ниже её верха, нулевой конечный кадр при перетаскивании читается как скрытие, наблюдателя `WillHide` нет. После: link — в `NSRunLoopCommonModes`; размещение клавиатуры публикуется как `Hidden \| Docked { inset } \| Floating { frame }`, и раскладка решает сама; нулевой кадр изменения сохраняет прежнее, `WillHide` — скрытие | — | `crates/flui-native/src/window/{apple/ios.rs,keyboard.rs}`, `KeyboardInset` в `crates/flui-platform` | `cross-typecheck`, гейт API-замыкания | строки `keyboard.rs`: кадр с низом выше низа вида — не пристыкованная вставка; нулевой кадр сохраняет вставку; уведомление о скрытии — скрыто при любом кадре; каждая падает при откате | L + T; Dev: iOS |
 | **LY139** | **Apple: состояние потока владельца без блокировок, одно поколение привязок, первый клик.** Сейчас `MacOSWindow` (`!Send + !Sync`) держит `parking_lot::Mutex<MacOSWindowState>`, `LoopControl` — `Mutex<State>` и `Mutex<TerminateGate>`, вид iOS — мьютексы в ivars, а `session_ending` использует `try_lock` как детектор повторного входа: формы из столбца «Not», и повторный вход в `parking_lot` молча виснет. macOS держит два поколения привязок: сырой `msg_send!` и `ClassBuilder` с нетипизированными ivars (`window/apple/macos.rs`, `window/apple/macos/delegate.rs`, `owner/apple/macos/content_view.rs`) рядом с `define_class!`, и два крейта GCD (`dispatch` 0.2 и `dispatch2`); комментарий в `Cargo.toml` ссылается на удалённый `cocoa`. У `FLUIContentView` нет `acceptsFirstMouse:`, и клик, активирующий неактивное окно, до FLUI не доходит. После: `Rc` и `RefCell` на потоке владельца, занятость — типизированный исход; три класса на `define_class!` с типизированными ivars, полоса владельца на `dispatch2`, `dispatch` снят; `acceptsFirstMouse:` отвечает `YES` и помечает нажатие, а виджет решает, принять ли его | LY133 | `crates/flui-native/src/{window/apple/macos.rs,window/apple/macos/delegate.rs,owner/apple/macos/*,window/apple/ios.rs,clipboard/apple/macos.rs,input/apple.rs}`, `crates/flui-native/Cargo.toml`, чтение нажатия в `crates/flui-platform` | `cross-typecheck`, `send-impls`, `deps`, `panic-boundary`, гейт API-замыкания | строка AppKit-kit: клик по неактивному окну доходит до потока указателя с пометкой первого клика; набор AppKit-kit зелёный до и после переноса привязок; падает при откате | T; Dev: macOS, iOS |
 | **LY140** | **Android: доступность выключается, когда сервис не слушает.** Сейчас `notify_activation(false)` на Android не зовётся, и Java не слушает состояние доступности: после первого запроса дерева любым сервисом каждый кадр строит и шлёт обновления семантики до конца процесса. `NodeProvider` (`crates/flui-native/src/accessibility/android.rs`) использует `try_lock` как детектор повторного входа. После: `FluiView` регистрирует `AccessibilityStateChangeListener` и `TouchExplorationStateChangeListener` и через новый native-метод выключает мост (`PROTOCOL` поднят); провайдер строится на главном потоке, держится как `Rc<RefCell<…>>` в реестре по handle вида, повторный вход отвечает типизированным `Busy` | LY137 | `crates/flui-native/src/{accessibility/android.rs,owner/android/java_view.rs}`, `FluiView.java` | `android-dex`, `panic-boundary`, `cross-typecheck` | модель моста: уход сервиса останавливает построение семантики; повторный вход в провайдер отвечает `Busy`; каждый падает при откате | L + T; Dev: Android |
-| **LY141** | **URL, пришедший без окна, доходит до приложения.** Сейчас у резидентного приложения (`ExplicitQuit`, macOS после последнего окна) ссылка уходит в `OpenRouting::hold` (`crates/flui-app/src/app/runner/opened.rs`) и ждёт следующего окна — может, часы, может, никогда; хука URL у `Application` нет, а «ни одно окно не видно — сначала reopen» держат только пути single-instance Windows, X11 и Wayland. `hold` держит одну цель: URL другой цели заменяет удержанные целиком, URL уже закрытого окна держится до конца и вытесняет URL приложения. Файлы холодного запуска пропадают без строки лога, когда bootstrap падает. После: правило на шве — URL без представления при `Launch::Running` вызывает маршрут reopen и удерживается до установки окна; удержание по целям с общим пределом `MAX_OPENED_ITEMS`, URL закрытого окна отказывается; потерянные файлы считаются в логе; reopen в хостах больше не нужен | — | `crates/flui-app/src/app/{runner/opened.rs,runner/host.rs,window_registry.rs}`, `crates/flui-app/tests/runner_open.rs`, single-instance в `crates/flui-native/src/owner/{windows,linux}/*` | `workspace`, `reach`, `cross-typecheck` | `a_link_with_no_window_opens_one_on_it`: резидентный headless-запуск, ссылка открывает одно окно, Router строит её цель; ссылка для окна, которое не установится, затем ссылка приложения — та открывается; каждый падает при откате | L + T |
+| **LY141** | **URL, пришедший без окна, доходит до приложения.** Сейчас у резидентного приложения (`ExplicitQuit`, macOS после последнего окна) ссылка уходит в `OpenRouting::hold` (`crates/flui-app/src/app/runner/opened.rs`) и ждёт следующего окна — может, часы, может, никогда; хука URL у `Application` нет, а «ни одно окно не видно — сначала reopen» держат только пути single-instance Windows, X11 и Wayland. `hold` держит одну цель: URL другой цели заменяет удержанные целиком, URL уже закрытого окна держится до конца и вытесняет URL приложения. Файлы холодного запуска пропадают без строки лога, когда bootstrap падает. После: правило на шве — URL без представления при `Launch::Running` вызывает маршрут reopen и удерживается до установки окна; удержание по целям с общим пределом `MAX_OPENED_ITEMS`, URL закрытого окна отказывается; потерянные файлы считаются в логе; reopen однокопийного хоста остаётся только для позднего запуска, который ничего не открывает, а запуск со ссылкой или файлом маршрутизирует раннер | — | `crates/flui-app/src/app/{runner/opened.rs,runner/host.rs,window_registry.rs}`, `crates/flui-app/tests/runner_open.rs`, single-instance в `crates/flui-native/src/owner/{windows,linux}/*` | `workspace`, `reach`, `cross-typecheck` | `a_link_with_no_window_opens_one_on_it`: резидентный headless-запуск, ссылка открывает одно окно, Router строит её цель; ссылка для окна, которое не установится, затем ссылка приложения — та открывается; каждый падает при откате | L + T |
 | **LY142** | **Состояние потока владельца flui-app без блокировок; без маркеров процесса.** Сейчас `CloseRequestRouter.entries` (`crates/flui-app/src/app/close_request.rs`), `GpuLossLedger`, `FirstReveal` и `HostMemory.receivers` — `parking_lot::Mutex`, хотя ADR-0323 §5 требует `Rc`, `Cell` и `RefCell`, и ни один файл не записан в `docs/gaps.md`; роутер лежит в `Rc` и держит `Weak<dyn PlatformWindow>`, проверки `ThreadId` и `ClosePublication` с `MutexGuard` защищают блокировку, которая ничему не служит, а забытый клон перед повторным входом повис бы, а не упал на `RefCell`; доки говорят, что роутер — `Arc`. `close_request.rs` и `lifecycle.rs` несут «Not in this slice», «own lifecycle slice» и пункты плана в доках модуля. После: `RefCell` и `Rc`, `WrongThread` и проверки потока удалены; доки говорят действующий контракт, недостающее — в `docs/gaps.md` | LY108 | `crates/flui-app/src/app/{close_request.rs,runner/gpu_loss.rs,runner/first_reveal.rs,host_memory.rs,lifecycle.rs}`, `docs/gaps.md`, `api/flui.txt` | `markers`, `public-api`, `workspace`, `cross-typecheck` | таблица `runner_close` зелёная до и после; `rg` по словам срезов в `crates/flui-app` пуст | L + T |
 | **LY143** | **Диалог кончается со своим окном и отменяется; тип результата допускает только настоящие результаты.** Сейчас `DialogError::WindowClosed` (`crates/flui-system/src/dialog/mod.rs`) нигде не строится: диалог переживает окно и доставляет в виджет закрытого окна, handle закрытого окна ещё спрашивает ОС. Портальный `Request.Close` никто не зовёт (`portal/request.rs`): брошенное завершение оставляет диалог на экране и окно `Busy`, молчащий портал держит `Busy` до ухода runtime. `a_window_shows_one_dialog_at_a_time` проверяет только клоны одного handle и прошёл бы с правилом на handle. `OpenResult` допускает `Some(vec![])` и несколько выборов при одиночном; успех портала без `uris` читается как отмена. `Failed { code }` обещает код ОС, а портал выдумывает `0` или передаёт свой ответ `2`, `Ended` угадан как `NoHandler`. После: билет диалога, чей `Drop` отменяет бэкенд, и подписка на закрытие окна, отвечающая `Err(WindowClosed)`; результат нормализуется в `FileDialogs::show` или непустым типом; источник отказа назван типом (ответ портала, errno, шина) | LY54 | `crates/flui-system/src/{dialog/mod.rs,portal/*,testing.rs}`, `crates/flui-system/tests/`, `crates/flui-platform/src/capability/window_ref.rs` | `workspace`, `testing`, гейт API-замыкания, `public-api` | второе headless-окно, удержанный сценарный диалог, окно закрыто: `Err(WindowClosed)` и отмена в бэкенде, следующий `open()` до бэкенда не доходит; брошенное завершение доходит до `Close` подставного портала; два виджета одного окна — `Busy`, виджет другого окна — нет; каждый падает при откате | L |
 | **LY144** | **Фильтры диалога совпадают, как у ОС; запуск называет разрешённые схемы.** Сейчас фильтры портала чувствительны к регистру (`crates/flui-system/src/portal/dialogs.rs`, `literal_glob`): `*.png` прячет `PHOTO.PNG` на Linux, тогда как Windows и macOS совпадают без регистра; диалог сохранения не шлёт `current_filter` и не сообщает выбранный фильтр; `with_extension("tar.gz")` отказывает `InvalidRequest`, хотя доки обещают файлы, кончающиеся на `.extension`. `ExternalUri` — запрет-список схем (`crates/flui-platform/src/launch.rs`): `smb:`, `nfs:`, `ghelp:`, `ms-msdt:`, `search-ms:` и любая своя схема проходят (класс Tauri CVE-2025-31477). Предположительно: launcher передаёт OpenURI и OpenFile пустое родительское окно (`portal/launcher.rs`), и выбор приложения не привязан к окну. После: глобы со сложенным регистром ASCII; `current_filter` туда и обратно; расширение из нескольких сегментов разрешено, либо доки говорят «один сегмент»; разрешены `http`, `https`, `mailto`, `tel`, схемы, которые приложение объявило (ADR-0307), и явное разрешение; родитель — окно виджета | LY143 | `crates/flui-system/src/{dialog/request.rs,portal/dialogs.rs,portal/launcher.rs}`, `crates/flui-platform/src/launch.rs` | `workspace`, гейт API-замыкания, `public-api` | `a_filter_becomes_globs_then_mime_types` ждёт `*.[pP][nN][gG]`; `smb:`, `ghelp:` и `ms-msdt:` отказаны; выбранный фильтр возвращается; при подтверждении — родитель в запросе к подставному порталу; каждый падает при откате | L |
@@ -5961,38 +5961,54 @@ GPU-память простаивающего или невидимого окн
   Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
   (`docs/gaps.md`); кнопки примера не нажимались.
 
-- [ ] **LY141** — ветка `app/opened-url-routing`, на ревью.
-  Построено: судьбу открытого системой решает одно правило на шве раннера (`OpenRouting`,
-  `runner/opened.rs`) для всех хостов и headless. Файлы идут в `on_open_files` (адресат
-  приложения, есть и без окна). URL сначала допускается декларациями (и на вебе origin страницы):
-  недопущенный отказан сразу, не ждёт и не открывает окно. Допущенный идёт в представление,
-  которое называет `WindowRegistry::open_target` (теперь `OpenDestination`: `Presentation`,
-  `Pending`, `Closed`), после URL, ждавших того же адресата. Без представления URL держится по
-  своему адресату (`HeldUrls`: порядок прихода, не больше `MAX_OPENED_ITEMS` URL и
-  `MAX_HELD_URL_BYTES` байт на всех; сверх границы отказ, ранние сохраняют место); если ждёт
-  приложение целиком, а окна нет, раннер идёт по маршруту reopen (как щелчок в Dock): главное окно
-  открывается, его первый Router — на ссылке. После запроса выхода reopen окна не показывает.
-  URL для закрытого окна (реестр помнит последние `MAX_OPENED_ITEMS` закрытых) отказан при
-  приходе. Удержанное отказывается в журнале (по причине, без URL) при сбое или панике bootstrap
-  (`Launching`, вместе с файлами запуска) и в конце прогона. Пред-шаг reopen однокопийных хостов
-  (Windows, X11, Wayland) оставлен: по ADR-0254 §4 поздний запуск — это повторный запуск
-  приложения (на macOS reopen шлёт сама ОС), пустой запуск до обработчика не доходит; второй
-  запрос reopen только держит уже выставленное намерение. Файлы хостов не менялись.
-  Тесты (в скобках — результат на базе без исправления): в таблице `runner_open`
-  `a_link_with_no_window_reopens_the_main_window_on_it` (окон 0, ссылка ждёт молча),
-  `a_link_that_launched_a_resident_app_opens_its_main_window_on_it` (окон 0),
-  `a_burst_of_links_with_no_window_opens_one_window_on_the_last` (окон 0),
-  `a_link_for_a_window_not_open_yet_leaves_the_applications_link` (ссылка другого окна вытесняла
-  ссылку приложения, окно открывалось на начальной странице),
-  `a_link_for_a_closed_window_is_refused_as_it_arrives` (ссылка ждала до конца прогона),
-  `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end` (без запрета reopen после
-  запроса выхода окно открывалось), `a_link_no_declaration_admits_opens_no_window` (проходит и на
-  базе: держит, что reopen не открывает окно чужой ссылке); строки `app_handler_routes`
-  «a bootstrap that fails/panics refuses what launched the application» (файлы и ссылка запуска
-  пропадали без строки журнала). Падение bootstrap с `Err` бывает только у мобильных и веб
-  раннеров: настольный при панике `on_ready` или сбое службы возвращает `Ok` и доставляет файлы.
-  Не построено: `Application::on_open_url` (URL — навигация по ADR-0330, адресат — Router главного
-  окна; второй путь не вводится).
+- [x] **LY141** — ветка `app/opened-url-routing`.
+  Правило — ADR-0339 (заменяет абзац ADR-0330 §5 о раннере и оговорку ADR-0254 §4 о reopen
+  перед поздним запуском). Судьбу открытого системой решает `OpenRouting`
+  (`runner/opened.rs`) для всех хостов и headless. URL допускается одним правилом
+  `OpenDeclarations::admit` (теперь с origin страницы; тем же правилом пользуется
+  `UiRuntime::open_url`) до удержания: недопущенный отказан сразу и окна не открывает. Адресат —
+  `InstalledHost::open_target` (`OpenDestination`: `Presentation`, `Pending`, `Closed`,
+  `NotOpen`); URL для окна без представления держится, только пока установка этого окна идёт,
+  иначе отказ. `HeldUrls` держит для приложения только новейший URL (окно открывает Router на
+  одном адресе, старший отказан как вытесненный), для каждого устанавливаемого окна — по порядку,
+  не больше `MAX_HELD_PER_WINDOW`. URL, отданные в рантайм окна до монтирования корня (`Lent`),
+  возвращаются в удержание, если установка сорвалась (в `finish_install`, в ранних отказах
+  `commit_install` и при следующем шаге маршрутизации для отказа до отправки установки).
+  Без окна раннер идёт по маршруту reopen; reopen во время выхода ждёт выхода
+  (`Ingress::request_native_show`): показывается, если выход отменён, и сбрасывается, если выход
+  состоялся. Удержанное отказывается в журнале по причине, без URL, при сбое или панике bootstrap
+  (`Launching`, вместе с файлами запуска) и в конце прогона. Однокопийные хосты (Windows, X11,
+  Wayland, общий `hand_on_forwarded`) просят reopen только для позднего запуска, который ничего не
+  открывает; запуск со ссылкой или файлом идёт к раннеру, и окно открывается только для
+  допущенной ссылки. Хука `Application::on_open_url` нет: URL — навигация (ADR-0330), окно без
+  окна — главное окно фабрики. Отказ до хоста не доходит: второй процесс узнаёт «принято» раньше
+  маршрутизации, это в `docs/gaps.md` («A later launch is acknowledged before its link is
+  routed»).
+  Тесты (в скобках — результат без исправления): `runner_open` —
+  `a_link_with_no_window_reopens_the_main_window_on_it`,
+  `a_link_that_launched_a_resident_app_opens_its_main_window_on_it` (на базе окон 0);
+  `a_burst_of_links_with_no_window_opens_one_window_on_the_last` (девять ссылок у предела длины:
+  на голове PR до ревью девятая отказана, окно на восьмой);
+  `a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link` (держалась до
+  конца прогона); `a_link_for_a_closed_window_is_refused_as_it_arrives` (на базе держалась до
+  конца); `a_link_outlives_a_window_that_failed_to_install` (GPU отказал окну: ссылка пропадала,
+  следующее окно открывалось на начальной странице);
+  `a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned` (reopen терялся);
+  `a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead` и
+  `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end` (второй без запрета reopen при
+  выходе открывал окно; первый держит, что отложенный reopen не открывает окна при состоявшемся
+  выходе); `a_link_no_declaration_admits_opens_no_window` (проходит и на базе: держит, что reopen
+  не открывает окно недопущенной ссылке); `a_panic_in_on_open_files_ends_the_run_and_refuses_the_link`
+  (проходит и до правки: паника колбэка терминальна по ADR-0258 §4, ссылка отказана в конце
+  прогона — опровержение находки о «застрявшей» ссылке); строки `app_handler_routes` о сбое и
+  панике bootstrap (файлы и ссылка запуска пропадали без строки журнала; `Err` возвращает и
+  настольный bootstrap — `install_owner_platform(owner)?`, — панику ловит `contained` на каждом
+  раннере); в `flui-native` `only_a_launch_that_opens_nothing_asks_for_a_reopen`.
+  Прогоны: Windows — clippy и nextest `flui-app`, `flui-view`, `flui-runtime`, `flui-widgets`,
+  `flui-native` (с `single-instance`); WSL — clippy и lib-тесты `flui-native` для X11 и Wayland.
+  Не компилировалось здесь: macOS, iOS, Android, wasm32 (только CI). Устройства: строка
+  `deep-links-url-schemes-file-associations` в `platform-parity.toml` называет долг — путь macOS
+  без окон, ссылка сцены iOS во время её установки, ссылка Android до окна Activity.
 
 ## Отступление от порядка, решённое владельцем
 

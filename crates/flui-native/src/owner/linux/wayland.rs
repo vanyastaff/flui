@@ -2484,22 +2484,22 @@ mod event_loop {
             let Some(instance) = &self.instance else {
                 return;
             };
-            // One launch at a time, each claimed only once the reopen before
-            // it ran: one waiting behind a handler that blocks stays
+            // One launch at a time, each answered before any handler it
+            // reaches runs: one waiting behind a handler that blocks stays
             // withdrawable, so its caller never runs on its own while this
-            // instance opens it.
+            // instance opens it. A launch that opens nothing asks an
+            // application without a window (one that outlives its last) to
+            // reopen.
             while instance.has_waiting() {
-                // An application without a window (one that outlives its
-                // last) is asked to reopen, as a Dock click asks on macOS.
-                if self.windows.is_empty() {
-                    self.app
-                        .reopen()
-                        .or_contain((), "a launch another instance forwarded");
-                }
                 let Some((forwarded, delivery)) = instance.take_next() else {
                     break;
                 };
-                if crate::owner::single_instance::hand_on(&self.app, forwarded.opened(), delivery) {
+                if crate::owner::single_instance::hand_on_forwarded(
+                    &self.app,
+                    forwarded.opened(),
+                    delivery,
+                    || !self.windows.is_empty(),
+                ) {
                     self.windows
                         .activate_forwarded(forwarded.token.map(ActivationToken::new));
                 }

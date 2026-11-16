@@ -7,6 +7,9 @@
   dialogs moved to a modal surface outside routes); through it,
   [ADR-0024](ADR-0024-named-routes-seam.md) in full and
   [ADR-0019](ADR-0019-navigator-routing-seam.md) §2 and the result clauses of §3
+- **Superseded-by:** [ADR-0339](ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)
+  for §5's paragraph on how the application runner routes what the platform opens (the URLs
+  held for a presentation that does not exist yet)
 - **Related:** [ADR-0262](ADR-0262-persisted-documents-over-a-byte-storage-capability.md) §6 (the
   router's stack restored from the application's own document),
   [ADR-0254](ADR-0254-window-contract.md) (the URLs the platform opens reach `AppHandler`),
@@ -360,14 +363,10 @@ with no Router is `NoUrlOwner` from then on.
 
 The application runner routes what the platform opens. A URL addressed to a window goes to that
 window's presentation, one addressed to the application to the presentation whose window was
-focused last, else the first one opened. The runner admits each URL by the declarations before it
-routes it, so one the application does not open is refused before it waits or opens a window. URLs
-whose presentation does not exist yet (the link that launched the application, which the runner
-takes in `ready` before the first window opens, or one that comes while it has no window) are held
-for it, in order and bounded, and opened in its UI runtime before its root mounts, so its first
-Router opens on them; for the application as a whole the runner opens its main window for them, as
-a Dock click does. A URL for a window that closed is refused as it arrives, and held URLs whose
-window never opens are refused in the log when the bootstrap fails or the run ends. Each
+focused last, else the first one opened. URLs whose presentation does not exist yet (the link that
+launched the application, which the runner takes in `ready` before the first window opens) are
+held for it, bounded, and opened in its UI runtime before its root mounts, so its first Router
+opens on them; held URLs whose window never opens are refused in the log when the run ends. Each
 URL is opened alone under `FirstPanic` (ADR-0281), so a panic in one URL's navigation does not lose
 the next. Files go to `Application::on_open_files`. The declarations are the ones `#[flui::main]`
 reads from the application's manifest (ADR-0307 §2) for the runs the function it marks starts, or
@@ -468,16 +467,8 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `ready`, and the page answers its origin). Through the application runner, `flui-app`'s `runner_open` table:
   `a_link_that_launched_the_app_opens_its_first_router_on_it` (the initial page never built),
   `a_link_goes_to_the_window_focused_last`, `an_undeclared_scheme_opens_nothing`,
-  `opened_files_reach_on_open_files`,
-  `a_panic_in_the_first_urls_navigation_does_not_lose_the_second`,
-  `a_link_with_no_window_reopens_the_main_window_on_it`,
-  `a_link_that_launched_a_resident_app_opens_its_main_window_on_it`,
-  `a_link_no_declaration_admits_opens_no_window`,
-  `a_burst_of_links_with_no_window_opens_one_window_on_the_last`,
-  `a_link_for_a_window_not_open_yet_leaves_the_applications_link`,
-  `a_link_for_a_closed_window_is_refused_as_it_arrives` and
-  `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end`; the failed-bootstrap rows of
-  `app_handler_routes`; in `flui-native`,
+  `opened_files_reach_on_open_files` and
+  `a_panic_in_the_first_urls_navigation_does_not_lose_the_second`; in `flui-native`,
   `ready_takes_what_launched_the_application`.
 - `examples/navigation.rs` (`cargo check --example navigation --features material`): a push, a
   page popped with a result, and a dialog.

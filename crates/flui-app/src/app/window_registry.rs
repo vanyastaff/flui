@@ -74,8 +74,8 @@ pub(crate) struct WindowRegistry {
 /// window is made while the window is open; it reaches the runner after the
 /// close only from the platform's queue of opened reports waiting for the
 /// handler (`AppHandler::opened`), which holds fewer than this. An older id
-/// forgotten here is held as a window still to come, within the hold's bound,
-/// and refused when the run ends.
+/// forgotten here names no installation either, so a URL for it is still
+/// refused, as a window that is not open.
 const RETIRED_WINDOWS_KEPT: usize = flui_platform::MAX_OPENED_ITEMS;
 
 /// Where what the operating system opened for an [`OpenTarget`] goes now.
@@ -83,11 +83,16 @@ const RETIRED_WINDOWS_KEPT: usize = flui_platform::MAX_OPENED_ITEMS;
 pub(crate) enum OpenDestination {
     /// The presentation that takes it.
     Presentation(PresentationAddress),
-    /// No presentation yet: the window the target names is still to be
-    /// installed, or the application has no window.
+    /// No presentation yet: the window the target names is being installed,
+    /// or the application has no window.
     Pending,
     /// The window the target names has closed: nothing opens in it again.
     Closed,
+    /// The window the target names has no presentation and no installation
+    /// under way: nobody announced it, or its installation failed. Decided
+    /// by the installed host, which knows the installations
+    /// (`InstalledHost::open_target`).
+    NotOpen,
 }
 
 impl WindowRegistry {
@@ -110,10 +115,28 @@ impl WindowRegistry {
     ) {
         self.entries.push((registration.id, address));
     }
+    /// Remove every mapping, each window remembered as closed.
     pub(crate) fn clear(&mut self) -> usize {
         let count = self.entries.len();
-        self.entries.clear();
+        for (id, _) in std::mem::take(&mut self.entries) {
+            self.retire(id);
+        }
         count
+    }
+
+    /// Remember `id` as closed, forgetting the oldest past
+    /// [`RETIRED_WINDOWS_KEPT`].
+    fn retire(&mut self, id: WindowId) {
+        if self.retired.len() == RETIRED_WINDOWS_KEPT {
+            self.retired.pop_front();
+        }
+        self.retired.push_back(id);
+    }
+
+    /// Whether `target` names a window and `window` is it, read before the
+    /// window is registered: the native identity stays in this file.
+    pub(crate) fn names_window(target: OpenTarget, window: &dyn PlatformWindow) -> bool {
+        matches!(target, OpenTarget::Window(_)) && Self::opens_in(target, window)
     }
 
     pub(crate) const fn new() -> Self {
@@ -201,10 +224,7 @@ impl WindowRegistry {
             }
         });
         for (id, _) in &removed {
-            if self.retired.len() == RETIRED_WINDOWS_KEPT {
-                self.retired.pop_front();
-            }
-            self.retired.push_back(*id);
+            self.retire(*id);
         }
         removed
     }

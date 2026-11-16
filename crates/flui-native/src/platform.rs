@@ -68,9 +68,10 @@ pub trait AppHandler: 'static {
     fn quit_requested(&self, owner: &OwnerPlatform);
 
     /// The user reopened the application: a click on its Dock icon (AppKit),
-    /// or, on Linux, a later launch of one that keeps one instance, made while
-    /// it shows no window: none is open, or (on X11, where an application can
-    /// hide one) each one is hidden.
+    /// or, on Linux and Windows, a later launch of one that keeps one
+    /// instance which opens nothing, made while it shows no window: none is
+    /// open, or each one is hidden. A later launch that opens URLs or files
+    /// reaches [`opened`](Self::opened) alone (ADR-0339 §7).
     fn reopen(&self, owner: &OwnerPlatform);
 
     /// The operating system opened URLs or files with the application: a

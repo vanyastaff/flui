@@ -99,6 +99,11 @@ impl InstallationWindow {
             .expect("BUG: live installation retains its native window")
     }
 
+    /// The native window, while the installation holds it.
+    pub(super) fn platform_window(&self) -> Option<&Rc<dyn PlatformWindow>> {
+        self.window.as_ref()
+    }
+
     pub(super) fn cancellation(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.closed)
     }

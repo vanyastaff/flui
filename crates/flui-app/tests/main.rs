@@ -270,8 +270,8 @@ fn runner_open() {
                 runner_open::a_burst_of_links_with_no_window_opens_one_window_on_the_last as fn(),
             ),
             (
-                "runner_open::a_link_for_a_window_not_open_yet_leaves_the_applications_link",
-                runner_open::a_link_for_a_window_not_open_yet_leaves_the_applications_link
+                "runner_open::a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link",
+                runner_open::a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link
                     as fn(),
             ),
             (
@@ -281,6 +281,24 @@ fn runner_open() {
             (
                 "runner_open::a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end",
                 runner_open::a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end
+                    as fn(),
+            ),
+            (
+                "runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link",
+                runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link as fn(),
+            ),
+            (
+                "runner_open::a_link_outlives_a_window_that_failed_to_install",
+                runner_open::a_link_outlives_a_window_that_failed_to_install as fn(),
+            ),
+            (
+                "runner_open::a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned",
+                runner_open::a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned
+                    as fn(),
+            ),
+            (
+                "runner_open::a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead",
+                runner_open::a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead
                     as fn(),
             ),
         ],

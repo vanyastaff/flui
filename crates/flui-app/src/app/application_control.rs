@@ -134,6 +134,9 @@ struct State {
     phase: Phase,
     quit: QuitAsk,
     intent: bool,
+    /// A reopen asked while a quit was asked, consulted or deferred: shown
+    /// once the quit is abandoned, dropped once it commits.
+    reopen_after_quit: bool,
     active: bool,
     batch: Option<Arc<()>>,
     superseded: bool,
@@ -311,6 +314,7 @@ impl Ingress {
                 phase: Phase::Accepting,
                 quit: QuitAsk::None,
                 intent: startup_open,
+                reopen_after_quit: false,
                 active: false,
                 batch: None,
                 superseded: false,
@@ -354,21 +358,41 @@ impl Ingress {
         Ok(WindowRequest { reply: receiver })
     }
     /// Show the main window for the platform's reopen or for opened URLs
-    /// that found no window. Ignored once a quit was asked: a reopen made
-    /// while the application quits shows nothing, as AppKit ignores one
-    /// made while it terminates.
+    /// that found no window. A reopen made while a quit is asked, consulted
+    /// or deferred (a close guard waiting on the user) waits for the quit:
+    /// it is shown if the quit is abandoned and dropped if it commits, as
+    /// AppKit ignores a reopen once it terminates.
     pub(crate) fn request_native_show(&self) {
         let mut state = self.state.lock();
-        if state.phase != Phase::Accepting || !matches!(state.quit, QuitAsk::None) {
+        if state.phase != Phase::Accepting {
             return;
         }
-        if let Err(error) = self.proxy.wake() {
+        if !matches!(state.quit, QuitAsk::None) {
+            state.reopen_after_quit = true;
+            return;
+        }
+        Self::show_for_reopen(state, &self.proxy);
+    }
+
+    /// Ask the owner to show the main window for a reopen, unless one is
+    /// shown and stays.
+    fn show_for_reopen(mut state: parking_lot::MutexGuard<'_, State>, proxy: &PlatformProxy) {
+        if let Err(error) = proxy.wake() {
             drop(state);
             tracing::error!(%error, "native reopen could not notify application owner");
             return;
         }
         if !state.active || state.superseded || state.closing.is_some() {
             state.intent = true;
+        }
+    }
+
+    /// The quit was abandoned: show the main window a reopen asked for while
+    /// it was pending.
+    fn quit_abandoned(mut state: parking_lot::MutexGuard<'_, State>, proxy: &PlatformProxy) {
+        state.quit = QuitAsk::None;
+        if std::mem::take(&mut state.reopen_after_quit) {
+            Self::show_for_reopen(state, proxy);
         }
     }
     pub(crate) fn wake_owner(&self) {
@@ -497,6 +521,7 @@ impl Ingress {
     fn commit_quit(state: &mut State, proxy: &PlatformProxy) -> Result<(), AppControlError> {
         state.phase = Phase::Quitting;
         state.quit = QuitAsk::None;
+        state.reopen_after_quit = false;
         proxy.request_quit().map_err(control_error)
     }
 
@@ -521,8 +546,7 @@ impl Ingress {
         }
         match answer {
             QuitAnswer::Cancelled => {
-                state.quit = QuitAsk::None;
-                drop(state);
+                Self::quit_abandoned(state, &self.proxy);
                 tracing::info!(
                     "a presentation refused the quit without recording it; quit cancelled"
                 );
@@ -559,12 +583,11 @@ impl Ingress {
     /// The presentation at `address` kept itself open: the deferred quit it
     /// was waited on for is cancelled.
     pub(crate) fn quit_declined(&self, address: PresentationAddress) {
-        let mut state = self.state.lock();
+        let state = self.state.lock();
         if let QuitAsk::Deferred(waiting) = &state.quit
             && waiting.contains(&address)
         {
-            state.quit = QuitAsk::None;
-            drop(state);
+            Self::quit_abandoned(state, &self.proxy);
             tracing::info!(
                 ?address,
                 "a presentation stayed open; deferred quit cancelled"
