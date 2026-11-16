@@ -5156,7 +5156,7 @@ graph LR
   `-D warnings`, `wasm-check`, `workspace`, `reach` и остальные `xtask checks` зелёные, кроме
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остальное закрывает запись ниже.
-- [x] **LY55** — ветка `platform/contract-without-tracing`. Контракт больше не зависит от
+- [x] **LY55** — #2660, ветка `platform/contract-without-tracing`. Контракт больше не зависит от
   `tracing`, и у каждого условия, которое он логировал, свой исход. Отказ store в правке,
   которая выполнилась до возврата запроса, — ошибка вызывающего: `commit_composition_in_place`
   теперь возвращает её так же, как `project_ime_event` (раньше отказ снять композицию
@@ -5183,7 +5183,14 @@ graph LR
   читавшие удалённые методы, переведены: `touch` в `handler_reentry.rs` зовёт
   `window_capabilities`, тесты раскладки (`handler_reentry.rs`, `x11_input.rs`,
   `wayland_input.rs`) — `testing::keyboard_layout`; trybuild-снимок
-  `platform_and_host_window_are_sealed` изменился только в номерах строк.
+  `platform_and_host_window_are_sealed` изменился только в номерах строк. Заодно удалены
+  непрочитанные `TargetPlatform::{is_mobile, is_desktop, is_touch_primary}` и
+  `PlatformInput::as_drag_drop`. Проверки: на Windows clippy `--workspace --all-targets
+  -D warnings`, nextest flui-platform и flui-native (падают только тесты, падающие и на базе:
+  Android intent, дрейф trybuild-снимков в нетронутых фикстурах), doctests контракта, `reach`,
+  `doc-strict`, `checks`, `expectations`; в WSL clippy `-p flui-native -p flui-platform
+  --all-targets --all-features`. Не собирались здесь macOS, iOS, Android и wasm32 (там только
+  удаление `fn active`, CI `cross-typecheck`); тесты X11 и Wayland не запускались.
 - [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
   #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
