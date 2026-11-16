@@ -18,7 +18,9 @@
 - **Revised:** 2026-11-15 — sections 10 and 16 name the journal's feature as built,
   `native-capture` (it was `driver`), and say where the code differs from section 16; section 16
   names Android's presentation time as `VK_GOOGLE_display_timing`, not its frame timelines, which
-  give a deadline.
+  give a deadline; section 9 states where the keyboard layout lives as built: the core host's
+  input position, not a `pub(crate)` method, because the host table that names it is public for
+  the compile-fail fixture that shows a table must fill every position.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -45,9 +47,6 @@
   [ADR-0247](ADR-0247-android-java-view.md) (Android Java view; its crate path moves in section 12),
   [ADR-0254](ADR-0254-window-contract.md) (window contract),
   [ADR-0255](ADR-0255-mobile-and-web-hosts.md) (Android, iOS and Web hosts)
-- **Revised:** 2026-11-15 — section 9 states where the keyboard layout lives as built: the core
-  host's input position, not a `pub(crate)` method, because the host table that names it is public
-  for the compile-fail fixture that shows a table must fill every position.
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`
   where they bear on a decision: winit 0.31.0-beta.3 (`rust-windowing/winit@1893565716`), GPUI
   (`zed-industries/zed@fae8a35482`), Slint (`slint-ui/slint@277e7676ce`), SDL3
