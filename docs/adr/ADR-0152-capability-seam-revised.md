@@ -22,6 +22,8 @@
   `concealed` to keep it out of the clipboard's history and cloud sync, and every backend answers
   what it does with one as a `Concealment`, so an application can tell a system that honours the
   mark from one where only some clipboard managers read it and one with no way to mark it.
+- **Superseded-by:** [ADR-0337](ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)
+  for §6 in part (a write answers through a resolver; `NativeClipboard` has no `write_text`)
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
@@ -595,10 +597,10 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   the registry through `with_capabilities`; without one every acquisition answers
   `NotRegistered`.
 - **The core host's clipboard.** `flui_native::NativeClipboard` is owner-local and
-  `OwnerPlatform::clipboard` hands it out; its read answers through a `Resolver`. Win32, AppKit,
-  UIKit and `arboard` answer at once, the web when `navigator.clipboard.readText()` settles
-  (falling back to what the page wrote when the browser refuses). Android reads and writes
-  `ClipboardManager` through JNI.
+  `OwnerPlatform::clipboard` hands it out; its read, and its write since ADR-0337, answer through
+  a `Resolver`. AppKit and UIKit answer at once, Win32 from a clipboard thread of its own
+  (ADR-0337 §3), the web when `navigator.clipboard.readText()` settles (falling back to what the
+  page wrote when the browser refuses). Android reads and writes `ClipboardManager` through JNI.
 - **The scripted double.** `flui_testing::ScriptedClipboard` holds, answers, fails, drops or
   refuses reads, and counts the reads it was asked and the live handles;
   `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` mount a tree over another
