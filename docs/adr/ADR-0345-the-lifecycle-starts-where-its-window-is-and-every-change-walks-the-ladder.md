@@ -114,13 +114,14 @@ panic cannot skip removal.
 
 ### Confirmation
 
-- flui-runtime's `lifecycle_derivation_matrix` pins the derivation truth table, checks every pair
-  of states for a ladder of ring neighbours that ends at its target and passes nothing more active
-  than both ends, and pins exact ladders up, down, into and out of `Detached`.
+- flui-runtime's `lifecycle_derivation_matrix` pins the derivation truth table, checks for every
+  pair of states that the ladder moves one state of activity at a time straight from its start to
+  its target, and pins exact ladders up, down, into and out of `Detached`.
 - flui-testing's `tester::hiding_the_window_hides_the_application_and_showing_it_resumes` pins
   `[Inactive, Hidden]` for a subscriber of a mounted window, and
   `tester::opening_a_second_window_makes_the_first_inactive` pins the headless host's snapshot of
-  an installed window.
+  an installed window, and `headless_host::opening_a_window_cancels_the_keys_the_focused_one_held`
+  pins the focus transfer that forgets the held keys of the window that loses the focus.
 - flui-runtime's `owner_input` table: `a_runtime_starts_in_its_window_lifecycle` pins the seeded
   scheduler and the snapshots of a second window opened hidden or focused, and
   `window_observations_update_only_the_target_runtime_lifecycle` pins the scheduler's climb from
