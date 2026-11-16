@@ -148,7 +148,7 @@ pub(super) fn configured_bundle(root: &Path) -> CliResult<Option<AppBundle>> {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&path)?;
             let mut bundle = AppBundle::new(&config.app.name, config.app.id.apple_bundle_id());
-            bundle.version = config.app.version;
+            bundle.version = config.app.version.to_string();
             Ok(Some(bundle))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
