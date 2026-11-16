@@ -11967,6 +11967,7 @@ impl core::marker::StructuralPartialEq for flui::platform::CapabilityAbsence
 pub const flui::platform::CapabilityAbsence::NOT_ON_THIS_DEVICE: Self = _
 pub const flui::platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM: Self = _
 pub const flui::platform::CapabilityAbsence::NOT_YET_ON_THIS_HOST: Self = _
+pub const flui::platform::CapabilityAbsence::WITHDRAWN: Self = _
 pub const fn flui::platform::CapabilityAbsence::reason(self) -> flui::platform::UnsupportedReason
 pub struct flui::platform::CapabilityParts
 field flui::platform::CapabilityParts::activates: flui::platform::WindowCapability // at 12
@@ -13017,6 +13018,12 @@ variant flui::platform::PreferenceQueryError::Invalid(flui::platform::InvalidPre
 variant flui::platform::PreferenceQueryError::Native { message: String } // at 3
 variant flui::platform::PreferenceQueryError::Unsupported(flui::platform::Unsupported) // at 0
 variant flui::platform::PreferenceQueryError::WrongThread // at 1
+pub struct flui::platform::PublicationMint(_)
+impl Clone for flui::platform::PublicationMint
+impl Copy for flui::platform::PublicationMint
+impl core::fmt::Debug for flui::platform::PublicationMint
+pub const fn flui::platform::PublicationMint::exhausted() -> Self
+pub const fn flui::platform::PublicationMint::process() -> Self
 pub trait flui::platform::RedrawRequester: Send + Sync + 'static
 fn flui::platform::RedrawRequester::request_redraw(&self)
 impl<F: Fn() + Send + Sync + 'static> flui::platform::RedrawRequester for F
@@ -13445,6 +13452,7 @@ variant flui::platform::UnsupportedReason::NotOnThisPlatform // at 0
 variant flui::platform::UnsupportedReason::NotRegistered // at 5
 variant flui::platform::UnsupportedReason::NotYetOnThisHost // at 2
 variant flui::platform::UnsupportedReason::Unavailable // at 4
+variant flui::platform::UnsupportedReason::Withdrawn // at 7
 #[non_exhaustive] pub enum flui::platform::Weekday
 impl Clone for flui::platform::Weekday
 impl Copy for flui::platform::Weekday
@@ -13556,6 +13564,7 @@ pub const fn flui::platform::WindowCapabilities::shows(&self) -> flui::platform:
 pub const fn flui::platform::WindowCapabilities::unavailable(self, command: &flui::platform::WindowCommand, absence: flui::platform::CapabilityAbsence) -> Self
 pub const fn flui::platform::WindowCapabilities::withdraw(self) -> Self
 pub fn flui::platform::WindowCapabilities::publish(self) -> Result<Self, flui::foundation::IdExhausted>
+pub fn flui::platform::WindowCapabilities::publish_from(self, mint: flui::platform::PublicationMint) -> Result<Self, flui::foundation::IdExhausted>
 pub enum flui::platform::WindowCapability
 impl Clone for flui::platform::WindowCapability
 impl Copy for flui::platform::WindowCapability
@@ -13818,6 +13827,7 @@ impl core::hash::Hash for flui::platform::WindowRevision
 impl core::marker::StructuralPartialEq for flui::platform::WindowRevision
 pub const flui::platform::WindowRevision::LAST: Self = _
 pub const flui::platform::WindowRevision::ZERO: Self = _
+pub const fn flui::platform::WindowRevision::from_raw(raw: u64) -> Self
 pub const fn flui::platform::WindowRevision::get(self) -> u64
 pub const fn flui::platform::WindowRevision::next(self) -> Option<Self>
 pub struct flui::platform::WindowRevisionExhausted;
@@ -13859,6 +13869,7 @@ pub fn flui::platform::WindowState::into_parts(self) -> flui::platform::WindowSt
 pub fn flui::platform::WindowState::is_seen(&self) -> bool
 pub fn flui::platform::WindowState::new(outer: flui::platform::WindowGeometry, content_size: flui::platform::WindowExtent) -> Self
 pub fn flui::platform::WindowState::successor(&self, sample: Self) -> Result<Self, flui::platform::WindowRevisionExhausted>
+pub fn flui::platform::WindowState::successor_from(&self, sample: Self, mint: flui::platform::PublicationMint) -> Result<Self, flui::platform::WindowRevisionExhausted>
 pub fn flui::platform::WindowState::with_active(self, active: bool) -> Self
 pub fn flui::platform::WindowState::with_appearance(self, appearance: flui::platform::WindowAppearance) -> Self
 pub fn flui::platform::WindowState::with_capabilities(self, capabilities: flui::platform::WindowCapabilities) -> Self
@@ -33296,6 +33307,7 @@ pub const fn flui_protocol::native_recording::Absence::name(self) -> &'static st
 variant flui_protocol::native_recording::Absence::NotOnThisDevice // at 1
 variant flui_protocol::native_recording::Absence::NotOnThisPlatform // at 0
 variant flui_protocol::native_recording::Absence::NotYetOnThisHost // at 2
+variant flui_protocol::native_recording::Absence::Withdrawn // at 3
 #[non_exhaustive] pub enum flui_protocol::native_recording::Action
 impl Clone for flui_protocol::native_recording::Action
 impl Copy for flui_protocol::native_recording::Action
