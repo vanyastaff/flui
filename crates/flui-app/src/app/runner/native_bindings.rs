@@ -140,13 +140,13 @@ impl NativeBindings {
         self.0.windows.borrow().contains_address(address)
     }
 
-    /// The presentation what the operating system opened for `target` goes
-    /// to ([`WindowRegistry::open_target`]).
+    /// Where what the operating system opened for `target` goes
+    /// ([`WindowRegistry::open_target`]).
     pub(super) fn open_target(
         &self,
         target: flui_platform::OpenTarget,
         active: Option<PresentationAddress>,
-    ) -> Option<PresentationAddress> {
+    ) -> crate::app::window_registry::OpenDestination {
         self.0.windows.borrow().open_target(target, active)
     }
 

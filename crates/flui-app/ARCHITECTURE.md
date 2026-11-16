@@ -525,6 +525,42 @@ stays released and skips GPU work. Existing device recovery does not imply an
 automatic surface recreation retry; another availability request is currently
 required. Scene migration and background owner waking remain explicit follow-ups.
 
+### What the operating system opens has one destination, decided at the runner
+
+`OpenRouting` (`runner/opened.rs`) decides, for every host and the headless one, where what the
+operating system opened goes (ADR-0330 §5, ADR-0254 §4). A host reports it (`AppHandler::opened`,
+or `take_launch_opened` in `ready`) and does nothing else for it.
+
+- Files go to `Application::on_open_files`, the application's own destination, which exists
+  without a window; with no callback they are logged and dropped.
+- A URL is admitted first, by the application's declarations and on the web the page's origin
+  (`OpenedUrl::parse`, `OpenDeclarations::admit`): one the application does not open is refused
+  as it arrives, before it is held or can make a window open.
+- An admitted URL goes to the presentation `WindowRegistry::open_target` names
+  (`OpenDestination`): the window's own, or for the application the window focused last, else
+  the first opened. URLs held for that target open before it, so the order is the operating
+  system's.
+- With no presentation yet (`Pending`) the URL is held for its target. When a URL is held for the
+  application as a whole and it has no window, the runner takes its reopen route, the one a Dock
+  click takes, which shows the main window `run` or `run_resident`'s factory builds; that
+  window's first Router opens on the URL. Once a quit was asked the route shows nothing, so a URL
+  that comes while the application quits waits and is refused when the run ends. A run with no
+  main window (iOS, Android, the web) routes no reopen: there the host opens the window the URL
+  waits for.
+- A URL addressed to a window that closed (`Closed`: the registry remembers the last
+  `MAX_OPENED_ITEMS` closed windows, whose ids no host issues again) is refused as it arrives.
+- Held URLs are bounded by `MAX_OPENED_ITEMS` URLs and `MAX_HELD_URL_BYTES` bytes across every
+  target; one past the bound is refused and those held first keep their place. They are refused,
+  by reason and never with the URL, when the bootstrap fails or panics (with the launch's files,
+  which the application then never hears) and when the run ends.
+
+A host that keeps one instance still asks `reopen` before a later launch while it shows no window
+(ADR-0254 §4): a later launch is the user starting the application again, as relaunching it is on
+macOS, and a launch that opens nothing never reaches the handler. For a launch that opens a URL the
+runner's own reopen follows; asked twice, the route only keeps the intent it set.
+
+Pinned by `runner_open`'s rows and the failed-bootstrap rows of `app_handler_routes`.
+
 ### UIKit process and session ownership
 
 The owner-only background turn drains the addressed UI runtime's owner inbox,

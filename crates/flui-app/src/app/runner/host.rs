@@ -1190,6 +1190,21 @@ impl RunnerHandler {
     fn route<T: ?Sized>(&self, pick: impl FnOnce(&AppRoutes) -> Option<Rc<T>>) -> Option<Rc<T>> {
         pick(&self.routes.borrow())
     }
+
+    /// Open the main window when URLs are held for the application and it
+    /// has none ([`OpenRouting::waits_for_a_window`](super::opened::OpenRouting::waits_for_a_window)),
+    /// through the route a Dock click takes; the held URLs open in its first
+    /// Router. A run with no main window (iOS, Android, the web) routes no
+    /// reopen: there the host opens the window they wait for. Asked again
+    /// while the window is coming, the route only keeps the intent it set.
+    fn reopen_for_held_urls(&self) {
+        let waits = self
+            .route(|routes| routes.opened.clone())
+            .is_some_and(|routing| routing.waits_for_a_window());
+        if waits && let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
+            reopen();
+        }
+    }
 }
 
 // Every method's whole body runs under one catch, as `WindowRoutes`' do
@@ -1218,14 +1233,19 @@ impl flui_native::AppHandler for RunnerHandler {
             if let (Some(routing), Some(origin)) = (&routing, owner.page_origin()) {
                 routing.set_page_origin(origin);
             }
-            let launch_files = match (&routing, owner.take_launch_opened()) {
-                (Some(routing), Some(launch)) => routing.hold_launch(launch),
-                _ => Vec::new(),
+            // Refuses what launched the application, in the log, when the
+            // bootstrap fails or panics.
+            let launching = match (&routing, owner.take_launch_opened()) {
+                (Some(routing), Some(launch)) => Some(routing.hold_launch(launch)),
+                _ => None,
             };
             bootstrap(owner)?;
-            if let Some(routing) = routing {
-                routing.open_files(launch_files);
+            if let Some(launching) = launching {
+                launching.started();
             }
+            // A link that launched an application which opened no window (a
+            // resident one) opens its main window.
+            self.reopen_for_held_urls();
             Ok(())
         })
     }
@@ -1247,11 +1267,13 @@ impl flui_native::AppHandler for RunnerHandler {
     }
 
     /// Files to the application's callback, URLs to the presentation they
-    /// address ([`OpenRouting::deliver`](super::opened::OpenRouting::deliver)).
+    /// address ([`OpenRouting::deliver`](super::opened::OpenRouting::deliver)),
+    /// and the main window opened for URLs that found none.
     fn opened(&self, _: &flui_native::OwnerPlatform, opened: flui_platform::Opened) {
         contained((), "application open", || {
             if let Some(routing) = self.route(|routes| routes.opened.clone()) {
                 routing.deliver(opened);
+                self.reopen_for_held_urls();
             }
         });
     }

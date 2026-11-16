@@ -119,8 +119,88 @@ fn app_handler_routes() {
                 "a run that routes no exit leaves it to the host",
                 a_run_that_routes_no_exit_leaves_it_to_the_host as fn(),
             ),
+            (
+                "a bootstrap that fails refuses what launched the application",
+                a_bootstrap_that_fails_refuses_what_launched_the_application as fn(),
+            ),
+            (
+                "a bootstrap that panics refuses what launched the application",
+                a_bootstrap_that_panics_refuses_what_launched_the_application as fn(),
+            ),
         ],
     );
+}
+
+/// How a headless run whose bootstrap ends with `bootstrap` ends and what it
+/// logs, when a link and two files launched it; the application hears no
+/// file.
+fn launch_refused_by(
+    bootstrap: impl FnOnce(OwnerPlatform) -> Result<(), flui_native::BootstrapError> + 'static,
+) -> (
+    Result<(), flui_native::PlatformError>,
+    flui_testing::CapturedLog,
+) {
+    use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
+
+    flui_testing::disarm_interest_cache();
+    let heard = Rc::new(Cell::new(0_usize));
+    let files = Rc::clone(&heard);
+    let settings = crate::app::runner::OpenSettings {
+        declarations: Some(flui_view::navigation::OpenDeclarations::new().url_schemes(&["myapp"])),
+        on_open_files: Some(Rc::new(move |opened: &[OpenedFile]| {
+            files.set(files.get() + opened.len());
+        })),
+        ..crate::app::runner::OpenSettings::default()
+    };
+    let platform = HeadlessPlatform::new();
+    platform.host_events().open(Opened::new(
+        ["myapp:///note/3".to_owned()],
+        ["/a.note", "/b.note"].map(OpenedFile::new),
+        OpenTarget::Application,
+        Launch::Cold,
+    ));
+    let (ran, log) = flui_testing::capture(|| {
+        Box::new(platform).run(crate::app::runner::opening_app_handler(settings, bootstrap))
+    });
+    assert_eq!(
+        heard.get(),
+        0,
+        "an application that did not start hears no file"
+    );
+    (ran, log)
+}
+
+/// The files and the link of the launch, each refused by count and reason.
+fn assert_launch_refused(log: &flui_testing::CapturedLog) {
+    let refused: Vec<(Option<&str>, Option<&str>)> = log
+        .records()
+        .iter()
+        .filter(|record| record.contains("the application did not start"))
+        .map(|record| (record.field("files"), record.field("urls")))
+        .collect();
+    assert_eq!(
+        refused,
+        [(Some("2"), None), (None, Some("1"))],
+        "the launch's two files and its link are refused: {log}"
+    );
+}
+
+fn a_bootstrap_that_fails_refuses_what_launched_the_application() {
+    let (ran, log) = launch_refused_by(|_| Err("the window could not open".into()));
+    assert!(ran.is_err(), "the run fails with its bootstrap");
+    assert_launch_refused(&log);
+}
+
+fn a_bootstrap_that_panics_refuses_what_launched_the_application() {
+    const BOOTSTRAP_PANIC: &str = "the bootstrap panics";
+    let (_, log) = launch_refused_by(|_| panic!("{BOOTSTRAP_PANIC}"));
+    let held = crate::app::runner::terminal::take_terminal()
+        .expect("the bootstrap's panic is held as the loop's terminal failure");
+    assert_eq!(
+        flui_foundation::panic::payload_text(held.as_ref()),
+        Some(BOOTSTRAP_PANIC)
+    );
+    assert_launch_refused(&log);
 }
 
 /// ADR-0258 §4 on the desktop runner: the web host has no headless window

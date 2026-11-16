@@ -353,9 +353,13 @@ impl Ingress {
         }
         Ok(WindowRequest { reply: receiver })
     }
+    /// Show the main window for the platform's reopen or for opened URLs
+    /// that found no window. Ignored once a quit was asked: a reopen made
+    /// while the application quits shows nothing, as AppKit ignores one
+    /// made while it terminates.
     pub(crate) fn request_native_show(&self) {
         let mut state = self.state.lock();
-        if state.phase != Phase::Accepting {
+        if state.phase != Phase::Accepting || !matches!(state.quit, QuitAsk::None) {
             return;
         }
         if let Err(error) = self.proxy.wake() {

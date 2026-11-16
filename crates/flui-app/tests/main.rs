@@ -252,6 +252,37 @@ fn runner_open() {
                 "runner_open::the_entry_functions_manifest_declares_what_a_run_opens",
                 runner_open::the_entry_functions_manifest_declares_what_a_run_opens as fn(),
             ),
+            (
+                "runner_open::a_link_with_no_window_reopens_the_main_window_on_it",
+                runner_open::a_link_with_no_window_reopens_the_main_window_on_it as fn(),
+            ),
+            (
+                "runner_open::a_link_that_launched_a_resident_app_opens_its_main_window_on_it",
+                runner_open::a_link_that_launched_a_resident_app_opens_its_main_window_on_it
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_no_declaration_admits_opens_no_window",
+                runner_open::a_link_no_declaration_admits_opens_no_window as fn(),
+            ),
+            (
+                "runner_open::a_burst_of_links_with_no_window_opens_one_window_on_the_last",
+                runner_open::a_burst_of_links_with_no_window_opens_one_window_on_the_last as fn(),
+            ),
+            (
+                "runner_open::a_link_for_a_window_not_open_yet_leaves_the_applications_link",
+                runner_open::a_link_for_a_window_not_open_yet_leaves_the_applications_link
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_for_a_closed_window_is_refused_as_it_arrives",
+                runner_open::a_link_for_a_closed_window_is_refused_as_it_arrives as fn(),
+            ),
+            (
+                "runner_open::a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end",
+                runner_open::a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end
+                    as fn(),
+            ),
         ],
     );
 }
