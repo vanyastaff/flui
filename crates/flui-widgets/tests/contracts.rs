@@ -281,6 +281,8 @@ fn text_editing() {
             ("keyboard_modifiers::locks_release_repeat_and_next_operation_preserve_existing_behavior", crate::keyboard_modifiers::locks_release_repeat_and_next_operation_preserve_existing_behavior),
             ("keyboard_modifiers::altgraph_word_aliases_preserve_character_movement", crate::keyboard_modifiers::altgraph_word_aliases_preserve_character_movement),
             ("keyboard_modifiers::source_composition_preserves_editing_and_submit", crate::keyboard_modifiers::source_composition_preserves_editing_and_submit),
+            ("editable_text::a_tap_on_the_focused_field_asks_for_the_keyboard", crate::editable_text::a_tap_on_the_focused_field_asks_for_the_keyboard),
+            ("editable_text::a_fields_bounds_are_its_box", crate::editable_text::a_fields_bounds_are_its_box),
             ("editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret", crate::editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret),
             ("editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context", crate::editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context),
             ("editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node", crate::editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node),

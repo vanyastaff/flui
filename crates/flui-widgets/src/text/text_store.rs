@@ -966,18 +966,14 @@ impl TextStoreRead for Session<'_> {
         })
     }
 
+    /// The box the field was given, in window-root pixels: the area a host
+    /// hit-tests a tap or a pen against and hands the input method as the
+    /// editor's, whether the field is empty or its text runs past the box
+    /// (scrolled, clipped). Answers once the field is laid out for its text.
     fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
-        self.store.with_layout(&self.doc, |editable, to_root| {
-            let len = editable.plain_text().len();
-            let text = editable
-                .local_rect_for_range(0..len)
-                .ok_or(TextStoreError::NoLayout)?;
-            let caret = editable
-                .local_rect_for_range(len..len)
-                .ok_or(TextStoreError::NoLayout)?;
-            Ok(bounds_from_rect(
-                to_root.transform_rect(&text.union(&caret)),
-            ))
+        let viewport = self.store.viewport()?;
+        self.store.with_layout(&self.doc, |_editable, to_root| {
+            Ok(bounds_from_rect(to_root.transform_rect(&viewport)))
         })
     }
 

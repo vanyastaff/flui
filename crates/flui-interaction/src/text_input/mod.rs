@@ -201,6 +201,8 @@ enum HostOp {
     Focus(Option<Rc<dyn TextStore>>),
     /// End the composition in this store, captured when it was asked for.
     Complete(Rc<dyn TextStore>),
+    /// Show the soft keyboard over this store's field, which was tapped.
+    ShowKeyboard(Rc<dyn TextStore>),
 }
 
 /// Counts one owner call on the host for as long as it runs, unwinding
@@ -907,6 +909,42 @@ impl TextInputOwner {
         }
     }
 
+    /// The active client's field was tapped: ask a pull-model host to show
+    /// its soft keyboard over it (`TextStoreHost::show_keyboard`), queued
+    /// behind the host operations already asked for, as a completion is. A
+    /// push-model platform has no such request.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the first failure the host call or a failure parked before
+    /// it raised, once the queued host operations have run.
+    pub(crate) fn show_keyboard(&self) {
+        self.gate.owner_entry(|| self.show_keyboard_entered());
+    }
+
+    fn show_keyboard_entered(&self) {
+        if !self.is_pull() {
+            return;
+        }
+        let mut calls = OwnerCalls::new();
+        {
+            let mut state = self.state.borrow_mut();
+            if state.lifecycle != OwnerLifecycle::Open {
+                return;
+            }
+            let Some(store) = state
+                .active
+                .as_ref()
+                .map(|active| Rc::clone(&active.client.store))
+            else {
+                return;
+            };
+            state.host_ops.push_back(HostOp::ShowKeyboard(store));
+        }
+        self.apply_host_ops(&mut calls, HostTurn::Own);
+        calls.resume();
+    }
+
     fn complete_store_composition(&self, store: Rc<dyn TextStore>) {
         let mut calls = OwnerCalls::new();
         if self.is_pull() {
@@ -1009,6 +1047,10 @@ impl TextInputOwner {
                         }
                         // A host call that detached the client left this
                         // clone the store's last owner.
+                        calls.retire_parking(&self.gate, store);
+                    }
+                    HostOp::ShowKeyboard(store) => {
+                        calls.run_parking(&self.gate, || host.show_keyboard(&store));
                         calls.retire_parking(&self.gate, store);
                     }
                 }
@@ -1335,6 +1377,9 @@ impl TextInputOwner {
                     close_host_call(&self.gate, failure, || complete_through(host, &store));
                     close_retire(&self.gate, failure, store);
                 }
+                // A closing presentation shows no keyboard: the field's
+                // focus goes with it.
+                HostOp::ShowKeyboard(store) => close_retire(&self.gate, failure, store),
             }
         }
         if focused {
@@ -1512,6 +1557,24 @@ impl TextInputHandle {
         owner.ensure_open()?;
         if owner.is_attached(token) {
             owner.complete_composition();
+        }
+        Ok(())
+    }
+
+    /// `token`'s field was tapped while it holds the input: show the soft
+    /// keyboard over it through the window's text-store host, for the
+    /// active client; a stale token is a no-op. What a field does on its own
+    /// tap, so a keyboard the user put away returns.
+    ///
+    /// # Errors
+    ///
+    /// [`TextInputError::Closed`] or [`TextInputError::OwnerGone`] once the
+    /// presentation is closing or gone.
+    pub fn show_keyboard(&self, token: ClientToken) -> Result<(), TextInputError> {
+        let owner = self.owner()?;
+        owner.ensure_open()?;
+        if owner.is_attached(token) {
+            owner.show_keyboard();
         }
         Ok(())
     }

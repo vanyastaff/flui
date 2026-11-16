@@ -1668,6 +1668,8 @@ impl flui_platform::text_store::TextStoreHost for ServedStore {
     > {
         Err(flui_platform::text_store::TextStoreHostError::NotFocused)
     }
+
+    fn show_keyboard(&self, _store: &Rc<dyn TextStore>) {}
 }
 
 /// A platform observer that hears the store's changes and does nothing.

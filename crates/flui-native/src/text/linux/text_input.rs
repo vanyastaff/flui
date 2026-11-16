@@ -968,6 +968,10 @@ impl TextStoreHost for TextInputClient {
         self.drain();
         Ok(end)
     }
+
+    /// `text-input-v3`, IBus, Fcitx5 and XIM have no request to show an
+    /// on-screen keyboard: a compositor shows its own for an enabled field.
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
 }
 
 /// What the focused store tells the client when the application changes the
