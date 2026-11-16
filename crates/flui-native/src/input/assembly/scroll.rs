@@ -9,7 +9,7 @@
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    PointerEvent, ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision,
+    PointerEvent, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
 };
 
 use super::{ContactRegistry, GesturePhase, NativeContact, NativeDevice, NativeSurface};
@@ -136,7 +136,7 @@ pub struct ContactScroll {
     /// Whether the delta is precise.
     pub precision: ScrollPrecision,
     /// Whether the platform reversed the device's direction.
-    pub direction: ScrollDirection,
+    pub inversion: ScrollInversion,
     /// When, already on the event timeline.
     pub time: EventTime,
     /// The modifiers held.
@@ -153,7 +153,7 @@ impl ContactRegistry {
         let (position, _) = self.position(reading.surface, reading.device, reading.contact)?;
         let mut scroll = ScrollEvent::new(info, reading.time, position, reading.delta)
             .with_precision(reading.precision)
-            .with_direction(reading.direction)
+            .with_inversion(reading.inversion)
             .with_modifiers(reading.modifiers);
         if let Some(phase) = reading.phase {
             scroll = scroll.with_phase(phase);

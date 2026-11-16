@@ -180,12 +180,10 @@ struct InputWindow {
     /// path uses this; the `WM_KEYDOWN` drain sees a whole burst at once and
     /// never needs cross-message state.
     pending_high_surrogate: Cell<Option<u16>>,
-    /// Physical keys held down that were pressed as dead keys, so their
-    /// release reports `Dead` like the press.
-    held_dead_keys: RefCell<raw::HeldKeys<Option<char>>>,
-    /// Keys held down whose scancode names no code, with the key each was
-    /// pressed as, so its repeats and release carry that key.
-    unplaced_keys: RefCell<crate::input::keys::UnplacedKeys<(u16, bool)>>,
+    /// Keys held down that were pressed as a dead key or whose scancode names
+    /// no code, with the key each was pressed as, so its repeats and release
+    /// carry that key.
+    pressed_as: RefCell<crate::input::keys::PressedAs<(u16, bool)>>,
     /// Physical keys held down whose press an input method took
     /// (`VK_PROCESSKEY`): their release is no key either.
     keys_taken_by_input_method: RefCell<raw::HeldKeys>,
@@ -217,8 +215,7 @@ impl InputWindow {
             modifiers: Cell::new(Modifiers::NONE),
             touchpad: direct_manipulation::TouchpadSlot::default(),
             pending_high_surrogate: Cell::new(None),
-            held_dead_keys: RefCell::default(),
-            unplaced_keys: RefCell::default(),
+            pressed_as: RefCell::default(),
             keys_taken_by_input_method: RefCell::default(),
             gone: Cell::new(false),
         }
@@ -614,7 +611,7 @@ impl InputWindows {
                         // its own (the stray `WM_CHAR` arm).
                         let mut taken = ctx.keys_taken_by_input_method.borrow_mut();
                         if crate::input::keys::taken_by_input_method(key.vk) {
-                            taken.press(key.scan_code, key.extended, ());
+                            taken.press(key.scan_code, key.extended);
                             drop(taken);
                             return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
                         }
@@ -667,11 +664,11 @@ impl InputWindows {
 
                         // Dispatch keyboard event via per-window callback
                         use raw::key_down_event;
-                        let event = {
-                            let mut held = ctx.held_dead_keys.borrow_mut();
-                            let event = key_down_event(key, stroke, &mut held, time);
-                            ctx.settle_unplaced(key.scan_code, key.extended, event)
-                        };
+                        let event = ctx.settle_pressed_as(
+                            key.scan_code,
+                            key.extended,
+                            key_down_event(key, stroke, time),
+                        );
                         let result = ctx.delivery.dispatch_input(event);
                         // A callback can close this window and create another
                         // with a recycled HWND: only while the window is the
@@ -717,18 +714,17 @@ impl InputWindows {
                         let taken = ctx
                             .keys_taken_by_input_method
                             .borrow_mut()
-                            .release(key.scan_code, key.extended)
-                            .is_some();
+                            .release(key.scan_code, key.extended);
                         if taken {
                             return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
                         }
 
                         use raw::key_up_event;
-                        let event = {
-                            let mut held = ctx.held_dead_keys.borrow_mut();
-                            let event = key_up_event(key, &mut held, time);
-                            ctx.settle_unplaced(key.scan_code, key.extended, event)
-                        };
+                        let event = ctx.settle_pressed_as(
+                            key.scan_code,
+                            key.extended,
+                            key_up_event(key, time),
+                        );
                         let result = ctx.delivery.dispatch_input(event);
                         if result.default_prevented || !ctx.is_current() {
                             return Some(LRESULT(0));
@@ -922,7 +918,7 @@ mod keystroke_queue {
 impl InputWindow {
     /// `input` of the key `(scan_code, extended)`, its key the key-down's when
     /// its scancode names no code (`KeyEvent`'s contract).
-    fn settle_unplaced(
+    fn settle_pressed_as(
         &self,
         scan_code: u16,
         extended: bool,
@@ -932,7 +928,7 @@ impl InputWindow {
             // Scan code 0 (input injected by virtual key alone) names no key.
             flui_platform::PlatformInput::Keyboard(event) => {
                 flui_platform::PlatformInput::Keyboard(
-                    self.unplaced_keys
+                    self.pressed_as
                         .borrow_mut()
                         .settle((scan_code != 0).then_some((scan_code, extended)), event),
                 )
@@ -2291,12 +2287,7 @@ mod raw {
     /// applies. `time` is the message's generation time on the shared epoch
     /// ([`MessageClock::message_time`]), so a key and a click queued around it
     /// keep their order.
-    pub fn key_down_event(
-        message: KeyMessage,
-        stroke: Keystroke,
-        held_dead: &mut HeldKeys<Option<char>>,
-        time: u64,
-    ) -> PlatformInput {
+    pub fn key_down_event(message: KeyMessage, stroke: Keystroke, time: u64) -> PlatformInput {
         let KeyMessage {
             vk,
             scan_code,
@@ -2307,15 +2298,6 @@ mod raw {
             Keystroke::Dead(accent) => (Some(accent), None),
             Keystroke::Text(text) => (None, text),
         };
-        // A press is also proof the key was released before: a dead press held
-        // across a focus change whose release went to another window is forgotten
-        // here, when the same physical key goes down again. A key that stays held
-        // across a transient focus loss keeps its identity for its release.
-        if let Some(accent) = dead {
-            held_dead.press(scan_code, extended, accent);
-        } else if !is_repeat {
-            held_dead.release(scan_code, extended);
-        }
 
         let modifiers = message_modifiers();
         let fallback = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
@@ -2359,12 +2341,10 @@ mod raw {
     /// fallback — for a letter that is its shift-respecting character, for OEM
     /// punctuation the US-layout position. Consumers that type text act on
     /// `KeyState::Down` only, so this asymmetry never reaches a text field.
-    /// `time` is the message's, as for [`key_down_event`].
-    pub fn key_up_event(
-        message: KeyMessage,
-        held_dead: &mut HeldKeys<Option<char>>,
-        time: u64,
-    ) -> PlatformInput {
+    /// The release of a dead key reports its press's `Key::Dead`: the window's
+    /// `PressedAs` ledger gives it the key its press named. `time` is the
+    /// message's, as for [`key_down_event`].
+    pub fn key_up_event(message: KeyMessage, time: u64) -> PlatformInput {
         let KeyMessage {
             vk,
             scan_code,
@@ -2373,14 +2353,7 @@ mod raw {
         } = message;
 
         let modifiers = message_modifiers();
-        // The release of a dead key is `Dead` too (W3C UI Events dead-key
-        // sequence), so a pressed-key set sees the same identity go down and up.
-        // The press decided it; the layout may have changed while the key was held.
-        let key = if let Some(accent) = held_dead.release(scan_code, extended) {
-            Key::Dead(accent)
-        } else {
-            keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT))
-        };
+        let key = keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT));
         let code = keys::scancode_to_code(scan_code, extended);
 
         PlatformInput::Keyboard(
@@ -2424,41 +2397,24 @@ mod raw {
         Dead(Option<char>),
     }
 
-    /// Physical keys currently held down whose press was of one kind (a dead
-    /// key, a key an input method took), by scancode and extended flag, each
-    /// with what its press said (a dead key's accent), so each one's release
-    /// is reported like its press, even if the keyboard layout or the
-    /// modifiers changed while it was held. Owned per window.
-    #[derive(Debug)]
-    pub struct HeldKeys<T = ()>(Vec<((u16, bool), T)>);
+    /// Physical keys currently held down whose press an input method took, by
+    /// scancode and extended flag, so each one's release is not delivered
+    /// either. Owned per window.
+    #[derive(Debug, Default)]
+    pub struct HeldKeys(Vec<(u16, bool)>);
 
-    impl<T> Default for HeldKeys<T> {
-        fn default() -> Self {
-            Self(Vec::new())
-        }
-    }
-
-    impl<T> HeldKeys<T> {
-        /// Hold the key, with what its press said; a key held again keeps
-        /// what its first press said.
-        pub(super) fn press(&mut self, scan_code: u16, extended: bool, said: T) {
-            if !self
-                .0
-                .iter()
-                .any(|(held, _)| *held == (scan_code, extended))
-            {
-                self.0.push(((scan_code, extended), said));
+    impl HeldKeys {
+        pub(super) fn press(&mut self, scan_code: u16, extended: bool) {
+            if !self.0.contains(&(scan_code, extended)) {
+                self.0.push((scan_code, extended));
             }
         }
 
-        /// What the released key's press said, when it was pressed as one of
-        /// these; forgets it.
-        pub(super) fn release(&mut self, scan_code: u16, extended: bool) -> Option<T> {
-            let at = self
-                .0
-                .iter()
-                .position(|(held, _)| *held == (scan_code, extended))?;
-            Some(self.0.remove(at).1)
+        /// Whether the released key was pressed as one of these; forgets it.
+        pub(super) fn release(&mut self, scan_code: u16, extended: bool) -> bool {
+            let before = self.0.len();
+            self.0.retain(|held| *held != (scan_code, extended));
+            self.0.len() != before
         }
     }
 

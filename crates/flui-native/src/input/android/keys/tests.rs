@@ -85,9 +85,11 @@ fn a_hardware_dead_key_composes_with_the_next_key() {
     enum Step {
         Press(MappedChar),
         Named(NamedKey),
+        /// A Control or Meta chord, or an input method starting to compose.
+        Interrupt,
     }
     use MappedChar::{Accent, Text};
-    use Step::{Named, Press};
+    use Step::{Interrupt, Named, Press};
     let rows: &[(&str, &[Step], &[Key])] = &[
         (
             "an accent then its letter",
@@ -146,6 +148,16 @@ fn a_hardware_dead_key_composes_with_the_next_key() {
             ],
         ),
         (
+            "a Control chord drops the accent, so the shortcut fires and the next letter is bare",
+            &[Press(Accent('´')), Interrupt, Press(Text('e'))],
+            &[Key::Dead(Some('´')), Key::character("e")],
+        ),
+        (
+            "an input method's composition drops the accent before its commit",
+            &[Press(Accent('^')), Interrupt, Press(Text('e'))],
+            &[Key::Dead(Some('^')), Key::character("e")],
+        ),
+        (
             "a letter with no accent pending is itself",
             &[Press(Text('e')), Press(Text('e'))],
             &[Key::character("e"), Key::character("e")],
@@ -157,6 +169,10 @@ fn a_hardware_dead_key_composes_with_the_next_key() {
             .iter()
             .filter_map(|step| match step {
                 Press(mapped) => Some(composer.press(*mapped, &StandInMap)),
+                Interrupt => {
+                    composer.interrupt();
+                    None
+                }
                 Named(key) => {
                     composer.named(*key);
                     None

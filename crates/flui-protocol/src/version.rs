@@ -90,8 +90,9 @@ pub struct Break {
     pub adr: &'static str,
     /// The names it respelled, old then new.
     pub renamed: &'static [(&'static str, &'static str)],
-    /// The schema names it removed: a variant, a property or a type, matched as one segment of
-    /// a schema path. Nothing but these and `renamed` may differ from the version before.
+    /// The schema paths it removed, each in full (`/$defs/KeyEvent/properties/repeat`): a
+    /// property, a tagged variant or a definition, and everything under it. Nothing but these
+    /// and `renamed` may differ from the version before.
     pub removed: &'static [&'static str],
 }
 
@@ -146,11 +147,11 @@ pub const BREAKING: &[Break] = &[
         // `repeat` or `unpaired`.
         renamed: &[],
         removed: &[
-            "repeat",
-            "unreleased",
-            "revise",
-            "pen_squeeze",
-            "SqueezePhase",
+            "/$defs/KeyEvent/properties/repeat",
+            "/$defs/KeyEvent/properties/unreleased",
+            "/$defs/PointerEvent/oneOf/revise=revise",
+            "/$defs/PointerEvent/oneOf/pen_squeeze=pen_squeeze",
+            "/$defs/SqueezePhase",
         ],
     },
 ];

@@ -174,7 +174,7 @@ pub use flui_platform::EventTime;
 pub use flui_platform::pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase,
+    PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase,
     ScrollPrecision, ScrollUnit,
 };
 

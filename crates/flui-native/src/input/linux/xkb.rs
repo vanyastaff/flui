@@ -557,7 +557,7 @@ mod keyboard {
     use super::{EVDEV_OFFSET, XkbModifier, code_of, dead_key, key_of, modifiers_of};
     #[cfg(wayland_host)]
     use super::{group_names, keymap_text};
-    use crate::input::keys::{UnplacedKeys, location_for_code};
+    use crate::input::keys::{PressedAs, location_for_code};
     #[cfg(x11_host)]
     use crate::owner::linux::x11::X11Connection;
 
@@ -727,7 +727,7 @@ mod keyboard {
         held: Vec<u32>,
         /// The keys of [`held`](Self::held) the kernel names no code for, with
         /// the key each was pressed as.
-        unplaced: UnplacedKeys<u32>,
+        pressed_as: PressedAs<u32>,
     }
 
     /// The keys a keyboard holds down at once. A full-size keyboard has 104
@@ -781,7 +781,7 @@ mod keyboard {
                 modifiers,
                 keycodes,
                 held: Vec::new(),
-                unplaced: UnplacedKeys::default(),
+                pressed_as: PressedAs::default(),
             })
         }
 
@@ -1112,7 +1112,7 @@ mod keyboard {
             {
                 event.key = composed;
             }
-            self.unplaced.settle(Some(keycode), event)
+            self.pressed_as.settle(Some(keycode), event)
         }
 
         /// The keyboard leaves its window: the compose sequence in progress

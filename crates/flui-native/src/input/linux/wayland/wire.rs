@@ -13,7 +13,7 @@
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollDirection,
+    PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollInversion,
     ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{EventTime, PlatformInput};
@@ -460,7 +460,7 @@ struct PointerState {
     fingers: bool,
     /// Whether its scrolls run against the fingers, as the compositor last said
     /// (`Unknown` before seat version 9).
-    direction: ScrollDirection,
+    inversion: ScrollInversion,
 }
 
 /// The axis events of one pointer frame.
@@ -748,7 +748,7 @@ impl SeatAssembly {
                 position: (0.0, 0.0),
                 axes: AxisFrame::default(),
                 fingers: false,
-                direction: ScrollDirection::Unknown,
+                inversion: ScrollInversion::Unknown,
             },
         )
     }
@@ -879,10 +879,10 @@ impl SeatAssembly {
         if let Some(inverted) =
             axes.inverted[Axis::Vertical.index()].or(axes.inverted[Axis::Horizontal.index()])
         {
-            state.direction = if inverted {
-                ScrollDirection::InvertedFromDevice
+            state.inversion = if inverted {
+                ScrollInversion::InvertedFromDevice
             } else {
-                ScrollDirection::FromDevice
+                ScrollInversion::FromDevice
             };
         }
         let Some(surface) = state.surface else {
@@ -968,11 +968,11 @@ impl SeatAssembly {
             phase,
             delta,
             precision,
-            direction: self
+            inversion: self
                 .pointers
                 .iter()
                 .find(|state| state.device == device)
-                .map_or(ScrollDirection::Unknown, |state| state.direction),
+                .map_or(ScrollInversion::Unknown, |state| state.inversion),
             time: self.stamp(time),
             modifiers: self.modifiers_of(device),
         };

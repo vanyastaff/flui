@@ -1918,7 +1918,7 @@ mod native_windows {
         delivered
     }
 
-    // A dead key (an accent on an international layout) arrives as
+    // `Key::Dead` with its accent, not as its unshifted character, so a shortcut bound
     // `NamedKey::Dead`, not as its unshifted character, so a shortcut bound
     // to that character does not fire mid-composition.
     fn dead_key_is_reported_as_dead() {

@@ -342,7 +342,7 @@ fn a_wheel_frame_is_one_step_in_detents() {
 /// keeps it, and a seat that never says leaves it unknown.
 #[test]
 fn a_scroll_carries_the_direction_the_compositor_reports() {
-    use flui_platform::pointer::ScrollDirection;
+    use flui_platform::pointer::ScrollInversion;
 
     let directions = |frames: &[&[PointerWire]]| {
         let mut assembly = seated();
@@ -367,7 +367,7 @@ fn a_scroll_carries_the_direction_the_compositor_reports() {
             }) {
                 if let Routed::To(_, PlatformInput::Pointer(PointerEvent::Scroll(scroll))) = routed
                 {
-                    out.push(scroll.direction);
+                    out.push(scroll.inversion);
                 }
             }
         }
@@ -392,18 +392,18 @@ fn a_scroll_carries_the_direction_the_compositor_reports() {
     assert_eq!(
         directions(&[&finger(Some(true)), &stop]),
         [
-            ScrollDirection::InvertedFromDevice,
-            ScrollDirection::InvertedFromDevice
+            ScrollInversion::InvertedFromDevice,
+            ScrollInversion::InvertedFromDevice
         ],
         "natural scrolling, and the stop that ends it"
     );
     assert_eq!(
         directions(&[&finger(Some(false))]),
-        [ScrollDirection::FromDevice]
+        [ScrollInversion::FromDevice]
     );
     assert_eq!(
         directions(&[&finger(None), &stop]),
-        [ScrollDirection::Unknown, ScrollDirection::Unknown],
+        [ScrollInversion::Unknown, ScrollInversion::Unknown],
         "a seat before version 9 does not say"
     );
 }

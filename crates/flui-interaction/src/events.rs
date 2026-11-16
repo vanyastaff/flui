@@ -21,7 +21,7 @@ pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
     PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollDirection, ScrollEvent,
+    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, ScrollInversion,
     SmartZoomEvent,
 };
 

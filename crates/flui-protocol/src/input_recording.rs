@@ -646,7 +646,7 @@ pub struct Scroll {
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub direction: Option<ScrollDirection>,
+    pub inversion: Option<ScrollInversion>,
     /// The held modifiers, by name.
     #[cfg_attr(
         feature = "serde",
@@ -663,7 +663,7 @@ pub struct Scroll {
     clippy::exhaustive_enums,
     reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
 )]
-pub enum ScrollDirection {
+pub enum ScrollInversion {
     /// The `from_device` direction.
     #[cfg_attr(feature = "serde", serde(rename = "from_device"))]
     FromDevice,

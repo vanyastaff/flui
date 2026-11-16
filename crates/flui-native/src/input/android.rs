@@ -119,7 +119,9 @@ pub mod keys {
         /// Windows and macOS type it), so no keystroke is lost. A second
         /// dead key replaces the pending accent unless the two compose. A
         /// key that types nothing (an arrow, Enter, Escape) drops the
-        /// accent; a modifier keeps it, so Shift can choose the base letter.
+        /// accent, and so do a Control or Meta chord (the shortcut fires as on
+        /// every other host) and an input method's composition; a modifier
+        /// keeps it, so Shift can choose the base letter.
         #[derive(Debug, Default)]
         pub(crate) struct DeadKeyComposer {
             pending: Option<char>,
@@ -159,6 +161,13 @@ pub mod keys {
                     MappedChar::Accent(accent) => Key::Dead(Some(accent)),
                     MappedChar::Nothing => Key::Named(NamedKey::Unidentified),
                 }
+            }
+
+            /// Something that is not typing ends the pending accent: a
+            /// Control or Meta chord (a shortcut, which the accent must not
+            /// turn into text), or an input method's composition.
+            pub(crate) fn interrupt(&mut self) {
+                self.pending = None;
             }
 
             /// A named key went down: one that types nothing drops the
@@ -234,7 +243,7 @@ pub(crate) mod motion {
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
         PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta,
-        ScrollDirection, ScrollPhase, ScrollPrecision, ScrollUnit,
+        ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
     };
     use web_time::Instant;
 
@@ -884,7 +893,7 @@ pub(crate) mod motion {
                             phase: None,
                             delta,
                             precision: ScrollPrecision::Unknown,
-                            direction: ScrollDirection::Unknown,
+                            inversion: ScrollInversion::Unknown,
                             time: event.time,
                             modifiers: motion.modifiers,
                         }));
@@ -1007,7 +1016,7 @@ pub(crate) mod motion {
                         phase: Some(owned),
                         delta,
                         precision: ScrollPrecision::Precise,
-                        direction: ScrollDirection::Unknown,
+                        inversion: ScrollInversion::Unknown,
                         time: event.time,
                         modifiers: motion.modifiers,
                     }));
@@ -1507,8 +1516,9 @@ fn motion_device(
 pub(crate) struct AndroidInput {
     state: Mutex<AndroidInputState>,
     scroll_factors: Mutex<scroll::FactorCache>,
-    /// The accent a hardware dead key left pending for the next key.
-    dead_keys: Mutex<keys::DeadKeyComposer>,
+    /// The accent a hardware dead key left pending, and the key each held key
+    /// was pressed as. A `Mutex` because `ActivityInput` is `Send + Sync`.
+    held_keys: Mutex<HeldKeys>,
 }
 
 #[cfg(target_os = "android")]
@@ -1586,7 +1596,7 @@ impl ActivityInput for AndroidInput {
         event: &android_activity::input::KeyEvent<'_>,
         composing: bool,
     ) -> Option<PlatformInput> {
-        convert_key_event(app, event, composing, &mut self.dead_keys.lock())
+        convert_key_event(app, event, composing, &mut self.held_keys.lock())
     }
 
     fn finish_drain(&self) -> Vec<PlatformInput> {
@@ -1596,7 +1606,7 @@ impl ActivityInput for AndroidInput {
     fn focus_lost(&self) -> Vec<PlatformInput> {
         // An accent pending when the window lost focus does not wait for the
         // first key after it comes back.
-        *self.dead_keys.lock() = keys::DeadKeyComposer::default();
+        self.held_keys.lock().dead_keys.interrupt();
         self.state.lock().cancel_contacts(NativeCancel::FocusLost)
     }
 
@@ -1789,15 +1799,19 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
 /// Convert an Android `KeyEvent` to a `PlatformInput`. `composing` is whether
 /// the input method composes now: a key it passed on during a composition is
 /// still its own ([`keys::key_composition`]) and feeds no dead-key
-/// composition; `dead_keys` holds the accent a hardware dead key left
-/// pending.
+/// composition; `held` holds the accent a hardware dead key left pending and
+/// the key each held key was pressed as.
 #[cfg(target_os = "android")]
 fn convert_key_event(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::KeyEvent<'_>,
     composing: bool,
-    dead_keys: &mut keys::DeadKeyComposer,
+    held: &mut HeldKeys,
 ) -> Option<PlatformInput> {
+    let HeldKeys {
+        dead_keys,
+        pressed_as,
+    } = held;
     let state = match event.action() {
         KeyAction::Up => KeyState::Up,
         // `ACTION_MULTIPLE` is the deprecated auto-repeat spelling.
@@ -1820,6 +1834,11 @@ fn convert_key_event(
     };
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
     let modifiers = convert_meta_state(event.meta_state());
+    let chord = modifiers.intersects(Modifiers::CONTROL | Modifiers::META);
+    if composing || (typing && chord) {
+        dead_keys.interrupt();
+    }
+    let typing = typing && !chord;
 
     let key = if named_key == UpstreamNamedKey::Unidentified {
         let map = app.device_key_character_map(event.device_id()).ok();
@@ -1844,12 +1863,22 @@ fn convert_key_event(
     };
 
     let time = EventTime::from_nanos(u64::try_from(event.event_time()).ok()?);
+    let event = KeyEvent::new(state, key, adapter::code(code), time)
+        .with_location(adapter::location(location))
+        .with_modifiers(adapter::modifiers(modifiers))
+        .with_composition(keys::key_composition(composing));
     Some(PlatformInput::Keyboard(
-        KeyEvent::new(state, key, adapter::code(code), time)
-            .with_location(adapter::location(location))
-            .with_modifiers(adapter::modifiers(modifiers))
-            .with_composition(keys::key_composition(composing)),
+        pressed_as.settle(Some(keycode_i32), event),
     ))
+}
+
+/// What the host keeps of the keys held now: the accent a hardware dead key
+/// left pending, and the key each held key was pressed as.
+#[derive(Default)]
+#[cfg(target_os = "android")]
+struct HeldKeys {
+    dead_keys: keys::DeadKeyComposer,
+    pressed_as: crate::input::keys::PressedAs<i32>,
 }
 
 /// The device key map's dead-character table.

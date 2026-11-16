@@ -468,8 +468,8 @@ fn every_published_schema_is_additive_to_the_next() {
     }
 }
 
-/// `violations` less the losses under a name a break `removed`: a property, string or
-/// required field whose path has the name as one segment, or as the string itself.
+/// `violations` less the losses at or under a schema path a break `removed` (a property,
+/// a tagged variant, a definition), named in full so it hides nothing else of that name.
 fn without_removed(violations: Vec<String>, removed: &[&str]) -> Vec<String> {
     violations
         .into_iter()
@@ -480,9 +480,12 @@ fn without_removed(violations: Vec<String>, removed: &[&str]) -> Vec<String> {
             else {
                 return true;
             };
-            !path
-                .split(['/', '='])
-                .any(|segment| removed.contains(&segment))
+            !removed.iter().any(|gone| {
+                path == *gone
+                    || path
+                        .strip_prefix(gone)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
         })
         .collect()
 }
@@ -500,10 +503,21 @@ fn a_removal_breaking_lists_may_go() {
     let violations = additivity_violations(&older, &removed, &[], false, &open_unions());
     assert_eq!(violations, ["property removed: /Node/properties/focusable"]);
     assert_eq!(
-        without_removed(violations.clone(), &["focusable"]),
+        without_removed(violations.clone(), &["/Node/properties/focusable"]),
         [] as [String; 0]
     );
-    assert_eq!(without_removed(violations, &["tooltip"]).len(), 1);
+    // A bare name, or a path that only begins the same way, hides nothing.
+    for other in [
+        "focusable",
+        "/Node/properties/focus",
+        "/Other/properties/focusable",
+    ] {
+        assert_eq!(
+            without_removed(violations.clone(), &[other]).len(),
+            1,
+            "{other}"
+        );
+    }
 }
 
 /// Protocol 0.4 published no method table: its operations were the agent endpoint's `op` names

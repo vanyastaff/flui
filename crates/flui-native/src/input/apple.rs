@@ -1235,7 +1235,7 @@ pub(crate) mod macos {
         use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
             PanZoomEvent, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollDirection, ScrollEvent,
+            PointerKind, PointerPosition, PointerRole, PointerSignal, ScrollEvent, ScrollInversion,
             ScrollPhase, SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
@@ -1261,7 +1261,7 @@ pub(crate) mod macos {
             force: crate::input::apple::force::ForceClick,
             /// Keys held down whose key code names no code, with the key each
             /// was pressed as.
-            unplaced: crate::input::keys::UnplacedKeys<u16>,
+            pressed_as: crate::input::keys::PressedAs<u16>,
         }
 
         impl Default for MacInputState {
@@ -1278,7 +1278,7 @@ pub(crate) mod macos {
                     contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
                     scrolling: ScrollPhases::default(),
                     force: crate::input::apple::force::ForceClick::default(),
-                    unplaced: crate::input::keys::UnplacedKeys::default(),
+                    pressed_as: crate::input::keys::PressedAs::default(),
                 }
             }
         }
@@ -1317,7 +1317,7 @@ pub(crate) mod macos {
                     .with_location(crate::input::keys::location_for_code(code))
                     .with_modifiers(extract_modifiers(event));
                     return vec![PlatformInput::Keyboard(
-                        self.unplaced.settle(Some(key_code), key),
+                        self.pressed_as.settle(Some(key_code), key),
                     )];
                 }
                 if event_type == NSEventType::FlagsChanged {
@@ -1485,15 +1485,15 @@ pub(crate) mod macos {
                 );
                 // The deltas are already in content terms; natural scrolling
                 // is AppKit's own reversal of the device's direction.
-                let direction = if event.isDirectionInvertedFromDevice() {
-                    ScrollDirection::InvertedFromDevice
+                let inversion = if event.isDirectionInvertedFromDevice() {
+                    ScrollInversion::InvertedFromDevice
                 } else {
-                    ScrollDirection::FromDevice
+                    ScrollInversion::FromDevice
                 };
                 let mut scroll = ScrollEvent::new(pointer, time, position, delta)
                     .with_modifiers(modifiers)
                     .with_precision(precision)
-                    .with_direction(direction);
+                    .with_inversion(inversion);
                 let (phase, momentum) = (event.phase(), event.momentumPhase());
                 if phase == NSEventPhase::MayBegin && momentum == NSEventPhase::None {
                     // Fingers came to rest on the trackpad: a fling in

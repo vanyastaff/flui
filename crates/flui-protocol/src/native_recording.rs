@@ -239,8 +239,8 @@ vocabulary! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
-    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeScrollDirection"))]
-    pub enum ScrollDirection {
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(rename = "NativeScrollInversion"))]
+    pub enum ScrollInversion {
         /// The way the device moved.
         FromDevice => "from_device",
         /// The platform reversed it (natural scrolling).
@@ -728,7 +728,7 @@ pub struct Scroll {
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
-    pub direction: Option<ScrollDirection>,
+    pub inversion: Option<ScrollInversion>,
     /// When, on the event timeline.
     pub time_ns: u64,
     /// The modifiers held.

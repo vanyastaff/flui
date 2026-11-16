@@ -46,18 +46,20 @@ use flui_platform::pointer::PointerButton;
     x11_host,
     target_os = "windows",
     target_os = "macos",
+    target_os = "android",
     target_arch = "wasm32",
     test
 ))]
-mod unplaced;
+mod pressed_as;
 #[cfg(any(
     wayland_host,
     x11_host,
     target_os = "windows",
     target_os = "macos",
+    target_os = "android",
     target_arch = "wasm32"
 ))]
-pub(crate) use unplaced::UnplacedKeys;
+pub(crate) use pressed_as::PressedAs;
 
 // Virtual-key codes, from `winuser.h`. Raw `u16` rather than the `windows`
 // crate's `VIRTUAL_KEY` newtype so this module compiles on every host.

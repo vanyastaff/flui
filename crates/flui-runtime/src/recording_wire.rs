@@ -41,7 +41,7 @@ use flui_platform::pointer::{
     PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
     PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
-    ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
     TangentialPressure, Twist,
 };
 use flui_platform::{
@@ -754,13 +754,13 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                             })
                         })
                         .transpose()?,
-                    direction: match scroll.direction {
-                        ScrollDirection::Unknown => None,
-                        ScrollDirection::FromDevice => Some(rec::ScrollDirection::FromDevice),
-                        ScrollDirection::InvertedFromDevice => {
-                            Some(rec::ScrollDirection::InvertedFromDevice)
+                    inversion: match scroll.inversion {
+                        ScrollInversion::Unknown => None,
+                        ScrollInversion::FromDevice => Some(rec::ScrollInversion::FromDevice),
+                        ScrollInversion::InvertedFromDevice => {
+                            Some(rec::ScrollInversion::InvertedFromDevice)
                         }
-                        _ => return Err(unmirrored("ScrollDirection")),
+                        _ => return Err(unmirrored("ScrollInversion")),
                     },
                     modifiers: modifiers_dto(scroll.modifiers),
                 })
@@ -866,11 +866,11 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                     rec::ScrollPrecision::Notched => ScrollPrecision::Notched,
                     rec::ScrollPrecision::Precise => ScrollPrecision::Precise,
                 })
-                .with_direction(match scroll.direction {
-                    None => ScrollDirection::Unknown,
-                    Some(rec::ScrollDirection::FromDevice) => ScrollDirection::FromDevice,
-                    Some(rec::ScrollDirection::InvertedFromDevice) => {
-                        ScrollDirection::InvertedFromDevice
+                .with_inversion(match scroll.inversion {
+                    None => ScrollInversion::Unknown,
+                    Some(rec::ScrollInversion::FromDevice) => ScrollInversion::FromDevice,
+                    Some(rec::ScrollInversion::InvertedFromDevice) => {
+                        ScrollInversion::InvertedFromDevice
                     }
                 })
                 .with_modifiers(modifiers(&scroll.modifiers)?);

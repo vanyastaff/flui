@@ -6354,10 +6354,10 @@
             "null"
           ]
         },
-        "direction": {
+        "inversion": {
           "anyOf": [
             {
-              "$ref": "#/$defs/NativeScrollDirection"
+              "$ref": "#/$defs/NativeScrollInversion"
             },
             {
               "type": "null"
@@ -6408,7 +6408,7 @@
       ],
       "type": "object"
     },
-    "NativeScrollDirection": {
+    "NativeScrollInversion": {
       "oneOf": [
         {
           "const": "from_device",
@@ -8645,16 +8645,6 @@
     },
     "Scroll": {
       "properties": {
-        "direction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScrollDirection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "dx": {
           "format": "double",
           "type": "number"
@@ -8662,6 +8652,16 @@
         "dy": {
           "format": "double",
           "type": "number"
+        },
+        "inversion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollInversion"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "modifiers": {
           "items": {
@@ -8713,18 +8713,6 @@
         "precision"
       ],
       "type": "object"
-    },
-    "ScrollDirection": {
-      "oneOf": [
-        {
-          "const": "from_device",
-          "type": "string"
-        },
-        {
-          "const": "inverted_from_device",
-          "type": "string"
-        }
-      ]
     },
     "ScrollHint": {
       "oneOf": [
@@ -8788,6 +8776,18 @@
         "target"
       ],
       "type": "object"
+    },
+    "ScrollInversion": {
+      "oneOf": [
+        {
+          "const": "from_device",
+          "type": "string"
+        },
+        {
+          "const": "inverted_from_device",
+          "type": "string"
+        }
+      ]
     },
     "ScrollPhase": {
       "oneOf": [

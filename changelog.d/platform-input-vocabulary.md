@@ -1,6 +1,6 @@
 ### Added
 
-- A scroll event says whether the platform reversed the device's direction (natural scrolling): `ScrollEvent::direction` is a `ScrollDirection`, read on macOS, in Safari and on Wayland and `Unknown` where the platform does not say, so a slider or stepper driven by the wheel can move with the fingers.
+- A scroll event says whether the platform reversed the device's direction (natural scrolling): `ScrollEvent::inversion` is a `ScrollInversion`, read on macOS, in Safari and on Wayland and `Unknown` where the platform does not say, for a control that maps a scroll onto a value and should move with the fingers (no widget reads it yet).
 - A dead key carries the accent it leaves pending: `Key::Dead(Option<char>)`, filled on Windows, Linux and Android.
 
 ### Changed

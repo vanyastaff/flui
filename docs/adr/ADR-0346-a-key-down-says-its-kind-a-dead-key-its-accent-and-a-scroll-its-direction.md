@@ -72,22 +72,28 @@ press, a repeat of it or a press with no key behind it.
 ### 2. A dead key carries its accent
 
 `Key::Dead(Option<char>)` carries the accent as the layout prints it (`´`, `^`, `¨`), or `None`
-where the platform does not say; its release carries the same value. The `key-vocabulary`
+where the platform does not say; its release carries the same value: every host settles
+its key events through one ledger, `PressedAs` in `flui-native`, which keeps the key a dead or
+code-less key was pressed as until its release, whatever Shift, the layout or a compose sequence
+made of the key since. The `key-vocabulary`
 generator leaves `Dead` out of `NamedKey` (`carried_by_key`) and fails if keyboard-types renames
 it. Windows reads the accent from `WM_DEADCHAR`, XKB from the dead keysym, Android from
 `KeyCharacterMap`; the DOM names no accent, and AppKit and UIKit compose dead keys as marked
 text. Android composes a hardware dead key with the next character key through
 `KeyCharacterMap.getDeadChar`, types the accent and the letter when the pair composes nothing,
-keeps the accent across a modifier and drops it on a key that types nothing or on focus loss.
+keeps the accent across a modifier and drops it on a key that types nothing, a Control or Meta
+chord, an input method's composition or focus loss.
 
 ### 3. A scroll says its direction
 
-`ScrollEvent::direction: ScrollDirection` with `Unknown` (the default), `FromDevice` and
+`ScrollEvent::inversion: ScrollInversion` with `Unknown` (the default), `FromDevice` and
 `InvertedFromDevice`. The delta stays in content terms on every platform; the direction is for a
 control that maps a scroll onto a value and wants to move with the fingers. macOS reads
 AppKit's `isDirectionInvertedFromDevice`, Safari `webkitDirectionInvertedFromDevice`
 and the native Wayland host `wl_pointer.axis_relative_direction`; the native recording carries
-the direction of each scroll row.
+the inversion of each scroll row. The type is not named `ScrollDirection`, which is the
+viewport's axis direction in `flui-rendering`. No widget reads it yet; the slider's wheel handling is
+its first consumer (`docs/gaps.md`).
 
 ### 4. No revision or pen squeeze until a host produces one
 
@@ -100,7 +106,7 @@ not by pointer id and time; `docs/gaps.md` holds that shape.
 ### 5. The recording and the protocol follow
 
 The recording's key state is `down`, `repeat`, `unpaired` or `up`, its key has a `dead` variant
-and its scroll an optional `direction`; the format is version 4 and refuses version 3. Protocol
+and its scroll an optional `inversion`; the format is version 4 and refuses version 3. Protocol
 0.16 is a break (ADR-0342 §1 for the added variants) and lists the removed names in `BREAKING`, which gains a `removed` list beside `renamed`.
 
 ### Consequences
@@ -124,4 +130,6 @@ and its scroll an optional `direction`; the format is version 4 and refuses vers
   `a_dead_key_carries_its_accent_and_no_named_key_spells_it` (flui-platform),
   `every_vocabulary_variant_round_trips_through_the_recording_dto` (flui-testing),
   `every_published_schema_is_additive_to_the_next` (flui-protocol),
-  `a_scroll_carries_the_direction_the_compositor_reports` (flui-native, the Wayland wire).
+  `a_scroll_carries_the_direction_the_compositor_reports` (flui-native, the Wayland wire),
+  `a_held_key_is_released_as_it_was_pressed` (flui-native, the shared ledger: a press, a
+  modifier or compose change, its release).

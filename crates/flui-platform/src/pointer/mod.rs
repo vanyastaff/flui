@@ -66,7 +66,7 @@ pub use buttons::{InvalidButtonNumber, PointerButton, PointerButtons};
 pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform, SmartZoomEvent};
 pub use sample::PointerSample;
 pub use scroll::{
-    ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use value::{
     ContactSize, HoverDistance, InputValueError, PenOrientation, PointerPosition, Pressure,

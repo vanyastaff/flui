@@ -457,7 +457,7 @@ pub(crate) mod events {
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
         pointer::{
             ButtonChange, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId,
-            PointerInfo, PointerKind, PointerPosition, PointerRole, ScrollDirection, ScrollEvent,
+            PointerInfo, PointerKind, PointerPosition, PointerRole, ScrollEvent, ScrollInversion,
         },
     };
 
@@ -522,7 +522,7 @@ pub(crate) mod events {
                 pinch: Rc::clone(&pinch),
                 accepting,
                 composing: Cell::new(false),
-                unplaced: std::cell::RefCell::default(),
+                pressed_as: std::cell::RefCell::default(),
             });
 
             // The pointers the canvas holds captured, by DOM pointer id with
@@ -583,7 +583,7 @@ pub(crate) mod events {
         composing: Cell<bool>,
         /// Keys held down the browser names no code for, by their `keyCode`,
         /// with the key each was pressed as.
-        unplaced: std::cell::RefCell<crate::input::keys::UnplacedKeys<u32>>,
+        pressed_as: std::cell::RefCell<crate::input::keys::PressedAs<u32>>,
     }
 
     impl CanvasKeys for KeyRoute {
@@ -598,7 +598,7 @@ pub(crate) mod events {
             let key_code = Some(ke.key_code()).filter(|code| *code != 0);
             let input = match convert_keyboard_event(ke, state, self.composing.get()) {
                 PlatformInput::Keyboard(key) => {
-                    PlatformInput::Keyboard(self.unplaced.borrow_mut().settle(key_code, key))
+                    PlatformInput::Keyboard(self.pressed_as.borrow_mut().settle(key_code, key))
                 }
                 other => other,
             };
@@ -1194,6 +1194,7 @@ pub(crate) mod events {
         let delivery = Arc::clone(delivery);
         let pinch = Rc::clone(pinch);
         let target = canvas.clone();
+        let inversion_key = wheel_inversion_key();
         registration.listen(
             canvas.as_ref(),
             "wheel",
@@ -1223,7 +1224,12 @@ pub(crate) mod events {
                 match route {
                     WheelRoute::Refused => {}
                     WheelRoute::Scroll => {
-                        if let Some(input) = convert_wheel_event(we, &target, &pinch.contacts) {
+                        if let Some(input) = convert_wheel_event(
+                            we,
+                            &target,
+                            &pinch.contacts,
+                            inversion_key.as_ref(),
+                        ) {
                             answer(&e, delivery.dispatch_input(input));
                         }
                     }
@@ -1745,6 +1751,7 @@ pub(crate) mod events {
         we: &web_sys::WheelEvent,
         canvas: &web_sys::HtmlCanvasElement,
         contacts: &RefCell<ContactRegistry>,
+        inversion_key: Option<&JsValue>,
     ) -> Option<PlatformInput> {
         let delta = super::wheel::step(we.delta_mode(), we.delta_x(), we.delta_y()).ok()?;
         // DOM getters run before the registry is borrowed: they can reenter.
@@ -1766,21 +1773,34 @@ pub(crate) mod events {
         Some(PlatformInput::Pointer(PointerEvent::Scroll(
             ScrollEvent::new(pointer, time, position, delta)
                 .with_modifiers(modifiers)
-                .with_direction(wheel_direction(we)),
+                .with_inversion(wheel_inversion(we, inversion_key)),
         )))
     }
 
-    /// Whether the browser reversed the device's direction: WebKit's
-    /// `webkitDirectionInvertedFromDevice`, which no other engine has, so a
-    /// wheel event elsewhere does not say.
-    fn wheel_direction(we: &web_sys::WheelEvent) -> ScrollDirection {
-        match js_sys::Reflect::get(we, &JsValue::from_str("webkitDirectionInvertedFromDevice"))
-            .ok()
+    /// The key of WebKit's `webkitDirectionInvertedFromDevice`, when this
+    /// engine's `WheelEvent` has it; no other engine does. Read once, when the
+    /// canvas starts listening, so a wheel event costs one property read.
+    fn wheel_inversion_key() -> Option<JsValue> {
+        let key = JsValue::from_str("webkitDirectionInvertedFromDevice");
+        let wheel_event =
+            js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("WheelEvent")).ok()?;
+        let prototype = js_sys::Reflect::get(&wheel_event, &JsValue::from_str("prototype")).ok()?;
+        js_sys::Reflect::has(&prototype, &key)
+            .unwrap_or(false)
+            .then_some(key)
+    }
+
+    /// Whether the browser reversed the device's direction, read through
+    /// `key` ([`wheel_inversion_key`]); `Unknown` on an engine that does not
+    /// say.
+    fn wheel_inversion(we: &web_sys::WheelEvent, key: Option<&JsValue>) -> ScrollInversion {
+        match key
+            .and_then(|key| js_sys::Reflect::get(we, key).ok())
             .and_then(|inverted| inverted.as_bool())
         {
-            Some(true) => ScrollDirection::InvertedFromDevice,
-            Some(false) => ScrollDirection::FromDevice,
-            None => ScrollDirection::Unknown,
+            Some(true) => ScrollInversion::InvertedFromDevice,
+            Some(false) => ScrollInversion::FromDevice,
+            None => ScrollInversion::Unknown,
         }
     }
 

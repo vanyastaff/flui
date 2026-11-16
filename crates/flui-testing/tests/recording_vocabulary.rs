@@ -25,7 +25,7 @@ use flui_platform::pointer::{
     PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtons, PointerCancel,
     PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
-    Pressure, ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    Pressure, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
     SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
@@ -552,11 +552,11 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("ScrollPrecision", "Precise") => {
             one(scroll(ScrollUnit::Pixels, ScrollPrecision::Precise, None))
         }
-        ("ScrollDirection", direction) => {
+        ("ScrollInversion", direction) => {
             let direction = match direction {
-                "Unknown" => ScrollDirection::Unknown,
-                "FromDevice" => ScrollDirection::FromDevice,
-                "InvertedFromDevice" => ScrollDirection::InvertedFromDevice,
+                "Unknown" => ScrollInversion::Unknown,
+                "FromDevice" => ScrollInversion::FromDevice,
+                "InvertedFromDevice" => ScrollInversion::InvertedFromDevice,
                 _ => return None,
             };
             one(pointer_event(PointerEvent::Scroll(
@@ -566,7 +566,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
                     position(5.0, 6.0),
                     ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, -3.0).expect("finite"),
                 )
-                .with_direction(direction),
+                .with_inversion(direction),
             )))
         }
         ("ScrollPhase", phase) => {

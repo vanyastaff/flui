@@ -194,7 +194,7 @@ pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision,
+    PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
     ScrollUnit, SmartZoomEvent,
 };
 pub use preferences::{

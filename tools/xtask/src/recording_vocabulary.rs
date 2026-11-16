@@ -142,9 +142,9 @@ const RECORDED: &[Recorded] = &[
         "ScrollPhase",
     ),
     repo(
-        "ScrollDirection",
+        "ScrollInversion",
         "crates/flui-platform/src/pointer/scroll.rs",
-        "ScrollDirection",
+        "ScrollInversion",
     ),
     repo(
         "PanZoomPhase",

@@ -6614,7 +6614,7 @@ GPU-память простаивающего или невидимого окн
   `keys::DeadKeyComposer` (чистый, собирается для тестов на любом хосте) через
   `KeyCharacterMap.getDeadChar`; несоставимая пара печатает акцент и букву, модификатор акцент
   держит, клавиша без текста и потеря фокуса сбрасывают, клавиша при композиции IME не участвует.
-  Прокрутка несёт `ScrollEvent::direction: ScrollDirection` (`Unknown`, `FromDevice`,
+  Прокрутка несёт `ScrollEvent::inversion: ScrollInversion` (`Unknown`, `FromDevice`,
   `InvertedFromDevice`): macOS (`isDirectionInvertedFromDevice`), WebKit
   (`webkitDirectionInvertedFromDevice`) и Wayland (`wl_pointer.axis_relative_direction`, seat 9;
   кадр, только останавливающий прокрутку, сохраняет её направление; журнал несёт направление
@@ -6629,7 +6629,7 @@ GPU-память простаивающего или невидимого окн
   `a_repeat_and_a_missing_release_are_kinds_of_key_down` и
   `a_dead_key_carries_its_accent_and_no_named_key_spells_it` (`NamedKey::from_w3c("Dead")` давал
   `Some`); `compile_fail`-доктест `KeyState` держит форму (отпускание с повтором не строится);
-  строки `KeyPress`, `ScrollDirection`, `Key::Dead` в
+  строки `KeyPress`, `ScrollInversion`, `Key::Dead` в
   `every_vocabulary_variant_round_trips_through_the_recording_dto`; мёртвые строки Windows в
   `tests/contract.rs` теперь ждут акцент; строки XKB `key_of` (мёртвый циркумфлекс, мёртвая точка
   снизу без отдельного знака); `a_scroll_carries_the_direction_the_compositor_reports` (до правки

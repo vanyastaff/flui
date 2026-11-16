@@ -2,7 +2,7 @@
 
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    ScrollDelta, ScrollDirection, ScrollPhase, ScrollPrecision, ScrollUnit,
+    ScrollDelta, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 use flui_protocol::native_recording as wire;
 
@@ -46,11 +46,11 @@ pub(super) fn scroll_to_wire(reading: &ContactScroll) -> DtoResult<wire::Scroll>
         delta: [reading.delta.x(), reading.delta.y()],
         precise,
         notched,
-        direction: match reading.direction {
-            ScrollDirection::Unknown => None,
-            ScrollDirection::FromDevice => Some(wire::ScrollDirection::FromDevice),
-            ScrollDirection::InvertedFromDevice => Some(wire::ScrollDirection::InvertedFromDevice),
-            _ => return Err(DtoError::Unmirrored("ScrollDirection")),
+        inversion: match reading.inversion {
+            ScrollInversion::Unknown => None,
+            ScrollInversion::FromDevice => Some(wire::ScrollInversion::FromDevice),
+            ScrollInversion::InvertedFromDevice => Some(wire::ScrollInversion::InvertedFromDevice),
+            _ => return Err(DtoError::Unmirrored("ScrollInversion")),
         },
         time_ns: nanos(reading.time),
         modifiers: modifiers_to_wire(reading.modifiers)?,
@@ -97,10 +97,10 @@ pub(super) fn scroll_from_wire(scroll: wire::Scroll) -> DtoResult<ContactScroll>
                 ));
             }
         },
-        direction: match scroll.direction {
-            None => ScrollDirection::Unknown,
-            Some(wire::ScrollDirection::FromDevice) => ScrollDirection::FromDevice,
-            Some(wire::ScrollDirection::InvertedFromDevice) => ScrollDirection::InvertedFromDevice,
+        inversion: match scroll.inversion {
+            None => ScrollInversion::Unknown,
+            Some(wire::ScrollInversion::FromDevice) => ScrollInversion::FromDevice,
+            Some(wire::ScrollInversion::InvertedFromDevice) => ScrollInversion::InvertedFromDevice,
             Some(other) => return Err(unread(other.name())),
         },
         time: EventTime::from_nanos(scroll.time_ns),

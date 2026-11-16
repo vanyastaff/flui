@@ -499,7 +499,7 @@ store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,
 and keep what flattening loses (ADR-0143): a scroll keeps its unit (lines,
 pixels or pages, resolved by the scrollable that receives it), its precision,
 its gesture phase and whether the platform reversed the device's direction
-(`ScrollDirection`, `Unknown` where it does not say); a trackpad gesture is one
+(`ScrollInversion`, `Unknown` where it does not say); a trackpad gesture is one
 pan/zoom stream whose transform is cumulative since its `Start`; the pen eraser
 is a tool, not a button; a cancelled sequence says why. A key-down says its
 kind in its state (`KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})`),

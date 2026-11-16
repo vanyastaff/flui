@@ -54,7 +54,7 @@ pub mod decode {
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
         PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollDelta,
-        ScrollDirection, ScrollPrecision, ScrollUnit,
+        ScrollInversion, ScrollPrecision, ScrollUnit,
     };
 
     use crate::input::assembly::{
@@ -1234,7 +1234,7 @@ pub mod decode {
                 phase: None,
                 delta,
                 precision,
-                direction: ScrollDirection::Unknown,
+                inversion: ScrollInversion::Unknown,
                 time,
                 modifiers: modifiers_of_mask(event.modifiers),
             };
