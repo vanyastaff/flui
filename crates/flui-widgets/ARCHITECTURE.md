@@ -1267,6 +1267,16 @@ Disabled fields cannot retain focus. The `text_editing` family pins this with
 `select_all_without_a_focused_text_field_leaves_the_key_unconsumed`, and
 `select_all_defers_to_an_active_composition_and_recovers_after_commit`.
 
+### An obscured field copies nothing
+
+Copy and cut stay disabled on an obscured `EditableText`, as on `NSSecureTextField`, a
+`UITextField` with `isSecureTextEntry` and an Android password field: the key is left
+unconsumed and the clipboard untouched. A concealed clipboard entry
+(`ClipboardWrite::concealed`, ADR-0152 §6) is an application's own write through
+`ClipboardHandle::write`, such as a "copy code" button, not a field's. The `text_editing`
+family pins this with
+`copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed`.
+
 ### A field commits its composition before it loses its input
 
 `EditableText` commits an active composition, keeping its text, through
