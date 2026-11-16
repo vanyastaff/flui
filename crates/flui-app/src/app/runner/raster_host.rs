@@ -1245,58 +1245,57 @@ impl RasterHost {
         let _turned = caught.contain(|| placed.executor.turn());
         // A raster thread's failures are taken with its settlements alone
         // (`drain_settled`), so the frame they came with is the one refused.
-        if !placed.slots.contains_key(&address) || placed.executor.inline().is_none() {
+        let Some(slot) = placed
+            .slots
+            .get_mut(&address)
+            .filter(|_| placed.executor.inline().is_some())
+        else {
             caught.resume();
-            return SlotTurn::Clean;
-        }
-        // The turn's own panic (a retired scene's `Drop`, a trim, a device
-        // rebuild) goes to the window that turned it, for its report, before
-        // the slot's failure is logged: a log that panics is the later one.
-        if let Some(slot) = placed.slots.get_mut(&address) {
-            slot.panic.absorb(caught);
-        }
-        Self::take_slot_failure(placed, address)
-    }
-
-    /// Settle what the executor left for `address`'s slot: a refusal is
-    /// logged, and a panic of the slot's commands is held for the window's
-    /// report after its frame. Answers whether the slot's own commands
-    /// panicked.
-    fn take_slot_failure(placed: &mut Placed, address: PresentationAddress) -> SlotTurn {
-        let Some(slot) = placed.slots.get_mut(&address) else {
             return SlotTurn::Clean;
         };
         let failure = placed.sender.take_failure(slot.slot);
-        Self::hold_slot_failure(slot, failure)
+        // The turn's own panic (a retired scene's `Drop`, a trim, a device
+        // rebuild) goes to the window that turned it, for its report, after
+        // the slot's own panic, which its commands raised first.
+        Self::hold_slot_failure(slot, failure, caught)
     }
 
-    /// Settle `failure`, taken from `slot`'s executor slot: a refusal is
-    /// logged, a panic held for the window's report. The log and the
-    /// refusal's drop run contained, their panic held with the slot's (a
-    /// subscriber is user code), so a caller that drained settlements with
-    /// the failure still hands them on.
-    fn hold_slot_failure(slot: &mut HostSlot, failure: Option<SlotFailure>) -> SlotTurn {
-        match failure {
+    /// Settle `failure`, taken from `slot`'s executor slot, with `turned`,
+    /// the panic of the turn that left it: a panic of the slot's commands is
+    /// held first for the window's report, then the turn's, and a refusal
+    /// is logged last. The log and the refusal's drop run contained, their
+    /// panic held with the slot's (a subscriber is user code), so a caller
+    /// that drained settlements with the failure still hands them on.
+    fn hold_slot_failure(
+        slot: &mut HostSlot,
+        failure: Option<SlotFailure>,
+        turned: FirstPanic,
+    ) -> SlotTurn {
+        let refusal = match failure {
             Some(SlotFailure::Panicked(payload)) => {
                 slot.panic.record(payload);
-                SlotTurn::Panicked
+                slot.panic.absorb(turned);
+                return SlotTurn::Panicked;
             }
+            refusal => refusal,
+        };
+        slot.panic.absorb(turned);
+        match refusal {
             Some(SlotFailure::Refused(error)) => {
                 let _logged = slot.panic.contain(move || {
                     tracing::warn!(%error, "raster host: the executor refused a window's command");
                     drop(error);
                 });
-                SlotTurn::Clean
             }
             Some(failure) => {
                 let _logged = slot.panic.contain(move || {
                     tracing::warn!(?failure, "raster host: a window's slot failed");
                     drop(failure);
                 });
-                SlotTurn::Clean
             }
-            None => SlotTurn::Clean,
+            None => {}
         }
+        SlotTurn::Clean
     }
 
     /// Ask the executor to rebuild a device it gave up on (ADR-0267).
@@ -1881,11 +1880,13 @@ impl RasterHost {
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
         let Some(verdict) = Self::settle_one(placed, address, frame, settled, turned) else {
-            if let Some(slot) = placed.slots.get_mut(&address) {
-                let _logged = slot.panic.contain(move || {
-                    tracing::error!(?epoch, "raster host: an inline frame settled nothing");
-                });
-            }
+            let slot = placed
+                .slots
+                .get_mut(&address)
+                .expect("BUG: the window an inline frame settled for holds its slot");
+            let _logged = slot.panic.contain(move || {
+                tracing::error!(?epoch, "raster host: an inline frame settled nothing");
+            });
             return SubmitVerdict::Failed;
         };
         verdict
@@ -2050,7 +2051,8 @@ impl RasterHost {
             .slots
             .get_mut(&address)
             .expect("BUG: the window whose slot drained still holds it");
-        let panicked = Self::hold_slot_failure(slot, failure) == SlotTurn::Panicked;
+        let panicked =
+            Self::hold_slot_failure(slot, failure, FirstPanic::new()) == SlotTurn::Panicked;
         if panicked {
             for held in &mut slot.pending {
                 held.tainted |= !settlements
