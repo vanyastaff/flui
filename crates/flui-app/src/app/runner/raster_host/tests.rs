@@ -1352,7 +1352,8 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
 /// A frame held when the owner took a panic of its slot settles with its
 /// base forgotten, since its settlement may have lost the mark that pairs it
 /// with the panic: the window's next frame draws in full. A frame that
-/// replaces a tainted one inherits the taint, as it inherits its damage.
+/// replaces a tainted one inherits the taint and the retry it owed, as it
+/// inherits its damage.
 ///
 /// Red-check: move the base for a tainted frame, or drop the taint with the
 /// replaced frame, and the base shows the last frame.
@@ -1378,6 +1379,7 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                         .pending
                     {
                         held.tainted = true;
+                        held.retrying = true;
                     }
                 })
                 .expect("the host is idle");
@@ -1393,6 +1395,16 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                 matches!(verdict, SubmitVerdict::QueuedReplacing(_)),
                 "{verdict:?}"
             );
+            let carried = shared
+                .try_read(|host| {
+                    host.placed
+                        .as_ref()
+                        .and_then(|placed| placed.slots.get(&address()))
+                        .and_then(|slot| slot.pending.last())
+                        .is_some_and(|held| held.tainted && held.retrying)
+                })
+                .expect("the host is idle");
+            assert!(carried, "the replacement inherits the taint and the retry");
             2
         } else {
             taint(&shared);

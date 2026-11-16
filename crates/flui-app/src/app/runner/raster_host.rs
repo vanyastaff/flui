@@ -851,7 +851,7 @@ impl RasterHost {
                 match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
                     Ok(()) => false,
                     Err(failure) => {
-                        tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach; the window is kept and draws nothing");
+                        tracing::error!(%failure, "raster host: the raster thread died or did not answer a window's attach; the window is kept and draws nothing");
                         true
                     }
                 }
@@ -1891,14 +1891,14 @@ impl RasterHost {
             .expect("BUG: `configure` found the slot");
         let verdict = match receipt {
             SendReceipt::Replaced(replaced) => {
-                // A tainted frame's replacement inherits the taint, as it
-                // inherits the replaced frame's damage.
-                let inherited = slot
-                    .pending
-                    .iter()
-                    .any(|held| held.epoch == replaced && held.tainted);
+                // The replacement inherits what the replaced frame owed, as
+                // it inherits its damage: its taint, and that it is the one
+                // retry a panicked resize or upload asked for.
+                if let Some(held) = slot.pending.iter().find(|held| held.epoch == replaced) {
+                    frame.tainted |= held.tainted;
+                    frame.retrying |= held.retrying;
+                }
                 slot.pending.retain(|held| held.epoch != replaced);
-                frame.tainted |= inherited;
                 SubmitVerdict::QueuedReplacing(replaced)
             }
             SendReceipt::Accepted | SendReceipt::Configured(_) | SendReceipt::Unconfigured => {

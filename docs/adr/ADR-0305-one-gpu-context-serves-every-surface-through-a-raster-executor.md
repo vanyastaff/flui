@@ -513,7 +513,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
 - Threaded, the owner's host waits for the thread's answer to a window's attach
   (`ExecutorHandle::await_attach`), so a window the thread refuses is refused at its attach as it
   is inline; a thread that does not answer within the detach deadline is wedged at the attach as
-  at a detach (§9), and the window is not refused, since the thread or its queue may still hold its surface;
+  at a detach (§9). Then, or when the thread died of anything else before it answered, the window
+  is not refused, since the thread or its queue may still hold its surface;
   it draws nothing until §9's quarantine is built. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
   slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
   surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
