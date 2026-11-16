@@ -1459,7 +1459,7 @@ mod cases {
         let notes = app_id("com.example.Notes");
         let cases = [
             (
-                flui_native::testing::x11::identified(&notes),
+                X11Platform::try_new_for(&notes),
                 "com.example.Notes",
                 Some("com.example.Notes"),
             ),

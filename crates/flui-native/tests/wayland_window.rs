@@ -1546,7 +1546,7 @@ mod optional {
             return;
         };
         let app_id = flui_foundation::AppId::try_new("com.example.Notes").expect("an app id");
-        let platform = flui_native::testing::wayland::identified(&app_id)
+        let platform = WaylandPlatform::try_new_for(&app_id)
             .expect("the compositor WAYLAND_DISPLAY names answers");
         let fixture = WaylandFixture::open(platform, "an identified window");
         let toplevels = list.toplevels();

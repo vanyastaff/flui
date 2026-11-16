@@ -30,19 +30,6 @@ pub fn run_for<H: Host<Loop = WaylandLoop>>(
     platform.owner().turn_for(span)
 }
 
-/// The Wayland platform as
-/// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it for an
-/// application identified by `app_id`, on a runtime of its own, kept as the
-/// concrete platform so [`run_for`] can turn its loop.
-///
-/// # Errors
-/// What [`WaylandPlatform::try_new`](crate::WaylandPlatform::try_new) reports.
-pub fn identified(
-    app_id: &flui_foundation::AppId,
-) -> Result<crate::WaylandPlatform, PlatformError> {
-    crate::WaylandPlatform::try_new_with(crate::NativeExecutor::own(), None, Some(app_id))
-}
-
 /// The outputs the compositor of `platform`, a `WaylandPlatform`, announces
 /// now, as [`CompositorReport::outputs`] names them. Call it on the thread
 /// that made the platform; elsewhere it is empty.

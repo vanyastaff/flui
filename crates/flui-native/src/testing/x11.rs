@@ -22,13 +22,3 @@ pub fn run_for<H: Host<Loop = X11Loop>>(
 ) -> Result<(), PlatformError> {
     platform.owner().pump_for(span)
 }
-
-/// The X11 platform as [`CurrentHost::start_with`](crate::CurrentHost::start_with)
-/// starts it for an application identified by `app_id`, on a runtime of its
-/// own, kept as the concrete platform so [`run_for`] can turn its loop.
-///
-/// # Errors
-/// What [`X11Platform::try_new`](crate::X11Platform::try_new) reports.
-pub fn identified(app_id: &flui_foundation::AppId) -> Result<crate::X11Platform, PlatformError> {
-    crate::X11Platform::try_new_with(crate::NativeExecutor::own(), None, Some(app_id))
-}
