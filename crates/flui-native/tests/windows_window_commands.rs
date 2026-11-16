@@ -770,6 +770,47 @@ fn maximizing_a_fullscreen_window_leaves_fullscreen() {
     assert_ne!(style(&window) & WS_CAPTION.0, 0, "it has its frame");
 }
 
+/// A window maximized, made fullscreen and maximized again comes back in one
+/// step: no snapshot between shows it normal, it returns to the normal
+/// rectangle it had before fullscreen, and no report of the round trip says
+/// the user placed it.
+fn a_fullscreen_window_maximized_again_never_reads_normal() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let normal = window.state().outer;
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    settle();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    on_changes(&window, move |_, _, next| {
+        log.lock().expect("log").push((next.mode, next.interaction));
+    });
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    settle();
+    let seen = seen.lock().expect("log").clone();
+    assert!(
+        seen.iter().all(|(mode, _)| *mode != WindowMode::Normal),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .all(|(_, interaction)| *interaction == WindowInteraction::None),
+        "{seen:?}"
+    );
+    let state = window.state();
+    assert_eq!(state.mode, WindowMode::Maximized);
+    // SAFETY: a plain query of the live window.
+    assert!(unsafe { IsZoomed(hwnd_of(&window)) }.as_bool());
+    assert_ne!(style(&window) & WS_CAPTION.0, 0, "it has its frame");
+    let returns = state.normal_geometry.expect("a maximized window's normal");
+    assert!(near(returns.size().width, normal.size().width), "{state:?}");
+    assert!(
+        near(returns.size().height, normal.size().height),
+        "{state:?}"
+    );
+}
+
 fn entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot() {
     let platform = platform();
     let window = open(&platform, options());
@@ -1282,47 +1323,23 @@ fn press_f11(window: &Rc<dyn HostWindow>) {
     send(window, WM_KEYDOWN, usize::from(VK_F11.0), 0x0057_0001);
 }
 
-fn the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through() {
+/// The host has no key of its own: an F11 the application answers without
+/// preventing its default leaves the window as it was. Fullscreen is the
+/// application's `SetMode`.
+fn a_key_the_application_lets_through_leaves_the_mode_alone() {
     let platform = platform();
     let window = open(&platform, options());
     settle();
-    // A toggle request that names another window (one whose handle this
-    // window reuses) is not this window's.
-    // SAFETY: a post to the live window; the parameters are plain values.
-    let _ = unsafe {
-        PostMessageW(
-            Some(hwnd_of(&window)),
-            windows::Win32::UI::WindowsAndMessaging::WM_APP + 3,
-            WPARAM(0),
-            LPARAM(0),
-        )
-    };
-    settle();
-    assert_ne!(window.state().mode, WindowMode::Fullscreen);
-
-    window
-        .handler
-        .react_to_input(|_| DispatchEventResult::resolved(false, true));
-    press_f11(&window);
-    settle();
-    assert_ne!(
-        window.state().mode,
-        WindowMode::Fullscreen,
-        "the app prevented it"
-    );
-
+    let before = window.state();
     window
         .handler
         .react_to_input(|_| DispatchEventResult::resolved(true, false));
     press_f11(&window);
-    assert_ne!(
-        window.state().mode,
-        WindowMode::Fullscreen,
-        "not inside the key's own message"
-    );
-    assert!(pump_until(Duration::from_secs(1), || {
-        window.state().mode == WindowMode::Fullscreen
-    }));
+    let changed = pump_until(Duration::from_millis(500), || {
+        window.state().mode != WindowMode::Normal
+    });
+    assert!(!changed, "{:?}", window.state().mode);
+    assert_eq!(window.state().outer, before.outer);
 }
 
 fn a_resize_outside_a_live_resize_asks_for_one_frame_after_it() {
@@ -2289,6 +2306,10 @@ fn native_window_commands() {
             maximizing_a_fullscreen_window_leaves_fullscreen,
         ),
         (
+            "a_fullscreen_window_maximized_again_never_reads_normal",
+            a_fullscreen_window_maximized_again_never_reads_normal,
+        ),
+        (
             "entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot",
             entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot,
         ),
@@ -2365,8 +2386,8 @@ fn native_window_commands() {
             a_size_past_the_largest_surface_is_admitted,
         ),
         (
-            "the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through",
-            the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through,
+            "a_key_the_application_lets_through_leaves_the_mode_alone",
+            a_key_the_application_lets_through_leaves_the_mode_alone,
         ),
         (
             "a_resize_outside_a_live_resize_asks_for_one_frame_after_it",

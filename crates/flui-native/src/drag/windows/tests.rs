@@ -66,7 +66,6 @@ use crate::drag::offers::{PathStyle, TransferUri};
 use crate::hosts::windows::Windows;
 use crate::owner::windows::control::OwnerPost;
 use crate::owner::windows::{HostDrag, WindowsLoop};
-use crate::window::config::WindowConfiguration;
 use crate::window::windows::WindowsWindow;
 use crate::window::windows::proc::with_window_context;
 use crate::{host_window::HostWindow, platform::Platform as _};
@@ -551,7 +550,6 @@ fn platform_over(transport: &Arc<OleTransfer>) -> WindowsPlatform {
     WindowsPlatform::try_from_parts(
         |positions| {
             crate::window::windows::WindowSet::new(
-                WindowConfiguration::default(),
                 positions,
                 crate::version::gate::windows::WindowsBuild::read(),
             )

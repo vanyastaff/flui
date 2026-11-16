@@ -297,7 +297,7 @@ trait depends on `flui-platform` instead.
     (`window::windows::proc::WindowProc`: creation, close and destruction,
     size, position and their limits, DPI, focus, paint, the cursor, the
     title, the modal size-move and menu loops with their deadline timer, the
-    setting changes, the frame and fullscreen requests posted to it and the
+    setting changes, the frame, close and delivery requests posted to it and the
     keyboard's system-menu command), the input
     (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
     characters and the keyboard layout, and the precision touchpad's hit
@@ -332,10 +332,10 @@ trait depends on `flui-platform` instead.
     pen in range), read-only, through the class on their thread
     (`owner::windows::window_inputs`). The text services' state of a window
     is theirs too; the window hands out its text-store host through the
-    class's text (`WindowTexts`, `owner::windows::window_texts`). A keydown
-    the application lets through is a step, which the window answers with its
-    own keys, the fullscreen hotkey; the session's lock is a step the window
-    answers by hiding. Tests:
+    class's text (`WindowTexts`, `owner::windows::window_texts`). The
+    window has no keys of its own: a keydown the application lets through
+    reaches only the default procedure. The session's lock is a step the
+    window answers by hiding. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class` (two instances of the owner's
@@ -744,9 +744,7 @@ trait depends on `flui-platform` instead.
   `flui_platform::MAX_SURFACE_EXTENT`; and `window::state::device_limits` for size
   limits, a minimum up and a maximum down and never below it, which Win32 and X11 both
   call; every host that hands its window system an extent or draws a surface of
-  its own reads them), the desktop window configuration
-  (`window::config`, crate-private: its windows open with F11 as the
-  fullscreen key) and the acknowledgement
+  its own reads them) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
@@ -5679,7 +5677,20 @@ window's current DPI with the frame measured for the style the window has
 **Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
 before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
 `WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back
-fullscreen. `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
+fullscreen.
+
+**Fullscreen is the application's.** No host has a key of its own that switches it: a window enters
+and leaves fullscreen only by `SetMode`, and a key for it is the application's or the framework's
+shortcut. A borderless Win32 window has no exit of its own, so every exit names where it goes
+(`proc::FullscreenExit`): `Normal` takes the style and the rectangle it had before fullscreen back,
+`Maximized` maximizes it with that rectangle as the one it is restored to, by one
+`SetWindowPlacement` that never shows the normal rectangle on the way. Each publishes one snapshot,
+in the mode it ends in, and sends no system command, so no report of the round trip says the user
+placed the window (ADR-0343 §2) and no placement is written as the user's. Tests:
+`a_key_the_application_lets_through_leaves_the_mode_alone`,
+`a_fullscreen_window_maximized_again_never_reads_normal` (Win32 window commands table),
+`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table).
+`WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.
 
 **System events** arrive on the hidden top-level receiver (`owner/windows/broadcast.rs`), which a

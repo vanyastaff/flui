@@ -191,6 +191,37 @@ fn fullscreen_is_borderless_on_the_whole_display() {
     );
 }
 
+/// Leaving fullscreen goes where the command names, in one snapshot each, and
+/// returns to the state the window left: maximized at the normal rectangle it
+/// had before it was maximized, normal at that rectangle. No snapshot of the
+/// round trip says the user placed the window.
+fn leaving_fullscreen_returns_to_the_state_it_left_in_one_step() {
+    let platform = HeadlessPlatform::new();
+    let window = open(&platform);
+    let opened = window.state();
+    let (_, maximized) = applied(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    let changes = count_changes(&window);
+    applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    let (before, back) = applied(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    assert_eq!(
+        changes.load(Ordering::SeqCst),
+        2,
+        "one snapshot per command"
+    );
+    assert_eq!(back.revision.get(), before.revision.get() + 1);
+    assert_eq!(back.mode, WindowMode::Maximized);
+    assert_eq!(back.outer, maximized.outer);
+    assert_eq!(back.normal_geometry, Some(opened.outer));
+    assert_eq!(back.interaction, flui_platform::WindowInteraction::None);
+
+    applied(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    let (before, normal) = applied(&window, WindowCommand::SetMode(WindowMode::Normal));
+    assert_eq!(normal.revision.get(), before.revision.get() + 1);
+    assert_eq!(normal.mode, WindowMode::Normal);
+    assert_eq!(normal.outer, opened.outer);
+    assert_eq!(normal.interaction, flui_platform::WindowInteraction::None);
+}
+
 fn app_title_bar_controls_survive_open_commands_and_fullscreen() {
     for controls in [
         SystemControls::Shown,
@@ -799,6 +830,10 @@ fn window_state_contract() {
             (
                 "fullscreen_is_borderless_on_the_whole_display",
                 fullscreen_is_borderless_on_the_whole_display as fn(),
+            ),
+            (
+                "leaving_fullscreen_returns_to_the_state_it_left_in_one_step",
+                leaving_fullscreen_returns_to_the_state_it_left_in_one_step,
             ),
             (
                 "repeating_a_command_keeps_the_revision_and_stays_silent",
