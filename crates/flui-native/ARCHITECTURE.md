@@ -1547,6 +1547,43 @@ retain the legacy US keycode fallback, including Shift and Caps Lock. A successf
 map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
 pins the projection, while actual layout and Shift mapping require live input.
 
+### The web window keeps its canvas and two hosts in one order, and takes them out
+
+`window::web::root::PageRoot` is what a web window puts in the page
+(ADR-0255 decision 16). A page with no canvas of its own gets a root,
+`flui-view`, appended to the body and fixed over the layout viewport
+(`position: fixed; inset: 0`, not `100vh`, which on a phone runs under the
+browser's toolbars), holding the canvas, the text-input host
+(`flui-text-input`) and the semantics slot (`flui-semantics`), in that
+order. A page that supplies `<canvas id="flui-canvas">` owns its layout: the
+two hosts are inserted after the canvas, and the canvas's `style` and
+`tabindex` attributes are put back when the window retires. A `#flui-canvas`
+inside another window's `flui-view` (another FLUI instance on the page) is
+not the page's: the window makes a root of its own, whose canvas takes the id
+only while no element has it. The hosts are `display: contents`, so they give
+no box, ancestor or containing block the canvas does not have; the text input
+and the accessibility put their elements only into them (`HostSlots`, on
+`CanvasRef`), so the semantics slot stays last whichever of the two adds its
+element first. Dropping the `PageRoot` takes out what it added, on a close and
+on an open that failed after the root was made.
+
+The safe area is the part of each band `env(safe-area-inset-*)` names
+unsafe that the canvas lies under. The text-input host's padding is those
+`env()` values, so its computed padding is the bands in CSS pixels;
+`window::safe_area::within` intersects them with the canvas's box in the
+layout viewport and scales them into the window's logical pixels, as the
+keyboard's occlusion is. The bands are zero unless the page covers the display
+(`viewport-fit=cover`, which the page `flui build` writes asks for). The
+snapshot reads them whenever it reads the page: a layout change, a resize, a
+scroll or a visual-viewport change.
+
+`a_window_takes_the_part_of_each_band_over_it` pins the intersection on
+Linux; on Node, `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+and `web_window_reads_the_safe_area_from_the_viewport` drive the fake page; in
+headless Chrome, `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+checks the order, the teardown and the page canvas's attributes. No mobile
+browser has run the safe area.
+
 ### Web subscriptions belong to one actual canvas registration
 
 The canvas owns an exact DOM-object registration claim. Another live owner of
@@ -1959,7 +1996,7 @@ quiescent point is still inside that dispatch.
 `OwnerPlatform::text_store_host` as Win32's text services are. The focused
 field's store is mirrored into an `EditContext` on the canvas where the
 browser has one (Chromium; web-sys binds none, so the crate declares it) and
-into a hidden `<textarea>` beside the canvas where it does not. The browser
+into a hidden `<textarea>` in the window's text-input host where it does not. The browser
 edits its copy and reports each edit (`textupdate`, or the textarea's
 `input`, diffed against the text the host last gave it by
 `text::ime::diff`, the mirror's one edit); the host applies it to the store under an
@@ -1988,6 +2025,24 @@ change, its keys reach the window through the canvas's key route
 (`CanvasKeys`), focusing the canvas forwards focus to it, and detaching gives
 focus back to the canvas.
 
+A mobile browser shows its keyboard only for an element focused inside a
+user gesture, and iOS Safari zooms the page into a focused field whose text
+is below 16 CSS pixels. Every element the host focuses for editing (the
+textarea, a semantics field) has `font-size: 16px` (`text::web::EDITOR_FONT_SIZE`).
+The textarea takes the page's focus when it attaches while the canvas has
+it, or while the page's focus is on nothing and the page has transient user
+activation (`navigator.userActivation.isActive`: a tap on a canvas the
+browser does not focus). A field whose focus the application applies after
+the tap ended attaches outside the gesture, so while the textarea serves a
+store unfocused, a touch or pen `pointerup` on the canvas focuses it; the
+canvas's input registered first, so a tap that moves the application's focus
+off the field has detached the textarea, and that listener, before it runs.
+`a_textarea_serves_the_field_without_edit_context` reads the font size and
+`a_touch_on_the_canvas_focuses_an_editor_left_unfocused` the touch focus in
+headless Chrome; whether Safari on iOS and Chrome on Android show the
+keyboard is a device run (`platform-parity.toml`, "Input purpose and
+hints").
+
 `the_purpose_picks_the_input_mode`,
 `a_key_of_the_input_method_is_marked_composing` and `mirror_text_table` pin
 the rules in Linux CI, and the conformance table's
@@ -2003,9 +2058,9 @@ input method, candidate window or soft keyboard has run.
 ### The web window's accessibility is a parallel ARIA DOM over the canvas
 
 AccessKit has no adapter for the browser, so `accessibility::web` writes the
-browser's accessibility tree itself (ADR-0255 decision 18): one `flui-node`
+browser's accessibility tree itself (ADR-0255 decision 18; the tree is the host's own, ADR-0336): one `flui-node`
 element per AccessKit node, nested as the tree is, inside a
-`flui-semantics-host` beside the canvas. The pure part runs on the Linux
+`flui-semantics-host` in the window's semantics slot. The pure part runs on the Linux
 host: `aria::describe` maps a node to its element (`role`, the name as
 `aria-label` or as the element's text for a role named by its content,
 states, ranges, `data-flui-id` from `author_id`, relations such as
@@ -2035,9 +2090,9 @@ and writes only what changed between two specs.
   transform is dropped, since CSS pixels are already logical. The host covers
   the canvas's client box, inside its border, the box the window's layout
   size reads.
-- **What stands beside the canvas is hidden with it.** As the canvas's
-  sibling, the placeholder and the host share every ancestor's `display` and
-  `visibility`; the canvas's own are copied on each placement and whenever a
+- **What stands in the semantics slot is hidden with the canvas.** In a
+  `display: contents` slot after the canvas, the placeholder and the host
+  share every ancestor's `display` and `visibility`; the canvas's own are copied on each placement and whenever a
   `MutationObserver` sees its `style`, `class` or `hidden` change.
 - **Work is queued.** A publish, an activation, a DOM event's action and a
   re-placement run in order from one queue. A listener that publishes from

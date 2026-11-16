@@ -262,7 +262,7 @@ graph LR
 | **LY73** | **`flui-system`: iOS** (D18). Выбор документа (`UIDocumentPickerViewController`), URL, share (`UIActivityViewController`), message box (`UIAlertController`), пути; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported` | LY57, LY28 | `packages/flui-system/src/ios/*` | `workspace`, `cross-typecheck` | таблица против симулятора; iOS — T | T; Dev: iOS |
 | **LY74** | **Web: корень DOM и страница** (D16, R6.6). Хост создаёт и владеет корнем DOM: canvas, хост ввода текста, хост семантики (в этом порядке); страница с собственным canvas работает как прежде. `flui-cli` генерирует страницу заново при каждой сборке (`<base href>` для размещения под подпутём, `viewport-fit=cover`, manifest, импорт модуля), без отдельных JavaScript-файлов. Safe area — `env(safe-area-inset-*)` (нужен `viewport-fit=cover`); inset клавиатуры — `visualViewport` (`interactive-widget` не используется: Safari его не даёт); публикация в снимке окна (поле вносит LY66). Согласовано со спекой web-canvas-input-ownership | LY28, LY30, LY46, LY56, LY66 | `crates/flui-native/src/{window,text,owner}/web.rs`, `crates/flui-cli/templates/platforms/web/*`, `crates/flui-cli/src/build/web.rs` | `wasm-check`, `workspace` | wasm-тесты корня; страница с и без своего canvas | L (wasm32); Dev: Web |
 | **LY75** | **Web: textarea — основа** (D16). Шрифт не менее 16 px на iOS (иначе Safari увеличивает страницу), `enterkeyhint` из назначения поля, решение об автозаполнении; фокус внутри пользовательского жеста; `EditContext` остаётся улучшением Chrome | LY74 | `crates/flui-native/src/text/web.rs` | `wasm-check`, `workspace` | wasm- и браузерные тесты атрибутов | L (wasm32); Dev: Web (Safari iOS, Firefox) |
-| **LY76** | **Web: ARIA DOM** (D16). `PlatformAccessibility` для Web: `TreeUpdate` через `accesskit_consumer` в параллельный ARIA DOM в хосте семантики (последним в корне); включается лениво скрытой фокусируемой кнопкой-заглушкой; текстовое поле семантики служит элементом редактирования, когда доступность включена (экран-ридер и IME видят один элемент); текст поля canvas доступен вспомогательным технологиям при любом пути редактирования; идентификатор ADR-0240 → `data-flui-id` | LY32, LY75 | `crates/flui-native/src/accessibility/web.rs`, `crates/flui-semantics` | `wasm-check`, `workspace` | правила отображения узлов — на хосте; браузерные тесты | L (wasm32); Dev: Web (скринридер) |
+| **LY76** | **Web: ARIA DOM** (D16). `PlatformAccessibility` для Web: `TreeUpdate` в параллельный ARIA DOM, дерево которого хост держит сам (`Mirror`, ADR-0336), без `accesskit_consumer`, в хосте семантики (последним в корне); включается лениво скрытой фокусируемой кнопкой-заглушкой; текстовое поле семантики служит элементом редактирования, когда доступность включена (экран-ридер и IME видят один элемент); текст поля canvas доступен вспомогательным технологиям при любом пути редактирования; идентификатор ADR-0240 → `data-flui-id` | LY32, LY75 | `crates/flui-native/src/accessibility/web.rs`, `crates/flui-semantics` | `wasm-check`, `workspace` | правила отображения узлов — на хосте; браузерные тесты | L (wasm32); Dev: Web (скринридер) |
 
 ### Нативный Linux
 
@@ -5277,35 +5277,52 @@ graph LR
   он доходит до `MediaQuery`. Правила те же, что у Android (`window/keyboard.rs`). Остаётся:
   прогон на Simulator или устройстве («type-checked, unrun»); `UIKeyboardLayoutGuide` за
   `Since<F>` строка называет уточнением.
-- [ ] **LY74** (не закрыта: inset клавиатуры на `main`; своего корня DOM, страницы, которую
-  `flui-cli` пишет на каждой сборке, и safe area нет) — #2121 (`8b154b514`), хост семантики
-  #2032. Окно Web читает клавиатуру из `navigator.virtualKeyboard` и `visualViewport` и публикует
-  её в снимке: `web_window_reads_the_keyboard_from_the_visual_viewport`,
-  `web_window_has_the_virtual_keyboard_overlay_its_page`. Страница со своим `#flui-canvas`
-  работает как раньше. Остаётся: корень DOM, которым владеет хост (холст, хост ввода текста,
-  хост семантики по порядку: сейчас оба хоста вставляются соседями холста); генерация страницы
-  с `<base href>` и `viewport-fit=cover` (`flui-cli` копирует `index.html` шаблона);
-  `env(safe-area-inset-*)`; прогон в мобильном браузере.
-- [ ] **LY75** (не закрыта: атрибуты поля на `main`; шрифта 16 px, фокуса внутри жеста,
-  браузерных тестов атрибутов и прогонов Safari iOS и Firefox нет) — #2109 (`3223e936d`), общая
-  очередь store host #2003. `text/web.rs` ставит `enterkeyhint`, `autocomplete` и `inputmode` по
-  статусу поля, `EditContext` — улучшение Chrome по `hasEditContext`. Тесты
-  (`text::web::ime::tests`): `the_status_labels_the_enter_key`,
-  `the_status_picks_what_the_browser_fills_in`, `the_purpose_picks_the_input_mode`. Остаётся:
-  `font-size` скрытого textarea, фокус в пользовательском жесте, тесты атрибутов в wasm и
-  браузере, прогоны.
-- [ ] **LY76** (не закрыта: зеркало ARIA на `main`; корня из LY74 и прогона с экранным диктором
-  нет) — #2032 (`16d7d2770`), ссылки, ползунки и прокрутка #2099, поле ввода своим элементом
-  #2109, выделение статического текста #2119, live region #2120. `accessibility/web/` держит
-  дерево сам (`Mirror::apply` выдаёт операции DOM, `aria.rs` строит элементы), без
-  `accesskit_consumer`, которого называет строка; ленивое включение — скрытая кнопка
-  `flui-a11y-placeholder`; идентификатор ADR-0240 — `data-flui-id`. Тесты: правила в `aria.rs` и
-  `mirror.rs` (`a_node_is_described_as_its_element`, `a_text_field_is_a_native_field_of_its_kind`,
-  `a_node_that_takes_text_is_served_on_the_canvas`), headless Chrome в
-  `tests/web_browser/accessibility.rs`
-  (`the_tree_reaches_the_dom_once_the_placeholder_is_activated`,
-  `a_focused_text_field_is_edited_through_its_element`). Остаётся: порядок хоста семантики в
-  корне (ждёт LY74), решение о зеркале вместо `accesskit_consumer`, прогон с экранным диктором.
+- [x] **LY74** (закрыта: код и тесты в ветке `native/web-dom-root`; прогон в мобильном браузере
+  записан в `platform-parity.toml`) — inset клавиатуры #2121 (`8b154b514`). Окно Web кладёт в
+  страницу то, чем владеет, через `window::web::root::PageRoot`: на странице без своего canvas —
+  корень `flui-view` (`position: fixed; inset: 0`) в `<body>` с canvas, хостом ввода текста
+  `flui-text-input` и слотом семантики `flui-semantics` в этом порядке; на странице с
+  `#flui-canvas` оба хоста встают после canvas, страница сама ведёт раскладку, а canvas при
+  закрытии получает назад свои `style` и `tabindex`. `#flui-canvas` внутри чужого `flui-view`
+  (второй экземпляр FLUI на странице) не считается canvas страницы. Хосты — `display: contents`;
+  ввод текста и доступность кладут элементы только в них (`HostSlots` на `CanvasRef`), так что
+  слот семантики остаётся последним, кто бы ни добавил элемент первым. `PageRoot` при `Drop`
+  убирает всё, что добавил, и при закрытии, и при неудачном открытии. Safe area: padding хоста
+  ввода — `env(safe-area-inset-*)`, вычисленный padding пересекается с рамкой canvas
+  (`window::safe_area::within`) и переводится в логические пиксели окна. `flui build web` пишет
+  `index.html` на каждой сборке (`build::web_page::render`: `<base href>` из `[web] base_href`
+  в `flui.toml`, `viewport-fit=cover`, manifest, импорт модуля, без canvas и без JS-файлов),
+  `platforms/web/index.html` больше не читается (предупреждение) и не создаётся `flui platform
+  add web`; manifest берётся из `platforms/web/` или создаётся по имени приложения. Тесты:
+  `a_window_takes_the_part_of_each_band_over_it` (Linux), `the_page_matches_its_golden`,
+  `the_page_is_a_mount_point_and_a_loader`, `a_base_path_is_an_absolute_directory_with_nothing_to_escape`,
+  `the_default_manifest_names_the_application`, `a_web_base_path_is_read_and_a_bad_one_refused`
+  (`flui-cli`, Windows); на Node `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+  и `web_window_reads_the_safe_area_from_the_viewport`; в headless Chrome
+  `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`. Wasm-половину собирает и
+  гоняет только CI (`wasm-check`, `wasm-test`, headless Chrome). Не закрыто здесь и записано в
+  `docs/gaps.md` («The Web host embeds only as the whole viewport or the page's own canvas»):
+  элемент-точка монтирования, кроме canvas; запасной ответ страницей в сервере `flui run`
+  (решение 19 ADR-0255).
+- [x] **LY75** (закрыта: код и тесты в ветке `native/web-dom-root`; прогоны Safari iOS и Firefox
+  записаны в `platform-parity.toml`, строка «Input purpose and hints») — атрибуты #2109
+  (`3223e936d`). Скрытый textarea и поля дерева доступности получают `font-size: 16px`
+  (`text::web::EDITOR_FONT_SIZE`). Textarea берёт фокус страницы при прикреплении, если фокус на
+  canvas или ни на чём при активном жесте (`navigator.userActivation.isActive`), а пока он
+  обслуживает хранилище без фокуса, касание или перо, отпущенные над canvas (`pointerup`), его
+  фокусируют: поле, прикреплённое после жеста, поднимает клавиатуру со следующего касания. Тесты
+  в headless Chrome: `a_textarea_serves_the_field_without_edit_context` (размер шрифта),
+  `a_focused_text_field_is_edited_through_its_element` (размер шрифта поля семантики),
+  `a_touch_on_the_canvas_focuses_an_editor_left_unfocused` (без слушателя `pointerup` редактор
+  остаётся без фокуса). Только CI их собирает и запускает.
+- [x] **LY76** (закрыта: зеркало ARIA на `main`, слот в корне и ADR в ветке
+  `native/web-dom-root`; прогон с экранным диктором записан в `platform-parity.toml`, строка
+  «Tree and actions») — #2032 (`16d7d2770`), #2099, #2109, #2119, #2120. Решение: дерево держит
+  сам хост (`Mirror::apply`, `aria::describe`, `dom`), без `accesskit_consumer`; это записано в
+  ADR-0336, который заменяет эту часть решения 18 ADR-0255 (`Superseded-by` в его заголовке);
+  строки LY76, R6.6 и D16 исправлены. Заглушка и хост семантики стоят в слоте `flui-semantics`,
+  последнем после canvas: `the_tree_reaches_the_dom_once_the_placeholder_is_activated` читает
+  заглушку, а после активации — хост в этом слоте.
 - [ ] **LY85** (не закрыта: профили и записи на `main`; настоящее окно X11 общую таблицу не
   проходит, записей касания, пера и щипка нет, прогона на рабочем столе нет) — фундаменты #1930
   и #1931, ввод #1936 и #1937. Через `assert_backend_conforms` идут декодеры обоих хостов
