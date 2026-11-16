@@ -35,7 +35,7 @@ use std::sync::Weak;
 
 use flui_platform::data_transfer::{RepresentationIndex, TransferActions};
 use flui_platform::drag::{
-    DragError, OsDragEnd, OsDragEndHook, OsDragProvider, OsDragRequest, OsDragStart,
+    DragError, OsDragEnd, OsDragEndHook, OsDragParts, OsDragProvider, OsDragRequest, OsDragStart,
     PlatformDragSource,
 };
 use flui_platform::{Unsupported, UnsupportedReason, WindowId};
@@ -132,26 +132,22 @@ impl SeatDrag {
             source.destroy();
             return Err(refused());
         }
-        let OsDragRequest {
-            representations,
-            allowed,
+        let OsDragParts {
+            terms,
             provider,
             on_end,
             ..
-        } = request;
+        } = request.into_parts();
         let mut types: Vec<(String, RepresentationIndex)> = Vec::new();
-        for (index, descriptor) in representations.iter().enumerate() {
-            let Ok(index) = u16::try_from(index) else {
-                break;
-            };
+        for (index, descriptor) in terms.indexed() {
             for name in names_of(&descriptor.format) {
                 if types.iter().all(|(held, _)| *held != name) {
                     source.offer(name.clone());
-                    types.push((name, RepresentationIndex(index)));
+                    types.push((name, index));
                 }
             }
         }
-        source.set_actions(offered(allowed));
+        source.set_actions(offered(terms.allowed()));
         if !self
             .shared
             .devices

@@ -19,7 +19,8 @@ use flui_platform::data_transfer::{
     TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{
-    DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, ProcessNonce,
+    DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, OsDragTerms,
+    ProcessNonce,
 };
 use flui_platform::{DispatchEventResult, PlatformInput};
 
@@ -116,22 +117,21 @@ impl Desktop {
             .drag_source()
             .expect("the window has a drag source");
         let session = IdMint::<DragSessionId>::new().next().expect("fresh mint");
+        let terms = OsDragTerms::try_new(
+            DragSessionKey::new(
+                ProcessNonce::from_raw(NonZeroU64::MIN),
+                UiRuntimeId::new(1),
+                session,
+            ),
+            vec![RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            }],
+            COPY,
+        )
+        .expect("one text representation under COPY");
         source
-            .start(OsDragRequest {
-                key: DragSessionKey::new(
-                    ProcessNonce::from_raw(NonZeroU64::MIN),
-                    UiRuntimeId::new(1),
-                    session,
-                ),
-                pointer: None,
-                representations: vec![RepresentationDescriptor {
-                    format: TransferFormat::Text,
-                    declared_len: None,
-                }],
-                allowed: COPY,
-                provider,
-                on_end: Box::new(|_| {}),
-            })
+            .start(OsDragRequest::new(terms, None, provider, Box::new(|_| {})))
             .expect("the session starts");
     }
 }

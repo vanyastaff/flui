@@ -46,7 +46,9 @@ use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario, ScenarioDriver};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
-use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::drag::{
+    DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
+};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::{
@@ -543,14 +545,10 @@ impl PlatformDragSource for HeadlessOsDrags {
         let end = (*self.end.lock()).ok_or(DragError::Unsupported(Unsupported::new(
             UnsupportedReason::NotRegistered,
         )))?;
-        let OsDragRequest {
-            representations,
-            allowed,
-            on_end,
-            ..
-        } = request;
+        let OsDragParts { terms, on_end, .. } = request.into_parts();
+        let allowed = terms.allowed();
         self.started.lock().push(StartedOsDrag {
-            representations,
+            representations: terms.into_representations(),
             allowed,
         });
         on_end(end);
