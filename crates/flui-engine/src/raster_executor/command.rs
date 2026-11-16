@@ -361,7 +361,7 @@ pub struct SlotSettlement {
     /// configuration or surface command before it): the frame the panic came
     /// with, which an owner that drains later than the turn cannot tell
     /// otherwise. The payload is the slot's held failure
-    /// ([`RasterSender::take_failure`]), unless an earlier panic the owner has
+    /// ([`RasterSender::take_failure`](super::RasterSender::take_failure)), unless an earlier panic the owner has
     /// not taken yet holds its place.
     pub panicked: bool,
 }

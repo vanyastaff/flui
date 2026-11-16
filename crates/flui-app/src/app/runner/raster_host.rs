@@ -2370,10 +2370,7 @@ impl RasterSlot {
     /// settled: the window's pacing then waits for their settlement, which
     /// wakes it, instead of arming its fallback.
     #[cfg_attr(
-        all(
-            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
-            not(all(test, feature = "testing"))
-        ),
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
         expect(dead_code, reason = "only the desktop loop turns a raster thread")
     )]
     pub(crate) fn has_pending(&self) -> bool {
