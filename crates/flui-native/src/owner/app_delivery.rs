@@ -87,6 +87,19 @@ impl<R> Asked<R> {
         answer.or_resume(vacant)
     }
 
+    /// [`Self::or_resume`], with `act` run on the answer before a report's
+    /// panic after it resumes: what the answer asks of the host is carried
+    /// out whatever a later report raised.
+    pub(crate) fn or_resume_after(self, vacant: R, act: impl FnOnce(&R)) -> R {
+        let Self { answer, after } = self;
+        let answer = answer.or_resume(vacant);
+        act(&answer);
+        if let Some(after) = after {
+            after.resume();
+        }
+        answer
+    }
+
     /// What the handler answered, or `fallback` when none ran or it
     /// panicked, for a caller with no frame to unwind into (an OS callback):
     /// the question's panic and a report's after the answer are logged under

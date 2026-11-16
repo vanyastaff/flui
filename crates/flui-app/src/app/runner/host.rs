@@ -879,7 +879,7 @@ fn flush_for_session_end(
                 unfinished = ?report.unfinished,
                 "the session ended before the flush registry was written"
             );
-            (!report.unfinished.is_empty()).then(|| flush.writes_in_flight())
+            flush.writes_in_flight()
         }
         Ok(_) => None,
         Err(payload) => {
@@ -1080,6 +1080,7 @@ pub(crate) fn install_owner_platform(
                         route_owed_opened_urls();
                         // A phone's background hold is released once its
                         // writes ended; the headless host stands in for one.
+                        #[cfg(not(target_arch = "wasm32"))]
                         release_finished_background_writes();
                     }
                     commands.absorb(first);

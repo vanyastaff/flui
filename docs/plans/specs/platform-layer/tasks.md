@@ -7011,6 +7011,38 @@ GPU-память простаивающего или невидимого окн
   истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
   AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
 
+- [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0349 (заменяет первое предложение
+  §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`
+  на выход вне конца сессии ставил явный выход, и `finish` снимал доставку каждого окна до
+  `Close`; iOS сообщал конец сессии только из `applicationWillTerminate:` и не держал фоновой
+  задачи. Построено: `AppHandler::quit_asked` → `QuitAnswer { Quit, KeepRunning }`; AppKit
+  отменяет запрос и спрашивает приложение отдельной задачей полосы владельца, паника обработчика
+  отвечает `KeepRunning`, отсутствие обработчика — `Quit`; headless спрашивает по
+  `HeadlessHostEvents::quit`; Win32, X11 и Wayland выхода приложения не слышат (каждое закрытие
+  доходит до одного окна, Restart Manager — конец сессии). `flui-app` отвечает той же
+  консультацией, что `AppHandle::request_quit` (`Ingress::platform_quit_asked`): каждое окно в
+  порядке регистрации, сторож, затем обработчик, отказ с записью откладывает выход, без записи
+  отменяет. Фон телефона: `SessionEndSupport::Background { window }` у iOS и Android; iOS сообщает
+  `Ending` на `sceneDidEnterBackground:` раз за поход в фон, `Block` держит фоновую задачу UIKit,
+  которая кончается ровно раз — отпусканием, истечением (с предупреждением) или возвратом сцены
+  (`lifecycle::background`); Android задачи не держит. `flui-app` после встроенного сброса с
+  записями в пути отвечает `Block`, поток ждёт их (`WritesInFlight::wait_until`) до окна,
+  называет в журнале неспасённые значения и будит владельца, чей ход отпускает платформу.
+  Тесты, в скобках результат с откатом: строка «a quit the user asks for is the handler's to
+  decide» таблицы `app_handler_obligation_table` (строка «kept running» находит платформу
+  остановленной); `a_quit_nothing_refuses_ends_the_loop`,
+  `a_refused_quit_waits_for_the_record_then_exits`, `a_quit_the_window_stays_open_for_is_cancelled`
+  в `runner_close`, каждая для выхода от приложения и от платформы (платформа отвечает `Quit`
+  вместо консультации); `a_phone_holds_its_background_for_the_writes_in_flight` в
+  `runner_teardown` (нет `Block` на запись в пути); `background_window_ends_each_task_exactly_once`,
+  `background_window_hands_back_a_task_it_cannot_hold` (возврат на экран, оставивший поход
+  объявленным, не объявляет следующий). Не прогнано: AppKit и UIKit собирает только CI
+  (macOS и Android type-check в WSL на nightly прошли, iOS не собирается здесь); прогон на Mac
+  (Quit из Dock с отказом окна, затем согласие) и на iOS (запись через уход в фон) — заметки
+  строк `quit-exit-request-last-window-policy` и `session-end-log-off-shutdown-with-veto` в
+  `platform-parity.toml`. Приостановленная Activity Android по-прежнему не выполняет заданий
+  владельца (`docs/gaps.md`): записи реестра идут в пуле IO и от этого не зависят.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

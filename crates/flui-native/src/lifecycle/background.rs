@@ -10,20 +10,18 @@
 //! process running until the system reclaims it, so its host holds nothing
 //! and the bound below is what the application waits for there.
 
-use std::time::Duration;
-
 /// How long an iOS application's writes may run after its scene went to the
 /// background: UIKit grants a background task about thirty seconds, and the
 /// application is told less so it reports before the system ends the task.
 #[cfg(target_os = "ios")]
-pub(crate) const IOS_BACKGROUND_WINDOW: Duration = Duration::from_secs(20);
+pub(crate) const IOS_BACKGROUND_WINDOW: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// How long an Android application's writes may run after its Activity
 /// stopped: the process keeps running after `onStop`, until the system
 /// reclaims it or the cached-app freezer stops it, ten seconds later by
 /// default; the application is told half of that.
 #[cfg(target_os = "android")]
-pub(crate) const ANDROID_BACKGROUND_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const ANDROID_BACKGROUND_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One trip to the background and the platform task `T` held for it.
 #[derive(Debug)]

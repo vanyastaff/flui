@@ -33,8 +33,9 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
     }
 
     /// Stand in for a platform whose session end works as `support` says: a
-    /// test of a phone or a browser tab passes
-    /// [`NotifyOnly`](flui_platform::SessionEndSupport::NotifyOnly). The
+    /// test of a phone passes
+    /// [`Background`](flui_platform::SessionEndSupport::Background), one of a
+    /// browser tab [`NotifyOnly`](flui_platform::SessionEndSupport::NotifyOnly). The
     /// default is [`Hold`](flui_platform::SessionEndSupport::Hold), a
     /// desktop that waits for a block.
     #[must_use]
@@ -139,17 +140,25 @@ impl HeadlessHostEvents {
     /// With no handler to ask, or once the platform is gone, the answer is
     /// `Quit`.
     pub fn quit(&self) -> crate::QuitAnswer {
-        let answer = self.app.upgrade().map_or(crate::QuitAnswer::Quit, |app| {
-            app.quit_asked().or_resume(crate::QuitAnswer::Quit)
-        });
-        if answer == crate::QuitAnswer::Quit
-            && let Some(signal) = self.signal.upgrade()
-        {
-            // A platform that stopped already refuses the request: the quit
-            // it asks for has happened.
-            let _ = signal.request_quit();
+        let signal = self.signal.clone();
+        // The quit is carried out before a later report's panic resumes, so a
+        // granted quit is never lost to it.
+        let act = move |answer: &crate::QuitAnswer| {
+            if *answer == crate::QuitAnswer::Quit
+                && let Some(signal) = signal.upgrade()
+            {
+                // A platform that stopped already refuses the request: the
+                // quit it asks for has happened.
+                let _ = signal.request_quit();
+            }
+        };
+        if let Some(app) = self.app.upgrade() {
+            app.quit_asked()
+                .or_resume_after(crate::QuitAnswer::Quit, act)
+        } else {
+            act(&crate::QuitAnswer::Quit);
+            crate::QuitAnswer::Quit
         }
-        answer
     }
 
     /// The user reopened the application, as AppKit reports a click on the

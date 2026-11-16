@@ -732,12 +732,22 @@ impl FlushHost {
     /// A handle another thread waits on for the writes in flight now, which
     /// [`flush_within`](Self::flush_within) left to the IO pool: a phone's
     /// host keeps the process running for them after its session end
-    /// returned. It starts no write and runs no application code.
+    /// returned. `None` when no write is in flight: bytes owed and not
+    /// started (a failed write, one the IO pool refused) would not move by
+    /// waiting, since nothing starts them off the owner thread. It starts no
+    /// write and runs no application code.
     #[must_use]
-    pub fn writes_in_flight(&self) -> WritesInFlight {
-        WritesInFlight {
+    pub fn writes_in_flight(&self) -> Option<WritesInFlight> {
+        let writing = self
+            .shared
+            .slots
+            .lock()
+            .entries
+            .values()
+            .any(|entry| entry.writing);
+        writing.then(|| WritesInFlight {
             shared: Arc::clone(&self.shared),
-        }
+        })
     }
 }
 

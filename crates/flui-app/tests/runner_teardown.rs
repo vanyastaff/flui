@@ -2420,7 +2420,7 @@ pub(crate) fn a_phone_holds_its_background_for_the_writes_in_flight() {
         "the window's end released the platform"
     );
     assert!(
-        ended.elapsed() >= window - Duration::from_millis(50),
+        ended.elapsed() >= window.saturating_sub(Duration::from_millis(50)),
         "released only once the window passed"
     );
     assert!(!note.stores("never stored"));
