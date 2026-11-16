@@ -266,6 +266,92 @@ impl SaveRequest {
     }
 }
 
+/// What the user picked in an open dialog: one file or folder at least,
+/// several only when the request [allowed them](OpenRequest::allow_multiple).
+///
+/// Never empty, so an answer with nothing picked cannot read as a pick: the
+/// user cancelling is `None`, not an empty list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picks {
+    first: PickedFile,
+    rest: Vec<PickedFile>,
+}
+
+impl Picks {
+    /// The one pick `first`.
+    #[must_use]
+    pub fn one(first: PickedFile) -> Self {
+        Self {
+            first,
+            rest: Vec::new(),
+        }
+    }
+
+    /// `picks`, in the order the user picked them; `None` when there are
+    /// none.
+    #[must_use]
+    pub fn try_new(picks: Vec<PickedFile>) -> Option<Self> {
+        let mut picks = picks.into_iter();
+        let first = picks.next()?;
+        Some(Self {
+            first,
+            rest: picks.collect::<Vec<PickedFile>>(),
+        })
+    }
+
+    /// The first pick: the only one of a dialog that picks one.
+    #[must_use]
+    pub fn first(&self) -> &PickedFile {
+        &self.first
+    }
+
+    /// How many were picked; at least one.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    /// Always `false`: there is at least one pick. Here for the `len`
+    /// convention.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// The picks, in order.
+    pub fn iter(&self) -> impl Iterator<Item = &PickedFile> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+
+    /// The picks as a list, in order; never empty.
+    #[must_use]
+    pub fn into_vec(self) -> Vec<PickedFile> {
+        let mut picks = Vec::with_capacity(self.len());
+        picks.push(self.first);
+        picks.extend(self.rest);
+        picks
+    }
+}
+
+impl IntoIterator for Picks {
+    type Item = PickedFile;
+    type IntoIter = std::vec::IntoIter<PickedFile>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Picks {
+    type Item = &'a PickedFile;
+    type IntoIter =
+        std::iter::Chain<std::iter::Once<&'a PickedFile>, std::slice::Iter<'a, PickedFile>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+}
+
 /// A file or folder the user picked.
 ///
 /// Its own type rather than a path, so that a later backend can carry the

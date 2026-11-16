@@ -7,6 +7,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use flui_platform::SystemFailure;
 use flui_platform::capability::Resolver;
 use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherBackend};
 use zbus::Variant;
@@ -66,9 +67,11 @@ impl PortalLauncher {
             io::ErrorKind::PermissionDenied => LaunchError::Denied,
             // `O_NOFOLLOW` met a symbolic link.
             _ if error.raw_os_error() == Some(libc::ELOOP) => LaunchError::Denied,
-            _ => LaunchError::Failed {
-                code: error.raw_os_error().unwrap_or(0),
-            },
+            // std answers without an errno only for a path it cannot hand the
+            // system (an interior NUL), and such a path names no file.
+            _ => error
+                .raw_os_error()
+                .map_or(LaunchError::NotFound, |code| SystemFailure::Os(code).into()),
         })
     }
 
@@ -94,10 +97,10 @@ impl PortalLauncher {
                 let connection = bus.connection().await?;
                 let response = match body {
                     OpenUriBody::Uri(body) => {
-                        request::call(&connection, OPEN_URI, method, &token, &body).await?
+                        request::call(&connection, OPEN_URI, method, &token, &body, None).await?
                     }
                     OpenUriBody::File(body) => {
-                        request::call(&connection, OPEN_URI, method, &token, &body).await?
+                        request::call(&connection, OPEN_URI, method, &token, &body, None).await?
                     }
                 };
                 Ok::<_, PortalError>(response)
@@ -107,7 +110,9 @@ impl PortalLauncher {
                 Ok(Response::Answered(_)) => Ok(()),
                 // The user dismissed the application chooser.
                 Ok(Response::Cancelled) => Err(LaunchError::Denied),
-                Ok(Response::Ended) => Err(LaunchError::NoHandler),
+                Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
+                // A launch is never dismissed: it has no dismissal to end it.
+                Ok(Response::Dismissed) => return,
                 Err(error) => Err(launch_error(error)),
             });
         });
@@ -139,7 +144,7 @@ fn options(token: &str) -> Options {
 fn launch_error(error: PortalError) -> LaunchError {
     match error {
         PortalError::Unsupported(unsupported) => LaunchError::Unsupported(unsupported),
-        PortalError::Failed => LaunchError::Failed { code: 0 },
+        PortalError::Failed(failure) => LaunchError::Failed(failure),
     }
 }
 

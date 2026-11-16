@@ -395,12 +395,20 @@ impl UiRuntime {
     }
 
     /// Begin closing presentation `id` alone: it is told it is detached and
-    /// drops its held input.
-    pub(super) fn stop_presentation_after_failure(&self, id: PresentationId, failure: FirstPanic) {
+    /// drops its held input, and the providers that answer its window later
+    /// learn that it closed.
+    pub(super) fn stop_presentation_after_failure(
+        &self,
+        id: PresentationId,
+        mut failure: FirstPanic,
+    ) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
             presentation.held_pointer_input().borrow_mut().clear();
+            // Provider code: a listener that panics does not keep the window
+            // from closing, and an earlier failure stays first.
+            failure.contain(|| presentation.window_closer.close());
             self.reconcile_lifecycle_after_failure(Vec::new(), failure);
         } else if let Some(payload) = failure.into_payload() {
             resume_unwind(payload);

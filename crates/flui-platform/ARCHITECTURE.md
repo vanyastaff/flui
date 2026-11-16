@@ -338,6 +338,22 @@ live apart from their implementations, so a crate that names a capability links 
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
 
+### A provider learns that its window closed, and a system failure names its source
+
+A UI runtime outlives each of its windows but one, so a provider that answers a window later
+cannot take "the runtime retired" as the end of the window. `WindowRef::lifetime` is the
+window's `WindowLifetime`: `is_closed`, and `on_close`, whose `WindowCloseWatch` runs a
+listener once when the window closes. The runtime keeps the window's `WindowCloser` in the
+presentation and closes it when the presentation's close begins (the runner's close and the
+headless host's alike), before its state drops; a closer dropped unclosed closes too. A
+listener that panics does not keep the window open. The file dialogs end their dialog there
+(ADR-0344).
+
+What a service's own error does not name is `SystemFailure`: an OS error code, a portal's
+response code, a bus failure, or an answer outside the system's contract. `LaunchError::Failed`
+and `flui-system`'s `DialogError::Failed` carry it, so no backend invents a number or guesses a
+named variant for a code it cannot read.
+
 ### A capability's double is built from one scenario primitive
 
 `capability::scripted`, under the `scripted` feature (which `testing` turns on), is what every
@@ -389,6 +405,12 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   script idle. When that code panics, the request it served stays held, every other request
   is still answered and the first panic is resumed (`FirstPanic`). A stream ends once, with a
   `StreamEnd`, and an ended stream answers its end to every later `next`.
+- **A request its caller calls off is withdrawn, not owed.** `Script::receive_with_ticket`
+  hands back a `RequestTicket`, the scenario's form of a system request that lives while its
+  requester holds it (a portal's `Request` object, an activity result's `ResultTicket`).
+  Dropping it while the request is held or scheduled removes the request, drops its resolver,
+  takes a scheduled answer off the timeline and counts it in `Script::withdrawn`; a withdrawn
+  request is neither `Unanswered` nor `NotReached`, and an answered one is untouched.
 
 The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
 doubles are not, each for its contract's sake. `testing::FakeHaptics` answers synchronously

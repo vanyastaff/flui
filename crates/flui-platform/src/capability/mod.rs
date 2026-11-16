@@ -29,12 +29,14 @@ mod registrar;
 mod runtime_local;
 #[cfg(feature = "scripted")]
 pub mod scripted;
+mod window_lifetime;
 mod window_ref;
 
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
 pub use registrar::{CapabilityRegistrar, Plugin, RegisteredProvider};
 pub use runtime_local::RuntimeLocals;
+pub use window_lifetime::{WindowCloseWatch, WindowCloser, WindowLifetime};
 pub use window_ref::WindowRef;
 
 use std::rc::Rc;
