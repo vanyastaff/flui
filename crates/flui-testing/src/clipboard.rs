@@ -11,7 +11,9 @@
 //! [`fail_reads_with`](ScriptedClipboard::fail_reads_with) makes reads fail as
 //! a host that cannot reach its clipboard does, and
 //! [`fail_writes_with`](ScriptedClipboard::fail_writes_with) refuses writes as
-//! a host does whose clipboard another application holds.
+//! a host does whose clipboard another application holds, and
+//! [`hold_writes`](ScriptedClipboard::hold_writes) keeps writes unanswered
+//! until [`answer_held_writes`](ScriptedClipboard::answer_held_writes).
 //! [`answer_concealment`](ScriptedClipboard::answer_concealment) sets what
 //! the host does with a concealed write, and
 //! [`is_concealed`](ScriptedClipboard::is_concealed) tells whether the text
@@ -45,6 +47,8 @@ struct State {
     reads: usize,
     hold: bool,
     held: Vec<Resolver<ClipboardRead>>,
+    hold_writes: bool,
+    held_writes: Vec<(ClipboardWrite, Resolver<ClipboardWritten>)>,
     refusal: Option<Unsupported>,
     handles: Rc<()>,
 }
@@ -141,6 +145,31 @@ impl ScriptedClipboard {
         self.state.borrow_mut().write_failure = None;
     }
 
+    /// Keep every later write unanswered and off the clipboard until
+    /// [`answer_held_writes`](Self::answer_held_writes), as a host whose
+    /// clipboard another application holds keeps it waiting.
+    pub fn hold_writes(&self) {
+        self.state.borrow_mut().hold_writes = true;
+    }
+
+    /// Take the writes held so far, in order (or refuse them with the
+    /// scripted failure), answer each, and take later writes at once again.
+    /// Returns how many writes it answered.
+    pub fn answer_held_writes(&self) -> usize {
+        let held = {
+            let mut state = self.state.borrow_mut();
+            state.hold_writes = false;
+            std::mem::take(&mut state.held_writes)
+        };
+        let answered = held.len();
+        for (write, answer) in held {
+            let written = self.state.borrow_mut().take(write);
+            // A retired owner has nobody left to tell.
+            let _ = answer.resolve(written);
+        }
+        answered
+    }
+
     /// How many reads reached this clipboard. A handle shares one read among
     /// the readers that ask while it is in flight, so a burst of pastes
     /// counts once.
@@ -191,6 +220,7 @@ impl fmt::Debug for ScriptedClipboard {
             .field("write_failure", &state.write_failure)
             .field("reads", &state.reads)
             .field("held_reads", &state.held.len())
+            .field("held_writes", &state.held_writes.len())
             .field("refusal", &state.refusal)
             .finish()
     }
@@ -218,15 +248,11 @@ impl ClipboardBackend for Backend {
 
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         let mut state = self.state.borrow_mut();
-        // A refused write leaves the clipboard as it was.
-        let written = state.write_failure.map_or_else(
-            || {
-                state.concealed = write.is_concealed();
-                state.text = Some(Arc::<str>::from(write.into_text()));
-                Ok(())
-            },
-            Err,
-        );
+        if state.hold_writes {
+            state.held_writes.push((write, answer));
+            return;
+        }
+        let written = state.take(write);
         drop(state);
         // A retired owner has nobody left to tell.
         let _ = answer.resolve(written);
@@ -241,6 +267,17 @@ impl ClipboardBackend for Backend {
 }
 
 impl State {
+    /// Take `write` onto the clipboard, or refuse it with the scripted
+    /// failure, which leaves the clipboard as it was.
+    fn take(&mut self, write: ClipboardWrite) -> ClipboardWritten {
+        if let Some(error) = self.write_failure {
+            return Err(error);
+        }
+        self.concealed = write.is_concealed();
+        self.text = Some(Arc::<str>::from(write.into_text()));
+        Ok(())
+    }
+
     /// What a read answers now: the scripted failure, or the text.
     fn answer(&self) -> ClipboardRead {
         match self.failure {

@@ -2527,9 +2527,21 @@ owns one message-only window (`HWND_MESSAGE` parent) and is the only place
 `ClipboardSession` opens the clipboard, always with that window as the owner,
 serving the requests in the order they were made, so a read after a write
 answers what the write left. Each answer goes to its request's resolver after
-the clipboard is closed again; a job or a delivery that panics is contained on
-the thread, which abandons that request (its resolver drops) and serves the
-rest.
+the clipboard is closed again. A read whose completion nobody holds when its
+turn comes is skipped; a write is always performed.
+
+- **Nothing the thread does not own can stop it.** A request's task (its
+  conversions and `tracing` events: a subscriber is user code), its answer's
+  delivery and the report of a failure each run contained. The resolver is
+  kept apart from the task, so a task that panics still answers its request
+  `Unavailable`; the first failure is reported and discarded, a panicking
+  report is discarded too, and the thread goes on to the next request. A panic
+  outside any request restarts the thread's loop with the request whose turn
+  it was; only an abort, which ends the process, ends the thread.
+- **A write is made before the clipboard is emptied.** Every format's global
+  memory is allocated and filled first, so a write that cannot be made leaves
+  the clipboard as it was; after `EmptyClipboard` only `SetClipboardData`
+  itself can fail, which leaves the clipboard without text.
 
 - **Two waits are another process's.** `OpenClipboard` fails while another
   window holds the clipboard (clipboard managers and `rdpclip.exe` open it
@@ -2564,9 +2576,15 @@ cannot cancel the worker's `GetClipboardData`.
 Tests (`clipboard::windows::tests`, on Windows):
 `a_write_and_a_read_while_the_clipboard_is_held_for_a_moment_land_once_it_is_let_go`,
 `a_clipboard_held_past_the_patience_refuses_the_write`,
+`a_write_that_cannot_be_made_leaves_the_clipboard_as_it_was`,
+`a_panicking_subscriber_leaves_the_clipboard_thread_serving`,
 `a_read_of_text_rendered_late_never_holds_the_caller`,
+`a_read_of_text_never_rendered_in_time_answers_timeout`,
+`a_read_nobody_waits_for_is_skipped`,
 `a_burst_of_clipboard_writes_is_answered_in_full` and
-`a_null_owner_open_on_another_thread_fails_while_a_session_is_open`.
+`a_null_owner_open_on_another_thread_fails_while_a_session_is_open`. Each takes
+the module's lock and puts back the clipboard it found (the formats held in
+global memory).
 
 ### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
 

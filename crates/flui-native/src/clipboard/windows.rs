@@ -14,17 +14,24 @@
 //! attempts, and is refused with [`ClipboardError::Unavailable`] when its
 //! patience runs out. `GetClipboardData` of a format its owner renders only
 //! when asked sends that owner `WM_RENDERFORMAT` and waits for the answer:
-//! measured on Windows 11, for as long as the owner takes, and thirty seconds
-//! for an owner that never answers, after which the read fails with
-//! `ERROR_TIMEOUT` and answers [`ClipboardError::Timeout`].
+//! for as long as the owner takes, and thirty seconds for an owner that never
+//! answers, after which the read fails with `ERROR_TIMEOUT` and answers
+//! [`ClipboardError::Timeout`].
+//!
+//! Everything the thread runs that it does not own is contained: the
+//! conversions and `tracing` events of a request (a subscriber is user code)
+//! and the delivery of its answer. A request whose work panics is answered
+//! [`ClipboardError::Unavailable`], the first failure is reported and the
+//! thread goes on to the next request.
 
 // This module calls the operating system directly, which has no safe wrapper:
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
+use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-use std::sync::{OnceLock, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::Instant;
 
 use flui_foundation::panic::{FirstPanic, discard_payload};
@@ -89,15 +96,17 @@ impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipb
 }
 
 impl NativeClipboard for WindowsClipboard {
-    /// Queued to the clipboard thread; answered from there.
+    /// Queued to the clipboard thread; answered from there. A read whose
+    /// completion nobody holds any longer when its turn comes is skipped.
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        submit(Job::Read(answer));
+        submit(Task::Read, Answer::Read(answer));
     }
 
     /// Queued to the clipboard thread behind every request made before it,
-    /// so a read made after it answers what it wrote.
+    /// so a read made after it answers what it wrote. A write is performed
+    /// even when nobody waits for its answer.
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
-        submit(Job::Write(write, answer));
+        submit(Task::Write(write), Answer::Written(answer));
     }
 
     fn concealment(&self) -> Concealment {
@@ -111,76 +120,89 @@ impl NativeClipboard for WindowsClipboard {
 const MAX_WAITING: usize = 64;
 
 /// What one request asks of the clipboard.
-enum Job {
-    Read(Resolver<ClipboardRead>),
-    Write(ClipboardWrite, Resolver<ClipboardWritten>),
+enum Task {
+    Read,
+    Write(ClipboardWrite),
     /// A test's look at the clipboard while a session holds it open.
     #[cfg(test)]
     Inspect(Box<dyn FnOnce() + Send>),
 }
 
+/// Whom a request answers. Kept apart from its [`Task`], so a task that
+/// panics leaves the answer to be given.
+enum Answer {
+    Read(Resolver<ClipboardRead>),
+    Written(Resolver<ClipboardWritten>),
+    /// A test's look, which answers nobody.
+    #[cfg(test)]
+    Nobody,
+}
+
+/// What a task found, for its [`Answer`].
+enum Settlement {
+    Read(ClipboardRead),
+    Written(ClipboardWritten),
+    #[cfg(test)]
+    Nothing,
+}
+
 /// One request and when it was accepted, which its patience counts from.
 struct Request {
-    job: Job,
+    task: Task,
+    answer: Answer,
     accepted: Instant,
 }
 
-/// What a job leaves to deliver once the clipboard is closed again.
-enum Answer {
-    Read(Resolver<ClipboardRead>, ClipboardRead),
-    Written(Resolver<ClipboardWritten>, ClipboardWritten),
-    /// A test's look, which answers nobody.
-    #[cfg(test)]
-    None,
-}
-
-impl Job {
-    /// Run the job in the open `session`, returning its answer undelivered.
-    fn run(self, session: &ClipboardSession) -> Answer {
+impl Task {
+    /// Run the task in the open `session`.
+    fn run(self, session: &ClipboardSession) -> Settlement {
         match self {
-            Job::Read(answer) => Answer::Read(answer, session.read_text()),
-            Job::Write(write, answer) => Answer::Written(answer, session.write(write)),
+            Task::Read => Settlement::Read(session.read_text()),
+            Task::Write(write) => Settlement::Written(session.write(write)),
             #[cfg(test)]
-            Job::Inspect(look) => {
+            Task::Inspect(look) => {
                 look();
-                Answer::None
-            }
-        }
-    }
-
-    /// The answer of a job the clipboard could not be opened for.
-    fn refused(self, error: ClipboardError) -> Answer {
-        match self {
-            Job::Read(answer) => Answer::Read(answer, Err(error)),
-            Job::Write(_, answer) => Answer::Written(answer, Err(error)),
-            #[cfg(test)]
-            Job::Inspect(look) => {
-                drop(look);
-                Answer::None
+                Settlement::Nothing
             }
         }
     }
 }
 
 impl Answer {
-    /// Hand the answer to its resolver. A retired owner has nobody left to
-    /// answer.
-    fn deliver(self) {
+    /// Whether anybody still waits for this answer.
+    fn is_awaited(&self) -> bool {
         match self {
-            Answer::Read(answer, read) => drop(answer.resolve(read)),
-            Answer::Written(answer, written) => drop(answer.resolve(written)),
+            Answer::Read(answer) => answer.is_awaited(),
+            Answer::Written(answer) => answer.is_awaited(),
             #[cfg(test)]
-            Answer::None => {}
+            Answer::Nobody => true,
         }
+    }
+
+    /// Hand the request its answer: what its task found, or `error` when
+    /// the task found nothing (it panicked, or never ran). A retired owner
+    /// has nobody left to answer.
+    fn settle(self, settled: Option<Settlement>, error: ClipboardError) {
+        let _ = match (self, settled) {
+            (Answer::Read(answer), Some(Settlement::Read(read))) => answer.resolve(read),
+            (Answer::Read(answer), _) => answer.resolve(Err(error)),
+            (Answer::Written(answer), Some(Settlement::Written(written))) => {
+                answer.resolve(written)
+            }
+            (Answer::Written(answer), _) => answer.resolve(Err(error)),
+            #[cfg(test)]
+            (Answer::Nobody, _) => Ok(()),
+        };
     }
 }
 
-/// Queue `job` to the clipboard thread, or refuse it at once when there is
-/// none or [`MAX_WAITING`] requests wait already. A refusal settles at the
+/// Queue a request to the clipboard thread, or refuse it at once when there
+/// is none or [`MAX_WAITING`] requests wait already. A refusal settles at the
 /// caller's next turn, never inside this call.
-fn submit(job: Job) {
+fn submit(task: Task, answer: Answer) {
     let request = Request {
-        job,
+        task,
+        answer,
         accepted: Instant::now(),
     };
     let refused = match ClipboardThread::get() {
@@ -195,7 +217,7 @@ fn submit(job: Job) {
         },
         None => request,
     };
-    refused.job.refused(ClipboardError::Unavailable).deliver();
+    refused.answer.settle(None, ClipboardError::Unavailable);
     tracing::warn!("a clipboard request was refused: the clipboard thread cannot take it");
 }
 
@@ -203,7 +225,7 @@ fn submit(job: Job) {
 /// that wakes it.
 struct ClipboardThread {
     requests: mpsc::SyncSender<Request>,
-    wake: OwnedHandle,
+    wake: Arc<OwnedHandle>,
 }
 
 impl ClipboardThread {
@@ -216,8 +238,7 @@ impl ClipboardThread {
 
     /// Wake the thread to take the requests sent to it.
     fn wake(&self) {
-        // SAFETY: the event is owned by the process-lifetime thread record,
-        // so it is live for the call.
+        // SAFETY: `self.wake` owns the event, live for the call.
         if let Err(error) = unsafe { SetEvent(HANDLE(self.wake.as_raw_handle())) } {
             tracing::error!(%error, "the clipboard thread could not be woken");
         }
@@ -226,18 +247,17 @@ impl ClipboardThread {
     /// Start the thread and wait until its window exists or failed to.
     fn spawn() -> Option<Self> {
         // SAFETY: an unnamed, non-inheritable auto-reset event; no pointers.
-        let event = match unsafe { CreateEventW(None, false, false, None) } {
+        let wake = match unsafe { CreateEventW(None, false, false, None) } {
             // SAFETY: a successful `CreateEventW` hands over this unique
-            // handle; `OwnedHandle` closes it once, and the thread record
-            // that owns it lives as long as the process.
-            Ok(event) => unsafe { OwnedHandle::from_raw_handle(event.0) },
+            // handle, which `OwnedHandle` closes once, after both the thread
+            // record and the thread have let go of it.
+            Ok(event) => Arc::new(unsafe { OwnedHandle::from_raw_handle(event.0) }),
             Err(error) => {
                 tracing::error!(%error, "failed to create the clipboard thread's event");
                 return None;
             }
         };
-        // The raw value crosses to the thread; the handle it names outlives it.
-        let wake = event.as_raw_handle() as isize;
+        let thread_wake = Arc::clone(&wake);
         let (requests, received) = mpsc::sync_channel(MAX_WAITING);
         let (created, window) = mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new()
@@ -253,7 +273,7 @@ impl ClipboardThread {
                     }
                 };
                 let _ = created.send(Ok(()));
-                serve(hwnd, HANDLE(wake as *mut _), &received);
+                run_thread(hwnd, &thread_wake, &received);
             });
         if let Err(error) = spawned {
             tracing::error!(%error, "failed to spawn the clipboard thread");
@@ -262,10 +282,7 @@ impl ClipboardThread {
         // A closed channel means the thread died before reporting; it cannot
         // have created a window that outlives it.
         match window.recv() {
-            Ok(Ok(())) => Some(Self {
-                requests,
-                wake: event,
-            }),
+            Ok(Ok(())) => Some(Self { requests, wake }),
             Ok(Err(error)) => {
                 tracing::error!(%error, "failed to create the clipboard owner window");
                 None
@@ -278,42 +295,80 @@ impl ClipboardThread {
     }
 }
 
-/// The clipboard thread's loop: serve the requests in order, each tried
-/// until its clipboard opens or its patience runs out, and between attempts
-/// wait for the next attempt, a new request or a message, pumping the
-/// messages. The owner window must be pumped while it owns the clipboard:
-/// another process's `EmptyClipboard` sends it `WM_DESTROYCLIPBOARD` and
-/// waits, and so would keep the clipboard it holds open meanwhile.
-fn serve(window: HWND, wake: HANDLE, requests: &mpsc::Receiver<Request>) {
-    let mut turn: Option<(Job, OpenAttempts)> = None;
+/// The clipboard thread's body: [`serve`] until `WM_QUIT`, starting it again
+/// after a panic outside any one request (a message its window dispatched),
+/// with the request whose turn it was kept. Only an abort, which ends the
+/// process, ends the thread before then.
+fn run_thread(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
+    let mut turn: Option<(Request, OpenAttempts)> = None;
+    loop {
+        let mut failure = FirstPanic::new();
+        if failure
+            .contain(|| serve(window, wake, requests, &mut turn))
+            .is_some()
+        {
+            return;
+        }
+        report(failure);
+    }
+}
+
+/// Serve the requests in order, each tried until its clipboard opens or its
+/// patience runs out, and between attempts wait for the next attempt, a new
+/// request or a message, pumping the messages. The owner window must be
+/// pumped while it owns the clipboard: another process's `EmptyClipboard`
+/// sends it `WM_DESTROYCLIPBOARD` and waits, and so would keep the clipboard
+/// it holds open meanwhile. Returns at `WM_QUIT`, which nothing posts while
+/// the process lives.
+fn serve(
+    window: HWND,
+    wake: &OwnedHandle,
+    requests: &mpsc::Receiver<Request>,
+    turn: &mut Option<(Request, OpenAttempts)>,
+) {
     loop {
         if !pump_messages() {
             return;
         }
         let mut retry_at = None;
         loop {
-            let (job, mut attempts) = match turn.take() {
+            let (request, mut attempts) = match turn.take() {
                 Some(current) => current,
                 None => match requests.try_recv() {
-                    Ok(request) => (request.job, OpenAttempts::new(request.accepted)),
+                    Ok(request) => {
+                        let attempts = OpenAttempts::new(request.accepted);
+                        (request, attempts)
+                    }
                     Err(_) => break,
                 },
             };
-            let answer = if let Some(session) = ClipboardSession::try_open(window) {
-                let answer = contained(|| job.run(&session));
+            if matches!(request.task, Task::Read) && !request.answer.is_awaited() {
+                // Nobody holds the read's completion: skip it, rather than
+                // wait on an owner that renders late for an answer nobody
+                // takes. Dropping the resolver abandons nobody's read.
+                continue;
+            }
+            if let Some(session) = ClipboardSession::try_open(window) {
+                let Request { task, answer, .. } = request;
+                let mut failure = FirstPanic::new();
+                let settled = failure.contain(|| task.run(&session));
                 // The clipboard closes before the answer is delivered.
                 drop(session);
-                answer
+                failure.contain(|| answer.settle(settled, ClipboardError::Unavailable));
+                report(failure);
             } else if let Some(at) = attempts.failed(Instant::now()) {
-                turn = Some((job, attempts));
+                *turn = Some((request, attempts));
                 retry_at = Some(at);
                 break;
             } else {
-                tracing::warn!("another process held the clipboard past this request's patience");
-                Some(job.refused(ClipboardError::Unavailable))
-            };
-            if let Some(answer) = answer {
-                contained(|| answer.deliver());
+                let mut failure = FirstPanic::new();
+                failure.contain(|| request.answer.settle(None, ClipboardError::Unavailable));
+                failure.contain(|| {
+                    tracing::warn!(
+                        "another process held the clipboard past this request's patience"
+                    );
+                });
+                report(failure);
             }
         }
         let timeout = retry_at.map_or(INFINITE, |at| {
@@ -324,32 +379,39 @@ fn serve(window: HWND, wake: HANDLE, requests: &mpsc::Receiver<Request>) {
             u32::try_from(milliseconds.min(u128::from(INFINITE - 1)))
                 .expect("BUG: a bounded wait fits u32")
         });
-        // SAFETY: `wake` is the live event the thread record owns for the
-        // process's life; the wait returns for it, a message, or the timeout,
-        // each of which the loop handles by trying again.
+        // SAFETY: `wake` is the live event the thread holds a share of; the
+        // wait returns for it, a message, or the timeout, each of which the
+        // loop handles by trying again.
         let _ = unsafe {
-            MsgWaitForMultipleObjectsEx(Some(&[wake]), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+            MsgWaitForMultipleObjectsEx(
+                Some(&[HANDLE(wake.as_raw_handle())]),
+                timeout,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            )
         };
     }
 }
 
-/// Run `run` on the clipboard thread with its panic contained: a job or a
-/// delivery that panics (a `tracing` subscriber, an owner's wake hook) drops
-/// what it held, which abandons its request, and the thread goes on serving
-/// the others. Nobody resumes the payload on this thread, so it is reported
-/// and discarded.
-fn contained<R>(run: impl FnOnce() -> R) -> Option<R> {
-    let mut failure = FirstPanic::new();
-    let result = failure.contain(run);
-    if let Some(payload) = failure.into_payload() {
+/// Report the first panic `failure` holds and discard it: nobody on the
+/// clipboard thread resumes it. The report is a `tracing` event, user code
+/// too, so a panic it raises is discarded with its payload.
+fn report(failure: FirstPanic) {
+    let Some(payload) = failure.into_payload() else {
+        return;
+    };
+    discard_payload(payload);
+    let mut reporting = FirstPanic::new();
+    reporting.contain(|| {
+        tracing::error!("a clipboard request panicked on the clipboard thread");
+    });
+    if let Some(payload) = reporting.into_payload() {
         discard_payload(payload);
-        tracing::error!("a clipboard request panicked on the clipboard thread; it is abandoned");
     }
-    result
 }
 
 /// Dispatch every message waiting on this thread: `false` once `WM_QUIT`
-/// arrives, which nothing posts while the process lives.
+/// arrives.
 fn pump_messages() -> bool {
     let mut message = MSG::default();
     // SAFETY: `message` is a valid, correctly sized `MSG` for both calls.
@@ -370,6 +432,17 @@ fn decoded_len(wide: &[u16]) -> usize {
     char::decode_utf16(wide.iter().copied())
         .map(|unit| unit.map_or(char::REPLACEMENT_CHARACTER.len_utf8(), char::len_utf8))
         .sum()
+}
+
+/// What a failed `GetClipboardData` answers: `Timeout` for the owner that
+/// did not render its data in time (`ERROR_TIMEOUT`, after Win32's thirty
+/// seconds), `Unavailable` for anything else.
+fn read_failure(error: &windows::core::Error) -> ClipboardError {
+    if error.code() == ERROR_TIMEOUT.to_hresult() {
+        ClipboardError::Timeout
+    } else {
+        ClipboardError::Unavailable
+    }
 }
 
 /// The clipboard, open on the clipboard thread with the owner window. The
@@ -428,13 +501,10 @@ impl ClipboardSession {
             // and Win32 gives up on it after thirty seconds.
             let handle = match GetClipboardData(CF_UNICODETEXT.0 as u32) {
                 Ok(handle) => handle,
-                Err(error) if error.code() == ERROR_TIMEOUT.to_hresult() => {
-                    tracing::warn!("the clipboard's owner did not render its text in time");
-                    return Err(ClipboardError::Timeout);
-                }
                 Err(error) => {
-                    tracing::warn!(%error, "failed to get the clipboard's text");
-                    return Err(ClipboardError::Unavailable);
+                    let failure = read_failure(&error);
+                    tracing::warn!(%error, ?failure, "failed to get the clipboard's text");
+                    return Err(failure);
                 }
             };
             if handle.is_invalid() {
@@ -480,6 +550,12 @@ impl ClipboardSession {
     }
 
     /// Replace the clipboard's text with `write`'s, or say why it could not.
+    ///
+    /// Every format's memory is made before the clipboard is emptied, so a
+    /// write that cannot be made leaves the clipboard as it was. Once it is
+    /// emptied, only Win32 itself can fail the write (`SetClipboardData`
+    /// refusing a handle): the clipboard then holds no text, and the markers
+    /// of a concealed write, which go first, may stand alone.
     #[expect(
         clippy::unused_self,
         reason = "the session is the proof that this thread holds the clipboard open"
@@ -487,45 +563,42 @@ impl ClipboardSession {
     fn write(&self, write: ClipboardWrite) -> ClipboardWritten {
         let concealed = write.is_concealed();
         let text = write.into_text();
-        // SAFETY: `self` holds the clipboard open on this thread for the
-        // whole block, and `EmptyClipboard` succeeds before any `set_data`,
-        // which is all `set_data` asks. `RegisterClipboardFormatW` takes a
-        // NUL-terminated wide string that `w!` builds as a static. `bytes`
-        // views `wide`, a live `Vec<u16>`, as its `len * 2` bytes, which `u8`
-        // may alias at any alignment.
-        unsafe {
-            if let Err(error) = EmptyClipboard() {
-                tracing::error!(%error, "failed to empty the clipboard for a write");
-                return Err(ClipboardError::Unavailable);
-            }
-
-            // The markers go first: a concealed write the clipboard could not
-            // mark leaves the clipboard empty rather than publish the secret
-            // to the clipboard's history (ADR-0152 §6).
-            if concealed {
-                for (name, label) in CONCEALMENT_FORMATS {
-                    let format = RegisterClipboardFormatW(name);
-                    if format == 0 || !set_data(format, &EXCLUDE.to_le_bytes()) {
-                        tracing::error!(
-                            format = label,
-                            "a concealed clipboard write was dropped: its marker could not be set"
-                        );
-                        return Err(ClipboardError::Unavailable);
-                    }
+        // The markers go first: a concealed write the clipboard could not
+        // mark leaves no text behind rather than publish the secret to the
+        // clipboard's history (ADR-0152 §6).
+        let mut formats = Vec::with_capacity(CONCEALMENT_FORMATS.len() + 1);
+        if concealed {
+            for (name, label) in CONCEALMENT_FORMATS {
+                // SAFETY: `name` is a static NUL-terminated wide string.
+                let format = unsafe { RegisterClipboardFormatW(name) };
+                if format == 0 {
+                    tracing::error!(
+                        format = label,
+                        "a concealed clipboard write was refused: its marker has no format"
+                    );
+                    return Err(ClipboardError::Unavailable);
                 }
-            }
-
-            let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-            let bytes = std::slice::from_raw_parts(
-                wide.as_ptr().cast::<u8>(),
-                wide.len() * std::mem::size_of::<u16>(),
-            );
-            if set_data(CF_UNICODETEXT.0 as u32, bytes) {
-                Ok(())
-            } else {
-                Err(ClipboardError::Unavailable)
+                formats.push(Prepared::try_new(format, &EXCLUDE.to_le_bytes())?);
             }
         }
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let bytes: Vec<u8> = wide.iter().flat_map(|unit| unit.to_le_bytes()).collect();
+        formats.push(Prepared::try_new(CF_UNICODETEXT.0 as u32, &bytes)?);
+
+        // SAFETY: `self` holds the clipboard open on this thread.
+        if let Err(error) = unsafe { EmptyClipboard() } {
+            tracing::error!(%error, "failed to empty the clipboard for a write");
+            return Err(ClipboardError::Unavailable);
+        }
+        for prepared in formats {
+            let format = prepared.format;
+            // SAFETY: the clipboard is open on this thread and emptied above.
+            if !unsafe { prepared.hand_over() } {
+                tracing::error!(format, "Win32 refused a clipboard format after emptying it");
+                return Err(ClipboardError::Unavailable);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -562,47 +635,80 @@ const CONCEALMENT_FORMATS: [(windows::core::PCWSTR, &str); 3] = [
 /// The DWORD each of [`CONCEALMENT_FORMATS`] holds: zero, "not allowed".
 const EXCLUDE: u32 = 0;
 
-/// Puts a copy of `bytes` on the clipboard as `format`; `false` if it could
-/// not, after logging why.
-///
-/// # Safety
-///
-/// The calling thread holds the clipboard open through a
-/// [`ClipboardSession`] whose `EmptyClipboard` succeeded.
-unsafe fn set_data(format: u32, bytes: &[u8]) -> bool {
-    // SAFETY: `GlobalAlloc` is asked for `bytes.len()` bytes and checked, so
-    // the matching `GlobalLock`'s non-null `ptr` is valid for writes of that
-    // many bytes; `copy_nonoverlapping` copies between `bytes` and the new
-    // allocation, two distinct regions. `GlobalUnlock`'s result is
-    // discarded: it cannot tell "unlocked, success" from failure without
-    // `GetLastError`, and nothing is left to do with the lock either way.
-    // Until `SetClipboardData` succeeds `global` is ours alone, so the failure
-    // paths free it (`HGLOBAL` has no `Drop`); after, the clipboard owns it.
-    // The `GlobalFree` results are discarded because the wrapper maps its
-    // NULL success return to `Err`. The caller holds the clipboard open and
-    // emptied, as `SetClipboardData` requires.
-    unsafe {
-        let global = match GlobalAlloc(GMEM_MOVEABLE, bytes.len()) {
-            Ok(global) => global,
-            Err(error) => {
-                tracing::error!(?error, "Failed to allocate global memory");
-                return false;
+/// A test's switch that makes the next [`Prepared::try_new`] fail, as an
+/// exhausted global heap does.
+#[cfg(test)]
+static FAIL_NEXT_PREPARE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// One format's bytes in global memory, ours until the clipboard takes it:
+/// dropped unhanded, the memory is freed.
+struct Prepared {
+    format: u32,
+    global: HGLOBAL,
+}
+
+impl Prepared {
+    /// Copy `bytes` into new global memory for `format`.
+    fn try_new(format: u32, bytes: &[u8]) -> Result<Self, ClipboardError> {
+        #[cfg(test)]
+        if FAIL_NEXT_PREPARE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(ClipboardError::Unavailable);
+        }
+        // SAFETY: `GlobalAlloc` is asked for `bytes.len()` bytes and checked,
+        // so the matching `GlobalLock`'s non-null `ptr` is valid for writes
+        // of that many bytes; `copy_nonoverlapping` copies between `bytes`
+        // and the new allocation, two distinct regions. `GlobalUnlock`'s
+        // result is discarded: it cannot tell "unlocked, success" from
+        // failure without `GetLastError`, and nothing is left to do with the
+        // lock either way. A failure frees the allocation through `Drop`.
+        unsafe {
+            let global = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).map_err(|error| {
+                tracing::error!(%error, "failed to allocate a clipboard format's memory");
+                ClipboardError::Unavailable
+            })?;
+            let prepared = Self { format, global };
+            let ptr = GlobalLock(global);
+            if ptr.is_null() {
+                tracing::error!("failed to lock a clipboard format's memory");
+                return Err(ClipboardError::Unavailable);
             }
-        };
-        let ptr = GlobalLock(global);
-        if ptr.is_null() {
-            tracing::error!("Failed to lock global memory");
-            let _ = GlobalFree(Some(global));
-            return false;
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+            let _ = GlobalUnlock(global);
+            Ok(prepared)
         }
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
-        let _ = GlobalUnlock(global);
-        if SetClipboardData(format, Some(HANDLE(global.0))).is_err() {
-            tracing::error!(format, "Failed to set clipboard data");
-            let _ = GlobalFree(Some(global));
-            return false;
+    }
+
+    /// Put the memory on the clipboard; `false` if Win32 refused it, which
+    /// frees it.
+    ///
+    /// # Safety
+    ///
+    /// The calling thread holds the clipboard open through a
+    /// [`ClipboardSession`] whose `EmptyClipboard` succeeded.
+    unsafe fn hand_over(self) -> bool {
+        let this = ManuallyDrop::new(self);
+        // SAFETY: the caller holds the clipboard open and emptied, as
+        // `SetClipboardData` requires; on success the clipboard owns the
+        // memory, which is why `this` is not dropped. On failure it is still
+        // ours, and freed here once.
+        unsafe {
+            if SetClipboardData(this.format, Some(HANDLE(this.global.0))).is_ok() {
+                return true;
+            }
+            let _ = GlobalFree(Some(this.global));
         }
-        true
+        false
+    }
+}
+
+impl Drop for Prepared {
+    fn drop(&mut self) {
+        // SAFETY: the memory was never handed to the clipboard, so it is ours
+        // and freed once. The result is discarded because the wrapper maps
+        // its NULL success return to `Err`.
+        unsafe {
+            let _ = GlobalFree(Some(self.global));
+        }
     }
 }
 

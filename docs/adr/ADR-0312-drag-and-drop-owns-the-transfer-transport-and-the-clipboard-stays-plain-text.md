@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-11-04)
 - **Date:** 2026-11-04
+- **Superseded-by:** [ADR-0337](ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)
+  for §6 in part (the write's shape: a write answers through a resolver, and `NativeClipboard`
+  has no `write_text`)
 - **Supersedes:** [ADR-0038](ADR-0038-data-transfer-architecture.md) as a whole: its transport,
   vocabulary and drag-and-drop input are restated in §1–§5; its clipboard over the transport (§6,
   §7 and the clipboard half of §2) is replaced by §6 and §7; its §8 (the Web out of scope) by §5,

@@ -3,12 +3,14 @@
 //! A read asks `navigator.clipboard.readText()` and answers when its promise
 //! settles. The browser may refuse it (no user gesture, a denied permission,
 //! an insecure context, no Clipboard API at all); the read then answers with
-//! what this page last wrote, so copy and paste inside the application keep
+//! the text of this page's last write the clipboard took
+//! (`clipboard::page`), so copy and paste inside the application keep
 //! working where the system clipboard is out of reach. Before the page wrote
 //! anything, a refusal answers its reason: [`ClipboardError::Denied`] for a
 //! permission, [`ClipboardError::Unavailable`] otherwise. A write goes to
-//! `navigator.clipboard.writeText()` and to that fallback, and answers when
-//! the browser's promise settles.
+//! `navigator.clipboard.writeText()` and answers when the browser's promise
+//! settles; the page keeps its text only if the clipboard took it, and where
+//! the page has no Clipboard API its own clipboard takes every write.
 
 // The page has one thread, so the clipboard claims `Send`/`Sync` by hand: the
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -22,15 +24,15 @@ use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
     capability::Resolver,
 };
-use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::host::{NativeClipboard, admit_text, host_text, owned_text};
+use crate::clipboard::page::PageClipboard;
+use crate::host::{NativeClipboard, admit_text, host_text};
 
 pub struct WebClipboard {
-    /// What this page last wrote: the answer to a read the browser refuses,
-    /// and the clipboard where the Navigator Clipboard API is missing.
-    fallback: Arc<Mutex<Option<Arc<str>>>>,
+    /// What this page holds: the answer to a read the browser refuses, and
+    /// the clipboard where the Navigator Clipboard API is missing.
+    page: Arc<PageClipboard>,
     /// Whether a concealed write has warned that it was an ordinary one.
     degraded: AtomicBool,
 }
@@ -51,7 +53,7 @@ unsafe impl Sync for WebClipboard {}
 impl WebClipboard {
     pub fn new() -> Self {
         Self {
-            fallback: Arc::new(Mutex::new(None)),
+            page: Arc::default(),
             degraded: AtomicBool::new(false),
         }
     }
@@ -78,9 +80,9 @@ fn system_clipboard(method: &str) -> Option<web_sys::Clipboard> {
 
 impl NativeClipboard for WebClipboard {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        let fallback = Arc::clone(&self.fallback);
+        let page = Arc::clone(&self.page);
         let Some(clipboard) = system_clipboard("readText") else {
-            let text = fallback_read(&fallback, ClipboardError::Unavailable);
+            let text = page.refused_read(ClipboardError::Unavailable);
             // A retired owner has nobody left to answer.
             let _ = answer.resolve(text);
             return;
@@ -102,7 +104,7 @@ impl NativeClipboard for WebClipboard {
                         ?refusal,
                         "the browser refused a clipboard read; answering this page's last write"
                     );
-                    fallback_read(&fallback, refusal_error(&refusal))
+                    page.refused_read(refusal_error(&refusal))
                 }
             };
             let _ = answer.resolve(text);
@@ -111,34 +113,31 @@ impl NativeClipboard for WebClipboard {
 
     /// Answered when the browser's promise settles: `Ok` once the system
     /// clipboard holds the text, the refusal otherwise
-    /// ([`ClipboardError::Denied`] for a permission). Either way the page's
-    /// own clipboard holds it, which the page's next refused read answers.
+    /// ([`ClipboardError::Denied`] for a permission), which leaves the page's
+    /// own clipboard as it was. Where the page has no Clipboard API, its own
+    /// clipboard is the clipboard and the write answers `Ok` at once.
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         if write.is_concealed() {
             degraded_once(&self.degraded);
         }
         let text = write.into_text();
         let promise = system_clipboard("writeText").map(|clipboard| clipboard.write_text(&text));
-        *self.fallback.lock() = Some(Arc::from(text));
+        let pending = self.page.begin(Arc::from(text));
         let Some(promise) = promise else {
-            // No system clipboard here (an insecure context): only this page
-            // can paste the text.
-            let _ = answer.resolve(Err(ClipboardError::Unavailable));
+            // A retired owner has nobody left to answer.
+            let _ = answer.resolve(self.page.settle(pending, Ok(())));
             return;
         };
+        let page = Arc::clone(&self.page);
         wasm_bindgen_futures::spawn_local(async move {
             let written = match JsFuture::from(promise).await {
                 Ok(_) => Ok(()),
                 Err(refusal) => {
-                    tracing::debug!(
-                        ?refusal,
-                        "the browser refused a clipboard write; this page still pastes it"
-                    );
+                    tracing::debug!(?refusal, "the browser refused a clipboard write");
                     Err(refusal_error(&refusal))
                 }
             };
-            // A retired owner has nobody left to answer.
-            let _ = answer.resolve(written);
+            let _ = answer.resolve(page.settle(pending, written));
         });
     }
 
@@ -158,15 +157,6 @@ fn degraded_once(degraded: &AtomicBool) {
              the Clipboard API cannot keep it out of the clipboard's history"
         );
     }
-}
-
-/// What a read the browser did not answer gives: this page's last write, or
-/// `error` when it wrote nothing yet.
-fn fallback_read(fallback: &Mutex<Option<Arc<str>>>, error: ClipboardError) -> ClipboardRead {
-    // The lock is let go before the read is admitted: a refusal logs, and a
-    // subscriber is user code.
-    let held = fallback.lock().clone();
-    held.as_ref().map_or(Err(error), owned_text)
 }
 
 /// Why the browser refused a read: a `NotAllowedError` is the user's or the

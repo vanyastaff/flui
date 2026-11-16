@@ -43,7 +43,10 @@ pub(super) struct ClipboardTextAction {
 }
 
 impl ClipboardTextAction {
-    fn admits_paste(&self) -> bool {
+    /// Whether the field takes an edit from the clipboard now: it is enabled,
+    /// mounted (its focus attachment is attached) and holds the primary
+    /// focus.
+    fn admits_edit(&self) -> bool {
         let attachment = self.attachment.borrow().clone();
         let node = self.focus_node.borrow().clone();
         self.enabled.get()
@@ -53,6 +56,13 @@ impl ClipboardTextAction {
     }
     fn enabled(&self) -> bool {
         self.focus_node.borrow().can_request_focus()
+    }
+
+    /// Whether an answer that arrives after its request still applies: the
+    /// field admits an edit and drives `controller`, the controller it drove
+    /// when the request began. Paste and cut answer under this one rule.
+    fn still_edits(&self, controller: &TextEditingController) -> bool {
+        self.admits_edit() && self.controller().is_same_controller(controller)
     }
 
     /// The controller, cloned out of its cell so no borrow is held while the
@@ -96,10 +106,10 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
 
 impl ClipboardTextAction {
     /// What a cut does once the clipboard answers its write: deletes the
-    /// selection it wrote, if the clipboard took it, the field still admits a
-    /// cut, and the field still drives the controller it drove, with the text
-    /// and the selection the cut wrote. A refused or abandoned write deletes
-    /// nothing, so a cut the clipboard could not take loses no text.
+    /// selection it wrote, if the clipboard took it, the field still edits
+    /// (mounted, focused, enabled, on the same controller) and its text and
+    /// selection are the ones the cut wrote. A refused or abandoned write
+    /// deletes nothing, so a cut the clipboard could not take loses no text.
     fn cut_answer(
         &self,
         controller: TextEditingController,
@@ -112,8 +122,7 @@ impl ClipboardTextAction {
             if written != Ok(Ok(())) {
                 return;
             }
-            let unchanged = authority.enabled()
-                && authority.controller().is_same_controller(&controller)
+            let unchanged = authority.still_edits(&controller)
                 && controller.selection() == selection
                 && controller.text() == text;
             if unchanged {
@@ -139,7 +148,7 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
         };
         let mut calls = OwnerCalls::new();
         self.commit.run(&mut calls);
-        if !self.admits_paste() {
+        if !self.admits_edit() {
             calls.resume();
             return ActionOutcome::NotPerformed;
         }
@@ -161,7 +170,7 @@ impl ClipboardTextAction {
     /// there, as a paste chord would paste the clipboard's at the caret.
     pub(super) fn paste_primary(&self, calls: &mut OwnerCalls, at: usize) {
         self.commit.run(calls);
-        if !self.admits_paste() {
+        if !self.admits_edit() {
             return;
         }
         // The answer takes the controller before the backend runs, as the
@@ -185,8 +194,7 @@ impl ClipboardTextAction {
         let controller = self.controller();
         let edits = self.edits.clone();
         move |text| {
-            if !authority.admits_paste() || !authority.controller().is_same_controller(&controller)
-            {
+            if !authority.still_edits(&controller) {
                 return;
             }
             // No text, a failed read and an abandoned one paste nothing.

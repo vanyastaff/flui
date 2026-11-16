@@ -173,10 +173,10 @@ priority = 90
 # flui-native's clipboard tests write the one system clipboard and read it
 # back (on Windows and macOS, and under Xvfb on Linux; the headless mocks match
 # the filter too and are cheap to serialize). nextest runs each test in its own
-# process, so the in-process lock every clipboard session takes (`SessionLock`
-# in `src/clipboard/lock.rs`, which covers plain `cargo test`) cannot
-# keep two of them apart here: one test's write would land between another's
-# write and read. The group runs them one at a time; everything else stays parallel.
+# process, so the lock the Win32 clipboard tests take in their module (which
+# covers plain `cargo test`, where they share one process) cannot keep two of
+# them apart here: one test's write would land between another's write and
+# read. The group runs them one at a time; everything else stays parallel.
 [[profile.default.overrides]]
 filter = 'package(flui-native) & test(/clipboard/)'
 test-group = 'system-clipboard'

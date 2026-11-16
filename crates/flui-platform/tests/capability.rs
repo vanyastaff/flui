@@ -106,6 +106,33 @@ fn a_result_from_another_thread_reaches_the_owner_through_the_poster() {
     assert_eq!(completion.poll(), None, "a completion settles once");
 }
 
+/// A resolver tells, from any thread, whether anybody may still take its
+/// answer: while the completion is held or waited on, and no longer once it
+/// is dropped or its owner retired first.
+#[test]
+fn a_resolver_knows_whether_its_answer_is_awaited() {
+    let owner = Owner::new();
+    let (held, answer) = owner.source.pending::<u32>();
+    let awaited = std::thread::spawn(move || (answer.is_awaited(), answer))
+        .join()
+        .expect("OS thread");
+    assert!(awaited.0, "a held completion awaits its answer");
+    drop(held);
+    assert!(
+        !awaited.1.is_awaited(),
+        "a dropped completion awaits nothing"
+    );
+
+    let (waited, answer) = owner.source.pending::<u32>();
+    waited.on_complete(|_| {});
+    assert!(
+        answer.is_awaited(),
+        "a waited-on completion awaits its answer"
+    );
+    owner.retire();
+    assert!(!answer.is_awaited(), "a retired owner awaits nothing");
+}
+
 #[test]
 fn a_dropped_resolver_ends_its_completion() {
     let owner = Owner::new();

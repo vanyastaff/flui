@@ -426,6 +426,18 @@ pub struct Resolver<T> {
 }
 
 impl<T> Resolver<T> {
+    /// Whether anybody may still take the answer: `false` once the
+    /// completion was dropped unconsumed, or was born after its owner
+    /// retired. A provider may skip work whose answer nobody takes (a read);
+    /// work with effects of its own (a write) is still done. Read from any
+    /// thread; `true` can turn `false` at any moment, never back.
+    #[must_use]
+    pub fn is_awaited(&self) -> bool {
+        // The completion's owner-local half holds the other share of the
+        // slot until it is dropped or settled.
+        self.id.is_some() && Arc::strong_count(&self.shared) > 1
+    }
+
     fn deliver(&mut self, outcome: Outcome<T>) -> Result<(), OwnerRetired> {
         self.done = true;
         let previous = self

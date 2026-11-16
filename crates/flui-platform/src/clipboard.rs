@@ -13,9 +13,12 @@ use std::sync::Arc;
 pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 
 /// The answer to one clipboard write (ADR-0337): `Ok(())` once the clipboard
-/// holds the written text, or why the host could not put it there. A refused
-/// write leaves the clipboard as it was, or empty where a concealed write
-/// could not be marked (ADR-0152 §6).
+/// holds the written text, or why the host could not put it there.
+///
+/// A refused write leaves the clipboard as it was, and no later read in this
+/// process answers its text, with one exception: a host that had to clear
+/// the clipboard before it could fill it (Win32's `EmptyClipboard`) and was
+/// then refused by the system itself leaves the clipboard without text.
 pub type ClipboardWritten = Result<(), ClipboardError>;
 
 /// Why a clipboard or primary-selection read has no answer, or a clipboard

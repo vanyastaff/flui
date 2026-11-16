@@ -98,8 +98,9 @@ impl ClipboardHandle {
     pub fn write(&self, write: ClipboardWrite) -> Completion<ClipboardWritten> {
         self.reads.0.changed();
         let (completion, answer) = self.completions.pending();
-        // The backend may be an application's: a panic in it drops the
-        // resolver, which abandons the write.
+        // The backend may be an application's. A panic in it is not
+        // contained here: it unwinds through `write` to the caller, and the
+        // completion, dropped on the way, waits for nothing.
         self.backend.write(write, answer);
         completion
     }
