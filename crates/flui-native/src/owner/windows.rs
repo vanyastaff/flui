@@ -609,14 +609,6 @@ pub(crate) enum WindowStep {
     /// It is being destroyed and its close callbacks ran, so the presentation
     /// that showed it is closed; its handle is still valid.
     Closed,
-    /// The application let a keydown through (did not prevent its default):
-    /// the window's own keys follow it. `repeat` when the key auto-repeats.
-    KeyLetThrough {
-        /// Its virtual-key code.
-        virtual_key: u16,
-        /// Whether it auto-repeats.
-        repeat: bool,
-    },
 }
 
 /// The window a hook was told of is gone: a message the hook dispatched

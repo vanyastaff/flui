@@ -25,7 +25,7 @@ pub mod direct_manipulation;
 #[cfg(windows)]
 use std::{
     cell::{Cell, RefCell},
-    rc::{Rc, Weak},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -53,7 +53,7 @@ use crate::owner::windows::control::OwnerPreferences;
 #[cfg(windows)]
 use crate::owner::windows::{
     CreatedWindow, WindowInputs, WindowMessages, WindowRef, WindowScale, WindowStep, WindowTable,
-    WindowsLoop, window_step,
+    WindowsLoop,
 };
 #[cfg(windows)]
 use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
@@ -144,10 +144,6 @@ impl InputWindows {
 struct InputWindow {
     /// The window.
     window: WindowRef,
-    /// The hooks of its class, which a key the application let through is
-    /// told to ([`WindowStep::KeyLetThrough`]); weak, since the input is one
-    /// of them.
-    hooks: Weak<[Rc<dyn WindowMessages>]>,
     /// Its callbacks, which its input is dispatched to.
     delivery: Arc<WindowDelivery>,
     /// What the application gave the loop: a keyboard layout change reaches
@@ -200,7 +196,6 @@ impl InputWindow {
         let click_settings = raw::click_settings(&*window.preferences, window.scale.dpi());
         Self {
             window: window.window(),
-            hooks: Rc::downgrade(&window.hooks),
             delivery: Arc::clone(&window.delivery),
             app_hooks: Rc::clone(&window.app_hooks),
             preferences: Rc::clone(&window.preferences),
@@ -292,10 +287,7 @@ impl WindowMessages for InputWindows {
             // The double-click rectangle is measured at the window's scale, and
             // the double-click time and size are settings too.
             WindowStep::Rescaled | WindowStep::SettingChanged => input.measure_clicks(),
-            WindowStep::KeyLetThrough { .. }
-            | WindowStep::ScaleApplied
-            | WindowStep::SessionLocked(_)
-            | WindowStep::Closed => {}
+            WindowStep::ScaleApplied | WindowStep::SessionLocked(_) | WindowStep::Closed => {}
         }
     }
 
@@ -678,18 +670,6 @@ impl InputWindows {
                             // Withdrawn with its keydown: the held
                             // characters are dropped here.
                             return Some(LRESULT(0));
-                        }
-                        // The window's own keys (the fullscreen hotkey) are a
-                        // default the app can prevent.
-                        if let Some(hooks) = ctx.hooks.upgrade() {
-                            window_step(
-                                &hooks,
-                                ctx.window,
-                                WindowStep::KeyLetThrough {
-                                    virtual_key: key.vk,
-                                    repeat: key.repeat,
-                                },
-                            );
                         }
                         let handled = DefWindowProcW(hwnd, msg, wparam, lparam);
                         restore_translated_sys_chars(hwnd, &held);
