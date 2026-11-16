@@ -1352,15 +1352,17 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
 /// A frame held when the owner took a panic of its slot settles with its
 /// base forgotten, since its settlement may have lost the mark that pairs it
 /// with the panic: the window's next frame draws in full. A frame that
-/// replaces a tainted one inherits the taint and the retry it owed, as it
+/// replaces a tainted one inherits the taint, and on the same surface the
+/// retry it owed, as it
 /// inherits its damage.
 ///
 /// Red-check: move the base for a tainted frame, or drop the taint with the
 /// replaced frame, and the base shows the last frame; drop the retry with
-/// it and the replacement holds none.
+/// it, or keep it at another size, and the replacement holds the wrong one.
 #[test]
 fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
-    for replaced in [false, true] {
+    // (the size the replacing frame is measured at, if one replaces)
+    for replaced in [None, Some(SIZE), Some((320, 240))] {
         let (shared, slots, _wakes) = threaded_host();
         let render = slots.hold_next_render();
         let mut scene = TestScene::new(AT);
@@ -1385,13 +1387,17 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                 })
                 .expect("the host is idle");
         };
-        let expected = if replaced {
+        let expected = if let Some(size) = replaced {
             // The second waits behind the held render and is tainted; the
             // third takes its place untainted by the owner.
             let (_second, verdict) = submit_threaded(&shared, &mut scene);
             assert_eq!(verdict, SubmitVerdict::Queued);
             taint(&shared);
-            let (_third, verdict) = submit_threaded(&shared, &mut scene);
+            let publication = scene.publication();
+            let epoch = scene.next_epoch();
+            let verdict = shared
+                .try_with(|host| host.submit(address(), size, epoch, publication))
+                .expect("the host is idle");
             assert!(
                 matches!(verdict, SubmitVerdict::QueuedReplacing(_)),
                 "{verdict:?}"
@@ -1402,10 +1408,13 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                         .as_ref()
                         .and_then(|placed| placed.slots.get(&address()))
                         .and_then(|slot| slot.pending.last())
-                        .is_some_and(|held| held.tainted && held.retrying)
+                        .is_some_and(|held| held.tainted && held.retrying == (size == SIZE))
                 })
                 .expect("the host is idle");
-            assert!(carried, "the replacement inherits the taint and the retry");
+            assert!(
+                carried,
+                "{size:?}: the replacement inherits the taint, and the retry on the same surface"
+            );
             2
         } else {
             taint(&shared);
@@ -1413,7 +1422,11 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
         };
         render.release();
         let settled = settle_threaded(&shared, expected);
-        assert_eq!(settled.len(), expected, "replaced {replaced}: {settled:?}");
+        assert_eq!(
+            settled.len(),
+            expected,
+            "replaced {replaced:?}: {settled:?}"
+        );
         let shown = shared
             .try_read(|host| {
                 host.placed
@@ -1422,7 +1435,7 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                     .and_then(|slot| slot.base.shown_version())
             })
             .expect("the host is idle");
-        assert_eq!(shown, None, "replaced {replaced}: the base is forgotten");
+        assert_eq!(shown, None, "replaced {replaced:?}: the base is forgotten");
     }
 }
 
