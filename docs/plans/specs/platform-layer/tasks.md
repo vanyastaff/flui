@@ -4895,11 +4895,13 @@ graph LR
   собирает журнал вместо неё и решение владельца — `docs/gaps.md`, ADR-0151 §10 и §16); чтение
   записи крейтом `flui-driver`, когда он появится.
 
-- [ ] **LY97** (не закрыта: четыре PR — потоки #1981, предпочтения #1989, дисплеи #1996 и
-  состояние окна #2017; дальше строки `close_request`/`closed` после T8 и строка store-edit для
-  IME без событий, на `main` их нет; `os`-lane драйвера, чей `--record` называет строка, нет:
-  эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и iOS, страница Web
-  пишет только слой `input`, прогонов на этих ОС нет) — ветка
+- [ ] **LY97** (не закрыта, остался только `--record` `os`-lane драйвера: строка его называет, а
+  крейта `flui-driver` нет, он ждёт спеки flui-driver (FD6); всё остальное на `main` — потоки
+  #1981, предпочтения #1989, дисплеи #1996, состояние окна #2017, закрытие и блокировки хранилища
+  (пятая часть ниже). Эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и
+  iOS, страница Web пишет только слой `input`; захват настоящего метода ввода на устройствах не
+  прогонялся, долг записан в строке parity «Recorded native input replays deterministically on
+  the headless host») — ветка
   `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
@@ -4958,8 +4960,54 @@ graph LR
   в `captured_streams_replay_to_what_the_session_delivered` replay снимков с общим реестром меток
   даёт те же факты и ревизии, что живая публикация, включая свёрнутое окно, которое не бывает
   occluded и сохраняет метрики; отказ на снимке с вычеркнутым заголовком в
-  `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Строки `close_request`/`closed` с
-  причиной и решением охранника (veto или доставка) — отдельный PR после T8.
+  `a_row_the_replay_does_not_reproduce_is_a_typed_error`.
+  **Пятая часть — закрытие и правки хранилища** (ветка `native/recording-close-and-edits` от
+  `main` @ `ab45cd94c`; T8 спеки teardown сделана). Поток `window`: `WindowDelivery` пишет
+  `close_request` после ответа обработчика (в нём охранник закрытия `flui-app`) и до действия
+  по нему — `close`, `keep_open`, `closing` (прежний запрос уже разрешён, обработчика не
+  спрашивали), `no_handler`, `panicked` — и `queued` (запрос ждал за работающим методом, ОС
+  ответили «оставить»); `closed` с причиной `granted_request` или `no_request` (команда
+  приложения или ОС, без вето). Запись — через `contain_owner_callback`: паника приёмника
+  заканчивает захват и не теряет разрешённое закрытие. Правки хранилища pull-модели (TSF,
+  AppKit, UIKit, зеркала Android и Web, текстовые входы Linux) идут без событий, поэтому
+  журнал стоит у хранилища: `OwnerPlatform::text_store_host`, единственное место выдачи хоста,
+  в debug-сборке с `native-capture` оборачивает хост в `journal::store_capture::JournaledHost`,
+  если при открытии окна был захват (иначе хост выдаётся как есть, без обёртки и выделений).
+  Обёртка отдаёт хосту `JournaledStore` вместо каждого фокусного хранилища под ключом
+  `RecordedStore` из `AtomicIdMint` окна (не переиздаётся; отложенная блокировка после смены
+  фокуса называет своё хранилище) и сопоставляет `complete_composition` по идентичности.
+  Каждая блокировка — одна строка `store_lock`: вид, каждое чтение и правка по порядку с ответом
+  хранилища (отказ — видом ошибки) и документ, который блокировка застала, если запись его ещё не
+  держит: первая блокировка после фокуса и первая после правки приложения (наблюдатель
+  хранилища обёрнут, чтобы это заметить). Геометрия не пишется (она ставит окно кандидатов и
+  ничего не меняет в хранилище); смещение по точке пишется с ответом и при replay не
+  переспрашивается — правка за ним несёт смещение сама. Границы — во `flui-protocol`:
+  `MAX_STORE_STEPS`, `MAX_STORE_TEXT_BYTES`; блокировка сверх них, с документом, который
+  хранилище не отдаёт (защищённое поле), или с размоткой тела пишется `incomplete`, replay
+  отказывает `ReplayError::Incomplete`. Replay (`StoreLock::replay_on`) восстанавливает
+  застанный документ и повторяет вызовы синхронной блокировкой того же вида, сверяя каждый
+  ответ: иной ответ чтения — `ReplayError::Diverged` с именем строки, так же и иное решение
+  по закрытию. Читатель записи считает её недоверенной: строка длиннее `MAX_LINE_BYTES`
+  отвергается до разбора, строка сверх `MAX_ROWS` — тоже, у `store_lock` число вызовов, объём
+  текста, диапазоны, «ответ или ошибка» и вид блокировки проверяются до построения вызовов.
+  Протокол 0.13 (схема опубликована); проверка аддитивности схемы называла каждый элемент
+  массива `*` и не отличала новый вариант тегированного объединения от поля, ставшего
+  обязательным, — теперь вариант называется тегом, самопроверка покрывает оба случая. Тесты
+  (таблица `native_recording_contracts`): золотой `headless_window_store_and_close.jsonl` и
+  `window_store_and_close_recordings_replay_on_the_headless_host`,
+  `a_row_replayed_otherwise_is_a_divergence`, `a_native_recording_past_its_bounds_is_refused`;
+  с `native-capture` — `captured_store_locks_replay_to_the_document_they_left` (модели TSF,
+  `EditContext` и зеркала Android через `text::conformance`, захват через
+  `OwnerPlatform::text_store_host` headless-окна, replay на свежем хранилище headless, отказ
+  редактированной записи), `a_store_lock_past_its_bounds_or_unwound_is_incomplete`,
+  `captured_close_requests_replay_to_the_same_decisions`. С откатом (наблюдатель не отмечает
+  правку приложения, `journal_close` ничего не пишет, проверка длины строки снята, сверка
+  ответов всегда «равно») падают соответственно `captured_store_locks_…`,
+  `captured_close_requests_…`, `a_native_recording_past_its_bounds_is_refused`,
+  `a_row_replayed_otherwise_is_a_divergence`. Не построено и не прогнано: `--record` драйвера
+  (ждёт `flui-driver`); захват настоящего TSF с IME на Windows (зонд `text_services` печатает в
+  настоящее окно через собственный хост окна, мимо `OwnerPlatform::text_store_host`), macOS,
+  iOS, Android, браузера и Linux — долг в строке parity.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей

@@ -1105,7 +1105,7 @@ note = "`PlatformWindow`'s facets (`text_input`, `haptics`, `system_chrome`, `dr
 quality = 'Recorded native input replays deterministically on the headless host'
 status = "partial"
 enforced_by = '`native_recording` traces recorded by manual runs with `native-capture`'
-note = 'Pointer, key and wheel traces exist; system notices, session ends, reopens, input method events, preference and display reads and window snapshots (`app`, `window`, `platform` and `window_state` streams) replay on headless (`app_recordings_replay_on_the_headless_host`, `window_recordings_replay_on_the_headless_host`, `platform_recordings_replay_on_the_headless_host`, `window_state_recordings_replay_on_the_headless_host`); close requests and closes, and input methods that edit the text store directly (TSF, Android, web), do not'
+note = 'Pointer, key and wheel traces exist; system notices, session ends, reopens, input method events, close requests and closes, the locks a pull-model input method holds on the focused text store, preference and display reads and window snapshots (`app`, `window`, `platform` and `window_state` streams) replay on headless (`app_recordings_replay_on_the_headless_host`, `window_recordings_replay_on_the_headless_host`, `window_store_and_close_recordings_replay_on_the_headless_host`, `platform_recordings_replay_on_the_headless_host`, `window_state_recordings_replay_on_the_headless_host`); store locks are captured from the TSF, web `EditContext` and Android mirror models (`captured_store_locks_replay_to_the_document_they_left`). Owed: a capture of a real input method on each host (TSF with an IME on Windows, AppKit on macOS, UIKit on iOS, `InputConnection` on Android, `EditContext` in a browser, the Linux text inputs), and the driver recording them with `--record`, which waits for the flui-driver crate'
 
 [[quality.row]]
 quality = 'Conformance executed with assistive technology on each OS'
@@ -1131,14 +1131,14 @@ note = "Not machine-checked against the code's `Unsupported` reasons"
 quality = 'The platform edge is observable: structured tracing per host and a replayable event journal'
 status = "partial"
 enforced_by = '`tracing` targets; the `native-capture` journal'
-note = 'The journal records pointers, system notices, session ends, reopens, input method events, preference and display reads and window snapshots; not close requests, closes or text store edits'
+note = 'The journal records pointers, system notices, session ends, reopens, input method events, close requests and closes, the reads and edits a pull-model input method makes in the focused text store, preference and display reads and window snapshots'
 
 [[quality.row]]
 quality = 'Platform-edge diagnostics never contain secrets (protected-field text, clipboard payloads, URLs with tokens, journals)'
 short = 'platform-edge diagnostics free of secrets'
 status = "unaudited"
 enforced_by = 'nothing yet'
-note = 'No redaction check covers the `tracing` targets or the `native-capture` journal, which will carry text and URLs once more event families are recorded'
+note = 'No redaction check covers the `tracing` targets; the `native-capture` journal redacts input method and text store text unless a recording keeps it, tested per row family, with no check across all of it'
 
 [capabilities]
 intro = '''

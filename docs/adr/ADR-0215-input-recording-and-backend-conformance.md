@@ -136,7 +136,10 @@ and put `serde` on the Stable contract crate.
    header; their schema is declared in `flui-protocol`, which a reader without the core reads,
    and their codec is `flui-native`'s `journal`, built only with `native-capture` or `testing`; it
    replays them through the pure decoders, so Linux CI exercises Win32 and Apple translation
-   without those hosts.
+   without those hosts. A window's native stream also holds its close requests with the
+   handler's answer, its close with the cause, and each lock a pull-model input method held on
+   the focused text store, its reads and edits with the store's answers; a replay compares every
+   answer and stops at the first that differs (`flui-native`'s `ARCHITECTURE.md` has the rows).
 5. **Privacy by default.** Key text, IME commit strings, accessibility action text
    (`ActionData::Value` for `SetValue` and `ReplaceSelectedText`, and any other text-carrying
    action data), window titles and device names are redacted when recorded. `--keep-text` is the
