@@ -180,7 +180,7 @@ impl<'frame> LayerDispatcher<'frame> {
 
     /// How many times a command's transform was compared with the installed
     /// one by value.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "testing"))]
     pub(crate) fn value_comparisons(&self) -> usize {
         self.value_comparisons.get()
     }
