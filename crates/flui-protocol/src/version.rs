@@ -16,16 +16,18 @@
 //!   error code reads as [`ErrorCode::Platform`](crate::ErrorCode::Platform).
 //! - A change that is not additive (a field renamed or removed, a name
 //!   respelled, an optional field made required, an existing field given a
-//!   new meaning, or a variant or value added to a closed union an older
-//!   reader meets unasked and has no fallback for, which its reader refuses
-//!   whole: a new native recording row, a new close answer) is listed in
+//!   new meaning, or a variant or value added to a union whose reader has no
+//!   fallback for it and refuses it whole: a new native recording row, a new
+//!   close answer) is listed in
 //!   [`BREAKING`] with the ADR that decided it and the names it respelled; the
 //!   test lets those names, and nothing else, go. A union is open to a new
-//!   value only when an older reader has a fallback for it (role, action name,
-//!   error code, above) or meets it only by asking for it by name (an event
-//!   kind after `events.subscribe`); the `wire_schema` test lists those
-//!   unions, and the published versions that added a value before the test
-//!   could see one (ADR-0342).
+//!   value or variant exactly when its reader reads an unknown one as a
+//!   fallback (a role, an action name, an error code, above, and a tree
+//!   diagnostic), whatever the union's shape: a string `enum`, a `oneOf` of
+//!   constants, or an internally, adjacently or externally tagged union. The
+//!   `wire_schema` test lists those unions by name with their readers, and the
+//!   published versions that added one before the test could see it
+//!   (ADR-0342).
 //!   After 1.0 it also bumps `major`, and that ADR supersedes ADR-0080. The
 //!   test sees only the schema's shape, so a new meaning is caught in review:
 //!   it goes under a new name instead, as `surface_rect` did beside `rect`.

@@ -603,6 +603,16 @@ pub enum ReplayError {
         /// The row's name in the schema.
         row: &'static str,
     },
+    /// The writer cut the recording at line `line`: what it holds is not all
+    /// the source journaled (`NativeRecording::replay`, which returns only
+    /// input, says so this way).
+    #[error("the native recording was cut at line {line} ({reason:?})")]
+    Cut {
+        /// The 1-based line of the `cut` row.
+        line: u64,
+        /// Why the writer cut it.
+        reason: CutReason,
+    },
     /// Line `line` was reproduced otherwise than recorded.
     #[error("line {line} (`{row}`) replayed otherwise than recorded: {divergence}")]
     Diverged {
@@ -821,60 +831,63 @@ impl NativeRecording {
         Ok(Self { header, rows })
     }
 
-    /// Write the recording, declaring in the header every device its rows
-    /// read with the kinds they read it as.
+    /// Write the recording, declaring in the header every device its written
+    /// rows read with the kinds they read it as. A recording past
+    /// [`wire::MAX_ROWS`] rows or [`wire::MAX_RECORDING_BYTES`] bytes is
+    /// written up to the last row that fits with room for a `cut` row after
+    /// it, which ends it: the writer never writes what its reader refuses, and
+    /// one that fits whole is written whole.
     ///
     /// # Errors
     ///
     /// [`CodecError::Unmirrored`] for a value this format does not mirror,
     /// and [`CodecError::Io`] when the sink fails.
     pub fn write(&self, mut out: impl Write) -> Result<(), CodecError> {
-        let mut devices: Vec<wire::Device> = Vec::new();
-        let rows = self
+        let lines = self
             .rows
             .iter()
             .enumerate()
             .map(|(index, row)| {
                 let line = index as u64 + 2;
-                for (device, kind) in row_devices(row) {
-                    let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
-                    match devices.iter_mut().find(|entry| entry.device == device.0) {
-                        Some(entry) if entry.kinds.contains(&kind) => {}
-                        Some(entry) => entry.kinds.push(kind),
-                        None => devices.push(wire::Device {
-                            device: device.0,
-                            kinds: vec![kind],
-                        }),
-                    }
-                }
-                row_to_wire(row).map_err(|error| error.at(line))
+                let wire = row_to_wire(row).map_err(|error| error.at(line))?;
+                encode_line(line, &wire)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let header = header_to_wire(&self.header, devices).map_err(|error| error.at(1))?;
-        let mut line = encode_line(1, &header)?;
-        let mut written = line.len();
-        out.write_all(&line)?;
-        for (index, row) in rows.iter().enumerate() {
-            let number = index as u64 + 2;
-            line = encode_line(number, row)?;
-            // Room for the row and, after it, the cut a later row may need, so
-            // the writer never makes what its reader refuses.
-            let cut = if index + 2 > wire::MAX_ROWS {
-                Some(wire::CutReason::Rows)
-            } else if written + line.len() + CUT_LINE_ROOM > wire::MAX_RECORDING_BYTES {
-                Some(wire::CutReason::Bytes)
-            } else {
-                None
-            };
-            if let Some(reason) = cut {
-                out.write_all(&encode_line(number, &wire::Row::Cut { reason })?)?;
-                break;
-            }
-            written += line.len();
-            out.write_all(&line)?;
+        // The header that declares every row's devices is the longest it can
+        // be: what fits after it fits after the one that declares fewer.
+        let longest = encode_line(1, &self.header_declaring(&self.rows)?)?.len();
+        let (kept, cut) = cut_point(longest, &lines);
+        let header = self.header_declaring(&self.rows[..kept])?;
+        out.write_all(&encode_line(1, &header)?)?;
+        for line in &lines[..kept] {
+            out.write_all(line)?;
+        }
+        if let Some(reason) = cut {
+            let number = kept as u64 + 2;
+            out.write_all(&encode_line(number, &wire::Row::Cut { reason })?)?;
         }
         out.flush()?;
         Ok(())
+    }
+
+    /// The header as the wire holds it, declaring the devices `rows` read.
+    fn header_declaring(&self, rows: &[Row]) -> Result<wire::Header, CodecError> {
+        let mut devices: Vec<wire::Device> = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            let line = index as u64 + 2;
+            for (device, kind) in row_devices(row) {
+                let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
+                match devices.iter_mut().find(|entry| entry.device == device.0) {
+                    Some(entry) if entry.kinds.contains(&kind) => {}
+                    Some(entry) => entry.kinds.push(kind),
+                    None => devices.push(wire::Device {
+                        device: device.0,
+                        kinds: vec![kind],
+                    }),
+                }
+            }
+        }
+        header_to_wire(&self.header, devices).map_err(|error| error.at(1))
     }
 
     /// The input the backend's registry assembles from these rows, as the
@@ -883,21 +896,27 @@ impl NativeRecording {
     /// # Errors
     ///
     /// [`ReplayError::Unsupported`] for the first row that is not a
-    /// registry's.
+    /// registry's, and [`ReplayError::Cut`] for a recording its writer cut:
+    /// what it holds is not all the registry assembled (`replay_into` replays
+    /// it up to the cut and says so).
     pub fn replay(&self) -> Result<Vec<PlatformInput>, ReplayError> {
         let mut collect = Collect(Vec::new());
-        self.replay_into(&mut collect)?;
-        Ok(collect.0)
+        match self.replay_into(&mut collect)? {
+            Replayed::Whole => Ok(collect.0),
+            Replayed::Cut { line, reason } => Err(ReplayError::Cut { line, reason }),
+        }
     }
 
     /// Replay every row into `target`, in order: a registry's rows as the
     /// input the registry assembles from them, each other row as itself.
+    /// Returns whether the recording was whole, or cut by its writer, and
+    /// where: every row before the cut was replayed.
     ///
     /// # Errors
     ///
     /// [`ReplayError`] for the first row `target` refuses or whose text was
     /// redacted; the rows after it are not replayed.
-    pub fn replay_into(&self, target: &mut dyn ReplayTarget) -> Result<(), ReplayError> {
+    pub fn replay_into(&self, target: &mut dyn ReplayTarget) -> Result<Replayed, ReplayError> {
         let mut registry = self.header.registry();
         let mut batch = MoveBatch::new();
         let mut touchpad = TouchpadAssembler::new(NativeSurface(0));
@@ -1036,13 +1055,19 @@ impl NativeRecording {
                 }
                 // The handler was not asked: an earlier request was granted,
                 // or the window had let go of its handler. Nothing is asked on
-                // replay either; the `closed` row closes the window. A cut ends
-                // a recording that is whole up to it: nothing follows.
+                // replay either; the `closed` row closes the window.
                 Row::CloseRequest {
                     answer: CloseAnswer::Closing | CloseAnswer::NoHandler,
                     ..
+                } => {}
+                // The writer stopped here: everything before replayed, and the
+                // caller learns the recording is not whole.
+                Row::Cut(reason) => {
+                    return Ok(Replayed::Cut {
+                        line,
+                        reason: *reason,
+                    });
                 }
-                | Row::Cut(_) => {}
                 Row::CloseRequest { answer, .. } => {
                     let replayed = target.close_request().map_err(unsupported)?;
                     let recorded = match answer {
@@ -1063,8 +1088,27 @@ impl NativeRecording {
                 target.input(input).map_err(unsupported)?;
             }
         }
-        Ok(())
+        Ok(Replayed::Whole)
     }
+}
+
+/// How much of a recording a replay reproduced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "a cut recording was replayed only up to its cut"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a recording is whole or its writer cut it"
+)]
+pub enum Replayed {
+    /// Every row, the recording being whole.
+    Whole,
+    /// Every row before line `line`, where the writer cut the recording.
+    Cut {
+        /// The 1-based line of the `cut` row.
+        line: u64,
+        /// Why the writer cut it.
+        reason: CutReason,
+    },
 }
 
 /// The devices `row`'s readings name, with the kind each reads it as.
@@ -1183,6 +1227,27 @@ fn json_error(line: u64, source: serde_json::Error) -> CodecError {
 /// How many bytes a writer keeps free for the [`wire::Row::Cut`] line it may
 /// end a recording with: the longest such line and its newline, with room.
 const CUT_LINE_ROOM: usize = 64;
+
+/// How many of `lines` a writer writes after a header of `header` bytes, and
+/// why it cuts the rest: every row while they all fit, otherwise the rows that
+/// fit with room after the last for the `cut` row that replaces the next.
+fn cut_point(header: usize, lines: &[Vec<u8>]) -> (usize, Option<wire::CutReason>) {
+    let mut written = header;
+    for (index, line) in lines.iter().enumerate() {
+        let follows = index + 1 < lines.len();
+        // The rows this one makes, and the cut a row after it would need.
+        let rows = index + 1 + usize::from(follows);
+        if rows > wire::MAX_ROWS {
+            return (index, Some(wire::CutReason::Rows));
+        }
+        let room = if follows { CUT_LINE_ROOM } else { 0 };
+        if written + line.len() + room > wire::MAX_RECORDING_BYTES {
+            return (index, Some(wire::CutReason::Bytes));
+        }
+        written += line.len();
+    }
+    (lines.len(), None)
+}
 
 /// `value` as line `line` of a recording, its newline included.
 fn encode_line(line: u64, value: &impl Serialize) -> Result<Vec<u8>, CodecError> {

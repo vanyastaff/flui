@@ -4671,45 +4671,67 @@ observer notices). Geometry reads change nothing in the store and are not
 recorded; an offset asked at a point is kept and not asked again on replay.
 A document the recording already holds the store at (what the last lock found
 and left unchanged) is not written again, so a store nobody observes does not
-copy its text into every row.
+copy its text into every row. Whenever a lock runs unrecorded, for any reason
+(nobody wants the row, the store is protected, the store's status panicked),
+the journal forgets the document it held, so the next recorded lock records the
+document it finds.
 
 What the journal holds of a field is bounded by what the field allows and what
 anyone wants. A protected store gives one `protected` row, with no text, range,
 offset, length or lock kind, for as long as it stays protected, however many
 locks its input method was granted: the count of locks would count the keys
-typed. Its replay is refused as withheld. A document longer than
-`MAX_STORE_TEXT_BYTES` UTF-16 units is never read; a row holds at most
-`MAX_STORE_STEPS` calls and `MAX_STORE_TEXT_BYTES` of text; a lock past either,
-or whose body unwound, is written `incomplete` and refused on replay. Whether
-the sink wants rows is a value the capture holds (`capture_wanting`'s
+typed. The row carries one bit, that a lock was granted on the protected field,
+at the row's position: that something was typed or read there, never what or
+how much. Its replay is refused as withheld. When the field stops being
+protected, the next lock records its document like any other's, in full when the
+recording keeps text: that is the text the user chose to reveal. A document
+longer than `MAX_STORE_TEXT_BYTES` UTF-16 units is never read; a row holds at
+most `MAX_STORE_STEPS` calls and `MAX_STORE_TEXT_BYTES` of text; a lock past
+either, or whose body unwound, is written `incomplete` and refused on replay.
+Whether the sink wants rows is a value the capture holds (`capture_wanting`'s
 `AtomicBool`, which `capture_lines` updates from `LineSink::wants` at each row
 that is not a setup row, a store's focus among them): a lock reads it with no
 lock taken and no code of the sink's run, and while it is `false` the lock runs
-untouched. The one call the tap makes into code it does not own, the store's
-status, runs under `FirstPanic`: the body the input method was granted runs
-whatever it does, and the first failure is raised after it.
+untouched. Every call the journal makes into code it does not own runs
+contained, and the host's own work happens whatever it does: in a lock the
+store's status runs under `FirstPanic`, the granted body runs, and the first
+failure is raised after it; at a focus the store's status, the sink and the drop
+of the store let go run under `FirstPanic`, the host is told of the focus
+(serving the store unjournaled when its focus row could not be written), and the
+first failure is raised after; every row a lock or a window's close writes goes
+through `contain_owner_callback`.
 
 `store_focus` is not a setup row a late reader is handed, so focus changes never
-crowd window state out of that prefix; a reader that joins a stream late gets
-its header with `joined_late` set (`flui-runtime`'s `NativeLines::join`). Only
-such a recording may hold a lock on a store it never saw focused, or before it
-holds the store's document; its replay refuses that lock with
-`ReplayError::JoinedLate`. In any other recording the reader refuses it, as it
-refuses a store focused twice and close rows in an order no delivery writes (a
-second close, a request after the close, `closing` with nothing granted, a
-request after a grant, a cause that contradicts the requests). A writer never
-writes what its reader refuses: `NativeRecording::write` ends a recording that
-reaches `MAX_RECORDING_BYTES` or `MAX_ROWS` with a `cut` row naming why, which
-reads as the recording's end, and a sink drops what a source reports after its
-cut. When a window's store journal cannot be kept (no owner slot left), its
-stream is cut (`store_journal`) instead of a host keying stores on its own.
-`StoreLock::replay_on` replays a lock under a synchronous lock of the recorded
-kind, restoring the found document first, and compares every answer: a read that
-answers otherwise is a `ReplayError::Diverged` naming the row. The reader treats
-a recording as untrusted input: a line past `MAX_LINE_BYTES` is refused before
-it is parsed, as is a row past `MAX_ROWS` and a line that takes the recording
-past `MAX_RECORDING_BYTES`, and a store lock's bounds, ranges, answer-or-error
-shape, lock kind and protected emptiness are checked before any call is built
+crowd window state out of that prefix; a stream's `cut` is one, made whether or
+not a reader wants rows, so a reader that joins after it is handed the cut with
+the stream's setup. A reader that joins late gets the header with `joined_late`
+set (`flui-runtime`'s `NativeLines::join`), and the recording begins at that
+point. A reader relaxes an order rule only for context that would have come
+before it: a lock on a store no focus row in the recording named (focused
+before the join), and a first close row that follows a grant the recording did
+not see; a store focused after the join, and every close row after the first,
+are held to every rule. A replay refuses a lock on a store focused before the
+join with `ReplayError::JoinedLate`. In any other case the reader refuses what no
+live stream writes: a store focused twice, a lock on a store with no focus row,
+a lock before the recording holds its store's document, and close rows in an
+order no delivery writes (a second close, a request after the close, `closing`
+with nothing granted, a request after a grant, a cause that contradicts the
+requests). The in-process writers never write what their reader refuses:
+`NativeRecording::write` writes a recording that fits whole, and otherwise ends
+it at the last row that fits with room for a `cut` row naming why; a sink drops
+what a source reports after its cut. `flui record --native` in `flui-cli` writes
+lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
+recording replays every row before the cut and returns `Replayed::Cut` with its
+line and reason, never plain success. When a window's store journal cannot be
+kept (no owner slot left), its stream is cut (`store_journal`) instead of a host
+keying stores on its own. `StoreLock::replay_on` replays a lock under a
+synchronous lock of the recorded kind, restoring the found document first, and
+compares every answer: a read that answers otherwise is a
+`ReplayError::Diverged` naming the row. The reader treats a recording as
+untrusted input: a line past `MAX_LINE_BYTES` is refused before it is parsed, as
+is a row past `MAX_ROWS` and a line that takes the recording past
+`MAX_RECORDING_BYTES`, and a store lock's bounds, ranges, answer-or-error shape,
+lock kind and protected emptiness are checked before any call is built
 (`a_native_recording_past_its_bounds_is_refused`,
 `window_store_and_close_recordings_replay_on_the_headless_host`,
 `a_row_replayed_otherwise_is_a_divergence`,
@@ -4719,11 +4741,13 @@ shape, lock kind and protected emptiness are checked before any call is built
 `a_protected_store_journals_nothing_of_its_content`,
 `a_protected_store_journals_one_row_whatever_was_typed`,
 `the_granted_body_runs_when_the_store_status_panics`,
+`the_host_is_told_of_a_focus_when_the_store_status_panics`,
 `an_unchanged_document_is_not_written_again`,
 `the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
 `a_store_lock_past_its_bounds_or_unwound_is_incomplete`,
-`every_close_answer_and_cause_replays`). The driver's own `--record` of these
-rows waits for the `flui-driver` crate; `flui record --native` writes them today.
+`every_close_answer_and_cause_replays`, and `lines`'
+`a_cut_is_a_setup_line_and_nothing_follows_it`). The driver's own `--record` of
+these rows waits for the `flui-driver` crate.
 
 On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch

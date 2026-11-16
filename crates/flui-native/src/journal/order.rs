@@ -7,16 +7,27 @@ use super::store::RecordedStore;
 /// The order a live stream writes its rows in, which a reader checks from the
 /// rows alone: nothing after a cut; a window's close requests and close in an
 /// order its delivery produces; and a text store lock only on a store a focus
-/// row named, with its document recorded before it relies on it, unless the
-/// recording says it joined late.
+/// row named, with its document recorded before it relies on it.
+///
+/// A recording that joined its stream late ([`Header::joined_late`]) begins at
+/// the join: its first row follows rows it never saw. A rule is relaxed only
+/// for context that would have come before that point, and only until the
+/// recording has seen the context itself: a lock on a store no focus row in the
+/// recording named (the store was focused before the join), and a first close
+/// row that follows a grant the recording did not see. A store focused after
+/// the join, and the close rows after the first, are held to every rule.
+///
+/// [`Header::joined_late`]: super::codec::Header::joined_late
 pub(super) struct RowOrder {
     joined_late: bool,
     cut: bool,
+    /// A close row was read: from here the close rules hold in full.
+    close_seen: bool,
     /// A close request was granted (answered `close`, or by no handler).
     granted: bool,
     closed: bool,
-    /// The stores focus rows named, and whether the recording holds each
-    /// one's document now.
+    /// The stores the recording knows, and whether it holds each one's
+    /// document now.
     stores: std::collections::BTreeMap<RecordedStore, bool>,
 }
 
@@ -25,10 +36,17 @@ impl RowOrder {
         Self {
             joined_late,
             cut: false,
+            close_seen: false,
             granted: false,
             closed: false,
             stores: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Whether the rows before this one may hold context the recording never
+    /// saw: it joined late, and this is the first row of its kind.
+    const fn before_join(&self, seen: bool) -> bool {
+        self.joined_late && !seen
     }
 
     /// Take `row`, or say why no live stream writes it here.
@@ -39,6 +57,11 @@ impl RowOrder {
         match row {
             Row::Cut(_) => self.cut = true,
             Row::CloseRequest { answer, .. } => {
+                if self.before_join(self.close_seen) && *answer == CloseAnswer::Closing {
+                    // A request was granted before the join.
+                    self.granted = true;
+                }
+                self.close_seen = true;
                 if self.closed {
                     return Err("a close request follows the close".to_owned());
                 }
@@ -56,6 +79,11 @@ impl RowOrder {
                 }
             }
             Row::Closed(cause) => {
+                if self.before_join(self.close_seen) && *cause == CloseCause::GrantedRequest {
+                    // The request it closes for was granted before the join.
+                    self.granted = true;
+                }
+                self.close_seen = true;
                 if self.closed {
                     return Err("the window closes a second time".to_owned());
                 }
@@ -79,21 +107,27 @@ impl RowOrder {
                 }
             }
             Row::StoreLock { lock, .. } => {
-                let Some(documented) = self.stores.get_mut(&lock.store) else {
-                    if self.joined_late {
-                        return Ok(());
+                if !self.stores.contains_key(&lock.store) {
+                    if !self.joined_late {
+                        return Err(format!(
+                            "a lock on store {}, which no focus row named",
+                            lock.store.get()
+                        ));
                     }
-                    return Err(format!(
-                        "a lock on store {}, which no focus row named",
-                        lock.store.get()
-                    ));
-                };
+                    // Focused before the join: whatever the journal held of
+                    // its document then is out of the recording's sight.
+                    self.stores.insert(lock.store, true);
+                }
+                let documented = self
+                    .stores
+                    .get_mut(&lock.store)
+                    .expect("BUG: the store was inserted above");
                 if lock.protected || lock.incomplete {
                     // The journal records the document again at the next lock.
                     *documented = false;
                 } else if lock.opened.is_some() {
                     *documented = true;
-                } else if !*documented && !self.joined_late {
+                } else if !*documented {
                     return Err(format!(
                         "a lock on store {} before the recording holds its document",
                         lock.store.get()

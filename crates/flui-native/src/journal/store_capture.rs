@@ -84,9 +84,14 @@ impl JournaledHost {
 
     /// The journaled store `store` is served through: the one standing for
     /// it if it is the focused store again, else a new one under a new key.
-    /// `None` once the window's keys are exhausted, and then `store` is
-    /// served unjournaled.
-    fn journaled(&self, store: &Rc<dyn TextStore>) -> Option<Rc<JournaledStore>> {
+    /// `None` once the window's keys are exhausted, or when the focus row
+    /// could not be journaled (the store's status or the sink panicked, which
+    /// `failure` keeps), and then `store` is served unjournaled.
+    fn journaled(
+        &self,
+        store: &Rc<dyn TextStore>,
+        failure: &mut FirstPanic,
+    ) -> Option<Rc<JournaledStore>> {
         if let Some(focused) = &*self.state.focused.borrow()
             && Rc::ptr_eq(&focused.presented, store)
         {
@@ -99,10 +104,12 @@ impl JournaledHost {
             return None;
         };
         let key = RecordedStore::from_raw(raw);
-        self.journal.record(Captured::StoreFocus(Some(StoreFocus {
-            store: key,
-            status: store.status(),
-        })));
+        failure.contain(|| {
+            self.journal.record(Captured::StoreFocus(Some(StoreFocus {
+                store: key,
+                status: store.status(),
+            })));
+        })?;
         Some(Rc::new(JournaledStore {
             inner: Rc::clone(store),
             key,
@@ -115,15 +122,20 @@ impl JournaledHost {
 }
 
 impl TextStoreHost for JournaledHost {
+    /// The host is told whatever the journal's calls do: what they run of
+    /// code the journal does not own (the store's status, the sink, the drop
+    /// of the store let go) is contained, and the first failure is raised
+    /// once the host was told.
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
+        let mut failure = FirstPanic::new();
         let (pair, served): (_, Option<Rc<dyn TextStore>>) = match store {
             None => {
                 if self.state.focused.borrow().is_some() {
-                    self.journal.record(Captured::StoreFocus(None));
+                    failure.contain(|| self.journal.record(Captured::StoreFocus(None)));
                 }
                 (None, None)
             }
-            Some(store) => match self.journaled(&store) {
+            Some(store) => match self.journaled(&store, &mut failure) {
                 Some(journaled) => {
                     let served: Rc<dyn TextStore> = journaled.clone();
                     let focused = Focused {
@@ -138,8 +150,9 @@ impl TextStoreHost for JournaledHost {
         // The previous pair is let go outside the borrow, and the host is
         // told with none held: it may reach application code.
         let replaced = self.state.focused.replace(pair);
-        drop(replaced);
+        failure.contain(|| drop(replaced));
         self.inner.focus_store(served);
+        failure.resume();
     }
 
     fn complete_composition(
@@ -204,6 +217,12 @@ impl TextStore for JournaledStore {
             protected_noted: Rc::clone(&self.protected_noted),
             store: Rc::downgrade(&self.inner),
         };
+        // Every lock that runs unrecorded, for whatever reason, leaves the
+        // recording without the document it leaves behind.
+        let forget = Unrecorded {
+            document: Rc::clone(&self.document),
+            held: Rc::clone(&self.held),
+        };
         // The body the input method was granted runs whatever the journal
         // does: what the tap runs of code it does not own (the store's status)
         // is contained, the first failure is kept, and it is raised once the
@@ -213,6 +232,7 @@ impl TextStore for JournaledStore {
                 let mut failure = FirstPanic::new();
                 match failure.contain(|| tap.open(LockKind::Read)).flatten() {
                     None => {
+                        forget.forget();
                         failure.contain(|| body(session));
                     }
                     Some(log) => {
@@ -230,6 +250,7 @@ impl TextStore for JournaledStore {
                 let mut failure = FirstPanic::new();
                 match failure.contain(|| tap.open(LockKind::ReadWrite)).flatten() {
                     None => {
+                        forget.forget();
                         failure.contain(|| body(session));
                     }
                     Some(log) => {
@@ -333,11 +354,30 @@ impl LockTap {
 
     /// The recording no longer holds what this lock leaves the document as.
     fn forget_document(&self) {
-        if self.document.get() == HeldDocument::Current {
-            self.document.set(HeldDocument::Stale);
-        }
-        self.held.replace(None);
+        forget_document(&self.document, &self.held);
     }
+}
+
+/// What a lock that runs unrecorded (no sink wants it, the store is
+/// protected, or the journal's own calls failed) has to forget.
+struct Unrecorded {
+    document: Rc<Cell<HeldDocument>>,
+    held: Rc<RefCell<Option<StoreDocument>>>,
+}
+
+impl Unrecorded {
+    fn forget(&self) {
+        forget_document(&self.document, &self.held);
+    }
+}
+
+/// The one place a store's journal forgets the document it held: the next
+/// lock that makes a recorded call records the document it finds.
+fn forget_document(document: &Cell<HeldDocument>, held: &RefCell<Option<StoreDocument>>) {
+    if document.get() == HeldDocument::Current {
+        document.set(HeldDocument::Stale);
+    }
+    held.replace(None);
 }
 
 /// The platform's observer of a journaled store: an application change it

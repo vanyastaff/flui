@@ -229,5 +229,56 @@ const fn is_setup(call: Captured<'_>) -> bool {
             | Captured::Preferences(_)
             | Captured::Displays(_)
             | Captured::WindowState(_)
+            | Captured::Cut(_)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use flui_protocol::native_recording::{CutReason, Stream};
+    use parking_lot::Mutex;
+
+    use super::{Forms, LineSink, StreamLine, capture_lines};
+    use crate::journal::capture::{Captured, Journal};
+
+    /// The rows a sink was handed, each with whether it was a setup line.
+    #[derive(Default)]
+    struct Handed(Arc<Mutex<Vec<(bool, String)>>>);
+
+    impl LineSink for Handed {
+        fn wants(&self) -> Forms {
+            // Nobody wants an ordinary row: only setup lines are made.
+            Forms::default()
+        }
+
+        fn line(&mut self, line: StreamLine<'_>) {
+            if let Some(super::wire::Line::Row(row)) = line.kept {
+                self.0.lock().push((line.setup, format!("{row:?}")));
+            }
+        }
+
+        fn lost(&mut self, _stream: u32) {}
+    }
+
+    /// A stream's cut reaches its sink as a setup line, made though no reader
+    /// wants rows, so a reader that joins later is handed it with the
+    /// stream's setup; nothing the source reports after its cut is sent.
+    #[test]
+    fn a_cut_is_a_setup_line_and_nothing_follows_it() {
+        let handed = Arc::default();
+        let capture = capture_lines(
+            crate::journal::codec::Backend::Headless,
+            Handed(Arc::clone(&handed)),
+        );
+        let window = Journal::open_stream(Stream::Window);
+        window.record(Captured::Cut(CutReason::StoreJournal));
+        window.record(Captured::Reopen);
+        drop(capture);
+        let handed = handed.lock();
+        assert_eq!(handed.len(), 1, "the cut, and nothing after it: {handed:?}");
+        assert!(handed[0].0, "the cut is a setup line");
+        assert!(handed[0].1.contains("Cut"), "{handed:?}");
+    }
 }

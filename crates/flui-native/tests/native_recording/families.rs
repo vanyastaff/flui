@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use flui_native::journal::codec::{
     CloseCause, CodecError, DisplayRead, FailureKind, NativeRecording, PreferenceRead, ReadFailure,
-    RecordedWindowState, ReplayError, ReplayTarget, Row, Unsupported,
+    RecordedWindowState, ReplayError, ReplayTarget, Replayed, Row, Unsupported,
 };
 use flui_native::journal::store::{RecordedStore, StoreFocus};
 use flui_native::testing::app::{AppCall, AppLog, run_keeping_owner};
@@ -52,6 +52,12 @@ pub(super) const FAMILY_RECORDINGS: [(&str, &str); 5] = [
         include_str!("headless_window_state.jsonl"),
     ),
 ];
+
+/// Asserts a replay reproduced every row: a cut recording is not a match.
+#[track_caller]
+pub(super) fn whole(replayed: Replayed) {
+    assert_eq!(replayed, Replayed::Whole, "the recording replayed whole");
+}
 
 /// Replays an application stream into a headless host's events.
 pub(super) struct HostEventsTarget(pub(super) HeadlessHostEvents);
@@ -425,9 +431,11 @@ fn app_recordings_replay_on_the_headless_host() {
     let events = platform.host_events();
     let log = AppLog::new();
     let _owner = run_keeping_owner(Box::new(platform), &log);
-    family("headless_app_notices")
-        .replay_into(&mut HostEventsTarget(events))
-        .expect("an application stream replays on the headless host");
+    whole(
+        family("headless_app_notices")
+            .replay_into(&mut HostEventsTarget(events))
+            .expect("an application stream replays on the headless host"),
+    );
     assert_eq!(
         log.calls(),
         [
@@ -449,9 +457,11 @@ fn window_recordings_replay_on_the_headless_host() {
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &log);
     let (window, handler) = headless_window(&owner);
-    family("headless_window_ime")
-        .replay_into(&mut WindowTarget::new(window))
-        .expect("a window stream replays on a headless window");
+    whole(
+        family("headless_window_ime")
+            .replay_into(&mut WindowTarget::new(window))
+            .expect("a window stream replays on a headless window"),
+    );
     assert_eq!(
         ime_events(&handler),
         [
@@ -499,9 +509,11 @@ fn window_store_and_close_recordings_replay_on_the_headless_host() {
     let (window, handler) = headless_window(&owner);
     let asked = veto_once(&handler);
     let mut target = WindowTarget::new(window);
-    family("headless_window_store_and_close")
-        .replay_into(&mut target)
-        .expect("a window stream with store locks and close requests replays");
+    whole(
+        family("headless_window_store_and_close")
+            .replay_into(&mut target)
+            .expect("a window stream with store locks and close requests replays"),
+    );
     let store = first_store(&target);
     assert_eq!(store.text(), "ab漢");
     assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(3)));
@@ -574,14 +586,29 @@ fn a_row_replayed_otherwise_is_a_divergence() {
 fn a_store_lock_the_recording_joined_after_is_refused() {
     let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
     // The golden's rows: the focus, the lock that found "ab", a read lock, ….
-    for (case, missed, line) in [("missed the focus", 0, 2), ("missed the document", 1, 3)] {
+    let written = |recording: &NativeRecording| {
+        let mut bytes = Vec::new();
+        recording.write(&mut bytes).expect("a recording writes");
+        bytes
+    };
+    // Missing the document of a store focused in the recording is malformed whether it joined
+    // late or not: the first lock after a focus records it.
+    let mut no_document = family("headless_window_store_and_close");
+    no_document.rows.remove(1);
+    for joined_late in [false, true] {
+        no_document.header.joined_late = joined_late;
+        assert!(
+            matches!(
+                NativeRecording::read(written(&no_document).as_slice()),
+                Err(CodecError::Invalid { line: 3, .. })
+            ),
+            "a lock after its store's focus and without its document, joined late: {joined_late}"
+        );
+    }
+    {
+        let (case, missed, line) = ("missed the focus", 0, 2);
         let mut joined = family("headless_window_store_and_close");
         joined.rows.remove(missed);
-        let written = |recording: &NativeRecording| {
-            let mut bytes = Vec::new();
-            recording.write(&mut bytes).expect("a recording writes");
-            bytes
-        };
         assert!(
             matches!(
                 NativeRecording::read(written(&joined).as_slice()),
@@ -602,6 +629,75 @@ fn a_store_lock_the_recording_joined_after_is_refused() {
             "{case}"
         );
     }
+
+    // Each rule a late join relaxes, before the join point (the first row of its kind, with the
+    // context it rests on before the join) and after it (the context seen in the recording):
+    // relaxed before, held in full after, and held in full in a recording that did not join.
+    let header = |joined: bool| {
+        format!(
+            r#"{{"flui_native_recording":2,"backend":"headless","stream":"window"{}}}"#,
+            if joined { r#","joined_late":true"# } else { "" }
+        )
+    };
+    let focus = r#"{"row":"store_focus","focus":{"store":1,"status":{}}}"#;
+    let opened = r#"{"row":"store_lock","lock":{"store":1,"kind":"read","opened":{"text":"","selection":[0,0]}}}"#;
+    let bare = r#"{"row":"store_lock","lock":{"store":1,"kind":"read","steps":[{"call":"selection","selection":[0,0]}]}}"#;
+    let request = |answer: &str| format!(r#"{{"row":"close_request","answer":"{answer}"}}"#);
+    let closed = |cause: &str| format!(r#"{{"row":"closed","cause":"{cause}"}}"#);
+    for (case, rows, before_join, after_join) in [
+        (
+            "a lock on a store focused before the join",
+            vec![bare.to_owned()],
+            true,
+            false,
+        ),
+        (
+            "a lock without its document on a store focused after the join",
+            vec![focus.to_owned(), bare.to_owned()],
+            false,
+            false,
+        ),
+        (
+            "a document then a bare lock on a store focused after the join",
+            vec![focus.to_owned(), opened.to_owned(), bare.to_owned()],
+            true,
+            true,
+        ),
+        (
+            "a first `closing` after a grant before the join",
+            vec![request("closing"), closed("granted_request")],
+            true,
+            false,
+        ),
+        (
+            "a first close for a grant before the join",
+            vec![closed("granted_request")],
+            true,
+            false,
+        ),
+        (
+            "`closing` after a refusal the recording saw",
+            vec![request("keep_open"), request("closing")],
+            false,
+            false,
+        ),
+        (
+            "a close for a grant after a refusal the recording saw",
+            vec![request("keep_open"), closed("granted_request")],
+            false,
+            false,
+        ),
+    ] {
+        for (joined, reads) in [(true, before_join), (false, after_join)] {
+            let text = format!("{}\n{}\n", header(joined), rows.join("\n"));
+            assert_eq!(
+                NativeRecording::read(text.as_bytes()).is_ok(),
+                reads,
+                "{case}, joined late: {joined}"
+            );
+        }
+    }
+
     let (_, text) = FAMILY_RECORDINGS[0];
     let focus = r#"{"row":"store_focus","focus":{"store":1,"status":{"single_line":true}}}"#;
     let twice = format!("{text}{focus}\n");
@@ -682,7 +778,7 @@ fn close_rows_out_of_order_are_refused() {
 /// is refused as it is read.
 fn a_recording_past_its_bound_is_written_cut() {
     use flui_native::journal::codec::{CutReason, Header};
-    use flui_protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES};
+    use flui_protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS};
 
     let commit = "x".repeat(MAX_LINE_BYTES - 128);
     let rows = MAX_RECORDING_BYTES / commit.len() + 2;
@@ -711,6 +807,22 @@ fn a_recording_past_its_bound_is_written_cut() {
         read.rows.len() < rows,
         "the rows past the bound were not written"
     );
+    // Its replay reproduces every row before the cut and says it was cut, and where.
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (window, handler) = headless_window(&owner);
+    let cut_line = read.rows.len() as u64 + 1;
+    assert_eq!(
+        read.replay_into(&mut WindowTarget::new(window)),
+        Ok(Replayed::Cut {
+            line: cut_line,
+            reason: CutReason::Bytes
+        })
+    );
+    assert_eq!(
+        ime_events(&handler).len(),
+        read.rows.len() - 1,
+        "every row before the cut replayed"
+    );
 
     let header =
         r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
@@ -720,6 +832,26 @@ fn a_recording_past_its_bound_is_written_cut() {
         NativeRecording::read(after.as_bytes()),
         Err(CodecError::Invalid { line: 3, .. })
     ));
+
+    // The row bound: a recording of exactly `MAX_ROWS` rows is written whole, with no room
+    // kept after its last row; one row more is cut where the cut still fits.
+    let reopens = |count: usize| NativeRecording {
+        header: Header::for_stream(
+            flui_native::journal::codec::Backend::Headless,
+            flui_native::journal::codec::Stream::App,
+        ),
+        rows: vec![Row::Reopen; count],
+    };
+    for (count, last) in [
+        (MAX_ROWS, Row::Reopen),
+        (MAX_ROWS + 1, Row::Cut(CutReason::Rows)),
+    ] {
+        let mut written = Vec::new();
+        reopens(count).write(&mut written).expect("it writes");
+        let read = NativeRecording::read(written.as_slice()).expect("its reader reads it");
+        assert_eq!(read.rows.len(), MAX_ROWS, "{count} rows");
+        assert_eq!(read.rows.last(), Some(&last), "{count} rows");
+    }
 }
 
 /// A platform stream replays on the headless host: after each row the
@@ -734,9 +866,11 @@ fn platform_recordings_replay_on_the_headless_host() {
     let owner = run_keeping_owner(Box::new(platform), &log);
     let labels = Labels::default();
     let mut target = PlatformTarget::new(sources, &owner, &labels);
-    recording
-        .replay_into(&mut target)
-        .expect("a platform stream replays on the headless host");
+    whole(
+        recording
+            .replay_into(&mut target)
+            .expect("a platform stream replays on the headless host"),
+    );
     let expected = recorded_reads(&recording);
     assert_eq!(expected.len(), 6, "every row is a read");
     assert_eq!(target.reads, expected);
@@ -851,9 +985,11 @@ fn window_state_recordings_replay_on_the_headless_host() {
     let (window, handler) = headless_window(&owner);
     let labels = Labels::default();
     let mut target = WindowStateTarget::new(window, &labels);
-    recording
-        .replay_into(&mut target)
-        .expect("a window state stream replays on a headless window");
+    whole(
+        recording
+            .replay_into(&mut target)
+            .expect("a window state stream replays on a headless window"),
+    );
     assert_eq!(
         target
             .published
@@ -947,7 +1083,7 @@ fn app_title_bar_snapshots_keep_their_wire_values_and_replay() {
     let (replay_window, _) = headless_window(&owner);
     let labels = Labels::default();
     let mut target = WindowStateTarget::new(replay_window, &labels);
-    decoded.replay_into(&mut target).expect("snapshots replay");
+    whole(decoded.replay_into(&mut target).expect("snapshots replay"));
     assert_eq!(target.published.len(), cases.len());
     for (state, (controls, _)) in target.published.iter().zip(&cases) {
         assert_eq!(
@@ -1318,19 +1454,25 @@ fn captured_streams_replay_to_what_the_session_delivered() {
     let sources = Sources::of(&platform);
     let log = AppLog::new();
     let owner = run_keeping_owner(Box::new(platform), &log);
-    app.replay_into(&mut HostEventsTarget(events))
-        .expect("the application stream replays");
+    whole(
+        app.replay_into(&mut HostEventsTarget(events))
+            .expect("the application stream replays"),
+    );
     assert_eq!(log.calls(), session.calls);
     let (mock, handler) = headless_window(&owner);
-    window
-        .replay_into(&mut WindowTarget::new(mock))
-        .expect("the window stream replays");
+    whole(
+        window
+            .replay_into(&mut WindowTarget::new(mock))
+            .expect("the window stream replays"),
+    );
     assert_eq!(ime_events(&handler), session.ime);
     let labels = Labels::default();
     let mut target = PlatformTarget::new(sources, &owner, &labels);
-    reads
-        .replay_into(&mut target)
-        .expect("the platform stream replays");
+    whole(
+        reads
+            .replay_into(&mut target)
+            .expect("the platform stream replays"),
+    );
     assert_eq!(target.reads, session.reads);
 
     // The window's snapshots replay on a window of the replayed platform,
@@ -1338,9 +1480,11 @@ fn captured_streams_replay_to_what_the_session_delivered() {
     // on the display the platform stream's replay issued for its label.
     let (mock, replayed) = headless_window(&owner);
     let mut target = WindowStateTarget::new(mock, &labels);
-    states
-        .replay_into(&mut target)
-        .expect("the window state stream replays");
+    whole(
+        states
+            .replay_into(&mut target)
+            .expect("the window state stream replays"),
+    );
     assert_eq!(
         target
             .published
@@ -1476,9 +1620,11 @@ fn captured_streams_replay_to_what_the_session_delivered() {
     let owner = run_keeping_owner(Box::new(platform), &AppLog::new());
     let labels = Labels::default();
     let mut target = PlatformTarget::new(sources, &owner, &labels);
-    reads
-        .replay_into(&mut target)
-        .expect("a redacted display read replays");
+    whole(
+        reads
+            .replay_into(&mut target)
+            .expect("a redacted display read replays"),
+    );
     assert_eq!(
         target.reads.len(),
         redacted.reads.len(),
@@ -1696,9 +1842,11 @@ fn captured_store_locks_replay_to_the_document_they_left() {
         let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
         let (window, _) = headless_window(&owner);
         let mut target = WindowTarget::new(window);
-        recording
-            .replay_into(&mut target)
-            .unwrap_or_else(|error| panic!("{path:?}: the window stream replays: {error}"));
+        whole(
+            recording
+                .replay_into(&mut target)
+                .unwrap_or_else(|error| panic!("{path:?}: the window stream replays: {error}")),
+        );
         assert_eq!(
             document_of(&first_store(&target)),
             document_of(&field),
@@ -1906,7 +2054,7 @@ fn every_close_answer_and_cause_replays() {
             );
             continue;
         }
-        replayed.unwrap_or_else(|error| panic!("{case}: the stream replays: {error}"));
+        whole(replayed.unwrap_or_else(|error| panic!("{case}: the stream replays: {error}")));
         let recorded_asks = rows
             .iter()
             .filter(|row| {
@@ -1937,9 +2085,11 @@ fn every_close_answer_and_cause_replays() {
         Row::Closed(CloseCause::GrantedRequest),
     ];
     let (window, replaying) = headless_window(&owner);
-    no_handler
-        .replay_into(&mut WindowTarget::new(window))
-        .expect("a request no handler answered replays without asking");
+    whole(
+        no_handler
+            .replay_into(&mut WindowTarget::new(window))
+            .expect("a request no handler answered replays without asking"),
+    );
     assert_eq!(replaying.count(&HandlerCall::CloseRequested), 0);
     assert_eq!(replaying.count(&HandlerCall::Closed), 1);
 
@@ -2335,10 +2485,22 @@ fn the_granted_body_runs_when_the_store_status_panics() {
     use flui_native::journal::recorder::Recorder;
     use flui_platform::text_store::{LockGrant, LockTiming, Utf16Offset, Utf16Range};
 
-    let _recorder = Recorder::start(Backend::Headless);
+    let recorder = Recorder::start(Backend::Headless);
     let field = InMemoryTextStore::new("ab");
     let counted = Rc::new(CountedReads::of(Rc::clone(&field)));
     let (_owner, _window, served) = served_store_of(Rc::clone(&counted) as Rc<dyn TextStore>);
+    let read = || {
+        let _granted = served
+            .request_lock(
+                LockGrant::read(|session| {
+                    let _ = session.selection();
+                }),
+                LockTiming::Sync,
+            )
+            .expect("a free store grants a sync read");
+    };
+    // The recording holds the document after this lock.
+    read();
     counted.panic_status.set(true);
     let ran = Rc::new(std::cell::Cell::new(false));
     let body_ran = Rc::clone(&ran);
@@ -2361,6 +2523,55 @@ fn the_granted_body_runs_when_the_store_status_panics() {
     assert!(
         unwound.is_err(),
         "the status's panic went on after the body"
+    );
+    // The lock ran unrecorded, so the recording no longer holds the document:
+    // the next lock records it again.
+    read();
+    let opened: Vec<bool> = only(
+        &recorder.finish(),
+        flui_native::journal::codec::Stream::Window,
+    )
+    .rows
+    .iter()
+    .filter_map(|row| match row {
+        Row::StoreLock { lock, .. } => Some(lock.opened.is_some()),
+        _ => None,
+    })
+    .collect();
+    assert_eq!(
+        opened,
+        [true, true],
+        "the lock after an unrecorded one records the document"
+    );
+}
+
+/// A store whose status panics as the window is told to serve it: the host
+/// still serves it, unjournaled, and the panic goes on after the host was
+/// told.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+fn the_host_is_told_of_a_focus_when_the_store_status_panics() {
+    use flui_native::journal::codec::Backend;
+    use flui_native::journal::recorder::Recorder;
+
+    let _recorder = Recorder::start(Backend::Headless);
+    let counted = Rc::new(CountedReads::of(InMemoryTextStore::new("ab")));
+    counted.panic_status.set(true);
+    SERVED.with(|served| served.replace(None));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test lets the store's panic reach it on purpose"
+    )]
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        served_store_of(Rc::clone(&counted) as Rc<dyn TextStore>)
+    }));
+    counted.panic_status.set(false);
+    assert!(unwound.is_err(), "the status's panic went on");
+    let served = SERVED
+        .with(|served| served.borrow().clone())
+        .expect("the host was told to serve the store");
+    assert!(
+        std::ptr::addr_eq(Rc::as_ptr(&served), Rc::as_ptr(&counted)),
+        "it serves the store itself, unjournaled, as the focus row could not be written"
     );
 }
 
@@ -2440,7 +2651,11 @@ fn an_unchanged_document_is_not_written_again() {
 
 /// The capture cases of the streams beside a registry's.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-pub(super) const CAPTURE_CASES: [(&str, fn()); 9] = [
+pub(super) const CAPTURE_CASES: [(&str, fn()); 10] = [
+    (
+        "the_host_is_told_of_a_focus_when_the_store_status_panics",
+        the_host_is_told_of_a_focus_when_the_store_status_panics,
+    ),
     (
         "a_protected_store_journals_one_row_whatever_was_typed",
         a_protected_store_journals_one_row_whatever_was_typed,
