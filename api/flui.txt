@@ -12002,6 +12002,7 @@ impl core::hash::Hash for flui::platform::ClipboardError
 impl core::marker::StructuralPartialEq for flui::platform::ClipboardError
 variant flui::platform::ClipboardError::ApplicationOnly // at 5
 variant flui::platform::ClipboardError::Denied // at 1
+variant flui::platform::ClipboardError::Gone // at 6
 variant flui::platform::ClipboardError::Malformed // at 3
 variant flui::platform::ClipboardError::Timeout // at 2
 variant flui::platform::ClipboardError::TooLarge // at 4
@@ -14080,6 +14081,7 @@ pub fn flui::platform::capability::scripted::Script::expect_held(&self, expect: 
 pub fn flui::platform::capability::scripted::Script::held(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::hold(&self) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::name(&self) -> &'static str // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::on_answer(&self, observe: impl Fn(&R, Option<&A>) + 'static) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::otherwise(&self, answer: impl Fn(&R) -> A + 'static) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::otherwise_value(&self, value: A) where A: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::receive(&self, request: R, resolver: flui::platform::capability::Resolver<A>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
@@ -36771,6 +36773,10 @@ impl PartialEq for flui_testing::clipboard::ClipboardRequest
 impl core::fmt::Debug for flui_testing::clipboard::ClipboardRequest
 impl core::marker::StructuralPartialEq for flui_testing::clipboard::ClipboardRequest
 variant flui_testing::clipboard::ClipboardRequest::ReadText // at 0
+pub struct flui_testing::clipboard::ClipboardWriteHold { .. }
+impl Drop for flui_testing::clipboard::ClipboardWriteHold
+impl core::fmt::Debug for flui_testing::clipboard::ClipboardWriteHold
+pub fn flui_testing::clipboard::ClipboardWriteHold::held(&self) -> usize
 pub struct flui_testing::clipboard::ScriptedClipboard { .. }
 impl Clone for flui_testing::clipboard::ScriptedClipboard
 impl Default for flui_testing::clipboard::ScriptedClipboard
@@ -36778,12 +36784,11 @@ impl core::fmt::Debug for flui_testing::clipboard::ScriptedClipboard
 impl flui::platform::capability::CapabilityProvider<flui::interaction::ClipboardCapability> for flui_testing::clipboard::ScriptedClipboard
 pub fn flui_testing::clipboard::ScriptedClipboard::answer_concealment(&self, concealment: flui::platform::Concealment)
 pub fn flui_testing::clipboard::ScriptedClipboard::answer_held_reads(&self) -> usize
-pub fn flui_testing::clipboard::ScriptedClipboard::answer_held_writes(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::drop_held_reads(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::fail_reads_with(&self, error: flui::platform::ClipboardError)
 pub fn flui_testing::clipboard::ScriptedClipboard::fail_writes_with(&self, error: flui::platform::ClipboardError)
 pub fn flui_testing::clipboard::ScriptedClipboard::hold_reads(&self)
-pub fn flui_testing::clipboard::ScriptedClipboard::hold_writes(&self)
+pub fn flui_testing::clipboard::ScriptedClipboard::hold_writes(&self) -> flui_testing::clipboard::ClipboardWriteHold
 pub fn flui_testing::clipboard::ScriptedClipboard::is_concealed(&self) -> bool
 pub fn flui_testing::clipboard::ScriptedClipboard::live_handles(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::new() -> Self
@@ -36797,7 +36802,15 @@ pub fn flui_testing::clipboard::ScriptedClipboard::set_text(&self, text: impl In
 pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_reads(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_writes(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::text(&self) -> Option<String>
-pub fn flui_testing::clipboard::ScriptedClipboard::writes(&self) -> &flui::platform::capability::scripted::Script<flui::platform::ClipboardWrite, flui::platform::ClipboardWritten>
+pub fn flui_testing::clipboard::ScriptedClipboard::writes(&self) -> &flui::platform::capability::scripted::Script<flui_testing::clipboard::WriteRequest, flui::platform::ClipboardWritten>
+#[non_exhaustive] pub struct flui_testing::clipboard::WriteRequest
+field flui_testing::clipboard::WriteRequest::number: u64 // at 0
+field flui_testing::clipboard::WriteRequest::write: flui::platform::ClipboardWrite // at 1
+impl Clone for flui_testing::clipboard::WriteRequest
+impl Eq for flui_testing::clipboard::WriteRequest
+impl PartialEq for flui_testing::clipboard::WriteRequest
+impl core::fmt::Debug for flui_testing::clipboard::WriteRequest
+impl core::marker::StructuralPartialEq for flui_testing::clipboard::WriteRequest
 pub struct flui_testing::host::HeadlessOsDrags { .. }
 impl Default for flui_testing::host::HeadlessOsDrags
 impl core::fmt::Debug for flui_testing::host::HeadlessOsDrags

@@ -723,7 +723,9 @@ impl Dispatch<WlDataSource, SourceData> for WaylandState {
                         // Only this source's seat lost its selection; it is
                         // destroyed below, not by the entry's release, and the
                         // sources it superseded go with it.
-                        let lost = state.owned.remove(|owned| owned.source == *source);
+                        let lost = state
+                            .owned
+                            .remove(|owned| owned.source.as_ref() == Some(source));
                         for superseded in lost.into_iter().flat_map(|lost| lost.superseded) {
                             superseded.destroy();
                         }
