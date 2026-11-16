@@ -381,6 +381,10 @@ impl<B: RasterBackend> RasterExecutor<B> {
             settled += close(&inbox, &mut first);
         }
         drop(queue);
+        // A dead executor still takes its slots down here, the one backend
+        // call it makes after the call it died during: the surfaces go with
+        // their slots, and a call that wedges again is covered by the owner,
+        // which settles what the inboxes hold (ADR-0305 §9).
         for entry in &mut self.slots {
             if let Some(slot) = entry.take() {
                 first.contain(|| self.backend.detach(slot.id));

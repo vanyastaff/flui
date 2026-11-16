@@ -472,7 +472,24 @@ fn a_frame_whose_resize_the_executor_died_during_is_not_rendered() {
         generation,
         ..resized
     };
-    thread.sender.send(frame(resized, 1)).expect("accepted");
+    // The frame carries a texture upload, the call after the resize.
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("an id is left");
+    texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+        1,
+        1,
+        vec![9, 9, 9, 255],
+    ));
+    let RasterCommand::Frame { slot, snapshot } = frame(resized, 1) else {
+        unreachable!("BUG: frame() builds a frame");
+    };
+    thread
+        .sender
+        .send(RasterCommand::Frame {
+            slot,
+            snapshot: snapshot.textures(registry.take_updates()),
+        })
+        .expect("accepted");
     let resize = thread.backend.hold_next_resize();
     render.release();
     assert!(
@@ -505,6 +522,17 @@ fn a_frame_whose_resize_the_executor_died_during_is_not_rendered() {
             .iter()
             .all(|(slot, _)| *slot != resized.slot),
         "the dead executor presents nothing to the slot"
+    );
+    let calls = thread.backend.calls();
+    let resize_at = calls
+        .iter()
+        .position(|call| matches!(call, SlotCall::Resize(slot, _) if *slot == resized.slot))
+        .expect("the resize ran");
+    assert!(
+        calls[resize_at + 1..]
+            .iter()
+            .all(|call| matches!(call, SlotCall::Detach(_))),
+        "after the call it died during, the executor only takes its slots down: {calls:?}"
     );
 }
 

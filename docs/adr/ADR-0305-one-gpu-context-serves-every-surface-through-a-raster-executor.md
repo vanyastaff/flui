@@ -453,8 +453,9 @@ executor and slot.
   unsettled, as the executor's own detach drops it. A slot settles in order even then: the frame
   a wedged render holds settles only if that render returns, and a frame queued behind it in that
   slot settles `Failed` after it, so a late `Presented` never arrives for a frame whose record a
-  later settlement already folded. A dead executor renders nothing after a held render returns:
-  its stop settles or drops what the inboxes hold.
+  later settlement already folded. A dead executor makes no backend call once the call it died
+  during returns, except that its stop still takes each slot down in the backend:
+  that stop settles or drops what the inboxes hold.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no
@@ -622,7 +623,8 @@ the facade. Every production use of `with_backend` becomes:
   `a_full_lifecycle_queue_returns_the_command` and
   `a_command_sent_during_the_stop_comes_back_gone`; on the raster thread, in
   `crates/flui-engine/tests/raster_thread.rs`, `a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline`
-  and `a_frame_queued_behind_a_wedged_render_settles_after_it` (§9); ADR-0244's
+  `a_frame_queued_behind_a_wedged_render_settles_after_it` and
+  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9); ADR-0244's
   `gpu_backend_fallback_order`; and
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
