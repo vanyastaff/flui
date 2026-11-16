@@ -1,5 +1,5 @@
 //! The Android host: NativeActivity through `android-activity`, and the
-//! `FluiView` it installs (ADR-0347).
+//! `FluiView` it installs (ADR-0348).
 
 use std::sync::{Arc, Weak};
 

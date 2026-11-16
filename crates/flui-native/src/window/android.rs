@@ -78,7 +78,7 @@ pub struct AndroidWindow {
     /// and the system bars it styles.
     facets: WindowFacets,
     /// `FluiView`: the input method's editor, the drop target and the drag
-    /// source (ADR-0347).
+    /// source (ADR-0348).
     java_view: Arc<JavaView>,
     /// The system drag source the drag transport made for the window.
     drag_source: Arc<dyn ActivityDragSource>,
@@ -633,7 +633,7 @@ impl crate::host_window::HostWindow for AndroidWindow {
         self.facets.text.capture_sizing()
     }
 
-    /// The window's input method host (ADR-0090, ADR-0347): `FluiView`'s
+    /// The window's input method host (ADR-0090, ADR-0348): `FluiView`'s
     /// `InputConnection` serves the focused field's store.
     fn text_store_host(
         &self,
