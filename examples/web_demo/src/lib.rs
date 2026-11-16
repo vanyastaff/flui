@@ -59,9 +59,7 @@ impl WindowHandler for ConsoleLog {
             PlatformInput::PointerFrame(_) => {}
             PlatformInput::Keyboard(ke) => log(&format!(
                 "Key {:?}: {:?} (code={:?})",
-                ke.state(),
-                ke.key,
-                ke.code
+                ke.state, ke.key, ke.code
             )),
             PlatformInput::Ime(ime_event) => log(&format!("IME: {ime_event:?}")),
             // The demo only logs drags; the web host takes and starts HTML

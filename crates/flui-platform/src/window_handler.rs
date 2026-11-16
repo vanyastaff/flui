@@ -102,7 +102,7 @@ pub trait WindowHandler {
     fn state_changed(&self);
 
     /// The platform wants a frame for this window, with what it reported
-    /// about the frame (ADR-0257). The answer says whether a frame ran: a
+    /// about the frame (ADR-0347). The answer says whether a frame ran: a
     /// platform that redelivers work due at one instant (a wake deadline)
     /// asks again only after a frame that ran, so a handler with nothing to
     /// run a frame with answers [`FrameOutcome::Declined`] and the platform

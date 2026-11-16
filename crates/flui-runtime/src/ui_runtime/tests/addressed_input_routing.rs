@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::pointer::PointerButton;
 use flui_interaction::events::{
-    Code, Key, KeyState, NamedKey, PointerKind, make_down_event, make_down_event_with_button,
-    make_up_event, make_up_event_with_button,
+    Code, Key, KeyPress, KeyState, NamedKey, PointerKind, make_down_event,
+    make_down_event_with_button, make_up_event, make_up_event_with_button,
 };
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
@@ -396,7 +396,7 @@ fn keyboard_ui_runtime() -> (UiRuntime, PresentationId, Rc<FocusNode>, KeyLog) {
                 .focus_node(Rc::clone(&node))
                 .on_key_event(move |_, event| {
                     seen.borrow_mut()
-                        .push((event.key.clone(), event.code, event.state()));
+                        .push((event.key.clone(), event.code, event.state));
                     KeyEventResult::Handled
                 }),
         )
@@ -426,7 +426,7 @@ fn mouse_button(
 ) {
     let at = Offset::new(4.0, 6.0);
     let event = match state {
-        KeyState::Down => make_down_event_with_button(at, PointerKind::Mouse, button),
+        KeyState::Down(_) => make_down_event_with_button(at, PointerKind::Mouse, button),
         KeyState::Up => make_up_event_with_button(at, PointerKind::Mouse, button),
     };
     deliver(
@@ -436,14 +436,8 @@ fn mouse_button(
     );
 }
 
-fn key(code: Code, key: Key, state: KeyState, repeat: bool) -> PlatformInput {
-    PlatformInput::Keyboard(
-        KeyEventBuilder::new(code)
-            .key(key)
-            .state(state)
-            .repeat(repeat)
-            .build(),
-    )
+fn key(code: Code, key: Key, state: KeyState) -> PlatformInput {
+    PlatformInput::Keyboard(KeyEventBuilder::new(code).key(key).state(state).build())
 }
 
 /// The mouse's back button (X1) reaches the focused node as a
@@ -451,20 +445,34 @@ fn key(code: Code, key: Key, state: KeyState, repeat: bool) -> PlatformInput {
 /// pointer press: it does not make focus visible.
 pub(crate) fn the_back_button_is_a_back_key() {
     let (ui_runtime, id, node, log) = keyboard_ui_runtime();
-    mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::BACK);
+    mouse_button(
+        &ui_runtime,
+        id,
+        KeyState::Down(KeyPress::First),
+        PointerButton::BACK,
+    );
     mouse_button(&ui_runtime, id, KeyState::Up, PointerButton::BACK);
     let back = Key::Named(NamedKey::BrowserBack);
     assert_eq!(
         *log.borrow(),
         [
-            (back.clone(), Code::Unidentified, KeyState::Down),
+            (
+                back.clone(),
+                Code::Unidentified,
+                KeyState::Down(KeyPress::First)
+            ),
             (back, Code::Unidentified, KeyState::Up),
         ]
     );
     assert!(!node.has_visible_focus(), "a pointer button shows no focus");
 
     log.borrow_mut().clear();
-    mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::PRIMARY);
+    mouse_button(
+        &ui_runtime,
+        id,
+        KeyState::Down(KeyPress::First),
+        PointerButton::PRIMARY,
+    );
     mouse_button(&ui_runtime, id, KeyState::Up, PointerButton::PRIMARY);
     assert!(log.borrow().is_empty(), "only the back button is a key");
 }
@@ -479,18 +487,23 @@ pub(crate) fn the_back_button_is_held_apart_from_the_back_key() {
         deliver(
             &ui_runtime,
             id,
-            key(code, back.clone(), KeyState::Down, false),
+            key(code, back.clone(), KeyState::Down(KeyPress::First)),
         );
-        mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::BACK);
+        mouse_button(
+            &ui_runtime,
+            id,
+            KeyState::Down(KeyPress::First),
+            PointerButton::BACK,
+        );
         mouse_button(&ui_runtime, id, KeyState::Up, PointerButton::BACK);
         deliver(
             &ui_runtime,
             id,
-            key(code, back.clone(), KeyState::Down, true),
+            key(code, back.clone(), KeyState::Down(KeyPress::AutoRepeat)),
         );
         assert_eq!(
             log.borrow().last(),
-            Some(&(back, code, KeyState::Down)),
+            Some(&(back, code, KeyState::Down(KeyPress::AutoRepeat))),
             "the {code:?} key's repeat still reaches the node"
         );
         assert_eq!(log.borrow().len(), 4);
@@ -503,10 +516,19 @@ pub(crate) fn a_pointer_press_hides_keyboard_focus() {
     deliver(
         &ui_runtime,
         id,
-        key(Code::KeyA, Key::character("a"), KeyState::Down, false),
+        key(
+            Code::KeyA,
+            Key::character("a"),
+            KeyState::Down(KeyPress::First),
+        ),
     );
     assert!(node.has_visible_focus(), "a key shows focus");
-    mouse_button(&ui_runtime, id, KeyState::Down, PointerButton::PRIMARY);
+    mouse_button(
+        &ui_runtime,
+        id,
+        KeyState::Down(KeyPress::First),
+        PointerButton::PRIMARY,
+    );
     assert!(!node.has_visible_focus(), "a pointer press hides it");
 }
 
@@ -561,8 +583,7 @@ pub(crate) fn a_panicking_key_cancel_still_moves_window_focus() {
             key(
                 Code::Enter,
                 Key::Named(NamedKey::Enter),
-                KeyState::Down,
-                false,
+                KeyState::Down(KeyPress::First),
             ),
         );
         let reports = Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -631,8 +652,7 @@ pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
         key(
             Code::Enter,
             Key::Named(NamedKey::Enter),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
         ),
     );
     ui_runtime
@@ -700,8 +720,7 @@ pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
         key(
             Code::Enter,
             Key::Named(NamedKey::Enter),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
         ),
     );
     let _cancel = node.register_on_key_cancel(Rc::new(|_| panic!("key cancel handler")));
@@ -756,8 +775,7 @@ pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
         key(
             Code::Enter,
             Key::Named(NamedKey::Enter),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
         ),
     );
     reports.borrow_mut().clear();
@@ -782,18 +800,25 @@ fn held_enter_after(deactivate: impl FnOnce(&mut UiRuntime, PresentationId)) {
     deliver(
         &ui_runtime,
         id,
-        key(Code::Enter, enter.clone(), KeyState::Down, false),
+        key(Code::Enter, enter.clone(), KeyState::Down(KeyPress::First)),
     );
     deactivate(&mut ui_runtime, id);
     deliver(
         &ui_runtime,
         id,
-        key(Code::Enter, enter.clone(), KeyState::Down, true),
+        key(
+            Code::Enter,
+            enter.clone(),
+            KeyState::Down(KeyPress::AutoRepeat),
+        ),
     );
     deliver(
         &ui_runtime,
         id,
-        key(Code::Enter, enter.clone(), KeyState::Up, false),
+        key(Code::Enter, enter.clone(), KeyState::Up),
     );
-    assert_eq!(*log.borrow(), [(enter, Code::Enter, KeyState::Down)]);
+    assert_eq!(
+        *log.borrow(),
+        [(enter, Code::Enter, KeyState::Down(KeyPress::First))]
+    );
 }

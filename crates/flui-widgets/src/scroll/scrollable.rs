@@ -105,7 +105,7 @@ use flui_interaction::{
     HoldEnd, HoldGestureRecognizer, PointerDispatch, PointerEvent, PointerKindSet,
     WheelPreferencesProvider,
 };
-use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::{
     WheelPreferences, WheelStep,
     keyboard::Modifiers,
@@ -1545,7 +1545,7 @@ impl ScrollableState {
         let key_post_frame = self.post_frame.clone();
         move |_ctx: &mut EventContext<'_>, event: &KeyEvent| {
             let pipeline = key_pipeline.as_ref();
-            if event.state() == KeyState::Up {
+            if event.state == KeyState::Up {
                 key_owner.key_released(event.code);
                 return KeyEventResult::Ignored;
             }
@@ -1576,7 +1576,7 @@ impl ScrollableState {
             };
             let outcome = key_owner.key_scroll(
                 event.code,
-                event.repeat() == KeyRepeat::AutoRepeat,
+                event.state == KeyState::Down(KeyPress::AutoRepeat),
                 target,
                 presentation_device_pixel_ratio(pipeline),
             );

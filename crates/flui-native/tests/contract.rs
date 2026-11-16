@@ -1711,7 +1711,7 @@ mod native_windows {
                 return flui_platform::DispatchEventResult::default();
             }
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state() == flui_platform::keyboard::KeyState::Down
+                && matches!(keyboard.state, flui_platform::keyboard::KeyState::Down(_))
                 && let flui_platform::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
@@ -1807,7 +1807,7 @@ mod native_windows {
                 (WM_KEYUP, 0x41, a | KEY_RELEASE),
             ]),
             [
-                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Down(First) Character(KeyText("a")) KeyA"#,
                 r#"Up Character(KeyText("a")) KeyA"#
             ],
             "only the application's own key is delivered"
@@ -1832,7 +1832,7 @@ mod native_windows {
                 (WM_KEYUP, 0x41, a | KEY_RELEASE),
             ]),
             [
-                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Down(First) Character(KeyText("a")) KeyA"#,
                 r#"Up Character(KeyText("a")) KeyA"#
             ],
             "only the application's own key is delivered"
@@ -1853,9 +1853,9 @@ mod native_windows {
                 (WM_SYSKEYUP, VK_PROCESSKEY, b | KEY_RELEASE),
             ]),
             [
-                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Down(First) Character(KeyText("a")) KeyA"#,
                 "Up Named(Unidentified) KeyA",
-                r#"Down Character(KeyText("b")) KeyB"#,
+                r#"Down(First) Character(KeyText("b")) KeyB"#,
                 "Up Named(Unidentified) KeyB"
             ],
             "each delivered press is released"
@@ -1888,9 +1888,7 @@ mod native_windows {
             if let Some(keyboard) = event.as_keyboard() {
                 observed.lock().expect("keys").push(format!(
                     "{:?} {:?} {:?}",
-                    keyboard.state(),
-                    keyboard.key,
-                    keyboard.code
+                    keyboard.state, keyboard.key, keyboard.code
                 ));
             }
             DispatchEventResult::resolved(true, false)
@@ -1920,7 +1918,7 @@ mod native_windows {
         delivered
     }
 
-    // A dead key (an accent on an international layout) arrives as
+    // `Key::Dead` with its accent, not as its unshifted character, so a shortcut bound
     // `NamedKey::Dead`, not as its unshifted character, so a shortcut bound
     // to that character does not fire mid-composition.
     fn dead_key_is_reported_as_dead() {
@@ -1997,7 +1995,7 @@ mod native_windows {
                 observed
                     .lock()
                     .expect("keys")
-                    .push((keyboard.state(), keyboard.key.clone()));
+                    .push((keyboard.state, keyboard.key.clone()));
             }
             DispatchEventResult::resolved(true, false)
         });
@@ -2062,17 +2060,39 @@ mod native_windows {
         // Leave no composition pending for the rows that follow.
         flush_dead_key_state();
         drop(layout);
-        let dead = flui_platform::keyboard::Key::Named(flui_platform::keyboard::NamedKey::Dead);
+        // The accent `WM_DEADCHAR` names: French AltGr+2 is a dead tilde, every
+        // other row presses US-International's dead acute, printed `'`.
+        let accent = if matches!(case, DeadKeyCase::FrenchAltGrTilde) {
+            '~'
+        } else {
+            '\''
+        };
+        let dead = flui_platform::keyboard::Key::Dead(Some(accent));
         let expected = if matches!(case, DeadKeyCase::FocusLostWhileHeld) {
             let apostrophe = flui_platform::keyboard::Key::character("'");
             vec![
-                (flui_platform::keyboard::KeyState::Down, dead),
-                (flui_platform::keyboard::KeyState::Down, apostrophe.clone()),
+                (
+                    flui_platform::keyboard::KeyState::Down(
+                        flui_platform::keyboard::KeyPress::First,
+                    ),
+                    dead,
+                ),
+                (
+                    flui_platform::keyboard::KeyState::Down(
+                        flui_platform::keyboard::KeyPress::First,
+                    ),
+                    apostrophe.clone(),
+                ),
                 (flui_platform::keyboard::KeyState::Up, apostrophe),
             ]
         } else {
             vec![
-                (flui_platform::keyboard::KeyState::Down, dead.clone()),
+                (
+                    flui_platform::keyboard::KeyState::Down(
+                        flui_platform::keyboard::KeyPress::First,
+                    ),
+                    dead.clone(),
+                ),
                 (flui_platform::keyboard::KeyState::Up, dead),
             ]
         };
@@ -2269,7 +2289,7 @@ mod native_windows {
                 return flui_platform::DispatchEventResult::default();
             }
             if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state() == flui_platform::keyboard::KeyState::Down
+                && matches!(keyboard.state, flui_platform::keyboard::KeyState::Down(_))
                 && let flui_platform::keyboard::Key::Character(text) = &keyboard.key
             {
                 typed_observations
@@ -2407,7 +2427,7 @@ mod native_windows {
             }
             if event
                 .as_keyboard()
-                .is_some_and(|key| key.state() == flui_platform::keyboard::KeyState::Down)
+                .is_some_and(|key| matches!(key.state, flui_platform::keyboard::KeyState::Down(_)))
             {
                 keydown_observations.fetch_add(1, Ordering::SeqCst);
                 if pump {

@@ -13,9 +13,7 @@
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
-use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey,
-};
+use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 
 use super::FocusNode;
 use crate::ids::FocusNodeId;
@@ -126,8 +124,8 @@ impl KeyLedger {
         unit: Option<FocusNodeId>,
         leaf: Option<&Rc<FocusNode>>,
     ) -> Result<Admission, Superseded> {
-        let admission = match (event.state(), event.repeat()) {
-            (KeyState::Down, KeyRepeat::First) => {
+        let admission = match event.state {
+            KeyState::Down(press @ (KeyPress::First | KeyPress::Unpaired)) => {
                 if let Some(KeyOrigin::Focus { unit: pressed, .. }) = self.pressed.get(&id)
                     && *pressed != unit
                     && let Some(KeyOrigin::Focus { press, .. }) = self.pressed.remove(&id)
@@ -138,7 +136,7 @@ impl KeyLedger {
                     || event.key == Key::Named(NamedKey::Process);
                 // A key-down no release follows is held by nobody: recorded,
                 // it would stay held until the next blur cancelled it.
-                if event.release() == KeyRelease::Never {
+                if press == KeyPress::Unpaired {
                     return Ok(if ime {
                         Admission::Withheld
                     } else {
@@ -163,13 +161,13 @@ impl KeyLedger {
                     Admission::Press
                 }
             }
-            (KeyState::Down, KeyRepeat::AutoRepeat) => match self.pressed.get(&id) {
+            KeyState::Down(KeyPress::AutoRepeat) => match self.pressed.get(&id) {
                 Some(KeyOrigin::Focus { unit: pressed, .. }) if *pressed == unit => {
                     Admission::Continuation
                 }
                 _ => Admission::Withheld,
             },
-            (KeyState::Up, _) => match self.pressed.remove(&id) {
+            KeyState::Up => match self.pressed.remove(&id) {
                 Some(KeyOrigin::Focus { unit: pressed, .. }) if pressed == unit => {
                     Admission::Continuation
                 }
@@ -194,7 +192,7 @@ impl KeyLedger {
         unit: Option<FocusNodeId>,
         leaf: Option<&Rc<FocusNode>>,
     ) {
-        if event.state() == KeyState::Down
+        if matches!(event.state, KeyState::Down(_))
             && let Some(KeyOrigin::Focus {
                 unit: pressed,
                 press,

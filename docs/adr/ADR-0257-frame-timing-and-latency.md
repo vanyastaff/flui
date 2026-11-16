@@ -1,6 +1,6 @@
 # ADR-0257: A frame request carries the host's vsync and target present time, and frame latency is a typed setting
 
-- **Status:** Accepted (2026-10-26)
+- **Status:** Superseded (2026-11-16)
 - **Date:** 2026-10-26
 - **Supersedes:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 8 only: the
   frame tick may be the frame's vsync instant, a sampled time. It is still not shifted to the
@@ -12,10 +12,9 @@
   [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md) §5: the
   setting is the window's slot's, given when the slot is attached and changed by a `Configure`
   command, which is the per-window override; the slot supplies it at every `Surface::configure`.
-- **Superseded-by:** [ADR-0346](ADR-0346-a-presentation-report-names-the-frame-it-describes.md)
-  for decision 6's report shape and its first ordering rule (a report names its frame and holds a
-  checked refresh period) and decision 8's `SwapChainStatistics` shape; the rest of both
-  decisions stands.
+- **Superseded-by:** [ADR-0347](ADR-0347-a-frame-request-carries-the-hosts-frame-times-and-reports-that-name-their-frame.md)
+  whole: it restates every decision under the same number, and a presentation report now names
+  the frame it describes.
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) §2 (the event timeline a
   vsync is stamped on), [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md) (a loop that
   blocks until woken is why `Mailbox` is not offered)

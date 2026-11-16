@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_rendering::semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor};
 use flui_testing::replay::MouseScript;
@@ -134,7 +134,7 @@ impl Scene {
     fn key(&mut self, key: Key, code: Code, modifiers: Modifiers) -> bool {
         let event: KeyEvent = KeyEventBuilder::new(code)
             .key(key)
-            .state(KeyState::Down)
+            .state(KeyState::Down(KeyPress::First))
             .modifiers(modifiers)
             .build();
         let handled = self

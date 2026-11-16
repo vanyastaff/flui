@@ -1,6 +1,6 @@
 //! When the desktop compositor last refreshed the screen and when it refreshes next, from the
 //! counter readings `DwmGetCompositionTimingInfo` reports, as the frame time a frame request
-//! carries (ADR-0257).
+//! carries (ADR-0347).
 //!
 //! The pure half of the Win32 frame clock: the rules take plain counter values, so every host runs
 //! their tests; the window procedure reads the system's structure and the counter (`proc`).
@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
-use flui_foundation::FrameStamp;
+use flui_foundation::{FrameStamp, SurfaceGeneration};
 use flui_platform::{DxgiShown, DxgiStatistics, RefreshPeriod};
 
 use crate::input::assembly::counter_nanos;
@@ -115,33 +115,37 @@ pub(crate) struct ShownPresent {
 /// shown: DXGI's largest buffer count, so no present a swap chain can hold is forgotten.
 const PRESENTS_KEPT: usize = 16;
 
-/// The frames of a swap chain's presents, by the number DXGI gives each present, from the one
+/// The frames of one surface's presents, by the number DXGI gives each present, from the one
 /// about to be made until the statistics name it or a later one shown.
 ///
 /// DXGI numbers a swap chain's presents from its creation and names a shown present by that
 /// number (`PresentCount`), so a report goes to the frame its own present carried, not to the
 /// newest one made: with presents in flight the shown one is older, and one the display skipped
-/// is never named. A count of presents made that went back is a new swap chain: its numbers name
-/// none of the presents kept. A count at `u32::MAX` numbers no next present, so that one present
-/// is not kept.
+/// is never named. The numbers are a swap chain's, not a surface's identity: a surface replaced
+/// (a restore, a resize, a device rebuild) numbers its presents from the start again, so the
+/// frames are kept per surface generation (`FrameStamp::surface_generation`), and a present of
+/// another generation forgets every frame of the old one. Within one generation, a present
+/// numbered no higher than the newest kept replaces the kept ones from that number on. A count at
+/// `u32::MAX` numbers no next present, so that one present is not kept.
 #[derive(Debug, Default)]
 struct PresentFrames {
-    /// Presents made with a frame and not yet named shown, oldest first.
+    /// The surface generation of the frames kept.
+    generation: Option<SurfaceGeneration>,
+    /// Presents made with a frame and not yet named shown, oldest first, by rising number.
     in_flight: VecDeque<(u32, FrameStamp)>,
-    /// The presents the swap chain had made before the newest one kept.
-    made: Option<u32>,
 }
 
 impl PresentFrames {
-    /// The swap chain made `made` presents before the present about to be: whether it is a swap
-    /// chain other than the one the kept presents were made on, which forgets them.
-    fn before_present(&mut self, made: u32) -> bool {
-        let remade = self.made.is_some_and(|before| made < before);
-        if remade {
+    /// A present of `frame` is about to be made (`None` for a present that shows no frame):
+    /// whether the frames kept were of another surface, or of no known one, and are forgotten.
+    fn before_present(&mut self, frame: Option<FrameStamp>) -> bool {
+        let generation = frame.map(|frame| frame.surface_generation);
+        let other = generation.is_none() || self.generation != generation;
+        if other {
             self.in_flight.clear();
+            self.generation = generation;
         }
-        self.made = Some(made);
-        remade
+        other
     }
 
     /// The present about to be, numbered after the `made` before it, shows `frame`.
@@ -149,6 +153,13 @@ impl PresentFrames {
         let Some(number) = made.checked_add(1) else {
             return;
         };
+        while self
+            .in_flight
+            .back()
+            .is_some_and(|&(kept, _)| kept >= number)
+        {
+            self.in_flight.pop_back();
+        }
         if self.in_flight.len() == PRESENTS_KEPT {
             self.in_flight.pop_front();
         }
@@ -175,7 +186,7 @@ impl PresentFrames {
 /// and another refresh is a new report: a repeat would replace a report that measured the period
 /// with one that measures none. A break in the statistics (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`,
 /// after a mode change or a move to another output) forgets the last refresh, so no period is
-/// measured across it; a new swap chain forgets it too.
+/// measured across it; a present of another surface, or of no frame, forgets it too.
 #[derive(Debug, Default)]
 pub(crate) struct PresentTracker {
     last: Option<SyncPoint>,
@@ -186,7 +197,9 @@ impl PresentTracker {
     /// What the counters read before the present of `frame` (`None` for a present that shows no
     /// frame) report, with the counter reading `now` they were read at: the frame a newly shown
     /// present carried, or `None` when nothing new is shown, the shown present carried no frame
-    /// kept, or the statistics broke off. Then the present about to be is kept with its frame.
+    /// kept, the statistics broke off, or the present is of another surface than the frames kept
+    /// or shows no frame (the statistics may then be of another swap chain). Then the present
+    /// about to be is kept with its frame.
     pub(crate) fn observe(
         &mut self,
         read: DxgiStatistics,
@@ -194,7 +207,7 @@ impl PresentTracker {
         now: u64,
         frequency: NonZeroU64,
     ) -> Option<ShownPresent> {
-        if self.frames.before_present(read.last_present_count) {
+        if self.frames.before_present(frame) {
             self.last = None;
         }
         let shown = match read.shown {
@@ -366,11 +379,19 @@ mod tests {
             }),
         )
     }
+    /// Frame `epoch`, drawn for surface generation `surface`.
+    fn frame_on(epoch: u64, surface: u64) -> FrameStamp {
+        FrameStamp::new(
+            frame(epoch).address,
+            frame(epoch).epoch,
+            SurfaceGeneration::from_raw(surface),
+        )
+    }
 
     /// Each report names the frame its own present carried: with two presents in flight the
-    /// statistics name the older, a present the display skipped is never reported, a present
-    /// made without a frame reports nothing, and a swap chain made again numbers none of the old
-    /// one's presents.
+    /// statistics name the older, a present the display skipped is never reported, and a present
+    /// made without a frame reports nothing and forgets what was kept, since its surface is not
+    /// known.
     #[test]
     fn a_shown_present_reports_the_frame_its_present_carried() {
         const NOW: u64 = 100_000_000;
@@ -393,21 +414,81 @@ mod tests {
             "present 2 skipped: present 3 shown"
         );
         assert_eq!(
-            observe(counters(4, Some((2, 12))), None),
+            observe(counters(4, Some((2, 12))), Some(5)),
             None,
             "the skipped present is never reported"
         );
         assert_eq!(
-            observe(counters(5, Some((5, 13))), Some(6)),
+            observe(counters(5, Some((4, 13))), None),
             None,
-            "present 5 carried no frame"
+            "a present without a frame: the surface is not known"
         );
         assert_eq!(
-            observe(counters(0, Some((6, 14))), Some(7)),
+            observe(counters(6, Some((5, 14))), Some(7)),
             None,
-            "a new swap chain's number 6 is none of the old chain's"
+            "what was kept before it is forgotten"
         );
-        assert_eq!(observe(counters(1, Some((1, 20))), Some(8)), Some(7));
+        assert_eq!(observe(counters(7, Some((7, 15))), Some(8)), Some(7));
+    }
+
+    /// A surface replaced before its first present was read: the new swap chain's first present
+    /// takes the number the old one's first present had, and its report names the new surface's
+    /// frame. Two presents read with one count (the first never made) keep the second.
+    #[test]
+    fn a_replaced_surface_reports_its_own_frame() {
+        const NOW: u64 = 100_000_000;
+        let mut tracker = PresentTracker::default();
+        let mut observe = |read, carried: FrameStamp| {
+            tracker
+                .observe(read, Some(carried), NOW, MHZ_10)
+                .map(|shown| shown.frame)
+        };
+        assert_eq!(observe(counters(0, None), frame_on(1, 1)), None);
+        // The surface is replaced: the new swap chain has made no present either.
+        assert_eq!(observe(counters(0, None), frame_on(2, 2)), None);
+        assert_eq!(
+            observe(counters(1, Some((1, 10))), frame_on(3, 2)),
+            Some(frame_on(2, 2)),
+            "the new swap chain's present 1 is the new surface's frame"
+        );
+
+        // A resize keeps the swap chain and its numbering but is a new surface generation: the
+        // statistics read before the new generation's first present name the old one's present,
+        // whose frame is no report of the new surface.
+        let mut tracker = PresentTracker::default();
+        let mut observe = |read, carried: FrameStamp| {
+            tracker
+                .observe(read, Some(carried), NOW, MHZ_10)
+                .map(|shown| shown.frame)
+        };
+        assert_eq!(observe(counters(2, None), frame_on(3, 1)), None);
+        assert_eq!(
+            observe(counters(3, Some((3, 10))), frame_on(4, 2)),
+            None,
+            "the old generation's present"
+        );
+        assert_eq!(
+            observe(counters(4, Some((4, 11))), frame_on(5, 2)),
+            Some(frame_on(4, 2))
+        );
+
+        let mut tracker = PresentTracker::default();
+        let mut observe = |read, carried: FrameStamp| {
+            tracker
+                .observe(read, Some(carried), NOW, MHZ_10)
+                .map(|shown| shown.frame)
+        };
+        assert_eq!(observe(counters(0, None), frame_on(1, 1)), None);
+        assert_eq!(
+            observe(counters(0, None), frame_on(2, 1)),
+            None,
+            "present 1 again"
+        );
+        assert_eq!(
+            observe(counters(1, Some((1, 10))), frame_on(3, 1)),
+            Some(frame_on(2, 1)),
+            "the present made with number 1 is the second"
+        );
     }
 
     /// A period the reports measure outside a cadence (an hour between two refreshes counted one
@@ -434,7 +515,7 @@ mod tests {
         let second = tracker
             .observe(
                 read(3, 2, 11, 1_000 + HOUR_TICKS),
-                None,
+                Some(frame(4)),
                 2_000 + HOUR,
                 MHZ_10,
             )

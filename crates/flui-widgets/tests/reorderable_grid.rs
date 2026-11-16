@@ -17,7 +17,7 @@ use flui_interaction::events::{
 use flui_painting::Alignment;
 use flui_painting::typography::TextDirection;
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_testing::a11y::{A11yTree, Action, ActionData, ActionRequest, NodeId, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
 use flui_testing::widgets::SharedSignal;
@@ -250,7 +250,7 @@ fn touch(laid: &LaidOut, id: u64, (x, y): (f64, f64), phase: u8) {
 }
 
 fn press(laid: &mut LaidOut, activator: &SingleActivator) {
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         laid.dispatch_key(
             KeyEvent::new(
                 state,

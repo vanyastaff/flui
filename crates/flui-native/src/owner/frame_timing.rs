@@ -4,12 +4,12 @@
 
 use std::sync::Arc;
 
-use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress};
+use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress, SurfaceGeneration};
 use flui_platform::{EventTime, FramePresented, FrameRequest};
 use parking_lot::Mutex;
 
 /// A frame request for a backend whose platform reports no frame timestamp: the vsync is this
-/// reading of the event clock, and the target present time is unknown (ADR-0257).
+/// reading of the event clock, and the target present time is unknown (ADR-0347).
 #[must_use]
 pub fn frame_request_now() -> FrameRequest {
     frame_request_aged(std::time::Duration::ZERO)
@@ -93,9 +93,12 @@ pub(crate) fn rebased_at(
 /// callback thread (Metal's presented handler) or the owner (a compositor's event). Each report
 /// names the frame it describes (`FramePresented::frame`), and that name decides what it is:
 ///
-/// - a frame of a presentation other than the one whose frame the window's newest present carried
-///   ([`presenting`](Self::presenting)) belongs to what the window no longer shows, and the report
-///   is dropped; a window that presented nothing reports nothing;
+/// - a frame of a presentation or a surface generation other than those of the frame the window's
+///   newest present carried ([`presenting`](Self::presenting)) belongs to what the window no
+///   longer shows, and the report is dropped; a window that presented nothing reports nothing. So
+///   a report that arrives late, after the window moved to another presentation or its surface
+///   was replaced, is refused by the identity its frame carries, whatever order the reports of
+///   the two surfaces arrive in;
 /// - a frame no newer than the frame of a report kept or already carried (a repeat, or a report
 ///   that arrived after a later frame's) is dropped, and so is a frame shown before the time of
 ///   such a report, so neither the frames nor the times a window's requests carry run backwards;
@@ -123,8 +126,8 @@ const REPORT_LEAD: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Default)]
 struct Reported {
-    /// The presentation whose frame the window's newest present carried.
-    presenting: Option<PresentationAddress>,
+    /// The presentation and surface generation of the frame the window's newest present carried.
+    presenting: Option<(PresentationAddress, SurfaceGeneration)>,
     /// The newest report no request has carried yet.
     pending: Option<FramePresented>,
     /// The frame and time of the newest report kept or carried, of the presentation the window
@@ -135,24 +138,30 @@ struct Reported {
 /// Why a report was dropped, named by the trace that says so once the lock is released.
 #[derive(Clone, Copy, Debug)]
 enum Dropped {
-    /// Of a presentation the window does not present now.
+    /// Of a presentation or a surface the window does not present now.
     Elsewhere,
     /// Of a frame no newer than one reported, or shown before it.
     Stale,
 }
 
+/// The presentation and the surface generation `frame` was drawn for: what a window presents.
+fn surface_of(frame: FrameStamp) -> (PresentationAddress, SurfaceGeneration) {
+    (frame.address, frame.surface_generation)
+}
+
 impl PresentationReports {
     /// The window is about to present `frame`, `None` for a present that shows no frame of the
-    /// window. A frame of another presentation than the reports kept so far were of moves the
-    /// window to it: what was kept of the old one is forgotten.
+    /// window. A frame of another presentation or another surface generation than the reports
+    /// kept so far were of moves the window to it: what was kept of the old one is forgotten, and
+    /// a report of the old one that arrives later is refused by its frame's identity.
     pub(crate) fn presenting(&self, frame: Option<FrameStamp>) {
         let Some(frame) = frame else {
             return;
         };
         let mut reported = self.0.lock();
-        if reported.presenting != Some(frame.address) {
+        if reported.presenting != Some(surface_of(frame)) {
             *reported = Reported {
-                presenting: Some(frame.address),
+                presenting: Some(surface_of(frame)),
                 ..Reported::default()
             };
         }
@@ -177,7 +186,7 @@ impl PresentationReports {
         }
         let dropped = {
             let mut reported = self.0.lock();
-            if reported.presenting != Some(presented.frame.address) {
+            if reported.presenting != Some(surface_of(presented.frame)) {
                 Some(Dropped::Elsewhere)
             } else if reported
                 .newest
@@ -322,6 +331,39 @@ mod tests {
             Some((1, 25)),
             "the new presentation's first frame, though older than the old one's"
         );
+    }
+
+    /// A report names the surface its frame was drawn for: once the window presents a frame of a
+    /// new surface generation, a report of the old surface's frame is refused, whether it arrives
+    /// before or after the new surface's first report.
+    #[test]
+    fn a_report_of_a_replaced_surface_is_dropped() {
+        let at = EventTime::from_nanos;
+        let on = |epoch, surface| {
+            FrameStamp::new(
+                frame(1, epoch).address,
+                FrameEpoch::from_raw(epoch),
+                SurfaceGeneration::from_raw(surface),
+            )
+        };
+        for (old_first, why) in [
+            (true, "the old report first"),
+            (false, "the old report last"),
+        ] {
+            let reports = PresentationReports::default();
+            reports.presenting(Some(on(1, 1)));
+            reports.presenting(Some(on(2, 2)));
+            let old = FramePresented::new(on(1, 1), at(30));
+            let new = FramePresented::new(on(2, 2), at(20));
+            if old_first {
+                reports.report_read_at(old, at(40));
+                reports.report_read_at(new, at(40));
+            } else {
+                reports.report_read_at(new, at(40));
+                reports.report_read_at(old, at(40));
+            }
+            assert_eq!(carried(&reports), Some((2, 20)), "{why}");
+        }
     }
 
     /// A report stamped more than the lead ahead of the reading it arrives at is dropped, so the

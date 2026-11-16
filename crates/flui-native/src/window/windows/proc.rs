@@ -406,7 +406,7 @@ pub(crate) struct WindowContext {
 }
 
 /// The compositor's last and next refresh around now, from the desktop window manager's timing
-/// report and the performance counter it is measured on (ADR-0257). `None` when the window manager
+/// report and the performance counter it is measured on (ADR-0347). `None` when the window manager
 /// is not compositing (it has no timing to report) or the report cannot be placed.
 fn compositor_refresh() -> Option<RefreshTiming> {
     use windows::Win32::Graphics::Dwm::{DWM_TIMING_INFO, DwmGetCompositionTimingInfo};

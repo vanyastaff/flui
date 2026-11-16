@@ -141,7 +141,7 @@ pub struct SlotConfig {
     /// where it reports none.
     pub display: Option<DisplayColor>,
     /// How many frames a window slot's swapchain holds ahead of the display
-    /// (ADR-0257).
+    /// (ADR-0347).
     pub latency: FrameLatency,
 }
 

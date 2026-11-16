@@ -12,7 +12,7 @@ use crate::{EventTime, RefreshPeriod};
 /// none, and [`target_present`](Self::target_present) is `None` unless the platform names when
 /// this frame will be shown. Neither is a prediction. [`presented`](Self::presented) is the
 /// platform's newest report, since the window's last request, of an earlier frame shown, naming
-/// that frame (ADR-0346), so a request and the input before it are measured on one timeline.
+/// that frame (ADR-0347), so a request and the input before it are measured on one timeline.
 ///
 /// # Examples
 ///

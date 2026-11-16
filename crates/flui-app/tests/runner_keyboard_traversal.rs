@@ -9,7 +9,7 @@ use std::rc::Rc;
 use flui_app::app::{AppConfig, Application, ExitPolicy, WindowPolicy};
 use flui_app::testing::HeadlessRun;
 use flui_interaction::focus::FocusNode;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::{EventTime, PlatformInput};
 use flui_view::ViewExt as _;
 use flui_widgets::{Column, Focus, SizedBox};
@@ -55,7 +55,7 @@ impl Fields {
 
 /// Press and release Tab in `window`, with `modifiers` held.
 fn tab(window: &flui_native::HeadlessHostWindow, modifiers: Modifiers) {
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let _ = window.inject_event(PlatformInput::Keyboard(
             KeyEvent::new(
                 state,

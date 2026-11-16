@@ -1520,6 +1520,7 @@ mod tests {
     }
 
     /// The stamp of a frame a test draws straight into a window slot.
+    #[cfg(feature = "testing")]
     fn drawn_frame() -> FrameStamp {
         FrameStamp::new(
             PresentationAddress {

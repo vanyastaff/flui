@@ -127,11 +127,6 @@ const RECORDED: &[Recorded] = &[
         "CancelReason",
     ),
     repo(
-        "PenSqueezePhase",
-        "crates/flui-platform/src/pointer/mod.rs",
-        "PenSqueezePhase",
-    ),
-    repo(
         "ScrollUnit",
         "crates/flui-platform/src/pointer/scroll.rs",
         "ScrollUnit",
@@ -145,6 +140,11 @@ const RECORDED: &[Recorded] = &[
         "ScrollPhase",
         "crates/flui-platform/src/pointer/scroll.rs",
         "ScrollPhase",
+    ),
+    repo(
+        "ScrollInversion",
+        "crates/flui-platform/src/pointer/scroll.rs",
+        "ScrollInversion",
     ),
     repo(
         "PanZoomPhase",
@@ -163,9 +163,9 @@ const RECORDED: &[Recorded] = &[
         "Location",
     ),
     repo(
-        "KeyRepeat",
+        "KeyPress",
         "crates/flui-platform/src/keyboard/mod.rs",
-        "KeyRepeat",
+        "KeyPress",
     ),
     repo(
         "ImeComposition",

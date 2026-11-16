@@ -18,7 +18,7 @@ use flui_interaction::{
     InputSequenceId, InputSurface, InteractionLane, PointerId, RenderId, ScrollLatchEnd,
 };
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::pointer::{DeviceId, PointerRevision, ScrollPhase};
+use flui_platform::pointer::{DeviceId, ScrollPhase};
 use flui_platform::testing::FakeHaptics;
 use flui_platform::{HapticFeedback, PlatformHaptics};
 use static_assertions::assert_impl_all;
@@ -78,10 +78,7 @@ fn a_contact_carries_one_sequence_from_down_to_up() {
     foreign.pointer = foreign
         .pointer
         .with_device(DeviceId::try_from(7_u64).expect("nonzero device"));
-    let revision = PointerRevision::new(foreign.pointer, *foreign.current());
-    for packet in [PointerEvent::Move(foreign), PointerEvent::Revise(revision)] {
-        assert_eq!(send(&binding, &packet), None, "{packet:?}");
-    }
+    assert_eq!(send(&binding, &PointerEvent::Move(foreign)), None);
 
     assert_eq!(send(&binding, &up(1)), Some(second));
     assert_eq!(send(&binding, &up(2)), Some(other));

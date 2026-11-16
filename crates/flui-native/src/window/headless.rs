@@ -487,12 +487,20 @@ struct HeadlessPresents {
 impl HeadlessPresents {
     /// A present of `frame` is about to be made: counted, and kept for the
     /// simulated window system to show, unless it shows no frame. The oldest
-    /// kept present is forgotten past [`PRESENTS_KEPT`].
+    /// kept present is forgotten past [`PRESENTS_KEPT`], and every kept one
+    /// when the frame is of another surface generation.
     fn presenting(&self, frame: Option<flui_foundation::FrameStamp>) {
         self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.reports.presenting(frame);
         if let Some(frame) = frame {
             let mut in_flight = self.in_flight.lock();
+            // A frame of another surface: the old surface's presents will never be shown.
+            if in_flight
+                .back()
+                .is_some_and(|kept| kept.surface_generation != frame.surface_generation)
+            {
+                in_flight.clear();
+            }
             if in_flight.len() == PRESENTS_KEPT {
                 in_flight.pop_front();
             }

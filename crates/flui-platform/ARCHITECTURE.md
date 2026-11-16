@@ -270,7 +270,7 @@ this one path (ADR-0151 §9).
   (`HandleError::NotSupported`). No window target implements it, since a
   target answers `Unavailable` once its window is gone.
 - **A frame request carries when earlier frames reached the screen, on the
-  event timeline, each report naming its frame (ADR-0346).**
+  event timeline, each report naming its frame (ADR-0347).**
   `FrameRequest::presented` is a `FramePresented { frame, at, refresh }`: the
   platform's newest report since the window's last request, naming the frame
   shown by the `FrameStamp` its present carried, the instant the display
@@ -504,17 +504,20 @@ store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,
 
 `pointer` and `keyboard` follow the W3C Pointer Events and UI Events models
 and keep what flattening loses (ADR-0143): a scroll keeps its unit (lines,
-pixels or pages, resolved by the scrollable that receives it), its precision
-and its gesture phase; a trackpad gesture is one pan/zoom stream whose
-transform is cumulative since its `Start`; the pen eraser is a tool, not a
-button; a cancelled sequence says why. A value is checked once, where it is
-built, so the framework never re-checks finiteness downstream. The bridge from
-the `ui-events` values the backends still build lives in `flui-native`
-(`shared::input_vocabulary`), because it names upstream types.
+pixels or pages, resolved by the scrollable that receives it), its precision,
+its gesture phase and whether the platform reversed the device's direction
+(`ScrollInversion`, `Unknown` where it does not say); a trackpad gesture is one
+pan/zoom stream whose transform is cumulative since its `Start`; the pen eraser
+is a tool, not a button; a cancelled sequence says why. A key-down says its
+kind in its state (`KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})`),
+so a release carries no repeat, and a dead key is `Key::Dead` with the accent
+it leaves pending, never a named key (ADR-0346). A variant has a producer: a
+pointer revision or a pen squeeze joins the vocabulary with the host that
+reports it (`docs/gaps.md`). A value is checked once, where it is built, so the
+framework never re-checks finiteness downstream.
 **Tests:** `input_vocabulary_contract` here (sanitization, "no sensor",
-scroll units, button sets, generated key spellings) and `flui-native`'s
-`input_vocabulary_conversion` (every backend shape, eraser, non-finite
-release, key round trip through `keyboard-types`).
+scroll units, button sets, generated key spellings, key-down kinds, the dead
+key) and `flui-native`'s backend conformance table.
 
 ### Bounded measured history retains checked ownership
 

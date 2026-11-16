@@ -23,7 +23,7 @@ fn key(code: Code) -> PlatformInput {
 /// HTML creates no replay obligation when the canvas owns the next press.
 fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     use flui_interaction::FocusNode;
-    use flui_platform::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers};
+    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use flui_runtime::owner::WindowObservation;
     use flui_widgets::{
         Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator, SizedBox,
@@ -95,7 +95,7 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
         nested_input: Cell::new(false),
         wakes: Cell::new(0),
     };
-    let event = |state, repeat| {
+    let event = |state| {
         PlatformInput::Keyboard(
             KeyEvent::new(
                 state,
@@ -103,14 +103,13 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
                 Code::KeyS,
                 flui_platform::EventTime::from_nanos(0),
             )
-            .with_modifiers(Modifiers::CONTROL)
-            .with_repeat(repeat),
+            .with_modifiers(Modifiers::CONTROL),
         )
     };
     assert_eq!(
         effects
             .input
-            .input(event(KeyState::Down, KeyRepeat::First), &effects),
+            .input(event(KeyState::Down(KeyPress::First)), &effects),
         Ok(InputOutcome::Handled)
     );
     assert_eq!(
@@ -142,12 +141,9 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
         1,
         "restoration did not replay the missing release or press"
     );
-    for (state, repeat) in [
-        (KeyState::Up, KeyRepeat::First),
-        (KeyState::Down, KeyRepeat::AutoRepeat),
-    ] {
+    for state in [KeyState::Up, KeyState::Down(KeyPress::AutoRepeat)] {
         assert_eq!(
-            effects.input.input(event(state, repeat), &effects),
+            effects.input.input(event(state), &effects),
             Ok(InputOutcome::Unhandled)
         );
         assert_eq!(
@@ -159,7 +155,7 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     assert_eq!(
         effects
             .input
-            .input(event(KeyState::Down, KeyRepeat::First), &effects),
+            .input(event(KeyState::Down(KeyPress::First)), &effects),
         Ok(InputOutcome::Handled)
     );
     assert_eq!(

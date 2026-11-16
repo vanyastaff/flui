@@ -81,6 +81,7 @@ pub(crate) use toplevel::{WaylandWindow, WaylandWindows};
 pub(crate) mod activation;
 pub(crate) mod client_frame;
 pub(crate) mod decoration;
+pub(crate) mod presented;
 pub(crate) mod scale;
 
 pub(crate) mod configure {
@@ -1032,82 +1033,6 @@ pub(crate) mod frame {
     }
 }
 
-pub(crate) mod presented {
-    //! When the compositor showed a window's commit, as
-    //! `wp_presentation_feedback.presented` carries it: a time on the clock
-    //! `wp_presentation.clock_id` named, and the output's refresh interval.
-    //! The window asks for one feedback per commit it presents (its surface
-    //! target's `pre_present_notify`) and reports each shown commit on the
-    //! event timeline; a discarded commit reports nothing.
-
-    #![forbid(unsafe_code)]
-
-    use std::time::Duration;
-
-    use flui_platform::{CapabilityAbsence, WindowCapabilities, WindowCapability};
-
-    /// The time a `presented` event carries, from its three words: the
-    /// seconds split into high and low halves, and the nanoseconds.
-    /// Nanoseconds of a second or more are not a time and give `None`.
-    pub(crate) fn shown_at(tv_sec_hi: u32, tv_sec_lo: u32, tv_nsec: u32) -> Option<Duration> {
-        if tv_nsec >= 1_000_000_000 {
-            return None;
-        }
-        let seconds = (u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo);
-        Some(Duration::new(seconds, tv_nsec))
-    }
-
-    /// `capabilities` with the presentation report the compositor makes:
-    /// where it offers no `wp_presentation`, a window learns nothing of when
-    /// its frames are shown.
-    pub(crate) const fn reported(
-        capabilities: WindowCapabilities,
-        offered: bool,
-    ) -> WindowCapabilities {
-        let mut capabilities = capabilities.into_parts();
-        capabilities.reports_presentation = if offered {
-            WindowCapability::Native
-        } else {
-            WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
-        };
-        capabilities.into_capabilities()
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        /// A `presented` event's words make the time it names; nanoseconds
-        /// past a second do not.
-        #[test]
-        fn a_presented_event_names_its_time() {
-            assert_eq!(
-                shown_at(0, 12, 500_000_000),
-                Some(Duration::from_millis(12_500))
-            );
-            assert_eq!(
-                shown_at(1, 0, 0),
-                Some(Duration::from_secs(1 << 32)),
-                "the high word holds the upper seconds"
-            );
-            assert_eq!(shown_at(0, 1, 1_000_000_000), None);
-        }
-
-        /// A compositor without `wp_presentation` leaves a window without the
-        /// report, for want of the device's compositor, not the platform.
-        #[test]
-        fn the_report_follows_the_compositor() {
-            let offered = reported(WindowCapabilities::NONE, true);
-            assert_eq!(offered.reports_presentation(), WindowCapability::Native);
-            let missing = reported(WindowCapabilities::NONE, false);
-            assert_eq!(
-                missing.reports_presentation(),
-                WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
-            );
-        }
-    }
-}
-
 // Read by tests alone until the contract's window reference carries the
 // portal parent to the capability crates; that reader drops this `cfg`.
 #[cfg(any(test, feature = "testing"))]
@@ -1242,6 +1167,9 @@ mod toplevel {
         /// not shown the last frame yet, and the next waits for it, for the
         /// grace at most (`frame::CALLBACK_GRACE`).
         callback_armed: Mutex<Option<Instant>>,
+        /// The presentation feedbacks the surface asked for, until the
+        /// compositor answers each or the window forgets it.
+        feedbacks: Mutex<presented::CommitFeedbacks>,
         /// The handler granted a close request it was asked after the fact.
         close_granted: AtomicBool,
         /// The activation tokens the compositor and the launcher gave the
@@ -1326,6 +1254,7 @@ mod toplevel {
                 protocol: Mutex::new(Told::default()),
                 redraw: AtomicBool::new(false),
                 callback_armed: Mutex::new(None),
+                feedbacks: Mutex::default(),
                 close_granted: AtomicBool::new(false),
                 tokens: Mutex::new(Tokens::default()),
                 frame_shown: AtomicBool::new(false),
@@ -2454,7 +2383,20 @@ mod toplevel {
     /// commit, never to the newest one made.
     pub(crate) struct PresentedCommit {
         to: PresentedTo,
-        frame: flui_foundation::FrameStamp,
+        /// The window's record, whose feedbacks keep the frame by `number`.
+        record: Arc<ToplevelRecord>,
+        /// The feedback's number among the surface's
+        /// ([`presented::CommitFeedbacks`]).
+        number: u64,
+    }
+
+    /// A frame callback's user data: the window's record, and the feedback
+    /// request it confirms committed when it fires
+    /// ([`presented::CommitFeedbacks::confirm`]), `None` where the window
+    /// asks for none.
+    pub(crate) struct ArmedCallback {
+        record: Arc<ToplevelRecord>,
+        confirms: Option<u64>,
     }
 
     impl HasWindowHandle for WaylandSurface {
@@ -2534,13 +2476,15 @@ mod toplevel {
             }
             if let Some(presented) = &self.presentation {
                 presented.reports.presenting(frame);
-                if let Some(frame) = frame {
+                let number = self.record.feedbacks.lock().request(frame);
+                if let Some(number) = number {
                     let _feedback = presented.time.manager.feedback(
                         &self.surface.0,
                         &self.queue,
                         PresentedCommit {
                             to: presented.clone(),
-                            frame,
+                            record: Arc::clone(&self.record),
+                            number,
                         },
                     );
                 }
@@ -2553,7 +2497,14 @@ mod toplevel {
                 }
                 *armed = Some(now);
             }
-            let _callback = self.surface.0.frame(&self.queue, Arc::clone(&self.record));
+            let confirms = self.record.feedbacks.lock().arm();
+            let _callback = self.surface.0.frame(
+                &self.queue,
+                ArmedCallback {
+                    record: Arc::clone(&self.record),
+                    confirms,
+                },
+            );
         }
     }
 
@@ -3126,17 +3077,23 @@ mod toplevel {
         }
     }
 
-    impl Dispatch<WlCallback, Arc<ToplevelRecord>> for WaylandState {
+    impl Dispatch<WlCallback, ArmedCallback> for WaylandState {
+        /// The compositor showed the commit the callback was armed with: that
+        /// commit happened, so the feedbacks asked up to it are committed.
         fn event(
             _: &mut Self,
             _: &WlCallback,
             event: wl_callback::Event,
-            record: &Arc<ToplevelRecord>,
+            armed: &ArmedCallback,
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
             if let wl_callback::Event::Done { .. } = event {
+                let record = &armed.record;
                 *record.callback_armed.lock() = None;
+                if let Some(through) = armed.confirms {
+                    record.feedbacks.lock().confirm(through);
+                }
                 record.frame_shown.store(true, Ordering::Release);
             }
         }
@@ -3170,8 +3127,10 @@ mod toplevel {
         /// compositor's presentation clock rebased onto the event clock by its
         /// distance from a reading of that clock, and with the output's
         /// refresh where it is a cadence. A discarded commit (another replaced
-        /// it before a refresh) reports nothing; the compositor destroys the
-        /// feedback after either.
+        /// it before a refresh) reports nothing, and neither does a feedback
+        /// the window forgot (its present was never confirmed committed, or
+        /// its surface was replaced: [`presented::CommitFeedbacks`]); the
+        /// compositor destroys the feedback after either event.
         fn event(
             _: &mut Self,
             _: &WpPresentationFeedback,
@@ -3180,23 +3139,29 @@ mod toplevel {
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
-            let wp_presentation_feedback::Event::Presented {
-                tv_sec_hi,
-                tv_sec_lo,
-                tv_nsec,
-                refresh,
-                ..
-            } = event
-            else {
-                return;
+            let (tv_sec_hi, tv_sec_lo, tv_nsec, refresh) = match event {
+                wp_presentation_feedback::Event::Presented {
+                    tv_sec_hi,
+                    tv_sec_lo,
+                    tv_nsec,
+                    refresh,
+                    ..
+                } => (tv_sec_hi, tv_sec_lo, tv_nsec, refresh),
+                wp_presentation_feedback::Event::Discarded => {
+                    commit.record.feedbacks.lock().discarded(commit.number);
+                    return;
+                }
+                _ => return,
             };
-            let (Some(shown), Some(now)) = (
+            let frame = commit.record.feedbacks.lock().presented(commit.number);
+            let (Some(frame), Some(shown), Some(now)) = (
+                frame,
                 presented::shown_at(tv_sec_hi, tv_sec_lo, tv_nsec),
                 commit.to.time.clock.now(),
             ) else {
                 return;
             };
-            let mut report = flui_platform::FramePresented::new(commit.frame, rebased(now, shown));
+            let mut report = flui_platform::FramePresented::new(frame, rebased(now, shown));
             // A zero refresh, a variable rate, is none, as is one outside a cadence.
             if let Ok(refresh) = flui_platform::RefreshPeriod::try_from(
                 std::time::Duration::from_nanos(u64::from(refresh)),

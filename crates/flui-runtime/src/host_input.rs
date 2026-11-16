@@ -17,7 +17,7 @@ use crate::owner::WindowObservation;
 /// The platform's report that a frame of the presentation a [`HostInput`] is
 /// addressed to reached the screen: a [`FramePresented`] whose frame is named
 /// within that presentation, by its epoch and the surface generation it was
-/// drawn for (ADR-0346). The presentation the input is delivered to supplies
+/// drawn for (ADR-0347). The presentation the input is delivered to supplies
 /// the address ([`Self::of_presentation`]), so a recorded report replays into
 /// the presentation that replays it.
 ///
@@ -127,7 +127,7 @@ pub enum HostInput {
     Frame {
         /// When the frame's vsync happened.
         vsync: EventTime,
-        /// When the platform says the frame will be shown, if it says (ADR-0257): idle work
+        /// When the platform says the frame will be shown, if it says (ADR-0347): idle work
         /// runs only until then.
         target_present: Option<EventTime>,
         /// The platform's report that an earlier frame of the presentation reached the screen,

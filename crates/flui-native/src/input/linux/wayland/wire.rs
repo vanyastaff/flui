@@ -13,8 +13,8 @@
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPrecision,
-    ScrollUnit,
+    PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollInversion,
+    ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{EventTime, PlatformInput};
 use smallvec::SmallVec;
@@ -186,6 +186,14 @@ pub enum PointerWire {
         axis: Axis,
         /// How many notches.
         discrete: i32,
+    },
+    /// Whether the fingers moved against an axis's scroll (natural scrolling,
+    /// `wl_pointer.axis_relative_direction`, seat version 9).
+    AxisRelativeDirection {
+        /// Which.
+        axis: Axis,
+        /// The physical motion is the inverse of the axis direction.
+        inverted: bool,
     },
     /// The events since the last frame belong together.
     Frame,
@@ -450,6 +458,9 @@ struct PointerState {
     axes: AxisFrame,
     /// A finger scroll is open.
     fingers: bool,
+    /// Whether its scrolls run against the fingers, as the compositor last said
+    /// (`Unknown` before seat version 9).
+    inversion: ScrollInversion,
 }
 
 /// The axis events of one pointer frame.
@@ -460,6 +471,9 @@ struct AxisFrame {
     values: [f64; 2],
     value120: [Option<i32>; 2],
     discrete: [Option<i32>; 2],
+    /// Whether each axis's motion was inverted from the fingers', when the
+    /// compositor says.
+    inverted: [Option<bool>; 2],
     stopped: bool,
     turned: bool,
     time: Option<WireTime>,
@@ -734,6 +748,7 @@ impl SeatAssembly {
                 position: (0.0, 0.0),
                 axes: AxisFrame::default(),
                 fingers: false,
+                inversion: ScrollInversion::Unknown,
             },
         )
     }
@@ -846,6 +861,9 @@ impl SeatAssembly {
                 let held = axes.discrete[axis.index()].get_or_insert(0);
                 *held = held.saturating_add(discrete);
             }
+            PointerWire::AxisRelativeDirection { axis, inverted } => {
+                self.pointer_state(device).axes.inverted[axis.index()] = Some(inverted);
+            }
             PointerWire::Frame => self.axis_frame(device, time, &mut out),
         }
         out
@@ -855,6 +873,18 @@ impl SeatAssembly {
     fn axis_frame(&mut self, device: NativeDevice, time: WireTime, out: &mut Out) {
         let state = self.pointer_state(device);
         let axes = std::mem::take(&mut state.axes);
+        // Each axis event of a version 9 seat comes with its direction; a frame
+        // that only stops a scroll keeps the direction it ran in. The vertical
+        // axis speaks for the frame when both turned.
+        if let Some(inverted) =
+            axes.inverted[Axis::Vertical.index()].or(axes.inverted[Axis::Horizontal.index()])
+        {
+            state.inversion = if inverted {
+                ScrollInversion::InvertedFromDevice
+            } else {
+                ScrollInversion::FromDevice
+            };
+        }
         let Some(surface) = state.surface else {
             return;
         };
@@ -938,6 +968,11 @@ impl SeatAssembly {
             phase,
             delta,
             precision,
+            inversion: self
+                .pointers
+                .iter()
+                .find(|state| state.device == device)
+                .map_or(ScrollInversion::Unknown, |state| state.inversion),
             time: self.stamp(time),
             modifiers: self.modifiers_of(device),
         };

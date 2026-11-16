@@ -116,9 +116,9 @@ fn ime() -> PlatformInput {
 }
 
 fn key_at(at: u64) -> PlatformInput {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     PlatformInput::Keyboard(KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::character("k"),
         Code::KeyK,
         EventTime::from_nanos(at),

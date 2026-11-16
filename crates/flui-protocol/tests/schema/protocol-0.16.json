@@ -2640,16 +2640,6 @@
           "minimum": 0,
           "type": "integer"
         },
-        "frame": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ShownFrameId"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "refresh": {
           "format": "uint64",
           "minimum": 0,
@@ -4678,6 +4668,23 @@
             "named"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dead": {
+              "maxLength": 1,
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "dead"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -4754,9 +4761,6 @@
           },
           "type": "array"
         },
-        "repeat": {
-          "type": "boolean"
-        },
         "state": {
           "$ref": "#/$defs/KeyState"
         },
@@ -4764,9 +4768,6 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
-        },
-        "unreleased": {
-          "type": "boolean"
         }
       },
       "required": [
@@ -4782,6 +4783,14 @@
       "oneOf": [
         {
           "const": "down",
+          "type": "string"
+        },
+        {
+          "const": "repeat",
+          "type": "string"
+        },
+        {
+          "const": "unpaired",
           "type": "string"
         },
         {
@@ -6345,6 +6354,16 @@
             "null"
           ]
         },
+        "inversion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NativeScrollInversion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "modifiers": {
           "items": {
             "$ref": "#/$defs/Modifier"
@@ -6388,6 +6407,18 @@
         "time_ns"
       ],
       "type": "object"
+    },
+    "NativeScrollInversion": {
+      "oneOf": [
+        {
+          "const": "from_device",
+          "type": "string"
+        },
+        {
+          "const": "inverted_from_device",
+          "type": "string"
+        }
+      ]
     },
     "NativeScrollPhase": {
       "oneOf": [
@@ -7491,70 +7522,6 @@
           },
           "required": [
             "smart_zoom"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "revise": {
-              "properties": {
-                "pointer": {
-                  "$ref": "#/$defs/PointerInfo"
-                },
-                "sample": {
-                  "$ref": "#/$defs/Sample"
-                }
-              },
-              "required": [
-                "pointer",
-                "sample"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "revise"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "pen_squeeze": {
-              "properties": {
-                "hover": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/$defs/Sample"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "phase": {
-                  "$ref": "#/$defs/SqueezePhase"
-                },
-                "pointer": {
-                  "$ref": "#/$defs/PointerInfo"
-                },
-                "t": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "pointer",
-                "t",
-                "phase"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "pen_squeeze"
           ],
           "type": "object"
         },
@@ -8686,6 +8653,16 @@
           "format": "double",
           "type": "number"
         },
+        "inversion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScrollInversion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "modifiers": {
           "items": {
             "type": "string"
@@ -8799,6 +8776,18 @@
         "target"
       ],
       "type": "object"
+    },
+    "ScrollInversion": {
+      "oneOf": [
+        {
+          "const": "from_device",
+          "type": "string"
+        },
+        {
+          "const": "inverted_from_device",
+          "type": "string"
+        }
+      ]
     },
     "ScrollPhase": {
       "oneOf": [
@@ -8985,25 +8974,6 @@
       },
       "required": [
         "window"
-      ],
-      "type": "object"
-    },
-    "ShownFrameId": {
-      "properties": {
-        "epoch": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "surface": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "epoch",
-        "surface"
       ],
       "type": "object"
     },
@@ -9197,26 +9167,6 @@
             "full"
           ],
           "type": "object"
-        }
-      ]
-    },
-    "SqueezePhase": {
-      "oneOf": [
-        {
-          "const": "began",
-          "type": "string"
-        },
-        {
-          "const": "changed",
-          "type": "string"
-        },
-        {
-          "const": "ended",
-          "type": "string"
-        },
-        {
-          "const": "cancelled",
-          "type": "string"
         }
       ]
     },

@@ -6600,6 +6600,59 @@ GPU-память простаивающего или невидимого окн
   `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,
   `tests/wasm32/web_page_lifecycle.rs`.
 
+- [x] **LY117** — ветка `platform/input-vocabulary`, решение — ADR-0346 (заменяет в ADR-0143
+  §1 приватные `state`/`repeat` события клавиши, в §2 и §3 — `KeyRepeat` и мёртвую клавишу как
+  именованную). Состояние клавиши — `KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})` или
+  `Up`, поле `KeyEvent::state` открыто; `KeyRepeat`, `KeyRelease`, `repeat()`, `release()`,
+  `with_repeat`, `with_release` удалены, отпускание с повтором не строится (`compile_fail`-доктест
+  `KeyState`). Мёртвая клавиша — `Key::Dead(Option<char>)` с акцентом, как он напечатан на клавише;
+  генератор `key-vocabulary` не выпускает `Dead` в `NamedKey` (`carried_by_key`) и падает, если
+  keyboard-types его переименует (самотест). Акцент читают Windows (`WM_DEADCHAR`), XKB (мёртвый
+  keysym, `dead_key`) и Android (карта клавиш); DOM акцента не называет (`Key::Dead(None)`), AppKit
+  и UIKit составляют мёртвые клавиши размеченным текстом. Отпускание называет то, что назвало
+  нажатие, на каждом хосте: один реестр `PressedAs` (бывший `UnplacedKeys`) держит клавишу без
+  кода и мёртвую клавишу до отпускания, что бы ни сделали с ней Shift, раскладка или compose;
+  повторное нажатие заменяет запись (Windows, XKB, AppKit, веб, Android;
+  `a_held_key_is_released_as_it_was_pressed`, без реестра отпускание мёртвой с Shift называет
+  другой акцент). Android составляет аппаратную мёртвую клавишу со следующей:
+  `keys::DeadKeyComposer` (чистый, собирается для тестов на любом хосте) через
+  `KeyCharacterMap.getDeadChar`; несоставимая пара печатает акцент и букву, модификатор акцент
+  держит, клавиша без текста, аккорд Control или Meta (ярлык срабатывает), композиция IME и потеря
+  фокуса сбрасывают.
+  Прокрутка несёт `ScrollEvent::inversion: ScrollInversion` (`Unknown`, `FromDevice`,
+  `InvertedFromDevice`): macOS (`isDirectionInvertedFromDevice`), WebKit
+  (`webkitDirectionInvertedFromDevice`) и Wayland (`wl_pointer.axis_relative_direction`, seat 9;
+  кадр, только останавливающий прокрутку, сохраняет её направление; журнал несёт инверсию
+  строки прокрутки). `PointerEvent::Revise`, `PointerRevision`,
+  `PointerEvent::PenSqueeze`, `PenSqueeze`, `PenSqueezePhase` и `Listener::on_pointer_revise`
+  удалены: производителя не было ни у одного хоста; форма возврата (билет оценки, выданный хостом
+  с чтением) — в `docs/gaps.md` («Input latency modes…»). Запись — формат 4 (`down`, `repeat`,
+  `unpaired`, `up`, ключ `dead`, `inversion` прокрутки); протокол 0.16 — разрыв (ADR-0342),
+  `Break` получил список `removed` полных путей схемы (`a_removal_breaking_lists_may_go`).
+  Имя `ScrollInversion` не совпадает с `ScrollDirection` вьюпорта; виджета-читателя пока нет
+  (первый — колесо слайдера, `docs/gaps.md`).
+  Тесты, в скобках результат без исправления: `a_hardware_dead_key_composes_with_the_next_key`
+  (без составителя нет типа — не собирается; со старым отображением `´`, `e` даёт `e`);
+  `a_repeat_and_a_missing_release_are_kinds_of_key_down` и
+  `a_dead_key_carries_its_accent_and_no_named_key_spells_it` (`NamedKey::from_w3c("Dead")` давал
+  `Some`); `compile_fail`-доктест `KeyState` держит форму (отпускание с повтором не строится);
+  строки `KeyPress`, `ScrollInversion`, `Key::Dead` в
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`; мёртвые строки Windows в
+  `tests/contract.rs` теперь ждут акцент; строки XKB `key_of` (мёртвый циркумфлекс, мёртвая точка
+  снизу без отдельного знака); `a_scroll_carries_the_direction_the_compositor_reports` (до правки
+  событие `axis_relative_direction` отбрасывалось, направление — `Unknown`).
+  Проверки: на Windows clippy рабочего пространства `--all-targets -D warnings`, nextest
+  `flui-platform`, `flui-interaction`, `flui-runtime`, `flui-testing`, `flui-protocol`, `flui-widgets`,
+  `flui-native` (падают и на базе: Android intent, `owner_code_is_contained_at_every_point`, trybuild),
+  мёртвые строки Windows в `test_window_lifecycle_contract`, `doc-strict`, `checks`, `expectations`;
+  в WSL clippy `flui-native --all-targets` и тесты xkb, провода Wayland, клавиш Android; откат
+  чтения `axis_relative_direction` валит `a_scroll_carries_the_direction_the_compositor_reports`;
+  `cargo +nightly check` для Android, macOS и wasm32.
+  Не запущено: Android и Apple не компилировались здесь иначе как `cargo +nightly check` в WSL
+  (iOS — только CI); прогон аппаратной клавиатуры на Android и естественной прокрутки на Mac не
+  делался (`docs/gaps.md`, «Pointer and keyboard gaps»). Windows, X11, Android и iOS флага
+  направления не дают — `Unknown` (там же).
+
 - [ ] **LY112** — ветка `platform/one-rule-once`, PR #2651 (ждёт независимого чтения).
   **Частично:** масштаб каждой записи ввода (`NativeReading::scale`), зум преобразования
   DirectManipulation и измеренные отношения боксов хоста Web сохраняют свою проверку; почему —
@@ -7016,41 +7069,63 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   которые уже есть на `main` и ломаются лишь на Windows; `xtask cross-typecheck` требует `zig` и
   идёт в CI.
 
-- [x] **LY116** — ветка `platform/presentation-identity`, решение — ADR-0346 (заменяет форму отчёта
-  и первое правило порядка из решения 6 ADR-0257 и форму `SwapChainStatistics` из решения 8).
+- [x] **LY116** — ветка `platform/presentation-identity`, решение — ADR-0347 (заменяет ADR-0257 целиком:
+  излагает всё текущее правило отчёта о показе, частоты кадров и задержки).
   Подтверждено на `main` @ `e166cabd3` чтением: `FramePresented { at, refresh: Option<Duration> }`
   не называл кадра, `PresentationReports` упорядочивал отчёты только по времени, и ни один хост не
   нёс тождество present до ответа платформы; `with_refresh` принимал любой ненулевой `Duration`.
-  Потребителя, который приписывал бы задержку не тому кадру, на `main` нет: часы кадра берут из
-  отчёта только фазу сетки обновлений, так что находка — недостающее тождество, а не неверная
-  атрибуция. Построено на тождестве, которое уже есть у кадра (ADR-0305 §4, #2675, #2677): отчёт
+  Это повторяющийся дефект «ответ сопоставлен текущему, а не своему билету» (AGENTS.md, «Before
+  each push», п. 4): отчёт о показе приписывался «новейшему более раннему кадру», хотя при двух-трёх
+  present в полёте или пропущенном кадре показан другой. Его экземпляр, найденный независимым
+  чтением первой версии этой ветки: Win32 сопоставлял номер present DXGI с кадром без поколения
+  поверхности — старая цепочка сделала один present (кадр F1 под номером 1), поверхность
+  заменили до следующего чтения, первый present новой цепочки тоже получил номер 1, и отчёт
+  назвал F1 со временем показа F2. Поэтому перенос штампа ADR-0305 в отчёт — исправление дефекта,
+  и правка `flui-engine` ограничена переносом штампа. Построено на тождестве, которое уже есть у кадра (ADR-0305 §4, #2675, #2677): отчёт
   называет кадр штампом `FrameStamp`, с которым кадр ушёл в present, второго счётчика нет.
   `RasterBackend::render` получает штамп кадра, слот окна передаёт его в
   `SurfaceTarget::pre_present_notify(Option<FrameStamp>, SwapChainStatistics)` (`None` — сцена,
   одолженная вне кадров, о ней не сообщают; повтор present после suboptimal — тот же штамп).
   Хосты: Win32 хранит кадр каждого present по номеру DXGI (`GetLastPresentCount` + 1, не больше
-  16) и сообщает показанный present кадром, который нёс он сам; счёт, пошедший назад, — новая
-  цепочка, кадры забываются (`window::windows::frame_timing::PresentTracker::observe`). Wayland
-  кладёт кадр в user data фидбэка каждого commit (`PresentedCommit`), `discarded` молчит. AppKit:
+  16) и сообщает показанный present кадром, который нёс он сам. Номер — не тождество цепочки:
+  кадры хранятся по поколению поверхности (`FrameStamp::surface_generation`), present другого
+  поколения или без кадра забывает всё, а внутри поколения present с номером не выше хранимого
+  заменяет хранимые с этого номера (`window::windows::frame_timing::PresentTracker::observe`).
+  Wayland: фидбэк и frame callback, запрошенные до present, привязываются к следующему commit
+  поверхности, какой бы present его ни сделал, поэтому фидбэк считается закоммиченным, только
+  когда сработал callback, взведённый с его present или позже; следующий present забывает
+  неподтверждённые, и их ответ кадра не называет; present другого поколения забывает все
+  (`presented::CommitFeedbacks`, `discarded` молчит). AppKit:
   `nextDrawable` взводит слот кадра в обработчике drawable, `pre_present_notify` на главном потоке
   пишет кадр в слот последнего выданного drawable; drawable без кадра не сообщается. Headless
   держит present-ы до показа (`simulate_presented(at, refresh)`, старейший) или сброса
-  (`simulate_discarded`). UIKit, Android, X11 и web отчётов не делают и кадр игнорируют.
-  Шов `PresentationReports` узнаёт из каждого present, чью презентацию показывает окно
-  (`presenting`), и отбрасывает отчёт о кадре другой презентации, о кадре не новее хранимого или
-  показанном раньше него. Runtime отбрасывает отчёт с чужим адресом до часов кадра и записи;
-  `HostInput::Frame` несёт `ShownFrame` (эпоха, поколение поверхности, время, период), адрес даёт
-  презентация, которой доставлен ввод. `refresh` — `Option<RefreshPeriod>`: период вне 1 мс–1 с
-  в отчёт не попадает. Протокол агента 0.16 (аддитивно, ADR-0342): необязательное поле `frame`
-  (`ShownFrameId { epoch, surface }`) в записи отчёта; запись 0.15 без кадра читается как
-  отсутствие отчёта. `FrameEpoch`/`SurfaceGeneration::from_raw` — для чтения записи.
+  (`simulate_discarded`) и забывает их при кадре другого поколения. UIKit, Android, X11 и web
+  отчётов не делают и кадр игнорируют.
+  Шов `PresentationReports` узнаёт из каждого present, чью презентацию и какое поколение
+  поверхности показывает окно (`presenting`), и отбрасывает отчёт о кадре другой презентации или
+  поверхности — поздний отчёт старой поверхности отказан по тождеству, а не удачей порядка, — о
+  кадре не новее хранимого или показанном раньше него. Runtime отбрасывает отчёт с чужим адресом
+  до часов кадра и записи; `HostInput::Frame` несёт `ShownFrame` (эпоха, поколение поверхности,
+  время, период), адрес даёт презентация, которой доставлен ввод. `refresh` —
+  `Option<RefreshPeriod>`: период вне 1 мс–1 с в отчёт не попадает. Протокол агента 0.17
+  (аддитивно, ADR-0342): необязательное поле `frame` (`ShownFrameId { epoch, surface }`) в записи
+  отчёта; запись без кадра читается как отсутствие отчёта. `FrameEpoch::from_raw` и
+  `SurfaceGeneration::from_raw` — для чтения записи. ADR-0347 излагает всё правило отчёта о показе
+  и заменяет ADR-0257 целиком.
   Тесты (в скобках — какой откат их роняет): `a_shown_present_reports_the_frame_its_present_carried`
   (модель DXGI: два present в полёте — показан первый; пропущенный не сообщается; present без
-  кадра; новая цепочка; падает, если сообщать новейший present или не забывать кадры старой
-  цепочки); `a_measured_period_outside_a_cadence_is_no_refresh` (час между обновлениями — не
-  период); `a_presentation_report_names_the_present_it_describes` (`tests/`, headless: два
-  present в полёте — запрос несёт первый, сброшенный пропускается); `a_report_of_a_presentation_the_window_left_is_dropped`
-  и `a_presentation_report_rides_the_next_request` (шов: без проверки адреса или эпохи падают);
+  кадра забывает хранимое; падает, если сообщать новейший present);
+  `a_replaced_surface_reports_its_own_frame` (последовательность чтения: старая цепочка сделала
+  present 1 с F1, поверхность заменена, present 1 новой цепочки с F2 — отчёт называет F2; два
+  чтения с одним счётом хранят второй; падает без ключа по поколению или без замены);
+  `a_measured_period_outside_a_cadence_is_no_refresh` (час между обновлениями — не период);
+  `a_feedback_whose_present_did_not_commit_reports_nothing` и
+  `a_new_surface_forgets_the_old_surfaces_feedbacks` (модель Wayland: неудавшийся present и
+  следующий удачный, новая поверхность); `a_presentation_report_names_the_present_it_describes`
+  (`tests/`, headless: два present в полёте — запрос несёт первый, сброшенный пропускается);
+  `a_report_of_a_presentation_the_window_left_is_dropped`, `a_report_of_a_replaced_surface_is_dropped`
+  и `a_presentation_report_rides_the_next_request` (шов: без проверки адреса, поколения или эпохи
+  падают);
   `each_frame_reaches_the_backend_with_its_own_stamp` (`flui-engine`);
   `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (новый случай: отчёт о кадре
   другой презентации ничего не ограничивает; падает без проверки адреса в `note_frame_request`);

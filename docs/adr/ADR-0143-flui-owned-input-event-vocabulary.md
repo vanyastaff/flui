@@ -3,6 +3,7 @@
 - **Status:** Accepted (2026-10-06)
 - **Date:** 2026-10-06
 - **Amended by:** [ADR-0217](ADR-0217-interaction-module-layers-and-pointer-assembly.md) (`PanZoomTransform` loses its pan component; a two-finger pan is `Scroll` with phases)
+- **Superseded-by:** [ADR-0346](ADR-0346-a-key-down-says-its-kind-a-dead-key-its-accent-and-a-scroll-its-direction.md) for a key event's state and repeat (§1), `KeyRepeat` and the dead key as a named key (§2, §3)
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (this record is
   its input vocabulary, with the generator and the gate §4 asks for),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the contract crate that holds it),

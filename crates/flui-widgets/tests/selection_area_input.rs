@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Point};
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::EventTime;
 use flui_platform::pointer::{
@@ -174,7 +174,7 @@ impl Scene {
     fn key(&mut self, key: Key, code: Code, modifiers: Modifiers) -> bool {
         let event: KeyEvent = KeyEventBuilder::new(code)
             .key(key)
-            .state(KeyState::Down)
+            .state(KeyState::Down(KeyPress::First))
             .modifiers(modifiers)
             .build();
         let handled = self

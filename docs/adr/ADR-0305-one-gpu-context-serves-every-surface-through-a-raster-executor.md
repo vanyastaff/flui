@@ -27,7 +27,7 @@
   `SurfaceFactory`, and the instance's display is the platform's connection);
   [ADR-0267](ADR-0267-a-lost-gpu-device-is-rebuilt-on-a-backoff-and-given-up.md) (the rebuild is
   the context's, once per context); [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md) (one atlas
-  per context, aged by queue submission); [ADR-0257](ADR-0257-frame-timing-and-latency.md)
+  per context, aged by queue submission); [ADR-0347](ADR-0347-a-frame-request-carries-the-hosts-frame-times-and-reports-that-name-their-frame.md)
   decision 4 (the per-window frame latency is the slot's setting)
 - **Related:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   (the scene state a frame carries, which a coalesced frame folds);
@@ -312,7 +312,7 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   `FrameSink::in_flight_limit`. A presentation at its limit skips with `Backpressure`, keeps its
   demand and reports no pending work, and the settlement that frees a place wakes the loop. The
   limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. wgpu's
-  `desired_maximum_frame_latency` stays the slot's `FrameLatency` (ADR-0257 decision 4), set at
+  `desired_maximum_frame_latency` stays the slot's `FrameLatency` (ADR-0347 decision 4), set at
   `Attach` and changed by `Configure`, and stays decoupled from the depth; the GL backend ignores
   it as before.
 - The slot calls its `SurfaceTarget::pre_present_notify` directly, immediately before

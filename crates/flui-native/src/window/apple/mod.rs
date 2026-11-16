@@ -130,7 +130,7 @@ pub(crate) mod link_timing {
     /// The frame a tick read at `media_now_secs` stands for, as
     /// `(age, until_present)`: its vsync is the link's `timestamp_secs`, `age`
     /// before the reading, and it reaches the screen at the link's
-    /// `target_secs`, `until_present` after the reading (ADR-0257). A vsync the
+    /// `target_secs`, `until_present` after the reading (ADR-0347). A vsync the
     /// reading can't place (ahead of it, or no finite time) is the reading
     /// itself, and a target that isn't after both the vsync and the reading is
     /// unknown.

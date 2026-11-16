@@ -15,11 +15,11 @@
 - `HeadlessHostWindow::simulate_presented(at, refresh)` shows the oldest present the simulated
   window system holds and returns its frame; `simulate_discarded` drops one unreported.
   `HeadlessHost::report_presented(frame, at, refresh)` reports a frame its sink presented.
-- Agent protocol 0.16: a recorded presentation report carries the frame it names (`frame`, an
-  optional field); a 0.15 client ignores it.
+- Agent protocol 0.17: a recorded presentation report carries the frame it names (`frame`, an
+  optional field); a 0.16 client ignores it.
 
 ### Added
 
-- `FrameEpoch::from_raw`, `SurfaceGeneration::from_raw` and `ResourceGeneration::from_raw`, to read
+- `FrameEpoch::from_raw` and `SurfaceGeneration::from_raw`, to read
   a recorded counter back.
 - `flui_testing::window_conformance::fixture_frame`, the frame a window fixture's present carries.

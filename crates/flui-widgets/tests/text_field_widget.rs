@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use flui_interaction::FocusNode;
-use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_view::prelude::*;
 use flui_widgets::{RawTextField, TextEditingController};
@@ -31,7 +31,7 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_ctx() {
 
     let typed = KeyEventBuilder::new(Code::KeyA)
         .key(Key::character("a"))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .build();
     let _ = harness
         .focus_manager()
@@ -41,7 +41,7 @@ pub(crate) fn raw_text_field_callbacks_write_through_the_forwarded_ctx() {
 
     let enter = KeyEventBuilder::new(Code::Enter)
         .key(Key::Named(NamedKey::Enter))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .build();
     let _ = harness
         .focus_manager()
@@ -98,7 +98,7 @@ pub(crate) fn the_return_key_submits_a_single_line_field_without_a_line_break() 
             }),
     );
     let _ = focus_node.request_focus();
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let enter = KeyEventBuilder::new(Code::Enter)
             .key(Key::Named(NamedKey::Enter))
             .state(state)

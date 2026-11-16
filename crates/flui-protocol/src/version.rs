@@ -19,7 +19,7 @@
 //!   new meaning, or a variant or value added to a union whose reader has no
 //!   fallback for it and refuses it whole: a new native recording row, a new
 //!   close answer) is listed in
-//!   [`BREAKING`] with the ADR that decided it and the names it respelled; the
+//!   [`BREAKING`] with the ADR that decided it and the names it respelled or removed; the
 //!   test lets those names, and nothing else, go. A union is open to a new
 //!   value or variant exactly when its reader reads an unknown one as a
 //!   fallback (a role, an action name, an error code, above, and a tree
@@ -79,7 +79,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 16);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 17);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,8 +88,12 @@ pub struct Break {
     pub version: ProtocolVersion,
     /// The ADR that decided the break.
     pub adr: &'static str,
-    /// The names it respelled, old then new. Nothing else may differ from the version before.
+    /// The names it respelled, old then new.
     pub renamed: &'static [(&'static str, &'static str)],
+    /// The schema paths it removed, each in full (`/$defs/KeyEvent/properties/repeat`): a
+    /// property, a tagged variant or a definition, and everything under it. Nothing but these
+    /// and `renamed` may differ from the version before.
+    pub removed: &'static [&'static str],
 }
 
 /// The versions that are not additive to the one before it, by their schema or by a value
@@ -105,6 +109,7 @@ pub const BREAKING: &[Break] = &[
             ("act", "semantics.act"),
             ("motion", "motion.set"),
         ],
+        removed: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 11),
@@ -113,6 +118,7 @@ pub const BREAKING: &[Break] = &[
         // (`l4.2:3@7`), where it named a node of a frame's flattened tree (`l4.37`): no name
         // is respelled, the handle has a new meaning, so an older client cannot read it.
         renamed: &[],
+        removed: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 14),
@@ -121,6 +127,7 @@ pub const BREAKING: &[Break] = &[
         // `closed` and `cut`: a `record_native` event carrying one does not read in an older
         // client, which refuses the unknown row, so an app speaking 0.14 refuses older clients.
         renamed: &[],
+        removed: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 15),
@@ -129,6 +136,23 @@ pub const BREAKING: &[Break] = &[
         // withdrew its capabilities: an older client refuses the unknown value, so an app
         // speaking 0.15 refuses older clients.
         renamed: &[],
+        removed: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 16),
+        adr: "ADR-0346",
+        // A recorded key's state says whether it repeated or has no release, so its `repeat`
+        // and `unreleased` flags went; the pointer revision and the pen squeeze, which no host
+        // produced, left the input vocabulary; a recorded key may be `dead` and a key state
+        // `repeat` or `unpaired`.
+        renamed: &[],
+        removed: &[
+            "/$defs/KeyEvent/properties/repeat",
+            "/$defs/KeyEvent/properties/unreleased",
+            "/$defs/PointerEvent/oneOf/revise=revise",
+            "/$defs/PointerEvent/oneOf/pen_squeeze=pen_squeeze",
+            "/$defs/SqueezePhase",
+        ],
     },
 ];
 
@@ -213,8 +237,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.16");
-        assert_eq!("0.16".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.17");
+        assert_eq!("0.17".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -236,10 +260,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.16"))
+            Some(serde_json::json!("0.17"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.16")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.17")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

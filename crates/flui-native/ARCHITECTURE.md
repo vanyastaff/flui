@@ -1081,17 +1081,23 @@ trait depends on `flui-platform` instead.
     `pre_present_notify` arms the Wayland frame callback on the
     native Wayland host, and returns at once elsewhere. It is also where a
     presentation report starts, and every report names the frame the present
-    it describes carried (ADR-0346): the native Wayland target asks
-    `wp_presentation` for a feedback per commit of a frame, with the frame as
-    the feedback's user data (`PresentedCommit`), whose `presented` event the
-    window rebases from the compositor's clock (`clock_id`) onto the event
-    clock, and the Win32 target rebases the DXGI frame statistics the renderer
+    it describes carried (ADR-0347): the native Wayland target asks
+    `wp_presentation` for a feedback per present of a frame, numbered, the
+    frame kept by the number (`presented::CommitFeedbacks`): a feedback binds
+    to the surface's next commit whichever present makes it, so it counts as
+    committed once a frame callback armed with its present or later fired,
+    and the next present forgets the unconfirmed ones; its `presented` event
+    the window rebases from the compositor's clock (`clock_id`) onto the event
+    clock. The Win32 target rebases the DXGI frame statistics the renderer
     read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
     the refresh period between two reports (`frame_timing::PresentTracker`:
     a read naming the present or refresh already reported is no report,
     `DxgiShown::Disjoint` forgets the last refresh, and each present's frame
     is kept by its DXGI number until the statistics name it or a later one
-    shown, forgotten when the count of presents goes back, a new swap chain).
+    shown, per surface generation, since a present number is a swap chain's
+    and a replaced surface numbers from the start again). Every reporting
+    host forgets what it kept of a surface at a present of another surface
+    generation.
     The AppKit window reports from its view's backing layer, not the target:
     `owner::apple::metal_layer::FluiMetalLayer` (from `makeBackingLayer`)
     is the `CAMetalLayer` wgpu takes as the view's root layer and gets every
@@ -1628,10 +1634,20 @@ rotation and resume additionally require a device run.
 
 Android printable keyboard keys come from the input device's `KeyCharacterMap`
 using the event's native meta-state. Physical codes and named keys keep their
-existing translation. A dead key remains `NamedKey::Dead`; unavailable maps
-retain the legacy US keycode fallback, including Shift and Caps Lock. A successful
-map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
-pins the projection, while actual layout and Shift mapping require live input.
+existing translation. Unavailable maps retain the legacy US keycode fallback,
+including Shift and Caps Lock. A successful map reporting no character remains
+unidentified. `android_native_key_map_preserves_logical_keys` pins the projection,
+while actual layout and Shift mapping require live input.
+
+A hardware dead key is composed here, because a native activity receives the raw
+key events and no `TextView` key listener composes them. Its map entry
+(`COMBINING_ACCENT` with the spacing accent) reports `Key::Dead(Some(accent))` and
+leaves the accent pending in `keys::DeadKeyComposer`; the next character key's first
+press types `KeyCharacterMap.getDeadChar(accent, base)`, or the accent and the
+character when the pair composes nothing, so no keystroke is lost. A modifier keeps
+the accent, a named key that types nothing and focus loss drop it, and a key the
+input method passes on during a composition feeds nothing
+(`a_hardware_dead_key_composes_with_the_next_key`, over a stand-in key map).
 
 ### The web window keeps its canvas and two hosts in one order, and takes them out
 
@@ -4809,8 +4825,7 @@ was not read for: a device the OS reset or removed is seen at the press that
 starts a sequence and at the lift, exit or cancel that ends it (a reset
 cancels its sequences) (`the_device_is_queried_for_every_event_but_a_move`).
 
-Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
-estimated properties to revise, so the backend never emits `Revise`.
+A `MotionEvent` carries no estimated properties to revise.
 A run on a device held the translation (see the
 native recording section below).
 
