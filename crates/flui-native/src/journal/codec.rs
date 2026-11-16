@@ -2478,7 +2478,7 @@ fn display_to_wire(display: &RecordedDisplay) -> DtoResult<wire::Display> {
         name,
         bounds: bounds_to_wire(bounds),
         usable_bounds: bounds_to_wire(usable_bounds),
-        scale_factor,
+        scale_factor: scale_factor.get(),
         refresh_period_ns: refresh_period
             .map(|period| duration_nanos(period.get()))
             .transpose()?,
@@ -2543,9 +2543,8 @@ fn display_from_wire(wire: wire::Display) -> DtoResult<RecordedDisplay> {
                 .map_err(|error| invalid(format!("refresh period {nanos} ns: {error}")))
         })
         .transpose()?;
-    if !(scale_factor.is_finite() && scale_factor > 0.0) {
-        return Err(invalid(format!("scale factor {scale_factor}")));
-    }
+    let scale_factor = DevicePixelRatio::try_new(scale_factor)
+        .ok_or_else(|| invalid(format!("scale factor {scale_factor}")))?;
     Ok(RecordedDisplay {
         label,
         parts: DisplayParts {

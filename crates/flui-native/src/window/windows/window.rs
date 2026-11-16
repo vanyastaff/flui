@@ -4,7 +4,7 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -56,7 +56,7 @@ use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
 use crate::text::WindowTextInput;
 use crate::version::gate::Since;
-use crate::window::state::WindowStateCell;
+use crate::window::state::{WindowStateCell, device_extent};
 use crate::{
     owner::OpenWindowError, owner::window_delivery::WindowDelivery, owner::windows::AppHooks,
 };
@@ -136,6 +136,17 @@ fn backend_error(what: &str, error: windows::core::Error) -> ApplyError {
 fn device_pair(x: f64, y: f64, scale: f64) -> Result<(i32, i32), ApplyError> {
     checked_logical_to_device(x, scale)
         .zip(checked_logical_to_device(y, scale))
+        .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
+}
+
+/// A command's logical content size in device pixels by the hosts' one
+/// extent rule ([`device_extent`]): a side past the largest surface a
+/// renderer draws is clamped to it. Refused before any call for a side that
+/// is no size.
+fn device_size(size: Size<f64>, ratio: DevicePixelRatio) -> Result<(i32, i32), ApplyError> {
+    let side = |logical: f64| device_extent(logical, ratio).map(u32::cast_signed);
+    side(size.width)
+        .zip(side(size.height))
         .ok_or(ApplyError::Platform(PlatformFailure::OutOfRange))
 }
 
@@ -224,7 +235,14 @@ impl WindowsWindow {
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = crate::owner::windows::WindowIdentity::admit(
             crate::owner::windows::WindowIdentity::source(),
-            || Self::create_native(&options, &opening, displays.as_ref()),
+            || {
+                Self::create_native(
+                    &options,
+                    &opening,
+                    displays.as_ref(),
+                    &windows.system_scale_streak,
+                )
+            },
         );
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
@@ -258,6 +276,7 @@ impl WindowsWindow {
         options: &WindowOptions,
         opening: &flui_platform::OpeningGeometry,
         displays: &dyn crate::owner::windows::HostDisplays,
+        system_scale_streak: &std::cell::Cell<crate::display::scale::ScaleStreak>,
     ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
@@ -271,7 +290,18 @@ impl WindowsWindow {
                 message: format!("Failed to get module handle: {e}"),
             })?;
 
-            let system_scale = GetDpiForSystem() as f64 / USER_DEFAULT_SCREEN_DPI as f64;
+            // The system DPI over the base DPI, by the hosts' one rule, against
+            // the set's one streak for it; a refusal is reported here, with
+            // nothing borrowed.
+            let mut streak = system_scale_streak.get();
+            let (system_scale, refused) = streak.read(
+                f64::from(GetDpiForSystem()) / f64::from(USER_DEFAULT_SCREEN_DPI),
+                "Win32 system DPI",
+            );
+            system_scale_streak.set(streak);
+            if let Some(refused) = refused {
+                refused.report();
+            }
 
             // Determine window style
             // Always created hidden: the window is placed and put in its mode
@@ -427,7 +457,7 @@ impl WindowsWindow {
                         initial_size.height as f64 / scale_factor,
                     ),
                 },
-                scale_factor,
+                scale_factor: scale.ratio(),
                 visible: options.visible,
                 focused: false,
             }));
@@ -512,13 +542,14 @@ impl WindowsWindow {
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
                 scale: scale.clone(),
-                refusing_zero_dpi: std::cell::Cell::new(false),
+                dpi_streak: std::cell::Cell::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
+                scale_streak: std::cell::Cell::default(),
                 resizable: std::cell::Cell::new(options.resizable),
                 frame: std::cell::Cell::new(options.frame),
                 input_regions: std::cell::RefCell::default(),
@@ -839,12 +870,12 @@ impl WindowsWindow {
     /// - a fullscreen window takes the size for the bounds it returns to.
     ///
     /// # Errors
-    /// [`ApplyError::Platform`] for a size beyond what Win32
-    /// can represent, before any call; [`ApplyError::Platform`] when
+    /// [`ApplyError::Platform`] for a side that is no size (a side past the
+    /// largest surface is clamped), before any call; [`ApplyError::Platform`] when
     /// Win32 refuses or fails the resize.
     fn set_inner_size(&self, size: Size<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;
-        let content = device_pair(size.width, size.height, scale)?;
+        let content = device_size(size, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_inner_size", |ctx| {
             ctx.mode
                 .get()
@@ -919,7 +950,7 @@ impl WindowsWindow {
     /// Win32 can represent, before any call; [`ApplyError::Platform`]
     /// when Win32 refuses or fails the move.
     fn set_outer_position(&self, at: Point<f64>) -> Result<(), ApplyError> {
-        let scale = self.state.lock().scale_factor;
+        let scale = self.state.lock().scale_factor.get();
         let (x, y) = device_pair(at.x, at.y, scale)?;
         let fullscreen = super::proc::with_window_context(self.hwnd, "set_outer_position", |ctx| {
             let mode = ctx.mode.get();
@@ -1183,7 +1214,7 @@ impl WindowsWindow {
 
     /// Get current scale factor
     pub fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor
+        self.state.lock().scale_factor.get()
     }
 
     /// Toggle fullscreen mode for this window
@@ -1355,7 +1386,7 @@ impl PlatformWindow for WindowsWindow {
         use flui_platform::WindowAt;
         use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, WindowFromPoint};
 
-        let scale = self.state.lock().scale_factor;
+        let scale = self.state.lock().scale_factor.get();
         let device = |logical: f64| {
             let device = (logical * scale).round();
             (device.is_finite() && device >= f64::from(i32::MIN) && device <= f64::from(i32::MAX))

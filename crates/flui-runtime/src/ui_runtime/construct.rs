@@ -47,7 +47,8 @@ impl UiRuntime {
     /// # Errors
     ///
     /// [`UiRuntimeError::InteractionLane`] if the owner-local interaction lane
-    /// could not be created.
+    /// could not be created; [`UiRuntimeError::PixelRatio`] for a
+    /// `device_pixel_ratio` outside the range a screen can have.
     pub fn try_new(
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f64,
@@ -61,7 +62,8 @@ impl UiRuntime {
     /// # Errors
     ///
     /// [`UiRuntimeError::InteractionLane`] if the owner-local interaction lane
-    /// could not be created.
+    /// could not be created; [`UiRuntimeError::PixelRatio`] for a
+    /// `device_pixel_ratio` outside the range a screen can have.
     ///
     /// # Panics
     ///
@@ -74,6 +76,14 @@ impl UiRuntime {
         host: RuntimeHostServices<'_>,
     ) -> Result<Self, UiRuntimeError> {
         assert!(capacity > 0, "UiRuntime inbox capacity must be non-zero");
+        // The ratio is held by the type's one rule; one outside the range a
+        // screen can have is refused before anything is built.
+        let device_pixel_ratio = flui_foundation::geometry::DevicePixelRatio::try_new(
+            device_pixel_ratio,
+        )
+        .ok_or(UiRuntimeError::PixelRatio {
+            bits: device_pixel_ratio.to_bits(),
+        })?;
         let identity = crate::runtime_services::next_identity();
         Self::construct(
             capacity,
@@ -110,7 +120,7 @@ impl UiRuntime {
         capacity: usize,
         (ui_runtime_id, presentation_id): (UiRuntimeId, PresentationId),
         window: impl Into<PresentationWindow>,
-        device_pixel_ratio: Option<f64>,
+        device_pixel_ratio: Option<flui_foundation::geometry::DevicePixelRatio>,
         services: RuntimeServices,
     ) -> Result<Self, UiRuntimeError> {
         let (tx, rx) = bounded(capacity);

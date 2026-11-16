@@ -14,9 +14,9 @@
 //! - `windows`: OLE;
 //! - `android`: `FluiView`'s drag events and system drags;
 //! - `web`: HTML drag and drop;
-//! - `wayland`: drops on the native Wayland host's windows through the seats'
+//! - `linux::wayland`: drops on the native Wayland host's windows through the seats'
 //!   data devices, and the sessions they start;
-//! - `x11`: XDND drops on the native X11 host's windows, and the sessions they
+//! - `linux::x11`: XDND drops on the native X11 host's windows, and the sessions they
 //!   start;
 //! - `headless`: a double that plays the operating system's side.
 //!
@@ -32,12 +32,18 @@
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;
 pub(crate) mod headless;
+#[cfg(any(wayland_host, x11_host))]
+pub(crate) mod linux {
+    //! The Linux drags: the native Wayland host's (`wayland`) and the native
+    //! X11 host's (`x11`).
+
+    #[cfg(wayland_host)]
+    pub(crate) mod wayland;
+    #[cfg(x11_host)]
+    pub(crate) mod x11;
+}
 pub(crate) mod offers;
-#[cfg(wayland_host)]
-pub(crate) mod wayland;
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod web;
 #[cfg(any(windows, test))]
 pub(crate) mod windows;
-#[cfg(x11_host)]
-pub(crate) mod x11;

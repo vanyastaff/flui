@@ -321,7 +321,7 @@ impl HeadlessState {
     /// The bounds of display `id` in the logical pixels of its own scale.
     pub(crate) fn display_bounds(&self, id: DisplayId) -> Option<Bounds<f64>> {
         let display = self.displays.lock().snapshot.get(id)?.clone();
-        let scale = display.scale_factor;
+        let scale = display.scale_factor.get();
         let device = display.bounds;
         Some(Bounds::new(
             Point::new(

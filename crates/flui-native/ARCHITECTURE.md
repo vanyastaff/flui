@@ -609,7 +609,31 @@ trait depends on `flui-platform` instead.
   X11 `NotYetOnThisHost`, a compositor without `wp_color_management_v1` or a
   device below the API that reports it `NotOnThisDevice`, the browser's
   headroom `NotOnThisPlatform`. The Wayland model numbers each image
-  description it asks for and takes over only the newest one's `done`.
+  description it asks for and takes over only the newest one's `done`. A
+  scale an operating system reports, of a display or of a window (a DPI over
+  the base DPI, a backing or content scale, a density, a pixel ratio,
+  `Xft.dpi`), becomes a `DevicePixelRatio` once, where it enters, by the one
+  rule `display::scale::ScaleStreak::read`: a ratio in `DevicePixelRatio::MIN..=MAX` is taken,
+  anything else reads as the base ratio, so the display or window still exists
+  with a scale, and the first refusal of a run is handed back to be reported
+  with nothing borrowed (`a_reported_scale_is_taken_or_read_as_the_base_ratio_once_reported`).
+  A streak is kept per source: one `ScaleStreak` where a host reads one (a
+  window, the Win32 system DPI, `Xft.dpi`), `ScaleStreaks` keyed by `DisplayId`
+  where it reads several displays in a sample, holding only the displays that
+  sample read (`each_source_keeps_its_own_streak`).
+  A scale a window is told after it opens (Win32's `WM_DPICHANGED`, Wayland's
+  `preferred_scale` and `preferred_buffer_scale`) goes through
+  `ScaleStreak::check` instead: one that is no ratio is refused, reported once
+  per run as kept, and the window keeps the scale it has: the last one it took
+  (`a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale`; Wayland's
+  `ToldScale`, `a_buffer_is_drawn_at_the_scale_the_compositor_prefers`). The
+  refusal carries which of the two its caller did (`Refusal`), so its report
+  says it (`a_refusal_names_what_its_caller_did`). Where a source's other
+  facts follow from its ratio (a Wayland output's logical size),
+  `ScaleStreak::try_read` hands the refusal back and the caller derives them
+  from the base ratio, so a display's bounds and scale agree
+  (`a_scale_no_screen_has_reads_as_the_base_ratio`). A ratio an application
+  hands the runtime is refused typed (`UiRuntimeError::PixelRatio`).
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
@@ -711,16 +735,24 @@ trait depends on `flui-platform` instead.
   the published state (`window::state`), the one rule that decides a window's
   mode from what its window system says (`window::state::mode_of` over
   `ModeFlags`: minimized before fullscreen before maximized;
-  AppKit's flags, the X11 window manager's properties and the Win32
+  AppKit's flags, the X11 window manager's properties, the Wayland
+  toplevel's configured states and the Win32
   window's tracked mode each read their report into the flags and nothing
-  else), the desktop window configuration
+  else), the one rule that turns a logical window extent into device pixels
+  (`window::state::device_extent`: `flui_foundation::geometry::device_extent`, the
+  conversion the runtime's scene surface uses too, clamped at
+  `flui_platform::MAX_SURFACE_EXTENT`; and `window::state::device_limits` for size
+  limits, a minimum up and a maximum down and never below it, which Win32 and X11 both
+  call; every host that hands its window system an extent or draws a surface of
+  its own reads them), the desktop window configuration
   (`window::config`, crate-private: its windows open with F11 as the
   fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
   `window::state::mapping` reads one table through the X11
-  window manager's properties, AppKit's raw flags (which keep full screen
+  window manager's properties, the Wayland toplevel's states (which never
+  say minimized, a column of their own), AppKit's raw flags (which keep full screen
   above a miniaturized flag, a row of their own) and the Win32 tracked mode.
   Whether a window is seen is three facts of its snapshot, `visible`, its
   mode and `occluded`, which `WindowState::is_seen` reads together; each
@@ -809,12 +841,13 @@ trait depends on `flui-platform` instead.
   platform's amounts in the unit it picks, each axis turned to FLUI's
   direction by whether it moves the offset or the content, an idle axis
   `+0.0` whichever zero the platform reported, a non-finite amount refused,
-  which AppKit delivers as a zero step and the Web and Android
-  drop) and `event_timestamp_ns` (public at the crate root).
+  which AppKit and Wayland deliver as a zero step and the Web, Android and X11
+  drop; Win32's and Wayland's distances counted in steps of 1/120 detent are
+  read by one `DetentSteps`) and `event_timestamp_ns` (public at the crate root).
   `input::keys::mapping` reads one table of keys through the Win32 scancode
   table, the AppKit keycode table, the DOM's number and the keyboard-types
   adapter; `input::scroll::mapping` reads one table of turns through the
-  Win32 registry, the Web's, Android's and AppKit's steps. Beside it, one file per platform, each pure
+  Win32 registry, the Web's, Android's, AppKit's, X11's and Wayland's steps. Beside it, one file per platform, each pure
   half forbidding `unsafe`: `windows/` (`mod.rs`: `InputWindows`, the
   class's input hook, which keeps each window's `InputWindow` keyed by its
   identity, and `raw`, the messages decoded; `direct_manipulation.rs`, the
@@ -1092,8 +1125,12 @@ trait depends on `flui-platform` instead.
   `a_command_admitted_before_a_revision_is_superseded` holds a host to it
   where its fixture can revise capabilities. A command no host arm carries
   out answers `ApplyError::Platform` (`window::state::not_carried_out`), and
-  Win32 numbers beyond its device range are `PlatformFailure::OutOfRange`:
-  admission held them finite and positive, the range is the window system's.
+  a Win32 position beyond its device range is `PlatformFailure::OutOfRange`:
+  admission held it finite, the range is the window system's. A size past the
+  largest surface is not refused: the Win32, X11 and headless hosts clamp it by
+  the one extent rule (`window::state::device_extent`), as ADR-0254 lets a command
+  "take effect or be clamped, as the next snapshot shows" (AppKit does not yet,
+  `docs/gaps.md`).
   Showing, activating and closing are commands like the others
   (`Show`, `Activate`, `Close`); there is no method twin. The snapshot
   describes what the OS reported, not what a command asked for, and holds
@@ -1158,8 +1195,8 @@ trait depends on `flui-platform` instead.
   run of them in the window's turn, and reads again at the next invalidation
   (`a_refused_geometry_keeps_the_published_one_and_publishes_the_other_facts`;
   the conformance check `a_report_that_describes_no_window_publishes_nothing`
-  where a fixture can make its window system report one). The Win32 window keeps a DPI that is
-  never zero (`WindowScale`), and a `WM_DPICHANGED` naming zero changes
+  where a fixture can make its window system report one). The Win32 window keeps a DPI whose
+  ratio is in range (`WindowScale`), and a `WM_DPICHANGED` naming another changes
   nothing. The handler's `state_changed` is raised after the publish, outside
   the cell, only when the revision grew, and by one of two routes. A change
   the window system reported is announced from the host's own callback
@@ -1319,8 +1356,8 @@ trait depends on `flui-platform` instead.
   (`window::linux::wayland::scale`): whatever fractional, preferred or output
   scale the compositor names, the window's content and its own frame are
   drawn at no more than `BufferScale::MAX`, lowered further where a
-  configure's size at that scale would pass `MAX_CONTENT_EXTENT` device
-  pixels, the largest surface the engine configures, so the window still
+  configure's size at that scale would pass `flui_platform::MAX_SURFACE_EXTENT` device
+  pixels, the largest surface a renderer draws, so the window still
   draws at a size the renderer accepts; only a window with no viewport, at
   scale one, publishes no metrics past it
   (`a_window_publishes_what_a_surface_can_be`). A window's own frame follows
@@ -1328,8 +1365,8 @@ trait depends on `flui-platform` instead.
   binds (each on its own, and a seat that goes is followed no more), and
   keeps one action asked for, which a later press replaces. It draws each of
   its five pieces at most once a turn, at the window's `BufferScale`, none
-  wider or taller than `client_frame::MAX_EXTENT`, which is
-  `MAX_CONTENT_EXTENT`, so every window that publishes metrics has its frame
+  wider or taller than
+  `MAX_SURFACE_EXTENT`, so every window that publishes metrics has its frame
   (`a_window_that_publishes_metrics_draws_its_whole_frame`), and none of more
   than `MAX_PIXELS`, into at most `MAX_BUFFERS`
   buffers a piece: one the compositor released is drawn into again, and
@@ -1460,7 +1497,7 @@ trait depends on `flui-platform` instead.
     `a_run_of_motions_is_one_move_through_them`,
     `a_burst_of_motion_is_one_move_through_it`), and a drag session finds the
     window under the pointer once for the run, in at most `MAX_DEPTH` round
-    trips (`drag::x11::source`);
+    trips (`drag::linux::x11::source`);
   - an X11 hierarchy change is read from the flags the server sends, since a
     removed device comes with no use
     (`a_hierarchy_change_is_read_from_its_flags`,
@@ -4033,7 +4070,7 @@ AT-SPI bridge of `accessibility::linux`. `current_host` picks the host for
 an X11 session (`choose_linux_host`).
 The text position is `X11Text`: the focused field is served to IBus or Fcitx5
 over D-Bus, and to an XIM server where neither answers (`text::linux::x11`);
-the drag position is the loop's, XDND as target and as source (`drag::x11`);
+the drag position is the loop's, XDND as target and as source (`drag::linux::x11`);
 the clipboard is the clipboard feature's, on a connection and thread of its
 own.
 
@@ -4123,7 +4160,7 @@ modules' tables
 `a_wake_deadline_no_frame_serviced_is_delivered_once`.
 
 The drag position is the loop's too (`type Drag = X11Loop`): the table makes
-the drag feature's `drag::x11::X11Drag` (`X11Host::drag`), the platform's one
+the drag feature's `drag::linux::x11::X11Drag` (`X11Host::drag`), the platform's one
 `DragTransport`, and the loop holds it by the hook
 `owner::linux::x11::LoopDrag`, hands it every event before the input, and
 wakes for the deadline of the fetch it waits on. A window opening tells it
@@ -4135,7 +4172,7 @@ action (an `XdndActionAsk` reads the source's `XdndActionList`); each
 position is answered `XdndStatus` from the feedback the target cached while
 hearing it, asking for every movement; a drop resolves the action from that
 feedback, and a refusal answers `XdndFinished` at once while the window hears
-`Exited`. Types map to representations in the pure `drag::x11::model`: text
+`Exited`. Types map to representations in the pure `drag::linux::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
 drag's last time into a window made for that fetch and destroyed as it ends,
@@ -4153,7 +4190,7 @@ last one's exit fails learns its types before that failure goes on, and a
 diagnostic found under the lock is emitted once it is let go.
 
 A window is a source too: its `drag_source` starts the runtime's OS session
-(`drag::x11::source`) when the drag leaves it with a button held, so the
+(`drag::linux::x11::source`) when the drag leaves it with a button held, so the
 press's implicit grab keeps the pointer's XInput 2 events coming to the window
 wherever it goes, and the session takes them before the input does. The
 press is the session's from then on: at the loop's next turn the window's
@@ -4208,7 +4245,7 @@ The session lives in an owner-thread cell; its provider and end hook run
 outside it, and the provider is dropped contained, so the hook hears the end
 though a capture fails (ADR-0281 §3).
 
-Tests of the drag: `drag::x11::tests` holds the model's tables
+Tests of the drag: `drag::linux::x11::tests` holds the model's tables
 (`messages_read_what_the_source_wrote`, `types_offer_each_format_once`,
 `bytes_make_their_payload`, `an_incr_write_numbers_its_chunks`,
 `incr_writes_are_bounded_and_let_go`,

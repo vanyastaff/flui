@@ -10,7 +10,7 @@
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
     DisplayRegistry, DisplayRevisionExhausted, DisplaySnapshot,
@@ -30,7 +30,7 @@ use crate::platform::HostPlatform;
 pub struct DisplaySpec {
     name: String,
     size: Size<i32>,
-    scale_factor: f64,
+    scale_factor: DevicePixelRatio,
     refresh_period: Option<Duration>,
     persistent_key: Option<String>,
     color: Result<DisplayColor, CapabilityAbsence>,
@@ -44,7 +44,7 @@ impl DisplaySpec {
         Self {
             name: name.into(),
             size: Size::new(width, height),
-            scale_factor: 1.0,
+            scale_factor: DevicePixelRatio::ONE,
             refresh_period: None,
             persistent_key: None,
             color: Ok(DisplayColor::Standard(ColorGamut::Srgb)),
@@ -69,7 +69,7 @@ impl DisplaySpec {
 
     /// The display's device pixels per logical pixel.
     #[must_use]
-    pub fn scale_factor(mut self, scale_factor: f64) -> Self {
+    pub fn scale_factor(mut self, scale_factor: DevicePixelRatio) -> Self {
         self.scale_factor = scale_factor;
         self
     }
@@ -99,7 +99,7 @@ pub enum DisplayChange {
     /// mode the OS reports no rate for.
     RefreshPeriod(Option<Duration>),
     /// The display's scale factor changed.
-    ScaleFactor(f64),
+    ScaleFactor(DevicePixelRatio),
     /// The display was renamed. A field no window pacing reads.
     Name(String),
     /// The display's colour profile changed: HDR switched on or off, the

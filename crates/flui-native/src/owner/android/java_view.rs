@@ -25,10 +25,11 @@
 //! ([`ViewEvent::RunOnWindow`]).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_platform::DragDropEvent;
 use jni::objects::{JClass, JObject, JObjectArray, JString};
 use jni::refs::Global;
@@ -298,8 +299,9 @@ pub(crate) struct JavaView {
     /// Whether the input method composes, as the view last reported.
     composing: AtomicBool,
     /// The window's scale factor, as the owner last read it, for the view's
-    /// pixel coordinates.
-    scale: AtomicU64,
+    /// pixel coordinates. A lock held only to copy the value: its type, not a
+    /// check at each read, keeps it a ratio.
+    scale: Mutex<DevicePixelRatio>,
 }
 
 impl std::fmt::Debug for JavaView {
@@ -329,7 +331,7 @@ impl JavaView {
                 handle: None,
             }),
             composing: AtomicBool::new(false),
-            scale: AtomicU64::new(1.0_f64.to_bits()),
+            scale: Mutex::new(DevicePixelRatio::ONE),
         });
         let installing = Arc::clone(&view);
         view.app
@@ -355,14 +357,14 @@ impl JavaView {
         self.composing.store(composing, Ordering::Release);
     }
 
-    pub(super) fn set_scale(&self, scale: f64) {
-        if scale.is_finite() && scale > 0.0 {
-            self.scale.store(scale.to_bits(), Ordering::Relaxed);
-        }
+    /// The window's scale, which the loop read by the hosts' one rule, for
+    /// the Java threads' callbacks.
+    pub(super) fn set_scale(&self, scale: DevicePixelRatio) {
+        *self.scale.lock() = scale;
     }
 
-    pub(crate) fn scale(&self) -> f64 {
-        f64::from_bits(self.scale.load(Ordering::Relaxed))
+    pub(crate) fn scale(&self) -> DevicePixelRatio {
+        *self.scale.lock()
     }
 
     /// Everything the view reported since the last call, oldest first.
@@ -795,7 +797,10 @@ extern "system" fn native_drag<'local>(
         view.transfer.drag(
             &view,
             action,
-            (f64::from(x) / scale, f64::from(y) / scale),
+            (
+                scale.to_logical(f64::from(x)),
+                scale.to_logical(f64::from(y)),
+            ),
             &mime_types,
             local,
             result,
@@ -830,7 +835,10 @@ extern "system" fn native_drop<'local>(
         view.transfer.take_drop(
             &view,
             offer,
-            (f64::from(x) / scale, f64::from(y) / scale),
+            (
+                scale.to_logical(f64::from(x)),
+                scale.to_logical(f64::from(y)),
+            ),
             local,
         )
     })
