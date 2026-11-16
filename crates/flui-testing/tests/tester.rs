@@ -1269,3 +1269,66 @@ fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
     }
     assert!(t.find_all(&find::text("Item 39")).is_empty(), "never built");
 }
+
+/// Paints its whole size in one colour.
+#[derive(Debug)]
+struct SwatchPainter(flui_painting::styling::Color);
+
+impl flui_widgets::CustomPainter for SwatchPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            &flui_painting::Paint::fill(self.0),
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        true
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` reads the scene the window submitted last, after the
+/// frames due now: a change from outside the tree repaints the swatch, and
+/// the next read sees the new colour with no pump between.
+///
+/// Fails if the read samples the scene before the frames due now.
+#[test]
+fn draw_commands_read_the_last_submitted_scene() {
+    use flui_painting::styling::Color;
+
+    let changed = Rc::new(flui_foundation::ChangeNotifier::new());
+    let shade = Rc::new(Cell::new(0_u8));
+    let read = Rc::clone(&shade);
+    let mut t = Tester::mount(flui_widgets::AnimatedBuilder::new(
+        Rc::clone(&changed) as Rc<dyn flui_foundation::Listenable>,
+        move || {
+            Center::new().child(
+                flui_widgets::CustomPaint::new()
+                    .size(flui_foundation::geometry::Size::new(24.0, 16.0))
+                    .painter(SwatchPainter(Color::rgb(read.get(), 0, 0))),
+            )
+        },
+    ));
+    let rectangles = |t: &mut Tester| -> Vec<(flui_foundation::geometry::Rect, Color)> {
+        t.draw_commands()
+            .into_iter()
+            .filter_map(|command| match command.op {
+                flui_painting::DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
+                _ => None,
+            })
+            .collect()
+    };
+    let swatch = flui_foundation::geometry::Rect::from_origin_size(
+        flui_foundation::geometry::Point::ZERO,
+        flui_foundation::geometry::Size::new(24.0, 16.0),
+    );
+    assert_eq!(rectangles(&mut t), [(swatch, Color::rgb(0, 0, 0))]);
+    shade.set(100);
+    changed.notify_listeners();
+    assert_eq!(rectangles(&mut t), [(swatch, Color::rgb(100, 0, 0))]);
+}

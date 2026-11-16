@@ -7,18 +7,22 @@
   `to_have_name`, `to_have_value`, `to_be_checked`, `to_be_enabled`, `to_be_focused`) waits while
   the application has a frame or work due and fails at once, with the window's outline, when it is
   idle. Each action has a `try_` twin returning `TestError`.
+- `Tester::draw_commands` reads every draw command of the window's last submitted scene, after
+  the frames due now, each with the canvas transform it was recorded under, so a test checks what a
+  `CustomPainter` or a render object drew.
 
 ### Changed
 
 - `flui create`'s counter and widget templates test through `Tester`; the counter's test no longer
   wraps the app in a `MediaQuery` or computes tap coordinates.
 
-### Deprecated
+### Removed
 
-- `flui::testing`'s old harnesses moved under the deprecated `flui::testing::harness`:
-  `HeadlessBinding`, `BuildCapabilities`, `MountOptions`, `MountOwners`, `Mounted`, `widgets`,
-  `storage`, `replay`, `a11y` and `render_snapshot`. Use `Tester`,
-  `flui::testing::find` and `Tester::inspect_render`.
+- `flui::testing`'s old harnesses: `HeadlessBinding`, `BuildCapabilities`, `MountOptions`,
+  `MountOwners`, `Mounted`, `GestureBinding`, `widgets`, `storage`, `replay`, `a11y` and
+  `render_snapshot` are no longer reachable through the facade. Use `Tester`,
+  `flui::testing::find`, `Tester::inspect_render` and `Tester::draw_commands`; render objects keep
+  `flui::testing::rendering`.
 
 ### Fixed
 

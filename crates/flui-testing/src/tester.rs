@@ -616,6 +616,28 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
+    /// Every draw command of the window's last submitted scene, in layer
+    /// order, each with the canvas transform it was recorded under: what a
+    /// paint test samples at a virtual time. The frames due now run first, as
+    /// for every read; a scene that painted nothing new keeps the last one.
+    ///
+    /// The commands are the whole scene's: a scene does not record which
+    /// node painted which command ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
+    #[must_use]
+    pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
+        self.run_due_now();
+        let Some(tree) = self.host.sink().layer_tree() else {
+            return Vec::new();
+        };
+        let mut commands = Vec::new();
+        for (_, node) in tree.iter() {
+            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
+                commands.extend(picture.picture().iter().map(|command| command.to_buf()));
+            }
+        }
+        commands
+    }
+
     // --- Acting -----------------------------------------------------------
 
     /// Tap the one element `locator` names at the centre of its visible part.
