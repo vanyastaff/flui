@@ -42,7 +42,6 @@ use super::bridge_slot::BridgeSlot;
 use super::main_thread;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
-use crate::text::android::ime::{Install as SnapshotInstall, Snapshot};
 use crate::version::gate::android::AndroidApi;
 
 use super::{ActivityWindow, ActivityWindowId};
@@ -160,12 +159,6 @@ pub(crate) type WindowWork = Box<dyn FnOnce(&dyn ActivityWindow) + Send>;
 /// method of the view, on the Java main thread under no lock of the view, and
 /// answers what the view applies and queues.
 pub(crate) trait InputMethod: Send + Sync {
-    /// The view takes `snapshot`, which the owner published: the reports
-    /// that follow are made against what the answer leaves it holding. On
-    /// the Java main thread, in the posted call that hands the view the
-    /// snapshot, so it is ordered with the view's reports.
-    fn install(&self, snapshot: &Snapshot) -> SnapshotInstall;
-
     /// `nativeImeState`: what the view holds after an input method edit;
     /// `None` before the view holds a snapshot.
     fn edited(&self, state: EditorState) -> Option<InputMethodReply>;

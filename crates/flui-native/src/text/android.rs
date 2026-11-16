@@ -749,8 +749,8 @@ mod input {
 
     use super::ime::{
         Change, CharacterBounds, EditorReport, ImeEdit, Install, KeyboardTap, Ledger, Mirror,
-        Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info, field_contains,
-        starts_handwriting,
+        Replayed, Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info,
+        field_contains, starts_handwriting,
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -830,7 +830,9 @@ mod input {
     /// the work it hands the owner reaches. Public where it is defined, as the
     /// host's table names it, and nameable only inside the crate.
     pub struct ViewInputMethod {
-        mirror: parking_lot::Mutex<Mirror>,
+        /// The view's mirror, which each report is diffed against and each
+        /// window's field installs its snapshots in, on the Java main thread.
+        mirror: Arc<parking_lot::Mutex<Mirror>>,
         /// The owner's half of the mirror, which every window's field
         /// publishes through and replays against ([`Ledger`]); made with the
         /// first window, on the owner thread that made this.
@@ -842,7 +844,7 @@ mod input {
     impl Default for ViewInputMethod {
         fn default() -> Self {
             Self {
-                mirror: parking_lot::Mutex::default(),
+                mirror: Arc::default(),
                 ledger: OwnerSlot::new(),
                 fields: Arc::default(),
             }
@@ -869,10 +871,6 @@ mod input {
     }
 
     impl InputMethod for ViewInputMethod {
-        fn install(&self, snapshot: &Snapshot) -> Install {
-            self.mirror.lock().install(snapshot)
-        }
-
         fn edited(&self, state: EditorState) -> Option<InputMethodReply> {
             let EditorState {
                 text,
@@ -940,7 +938,12 @@ mod input {
             let input = OwnerSlot::new();
             let made = self.ledger().is_some_and(|ledger| {
                 input
-                    .replace(AndroidTextInput::new(Arc::clone(view), api, ledger))
+                    .replace(AndroidTextInput::new(
+                        Arc::clone(view),
+                        api,
+                        Arc::clone(&self.mirror),
+                        ledger,
+                    ))
                     .is_ok()
             });
             if !made {
@@ -1051,10 +1054,9 @@ mod input {
         /// Whether the input method can start stylus handwriting on the view.
         handwriting: Option<Since<StylusHandwriting>>,
         focused: RefCell<Option<Rc<dyn TextStore>>>,
-        /// The view's publications and the reports replayed, which decide
-        /// whether an edit still applies; shared with every window's field
-        /// over the view.
-        ledger: Rc<Ledger>,
+        /// What publishes the focused store to the view and decides whether
+        /// an edit still applies.
+        publisher: Publisher,
         /// The contact that may be a tap on the focused field.
         tap: RefCell<KeyboardTap>,
         /// What `requestCursorUpdates` last asked for.
@@ -1070,19 +1072,52 @@ mod input {
         }
     }
 
-    /// Publish `snapshot` to the view. On the Java main thread, in the call
-    /// that hands it to the view and so ordered with the view's reports, the
-    /// view's mirror installs it ([`Mirror::install`]) and the view takes it
-    /// as the install says: as a new editor for a focus, by replacing its
-    /// text with or without a restart, or not at all when it keeps the input
-    /// method's newer edits. A view that is not installed takes neither.
-    fn publish(view: &Arc<JavaView>, snapshot: Snapshot, status: (i32, i32, bool)) {
+    /// The view's two halves of the focused field, shared by every window's
+    /// field over the view: the mirror the Java main thread diffs reports
+    /// against, and the owner's ledger of publications and replayed reports.
+    #[derive(Clone)]
+    struct Publisher {
+        view: Arc<JavaView>,
+        mirror: Arc<parking_lot::Mutex<Mirror>>,
+        ledger: Rc<Ledger>,
+    }
+
+    impl Publisher {
+        /// Replay `edit` into `session` by the ledger's rule.
+        fn replay(&self, edit: &ImeEdit, session: &mut dyn TextStoreEdit) -> Replayed {
+            self.ledger.replay(edit, session)
+        }
+
+        /// Publish the store `session` reads, for `change`, to the view. On
+        /// the Java main thread, in the call that hands it to the view and so
+        /// ordered with the view's reports, the mirror installs it
+        /// ([`Mirror::install`]) and the view takes it as the install says: as
+        /// a new editor for a focus, by replacing its text with or without a
+        /// restart, or not at all when it keeps the input method's newer
+        /// edits. A view that is not installed takes neither.
+        fn publish(&self, session: &dyn TextStoreRead, change: Change, status: (i32, i32, bool)) {
+            publish(
+                &self.view,
+                Arc::clone(&self.mirror),
+                self.ledger.publish(session, change),
+                status,
+            );
+        }
+    }
+
+    /// See [`Publisher::publish`].
+    fn publish(
+        view: &Arc<JavaView>,
+        mirror: Arc<parking_lot::Mutex<Mirror>>,
+        snapshot: Snapshot,
+        status: (i32, i32, bool),
+    ) {
         let bridge = Arc::clone(view);
         view.post(move |env, view| {
             // Made before the mirror changes, so a refused allocation leaves
             // the mirror and the view's editor holding the same text.
             let text = env.new_string(&snapshot.text)?;
-            let Install::Replace { restart } = bridge.input_method().install(&snapshot) else {
+            let Install::Replace { restart } = mirror.lock().install(&snapshot) else {
                 return Ok(());
             };
             bridge.set_composing(snapshot.composition.is_some());
@@ -1129,12 +1164,23 @@ mod input {
     }
 
     impl AndroidTextInput {
-        pub(crate) fn new(view: Arc<JavaView>, api: AndroidApi, ledger: Rc<Ledger>) -> Rc<Self> {
+        /// The field of a window over `view`, whose mirror and ledger every
+        /// window over the view shares.
+        fn new(
+            view: Arc<JavaView>,
+            api: AndroidApi,
+            mirror: Arc<parking_lot::Mutex<Mirror>>,
+            ledger: Rc<Ledger>,
+        ) -> Rc<Self> {
             Rc::new_cyclic(|this| Self {
+                publisher: Publisher {
+                    view: Arc::clone(&view),
+                    mirror,
+                    ledger,
+                },
                 view,
                 handwriting: api.since::<StylusHandwriting>(),
                 focused: RefCell::new(None),
-                ledger,
                 tap: RefCell::new(KeyboardTap::default()),
                 cursor_mode: Cell::new(0),
                 queue: HostQueue::new(),
@@ -1188,13 +1234,12 @@ mod input {
             let Some(store) = self.focused() else {
                 return;
             };
-            let ledger = Rc::clone(&self.ledger);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&*store);
             let this = self.this.clone();
             let edited = Rc::clone(&store);
             let grant = LockGrant::read_write(move |session| {
-                let outcome = ledger.replay(&edit, session);
+                let outcome = publisher.replay(&edit, session);
                 // Focus may have moved to another field while the grant waited: its
                 // snapshot is the one the view mirrors now, and a restart on this
                 // store would overwrite it.
@@ -1205,7 +1250,7 @@ mod input {
                 if outcome.restarts_the_view() && still_focused {
                     // The store refused a step: the input method's text no longer
                     // matches the store's.
-                    publish(&view, ledger.publish(&*session, Change::Resync), status);
+                    publisher.publish(&*session, Change::Resync, status);
                 }
             });
             {
@@ -1223,11 +1268,10 @@ mod input {
             let Some(store) = self.focused() else {
                 return;
             };
-            let ledger = Rc::clone(&self.ledger);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&*store);
             let grant = move |session: &dyn TextStoreRead| {
-                publish(&view, ledger.publish(session, change), status);
+                publisher.publish(session, change, status);
             };
             let _entered = self.queue.enter();
             let sync = {
@@ -1278,15 +1322,14 @@ mod input {
         /// and publish the result, which ends the input method's own (the view
         /// restarts it when it was composing).
         fn end_composition(&self, store: &Rc<dyn TextStore>) -> CompositionEnd {
-            let ledger = Rc::clone(&self.ledger);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&**store);
             let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
                 if session.composition().is_some() {
                     let _ = session.set_composition(None);
                 }
-                view.set_composing(false);
-                publish(&view, ledger.publish(&*session, Change::Text), status);
+                publisher.view.set_composing(false);
+                publisher.publish(&*session, Change::Text, status);
             });
             let outcome = {
                 let _entered = self.queue.enter();
@@ -1310,16 +1353,15 @@ mod input {
             let Some(store) = self.focused() else {
                 return;
             };
-            let ledger = Rc::clone(&self.ledger);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&*store);
             let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
                 if session.composition().is_none() {
                     return;
                 }
                 let _ = session.set_composition(None);
-                view.set_composing(false);
-                publish(&view, ledger.publish(&*session, Change::Text), status);
+                publisher.view.set_composing(false);
+                publisher.publish(&*session, Change::Text, status);
             });
             {
                 let _entered = self.queue.enter();

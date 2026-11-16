@@ -953,6 +953,50 @@ fn with_render_editable<T>(
     })
 }
 
+/// A field's whole bounds, which a host hit-tests a tap or a pen against and
+/// hands the input method as the editor's area, are the box the field was
+/// given, even with no text to cover it; and they still cover text that runs
+/// past the box.
+pub(crate) fn a_fields_bounds_are_its_box_and_its_text() {
+    use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming};
+    use flui_view::ViewExt;
+    use flui_widgets::SizedBox;
+    use std::cell::Cell;
+
+    let bounds_of = |text: &str| {
+        let controller = TextEditingController::with_text(text);
+        let focus = FocusNode::with_debug_label("bounded field");
+        let mut harness = crate::common::harness::mount_with_ime(
+            SizedBox::new(240.0, 40.0)
+                .child(EditableText::new(controller, Rc::clone(&focus)))
+                .boxed(),
+        );
+        let _ = focus.request_focus();
+        harness.tick();
+        let store = harness.active_text_store().expect("focused input store");
+        let found = Rc::new(Cell::new(None));
+        let sink = Rc::clone(&found);
+        assert_eq!(
+            store.request_lock(
+                LockGrant::read(move |session| sink.set(session.document_bounds().ok())),
+                LockTiming::Sync
+            ),
+            Ok(LockOutcome::Granted)
+        );
+        found.get().expect("a laid out field has bounds")
+    };
+    let empty = bounds_of("");
+    assert!(
+        (empty.size.width - 240.0).abs() < 0.5 && empty.size.height >= 16.0,
+        "an empty field's bounds are its box, not its caret: {empty:?}"
+    );
+    let long = bounds_of(&"m".repeat(200));
+    assert!(
+        long.size.width > 240.0,
+        "text past the box stays inside the bounds: {long:?}"
+    );
+}
+
 /// Glyph geometry and the caret must use the same updated text sizing.
 pub(crate) fn inherited_text_sizing_updates_editable_glyphs_and_caret() {
     use flui_painting::typography::TextStyle;

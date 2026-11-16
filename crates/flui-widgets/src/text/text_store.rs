@@ -966,7 +966,11 @@ impl TextStoreRead for Session<'_> {
         })
     }
 
+    /// The field's box together with its text and caret, which may run past
+    /// the box: an empty field's bounds are still the area a host hit-tests
+    /// a tap or a pen against.
     fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
+        let viewport = self.store.viewport()?;
         self.store.with_layout(&self.doc, |editable, to_root| {
             let len = editable.plain_text().len();
             let text = editable
@@ -976,7 +980,7 @@ impl TextStoreRead for Session<'_> {
                 .local_rect_for_range(len..len)
                 .ok_or(TextStoreError::NoLayout)?;
             Ok(bounds_from_rect(
-                to_root.transform_rect(&text.union(&caret)),
+                to_root.transform_rect(&text.union(&caret).union(&viewport)),
             ))
         })
     }
