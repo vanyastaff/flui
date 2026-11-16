@@ -68,10 +68,66 @@ fn os_drag_terms_refuse_what_no_os_session_may_offer() {
         format: custom(&format!("{IDENTITY_ESSENCE};session=9")),
         declared_len: None,
     };
+    let of = |format| RepresentationDescriptor {
+        format,
+        declared_len: None,
+    };
+    let image = |mime: &str| TransferFormat::Image {
+        mime: Mime::new(mime),
+    };
     let most = usize::from(u16::MAX);
+    // `vec![text(); n]` repeats one media type, so the long rows use a custom
+    // type per representation.
+    let distinct = |n: usize| -> Vec<RepresentationDescriptor> {
+        (0..n)
+            .map(|i| of(custom(&format!("application/x-row-{i}"))))
+            .collect()
+    };
     for (name, serialized, allowed, expected) in [
         ("text under copy", vec![text()], COPY, Ok(2)),
         ("identity alone", Vec::new(), MOVE, Ok(1)),
+        (
+            "every variant once",
+            vec![
+                text(),
+                of(TransferFormat::Html),
+                of(TransferFormat::UriList),
+                of(image("image/png")),
+                of(custom("application/json")),
+            ],
+            COPY,
+            Ok(6),
+        ),
+        (
+            "an image under the identity's type",
+            vec![text(), of(image(IDENTITY_ESSENCE))],
+            COPY,
+            Err(DragRequestError::ClaimsIdentity),
+        ),
+        (
+            "the identity's type spelled with capitals and parameters",
+            vec![of(custom("Application/X-Flui-Drag-Session; process=1"))],
+            COPY,
+            Err(DragRequestError::ClaimsIdentity),
+        ),
+        (
+            "text and a custom text/plain",
+            vec![text(), of(custom("text/plain;charset=utf-8"))],
+            COPY,
+            Err(DragRequestError::DuplicateFormat),
+        ),
+        (
+            "one image type twice",
+            vec![of(image("image/png")), of(image("image/png"))],
+            COPY,
+            Err(DragRequestError::DuplicateFormat),
+        ),
+        (
+            "two image types",
+            vec![of(image("image/png")), of(image("image/jpeg"))],
+            COPY,
+            Ok(3),
+        ),
         (
             "no action",
             vec![text()],
@@ -86,13 +142,13 @@ fn os_drag_terms_refuse_what_no_os_session_may_offer() {
         ),
         (
             "the last index taken by the identity",
-            vec![text(); most],
+            distinct(most),
             COPY,
             Ok(most + 1),
         ),
         (
             "past the last index",
-            vec![text(); most + 1],
+            distinct(most + 1),
             COPY,
             Err(DragRequestError::TooManyRepresentations),
         ),
@@ -134,6 +190,12 @@ fn the_identity_format_is_known_by_its_media_type_alone() {
     assert!(key().representation().format.is_drag_identity());
     for (format, identity) in [
         (custom(IDENTITY_ESSENCE), true),
+        (
+            TransferFormat::Image {
+                mime: Mime::new(IDENTITY_ESSENCE),
+            },
+            true,
+        ),
         (custom("application/x-flui-drag-session-other"), false),
         (custom("text/plain"), false),
         (TransferFormat::Text, false),

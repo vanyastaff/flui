@@ -28,12 +28,19 @@ use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 /// replaced, folds so the ring stays bounded.
 pub(super) const MAX_PENDING_FRAMES: usize = 8;
 
+/// How long the owner sleeps at most while a presentation has frames pending, so a settlement
+/// whose wake was lost is drained within this interval instead of never (ADR-0305 §5).
+pub(crate) const IN_FLIGHT_FLOOR: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// What a frame commits once its sink's verdict is known, captured when the frame is handed to
 /// the sink, so a settlement that arrives later commits the frame it names and not the tree as it
 /// is by then.
 pub(crate) struct PendingFrame {
     /// The stamp the frame's settlement names.
     epoch: FrameEpoch,
+    /// When the frame was handed to its sink, on its presentation's clock: what the in-flight
+    /// floor counts from.
+    submitted_at: Instant,
     /// What the frame's telemetry is recorded from.
     telemetry: SubmittedTelemetry,
     /// The scene version the sink was handed, acknowledged once it is shown.
@@ -51,6 +58,11 @@ pub(crate) struct PendingFrame {
 }
 
 impl PendingFrame {
+    /// When the frame was handed to its sink.
+    pub(crate) fn submitted_at(&self) -> Instant {
+        self.submitted_at
+    }
+
     /// How many layer reads the frame holds.
     pub(crate) fn staged_layer_reads(&self) -> usize {
         self.layer_reads.len()
@@ -107,6 +119,7 @@ impl UiRuntime {
         let layer_reads = producer.stage_agent_layer_reads(scene);
         PendingFrame {
             epoch: FrameEpoch::ZERO,
+            submitted_at: producer.clock().now(),
             telemetry: SubmittedTelemetry {
                 frame_time,
                 segment: producer.take_last_segment_span(),
@@ -209,9 +222,9 @@ impl UiRuntime {
     /// address and epoch name commits what it captured when it was submitted, by the same rules
     /// an inline verdict follows. The raster side settles a slot's frames in order, so frames of
     /// the same presentation queued before it and still pending get no settlement of their own,
-    /// and their records fold into this one. The one exception is an executor that dies during a
-    /// render: its inbox frame settles `Failed` first, and the render's own settlement, should it
-    /// return, is stale (`docs/gaps.md`). A settlement no pending record matches (another
+    /// and their records fold into this one; an executor that dies settles a frame queued behind a
+    /// render it still holds only after that render, so even then a later settlement never folds
+    /// a frame the raster side may still show. A settlement no pending record matches (another
     /// runtime's, an earlier life's, one already settled or folded, or a queued verdict, which no
     /// settlement carries) is [`Settled::Stale`], traced and ignored.
     ///
@@ -300,6 +313,15 @@ impl UiRuntime {
                     self.mark_needs_full_repaint_for(producer);
                 }
                 self.wake_frame();
+            } else if !producer.failure_backoff_holds(producer.clock().now())
+                && !producer.device_abandoned()
+                && !producer.frames_in_flight().is_saturated()
+                && producer.has_frame_work()
+            {
+                // Work the in-flight gate kept while the sink held as many frames as it may:
+                // this settlement freed a place, and nothing else wakes the loop for it
+                // (ADR-0305 §5).
+                self.wake_frame();
             }
         });
         // Held input replays once the retry is in place, before the first panic resumes: a panic
@@ -333,6 +355,7 @@ impl UiRuntime {
     ) -> VerdictTail {
         let PendingFrame {
             epoch: _,
+            submitted_at: _,
             telemetry,
             shown,
             tree_revision,

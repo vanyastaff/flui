@@ -22,6 +22,7 @@ use flui_platform::drag::{
     DragError, DragSessionKey, OsDragProvider, OsDragRequest, OsDragStart, OsDragTerms,
     ProcessNonce,
 };
+use flui_platform::pointer::PressId;
 use flui_platform::{DispatchEventResult, PlatformInput};
 
 const COPY: TransferActions = TransferActions::COPY;
@@ -112,6 +113,16 @@ impl Desktop {
     /// Start a FLUI drag from the window, serving its one text representation
     /// from `provider`.
     fn start(&self, provider: OsDragProvider) {
+        self.start_pressed(provider, None)
+            .expect("the session starts");
+    }
+
+    /// [`Self::start`], begun by the press sequence `press`.
+    fn start_pressed(
+        &self,
+        provider: OsDragProvider,
+        press: Option<PressId>,
+    ) -> Result<(), DragError> {
         let source = self
             .window
             .drag_source()
@@ -130,10 +141,68 @@ impl Desktop {
             COPY,
         )
         .expect("one text representation under COPY");
-        source
-            .start(OsDragRequest::new(terms, None, provider, Box::new(|_| {})))
-            .expect("the session starts");
+        source.start(OsDragRequest::new(terms, press, provider, Box::new(|_| {})))
     }
+
+    /// Inject a primary-button `Down` or `Up` of pointer 3 in the press
+    /// sequence `press` into the window.
+    fn press(&self, down: bool, press: PressId) {
+        use flui_foundation::geometry::Point as At;
+        use flui_platform::EventTime;
+        use flui_platform::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+            PointerPosition, PointerPress, PointerRelease, PointerSample,
+        };
+        let mouse = PointerInfo::new(PointerId::try_from(3_u64).expect("id"), PointerKind::Mouse);
+        let at = PointerSample::new(
+            EventTime::from_nanos(10),
+            PointerPosition::try_new(At::new(1.0, 1.0)).expect("finite"),
+        );
+        let event = if down {
+            PointerEvent::Down(
+                PointerPress::new(mouse, PointerButton::PRIMARY, PointerButtons::NONE, at)
+                    .with_press(press),
+            )
+        } else {
+            PointerEvent::Up(
+                PointerRelease::new(mouse, PointerButton::PRIMARY, PointerButtons::NONE, at)
+                    .with_press(press),
+            )
+        };
+        self.window
+            .as_any()
+            .downcast_ref::<flui_native::HeadlessHostWindow>()
+            .expect("a headless window")
+            .inject_event(PlatformInput::Pointer(event));
+    }
+}
+
+/// The double refuses a request begun by a press the window no longer holds,
+/// as a Win32 window does, and starts one whose press it holds. Red-check:
+/// start without reading the press.
+fn a_request_from_a_press_the_window_does_not_hold_is_refused() {
+    let desktop = desktop(Some(COPY));
+    let mint = IdMint::<PressId>::new();
+    let (first, second) = (
+        mint.next().expect("fresh mint"),
+        mint.next().expect("fresh mint"),
+    );
+    let serve = || -> OsDragProvider { Box::new(|_| Ok(TransferPayload::Text("x".to_owned()))) };
+    desktop.press(true, first);
+    desktop.press(false, first);
+    desktop.press(true, second);
+    assert_eq!(
+        desktop.start_pressed(serve(), Some(first)),
+        Err(DragError::Unsupported(flui_platform::Unsupported::new(
+            flui_platform::UnsupportedReason::Unavailable
+        ))),
+        "the ended press starts nothing, though the pointer is pressed again"
+    );
+    assert_eq!(
+        desktop.start_pressed(serve(), Some(second)),
+        Ok(()),
+        "the press the window holds starts its session"
+    );
 }
 
 fn resolved(request: TransferRequest) -> Result<TransferPayload, TransferError> {
@@ -296,6 +365,10 @@ fn headless_drag_contracts() {
             (
                 "a_concluded_drop_retires_its_provider_outside_the_double",
                 a_concluded_drop_retires_its_provider_outside_the_double,
+            ),
+            (
+                "a_request_from_a_press_the_window_does_not_hold_is_refused",
+                a_request_from_a_press_the_window_does_not_hold_is_refused,
             ),
         ],
     );

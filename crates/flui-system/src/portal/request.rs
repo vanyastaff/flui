@@ -6,26 +6,30 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use flui_platform::{Unsupported, UnsupportedReason};
+use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 use futures_util::StreamExt;
 use futures_util::future::{Either, select};
 use zbus::{MatchRule, MessageStream, OwnedObjectPath, OwnedVariant};
 
-use super::PortalError;
+use super::{Dismissal, PortalError};
 
 pub(super) const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 pub(super) const PATH: &str = "/org/freedesktop/portal/desktop";
 /// The bus driver's own name, the sender of its notices.
 const BUS: &str = "org.freedesktop.DBus";
 
-/// How the user ended a request.
+/// How a request ended.
 pub(super) enum Response {
     /// Answered, with the portal's results.
     Answered(HashMap<String, OwnedVariant>),
     /// Cancelled by the user.
     Cancelled,
-    /// Ended some other way: the portal's own failure.
-    Ended,
+    /// Ended some other way, with the portal's response code (`2` for "the
+    /// user interaction was ended in some other way").
+    Ended(u32),
+    /// The caller let the request go: its `Request` was closed, or it was
+    /// never made. Nobody hears this answer.
+    Dismissed,
 }
 
 /// Call `method` of `interface` and wait for its `Request`'s `Response`.
@@ -39,19 +43,24 @@ pub(super) enum Response {
 /// send a signal to this connection directly, past any bus-side match rule,
 /// but not under the portal's unique name. The portal leaving the bus before
 /// it answers ends the request as unavailable.
+///
+/// A request with a `dismissal` ends when its caller lets it go: not made at
+/// all when that happened first, otherwise closed through its `Request`
+/// object's `Close`, which takes the portal's dialog down.
 pub(super) async fn call<B>(
     connection: &zbus::Connection,
     interface: &str,
     method: &str,
     token: &str,
     body: &B,
+    dismissal: Option<&Dismissal>,
 ) -> Result<Response, PortalError>
 where
     B: serde::Serialize + zbus::DynamicType,
 {
     let sender = connection
         .unique_name()
-        .ok_or(PortalError::Failed)?
+        .ok_or(PortalError::Failed(SystemFailure::Bus))?
         .trim_start_matches(':')
         .replace('.', "_");
     let expected = format!("{PATH}/request/{sender}/{token}");
@@ -60,6 +69,9 @@ where
     let owner = owner(&bus).await?;
     let mut responses = subscribe(connection, &owner, &expected).await?;
 
+    if dismissal.is_some_and(Dismissal::is_dismissed) {
+        return Ok(Response::Dismissed);
+    }
     let reply = connection
         .call_method(Some(owner.as_str()), PATH, Some(interface), method, body)
         .await?;
@@ -71,12 +83,22 @@ where
     }
 
     let departed = std::pin::pin!(departure(&mut departures, owner.as_str()));
-    let message = match select(responses.next(), departed).await {
-        Either::Left((message, _)) => message.ok_or(PortalError::Failed)??,
-        Either::Right(_) => {
+    let dismissed = std::pin::pin!(async {
+        match dismissal {
+            Some(dismissal) => dismissal.dismissed().await,
+            None => std::future::pending::<()>().await,
+        }
+    });
+    let message = match select(responses.next(), select(departed, dismissed)).await {
+        Either::Left((message, _)) => message.ok_or(PortalError::Failed(SystemFailure::Bus))??,
+        Either::Right((Either::Left(_), _)) => {
             return Err(PortalError::Unsupported(Unsupported::new(
                 UnsupportedReason::Unavailable,
             )));
+        }
+        Either::Right((Either::Right(_), _)) => {
+            close(connection, &owner, &handle).await;
+            return Ok(Response::Dismissed);
         }
     };
     let (code, results) = message
@@ -85,8 +107,24 @@ where
     Ok(match code {
         0 => Response::Answered(results),
         1 => Response::Cancelled,
-        _ => Response::Ended,
+        other => Response::Ended(other),
     })
+}
+
+/// Close the `Request` object at `handle`: the portal takes its dialog down
+/// and sends no answer. A portal that answered meanwhile has removed the
+/// object; the error that answers then, like any other, is nobody's to
+/// hear.
+async fn close(connection: &zbus::Connection, owner: &str, handle: &OwnedObjectPath) {
+    let _ = connection
+        .call_method(
+            Some(owner),
+            handle.as_str(),
+            Some("org.freedesktop.portal.Request"),
+            "Close",
+            &(),
+        )
+        .await;
 }
 
 /// The portal's unique owner, starting an installed portal that is not

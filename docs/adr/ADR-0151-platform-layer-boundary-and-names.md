@@ -650,11 +650,11 @@ One pull request would break `git blame` on paths that exist before and after
 
 ### 13. `AppLifecycleState` stays in `flui-scheduler`
 
-It is an aggregate of the UI runtime (ADR-0035 §4: lifecycle facts are per presentation, the
+It is an aggregate of the UI runtime (ADR-0345 §1: lifecycle facts are per presentation, the
 runtime aggregates them). Hosts publish presentation facts (`WindowExecutionState`,
 visibility) and name no scheduler type. Moving it to the contract would put framework policy
-(`should_render`, `should_animate`) in a Stable crate. ADR-0035 stands unchanged; the earlier
-proposal to supersede its §1 is dropped.
+(`should_render`, `should_animate`) in a Stable crate. ADR-0035 §1 stands, and the earlier
+proposal to supersede it is dropped.
 
 ### 14. OS floors stand; Android's `targetSdk` is pinned
 

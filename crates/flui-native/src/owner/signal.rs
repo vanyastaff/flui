@@ -91,7 +91,7 @@ struct State {
     window_wakes: Vec<WindowWake>,
     /// Work that runs code the owner does not own (a message the queue
     /// refused, sent to its window), run once the turn released its state
-    /// ([`OwnerSignal::run_outside_turn`]).
+    /// (`OwnerSignal::run_outside_turn`, which only the Windows host builds).
     outside_turn: Vec<WindowWake>,
     /// Window opens other threads asked for, oldest first, waiting for an
     /// owner turn; at most [`OPEN_LANE_CAPACITY`].
