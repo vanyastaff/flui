@@ -32,3 +32,6 @@
   hidden or paused) instead of `Resumed`, and its listeners no longer hear a start-up change no
   window made. The headless host's `open_window` reports the new window as it opened, as a
   native host does, so a focused new window makes the first one `Inactive`.
+- A window installed beside a focused one no longer leaves that one holding its keys: installing
+  moves no focus, and the new window's snapshot takes it, so the window that loses it is told
+  each held key was cancelled and its pointer sequences end.

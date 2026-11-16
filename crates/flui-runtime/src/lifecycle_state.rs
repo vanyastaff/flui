@@ -179,8 +179,8 @@ mod lifecycle_derivation_tests {
         );
     }
 
-    /// Every ladder walks each state between its ends on the ring and passes
-    /// none more active than both of them; the table pins exact ladders up,
+    /// Every ladder walks each state between its ends, in order of activity,
+    /// and nothing outside them; the table pins exact ladders up,
     /// down and into `Detached`.
     fn every_ladder_walks_each_state_between_its_ends() {
         use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
@@ -197,44 +197,37 @@ mod lifecycle_derivation_tests {
             assert_eq!(lifecycle_ladder(old, new), expected, "{old:?} -> {new:?}");
         }
 
-        // Every pair, the empty ladder included: each step is a neighbour of
-        // the one before on the ring, the ladder ends at its target, and no
-        // step is more active than both ends.
+        // Every pair, the empty ladder included. Ordered by activity
+        // (`Detached` below `Paused`), a ladder moves one state at a time
+        // straight from its start to its target: it never turns back, skips
+        // a state, repeats one, or leaves the span between its ends.
         let activity = |state| match state {
-            Detached => 0,
+            Detached => 0_i32,
             Paused => 1,
             Hidden => 2,
             Inactive => 3,
             Resumed => 4,
         };
-        let position = |state| {
-            AppLifecycleState::ALL
-                .iter()
-                .position(|&s| s == state)
-                .expect("BUG: every state is in ALL")
-        };
-        let ring = AppLifecycleState::ALL.len();
         for old in AppLifecycleState::ALL {
             for new in AppLifecycleState::ALL {
                 let steps = lifecycle_ladder(old, new);
-                if old == new {
-                    assert!(steps.is_empty(), "{old:?} -> {new:?}: {steps:?}");
-                    continue;
-                }
-                assert_eq!(steps.last(), Some(&new), "{old:?} -> {new:?}: {steps:?}");
+                let direction = (activity(new) - activity(old)).signum();
+                assert_eq!(
+                    steps.len(),
+                    usize::try_from((activity(new) - activity(old)).abs())
+                        .expect("BUG: an absolute difference is not negative"),
+                    "{old:?} -> {new:?}: {steps:?}"
+                );
                 let mut previous = old;
                 for &step in &steps {
-                    let apart = (position(step) + ring - position(previous)) % ring;
-                    assert!(
-                        apart == 1 || apart == ring - 1,
+                    assert_eq!(
+                        activity(step) - activity(previous),
+                        direction,
                         "{old:?} -> {new:?}: {previous:?} then {step:?} in {steps:?}"
-                    );
-                    assert!(
-                        activity(step) <= activity(old).max(activity(new)),
-                        "{old:?} -> {new:?}: {step:?} is more active than both ends"
                     );
                     previous = step;
                 }
+                assert_eq!(previous, new, "{old:?} -> {new:?} ends at its target");
             }
         }
     }

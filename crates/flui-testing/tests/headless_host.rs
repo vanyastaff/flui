@@ -842,6 +842,50 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
     );
 }
 
+/// A window opened beside the focused one takes the OS focus: the first
+/// window is told the key it held was cancelled, as when it loses focus to
+/// another application.
+///
+/// Fails when installing the window clears the first one's focus without
+/// the transfer that forgets its keys.
+#[test]
+fn opening_a_window_cancels_the_keys_the_focused_one_held() {
+    use flui_interaction::focus::{FocusNode, KeyEventResult};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::{EventTime, PlatformInput};
+
+    let node = FocusNode::with_debug_label("held");
+    let cancelled = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&cancelled);
+    let _cancel = node.register_on_key_cancel(Rc::new(move |press: &KeyEvent| {
+        seen.borrow_mut().push(press.key.clone());
+    }));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    host.attach(
+        &flui_widgets::Focus::new(flui_widgets::SizedBox::new(40.0, 40.0))
+            .focus_node(Rc::clone(&node))
+            .on_key_event(|_, _| KeyEventResult::Handled),
+    )
+    .expect("a fresh host has no root");
+    let _ = host.pump(Duration::ZERO);
+    let _ = node.request_focus();
+    let _ = host.pump(Duration::ZERO);
+    host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
+        KeyState::Down,
+        Key::character("a"),
+        Code::KeyA,
+        EventTime::from_nanos(0),
+    )));
+    assert!(cancelled.borrow().is_empty(), "the key is held");
+
+    host.open_window(HeadlessWindow::new(100, 100));
+    assert_eq!(
+        *cancelled.borrow(),
+        [Key::character("a")],
+        "the first window forgot the key it held"
+    );
+}
+
 /// Tab moves the primary focus to the next field, and Shift+Tab back, in a
 /// root attached through `HeadlessHost`, on the primary window and on a
 /// secondary one: the host wraps every root in `flui_widgets::app_root`, the

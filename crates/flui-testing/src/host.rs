@@ -1775,7 +1775,15 @@ impl HeadlessHost {
     /// until a view is [attached](Self::attach_to) to it.
     ///
     /// The window gets a window identity no window of this host had, open
-    /// or closed.
+    /// or closed. It reports itself as it opened, focused and shown, as a
+    /// native window does once installed: it takes the OS focus from the
+    /// other windows, which forget their held keys, and the application's
+    /// lifecycle moves with it.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the panic of an observer that report reaches, with the window
+    /// open.
     pub fn open_window(&mut self, mut window: HeadlessWindow) -> HeadlessWindowId {
         window.id = self
             .window_ids

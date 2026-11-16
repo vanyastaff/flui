@@ -68,12 +68,15 @@ host's lifecycle when the presentation enters the forest: in `UiRuntime::constru
 one and in `install_presentation` for every later one, before a root mounts and anything can
 subscribe; it runs no user code. `UiRuntime::seed_runtime_lifecycle` then sets the scheduler to
 the aggregate of the primary at construction, before anything subscribes. Installing a later
-presentation stays a pure publication that runs no user code; the change it makes to the
-aggregate and to its siblings reaches observers when the host delivers the window's `Snapshot`
-observation next, inside the owner's turn, where a panicking observer is contained as on any
-window change. Every host does so: flui-app's window installation and the headless host's
-`open_window`. The reconcile pass therefore always has a previous state; an empty source is a
-broken invariant (`expect("BUG: …")`), not a branch.
+presentation stays a pure publication that runs no user code and moves no focus. The host
+delivers the window's `Snapshot` observation next, inside the owner's turn: it takes the focus
+from the siblings (forgetting their held keys and cancelling their pointer sequences) and
+delivers the change to the aggregate. Every host does so: flui-app's window installation, as the
+first of the window's initial observations, and the headless host's `open_window`. A panic of an
+observer that snapshot reaches is the snapshot's failure: flui-app fails the window's
+installation with it, and `open_window` resumes it with the window open. The reconcile pass
+always has a previous state; an empty source is a broken invariant (`expect("BUG: …")`), not a
+branch.
 
 ### §3 Every change walks the ladder
 
