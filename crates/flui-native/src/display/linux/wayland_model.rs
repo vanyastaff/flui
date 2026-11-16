@@ -34,12 +34,13 @@
 //!   compositor cannot describe an output, the colour is absent on this
 //!   device.
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     CapabilityAbsence, ColorGamut, DisplayColor, DisplayKey, Headroom, RefreshPeriod,
 };
 
 use super::view::{Identity, OutputView};
+use crate::display::scale::{RefusedScale, ScaleStreak};
 
 /// One event of an output, in the terms the model needs. The adapter maps the
 /// protocol's events onto these.
@@ -204,6 +205,12 @@ struct Output {
     /// The image description being described; replaced by a newer one, so an
     /// older description never overwrites a newer colour.
     describing: Option<(u64, ColorDescription)>,
+    /// The logical size and ratio of the state last taken over, read together
+    /// by the hosts' one rule; `None` for a state with no usable mode.
+    extent: Option<ScaledExtent>,
+    /// Whether the last scale read for this output was refused, so a run of
+    /// refusals is reported once.
+    scale_streak: ScaleStreak,
 }
 
 impl Output {
@@ -212,6 +219,25 @@ impl Output {
         let changed = self.color != color;
         self.color = color;
         changed && self.applied.is_some()
+    }
+
+    /// Take the pending state over, at a `done` or at the logical size that
+    /// completes a first state; whether it differs from the last one. The
+    /// compositor's scale goes through the hosts' one rule here: a scale no
+    /// screen has reads as the base ratio, and a run of them is reported once
+    /// for this output, with nothing borrowed while it is.
+    fn apply_pending(&mut self) -> bool {
+        let changed = self.applied.as_ref() != Some(&self.pending);
+        self.applied = Some(self.pending.clone());
+        let (extent, refused) = match scaled_extent(&self.pending, &mut self.scale_streak) {
+            Some((extent, refused)) => (Some(extent), refused),
+            None => (None, None),
+        };
+        self.extent = extent;
+        if let Some(refused) = refused {
+            refused.report();
+        }
+        changed
     }
 }
 
@@ -235,6 +261,8 @@ impl WaylandOutputs {
             awaiting_logical_size: false,
             color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             describing: None,
+            extent: None,
+            scale_streak: ScaleStreak::default(),
         });
     }
 
@@ -374,7 +402,7 @@ impl WaylandOutputs {
                 // taken over now rather than waiting for a `done` that a
                 // compositor need not repeat.
                 if std::mem::take(&mut output.awaiting_logical_size) {
-                    output.applied = Some(output.pending.clone());
+                    output.apply_pending();
                     return true;
                 }
             }
@@ -382,9 +410,7 @@ impl WaylandOutputs {
                 if output.awaiting_logical_size {
                     return false;
                 }
-                let changed = output.applied.as_ref() != Some(&output.pending);
-                output.applied = Some(output.pending.clone());
-                return changed;
+                return output.apply_pending();
             }
         }
         false
@@ -408,7 +434,9 @@ impl WaylandOutputs {
             if let Some(name) = key_name {
                 taken_names.push(name);
             }
-            if let Some(view) = view_of(output.global, state, key_name, output.color) {
+            if let Some(extent) = output.extent
+                && let Some(view) = view_of(output.global, state, key_name, output.color, extent)
+            {
                 views.push(view);
             }
         }
@@ -416,38 +444,78 @@ impl WaylandOutputs {
     }
 }
 
+/// An output's logical size and the ratio of its device pixels to it, read
+/// together so the two cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScaledExtent {
+    size: Size<i32>,
+    ratio: DevicePixelRatio,
+}
+
+/// The logical size and ratio an output's state says: its `xdg_output`
+/// logical size and its mode over it where it has one, else its mode over its
+/// `wl_output.scale` at that scale. The ratio goes through the hosts' one
+/// rule (`display::scale`): a ratio no screen has reads as the base ratio, and
+/// the size is then the mode's own pixels, so the bounds a snapshot publishes
+/// are the ones its scale describes. With the refusal to report when it
+/// starts a run; `None` for an output with no usable mode.
+fn scaled_extent(
+    state: &OutputState,
+    streak: &mut ScaleStreak,
+) -> Option<(ScaledExtent, Option<RefusedScale>)> {
+    let mode = state.mode?;
+    if mode.width <= 0 || mode.height <= 0 {
+        return None;
+    }
+    let pixels = if state.swaps_axes {
+        Size::new(mode.height, mode.width)
+    } else {
+        Size::new(mode.width, mode.height)
+    };
+    let (size, reported) = if let Some((width, height)) = state
+        .logical_size
+        .filter(|&(width, height)| width > 0 && height > 0)
+    {
+        (
+            Size::new(width, height),
+            f64::from(pixels.width) / f64::from(width),
+        )
+    } else {
+        let scale = state.scale.max(1);
+        (
+            Size::new(
+                (pixels.width / scale).max(1),
+                (pixels.height / scale).max(1),
+            ),
+            f64::from(scale),
+        )
+    };
+    Some(match streak.try_read(reported, "wl_output scale") {
+        Ok(ratio) => (ScaledExtent { size, ratio }, None),
+        Err(refused) => (
+            ScaledExtent {
+                size: pixels,
+                ratio: DevicePixelRatio::ONE,
+            },
+            refused,
+        ),
+    })
+}
+
 fn view_of(
     global: u32,
     state: &OutputState,
     key_name: Option<&str>,
     color: Result<DisplayColor, CapabilityAbsence>,
+    extent: ScaledExtent,
 ) -> Option<OutputView> {
     let mode = state.mode?;
-    if mode.width <= 0 || mode.height <= 0 {
-        return None;
-    }
-    let (pixel_width, pixel_height) = if state.swaps_axes {
-        (mode.height, mode.width)
-    } else {
-        (mode.width, mode.height)
-    };
-    let integer_scale = state.scale.max(1);
-    let logical = state
-        .logical_size
-        .filter(|&(width, height)| width > 0 && height > 0);
-    let (width, height, scale_factor) = match logical {
-        Some((width, height)) => (width, height, f64::from(pixel_width) / f64::from(width)),
-        None => (
-            (pixel_width / integer_scale).max(1),
-            (pixel_height / integer_scale).max(1),
-            f64::from(integer_scale),
-        ),
-    };
     let (x, y) = state
         .logical_position
         .or(state.position)
         .unwrap_or_default();
-    let bounds = Bounds::new(Point::new(x, y), Size::new(width, height));
+    let bounds = Bounds::new(Point::new(x, y), extent.size);
+    let ratio = extent.ratio;
     let identity = match key_name {
         Some(name) => Identity::Keyed(DisplayKey::WaylandOutput(name.to_owned())),
         None => Identity::Fresh { slot: global },
@@ -458,7 +526,7 @@ fn view_of(
         name: label_of(state),
         bounds,
         usable_bounds: bounds,
-        scale_factor,
+        scale_factor: ratio,
         // `wl_output.mode`'s `refresh` is millihertz in an `i32`; zero or
         // less means the compositor does not know.
         refresh_period: RefreshPeriod::from_millihertz(i64::from(mode.refresh_millihertz)).ok(),
@@ -540,7 +608,7 @@ mod tests {
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
         let first = only(&outputs);
         assert_eq!(first.bounds.size.width, 1920);
-        assert_eq!(first.scale_factor, 1.0);
+        assert_eq!(first.scale_factor.get(), 1.0);
 
         // A mode and a scale change arrive as a burst: neither shows until done.
         assert!(!outputs.apply(GLOBAL, mode(3840, 2160, 120_000)));
@@ -549,7 +617,7 @@ mod tests {
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
         let second = only(&outputs);
         assert_eq!(second.bounds.size.width, 1920, "3840 pixels at scale 2");
-        assert_eq!(second.scale_factor, 2.0);
+        assert_eq!(second.scale_factor.get(), 2.0);
         assert_eq!(
             second.refresh_period.map(RefreshPeriod::get),
             Some(Duration::from_nanos(8_333_333))
@@ -764,12 +832,77 @@ mod tests {
             ],
         );
         let view = only(&outputs);
-        assert_eq!(view.scale_factor, 1.5);
+        assert_eq!(view.scale_factor.get(), 1.5);
         assert_eq!(view.bounds.origin.x, 1280);
         assert_eq!(view.bounds.size.width, 2560);
         assert_eq!(view.bounds.size.height, 1440);
         assert_eq!(view.usable_bounds, view.bounds);
         assert!(!view.is_primary, "Wayland has no primary output");
+    }
+
+    /// A scale no screen has, whether the compositor says it in
+    /// `wl_output.scale` or makes it of a mode over a logical size, reads as
+    /// the base ratio by the hosts' one rule: the output is still listed, at
+    /// the bounds that ratio gives its mode.
+    fn a_scale_no_screen_has_reads_as_the_base_ratio() {
+        // (case, events, scale, bounds)
+        let rows = [
+            (
+                "a wl_output scale of 64",
+                vec![
+                    geometry(0, 0),
+                    mode(1920, 1080, 60_000),
+                    OutputEvent::Scale(64),
+                ],
+                1.0,
+                (1920, 1080),
+            ),
+            (
+                "a mode far wider than its logical size",
+                vec![
+                    geometry(0, 0),
+                    mode(7680, 4320, 60_000),
+                    OutputEvent::LogicalSize {
+                        width: 10,
+                        height: 10,
+                    },
+                ],
+                1.0,
+                (7680, 4320),
+            ),
+            (
+                "a logical size far wider than its mode",
+                vec![
+                    geometry(0, 0),
+                    mode(10, 10, 60_000),
+                    OutputEvent::LogicalSize {
+                        width: 7680,
+                        height: 4320,
+                    },
+                ],
+                1.0,
+                (10, 10),
+            ),
+            (
+                "the largest ratio a screen has",
+                vec![
+                    geometry(0, 0),
+                    mode(3200, 3200, 60_000),
+                    OutputEvent::Scale(32),
+                ],
+                32.0,
+                (100, 100),
+            ),
+        ];
+        for (case, events, scale, (width, height)) in rows {
+            let mut outputs = WaylandOutputs::default();
+            announce(&mut outputs, GLOBAL, events);
+            let view = only(&outputs);
+            assert_eq!(view.scale_factor.get(), scale, "{case}");
+            // The bounds are the ones the scale describes: a mode read at the
+            // base ratio is its own pixels.
+            assert_eq!(view.bounds.size, Size::new(width, height), "{case}");
+        }
     }
 
     fn a_quarter_turn_swaps_the_mode_without_a_logical_size() {
@@ -820,13 +953,17 @@ mod tests {
             }
         ));
         let view = only(&outputs);
-        assert_eq!(view.scale_factor, 1.5);
+        assert_eq!(view.scale_factor.get(), 1.5);
         assert_eq!(view.bounds.size.width, 2560);
         // Once listed, a later burst applies at its own `done` as usual.
         outputs.apply(GLOBAL, OutputEvent::Scale(1));
         assert_eq!(only(&outputs), view);
         assert!(outputs.apply(GLOBAL, OutputEvent::Done));
-        assert_eq!(only(&outputs).scale_factor, 1.5, "the logical size rules");
+        assert_eq!(
+            only(&outputs).scale_factor.get(),
+            1.5,
+            "the logical size rules"
+        );
     }
 
     fn an_output_without_a_usable_mode_is_not_listed() {
@@ -1054,6 +1191,10 @@ mod tests {
                 (
                     "wayland_refresh_at_or_below_zero_is_unknown",
                     wayland_refresh_at_or_below_zero_is_unknown,
+                ),
+                (
+                    "a_scale_no_screen_has_reads_as_the_base_ratio",
+                    a_scale_no_screen_has_reads_as_the_base_ratio,
                 ),
                 (
                     "logical_size_gives_a_fractional_scale_and_the_bounds",

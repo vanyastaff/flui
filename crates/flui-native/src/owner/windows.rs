@@ -100,7 +100,7 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
-pub(crate) use window_table::{WindowScale, WindowTable};
+pub(crate) use window_table::{WindowDpi, WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");

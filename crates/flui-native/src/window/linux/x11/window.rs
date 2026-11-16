@@ -81,7 +81,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Point, Size, WindowMetrics};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size, WindowMetrics};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::input_regions::ResizeEdge;
 use flui_platform::{
@@ -109,8 +109,8 @@ use x11rb::wrapper::ConnectionExt as _;
 use super::hints::{motif_hints, size_limits};
 use super::mode::{NetWmState, NetWmStateAtoms, WmState, mode_flags, with_mode};
 use super::placement::{
-    FrameExtents, device_coordinate, device_extent, display_of, is_scale, logical_geometry,
-    outer_bounds, window_scale,
+    FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
+    window_scale,
 };
 use super::support::{SupportAtoms, WindowManager, WindowManagerSupport, capabilities};
 use crate::host::{self, WindowFacets, WindowPositions};
@@ -380,7 +380,7 @@ struct Record {
     /// platform is gone.
     support: WindowManagerSupport,
     /// The scale of the display the window was last read on, or opened on.
-    scale: f64,
+    scale: DevicePixelRatio,
 }
 
 /// One X11 window of the platform's connection.
@@ -621,7 +621,7 @@ impl X11Window {
             .and_then(|snapshot| display_of(snapshot, outer).or_else(|| snapshot.primary()));
         let scale = window_scale(display, record.scale);
         record.scale = scale;
-        self.input_scale.set(scale);
+        self.input_scale.set(scale.get());
         // Remembered for a window whose platform is gone.
         record.support = support;
         // Shown while mapped, waiting for its first frame to be, or iconic: a
@@ -636,8 +636,8 @@ impl X11Window {
         let occluded = read.map_state == MapState::UNVIEWABLE || record.obscured;
         let geometry = logical_geometry(outer, scale).and_then(|geometry| {
             let content = flui_platform::WindowExtent::try_new(Size::new(
-                f64::from(read.content.width) / scale,
-                f64::from(read.content.height) / scale,
+                scale.to_logical(f64::from(read.content.width)),
+                scale.to_logical(f64::from(read.content.height)),
             ))?;
             let normal = match mode {
                 WindowMode::Normal => {
@@ -659,7 +659,7 @@ impl X11Window {
         {
             windows.frame_inset.record(frame.added());
         }
-        let metrics = WindowMetrics::try_new(read.content, scale).ok();
+        let metrics = WindowMetrics::try_new(read.content, scale.get()).ok();
         Sample::read(geometry, |state| {
             let state = state
                 .with_mode(mode)
@@ -753,7 +753,7 @@ impl X11Window {
 
     /// The scale of the display the window was last read on: the primary's
     /// when it is on none, the one it opened on before it was read.
-    fn scale(&self) -> f64 {
+    fn scale(&self) -> DevicePixelRatio {
         self.record.borrow().scale
     }
 
@@ -882,7 +882,7 @@ impl X11Window {
         let band = titled
             .then(|| {
                 let resizes = resizable && mode == WindowMode::Normal;
-                content.and_then(|size| ResizeBand::of(size, scale, resizes))
+                content.and_then(|size| ResizeBand::of(size, scale.get(), resizes))
             })
             .flatten();
         let answer = {
@@ -891,7 +891,14 @@ impl X11Window {
             let Chrome {
                 projected, presses, ..
             } = &mut *chrome;
-            presses.press(projected.sent(), point, button, band, Instant::now(), scale)
+            presses.press(
+                projected.sent(),
+                point,
+                button,
+                band,
+                Instant::now(),
+                scale.get(),
+            )
         };
         match answer {
             // The window manager's menu is asked for with a message only some
@@ -932,7 +939,7 @@ impl X11Window {
         let scale = self.record.borrow().scale;
         let starts = {
             let mut chrome = self.chrome.borrow_mut();
-            chrome.held == Some(1) && chrome.presses.moved(point, scale)
+            chrome.held == Some(1) && chrome.presses.moved(point, scale.get())
         };
         if starts {
             self.move_resize(MOVERESIZE_MOVE, motion);
@@ -2133,9 +2140,7 @@ impl X11Windows {
             placement,
             self.frame_inset.logical(placement.scale_factor),
         );
-        let scale = Some(placement.scale_factor)
-            .filter(|scale| is_scale(*scale))
-            .unwrap_or(1.0);
+        let scale = placement.scale_factor;
         let (Some(width), Some(height)) = (
             device_extent(plan.content_size.width, scale),
             device_extent(plan.content_size.height, scale),
@@ -2215,7 +2220,7 @@ impl X11Windows {
             input,
             drag: Arc::clone(owner.drag()),
             text: Rc::clone(owner.text()),
-            input_scale: WindowScale::new(scale),
+            input_scale: WindowScale::new(scale.get()),
             record: RefCell::new(Record {
                 title: options.title.clone(),
                 constraints,
@@ -2556,7 +2561,11 @@ impl host::Window<X11Loop> for X11Window {
         capabilities(shared.support())
     }
 
-    fn frame_inset(_: &X11Loop, shared: &X11Windows, scale_factor: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &X11Loop,
+        shared: &X11Windows,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         shared.frame_inset.logical(scale_factor)
     }
 

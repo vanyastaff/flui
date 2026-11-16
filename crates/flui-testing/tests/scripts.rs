@@ -329,7 +329,10 @@ fn a_script_finds_its_target_by_role_and_label_and_settles_within_a_limit() {
 
     let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
     let window = host.primary_window();
-    host.set_scale_factor(window, 1.5);
+    host.set_scale_factor(
+        window,
+        flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
+    );
     let pressed = Rc::new(RefCell::new(Vec::new()));
     let button = |label: &'static str| {
         let pressed = Rc::clone(&pressed);

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::task::{Context, Waker};
 use std::time::{Duration, Instant};
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
 use flui_platform::{
     DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
@@ -31,7 +31,7 @@ fn displays() -> DisplaySnapshot {
         id,
         "main",
         Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-        1.0,
+        DevicePixelRatio::ONE,
     )
     .with_primary(true)
     .with_persistent_key("key-main");

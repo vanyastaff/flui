@@ -19,7 +19,7 @@
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     SizeConstraints, WindowAppearance, WindowExtent, WindowGeometry, WindowId, WindowMode,
 };
@@ -208,9 +208,9 @@ pub(crate) struct WindowContext {
     ///
     /// [`CreatedWindow::scale`]: crate::owner::windows::CreatedWindow::scale
     pub(crate) scale: crate::owner::windows::WindowScale,
-    /// A `WM_DPICHANGED` naming a DPI of zero was refused and no valid one
-    /// came since: a sender that repeats it is reported once, not per message.
-    pub(crate) refusing_zero_dpi: std::cell::Cell<bool>,
+    /// Whether the last `WM_DPICHANGED` was refused (its DPI no ratio a screen
+    /// can have), so a sender that repeats one is reported once per run.
+    pub(crate) dpi_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -238,6 +238,9 @@ pub(crate) struct WindowContext {
     /// The inner-size limits the app set, in logical pixels; `WM_GETMINMAXINFO`
     /// turns them into outer limits at the window's current DPI.
     pub constraints: std::cell::Cell<flui_platform::SizeConstraints>,
+    /// Whether the last DPI the limits were read at was refused, so a run of
+    /// refusals is reported once.
+    pub scale_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
     /// Whether the app wants the window resizable. A window without a frame
     /// cannot be, but gets the frame back with this still set.
     pub resizable: std::cell::Cell<bool>,
@@ -1501,7 +1504,7 @@ pub(crate) struct WindowRecord {
     pub(crate) bounds: Bounds<f64>,
 
     /// Current scale factor (DPI / 96)
-    pub(crate) scale_factor: f64,
+    pub(crate) scale_factor: DevicePixelRatio,
 
     /// Is window visible?
     pub(crate) visible: bool,
@@ -1622,7 +1625,7 @@ pub(crate) fn sample_state(
     let (scale, visible, focused, cached) = {
         let record = record.lock();
         (
-            record.scale_factor,
+            record.scale_factor.get(),
             record.visible,
             record.focused,
             record.bounds.size,
@@ -2002,24 +2005,38 @@ impl WindowContext {
     pub(crate) fn change_dpi(&self, hwnd: HWND, dpi: u16, suggested: Option<RECT>) {
         use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-        let Some(old_scale) = self.scale.rescale(u32::from(dpi)) else {
-            // Once per run of them: any process can send the message in a
-            // loop, and each warning is a call into the subscriber.
-            if !self.refusing_zero_dpi.replace(true) {
-                tracing::warn!("a DPI change to zero is ignored: the window keeps its scale");
+        // The DPI goes through the hosts' one scale rule before it is stored:
+        // any process can send the message, with any DPI, in a loop. One that
+        // is no ratio a screen can have is refused, reported once per run of
+        // them for this window (each report is a call into the subscriber,
+        // with nothing borrowed here), and the window keeps its scale.
+        let mut streak = self.dpi_streak.get();
+        let told = streak.admit(
+            crate::owner::windows::WindowDpi::try_new(u32::from(dpi)),
+            crate::owner::windows::dpi_scale(u32::from(dpi)),
+            "WM_DPICHANGED",
+        );
+        self.dpi_streak.set(streak);
+        let dpi = match told {
+            Ok(dpi) => dpi,
+            Err(refused) => {
+                if let Some(refused) = refused {
+                    refused.report();
+                }
+                return;
             }
-            return;
         };
-        self.refusing_zero_dpi.set(false);
+        let old_scale = self.scale.rescale(dpi);
         let new_scale = self.scale.scale();
-        tracing::info!(dpi, new_scale, "DPI changed");
+        tracing::info!(dpi = dpi.get(), new_scale, "DPI changed");
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
         self.step(hwnd, WindowStep::Rescaled);
         // The scale and the rectangle change together: a subscriber sees the
         // window once, at its new size.
         let hold = self.hold_publishing();
-        self.update_window_state(|state| state.scale_factor = new_scale);
+        let ratio = self.scale.ratio();
+        self.update_window_state(|state| state.scale_factor = ratio);
         self.apply_dpi_rectangle(hwnd, suggested, new_scale / old_scale);
         // The state callback the rectangle's `WM_SIZE` ran may have closed the
         // window: its resize and frame are then not for whatever window has
@@ -2534,12 +2551,21 @@ impl WindowContext {
         let (frame_width, frame_height) =
             super::set::outer_size(style, ex_style, dpi, (0, 0), self.draws_app_title_bar())
                 .unwrap_or((0, 0));
-        Some(track_limits(
+        // A DPI of zero, which Windows reports for a handle it cannot
+        // measure, reads as the base DPI by the hosts' one rule.
+        let mut streak = self.scale_streak.get();
+        let (ratio, refused) = streak.read(f64::from(dpi) / 96.0, "Win32 window DPI");
+        self.scale_streak.set(streak);
+        let limits = track_limits(
             constraints.min.map(WindowExtent::get),
             constraints.max.map(WindowExtent::get),
-            dpi,
+            ratio,
             PixelSize::new(frame_width, frame_height),
-        ))
+        );
+        if let Some(refused) = refused {
+            refused.report();
+        }
+        Some(limits)
     }
 
     /// Fill in `WM_GETMINMAXINFO` with the app's size limits at the window's

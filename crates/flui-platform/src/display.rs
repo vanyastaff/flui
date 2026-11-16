@@ -52,7 +52,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_foundation::UniqueKey;
-use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::{Bounds, DevicePixelRatio};
 
 use crate::unsupported::{CapabilityAbsence, Unsupported};
 
@@ -332,8 +332,10 @@ pub struct DisplayInfo {
     pub bounds: Bounds<i32>,
     /// The area windows can occupy without being covered by system chrome.
     pub usable_bounds: Bounds<i32>,
-    /// Device pixels per logical pixel.
-    pub scale_factor: f64,
+    /// Device pixels per logical pixel: finite and positive by its type, so
+    /// a host checks the number its operating system reports once, where it
+    /// builds the display.
+    pub scale_factor: DevicePixelRatio,
     /// The period of the mode the display is running; `None` when unknown.
     pub refresh_period: Option<RefreshPeriod>,
     /// Whether this is the primary display. A platform with no notion of
@@ -362,7 +364,7 @@ impl DisplayInfo {
         id: DisplayId,
         name: impl Into<String>,
         bounds: Bounds<i32>,
-        scale_factor: f64,
+        scale_factor: DevicePixelRatio,
     ) -> Self {
         Self {
             id,
@@ -807,7 +809,7 @@ mod tests {
         };
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-        let display = DisplayInfo::new(id, "d", Bounds::default(), 1.0);
+        let display = DisplayInfo::new(id, "d", Bounds::default(), DevicePixelRatio::ONE);
         assert_eq!(
             at_last.successor(vec![display]),
             Err(DisplayRevisionExhausted),
@@ -840,7 +842,7 @@ pub struct DisplayParts {
     /// [`DisplayInfo::usable_bounds`].
     pub usable_bounds: Bounds<i32>,
     /// [`DisplayInfo::scale_factor`].
-    pub scale_factor: f64,
+    pub scale_factor: DevicePixelRatio,
     /// [`DisplayInfo::refresh_period`].
     pub refresh_period: Option<RefreshPeriod>,
     /// [`DisplayInfo::is_primary`].

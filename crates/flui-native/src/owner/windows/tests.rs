@@ -496,7 +496,10 @@ fn a_window_opens_at_one_dpi_its_hooks_share() {
     }
     let scale = super::WindowScale::at_open(0, 1.5);
     let read_by_a_hook = scale.clone();
-    assert_eq!(scale.rescale(192), Some(1.5));
+    assert_eq!(
+        scale.rescale(super::WindowDpi::try_new(192).expect("a DPI in range")),
+        1.5
+    );
     assert_eq!(
         read_by_a_hook.scale(),
         2.0,
@@ -504,16 +507,40 @@ fn a_window_opens_at_one_dpi_its_hooks_share() {
     );
 }
 
-/// A DPI of zero is no DPI: a window told to take it keeps the one it has,
-/// so its scale stays a number the window's rectangles can be divided by.
+/// A DPI whose ratio no screen has (zero, 1 or 2, past 3072) builds no
+/// window DPI: a `WM_DPICHANGED` naming one is refused by the hosts' one rule,
+/// reported once per run, and the window keeps the scale it has.
 #[test]
-fn a_window_takes_no_dpi_of_zero() {
-    let scale = super::WindowScale::at_open(0, 1.5);
-    assert_eq!(scale.rescale(0), None);
-    assert_eq!(scale.dpi(), 144, "the DPI it had");
-    assert_eq!(scale.scale(), 1.5);
-    assert_eq!(scale.rescale(96), Some(1.5), "and takes the next real one");
-    assert_eq!(scale.scale(), 1.0);
+fn a_window_takes_no_dpi_no_screen_has() {
+    for (dpi, taken) in [
+        (0, false),
+        (1, false),
+        (2, false),
+        (3, true),
+        (3072, true),
+        (3073, false),
+        (u32::MAX, false),
+    ] {
+        assert_eq!(super::WindowDpi::try_new(dpi).is_some(), taken, "{dpi}");
+    }
+    let mut streak = crate::display::scale::ScaleStreak::default();
+    let refused: Vec<bool> = [0, 4000, 192, 1]
+        .into_iter()
+        .map(|dpi: u32| {
+            match streak.admit(
+                super::WindowDpi::try_new(dpi),
+                super::dpi_scale(dpi),
+                "WM_DPICHANGED",
+            ) {
+                Ok(dpi) => {
+                    assert_eq!(dpi.get(), 192);
+                    false
+                }
+                Err(refused) => refused.is_some(),
+            }
+        })
+        .collect();
+    assert_eq!(refused, [true, false, false, true], "one report per run");
 }
 
 /// An exhausted identity mint refuses every retry and acquires nothing: a

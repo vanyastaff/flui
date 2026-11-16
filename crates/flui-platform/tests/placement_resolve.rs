@@ -3,12 +3,17 @@
 
 use std::sync::LazyLock;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     Availability, DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot,
     PlacementError, ResolvedPlacement, WindowCapabilities, WindowCapability, WindowExtent,
     WindowGeometry, WindowMode, WindowPlacement, WindowState,
 };
+
+/// Two device pixels per logical pixel.
+fn two() -> DevicePixelRatio {
+    DevicePixelRatio::try_new(2.0).expect("a positive ratio")
+}
 
 fn bounds(x: i32, y: i32, width: i32, height: i32) -> Bounds<i32> {
     Bounds::new(Point::new(x, y), Size::new(width, height))
@@ -27,11 +32,16 @@ fn build_desk() -> Desk {
     let registry = DisplayRegistry::new();
     let left = registry.mint(&DisplayKey::Injected(1)).expect("id");
     let right = registry.mint(&DisplayKey::Injected(2)).expect("id");
-    let primary = DisplayInfo::new(left, "left", bounds(0, 0, 1920, 1080), 1.0)
-        .with_usable_bounds(bounds(0, 0, 1920, 1040))
-        .with_primary(true)
-        .with_persistent_key("key-left");
-    let hidpi = DisplayInfo::new(right, "right", bounds(1920, 0, 3840, 2160), 2.0)
+    let primary = DisplayInfo::new(
+        left,
+        "left",
+        bounds(0, 0, 1920, 1080),
+        DevicePixelRatio::ONE,
+    )
+    .with_usable_bounds(bounds(0, 0, 1920, 1040))
+    .with_primary(true)
+    .with_persistent_key("key-left");
+    let hidpi = DisplayInfo::new(right, "right", bounds(1920, 0, 3840, 2160), two())
         .with_persistent_key("key-right");
     Desk {
         displays: DisplaySnapshot::empty()
@@ -239,12 +249,12 @@ fn a_placement_without_a_position_stays_unpositioned() {
 
 fn displays_that_cannot_hold_a_window_are_not_candidates() {
     let registry = DisplayRegistry::new();
-    let make = |number, scale, usable: Bounds<i32>, primary| {
+    let make = |number, usable: Bounds<i32>, primary| {
         DisplayInfo::new(
             registry.mint(&DisplayKey::Injected(number)).expect("id"),
             "display",
             bounds(0, 0, 1920, 1080),
-            scale,
+            DevicePixelRatio::ONE,
         )
         .with_usable_bounds(usable)
         .with_primary(primary)
@@ -252,12 +262,12 @@ fn displays_that_cannot_hold_a_window_are_not_candidates() {
     };
     let snapshot = DisplaySnapshot::empty()
         .successor(vec![
-            // The primary reports a scale that cannot be divided by.
-            make(1, f64::NAN, bounds(0, 0, 1920, 1080), true),
-            make(2, 0.0, bounds(0, 0, 1920, 1080), false),
+            // The primary has no usable area, nor the next.
+            make(1, bounds(0, 0, 1920, 0), true),
+            make(2, bounds(0, 0, 0, 1080), false),
             // No usable area at all.
-            make(3, 1.0, bounds(0, 0, 0, 0), false),
-            make(4, 1.0, bounds(0, 0, 1280, 720), false),
+            make(3, bounds(0, 0, 0, 0), false),
+            make(4, bounds(0, 0, 1280, 720), false),
         ])
         .expect("revision");
     let result = placement(Some("key-3"), (0.0, 0.0), (800.0, 600.0))
@@ -267,7 +277,7 @@ fn displays_that_cannot_hold_a_window_are_not_candidates() {
     assert_eq!(result.display, expected);
 
     let only_broken = DisplaySnapshot::empty()
-        .successor(vec![make(5, f64::INFINITY, bounds(0, 0, 100, 100), true)])
+        .successor(vec![make(5, bounds(0, 0, 0, 0), true)])
         .expect("revision");
     assert_eq!(
         placement(None, (0.0, 0.0), (800.0, 600.0)).resolve(

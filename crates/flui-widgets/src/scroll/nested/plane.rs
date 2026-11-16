@@ -19,7 +19,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_foundation::geometry::{Matrix4, Point, Size, Vec2};
+use flui_foundation::geometry::{DevicePixelRatio, Matrix4, Point, Size, Vec2};
 use flui_objects::SubtreeAnchor;
 use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
 
@@ -38,7 +38,7 @@ pub(crate) fn presentation_device_pixel_ratio(pipeline: Option<&WeakPipelineCell
     pipeline
         .and_then(WeakPipelineCell::upgrade)
         .and_then(|cell| cell.try_with(PipelineOwner::device_pixel_ratio))
-        .unwrap_or(1.0)
+        .map_or(1.0, DevicePixelRatio::get)
 }
 
 /// Where one participant's plane is read: the presentation, acquired in a
@@ -78,8 +78,7 @@ impl PlaneSource {
                 Some(Plane {
                     to_root,
                     size,
-                    device_pixel_ratio: Some(owner.device_pixel_ratio())
-                        .filter(|ratio| ratio.is_finite() && *ratio > 0.0),
+                    device_pixel_ratio: Some(owner.device_pixel_ratio().get()),
                 })
             })
             .flatten()

@@ -25,12 +25,15 @@ fn native_mouse_geometry_preserves_full_area_and_half_extents() {
     assert_eq!(projected.mouse_drag_tolerance(), Some(Size::new(3.0, 0.0)));
     assert!(NativeMouseGeometry::try_new(Size::new(-1, 8), Size::new(6, 2), ratio).is_err());
 
-    let tiny = DevicePixelRatio::try_new(f64::from_bits(1)).expect("positive finite ratio");
-    let extreme = NativeMouseGeometry::try_new(Size::new(1, 1), Size::new(1, 1), tiny)
-        .expect("finite native observation");
+    // At the smallest ratio a screen can have, a native size stays finite.
+    let extreme =
+        NativeMouseGeometry::try_new(Size::new(1, 1), Size::new(1, 1), DevicePixelRatio::MIN)
+            .expect("finite native observation");
     assert_eq!(
-        GestureGeometry::from_native_mouse(&extreme),
-        Err(InvalidPreference::GestureArea)
+        GestureGeometry::from_native_mouse(&extreme)
+            .expect("a finite projection")
+            .mouse_double_click_area(),
+        Some(Size::new(32.0, 32.0))
     );
 }
 
@@ -86,12 +89,10 @@ fn native_touch_geometry_projects_each_context_and_refuses_overflow() {
         );
         assert!(projected.mouse_double_click_area().is_none());
     }
-    let tiny = DevicePixelRatio::try_new(f64::from_bits(1)).expect("finite positive ratio");
-    let native = NativeTouchGeometry::try_new(1, 1, 1, 2, tiny).expect("native observation");
-    assert_eq!(
-        GestureGeometry::from_native_touch(&native),
-        Err(InvalidPreference::Distance)
-    );
+    // At the smallest ratio a screen can have, a native distance stays finite.
+    let native = NativeTouchGeometry::try_new(1, 1, 1, 2, DevicePixelRatio::MIN)
+        .expect("native observation");
+    assert!(GestureGeometry::from_native_touch(&native).is_ok());
     assert!(NativeTouchGeometry::try_new(-1, 0, 1, 2, DevicePixelRatio::ONE).is_err());
     assert!(NativeTouchGeometry::try_new(0, 0, 2, 1, DevicePixelRatio::ONE).is_err());
 }
