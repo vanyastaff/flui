@@ -331,12 +331,11 @@ impl std::future::Future for PostedWrite {
             .0
             .lock()
             .expect("BUG: the slot is never held across a panic");
-        match slot.0.take() {
-            Some(answer) => std::task::Poll::Ready(answer),
-            None => {
-                slot.1 = Some(ctx.waker().clone());
-                std::task::Poll::Pending
-            }
+        if let Some(answer) = slot.0.take() {
+            std::task::Poll::Ready(answer)
+        } else {
+            slot.1 = Some(ctx.waker().clone());
+            std::task::Poll::Pending
         }
     }
 }
@@ -478,10 +477,9 @@ impl flui_view::View for HearsSessionEnd {
 /// still hears the session end with its budget.
 #[test]
 fn a_store_that_never_answers_leaves_the_session_end_its_budget() {
-    let storage = MemoryStorage::new();
-    let barrier = storage.hold_commits();
+    let provided = MemoryStorage::new();
+    let barrier = provided.hold_commits();
     let heard = Rc::new(Cell::new(false));
-    let provided = storage.clone();
     let application = Application::new()
         .config(AppConfig::new().restore_placement(NAME))
         .capability::<StorageCapability>(move |_: &ProviderContext<'_>| {

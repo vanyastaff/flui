@@ -5,7 +5,7 @@
 //!
 //! The storage is the one the run's capability registry provides, the
 //! application's override of `StorageCapability` when it has one: the host
-//! acquires it through [`HostCapabilities`] (ADR-0332). Nothing here blocks the
+//! acquires it through [`HostCapabilities`] (ADR-0338). Nothing here blocks the
 //! owner thread on storage, except the final flush at the end of the loop or of
 //! the session, within that end's deadline. The owner's turns come from storage's
 //! answers and from the loop's turn deadline (`AppHandler::turn_deadline`,

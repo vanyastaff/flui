@@ -748,12 +748,13 @@ impl Future for HeldRead {
             // The latest waker only: the one it replaces is dropped after the
             // lock is released.
             let id = self.id;
-            let replaced = match state.held_reads.iter_mut().find(|(held, _)| *held == id) {
-                Some((_, held)) => Some(std::mem::replace(held, waker)),
-                None => {
-                    state.held_reads.push((id, waker));
-                    None
-                }
+            let replaced = if let Some((_, held)) =
+                state.held_reads.iter_mut().find(|(held, _)| *held == id)
+            {
+                Some(std::mem::replace(held, waker))
+            } else {
+                state.held_reads.push((id, waker));
+                None
             };
             drop(state);
             drop(replaced);

@@ -614,14 +614,15 @@ impl PlacementRecorder {
     pub(crate) fn hand_over(&self) -> Option<(Vec<u8>, StoredPlacement)> {
         let record = self.record.borrow();
         let latest = record.latest.clone()?;
+        // A write in flight may still land: until it answers, what storage
+        // holds is not known, and the placement stays owed unless storage
+        // already holds it.
         let stored = match &record.stored {
-            // A write in flight may still land: until it answers, what
-            // storage holds is not known, and the placement stays owed.
-            stored if !record.write.is_idle() => match stored {
-                StoredPlacement::Holds(held) if *held == latest => stored.clone(),
-                _ => StoredPlacement::Nothing,
-            },
-            stored => stored.clone(),
+            StoredPlacement::Holds(held) if *held == latest => record.stored.clone(),
+            stored if record.write.is_idle() => stored.clone(),
+            StoredPlacement::Holds(_)
+            | StoredPlacement::Nothing
+            | StoredPlacement::Unknown { .. } => StoredPlacement::Nothing,
         };
         Some((latest, stored))
     }
@@ -816,15 +817,12 @@ impl PlacementRecorder {
         report_panic(first, &self.name, "writing");
         let gave_up = {
             let mut record = self.record.borrow_mut();
-            match published {
-                Some(answer) => {
-                    record.write = Write::Out { bytes, answer };
-                    false
-                }
-                None => {
-                    record.write = Write::Idle;
-                    record.refuse()
-                }
+            if let Some(answer) = published {
+                record.write = Write::Out { bytes, answer };
+                false
+            } else {
+                record.write = Write::Idle;
+                record.refuse()
             }
         };
         self.report_given_up(gave_up);
@@ -839,7 +837,7 @@ impl PlacementRecorder {
             let mut record = self.record.borrow_mut();
             match std::mem::replace(&mut record.write, Write::Polling) {
                 Write::Out { bytes, answer } => (bytes, answer),
-                other => {
+                other @ (Write::Idle | Write::Starting | Write::Polling) => {
                     record.write = other;
                     return;
                 }

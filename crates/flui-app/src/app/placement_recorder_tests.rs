@@ -354,12 +354,16 @@ fn scaled(state: WindowState, scale: f64) -> WindowState {
     ))
 }
 
+/// A case of [`an_unread_placement_is_overwritten_only_by_the_user`]: its
+/// name and what changes the window after it opened.
+type ChangeSinceOpen = (&'static str, fn(&PlacementRecorder, Instant));
+
 /// A window whose stored placement could not be read keeps what storage may
 /// hold against everything but the user: where it opened, a display change,
 /// a scale change and a command the application applied each change its
 /// placement and write nothing; a move the user makes does.
 fn an_unread_placement_is_overwritten_only_by_the_user() {
-    let since_open: [(&str, fn(&PlacementRecorder, Instant)); 3] = [
+    let since_open: [ChangeSinceOpen; 3] = [
         ("a display change", |recorder, now| {
             recorder.redisplay(&displays_with_left_edge(60), now);
         }),
@@ -397,7 +401,7 @@ fn an_unread_placement_is_overwritten_only_by_the_user() {
     }
 
     let storage = MemoryStorage::new();
-    storage.put(&NAME, kept.clone());
+    storage.put(&NAME, kept);
     let recorder = PlacementRecorder::new(
         handle(&storage),
         NAME,
@@ -487,10 +491,13 @@ fn a_handed_over_placement_carries_its_debt() {
     assert_eq!(storage.contents(&NAME), Some(bytes), "the debt is paid");
 }
 
+/// What a re-entering storage runs, told where it runs from.
+type Reentry = Rc<dyn Fn(&str)>;
+
 std::thread_local! {
     /// What a re-entering storage runs from its `publish`, its future's
     /// `poll` and that future's drop.
-    static REENTRY: std::cell::RefCell<Option<Rc<dyn Fn(&str)>>> =
+    static REENTRY: std::cell::RefCell<Option<Reentry>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -546,9 +553,8 @@ impl std::future::Future for ReenteringWrite {
 impl Drop for ReenteringWrite {
     fn drop(&mut self) {
         reenter("drop");
-        if panics_here(&self.panic_at, "drop") && !std::thread::panicking() {
-            panic!("the store panics in drop");
-        }
+        let panics = panics_here(&self.panic_at, "drop") && !std::thread::panicking();
+        assert!(!panics, "the store panics in drop");
     }
 }
 

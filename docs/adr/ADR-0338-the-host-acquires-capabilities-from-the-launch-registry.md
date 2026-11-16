@@ -1,4 +1,4 @@
-# ADR-0336: The host acquires capabilities for itself from the launch registry
+# ADR-0338: The host acquires capabilities for itself from the launch registry
 
 - **Status:** Accepted (2026-11-15)
 - **Date:** 2026-11-15

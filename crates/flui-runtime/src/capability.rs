@@ -328,7 +328,7 @@ impl Drop for OwnerJobs {
 
 /// What the composition root acquires capabilities through for itself, outside
 /// every UI runtime: the run's registry, an owner-job queue of its own and no
-/// window (ADR-0336).
+/// window (ADR-0338).
 ///
 /// The host keeps state of its own in an application's capabilities (a window's
 /// remembered placement in its storage), so it acquires them from the same

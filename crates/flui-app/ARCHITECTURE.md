@@ -515,7 +515,7 @@ A window that remembers its placement (`AppConfig::restore_placement`) keeps
 it in the storage the run's capability registry provides: the application's
 override of `StorageCapability` when it registers one, otherwise the host's
 own store. The host acquires it through `flui_runtime::capability::HostCapabilities`
-over the launch registry, once per window that opens ([ADR-0336](../../docs/adr/ADR-0336-the-host-acquires-capabilities-from-the-launch-registry.md)).
+over the launch registry, once per window that opens ([ADR-0338](../../docs/adr/ADR-0338-the-host-acquires-capabilities-from-the-launch-registry.md)).
 The state is one `runner::placement::PlacementShared`, held by the
 application runtime and by each remembered window's close handle; each list is
 a cell of its own, borrowed only for a step that runs none of the

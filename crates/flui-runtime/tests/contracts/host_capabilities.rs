@@ -1,4 +1,4 @@
-//! The composition root's own capability scope (ADR-0336): it acquires from
+//! The composition root's own capability scope (ADR-0338): it acquires from
 //! the run's registry with no window, runs what providers post back when the
 //! owner asks, contains a panicking job, and refuses posts once retired.
 
@@ -131,13 +131,13 @@ fn a_host_scope_refuses_posts_after_retirement() {
         let pending = HostCapabilities::new(registry, || {});
         let _ = pending.acquire::<Greeting>();
         let (completion, resolver) = kept.take().expect("the provider made a completion");
-        assert!(!pending.retire().held().is_some(), "a quiet retirement");
+        assert!(pending.retire().held().is_none(), "a quiet retirement");
         (pending, completion, resolver)
     };
     let (_pending, mut completion, _resolver) = completions;
     assert_eq!(completion.poll(), Some(Err(Abandoned::OwnerRetired)));
 
-    assert!(!scope.retire().held().is_some());
+    assert!(scope.retire().held().is_none());
     assert_eq!(poster.post(|| {}), Err(OwnerRetired));
     assert!(!scope.has_posted(), "a refused job is not queued");
 }

@@ -2,7 +2,7 @@
 
 - `flui_runtime::capability::HostCapabilities`: the scope a composition root
   acquires capabilities through for itself, outside every UI runtime, from the
-  run's registry, with no window (ADR-0336).
+  run's registry, with no window (ADR-0338).
 - `flui_native::AppHandler::turn_deadline`: an instant at which the loop gives
   the owner a turn with or without a window open and asks no window for a
   frame. Served by Win32 (its modal loops included), X11, Wayland and AppKit.
