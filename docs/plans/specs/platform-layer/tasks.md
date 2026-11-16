@@ -5238,40 +5238,43 @@ GPU-память простаивающего или невидимого окн
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
   отсутствующий `zig` и остаётся на CI. Остальное закрывает запись ниже.
 - [x] **LY55** — #2660, ветка `platform/contract-without-tracing`. Контракт больше не зависит от
-  `tracing`, и у каждого условия, которое он логировал, свой исход. Отказ store в правке,
-  которая выполнилась до возврата запроса, — ошибка вызывающего: `commit_composition_in_place`
-  теперь возвращает её так же, как `project_ime_event` (раньше отказ снять композицию
-  логировался, а вызов отвечал `Granted`); обе функции идут через один `edit_async`. Правка
-  отложенного grant, которую store отверг, остаётся у store: grant ничего не возвращает,
-  вызывающего уже нет, а каждая правка берёт смещения из своей сессии, так что store по правилам
-  `TextStoreEdit` отвергает её только собственным решением. Отброшенное `Opened::new` считается в
-  `Opened::overflow` (`OpenedOverflow`), и хост логирует его, когда принял отчёт
-  (`AppDelivery::opened`/`try_opened`, после постановки в очередь и ответа запустившему). Склейка
-  запуска в `take_launch` больше не отбрасывает принятое: она берёт cold-отчёты, пока их не больше
-  `MAX_OPENED_ITEMS`, остальные доходят до `AppHandler::opened` после `ready`. Манифест: `tracing`
-  удалён, добавлен в `reach-forbid`; единственный путь к нему — собственная инструментация
-  `flui-foundation`, исключённая там `reach-exceptions` (grant ADR-0151 §7). `Platform` и
-  `OwnerPlatform` без `active_window` (с позицией `host::Window::active` и её реализациями на
-  восьми хостах, полем `active` у headless и Wayland, `IOSLoop::active`) и без
-  `keyboard_layout`/`on_keyboard_layout_change`: раскладка остаётся позицией `host::Input` ядра,
-  тесты хостов читают её через `flui_native::testing::keyboard_layout` (ADR-0151 §9). ADR-0039
-  получил строку `Superseded-by`, `docs/gaps.md`, `docs/architecture.md` и `ARCHITECTURE.md`
-  контракта переписаны.
-  Тесты, в скобках результат без исправления: `a_refused_edit_reaches_the_caller_only_while_it_waits`
-  (`Ok(Granted)` вместо `Err(Protected)`); строка `a launch too large to join keeps the rest
-  queued` в `app_delivery_contracts` (хвост второго отчёта и третий отброшены);
-  `opened_items_and_urls_are_bounded_before_they_are_read` проверяет счёт `overflow`. Тесты,
-  читавшие удалённые методы, переведены: `touch` в `handler_reentry.rs` зовёт
-  `window_capabilities`, тесты раскладки (`handler_reentry.rs`, `x11_input.rs`,
-  `wayland_input.rs`) — `testing::keyboard_layout`; trybuild-снимок
-  `platform_and_host_window_are_sealed` изменился только в номерах строк. Заодно удалены
+  `tracing` и отдаёт каждое условие тому, кто решает. Отказ store в правке: сразу — ошибка
+  вызывающего (`commit_composition_in_place` теперь возвращает её, как `project_ime_event`);
+  в отложенном grant — вызов `late_refusal`, который передаёт вызывающий (обе функции идут
+  через один `edit_async`). Хосты коммитят композицию на месте одной функцией
+  `text::refusal::commit_in_place`, которая сообщает отказ в обоих случаях (TSF, зеркала Web и
+  Android, AppKit/UIKit, текстовый ввод Wayland); `TextInputOwner` сопоставляет исход явно и
+  тоже сообщает отказ. Ограничение того, что открыла ОС, — `Opened::bounded`, возвращающий
+  `(Opened, OpenedOverflow)`; публичного поля `Opened::overflow` нет. Хост сообщает переполнение
+  там, где ограничивает (`owner::opened::bounded`): аргументы запуска (и второй экземпляр до
+  пересылки), `file:`-URI, приём пересланного запуска, адрес страницы, интент Android (в том
+  числе пустой и документы сверх места). Склейка запуска в `take_launch` берёт cold-отчёты, пока
+  их не больше `MAX_OPENED_ITEMS`, остальные доходят до `AppHandler::opened` после `ready`.
+  Манифест: `tracing` удалён и стоит в `reach-forbid`; единственный путь к нему — собственная
+  инструментация `flui-foundation` (`reach-exceptions`, grant ADR-0151 §7). `Platform` и
+  `OwnerPlatform` без `active_window` (вместе с позицией `host::Window::active` на восьми хостах,
+  полем `active` у headless и Wayland, `IOSLoop::active`, macOS-только `OwnerMap::get` и id окна
+  в `WebState::window`) и без `keyboard_layout`/`on_keyboard_layout_change`: раскладка осталась
+  позицией `host::Input` ядра, тесты хостов читают её через `testing::keyboard_layout`; ADR-0151
+  §9 и ADR-0254 переписаны под это (`Revised`), ADR-0039 получил `Superseded-by`. Удалены
   непрочитанные `TargetPlatform::{is_mobile, is_desktop, is_touch_primary}` и
-  `PlatformInput::as_drag_drop`. Проверки: на Windows clippy `--workspace --all-targets
-  -D warnings`, nextest flui-platform и flui-native (падают только тесты, падающие и на базе:
-  Android intent, дрейф trybuild-снимков в нетронутых фикстурах), doctests контракта, `reach`,
-  `doc-strict`, `checks`, `expectations`; в WSL clippy `-p flui-native -p flui-platform
-  --all-targets --all-features`. Не собирались здесь macOS, iOS, Android и wasm32 (там только
-  удаление `fn active`, CI `cross-typecheck`); тесты X11 и Wayland не запускались.
+  `PlatformInput::as_drag_drop`.
+  Тесты, в скобках результат без исправления: `a_refused_edit_reaches_the_caller_or_its_late_reporter`
+  (сначала `Ok(Granted)` вместо `Err(Protected)`, затем поздний отказ не доходит);
+  `a_refused_commit_in_place_is_reported_once` и `a_field_refusing_the_commit_on_blur_is_reported_once`
+  (ни одного сообщения); `a_launch_reports_what_bounding_its_arguments_dropped`,
+  `an_intent_reports_what_bounding_dropped_even_when_nothing_is_left` (ни одного сообщения);
+  `a_forwarded_launch_reports_its_drop_where_it_happens` (только в WSL); строка «a launch too
+  large to join keeps the rest queued» в `app_delivery_contracts` (хвост отброшен). В
+  `handler_reentry.rs` деструктор обработчика теперь открывает окно, то есть берёт таблицу окон
+  хоста на запись (headless `HeadlessWindows::tracked`, Win32 `WindowSet::by_handle`): с
+  возвращённым удержанием `by_handle` вокруг `clear_then` таблица Win32 падает в `set.rs`.
+  Проверки: на Windows clippy `-D warnings`, nextest flui-platform, flui-native, flui-interaction
+  и flui-app, `reach`, `doc-strict`, `checks`, `expectations`; в WSL clippy, `cargo doc -D
+  warnings` и юнит-тесты Linux. На `main` @ `53c3e028f` на этом Windows-хосте уже падают
+  `an_intent_opens_its_link_or_documents` и trybuild-снимок `owner_platform_is_not_send`. Не
+  собирались здесь macOS, iOS, Android и wasm32 (CI `cross-typecheck`); тесты X11 и Wayland не
+  запускались.
 - [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
   #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
