@@ -278,6 +278,11 @@ fn capability_seam() {
                     as fn(),
             ),
             (
+                "capability_seam::a_tests_observer_and_two_holds_leave_the_clipboard_serving",
+                capability_seam::a_tests_observer_and_two_holds_leave_the_clipboard_serving
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_concealed_write_reaches_the_host_marked",
                 capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
             ),

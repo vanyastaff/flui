@@ -47,8 +47,8 @@ pub(crate) use event_loop::ShownCursor;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub(crate) use event_loop::{
     CursorGlobals, DragWindow, FramePointer, LastInput, LiveOutputs, LoopWaker, LoopWindow,
-    MAX_OUTPUTS, OutputFacts, PresentationTime, SeatText, SeatWindow, SeatWindowText, TextEvent,
-    TextRecorder, TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost,
+    MAX_OUTPUTS, OutputFacts, PresentationTime, SeatInput, SeatText, SeatWindow, SeatWindowText,
+    TextEvent, TextRecorder, TextWire, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost,
     WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable, bindable,
 };
 
@@ -87,6 +87,10 @@ pub(crate) mod user_input {
     #[derive(Debug)]
     pub(crate) struct Inputs<Seat, Surface> {
         last: Option<UserInput<Seat, Surface>>,
+        /// Whether the keyboard left the surface `last` went to since: a
+        /// compositor takes no selection under that input any more, while an
+        /// activation token still names it.
+        last_left: bool,
         /// Each seat's grab: the press that began it and how many buttons
         /// hold it now.
         grabs: Vec<(UserInput<Seat, Surface>, u32)>,
@@ -109,6 +113,7 @@ pub(crate) mod user_input {
         fn default() -> Self {
             Self {
                 last: None,
+                last_left: false,
                 grabs: Vec::new(),
                 watched: None,
             }
@@ -119,11 +124,32 @@ pub(crate) mod user_input {
         /// The seats report `input`, which is now the last.
         pub(crate) fn record(&mut self, input: UserInput<Seat, Surface>) {
             self.last = Some(input);
+            self.last_left = false;
         }
 
         /// The last input; `None` before any.
         pub(crate) const fn latest(&self) -> Option<&UserInput<Seat, Surface>> {
             self.last.as_ref()
+        }
+
+        /// The last input while the keyboard has not left the surface it went
+        /// to: the one a selection is set under. `None` before any input, or
+        /// once the keyboard left, until the next input.
+        pub(crate) fn latest_in_focus(&self) -> Option<&UserInput<Seat, Surface>> {
+            self.last.as_ref().filter(|_| !self.last_left)
+        }
+
+        /// `seat`'s keyboard left `surface`: the last input, if it was the
+        /// seat's on that surface, sets no selection any more. The last input
+        /// stays what an activation token names.
+        pub(crate) fn keyboard_left(&mut self, seat: &Seat, surface: &Surface) {
+            if self
+                .last
+                .as_ref()
+                .is_some_and(|last| last.seat == *seat && last.surface == *surface)
+            {
+                self.last_left = true;
+            }
         }
 
         /// A button of `press.seat`'s pointer went down: the first one held
@@ -188,19 +214,6 @@ pub(crate) mod user_input {
         /// it held: no release reaches a surface the pointer left.
         pub(crate) fn left(&mut self, seat: &Seat) {
             self.grabs.retain(|(grab, _)| grab.seat != *seat);
-        }
-
-        /// `seat`'s keyboard left `surface`: the last input, if it was the
-        /// seat's on that surface, is no longer one a compositor takes a
-        /// request under (a selection, an activation), so nothing names it.
-        pub(crate) fn keyboard_left(&mut self, seat: &Seat, surface: &Surface) {
-            if self
-                .last
-                .as_ref()
-                .is_some_and(|last| last.seat == *seat && last.surface == *surface)
-            {
-                self.last = None;
-            }
         }
 
         /// `seat`'s pointer went while the seat stays: the grab it held ends,
@@ -288,20 +301,23 @@ pub(crate) mod user_input {
             assert!(!inputs.watched_ended(&2, 20), "no release reached it");
         }
 
-        /// The keyboard leaving the surface the last input went to ends
-        /// that input: a copy made after the focus moved away has no serial
-        /// to set the selection under, and is refused rather than sent under
-        /// a stale one. Leaving another surface, or another seat's keyboard
-        /// leaving, keeps it.
+        /// The keyboard leaving the surface the last input went to ends that
+        /// input for a selection, which a compositor takes only from the
+        /// client the user is in, and leaves it for an activation token.
+        /// Leaving another surface, or another seat's keyboard leaving, keeps
+        /// it; the next input is in focus again.
         #[test]
-        fn the_keyboard_leaving_ends_the_last_input_it_had() {
+        fn the_keyboard_leaving_ends_the_last_input_for_a_selection_alone() {
             let mut inputs = Inputs::default();
             inputs.record(input(1, 5, 3));
             inputs.keyboard_left(&1, &4);
             inputs.keyboard_left(&2, &3);
-            assert_eq!(inputs.latest(), Some(&input(1, 5, 3)));
+            assert_eq!(inputs.latest_in_focus(), Some(&input(1, 5, 3)));
             inputs.keyboard_left(&1, &3);
-            assert_eq!(inputs.latest(), None);
+            assert_eq!(inputs.latest_in_focus(), None);
+            assert_eq!(inputs.latest(), Some(&input(1, 5, 3)), "a token names it");
+            inputs.record(input(1, 6, 3));
+            assert_eq!(inputs.latest_in_focus(), Some(&input(1, 6, 3)));
         }
 
         /// A seat removed with a button held leaves no grab and is not the
@@ -1286,6 +1302,19 @@ mod event_loop {
             self.0.with(|inputs| inputs.latest().cloned()).flatten()
         }
 
+        /// The last input a selection is set under. See
+        /// [`Inputs::latest_in_focus`].
+        pub(crate) fn latest_in_focus(&self) -> Option<SeatInput> {
+            self.0
+                .with(|inputs| inputs.latest_in_focus().cloned())
+                .flatten()
+        }
+
+        /// `seat`'s keyboard left `surface`. See [`Inputs::keyboard_left`].
+        pub(crate) fn keyboard_left(&self, seat: &WlSeat, surface: &WlSurface) {
+            self.0.with(|inputs| inputs.keyboard_left(seat, surface));
+        }
+
         /// A button of `press.seat`'s pointer went down: the first one held
         /// begins the seat's grab, on `press.surface` under `press.serial`.
         pub(crate) fn pressed(&self, press: SeatInput) {
@@ -1317,11 +1346,6 @@ mod event_loop {
         /// it held: no release reaches a surface the pointer left.
         pub(crate) fn left(&self, seat: &WlSeat) {
             self.0.with(|inputs| inputs.left(seat));
-        }
-
-        /// `seat`'s keyboard left `surface`. See [`Inputs::keyboard_left`].
-        pub(crate) fn keyboard_left(&self, seat: &WlSeat, surface: &WlSurface) {
-            self.0.with(|inputs| inputs.keyboard_left(seat, surface));
         }
 
         /// `seat`'s pointer went while the seat stays. See

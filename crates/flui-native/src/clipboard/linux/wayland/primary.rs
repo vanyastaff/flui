@@ -23,10 +23,12 @@
 //!   pipe meanwhile.
 //! - **A read of the application's own selection** asks its closure at
 //!   once, again with nothing held.
-//! - **A claim with no input to set it under is kept in the process**, as
-//!   a clipboard write with none is (ADR-0337 §1: that write answers
-//!   `ApplicationOnly`): a middle press in the same application pastes it,
-//!   until another client's selection arrives, which drops it.
+//! - **A claim with no input to set it under is kept in the process**: a
+//!   middle press in the same application pastes it, until another client's
+//!   selection arrives, which drops it. A claim answers nobody, so nothing
+//!   is owed for it; a clipboard write kept so answered `ApplicationOnly`,
+//!   and that text is offered at the seat's next serial instead (ADR-0337
+//!   §1).
 
 use std::os::fd::OwnedFd;
 use std::rc::Rc;

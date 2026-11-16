@@ -4,7 +4,8 @@
 //! reading and writing it are the whole implementation. UIKit is
 //! main-thread-only, so every access is checked for a `MainThreadMarker`
 //! before messaging the pasteboard rather than trusting a caller to be on
-//! the right thread.
+//! the right thread. A read or write off the main thread answers
+//! [`ClipboardError::Gone`]: retrying on that thread cannot succeed.
 
 // This module calls the operating system directly, which has no safe wrapper:
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -62,7 +63,7 @@ impl host::Clipboard<IOSLoop> for IOSClipboard {
 
 impl SyncClipboard for IOSClipboard {
     fn read_now(&self) -> ClipboardRead {
-        let pasteboard = Self::pasteboard().ok_or(ClipboardError::Unavailable)?;
+        let pasteboard = Self::pasteboard().ok_or(ClipboardError::Gone)?;
         // SAFETY: the pasteboard is main-thread-affine and this runs after
         // the `MainThreadMarker` check above; `string` is a documented getter.
         let Some(string) = (unsafe { pasteboard.string() }) else {
@@ -76,7 +77,7 @@ impl SyncClipboard for IOSClipboard {
     fn write_now(&self, write: ClipboardWrite) -> ClipboardWritten {
         let Some(pasteboard) = Self::pasteboard() else {
             tracing::warn!("clipboard write refused: UIPasteboard is main-thread-only");
-            return Err(ClipboardError::Unavailable);
+            return Err(ClipboardError::Gone);
         };
         let string = NSString::from_str(write.as_text());
         if !write.is_concealed() {

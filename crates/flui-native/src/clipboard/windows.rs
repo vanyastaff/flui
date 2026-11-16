@@ -4,7 +4,12 @@
 //! which opens the clipboard with its own message-only window, serves the
 //! requests one at a time in the order they were made, and answers each
 //! through its resolver. The owner thread only queues: it never waits for
-//! another process.
+//! another process. The queue is bounded twice, by [`MAX_WAITING`] requests
+//! and [`MAX_QUEUED_BYTES`] of write text, and a request past either is
+//! refused [`ClipboardError::Unavailable`] at once; a request that waited
+//! past `clipboard::patience`'s bound for its turn is refused
+//! [`ClipboardError::Timeout`] without an attempt. A request the thread can
+//! no longer serve answers [`ClipboardError::Gone`].
 //!
 //! Two waits are another process's to end, and both happen on the clipboard
 //! thread. `OpenClipboard` fails while another window holds the clipboard
@@ -31,6 +36,7 @@
 
 use std::mem::ManuallyDrop;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::time::Instant;
 
@@ -50,7 +56,9 @@ use windows::{
                 OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
             },
             LibraryLoader::GetModuleHandleW,
-            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+            Memory::{
+                GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+            },
             Ole::CF_UNICODETEXT,
             Threading::{CreateEventW, INFINITE, SetEvent},
         },
@@ -63,7 +71,7 @@ use windows::{
     core::w,
 };
 
-use crate::clipboard::patience::{OpenAttempts, queued_too_long};
+use crate::clipboard::patience::{OpenAttempts, Waiting};
 use crate::host::{NativeClipboard, admit_text, host_text, text_fits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
@@ -139,6 +147,28 @@ enum Answer {
     Nobody,
 }
 
+/// A request's [`Answer`], owed until it is settled. Dropped unsettled (the
+/// thread ended with the request in its queue or at its turn) it answers
+/// [`ClipboardError::Gone`], so no request is left without a typed answer.
+struct Owed(Option<Answer>);
+
+impl Owed {
+    /// Settle the answer: see [`Answer::settle`].
+    fn settle(mut self, settled: Option<Settlement>, error: ClipboardError) {
+        if let Some(answer) = self.0.take() {
+            answer.settle(settled, error);
+        }
+    }
+}
+
+impl Drop for Owed {
+    fn drop(&mut self) {
+        if let Some(answer) = self.0.take() {
+            answer.settle(None, ClipboardError::Gone);
+        }
+    }
+}
+
 /// What a task found, for its [`Answer`].
 enum Settlement {
     Read(ClipboardRead),
@@ -147,12 +177,79 @@ enum Settlement {
     Nothing,
 }
 
-/// One request and when it was accepted, which its time in the queue counts
-/// from.
+/// One request waiting for its turn.
 struct Request {
     task: Task,
-    answer: Answer,
-    accepted: Instant,
+    answer: Owed,
+    waiting: Waiting,
+    /// The bytes a write holds in the queue, given back as it is answered.
+    _reserved: Option<Reservation>,
+}
+
+impl Request {
+    /// The request's turn came at `now`: its [`Turn`], or its answer back
+    /// when it waited past the queue's bound for it.
+    fn take_turn(self, now: Instant) -> Result<Turn, Owed> {
+        let Self {
+            task,
+            answer,
+            waiting,
+            _reserved: reserved,
+        } = self;
+        match waiting.turn(now) {
+            Some(attempts) => Ok(Turn {
+                task,
+                answer,
+                attempts,
+                _reserved: reserved,
+            }),
+            None => Err(answer),
+        }
+    }
+}
+
+/// One request at its turn, trying to open the clipboard.
+struct Turn {
+    task: Task,
+    answer: Owed,
+    attempts: OpenAttempts,
+    _reserved: Option<Reservation>,
+}
+
+/// The most bytes of write text the queue holds at once, besides a write
+/// that comes to an empty queue, which is taken whatever its size: the
+/// host keeps no size limit of its own on a write. Past it a write is
+/// refused [`ClipboardError::Unavailable`], which a retry once the queue
+/// drains can fix.
+const MAX_QUEUED_BYTES: usize = crate::host::MAX_TEXT;
+
+/// The bytes of one queued write, counted in the queue's total until it
+/// drops.
+struct Reservation {
+    queued: &'static AtomicUsize,
+    bytes: usize,
+}
+
+impl Reservation {
+    /// Count `bytes` more in `queued`, or `None` past [`MAX_QUEUED_BYTES`].
+    fn try_new(queued: &'static AtomicUsize, bytes: usize) -> Option<Self> {
+        queued
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+                if held == 0 {
+                    return Some(bytes);
+                }
+                held.checked_add(bytes)
+                    .filter(|total| *total <= MAX_QUEUED_BYTES)
+            })
+            .ok()?;
+        Some(Self { queued, bytes })
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.queued.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
 }
 
 impl Task {
@@ -189,28 +286,54 @@ impl Answer {
 }
 
 /// Queue a request to the clipboard thread, or refuse it at once when there
-/// is none or [`MAX_WAITING`] requests wait already. A refusal settles at the
+/// is none, [`MAX_WAITING`] requests wait already or a write's text would
+/// take the queue past [`MAX_QUEUED_BYTES`]. A refusal settles at the
 /// caller's next turn, never inside this call.
 fn submit(task: Task, answer: Answer) {
+    submit_accepted_at(task, answer, Instant::now());
+}
+
+/// [`submit`], the request accepted at `accepted`, which its wait for its
+/// turn counts from.
+fn submit_accepted_at(task: Task, answer: Answer, accepted: Instant) {
+    let answer = Owed(Some(answer));
+    // A full queue is worth a retry; a thread that never started or ended is
+    // gone for the rest of the run.
+    let Some(thread) = ClipboardThread::get() else {
+        return refuse(answer, ClipboardError::Gone);
+    };
+    let reserved = match &task {
+        Task::Write(write) => {
+            let Some(reserved) = Reservation::try_new(&thread.queued_bytes, write.as_text().len())
+            else {
+                return refuse(answer, ClipboardError::Unavailable);
+            };
+            Some(reserved)
+        }
+        Task::Read => None,
+        #[cfg(test)]
+        Task::Inspect(_) => None,
+    };
     let request = Request {
         task,
         answer,
-        accepted: Instant::now(),
+        waiting: Waiting::since(accepted),
+        _reserved: reserved,
     };
-    // A full queue is worth a retry; a thread that never started or ended is
-    // gone for the rest of the run.
-    let (refused, error) = match ClipboardThread::get() {
-        Some(thread) => match thread.requests.try_send(request) {
-            Ok(()) => {
-                thread.wake();
-                return;
-            }
-            Err(mpsc::TrySendError::Full(request)) => (request, ClipboardError::Unavailable),
-            Err(mpsc::TrySendError::Disconnected(request)) => (request, ClipboardError::Gone),
-        },
-        None => (request, ClipboardError::Gone),
-    };
-    refused.answer.settle(None, error);
+    match thread.requests.try_send(request) {
+        Ok(()) => thread.wake(),
+        Err(mpsc::TrySendError::Full(request)) => {
+            refuse(request.answer, ClipboardError::Unavailable);
+        }
+        Err(mpsc::TrySendError::Disconnected(request)) => {
+            refuse(request.answer, ClipboardError::Gone);
+        }
+    }
+}
+
+/// Refuse a request at once with `error`, then say so.
+fn refuse(answer: Owed, error: ClipboardError) {
+    answer.settle(None, error);
     tracing::warn!(
         ?error,
         "a clipboard request was refused: the clipboard thread cannot take it"
@@ -222,6 +345,8 @@ fn submit(task: Task, answer: Answer) {
 struct ClipboardThread {
     requests: mpsc::SyncSender<Request>,
     wake: Arc<OwnedHandle>,
+    /// The bytes of write text queued and not yet answered.
+    queued_bytes: AtomicUsize,
 }
 
 impl ClipboardThread {
@@ -279,7 +404,11 @@ impl ClipboardThread {
         // A closed channel means the thread died before reporting; it cannot
         // have created a window that outlives it.
         match window.recv() {
-            Ok(Ok(())) => Some(Self { requests, wake }),
+            Ok(Ok(())) => Some(Self {
+                requests,
+                wake,
+                queued_bytes: AtomicUsize::new(0),
+            }),
             Ok(Err(error)) => {
                 tracing::error!(%error, "failed to create the clipboard owner window");
                 None
@@ -302,57 +431,67 @@ impl ClipboardThread {
 ///
 /// Every request runs contained, and nothing else here runs code the thread
 /// does not own (the window's messages go through `os_entry`), so the loop
-/// has no failure to restart from. Were it to end all the same, the channel
-/// would close and every later request answers
-/// [`ClipboardError::Gone`].
+/// has no failure to restart from. Were it to end all the same, the request
+/// at its turn and those in the queue drop with it and answer
+/// [`ClipboardError::Gone`] ([`Owed`]), and so does every later request,
+/// which finds the channel closed.
+///
+/// A request in the queue is [`Waiting`]; its turn makes it a [`Turn`],
+/// whose attempts keep their patience whatever it waited for its turn: the
+/// queue's bound is measured once, as the turn comes.
 fn serve(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
-    let mut turn: Option<(Request, OpenAttempts)> = None;
-    let turn = &mut turn;
+    let mut turn: Option<Turn> = None;
     loop {
         if !pump_messages() {
             return;
         }
         let mut retry_at = None;
         loop {
-            let (request, mut attempts) = match turn.take() {
-                Some(current) => current,
-                None => match requests.try_recv() {
-                    // The patience to open counts from the request's turn.
-                    Ok(request) => (request, OpenAttempts::new(Instant::now())),
-                    Err(_) => break,
-                },
-            };
-            if queued_too_long(request.accepted, Instant::now()) {
-                let mut failure = FirstPanic::new();
-                failure.contain(|| request.answer.settle(None, ClipboardError::Timeout));
-                failure.contain(|| {
-                    tracing::warn!("a clipboard request waited its whole bound in the queue");
-                });
-                report(failure);
-                continue;
-            }
-            if let Some(session) = ClipboardSession::try_open(window) {
-                let Request { task, answer, .. } = request;
-                let mut failure = FirstPanic::new();
-                let settled = failure.contain(|| task.run(&session));
-                // The clipboard closes before the answer is delivered.
-                drop(session);
-                failure.contain(|| answer.settle(settled, ClipboardError::Unavailable));
-                report(failure);
-            } else if let Some(at) = attempts.failed(Instant::now()) {
-                *turn = Some((request, attempts));
-                retry_at = Some(at);
-                break;
+            let current = if let Some(current) = turn.take() {
+                current
             } else {
+                let Ok(request) = requests.try_recv() else {
+                    break;
+                };
+                match request.take_turn(Instant::now()) {
+                    Ok(current) => current,
+                    Err(answer) => {
+                        let mut failure = FirstPanic::new();
+                        failure.contain(|| answer.settle(None, ClipboardError::Timeout));
+                        failure.contain(|| {
+                            tracing::warn!(
+                                "a clipboard request waited its whole bound for its turn"
+                            );
+                        });
+                        report(failure);
+                        continue;
+                    }
+                }
+            };
+            let Some(session) = ClipboardSession::try_open(window) else {
+                let mut current = current;
+                if let Some(at) = current.attempts.failed(Instant::now()) {
+                    turn = Some(current);
+                    retry_at = Some(at);
+                    break;
+                }
                 let mut failure = FirstPanic::new();
-                failure.contain(|| request.answer.settle(None, ClipboardError::Unavailable));
+                failure.contain(|| current.answer.settle(None, ClipboardError::Unavailable));
                 failure.contain(|| {
                     tracing::warn!(
                         "another process held the clipboard past this request's patience"
                     );
                 });
                 report(failure);
-            }
+                continue;
+            };
+            let Turn { task, answer, .. } = current;
+            let mut failure = FirstPanic::new();
+            let settled = failure.contain(|| task.run(&session));
+            // The clipboard closes before the answer is delivered.
+            drop(session);
+            failure.contain(|| answer.settle(settled, ClipboardError::Unavailable));
+            report(failure);
         }
         let timeout = retry_at.map_or(INFINITE, |at| {
             // Rounded up, so a wait shorter than a millisecond cannot spin;
@@ -564,9 +703,10 @@ impl ClipboardSession {
                 formats.push(Prepared::try_new(format, &EXCLUDE.to_le_bytes())?);
             }
         }
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let bytes: Vec<u8> = wide.iter().flat_map(|unit| unit.to_le_bytes()).collect();
-        formats.push(Prepared::try_new(CF_UNICODETEXT.0 as u32, &bytes)?);
+        // Encoded straight into the clipboard's memory: the request's text
+        // is the one other copy, and it goes before the clipboard is emptied.
+        formats.push(Prepared::utf16(CF_UNICODETEXT.0 as u32, &text)?);
+        drop(text);
 
         // SAFETY: `self` holds the clipboard open on this thread.
         if let Err(error) = unsafe { EmptyClipboard() } {
@@ -633,19 +773,45 @@ struct Prepared {
 impl Prepared {
     /// Copy `bytes` into new global memory for `format`.
     fn try_new(format: u32, bytes: &[u8]) -> Result<Self, ClipboardError> {
+        Self::filled(format, bytes.len(), |memory| memory.copy_from_slice(bytes))
+    }
+
+    /// `text` as NUL-terminated little-endian UTF-16 in new global memory
+    /// for `format`, encoded straight into it.
+    fn utf16(format: u32, text: &str) -> Result<Self, ClipboardError> {
+        let units = text.encode_utf16().count().saturating_add(1);
+        let len = units
+            .checked_mul(std::mem::size_of::<u16>())
+            .ok_or(ClipboardError::Unavailable)?;
+        Self::filled(format, len, |memory| {
+            let wide = text.encode_utf16().chain(std::iter::once(0));
+            for (slot, unit) in memory.as_chunks_mut::<2>().0.iter_mut().zip(wide) {
+                slot.copy_from_slice(&unit.to_le_bytes());
+            }
+        })
+    }
+
+    /// New global memory of `len` bytes for `format`, written by `fill`
+    /// while it is locked.
+    fn filled(
+        format: u32,
+        len: usize,
+        fill: impl FnOnce(&mut [u8]),
+    ) -> Result<Self, ClipboardError> {
         #[cfg(test)]
         if FAIL_NEXT_PREPARE.swap(false, std::sync::atomic::Ordering::SeqCst) {
             return Err(ClipboardError::Unavailable);
         }
-        // SAFETY: `GlobalAlloc` is asked for `bytes.len()` bytes and checked,
-        // so the matching `GlobalLock`'s non-null `ptr` is valid for writes
-        // of that many bytes; `copy_nonoverlapping` copies between `bytes`
-        // and the new allocation, two distinct regions. `GlobalUnlock`'s
+        // SAFETY: `GlobalAlloc` is asked for `len` zeroed bytes and checked,
+        // so the matching `GlobalLock`'s non-null `ptr` is valid for reads
+        // and writes of `len` initialized bytes (a `u8` has no alignment to
+        // keep), and nothing else reaches the new allocation while the slice
+        // made from it lives. `GlobalUnlock`'s
         // result is discarded: it cannot tell "unlocked, success" from
         // failure without `GetLastError`, and nothing is left to do with the
         // lock either way. A failure frees the allocation through `Drop`.
         unsafe {
-            let global = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).map_err(|error| {
+            let global = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, len).map_err(|error| {
                 tracing::error!(%error, "failed to allocate a clipboard format's memory");
                 ClipboardError::Unavailable
             })?;
@@ -655,7 +821,7 @@ impl Prepared {
                 tracing::error!("failed to lock a clipboard format's memory");
                 return Err(ClipboardError::Unavailable);
             }
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.cast::<u8>(), bytes.len());
+            fill(std::slice::from_raw_parts_mut(ptr.cast::<u8>(), len));
             let _ = GlobalUnlock(global);
             Ok(prepared)
         }

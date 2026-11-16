@@ -16,8 +16,11 @@ pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 ///
 /// - `Ok(())`: the system clipboard took the text.
 /// - `Err(`[`ClipboardError::ApplicationOnly`]`)`: the system clipboard
-///   cannot take the text now, and only this application can read it back:
-///   its own later reads answer it, other applications do not see it.
+///   cannot take the text now, and the host keeps it: this application's
+///   later reads answer it, other applications do not see it yet. The host
+///   still owes it to the system clipboard and offers it there as soon as
+///   it can; a system change that arrives before that offer does not drop
+///   it, and only a newer write, or a system change after the offer, does.
 /// - any other error: nothing was kept. The clipboard is as it was, and no
 ///   later read in this process answers the text, with one exception: a host
 ///   that must clear the clipboard before it fills it (Win32's
@@ -26,9 +29,10 @@ pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 ///
 /// A Wayland compositor confirms no selection request, so a request it drops
 /// silently still answers `Ok`. Worth a retry: [`ClipboardError::Unavailable`]
-/// and [`ClipboardError::Timeout`] (a clipboard held or slow now), and
-/// [`ClipboardError::Denied`] once the user acts; not
-/// [`ClipboardError::Gone`].
+/// and [`ClipboardError::Timeout`] (a clipboard held, busy or slow now), and
+/// [`ClipboardError::Denied`] once the user acts. Never worth one:
+/// [`ClipboardError::Gone`], the one answer on every host for a clipboard
+/// no retry can reach.
 pub type ClipboardWritten = Result<(), ClipboardError>;
 
 /// Why a clipboard or primary-selection read has no answer, or a clipboard
@@ -39,10 +43,10 @@ pub type ClipboardWritten = Result<(), ClipboardError>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum ClipboardError {
-    /// The host could not reach the clipboard: another application held it
-    /// open past the host's patience, the host's queue of requests is full,
-    /// the display connection is gone, or the
-    /// selection's owner left during the transfer.
+    /// The host could not reach the clipboard now, and a retry can: another
+    /// application held it open past the host's patience, the host's queue
+    /// of requests or of queued text is full, or the selection's owner left
+    /// during the transfer.
     #[error("the clipboard could not be reached")]
     Unavailable,
     /// The user or the platform refused this application the clipboard: a
@@ -51,8 +55,9 @@ pub enum ClipboardError {
     /// selection only under the serial of the user's input.
     #[error("the clipboard was denied to this application")]
     Denied,
-    /// The clipboard's owner did not answer in time: a selection owner, or a
-    /// Win32 owner that renders its data only when it is asked.
+    /// The clipboard did not answer in time: a selection owner, a Win32
+    /// owner that renders its data only when it is asked, or a Win32 request
+    /// that waited past its queue's bound for its turn behind such owners.
     #[error("the clipboard's owner did not answer in time")]
     Timeout,
     /// The clipboard held text that is not valid in its declared encoding.
@@ -64,15 +69,22 @@ pub enum ClipboardError {
     TooLarge,
     /// Only a write answers it: the system clipboard cannot take the text
     /// now (a web page without the Clipboard API, a Wayland write with no
-    /// input serial to set the selection under), so the host keeps it for
-    /// this application alone. Its own later reads answer it; no other
-    /// application can paste it. Nothing is lost: a cut may delete on it, as
-    /// a paste in the application returns the text.
+    /// input serial to set the selection under or no data device to set it
+    /// on), so the host keeps it. This application's later reads answer it;
+    /// no other application can paste it until the host offers it to the
+    /// system clipboard, which it owes and does at its first chance (a
+    /// Wayland window's next input; a page without the Clipboard API has
+    /// none, and sees no system change either). A system change before that
+    /// offer does
+    /// not drop it; a newer write, or a system change after the offer, does.
+    /// Nothing is lost: a cut may delete on it, as a paste in the
+    /// application returns the text.
     #[error("only this application can read the text back")]
     ApplicationOnly,
-    /// The host's clipboard is gone for the rest of this run: it could not
-    /// be started, or stopped (Win32's clipboard thread). No later request
-    /// is served; not worth a retry.
+    /// The host's clipboard is gone, and no retry can reach it: it could not
+    /// be started or has ended (Win32's clipboard thread, X11's selection
+    /// thread), the loop that held it released it (Wayland), or the caller
+    /// is on a thread the platform never serves (UIKit off the main thread).
     #[error("the clipboard is gone for this run")]
     Gone,
 }

@@ -288,20 +288,55 @@ pub(crate) fn the_scripted_clipboard_keeps_one_order_across_reads_and_writes() {
     assert_eq!(*later.borrow(), Some(Ok(Ok(Some(answered("written"))))));
 
     // The first write answers late, the second at once: the second lands
-    // last, as it was asked last.
+    // last, as it was asked last, and its completion settles only once its
+    // text has landed.
     scripted
         .writes()
         .answer_next(Answer::value(Ok(())).after(Duration::from_millis(20)));
-    drop(clipboard.write_text("first"));
-    drop(clipboard.write_text("second"));
+    let first = settle_into(clipboard.write_text("first"));
+    let second = settle_into(clipboard.write_text("second"));
     let _ = host.pump(Duration::ZERO);
     assert_eq!(
         scripted.text().as_deref(),
         Some("written"),
         "the first has not landed"
     );
+    assert_eq!(
+        *second.borrow(),
+        None,
+        "the second's completion waits for its text"
+    );
     let _ = host.pump(Duration::from_millis(20));
+    let _ = host.pump(Duration::ZERO);
     assert_eq!(scripted.text().as_deref(), Some("second"));
+    assert_eq!(*first.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(*second.borrow(), Some(Ok(Ok(()))));
+}
+
+/// A test's own observer on the write script hears beside the clipboard's,
+/// which keeps landing writes and letting reads through; and writes stay
+/// held while either of two holds lives.
+pub(crate) fn a_tests_observer_and_two_holds_leave_the_clipboard_serving() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    let heard = Rc::new(Cell::new(0_usize));
+    let counted = Rc::clone(&heard);
+    scripted
+        .writes()
+        .on_answer(move |_, _| counted.set(counted.get() + 1));
+    let clipboard = acquire(&mut host).expect("provided");
+    let first = scripted.hold_writes();
+    let second = scripted.hold_writes();
+    drop(clipboard.write_text("held"));
+    let read = settle_into(clipboard.read_text());
+    drop(first);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(second.held(), 1, "the other hold still holds the write");
+    assert_eq!(*read.borrow(), None, "the read waits for the held write");
+    drop(second);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(heard.get(), 1, "the test's observer heard the write");
+    assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("held"))))));
 }
 
 /// A concealed write reaches the host marked, pastes like any other, and an

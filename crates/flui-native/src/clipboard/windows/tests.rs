@@ -672,3 +672,122 @@ fn a_burst_of_clipboard_writes_is_answered_in_full() {
     holder.join().expect("the holder thread");
     assert!(refused >= MAX_WAITING - 1, "{refused} refused");
 }
+
+/// The queue's bound covers the wait for a request's turn alone: a write
+/// whose turn comes just inside it, against a clipboard another window
+/// holds, keeps its whole patience past the bound and lands once the holder
+/// lets go; a write that waited past the bound is refused `Timeout` though
+/// the clipboard is free.
+#[test]
+fn the_queue_bound_ends_at_a_requests_turn() {
+    use crate::clipboard::patience::LONGEST_QUEUED;
+    let _test = ClipboardTest::begin();
+    let owner = SettlingOwner::new();
+    let ago = |waited: Duration| {
+        Instant::now()
+            .checked_sub(waited)
+            .expect("the machine has been up longer than the queue's bound")
+    };
+
+    let holder = hold_clipboard(PATIENCE * 4 / 5);
+    let (mut completion, answer) = owner.pending::<ClipboardWritten>();
+    submit_accepted_at(
+        Task::Write(ClipboardWrite::text("its turn came")),
+        Answer::Written(answer),
+        ago(LONGEST_QUEUED.saturating_sub(PATIENCE / 5)),
+    );
+    let written = owner
+        .settle_within(&mut completion, ANSWER_WITHIN)
+        .expect("the write is answered in time")
+        .expect("the write is answered, not abandoned");
+    holder.join().expect("the holder thread");
+    assert_eq!(
+        written,
+        Ok(()),
+        "a turn inside the bound keeps its patience"
+    );
+    assert_eq!(
+        read_and_wait(&WindowsClipboard::new()),
+        Ok(Some("its turn came".to_owned()))
+    );
+
+    let (mut completion, answer) = owner.pending::<ClipboardWritten>();
+    submit_accepted_at(
+        Task::Write(ClipboardWrite::text("waited too long")),
+        Answer::Written(answer),
+        ago(LONGEST_QUEUED + Duration::from_secs(1)),
+    );
+    assert_eq!(
+        owner
+            .settle_within(&mut completion, ANSWER_WITHIN)
+            .expect("the write is answered in time")
+            .expect("the write is answered, not abandoned"),
+        Err(ClipboardError::Timeout)
+    );
+    assert_eq!(
+        read_and_wait(&WindowsClipboard::new()),
+        Ok(Some("its turn came".to_owned()))
+    );
+}
+
+/// A request the thread can no longer serve, dropped from its queue or at
+/// its turn, answers `Gone` rather than nothing.
+#[test]
+fn a_request_dropped_unanswered_answers_gone() {
+    let owner = SettlingOwner::new();
+    let (mut completion, answer) = owner.pending::<ClipboardWritten>();
+    drop(Owed(Some(Answer::Written(answer))));
+    assert_eq!(
+        owner
+            .settle_within(&mut completion, ANSWER_WITHIN)
+            .expect("the write is answered in time")
+            .expect("the write is answered, not abandoned"),
+        Err(ClipboardError::Gone)
+    );
+}
+
+/// The queue holds write text up to its byte bound, besides a lone write of
+/// any size; past it a write is refused, and an answered write gives its
+/// bytes back.
+#[test]
+fn the_queue_holds_write_text_up_to_its_byte_bound() {
+    static QUEUED: AtomicUsize = AtomicUsize::new(0);
+    let lone = Reservation::try_new(&QUEUED, MAX_QUEUED_BYTES * 2).expect("a lone write");
+    assert!(Reservation::try_new(&QUEUED, 1).is_none(), "past the bound");
+    drop(lone);
+    let half = Reservation::try_new(&QUEUED, MAX_QUEUED_BYTES / 2).expect("half");
+    let rest = Reservation::try_new(&QUEUED, MAX_QUEUED_BYTES - MAX_QUEUED_BYTES / 2)
+        .expect("up to the bound");
+    assert!(Reservation::try_new(&QUEUED, 1).is_none(), "past the bound");
+    drop(half);
+    assert!(
+        Reservation::try_new(&QUEUED, 1).is_some(),
+        "bytes given back"
+    );
+    drop(rest);
+    assert_eq!(QUEUED.load(Ordering::Acquire), 0);
+}
+
+/// The text is encoded into the clipboard's memory whole, NUL-terminated,
+/// a pair of surrogates and an empty text included.
+#[test]
+fn a_writes_text_is_encoded_straight_into_its_memory() {
+    for text in ["", "plain", "a \u{1F980} crab"] {
+        let prepared = Prepared::utf16(CF_UNICODETEXT.0 as u32, text).expect("memory for it");
+        let expected: Vec<u8> = text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        // SAFETY: `prepared` owns the allocation, unlocked, which this test
+        // alone reaches; it is locked for the copy and unlocked after.
+        let held = unsafe {
+            let ptr = GlobalLock(prepared.global);
+            assert!(!ptr.is_null());
+            let held = std::slice::from_raw_parts(ptr.cast::<u8>(), expected.len()).to_vec();
+            let _ = GlobalUnlock(prepared.global);
+            held
+        };
+        assert_eq!(held, expected, "{text:?}");
+    }
+}

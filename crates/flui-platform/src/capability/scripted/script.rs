@@ -185,7 +185,8 @@ struct ScriptCell<R: fmt::Debug + 'static, A: 'static> {
 struct ScriptState<R, A> {
     steps: VecDeque<Step<R, A>>,
     otherwise: Option<Standing<R, A>>,
-    observer: Option<Observer<R, A>>,
+    /// Heard in the order they were added.
+    observers: Vec<Observer<R, A>>,
     holding: bool,
     /// Requests not answered yet, oldest first.
     waiting: VecDeque<Waiting<R, A>>,
@@ -246,7 +247,7 @@ where
             state: RefCell::new(ScriptState {
                 steps: VecDeque::new(),
                 otherwise: None,
-                observer: None,
+                observers: Vec::new(),
                 holding: false,
                 waiting: VecDeque::new(),
                 received: Vec::new(),
@@ -317,36 +318,35 @@ where
     /// answers, before the caller's completion is resolved: `Some(value)`,
     /// or `None` for a request that ends unanswered (abandoned, or
     /// unexpected). A double keeps the state its answers imply here, in one
-    /// place, whoever wrote the answer. Replaces any earlier observer; it
-    /// runs with no borrow of the script held, its panic contained like the
-    /// test's other code.
+    /// place, whoever wrote the answer. Adds an observer beside those added
+    /// before, which keep hearing and run first: a double's own observer
+    /// cannot be replaced by a test's. Each runs with no borrow of the
+    /// script held, its panic contained like the test's other code.
     pub fn on_answer(&self, observe: impl Fn(&R, Option<&A>) + 'static) {
-        let replaced = self
-            .cell
+        self.cell
             .state
             .borrow_mut()
-            .observer
-            .replace(Rc::new(observe));
-        drop(replaced);
+            .observers
+            .push(Rc::new(observe));
     }
 
-    fn observer(&self) -> Option<Observer<R, A>> {
-        self.cell.state.borrow().observer.clone()
+    fn observers(&self) -> Vec<Observer<R, A>> {
+        self.cell.state.borrow().observers.clone()
     }
 
-    /// Answer `request` through `resolver` with `value`, after the observer
-    /// heard it.
+    /// Answer `request` through `resolver` with `value`, after every
+    /// observer heard it.
     fn deliver(&self, request: &R, resolver: Resolver<A>, value: A, first: &mut FirstPanic) {
-        if let Some(observe) = self.observer() {
+        for observe in self.observers() {
             first.contain(|| observe(request, Some(&value)));
         }
         // A retired owner has nobody left to tell.
         let _ = resolver.resolve(value);
     }
 
-    /// End `request` unanswered, after the observer heard it.
+    /// End `request` unanswered, after every observer heard it.
     fn end_unanswered(&self, request: &R, resolver: Resolver<A>, first: &mut FirstPanic) {
-        if let Some(observe) = self.observer() {
+        for observe in self.observers() {
             first.contain(|| observe(request, None));
         }
         drop(resolver);

@@ -21,11 +21,14 @@
 //! [`ApplicationOnly`](ClipboardError::ApplicationOnly), the clipboard takes
 //! its text, in one place. [`fail_writes_with`](ScriptedClipboard::fail_writes_with)
 //! makes the standing answer refuse, and
-//! [`hold_writes`](ScriptedClipboard::hold_writes) holds writes while its
+//! [`hold_writes`](ScriptedClipboard::hold_writes) holds writes while any
 //! hold lives. Reads and writes keep one order, as a host's clipboard serves
 //! them (ADR-0337 §3): a read asked after a write waits until that write is
-//! answered, and writes land in the order they were asked, however their
-//! answers were scheduled.
+//! answered, writes land in the order they were asked, however their
+//! answers were scheduled, and a write's completion settles only once its
+//! text has landed. An observer a test adds to
+//! [`writes`](ScriptedClipboard::writes) hears beside the clipboard's own,
+//! which it cannot replace.
 //! [`answer_concealment`](ScriptedClipboard::answer_concealment) sets what
 //! the host does with a concealed write, and
 //! [`is_concealed`](ScriptedClipboard::is_concealed) tells whether the text
@@ -34,11 +37,14 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, Unsupported,
     capability::scripted::{Scenario, Script, ServiceState, Track},
-    capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
+    capability::{
+        CapabilityProvider, CapabilityRegistrar, CompletionSource, ProviderContext, Resolver,
+    },
 };
 
 /// A request a clipboard's handle makes of its host and is answered later.
@@ -82,6 +88,9 @@ struct Contents {
     failure: Option<ClipboardError>,
     /// What the standing answer refuses a write with; `None` takes it.
     write_failure: Option<ClipboardError>,
+    /// How many [`ClipboardWriteHold`]s are alive: writes are held while
+    /// any is.
+    write_holds: usize,
     /// One clone per live handle.
     handles: Rc<()>,
 }
@@ -118,6 +127,10 @@ struct Order {
     /// Writes answered ahead of an earlier one, by number: the write and
     /// its answer, or `None` for one that ended unanswered.
     early: BTreeMap<u64, Option<(ClipboardWrite, ClipboardWritten)>>,
+    /// The completions of the writes not landed yet, by number: each is
+    /// answered once its write lands, after its text, whatever order the
+    /// script answered the writes in.
+    owed: BTreeMap<u64, Resolver<ClipboardWritten>>,
     /// Reads asked behind writes not landed yet: the writes they wait for
     /// (by count) and their answers.
     reads: VecDeque<(u64, Resolver<ClipboardRead>)>,
@@ -279,11 +292,18 @@ impl ScriptedClipboard {
     /// Hold every later write, unanswered and off the clipboard, while the
     /// returned hold lives, as a host whose clipboard another application
     /// holds keeps it waiting; reads asked after a held write wait for it.
-    /// Dropping the hold answers the held writes, in order, with the
-    /// standing answer.
+    /// Writes stay held while any hold lives; dropping the last answers the
+    /// held writes, in order, with the standing answer.
     #[must_use = "writes are held only while the hold is alive"]
     pub fn hold_writes(&self) -> ClipboardWriteHold {
-        self.writes.hold();
+        let first = {
+            let mut contents = self.contents.borrow_mut();
+            contents.write_holds = contents.write_holds.saturating_add(1);
+            contents.write_holds == 1
+        };
+        if first {
+            self.writes.hold();
+        }
         ClipboardWriteHold {
             writes: self.writes.clone(),
             contents: Rc::clone(&self.contents),
@@ -335,14 +355,26 @@ impl ScriptedClipboard {
         }
     }
 
-    /// A write asked now, numbered in the order writes were asked.
-    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
+    /// A write asked now, numbered in the order writes were asked. The
+    /// script answers a stand-in of `answer`, made from `completions`;
+    /// `answer` itself is answered once the write lands.
+    fn write(
+        &self,
+        write: ClipboardWrite,
+        answer: Resolver<ClipboardWritten>,
+        completions: &CompletionSource,
+    ) {
+        let (unwatched, stand_in) = completions.pending::<ClipboardWritten>();
+        drop(unwatched);
         let number = {
             let mut order = self.order.borrow_mut();
             order.asked = order.asked.saturating_add(1);
-            order.asked
+            let number = order.asked;
+            order.owed.insert(number, answer);
+            number
         };
-        self.writes.receive(WriteRequest { number, write }, answer);
+        self.writes
+            .receive(WriteRequest { number, write }, stand_in);
     }
 }
 
@@ -357,22 +389,31 @@ struct Landing {
 impl Landing {
     /// The write `request` was answered `written` (`None`: it ended
     /// unanswered): land it and every write after it already answered, in
-    /// order, then let through the reads that waited for them.
+    /// order, then answer their completions in that order, then let through
+    /// the reads that waited for them. A completion never settles before
+    /// its write's text is on the clipboard.
     fn answered(&self, request: &WriteRequest, written: Option<&ClipboardWritten>) {
         let (Some(contents), Some(order)) = (self.contents.upgrade(), self.order.upgrade()) else {
             return;
         };
-        let released = {
+        let (settled, released) = {
             let mut order = order.borrow_mut();
             let answered = written.map(|written| (request.write.clone(), *written));
             order.early.insert(request.number, answered);
+            let mut settled = Vec::new();
             loop {
                 let next = order.landed.saturating_add(1);
                 let Some(answered) = order.early.remove(&next) else {
                     break;
                 };
-                if let Some((write, Ok(()) | Err(ClipboardError::ApplicationOnly))) = answered {
-                    contents.borrow_mut().take(write);
+                let written = answered.map(|(write, written)| {
+                    if let Ok(()) | Err(ClipboardError::ApplicationOnly) = written {
+                        contents.borrow_mut().take(write);
+                    }
+                    written
+                });
+                if let Some(answer) = order.owed.remove(&next) {
+                    settled.push((answer, written));
                 }
                 order.landed = next;
             }
@@ -387,16 +428,32 @@ impl Landing {
                     released.push(answer);
                 }
             }
-            released
+            (settled, released)
         };
-        for answer in released {
-            self.reads.receive(ClipboardRequest::ReadText, answer);
+        // Answered with nothing borrowed: a resolver's owner queue is the
+        // test's code. One that panics leaves the others answered, and the
+        // first failure goes on.
+        let mut failure = FirstPanic::new();
+        for (answer, written) in settled {
+            let _ = match written {
+                // A retired owner has nobody left to answer.
+                Some(written) => failure.contain(|| {
+                    let _ = answer.resolve(written);
+                }),
+                // Ended unanswered: its completion ends abandoned.
+                None => failure.contain(|| drop(answer)),
+            };
         }
+        for answer in released {
+            let _ = failure.contain(|| self.reads.receive(ClipboardRequest::ReadText, answer));
+        }
+        failure.resume();
     }
 }
 
-/// Writes held on a [`ScriptedClipboard`] while this lives; dropped, the
-/// held writes are answered, in order, with the standing answer.
+/// Writes held on a [`ScriptedClipboard`] while this, or another hold of
+/// the same clipboard, lives; when the last drops, the held writes are
+/// answered, in order, with the standing answer.
 #[must_use = "writes are held only while the hold is alive"]
 pub struct ClipboardWriteHold {
     writes: Script<WriteRequest, ClipboardWritten>,
@@ -413,6 +470,14 @@ impl ClipboardWriteHold {
 
 impl Drop for ClipboardWriteHold {
     fn drop(&mut self) {
+        let last = {
+            let mut contents = self.contents.borrow_mut();
+            contents.write_holds = contents.write_holds.saturating_sub(1);
+            contents.write_holds == 0
+        };
+        if !last {
+            return;
+        }
         self.writes.resume();
         let contents = Rc::clone(&self.contents);
         let _ = self.writes.release_held(|_| contents.borrow().decide());
@@ -432,6 +497,7 @@ impl CapabilityProvider<ClipboardCapability> for ScriptedClipboard {
         self.service.check()?;
         let backend = Backend {
             clipboard: self.clone(),
+            completions: ctx.completions().clone(),
             _handle: Rc::clone(&self.contents.borrow().handles),
         };
         Ok(ClipboardHandle::new(backend, ctx))
@@ -466,6 +532,9 @@ impl fmt::Debug for ScriptedClipboard {
 /// One handle's backend; it counts as a live handle while it exists.
 struct Backend {
     clipboard: ScriptedClipboard,
+    /// The handle's owner's completions, which a write's stand-in comes
+    /// from.
+    completions: CompletionSource,
     _handle: Rc<()>,
 }
 
@@ -475,7 +544,7 @@ impl ClipboardBackend for Backend {
     }
 
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
-        self.clipboard.write(write, answer);
+        self.clipboard.write(write, answer, &self.completions);
     }
 
     fn concealment(&self) -> Concealment {

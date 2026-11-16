@@ -41,10 +41,28 @@ pub(crate) const LONGEST_DELAY: Duration = Duration::from_millis(64);
 /// seconds at worst.
 pub(crate) const LONGEST_QUEUED: Duration = Duration::from_secs(40);
 
-/// Whether a request accepted at `accepted` has waited past
-/// [`LONGEST_QUEUED`] for its turn at `now`.
-pub(crate) fn queued_too_long(accepted: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(accepted) > LONGEST_QUEUED
+/// A request waiting for its turn, since it was accepted: the only state
+/// [`LONGEST_QUEUED`] is measured in. Its turn consumes it, so a request
+/// attempting to open the clipboard is never measured against the bound
+/// again.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Waiting {
+    accepted: Instant,
+}
+
+impl Waiting {
+    /// A request accepted at `accepted`.
+    pub(crate) const fn since(accepted: Instant) -> Self {
+        Self { accepted }
+    }
+
+    /// The request's turn came at `now`: its attempts, whose patience counts
+    /// from `now`, or `None` when it waited past [`LONGEST_QUEUED`] and is
+    /// refused `Timeout` without an attempt.
+    pub(crate) fn turn(self, now: Instant) -> Option<OpenAttempts> {
+        (now.saturating_duration_since(self.accepted) <= LONGEST_QUEUED)
+            .then(|| OpenAttempts::new(now))
+    }
 }
 
 /// One request's attempts to open the clipboard.
@@ -128,17 +146,22 @@ mod tests {
     #[test]
     fn the_queue_has_a_bound_of_its_own() {
         let accepted = Instant::now();
-        let behind_a_render = accepted + Duration::from_secs(30);
-        assert!(!queued_too_long(accepted, behind_a_render));
-        let mut attempts = OpenAttempts::new(behind_a_render);
-        assert!(
-            attempts.failed(behind_a_render).is_some(),
-            "a request that waited its turn still tries again"
+        let waiting = Waiting::since(accepted);
+        let behind_a_render = accepted + LONGEST_QUEUED;
+        let mut attempts = waiting
+            .turn(behind_a_render)
+            .expect("a turn inside the bound makes its attempts");
+        assert_eq!(
+            attempts.failed(behind_a_render + PATIENCE / 2),
+            Some(behind_a_render + PATIENCE / 2 + FIRST_DELAY),
+            "a request whose turn came keeps its patience past the bound"
         );
-        assert!(queued_too_long(
-            accepted,
-            accepted + LONGEST_QUEUED + Duration::from_millis(1)
-        ));
+        assert!(
+            waiting
+                .turn(accepted + LONGEST_QUEUED + Duration::from_millis(1))
+                .is_none(),
+            "a turn past the bound is refused"
+        );
     }
 
     /// The delay saturates at the longest however many attempts failed,

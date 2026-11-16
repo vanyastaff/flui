@@ -1051,3 +1051,40 @@ fn a_clipboard_write_answers_once_it_owns_the_selection() {
     }
     assert_eq!(Answers::new().read(&clipboard).as_deref(), Some("owned"));
 }
+
+/// A clipboard whose thread has ended answers every write and read
+/// `Gone`, never leaving one without a typed answer: retrying cannot
+/// succeed.
+#[test]
+fn a_clipboard_whose_thread_ended_answers_gone() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let mut clipboard = clipboard();
+    clipboard.send(super::selection::Command::Stop);
+    clipboard
+        .thread
+        .take()
+        .expect("the thread runs")
+        .join()
+        .expect("the thread ends without a panic");
+    let owner = crate::testing::clipboard::SettlingOwner::new();
+    let (mut written, answer) = owner.pending::<flui_platform::ClipboardWritten>();
+    NativeClipboard::write(&clipboard, ClipboardWrite::text("late"), answer);
+    assert_eq!(
+        owner
+            .settle_within(&mut written, STEP)
+            .expect("the write is answered in time")
+            .expect("the write is answered, not abandoned"),
+        Err(ClipboardError::Gone)
+    );
+    let (mut read, answer) = owner.pending::<ClipboardRead>();
+    NativeClipboard::read_text(&clipboard, answer);
+    assert_eq!(
+        owner
+            .settle_within(&mut read, STEP)
+            .expect("the read is answered in time")
+            .expect("the read is answered, not abandoned"),
+        Err(ClipboardError::Gone)
+    );
+}

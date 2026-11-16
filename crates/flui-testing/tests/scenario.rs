@@ -498,7 +498,8 @@ fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
 
 /// A script's observer hears every answer before the caller's completion
 /// settles, whoever gave it: a step, a delayed step, the standing answer, a
-/// release; and hears `None` for a request that ends unanswered.
+/// release; and hears `None` for a request that ends unanswered. An
+/// observer added later hears beside it rather than replacing it.
 #[test]
 fn a_scripts_observer_hears_every_answer_however_it_is_given() {
     let scenario = Scenario::new();
@@ -511,6 +512,11 @@ fn a_scripts_observer_hears_every_answer_however_it_is_given() {
             log.borrow_mut().push((*width, answer.map(Result::is_ok)));
         }
     });
+    let also_heard = Rc::new(std::cell::Cell::new(0_usize));
+    let counted = Rc::clone(&also_heard);
+    camera
+        .captures
+        .on_answer(move |_, _| counted.set(counted.get() + 1));
     camera.captures.otherwise(|_| Ok(vec![]));
     camera
         .captures
@@ -538,6 +544,7 @@ fn a_scripts_observer_hears_every_answer_however_it_is_given() {
             (2, Some(true))
         ]
     );
+    assert_eq!(also_heard.get(), 5, "the later observer heard every answer");
     for slot in [&stepped, &delayed, &standing, &released] {
         assert!(taken(slot).is_some(), "every answered request settled");
     }

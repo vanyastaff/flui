@@ -141,6 +141,19 @@ pub(super) enum Command {
     Stop,
 }
 
+impl Command {
+    /// The thread has ended or will take no more commands: a read or write
+    /// is answered [`ClipboardError::Gone`], anything else is dropped.
+    pub(super) fn refuse_gone(self) {
+        // A retired owner has nobody left to answer.
+        let _ = match self {
+            Self::Write(_, answer) => answer.resolve(Err(ClipboardError::Gone)),
+            Self::Read(_, answer) => answer.resolve(Err(ClipboardError::Gone)),
+            Self::Offer(_) | Self::Withdraw(_) | Self::Answer(..) | Self::Stop => Ok(()),
+        };
+    }
+}
+
 /// What the thread tells the owner thread about its primary selection, and
 /// the wake that has the owner's loop read it.
 pub(super) struct Notice {
@@ -548,9 +561,9 @@ impl Selection {
         failure.resume();
     }
 
-    /// The thread ends: every read and write still waiting is abandoned,
-    /// each drop contained, so one whose abandonment panics leaves the
-    /// others abandoned too, and the first failure goes on.
+    /// The thread ends: every read and write still waiting is answered
+    /// [`ClipboardError::Gone`], each delivery contained, so one that panics
+    /// leaves the others answered too, and the first failure goes on.
     fn abandon(&mut self) {
         let mut failure = FirstPanic::new();
         let waiting = std::mem::take(&mut self.readers);
@@ -558,10 +571,15 @@ impl Selection {
             .into_iter()
             .chain(std::mem::take(&mut self.after_write))
         {
-            failure.contain(|| drop(reader));
+            // A retired owner has nobody left to answer.
+            failure.contain(|| {
+                let _ = reader.resolve(Err(ClipboardError::Gone));
+            });
         }
         for answer in std::mem::take(&mut self.written) {
-            failure.contain(|| drop(answer));
+            failure.contain(|| {
+                let _ = answer.resolve(Err(ClipboardError::Gone));
+            });
         }
         failure.resume();
     }
@@ -1448,7 +1466,7 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
         // owned with it: the owner's turn retires the offers.
         failure.contain(|| selections.notice.end());
         while let Ok(command) = commands.try_recv() {
-            failure.contain(|| drop(command));
+            failure.contain(|| command.refuse_gone());
         }
         // A command sent after the drain drops with the queue.
         failure.contain(|| drop(commands));

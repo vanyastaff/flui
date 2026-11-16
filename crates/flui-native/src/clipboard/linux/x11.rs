@@ -112,11 +112,12 @@ impl X11Clipboard {
     }
 
     /// Send `command` and wake the thread for it. A thread that has ended
-    /// drops the command, and a read's resolver with it, which answers
-    /// nothing rather than waiting forever.
+    /// takes no command: a read or write is answered
+    /// [`ClipboardError::Gone`](flui_platform::ClipboardError::Gone).
     fn send(&self, command: Command) {
-        if self.commands.send(command).is_ok() {
-            ring(&self.bell);
+        match self.commands.send(command) {
+            Ok(()) => ring(&self.bell),
+            Err(mpsc::SendError(command)) => command.refuse_gone(),
         }
     }
 
@@ -198,8 +199,9 @@ impl host::NativeClipboard for X11Clipboard {
     }
 
     /// Answered once the clipboard thread owns the selection with the write,
-    /// or another client took it first; a thread that has ended drops the
-    /// answer, which abandons the write.
+    /// or another client took it first; [`Gone`] once the thread has ended.
+    ///
+    /// [`Gone`]: flui_platform::ClipboardError::Gone
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         self.send(Command::Write(write, answer));
     }

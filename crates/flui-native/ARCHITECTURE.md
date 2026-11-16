@@ -2560,7 +2560,9 @@ apartment and the message-only windows are unchanged.
 Every `WindowsClipboard` read and write is a request to one `flui-clipboard`
 thread per process (ADR-0337 §3), started with the first request and never
 stopped. The owner thread only queues, into a channel bounded at
-`MAX_WAITING`; a request past it is refused `Unavailable` at once. The thread
+`MAX_WAITING` requests and `MAX_QUEUED_BYTES` of write text (a write that comes
+to an empty queue is taken whatever its size); a request past either is refused
+`Unavailable` at once. The thread
 owns one message-only window (`HWND_MESSAGE` parent) and is the only place
 `ClipboardSession` opens the clipboard, always with that window as the owner,
 serving the requests in the order they were made, so a read after a write
@@ -2569,7 +2571,9 @@ the clipboard is closed again. A read whose readers all went away is still
 performed: a handle's shared read waits for it whatever its readers do. A
 request's patience to open counts from its turn; the wait for its turn is
 bounded apart (`clipboard::patience::LONGEST_QUEUED`), past which it answers
-`Timeout`. That bounds the turn, not the answer: a request whose turn comes
+`Timeout`. Waiting is a state of its own (`patience::Waiting`), which the turn
+consumes: a request attempting is never measured against the bound again.
+That bounds the turn, not the answer: a request whose turn comes
 just inside it still waits its own call to Win32, so the worst case is
 `LONGEST_QUEUED`, `PATIENCE` and Win32's thirty seconds.
 
@@ -2581,13 +2585,16 @@ just inside it still waits its own call to Win32, so the worst case is
   report is discarded too, and the thread goes on to the next request.
   Nothing else in its loop runs code it does not own (the window's messages
   cross `os_entry`), so the loop has no failure to restart from; were it to
-  end all the same, its channel closes and every later request answers
-  `ClipboardError::Gone`, as every request does when the thread could not
-  start. A full queue answers `Unavailable`, worth a retry.
+  end all the same, a request's answer is owed until settled (`Owed`), so the
+  request at its turn and those queued answer `ClipboardError::Gone` as they
+  drop, its channel closes and every later request answers `Gone`, as every
+  request does when the thread could not start. A full queue answers
+  `Unavailable`, worth a retry.
 - **A write is made before the clipboard is emptied.** Every format's global
-  memory is allocated and filled first, so a write that cannot be made leaves
-  the clipboard as it was; after `EmptyClipboard` only `SetClipboardData`
-  itself can fail, which leaves the clipboard without text.
+  memory is allocated and filled first, the text encoded into it directly, so
+  a write that cannot be made leaves the clipboard as it was; after
+  `EmptyClipboard` only `SetClipboardData` itself can fail, which leaves the
+  clipboard without text.
 
 - **Two waits are another process's.** `OpenClipboard` fails while another
   window holds the clipboard (clipboard managers and `rdpclip.exe` open it

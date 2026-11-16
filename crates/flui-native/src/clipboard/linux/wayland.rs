@@ -32,11 +32,18 @@
 //!   such a source, the write is not put on the clipboard, with a warning. Each `send` is written by a thread of its own, at most
 //!   [`MAX_WRITERS`] at once, from the text encoded once per form;
 //!   `cancelled` (another client took the selection) ends that seat's
-//!   ownership. With no user input to set it under, the text is kept here
-//!   for the application alone (the write answers `ApplicationOnly`), and a
-//!   read answers it until another client's selection arrives, as the
-//!   primary selection keeps a claim with no source. A write whose source
-//!   cannot be made or set is refused and changes no selection.
+//!   ownership.
+//! - **Text kept for the application.** With no user input in focus to set
+//!   it under, or no data device to set it on, the text is kept here and
+//!   the write answers `ApplicationOnly` (ADR-0337 §1). The host still owes
+//!   it to the system clipboard: at the loop's turn after the next input in
+//!   focus (the keyboard's `enter` included) it is set as that seat's
+//!   selection. Until then every read in the application answers it, and a
+//!   selection another client sets meanwhile does not drop it, since the
+//!   host has not had the chance to offer it; one arriving after an offer
+//!   no seat took, or a newer write, replaces it ([`Owners`]).
+//! - **After the loop releases the clipboard** every read and write answers
+//!   [`ClipboardError::Gone`].
 
 use std::os::fd::{BorrowedFd, OwnedFd};
 use std::rc::Rc;
@@ -60,7 +67,7 @@ use self::reads::{Admitted, Reads};
 use super::owners::Owners;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, NativeClipboard, NativePrimarySelection, owned_text};
-use crate::owner::linux::wayland::{LastInput, WaylandClipboard, WaylandState};
+use crate::owner::linux::wayland::{LastInput, SeatInput, WaylandClipboard, WaylandState};
 use crate::owner::slot::OwnerCell;
 use crate::transfer::linux::wayland::pipe::{self, PipeError};
 use crate::transfer::linux::wayland::{DataDevices, DeviceListener, OfferData};
@@ -116,6 +123,8 @@ struct State {
     owned: Owners<WlSeat, Owned>,
     /// The reads of other clients' selections under way.
     reads: SelectionReads,
+    /// The loop released the clipboard: nothing it is asked can succeed.
+    released: bool,
 }
 
 /// The reads of one selection under way, each of the offer it asked.
@@ -150,10 +159,44 @@ fn read_offer(
 }
 
 impl DeviceListener for Shared {
-    /// Text kept in this process with no source is the selection until a
-    /// selection arrives: another client's, or the application's own.
+    /// Text kept in this process gives way to a selection that arrives once
+    /// the host has tried to offer it, and only then (see [`Owners`]).
     fn selection_arrived(&self) {
-        self.state.with(|state| state.owned.remove_unseated());
+        let replaced = self
+            .state
+            .with(|state| state.owned.selection_arrived())
+            .flatten();
+        replaced.into_iter().for_each(Owned::release);
+    }
+}
+
+impl Shared {
+    /// A source answering with `text`, set as `input.seat`'s selection under
+    /// its serial; `None` with no data device manager or no device on the
+    /// seat, which leaves every selection as it was.
+    fn place(
+        self: &Arc<Self>,
+        text: &Arc<str>,
+        concealed: bool,
+        input: &SeatInput,
+    ) -> Option<WlDataSource> {
+        let source = self.devices.create_source(SourceData::new(
+            Arc::downgrade(self),
+            Arc::clone(text),
+            concealed,
+        ))?;
+        for mime in offered(concealed) {
+            source.offer(mime.to_owned());
+        }
+        if self
+            .devices
+            .set_selection(&input.seat, &source, input.serial)
+        {
+            Some(source)
+        } else {
+            source.destroy();
+            None
+        }
     }
 }
 
@@ -162,6 +205,9 @@ impl DeviceListener for Shared {
 /// while it is kept in this process alone, under no seat.
 struct Owned {
     text: Arc<str>,
+    /// Whether the write was concealed: text kept under no seat is offered
+    /// later through a source that offers the hint.
+    concealed: bool,
     source: Option<WlDataSource>,
     serial: Option<u32>,
     /// The sources set before `source` under the same serial, oldest first,
@@ -178,6 +224,28 @@ impl Owned {
         }
     }
 
+    /// Text kept in this process alone, under no seat.
+    fn kept(text: Arc<str>, concealed: bool) -> Self {
+        Self {
+            text,
+            concealed,
+            source: None,
+            serial: None,
+            superseded: Vec::new(),
+        }
+    }
+
+    /// Text set as a seat's selection through `source` under `serial`.
+    fn seated(text: Arc<str>, concealed: bool, source: WlDataSource, serial: u32) -> Self {
+        Self {
+            text,
+            concealed,
+            source: Some(source),
+            serial: Some(serial),
+            superseded: Vec::new(),
+        }
+    }
+
     /// Answer with `text` from now on, through every source this selection
     /// holds that can carry it: a concealed write never goes out through a
     /// source that does not offer the hint.
@@ -190,6 +258,7 @@ impl Owned {
             }
         }
         self.text = text;
+        self.concealed = concealed;
     }
 }
 
@@ -248,9 +317,16 @@ impl WaylandClipboard for SeatClipboard {
     }
 
     fn release(&self) {
-        let held = self.shared.state.with(std::mem::take);
+        let released = State {
+            released: true,
+            ..State::default()
+        };
+        let held = self
+            .shared
+            .state
+            .with(|state| std::mem::replace(state, released));
         // A read under way ends on its own thread, which holds its readers.
-        if let Some(State { owned, reads: _ }) = held {
+        if let Some(State { owned, .. }) = held {
             owned.into_items().into_iter().for_each(Owned::release);
         }
         if let Some(primary) = self.shared.primary.with(primary::Primary::take) {
@@ -275,7 +351,43 @@ impl WaylandClipboard for SeatClipboard {
     }
 
     fn deliver(&self) {
+        self.offer_kept();
         self.deliver_primary();
+    }
+}
+
+impl SeatClipboard {
+    /// Offer the text kept for the application, which the host owes the
+    /// system clipboard, as the selection of the last input's seat once an
+    /// input in focus gives a serial: a write kept it for want of one. An
+    /// offer no seat takes (no data device) leaves the text kept until the
+    /// next selection arrives.
+    fn offer_kept(&self) {
+        let Some(input) = self.shared.last_input.latest_in_focus() else {
+            return;
+        };
+        let replaced = self
+            .shared
+            .state
+            .with(|state| {
+                if state.released {
+                    return Vec::new();
+                }
+                let Some(owed) = state.owned.owed() else {
+                    return Vec::new();
+                };
+                let (text, concealed) = (Arc::clone(&owed.text), owed.concealed);
+                let Some(source) = self.shared.place(&text, concealed, &input) else {
+                    state.owned.offer_failed();
+                    return Vec::new();
+                };
+                state.owned.set(
+                    input.seat.clone(),
+                    Owned::seated(text, concealed, source, input.serial),
+                )
+            })
+            .unwrap_or_default();
+        replaced.into_iter().for_each(Owned::release);
     }
 }
 
@@ -319,6 +431,9 @@ impl NativeClipboard for SeatClipboard {
             .shared
             .state
             .with(|state| {
+                if state.released {
+                    return Read::Now(Err(ClipboardError::Gone));
+                }
                 let seat = selection.as_ref().map(|selection| &selection.seat);
                 if let Some(owned) = state.owned.read(seat) {
                     return Read::Owned(Arc::clone(&owned.text));
@@ -332,7 +447,8 @@ impl NativeClipboard for SeatClipboard {
                     })
                     .unwrap_or(Read::Now(Ok(None)))
             })
-            .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
+            // Off the owner thread no read can reach the selections.
+            .unwrap_or(Read::Now(Err(ClipboardError::Gone)));
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),
@@ -359,33 +475,21 @@ impl NativeClipboard for SeatClipboard {
 
     /// Answered at once: `Ok` once the seat's selection is set to the
     /// write's source (the compositor may still cancel it for a newer one);
-    /// [`ClipboardError::ApplicationOnly`] with no user input to set it under
-    /// (none yet, or the keyboard left the window it went to): the text is
-    /// kept for this application's reads until another client's selection
-    /// arrives; and [`ClipboardError::Unavailable`] when the source could
-    /// not be made or set, or a concealed write would be served by a source
-    /// that offers no hint, which leaves every seat's selection as it was.
+    /// [`ClipboardError::ApplicationOnly`] with no user input in focus to
+    /// set it under (none yet, or the keyboard left the window it went to)
+    /// or no data device to set it on: the text is kept, every read in the
+    /// application answers it, and it is offered as the selection at the
+    /// next input in focus (see the module docs); and
+    /// [`ClipboardError::Gone`] once the loop released the clipboard.
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         let concealed = write.is_concealed();
         let text: Arc<str> = write.into_text().into();
-        let last = self.shared.last_input.latest();
+        let last = self.shared.last_input.latest_in_focus();
         let outcome = self.shared.state.with(|state| {
-            let State { owned, .. } = state;
-            let devices = &self.shared.devices;
-            let set = |source: &WlDataSource, seat: &WlSeat, serial: u32| {
-                devices.set_selection(seat, source, serial).then_some(())
-            };
-            let create = |text: &Arc<str>| {
-                let source = devices.create_source(SourceData::new(
-                    Arc::downgrade(&self.shared),
-                    Arc::clone(text),
-                    concealed,
-                ))?;
-                for mime in offered(concealed) {
-                    source.offer(mime.to_owned());
-                }
-                Some(source)
-            };
+            if state.released {
+                return (Vec::new(), Err(ClipboardError::Gone));
+            }
+            let owned = &mut state.owned;
             let input = last.as_ref();
             // The seat's selection set under this input's serial, which a
             // write may change in place (see the module docs).
@@ -404,37 +508,24 @@ impl NativeClipboard for SeatClipboard {
             // source changes them.
             let fresh = input
                 .filter(|_| held_hint != Some(concealed))
-                .and_then(|input| {
-                    let source = create(&text)?;
-                    if set(&source, &input.seat, input.serial).is_some() {
-                        Some(source)
-                    } else {
-                        source.destroy();
-                        None
-                    }
-                });
+                .and_then(|input| self.shared.place(&text, concealed, input));
             let effect = write_effect(input.is_some(), held_hint, concealed, fresh.is_some());
             match (effect, fresh) {
-                // No serial to set a selection under: the text is kept for
-                // the application alone, under no seat, until another
-                // client's selection arrives.
+                // No serial to set a selection under, or no device to set it
+                // on: the text is kept for the application, owed to the
+                // system clipboard at the next input in focus.
                 (WriteEffect::KeepForApplication, _) => {
-                    let previous = owned.set(
-                        None,
-                        Owned {
-                            text,
-                            source: None,
-                            serial: None,
-                            superseded: Vec::new(),
-                        },
-                    );
-                    (previous, Err(ClipboardError::ApplicationOnly))
+                    let previous = owned.keep(Owned::kept(text, concealed));
+                    (
+                        previous.into_iter().collect(),
+                        Err(ClipboardError::ApplicationOnly),
+                    )
                 }
                 (WriteEffect::ReplaceInPlace, _) => {
                     if let Some(held) = held.as_mut() {
                         held.replace(Arc::clone(&text), concealed);
                     }
-                    (None, Ok(()))
+                    (owned.take_kept().into_iter().collect(), Ok(()))
                 }
                 // The current source keeps answering the new write in case
                 // the compositor keeps it, unless the write is concealed and
@@ -446,50 +537,38 @@ impl NativeClipboard for SeatClipboard {
                             SelectionCheck::send(
                                 &current,
                                 Arc::downgrade(&self.shared),
-                                devices.queue().as_ref(),
+                                self.shared.devices.queue().as_ref(),
                             );
                             held.superseded.push(current);
                         }
                     }
-                    (None, Ok(()))
+                    (owned.take_kept().into_iter().collect(), Ok(()))
                 }
                 // Only this seat's earlier selection is replaced: another
                 // seat keeps the source it reads.
                 (WriteEffect::SetFresh, Some(source)) => {
                     let input = input.expect("BUG: a new source is set only under an input");
                     let previous = owned.set(
-                        Some(input.seat.clone()),
-                        Owned {
-                            text,
-                            source: Some(source),
-                            serial: Some(input.serial),
-                            superseded: Vec::new(),
-                        },
+                        input.seat.clone(),
+                        Owned::seated(text, concealed, source, input.serial),
                     );
                     (previous, Ok(()))
                 }
-                // A refused write leaves the selections as they were.
-                (WriteEffect::Refuse(error), _) => (None, Err(error)),
                 (WriteEffect::SetOver | WriteEffect::SetFresh, None) => {
                     unreachable!("BUG: a write sets a new source only once it is made")
                 }
             }
         });
-        if matches!(outcome, Some((_, Err(ClipboardError::ApplicationOnly)))) {
+        // Off the owner thread no write can reach the selections.
+        let (previous, written) =
+            outcome.unwrap_or_else(|| (Vec::new(), Err(ClipboardError::Gone)));
+        previous.into_iter().for_each(Owned::release);
+        if matches!(written, Err(ClipboardError::ApplicationOnly)) {
             tracing::debug!(
-                "no user input to set the selection under: the text is kept for the application"
+                "no input in focus or no data device to set the selection: the text is kept for \
+                 the application and offered at the next input"
             );
         }
-        let written = match outcome {
-            Some((previous, written)) => {
-                if let Some(previous) = previous {
-                    previous.release();
-                }
-                written
-            }
-            // The loop that held the selection state has retired.
-            None => Err(ClipboardError::Unavailable),
-        };
         // A retired owner has nobody left to answer.
         let _ = answer.resolve(written);
     }
@@ -504,17 +583,17 @@ enum WriteEffect {
     SetOver,
     /// The new source is the seat's selection, set under this serial.
     SetFresh,
-    /// No serial to set a selection under: the text is kept for the
-    /// application alone (`ApplicationOnly`).
+    /// No serial to set a selection under, or no device to set it on: the
+    /// text is kept for the application (`ApplicationOnly`) and owed to the
+    /// system clipboard.
     KeepForApplication,
-    /// The write is refused and changes no selection.
-    Refuse(ClipboardError),
 }
 
-/// What a write does, from what it found: whether an input gives it a
-/// serial (`has_input`), the hint offered by the source
-/// set under the input's serial, if any (`held_hint`), whether the write is
-/// concealed, and whether a new source was made and set. A write answers
+/// What a write does, from what it found: whether an input in focus gives
+/// it a serial (`has_input`), the hint offered by the source set under the
+/// input's serial, if any (`held_hint`), whether the write is concealed,
+/// and whether a new source was made and set (`fresh_set`: only no data
+/// device manager or no device on the seat stops that). A write answers
 /// `Ok` only where the clipboard serves what it asked: a concealed write is
 /// never served by a source that offers no hint, while a plain write a
 /// hinted source serves is the plain text, marked secret.
@@ -532,7 +611,7 @@ fn write_effect(
         (Some(_), true) => WriteEffect::SetOver,
         (None, true) => WriteEffect::SetFresh,
         (Some(true), false) if !concealed => WriteEffect::ReplaceInPlace,
-        (_, false) => WriteEffect::Refuse(ClipboardError::Unavailable),
+        (_, false) => WriteEffect::KeepForApplication,
     }
 }
 
@@ -795,25 +874,25 @@ mod tests {
     use super::*;
 
     /// A write answers `Ok` only where the clipboard serves what it asked,
-    /// and a write it cannot place is refused without changing the
-    /// selection: a concealed write under the serial of a plain selection
-    /// whose new source could not be set is refused, never served unmarked
-    /// by the plain source.
+    /// and one no device can take is kept for the application rather than
+    /// refused: a concealed write under the serial of a plain selection
+    /// whose new source could not be set is kept, never served unmarked by
+    /// the plain source, and a write on a seat with no data device, or under
+    /// a compositor with no data device manager, is kept too.
     #[test]
     fn a_write_answers_ok_only_where_the_clipboard_serves_it() {
         use WriteEffect::*;
-        let refused = Refuse(ClipboardError::Unavailable);
         for (held_hint, concealed, fresh_set, effect) in [
             (Some(false), false, false, ReplaceInPlace),
             (Some(true), true, false, ReplaceInPlace),
             (Some(false), true, true, SetOver),
-            (Some(false), true, false, refused),
+            (Some(false), true, false, KeepForApplication),
             (Some(true), false, true, SetOver),
             (Some(true), false, false, ReplaceInPlace),
             (None, false, true, SetFresh),
             (None, true, true, SetFresh),
-            (None, false, false, refused),
-            (None, true, false, refused),
+            (None, false, false, KeepForApplication),
+            (None, true, false, KeepForApplication),
         ] {
             assert_eq!(
                 write_effect(true, held_hint, concealed, fresh_set),

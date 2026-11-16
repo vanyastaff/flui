@@ -35,7 +35,7 @@
 
 mod clipboard;
 
-#[cfg(any(wayland_host, x11_host))]
+#[cfg(any(wayland_host, x11_host, windows))]
 pub(crate) use clipboard::MAX_TEXT;
 #[cfg(any(target_arch = "wasm32", wayland_host, x11_host, test))]
 pub(crate) use clipboard::owned_text;
