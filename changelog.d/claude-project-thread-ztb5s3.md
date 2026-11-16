@@ -35,3 +35,8 @@
 - A window installed beside a focused one no longer leaves that one holding its keys: installing
   moves no focus, and the new window's snapshot takes it, so the window that loses it is told
   each held key was cancelled.
+- A panic in another window's code while a window changes state (its key-cancel handler, its
+  gesture cancellation, an observer of its lifecycle) is reported against that window, and the
+  change goes on: a window opening beside a focused one with a failing observer now opens
+  instead of failing its installation. A failure of the window's own code, or of an application
+  lifecycle listener, still fails the change.

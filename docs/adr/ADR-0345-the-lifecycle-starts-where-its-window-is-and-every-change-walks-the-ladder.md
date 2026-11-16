@@ -72,9 +72,26 @@ presentation stays a pure publication that runs no user code and moves no focus.
 delivers the window's `Snapshot` observation next, inside the owner's turn: it takes the focus
 from the siblings (forgetting their held keys and cancelling their pointer sequences) and
 delivers the change to the aggregate. Every host does so: flui-app's window installation, as the
-first of the window's initial observations, and the headless host's `open_window`. A panic of an
-observer that snapshot reaches is the snapshot's failure: flui-app fails the window's
-installation with it, and `open_window` resumes it with the window open. The reconcile pass
+first of the window's initial observations, and the headless host's `open_window`.
+
+A failure belongs to the presentation whose code failed, as Flutter reports a listener's
+exception through `FlutterError.reportError` instead of failing the platform message that
+carried it. A window's observation (its snapshot, focus, visibility or execution state) changes
+only that window's facts, so what it runs of a sibling's code is what taking the sibling's focus
+runs: its key-cancel handlers, its pointer cancellation and its lifecycle observers. A panic
+there is contained once the sibling's focus is written, the pass goes on with the other
+presentations, and the panic is reported against the sibling's address; the observation, a
+window's installation included, is not failed by it. Within the sibling, the panic ends the walk
+it broke, as any binding notification does: its observers after the one that failed miss that
+state. Every other step is the pass's own: the window's own presentation, the scheduler's
+aggregate and its listeners, a restored frame, a close, and the gesture pause of a sibling
+already hidden or paused, which is the interaction layer's code. So is every failure of a pass
+no window started (the host's lifecycle, a stop) and of a pass that a callback starts while
+another pass still has steps pending, the outer window's own among them: it fails the
+observation. A pass ends before it reports its siblings' failures, so a report handler that
+changes a window starts a pass of its own, which attributes as any other. flui-app
+fails the window's installation with it, and `open_window` resumes it with the window open. The
+reconcile pass
 always has a previous state; an empty source is a broken invariant (`expect("BUG: …")`), not a
 branch.
 
@@ -126,6 +143,17 @@ panic cannot skip removal.
   scheduler and the snapshots of a second window opened hidden or focused, and
   `window_observations_update_only_the_target_runtime_lifecycle` pins the scheduler's climb from
   `Paused` through `Hidden` and `Inactive`.
+- flui-runtime's `owner_registry` table:
+  `a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings` pins a sibling observer's panic
+  in a new window's initial snapshot as reported against the sibling, which keeps its committed
+  `Inactive`, with the installation ready, and an application listener's panic there as the
+  installation's failure; flui-testing's
+  `headless_host::a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another`
+  pins a panicking key-cancel and pointer-cancel handler of the window losing the focus, and
+  flui-runtime's `a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own` pins a window's
+  own observer failure in a pass its key-cancel handler started as its own change's, and
+  `a_report_handler_that_changes_a_window_starts_its_own_pass` pins a sibling's failure in a
+  pass a report handler started as reported against that sibling.
 
 ## Pros and cons of the options
 

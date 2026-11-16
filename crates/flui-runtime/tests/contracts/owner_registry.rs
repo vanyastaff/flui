@@ -334,6 +334,200 @@ fn native_shutdown_covers_all_presentations_and_preserves_its_failure() {
     }
 }
 
+/// Installs one sibling window beside the primary from the primary's frame,
+/// with the sibling's initial snapshot reporting it shown and focused, and
+/// records how its initialization ended.
+struct SiblingInstall {
+    owner: OwnerHost,
+    pending: RefCell<Vec<PreparedInstall>>,
+    installed: Cell<Option<PresentationAddress>>,
+    outcomes: RefCell<Vec<flui_runtime::owner::InitializationOutcome>>,
+}
+
+impl OwnerEffects for SiblingInstall {
+    fn finish_install(
+        &self,
+        _: PresentationAddress,
+        outcome: flui_runtime::owner::InitializationOutcome,
+        _: RecoveryState,
+    ) {
+        self.outcomes.borrow_mut().push(outcome);
+    }
+    fn runtime_lifecycle(
+        &self,
+        _: flui_foundation::UiRuntimeId,
+        _: flui_scheduler::AppLifecycleState,
+    ) {
+    }
+    fn runtimes_stopped(&self, _: RecoveryState) {}
+    fn frame(&self, address: PresentationAddress, _: &mut UiRuntime) {
+        let mut prepared = self
+            .owner
+            .prepare_presentation(address, window())
+            .expect("a sibling of the primary");
+        let token = prepared.take_delivery().expect("one token");
+        self.pending.borrow_mut().push(prepared);
+        assert_eq!(
+            self.owner.queue_install(token, self).expect("admit commit"),
+            Delivery::Queued
+        );
+    }
+    fn commit_install(
+        &self,
+        token: InstallToken,
+        _: RecoveryState,
+    ) -> Option<flui_runtime::owner::InstallInitialization> {
+        let prepared = self.pending.borrow_mut().pop().expect("the staged sibling");
+        assert_eq!(prepared.address(), token.address());
+        let address = self
+            .owner
+            .publication(prepared)
+            .expect("runtime checkout returned before registry commit")
+            .commit();
+        self.installed.set(Some(address));
+        Some(flui_runtime::owner::InstallInitialization {
+            address,
+            observations: vec![flui_runtime::owner::WindowObservation::Snapshot {
+                execution: flui_platform::WindowExecutionState::Running,
+                focused: true,
+                visible: true,
+            }],
+            lifecycle: None,
+        })
+    }
+    fn retire_host(&self, _: &[PresentationAddress], _: RecoveryState) {}
+    fn cancel_install(&self, _: InstallToken, _: RecoveryState) {
+        panic!("the sibling commits");
+    }
+    fn resize_surface(&self, _: PresentationAddress, _: flui_foundation::geometry::WindowMetrics) {}
+    fn retire_presentation(&self, _: PresentationAddress, _: Option<PresentationAddress>) {}
+    fn after_turn(&self, _: RecoveryState) {}
+    fn request_continuation(&self) -> bool {
+        panic!("one install fits the callback");
+    }
+}
+
+/// How a sibling's installation beside a primary ended.
+struct SiblingInstalled {
+    outcomes: Vec<flui_runtime::owner::InitializationOutcome>,
+    sibling: PresentationAddress,
+    primary: PresentationAddress,
+    /// The addresses the contained failures were reported against.
+    reports: Vec<PresentationAddress>,
+    /// Whether the owner's turn resumed a failure to its host.
+    resumed: bool,
+}
+
+/// Install a sibling beside a primary that `prepare` sets up.
+fn install_beside(prepare: impl FnOnce(&UiRuntime)) -> SiblingInstalled {
+    let runtime = runtime();
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let reported = Rc::clone(&reports);
+    runtime.set_frame_failure_handler(Some(flui_runtime::frame_failure::FrameFailureHandler::new(
+        move |report| {
+            reported.borrow_mut().push(report.address);
+        },
+    )));
+    prepare(&runtime);
+    let owner = OwnerHost::new();
+    let primary = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("initial runtime")
+        .commit();
+    let effects = SiblingInstall {
+        owner: owner.clone(),
+        pending: RefCell::new(Vec::new()),
+        installed: Cell::new(None),
+        outcomes: RefCell::new(Vec::new()),
+    };
+    let dispatcher = owner.frame_dispatcher(primary).expect("frame");
+    let mut resumed = flui_foundation::panic::FirstPanic::new();
+    resumed.contain(|| {
+        dispatcher
+            .deliver(crate::VSYNC, &effects)
+            .expect("delivery")
+    });
+    let resumed = match resumed.into_payload() {
+        Some(payload) => {
+            flui_foundation::panic::discard_payload(payload);
+            true
+        }
+        None => false,
+    };
+    SiblingInstalled {
+        outcomes: effects.outcomes.take(),
+        sibling: effects.installed.get().expect("the sibling committed"),
+        primary,
+        reports: reports.take(),
+        resumed,
+    }
+}
+
+/// A new window that takes the focus steps its focused sibling down to
+/// `Inactive`. A sibling's observer that panics there fails the sibling, not
+/// the installation: its failure is reported against the sibling, which keeps
+/// the state it committed, and the new window is ready. A failure the
+/// snapshot's pass owns, as a lifecycle listener of the whole application,
+/// still fails the installation.
+fn a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings() {
+    use flui_platform::WindowExecutionState::Running;
+    use flui_runtime::owner::InitializationOutcome::{Failed, Ready};
+    use flui_scheduler::AppLifecycleState::{Hidden, Inactive};
+    use std::sync::{Arc, Mutex};
+
+    struct Panicking(Arc<Mutex<Vec<flui_scheduler::AppLifecycleState>>>);
+    impl flui_view::WidgetsBindingObserver for Panicking {
+        fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
+            self.0.lock().expect("observer log").push(state);
+            assert_ne!(state, Inactive, "the sibling's observer fails");
+        }
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::new(Panicking(Arc::clone(&seen)));
+    let installed = install_beside(|runtime| {
+        runtime.synchronize_window_snapshot(runtime.presentation_id(), Running, true, true);
+        runtime.widgets().add_observer(observer);
+    });
+    assert_eq!(installed.outcomes, [Ready], "the new window installs");
+    assert!(!installed.resumed, "the sibling's failure stays contained");
+    assert_eq!(
+        installed.reports,
+        [installed.primary],
+        "the failure is the sibling's, not {:?}'s",
+        installed.sibling
+    );
+    // `Inactive` is the state of a visible window without focus: the
+    // sibling's focus moved and its lifecycle step committed before its
+    // observer failed.
+    assert_eq!(*seen.lock().expect("observer log"), [Inactive]);
+
+    // The primary is hidden, so the new window moves the application from
+    // Hidden through Inactive; the application's listener fails there.
+    let installed = install_beside(|runtime| {
+        runtime.synchronize_window_snapshot(runtime.presentation_id(), Running, false, false);
+        assert_eq!(runtime.scheduler().lifecycle_state(), Hidden);
+        runtime
+            .scheduler()
+            .add_lifecycle_state_listener(Rc::new(|state| {
+                assert_ne!(state, Inactive, "the application's listener fails");
+            }));
+    });
+    assert_eq!(
+        installed.outcomes,
+        [Failed],
+        "the pass's own failure fails the install"
+    );
+    assert!(
+        installed.resumed,
+        "the owner's turn resumes the installation's failure"
+    );
+    assert_eq!(
+        installed.reports,
+        [installed.sibling],
+        "reported against the window installing"
+    );
+}
+
 #[test]
 fn owner_registry_contract() {
     crate::table_test::run_table(
@@ -358,6 +552,10 @@ fn owner_registry_contract() {
             (
                 "foreign_owner_refusal_returns_the_same_token_for_retry",
                 foreign_owner_refusal_returns_the_same_token_for_retry as fn(),
+            ),
+            (
+                "a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings",
+                a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings as fn(),
             ),
         ],
     );
