@@ -1978,16 +1978,17 @@ impl PresentationState {
         )
     }
 
-    /// Record the limit of the sink this presentation's frame is handed to. A sink that names more
-    /// than the presentation keeps pending breaks its bound, and the newest records fold past the
-    /// ring's bound.
+    /// Record the limit of the sink this presentation's frame is handed to. Nothing clamps it: a
+    /// sink that names more than the presentation keeps pending breaks its bound, and the newest
+    /// records fold past the ring's bound.
     pub(crate) fn set_in_flight_limit(&self, limit: NonZeroUsize) {
         self.in_flight_limit.set(limit);
     }
 
     /// Whether this presentation has work a frame would do: demand its clock keeps, a redraw it
     /// was asked for, a build or a dirty node, or completion callbacks that wait. What a
-    /// settlement that frees an in-flight place wakes the loop for (ADR-0305 §5).
+    /// settlement that frees an in-flight place wakes the loop for, unless a dropped frame's
+    /// backoff or an abandoned device holds the presentation (ADR-0305 §5).
     pub(crate) fn has_frame_work(&self) -> bool {
         !self.clock().demand_mask().is_empty()
             || self.redraw_pending.get()

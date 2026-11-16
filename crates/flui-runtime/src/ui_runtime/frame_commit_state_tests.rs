@@ -238,25 +238,34 @@ pub(crate) fn a_frame_in_flight_bounds_the_owners_sleep() {
 /// dirtied after the gated pump, whose wake the gate held back) is asked for by the settlement
 /// that frees a place (ADR-0305 §5).
 pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
-    let mut ui_runtime = mount_box();
-    let mut sink =
-        ScriptedSink::new(|_, _| SubmitVerdict::Queued).holding(std::num::NonZeroUsize::MIN);
-    assert!(!ui_runtime.render_frame(&mut sink), "the frame is queued");
-    let [epoch] = sink.epochs[..] else {
-        panic!("one frame was submitted, got {:?}", sink.epochs);
-    };
-    let primary = ui_runtime.presentations.primary();
-    ui_runtime.mark_needs_full_repaint_for(primary);
-    ui_runtime.mark_rendered();
-    assert!(
-        primary.clock().demand_mask().is_empty() && !ui_runtime.needs_redraw(),
-        "the dirt carries no clock demand and no wake"
-    );
-    assert_eq!(settle(&mut ui_runtime, epoch), Settled::Applied);
-    assert!(
-        ui_runtime.needs_redraw(),
-        "the freed place asks for the dirty tree's frame"
-    );
+    // A presentation whose device rebuild was given up attempts no frames, so it is not woken.
+    for abandoned in [false, true] {
+        let mut ui_runtime = mount_box();
+        let mut sink =
+            ScriptedSink::new(|_, _| SubmitVerdict::Queued).holding(std::num::NonZeroUsize::MIN);
+        assert!(!ui_runtime.render_frame(&mut sink), "the frame is queued");
+        let [epoch] = sink.epochs[..] else {
+            panic!("one frame was submitted, got {:?}", sink.epochs);
+        };
+        let primary = ui_runtime.presentations.primary();
+        ui_runtime.mark_needs_full_repaint_for(primary);
+        ui_runtime.mark_rendered();
+        if abandoned {
+            primary.replace_device_recovery(Some(
+                crate::frame_failure::DeviceRecovery::Abandoned { attempts: 1 },
+            ));
+        }
+        assert!(
+            primary.clock().demand_mask().is_empty() && !ui_runtime.needs_redraw(),
+            "the dirt carries no clock demand and no wake"
+        );
+        assert_eq!(settle(&mut ui_runtime, epoch), Settled::Applied);
+        assert_eq!(
+            ui_runtime.needs_redraw(),
+            !abandoned,
+            "the freed place asks for the dirty tree's frame, unless its device was given up"
+        );
+    }
 }
 
 fn held_pointer_count(ui_runtime: &UiRuntime) -> usize {
