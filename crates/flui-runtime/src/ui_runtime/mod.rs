@@ -232,6 +232,10 @@ pub struct UiRuntime {
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
     host_lifecycle: Cell<HostLifecycle>,
+    /// How many lifecycle passes are running, one inside another: a pass a
+    /// callback starts inside another attributes no failure to a sibling,
+    /// since the outer pass's own steps are still pending (ADR-0345 §2).
+    lifecycle_passes: Cell<u32>,
     /// Wall-clock origin for the production `raw_frame_time` computation, moved
     /// here from the retired `AppBinding`: frame times are UI runtime-relative.
     /// `raw_frame_time()` = `start.elapsed()`, stored once here so

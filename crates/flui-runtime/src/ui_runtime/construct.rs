@@ -233,6 +233,7 @@ impl UiRuntime {
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
             host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
+            lifecycle_passes: Cell::new(0),
             start,
             clock,
             frame_time: Cell::new(None),

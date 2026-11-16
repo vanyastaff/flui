@@ -21,16 +21,91 @@ fn terminal_close_mode(failure_held: bool) -> flui_interaction::__runtime::Close
     }
 }
 
+/// The failures of a lifecycle pass that one window's observation started,
+/// in code that belongs to another, live presentation. A window's
+/// observation changes only its own facts, so what it runs of a sibling's
+/// code is what taking the sibling's focus runs: its key-cancel handlers,
+/// its pointer cancellation and its lifecycle observers. Each failure there
+/// is the sibling's, not the observation's: it is reported against the
+/// sibling's address when the pass ends, and the observation completes
+/// (ADR-0345 §2). Every other step stays the pass's own: the scheduler's
+/// aggregate, a restored frame, a close, and the gesture pause of a sibling
+/// already hidden or paused, which is the interaction layer's, not the
+/// sibling's. So does every failure of a pass no window started (the host's
+/// lifecycle, a stop) and of a pass started inside another one.
+struct SiblingFailures<'runtime> {
+    origin: Option<PresentationId>,
+    held: Vec<(PresentationId, Box<dyn std::any::Any + Send>)>,
+    /// The UI runtime's count of running passes, which this one holds a
+    /// place in until it drops.
+    passes: &'runtime std::cell::Cell<u32>,
+}
+
+impl<'runtime> SiblingFailures<'runtime> {
+    /// A pass that presentation `origin`'s window observation starts, or no
+    /// window's observation when `origin` is `None`. A pass that starts while
+    /// another is running attributes nothing: the outer pass's own steps
+    /// (its window's ladder among them) are still pending, so a presentation
+    /// the inner pass reaches is not known to be a sibling of the outer one.
+    fn start(passes: &'runtime std::cell::Cell<u32>, origin: Option<PresentationId>) -> Self {
+        let running = passes.get();
+        passes.set(
+            running
+                .checked_add(1)
+                .expect("BUG: lifecycle passes nest no deeper than the stack"),
+        );
+        Self {
+            origin: origin.filter(|_| running == 0),
+            held: Vec::new(),
+            passes,
+        }
+    }
+
+    /// Whether `owner`'s failures are its own rather than the pass's: it is
+    /// a live presentation other than the one whose observation this is. A
+    /// closing presentation's failures stay the pass's, which they turn
+    /// preserving (ADR-0123).
+    fn attributes(&self, owner: &crate::presentation::PresentationState) -> bool {
+        self.origin.is_some_and(|origin| origin != owner.id()) && !owner.closing_requested.get()
+    }
+
+    /// Run `step`, which runs `owner`'s code, contained, and keep its first
+    /// failure as `owner`'s.
+    fn contain(&mut self, owner: PresentationId, step: impl FnOnce()) {
+        let mut failure = FirstPanic::new();
+        failure.contain(step);
+        let Some(payload) = failure.into_payload() else {
+            return;
+        };
+        if self.held.iter().any(|(held, _)| *held == owner) {
+            flui_foundation::panic::discard_payload(payload);
+        } else {
+            self.held.push((owner, payload));
+        }
+    }
+}
+
+impl Drop for SiblingFailures<'_> {
+    fn drop(&mut self) {
+        self.passes.set(self.passes.get() - 1);
+    }
+}
+
 /// Forget `presentation`'s held keys. A key-cancel handler's panic is held in
-/// `first`, so the caller still finishes every window-focus write and the
-/// lifecycle pass (pointer cancellation included) before it propagates.
+/// `first`, or as a sibling's failure in `siblings`, so the caller still
+/// finishes every window-focus write and the lifecycle pass (pointer
+/// cancellation included) before it propagates.
 fn forget_pressed_keys(
     presentation: &crate::presentation::PresentationState,
     first: &mut FirstPanic,
+    siblings: &mut SiblingFailures<'_>,
 ) {
-    first.contain(|| {
-        presentation.focus_manager().forget_pressed_keys();
-    });
+    let forget = || presentation.focus_manager().forget_pressed_keys();
+    if siblings.attributes(presentation) {
+        siblings.contain(presentation.id(), forget);
+    } else {
+        first.contain(forget);
+    }
 }
 
 /// Begin closing `presentation`, on every path that closes one (alone, or
@@ -60,7 +135,10 @@ impl UiRuntime {
             return;
         }
         self.host_lifecycle.set(HostLifecycle::Observed(state));
-        self.reconcile_lifecycle(Vec::new());
+        self.reconcile_lifecycle(
+            Vec::new(),
+            SiblingFailures::start(&self.lifecycle_passes, None),
+        );
     }
 
     /// Adopt presentation `id`'s whole window state at once (execution,
@@ -92,22 +170,23 @@ impl UiRuntime {
         presentation.window_focused.set(focused);
         let mut cancel = Vec::new();
         let mut first = FirstPanic::new();
+        let mut siblings = SiblingFailures::start(&self.lifecycle_passes, Some(id));
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
-                    forget_pressed_keys(other, &mut first);
+                    forget_pressed_keys(other, &mut first, &mut siblings);
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
         } else {
-            forget_pressed_keys(presentation, &mut first);
+            forget_pressed_keys(presentation, &mut first, &mut siblings);
         }
         if !focused || !visible || execution != flui_platform::WindowExecutionState::Running {
             cancel.push(id);
         }
         self.set_presentation_hidden(id, !visible);
-        self.reconcile_lifecycle_after_failure(cancel, first);
+        self.reconcile_lifecycle_after_failure(cancel, first, siblings);
     }
 
     /// Record presentation `id`'s window execution state; a window that
@@ -134,6 +213,7 @@ impl UiRuntime {
             } else {
                 Vec::new()
             },
+            SiblingFailures::start(&self.lifecycle_passes, Some(id)),
         );
     }
 
@@ -152,21 +232,22 @@ impl UiRuntime {
         }
         let mut cancel = Vec::new();
         let mut first = FirstPanic::new();
+        let mut siblings = SiblingFailures::start(&self.lifecycle_passes, Some(id));
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
-                    forget_pressed_keys(other, &mut first);
+                    forget_pressed_keys(other, &mut first, &mut siblings);
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
         } else {
-            forget_pressed_keys(presentation, &mut first);
+            forget_pressed_keys(presentation, &mut first, &mut siblings);
         }
         if presentation.window_focused.replace(focused) && !focused {
             cancel.push(id);
         }
-        self.reconcile_lifecycle_after_failure(cancel, first);
+        self.reconcile_lifecycle_after_failure(cancel, first, siblings);
     }
 
     /// Record presentation `id`'s window visibility, gating its frame clock.
@@ -182,11 +263,14 @@ impl UiRuntime {
         }
         let changed = presentation.window_visible.replace(visible) != visible;
         self.set_presentation_hidden(id, !visible);
-        self.reconcile_lifecycle(if changed && !visible {
-            vec![id]
-        } else {
-            Vec::new()
-        });
+        self.reconcile_lifecycle(
+            if changed && !visible {
+                vec![id]
+            } else {
+                Vec::new()
+            },
+            SiblingFailures::start(&self.lifecycle_passes, Some(id)),
+        );
     }
 
     /// Commit the composition of presentation `id`'s focused field, keeping
@@ -387,7 +471,10 @@ impl UiRuntime {
     /// Re-derive and deliver every presentation's lifecycle from the state
     /// already recorded.
     pub fn synchronize_window_lifecycle(&self) {
-        self.reconcile_lifecycle(Vec::new());
+        self.reconcile_lifecycle(
+            Vec::new(),
+            SiblingFailures::start(&self.lifecycle_passes, None),
+        );
     }
 
     /// Begin closing every presentation: each is told it is detached and
@@ -401,7 +488,11 @@ impl UiRuntime {
         for presentation in self.presentations.iter() {
             begin_close(presentation, &mut failure);
         }
-        self.reconcile_lifecycle_after_failure(Vec::new(), failure);
+        self.reconcile_lifecycle_after_failure(
+            Vec::new(),
+            failure,
+            SiblingFailures::start(&self.lifecycle_passes, None),
+        );
     }
 
     /// Begin closing presentation `id` alone: it is told it is detached and
@@ -414,7 +505,11 @@ impl UiRuntime {
     ) {
         if let Some(presentation) = self.presentations.get(id) {
             begin_close(presentation, &mut failure);
-            self.reconcile_lifecycle_after_failure(Vec::new(), failure);
+            self.reconcile_lifecycle_after_failure(
+                Vec::new(),
+                failure,
+                SiblingFailures::start(&self.lifecycle_passes, None),
+            );
         } else if let Some(payload) = failure.into_payload() {
             resume_unwind(payload);
         }
@@ -531,14 +626,46 @@ impl UiRuntime {
         first_panic.absorb(failure);
     }
 
-    fn reconcile_lifecycle(&self, cancel: Vec<PresentationId>) {
-        self.reconcile_lifecycle_after_failure(cancel, FirstPanic::new());
+    /// Runs one step of a lifecycle pass that runs `owner`'s code: contained
+    /// as `owner`'s own failure when `siblings` attributes it, otherwise as
+    /// the pass's ([`Self::contain_lifecycle_step`]).
+    fn contain_step_of(
+        &self,
+        first_panic: &mut FirstPanic,
+        siblings: &mut SiblingFailures<'_>,
+        owner: &crate::presentation::PresentationState,
+        step: impl FnOnce(),
+    ) {
+        if siblings.attributes(owner) {
+            siblings.contain(owner.id(), step);
+        } else {
+            self.contain_lifecycle_step(first_panic, step);
+        }
+    }
+
+    /// Report each sibling's failure against the sibling's own address.
+    fn report_sibling_failures(&self, mut siblings: SiblingFailures<'_>) {
+        for (id, payload) in std::mem::take(&mut siblings.held) {
+            self.report_contained_panic(
+                flui_foundation::PresentationAddress {
+                    ui_runtime_id: self.id,
+                    presentation_id: id,
+                },
+                payload.as_ref(),
+            );
+            flui_foundation::panic::discard_payload(payload);
+        }
+    }
+
+    fn reconcile_lifecycle(&self, cancel: Vec<PresentationId>, siblings: SiblingFailures<'_>) {
+        self.reconcile_lifecycle_after_failure(cancel, FirstPanic::new(), siblings);
     }
 
     fn reconcile_lifecycle_after_failure(
         &self,
         mut cancel: Vec<PresentationId>,
         mut first_panic: FirstPanic,
+        mut siblings: SiblingFailures<'_>,
     ) {
         // A closing presentation's terminal recovery spans this whole pass;
         // its preserving policy ends when the pass returns (ADR-0123).
@@ -622,25 +749,22 @@ impl UiRuntime {
                 // terminal close below, after every presentation-wide
                 // capability is withdrawn: a recognizer's rejection callback
                 // must not reenter the closing presentation (ADR-0123).
-                if self
-                    .presentations
-                    .get(id)
-                    .is_some_and(|presentation| presentation.closing_requested.get())
-                {
+                let Some(presentation) = self.presentations.get(id) else {
+                    continue;
+                };
+                if presentation.closing_requested.get() {
                     continue;
                 }
                 // Cancelling pointer sequences runs contained so others are cancelled.
-                self.contain_lifecycle_step(&mut first_panic, || {
+                self.contain_step_of(&mut first_panic, &mut siblings, presentation, || {
                     self.cancel_pointer_sequences_for(id);
                 });
-                if let Some(presentation) = self.presentations.get(id)
-                    && matches!(
-                        self.execution_lifecycle(presentation),
-                        AppLifecycleState::Hidden
-                            | AppLifecycleState::Paused
-                            | AppLifecycleState::Detached
-                    )
-                {
+                if matches!(
+                    self.execution_lifecycle(presentation),
+                    AppLifecycleState::Hidden
+                        | AppLifecycleState::Paused
+                        | AppLifecycleState::Detached
+                ) {
                     // Focus loss still delivers Cancel and preserves hovering.
                     // Suspension also discards motion queued before the pause;
                     // this phase must run even when Cancel delivery panicked.
@@ -723,7 +847,7 @@ impl UiRuntime {
                     continue;
                 }
                 // Lifecycle notification runs contained so the other steps run.
-                self.contain_lifecycle_step(&mut first_panic, || {
+                self.contain_step_of(&mut first_panic, &mut siblings, presentation, || {
                     presentation.widgets().notify_committed_lifecycle(step);
                 });
             }
@@ -747,6 +871,7 @@ impl UiRuntime {
             self.contain_lifecycle_step(&mut first_panic, || presentation.close_with_mode(mode));
         }
         drop(lifecycle_windows);
+        self.report_sibling_failures(siblings);
         first_panic.resume();
     }
 }
