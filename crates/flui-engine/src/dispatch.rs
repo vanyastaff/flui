@@ -270,9 +270,12 @@ fn dispatch_command<R: CommandRenderer + ?Sized>(command: DrawCommand<'_>, rende
 /// Dispatch one display list in its own transform and clip scope.
 ///
 /// Dispatches every command of one display list inside one state scope, the
-/// only way commands reach a renderer: the scope's save and restore flush the
-/// renderer's installed command transform, so the address it keeps of the
-/// entry it was read from never outlives the list (ADR-0306 §5).
+/// only way a recorded `DrawCommand` reaches a renderer: the scope's save and
+/// restore flush the renderer's installed command transform, so the address
+/// it keeps of the entry it was read from never outlives the list
+/// (ADR-0306 §5). A layer that calls a `render_*` method itself passes a
+/// matrix it owns for the call alone; the scene walk flushes the transform at
+/// each node's enter and exit, which bounds that address to the node.
 ///
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
