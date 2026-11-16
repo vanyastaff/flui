@@ -21,9 +21,19 @@ const COLD_LINK: AppCall = AppCall::Opened {
     launch: Launch::Cold,
 };
 
+/// What bounding `urls` keeps ([`Opened::bounded`]).
+fn kept(
+    urls: impl IntoIterator<Item = String>,
+    files: [flui_platform::OpenedFile; 0],
+    target: OpenTarget,
+    launch: Launch,
+) -> Opened {
+    Opened::bounded(urls, files, target, launch).0
+}
+
 /// A link the operating system opened the application with.
 fn link(url: &str, launch: Launch) -> Opened {
-    Opened::new([url.to_owned()], [], OpenTarget::Application, launch)
+    kept([url.to_owned()], [], OpenTarget::Application, launch)
 }
 
 /// A report raised from inside a method is queued behind it and heard after
@@ -296,13 +306,13 @@ fn opened_reports_waiting_for_ready_are_bounded() {
     run.delivery.ready(run.owner()).expect("bootstrap");
     // A handler that did not take the launch hears it after `ready`, as one
     // report of what launched the application.
-    let kept = links[..MAX_PENDING_OPENED]
+    let first = links[..MAX_PENDING_OPENED]
         .iter()
         .flat_map(|opened| opened.urls.iter().cloned())
         .collect::<Vec<_>>();
     assert_eq!(
         app.opens(),
-        [Opened::new(kept, [], OpenTarget::Application, Launch::Cold)],
+        [kept(first, [], OpenTarget::Application, Launch::Cold)],
         "the first, in order"
     );
     assert_eq!(app.calls().last(), Some(&SLEEP));
@@ -347,7 +357,7 @@ fn ready_takes_what_launched_the_application() {
     );
     let reports = [
         link("myapp:///note/1", Launch::Cold),
-        Opened::new(["myapp:///note/2".to_owned()], [], window, Launch::Cold),
+        kept(["myapp:///note/2".to_owned()], [], window, Launch::Cold),
         link("myapp:///later", Launch::Running),
         link("myapp:///note/3", Launch::Cold),
     ];
@@ -366,7 +376,7 @@ fn ready_takes_what_launched_the_application() {
     run.delivery.ready(run.owner()).expect("bootstrap");
     assert_eq!(
         *taken.borrow(),
-        [Opened::new(
+        [kept(
             ["myapp:///note/1".to_owned(), "myapp:///note/3".to_owned()],
             [],
             OpenTarget::Application,
@@ -377,6 +387,35 @@ fn ready_takes_what_launched_the_application() {
     // Outside `ready` there is no launch to take.
     assert_eq!(run.owner().take_launch_opened(), None);
 }
+
+/// The launch joins its cold reports only while the join stays within
+/// `MAX_OPENED_ITEMS`: the report that would not fit and the ones after it
+/// stay queued and reach the handler after `ready`, so the join drops none
+/// of what the host accepted.
+fn a_launch_too_large_to_join_keeps_the_rest_queued() {
+    let app = AppLog::new();
+    let delivery = Arc::new(AppDelivery::new());
+    let batch = |from: usize| {
+        kept(
+            (from..from + 40).map(|n| format!("myapp:///note/{n}")),
+            [],
+            OpenTarget::Application,
+            Launch::Cold,
+        )
+    };
+    let reports = [batch(0), batch(40), batch(80)];
+    for opened in &reports {
+        assert!(matches!(delivery.opened(opened.clone()), Called::Vacant));
+    }
+    let run = bind(delivery, app.clone());
+    run.delivery.ready(run.owner()).expect("bootstrap");
+    assert_eq!(
+        app.opens(),
+        reports,
+        "the first is the launch, the others follow it whole"
+    );
+}
+
 /// A bootstrap that fails leaves what was reported queued, not dropped.
 fn a_failed_bootstrap_keeps_the_reports() {
     struct Failing(Rc<AppLog>);
@@ -730,6 +769,10 @@ fn app_delivery_contracts() {
             (
                 "ready takes what launched the application",
                 ready_takes_what_launched_the_application,
+            ),
+            (
+                "a launch too large to join keeps the rest queued",
+                a_launch_too_large_to_join_keeps_the_rest_queued,
             ),
             (
                 "a failed bootstrap keeps the reports",

@@ -97,6 +97,17 @@ pub(crate) mod linux;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    test
+))]
+pub(crate) mod opened;
 // The rules by which the Win32 loop and its windows reach a window's context
 // across threads: pure, so `test` compiles them on every host. Beside the
 // loop's module rather than in it, which is Windows' alone.
@@ -314,12 +325,6 @@ impl OwnerPlatform {
         self.hooks.open_owner_window(options, handler)
     }
 
-    /// The currently active (focused) window, if any.
-    #[must_use]
-    pub fn active_window(&self) -> Option<WindowId> {
-        self.platform.active_window()
-    }
-
     /// Read the host's system preferences without choosing a user window.
     ///
     /// # Errors
@@ -339,12 +344,6 @@ impl OwnerPlatform {
     /// Activate the application (bring to front).
     pub fn activate(&self, ignoring_other_apps: bool) {
         self.platform.activate(ignoring_other_apps);
-    }
-
-    /// The current keyboard layout identifier.
-    #[must_use]
-    pub fn keyboard_layout(&self) -> String {
-        self.platform.keyboard_layout()
     }
 
     /// Request the application to quit.

@@ -35,6 +35,7 @@ mod cases {
 
     use cursor_icon::CursorIcon;
     use flui_foundation::{DragSessionId, UiRuntimeId};
+    use flui_native::testing::keyboard_layout;
     use flui_native::testing::wayland::{cursor_report, last_input_serial, present, run_for};
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::data_transfer::{
@@ -303,7 +304,7 @@ mod cases {
         );
         // A keymap may name no layout (Weston's X11 backend on CI's Xvfb
         // sends none): the key above is what the keymap is checked by.
-        eprintln!("keyboard layout: {:?}", platform.keyboard_layout());
+        eprintln!("keyboard layout: {:?}", keyboard_layout::current(&platform));
         // The cursor shows over the window: by `cursor-shape` where the
         // compositor has it, from the cursor theme where it has not (Weston
         // 13).
@@ -336,11 +337,14 @@ mod cases {
         let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
         let dropped = Rc::new(Cell::new(false));
         let guard = OnDrop(Rc::clone(&dropped));
-        platform.on_keyboard_layout_change(Box::new(move || {
-            let _ = &guard;
-        }));
+        keyboard_layout::on_change(
+            &platform,
+            Box::new(move || {
+                let _ = &guard;
+            }),
+        );
         assert!(!dropped.get(), "the first callback is kept until replaced");
-        platform.on_keyboard_layout_change(Box::new(|| {}));
+        keyboard_layout::on_change(&platform, Box::new(|| {}));
         assert!(
             dropped.get(),
             "the first callback was kept beside the second"

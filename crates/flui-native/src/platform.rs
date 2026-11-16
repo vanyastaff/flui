@@ -11,12 +11,12 @@ use flui_foundation::geometry::Size;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
     AppDataDir, DisplaySnapshot, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice,
-    SystemPreferences, WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    SystemPreferences, WindowCapabilities, WindowHandler, WindowOptions,
 };
 
 use crate::error::{BootstrapError, PlatformError};
 use crate::host::{
-    self, Clipboard as _, Displays as _, Drag as _, Host, Input as _, Lifecycle as _, Loop as _,
+    self, Clipboard as _, Displays as _, Drag as _, Host, Lifecycle as _, Loop as _,
     Preferences as _, PrimarySelection as _, Services as _, Storage as _, Window as _,
     WindowPositions, WindowRefOf,
 };
@@ -75,7 +75,8 @@ pub trait AppHandler: 'static {
 
     /// The operating system opened URLs or files with the application: a
     /// link, a custom-scheme URL, a document, at launch or while it runs.
-    /// `opened` is bounded already ([`Opened::new`]); what it carries is
+    /// `opened` is bounded already ([`Opened::bounded`]; the host logs what
+    /// that dropped); what it carries is
     /// still untrusted text, which the UI runtime parses and admits
     /// (`UiRuntime::open_url`). Reported in order with the other reports, so
     /// one the operating system gives at launch is heard right after `ready`
@@ -296,9 +297,6 @@ pub trait Platform: sealed::Sealed + 'static {
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
 
-    /// Get the currently active (focused) window ID
-    fn active_window(&self) -> Option<WindowId>;
-
     /// Read system preferences independently of any user window.
     ///
     /// Call on the platform owner thread. Backends without an observation
@@ -404,21 +402,6 @@ pub trait Platform: sealed::Sealed + 'static {
         directory: &Path,
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>>;
-
-    // ==================== Keyboard ====================
-
-    /// Get the current keyboard layout identifier
-    ///
-    /// Empty where the host does not read the layout.
-    fn keyboard_layout(&self) -> String;
-
-    /// Register a callback for keyboard layout changes
-    ///
-    /// A registration replaces the callback before it, which is dropped then,
-    /// on every host. A host that does not read the layout never calls it.
-    /// The callback is called with no lock of the platform held; its panic is
-    /// the failure of the turn that heard the change, as a window handler's is.
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 
     /// Tell the platform the application is done holding a session end it
     /// answered [`SessionEndAnswer::Block`] to, so the session may go on: the
@@ -659,10 +642,6 @@ impl<H: Host> Platform for HostPlatform<H> {
         Ok(window)
     }
 
-    fn active_window(&self) -> Option<WindowId> {
-        H::Window::active(&self.owner, &self.window_shared)
-    }
-
     fn preferences(&self) -> Result<SystemPreferences, PlatformError> {
         let read = H::Preferences::sample(&self.owner);
         #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -722,14 +701,6 @@ impl<H: Host> Platform for HostPlatform<H> {
         suggested_name: Option<&str>,
     ) -> Task<Result<Option<PathBuf>, PlatformError>> {
         self.owner.prompt_for_new_path(directory, suggested_name)
-    }
-
-    fn keyboard_layout(&self) -> String {
-        H::Input::keyboard_layout(&self.owner)
-    }
-
-    fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>) {
-        H::Input::on_keyboard_layout_change(&self.owner, callback);
     }
 
     fn release_session_end(&self) {

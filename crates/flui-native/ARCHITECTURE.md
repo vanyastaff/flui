@@ -934,8 +934,9 @@ trait depends on `flui-platform` instead.
   the owner thread's table to be dropped when the thread exits. The handlers
   tests run a platform with are `testing::app` (the `testing` feature). The
   lifecycle position keeps only the release of a held session end and the
-  activation; the keyboard layout callback stays a registration until nothing
-  above the host reads it: one `LayoutCallback` per loop, where a registration
+  activation; the keyboard layout callback belongs to the input position
+  (`host::Input`, sealed: nothing outside the crate calls it, ADR-0151 §9): one
+  `LayoutCallback` per loop, where a registration
   replaces the callback before it on every host, and a callback's panic is
   its turn's failure (below). Tests: `owner::app_delivery::tests::app_delivery_contracts`,
   `owner::layout_callback::tests`, the row "a layout callback registered twice
@@ -2581,8 +2582,9 @@ one for Win32 makes that safe without changing a signature.
 
 - **Storage.** A window's handler lives in its `WindowDelivery`, an
   owner-thread slot the window shares with its `WindowContext`; it is set
-  when the window opens, never registered later; what the application gave the
-  loop (its handler's `AppDelivery` and the keyboard layout callback) lives as
+  when the window opens, never registered later; what the loop holds for the
+  application (its handler's `AppDelivery`) and the input position's keyboard
+  layout callback live as
   `Rc<RefCell<AppHooks>>` in the `OwnerControlContext` of the owner message
   window, shared by every window context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
   Both contexts sit behind `GWLP_USERDATA`, are reached only through the

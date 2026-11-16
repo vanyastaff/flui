@@ -1681,10 +1681,6 @@ impl host::Window<IOSLoop> for IOSWindow {
         Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
     }
 
-    fn active(owner: &IOSLoop, _: &IOSWindows) -> Option<WindowId> {
-        MainThreadMarker::new().and_then(|_| owner.active().map(|window| window.id()))
-    }
-
     fn capabilities(_: &IOSLoop, _: &IOSWindows) -> WindowCapabilities {
         scene_capabilities()
     }

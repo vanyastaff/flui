@@ -1,31 +1,13 @@
-//! Target platform enum.
+//! The operating systems whose conventions a widget can follow.
 //!
-//! Canonical home for `TargetPlatform` across the workspace. Identifies the
-//! platform the application is running on so platform-specific behaviour can
-//! be selected at compile time (`current()`) or branched on at runtime.
-//!
-//! Per Constitution Principle 2 ("Strict Crate Dependency DAG"), this type
-//! lives in `flui-platform` (a contract crate) so any downstream crate can
-//! consume it without inverting the dependency graph.
-//!
-//! # Variants
-//!
-//! The enum is marked `#[non_exhaustive]` so new variants (for example a
-//! future `Web` variant) can be added without breaking external `match`
-//! expressions. Intra-crate exhaustive `match` is preserved by the test
-//! module below.
-//!
-//! # Example
+//! The type lives in the contract so every crate above names one value; which
+//! one a widget follows is `flui_view::environment::PlatformConvention::of`,
+//! not the build host (ADR-0028).
 //!
 //! ```
 //! use flui_platform::TargetPlatform;
 //!
-//! let platform = TargetPlatform::current();
-//! assert!(!platform.as_str().is_empty());
-//!
-//! if platform.is_mobile() {
-//!     // touch-first input
-//! }
+//! assert_eq!(TargetPlatform::Android.as_str(), "android");
 //! ```
 
 /// Target platform identification.
@@ -103,28 +85,10 @@ impl TargetPlatform {
         }
     }
 
-    /// Returns true if this is a mobile platform (Android or iOS).
-    #[inline]
-    pub const fn is_mobile(self) -> bool {
-        matches!(self, Self::Android | Self::iOS)
-    }
-
-    /// Returns true if this is a desktop platform (Windows, macOS, or Linux).
-    #[inline]
-    pub const fn is_desktop(self) -> bool {
-        matches!(self, Self::Windows | Self::MacOS | Self::Linux)
-    }
-
-    /// Returns true if this is an Apple platform (iOS or macOS).
+    /// Whether this is iOS or macOS.
     #[inline]
     pub const fn is_apple(self) -> bool {
         matches!(self, Self::iOS | Self::MacOS)
-    }
-
-    /// Returns true if touch is the primary input modality.
-    #[inline]
-    pub const fn is_touch_primary(self) -> bool {
-        self.is_mobile()
     }
 
     /// Returns the platform name as a static string identifier.

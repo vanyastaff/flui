@@ -706,14 +706,6 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         Ok(Rc::new(AndroidWindow::clone(&window)))
     }
 
-    fn active(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> Option<WindowId> {
-        owner
-            .window
-            .borrow()
-            .as_ref()
-            .map(|window| window.activity_id().window())
-    }
-
     fn capabilities(owner: &AndroidLoop, _: &WindowPositions<ActivityRef>) -> WindowCapabilities {
         activity_capabilities(activity_facts(owner.api, owner.displays.as_ref()))
     }

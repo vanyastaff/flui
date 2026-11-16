@@ -58,7 +58,6 @@ use std::rc::{Rc, Weak};
 use drop;
 use flui_platform::text_store::{
     CompositionEnd, OwnerCalls, TextStore, TextStoreHost, TextStoreHostError,
-    commit_composition_in_place,
 };
 use windows::Win32::{
     Foundation::HWND,
@@ -119,7 +118,7 @@ impl Drop for Recovery {
         let mut calls = OwnerCalls::new();
         for store in self.0.drain(..) {
             calls.run(|| {
-                let _ = commit_composition_in_place(&*store);
+                crate::text::refusal::commit_in_place(&*store);
             });
             calls.retire(store);
         }
@@ -454,7 +453,7 @@ impl TextServices {
         } else {
             // A commit queued behind the owner's shut gate runs at its anchor,
             // with the stores the owner focused during the frame.
-            let _ = commit_composition_in_place(&*store);
+            crate::text::refusal::commit_in_place(&*store);
         }
     }
 

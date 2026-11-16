@@ -13,6 +13,10 @@ pub mod gap;
 /// The request-per-thread HTTP client's scripted stack.
 #[cfg(test)]
 pub(crate) mod http;
+pub mod keyboard_layout;
+/// How a unit test counts the log lines a host writes.
+#[cfg(test)]
+pub(crate) mod log;
 /// `docs/platform-parity.md`, rendered from `platform-parity.toml`.
 #[cfg(test)]
 pub(crate) mod parity;

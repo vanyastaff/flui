@@ -56,12 +56,7 @@ async fn web_the_page_address_is_the_link_it_launched_with() {
 
     assert_eq!(
         running.log.opens(),
-        [Opened::new(
-            [href.to_owned()],
-            [],
-            OpenTarget::Application,
-            Launch::Cold
-        )],
+        [Opened::bounded([href.to_owned()], [], OpenTarget::Application, Launch::Cold).0],
         "the page's address is reported once, as a cold link"
     );
     let calls = running.log.calls();
