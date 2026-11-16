@@ -6840,6 +6840,42 @@ GPU-память простаивающего или невидимого окн
   (строка `Image`); `an_os_session_names_its_press_and_offers_only_what_it_can` (два элемента с
   текстом: без отбора — `Refused(DuplicateFormat)`); `a_request_from_a_press_the_window_does_not_hold_is_refused`
   в `headless_drag_contracts` (без проверки — сессия закончившегося нажатия принята).
+- [x] **LY134** — ветка `native/android-ime-edits`. Находки подтверждены на `main` @ `e166cabd3`
+  чтением: владелец звал `Mirror::hold` у себя при публикации, а Java брала снимок позже, так что
+  правка клавиатуры между ними несла прошлое поколение, `Mirror::report` отвечал `None`, и
+  снимок только выделения оставлял символ в клавиатуре мимо поля; поколение — `u32` с
+  `wrapping_add`, и у каждого окна свой счётчик над одним зеркалом вида; каждое изменение текста
+  приложением звало `restartInput` (на устройстве — предупреждения `inactive InputConnection` на
+  backspace); `performContextMenuAction` не знал cut и copy; `getExtractedText` не смотрел на
+  `GET_EXTRACTED_TEXT_MONITOR` и `hintMaxChars`. Построено по ADR-0346 (заменяет часть п. 6
+  ADR-0247 и строку Android ADR-0090): `ime::Ledger` владельца (один на вид) чеканит
+  `Publication` из `IdMint` и помнит последний воспроизведённый отчёт; `ime::Mirror` ставит снимок
+  на Java main thread внутри отправленного вызова (`Mirror::install` → `Install`) и чеканит
+  `ReportId`; снимок выделения, не видевший отчёт, не берётся (`Install::Keep`), правка
+  воспроизводится; снимок текста, не видевший отчёт, побеждает с перезапуском, правка — `Stale`;
+  перезапуск — только когда снимок кончает композицию или меняет её текст, иначе
+  `updateSelection` и `updateExtractedText`; Java больше не несёт поколения; протокол моста 5,
+  dex пересобран из артефакта `Android dex`. Касание поля в фокусе снова показывает клавиатуру
+  (`ime::KeyboardTap`, `FluiView.showKeyboard`); для этого `document_bounds` поля
+  (`flui-widgets`, `text_store.rs`) отвечает коробку поля с текстом, а не рамку каретки, как
+  требует контракт. Cut и Copy — в `ClipboardManager`, защищённое поле отказывает; извлечённый
+  текст наблюдается по запросу текущего соединения, окно `hintMaxChars` вокруг выделения.
+  Тесты (`android_ime_adapter`), в скобках результат с откатом:
+  `a_selection_snapshot_that_raced_an_edit_keeps_it` (без `Keep` — `Replace { restart: true }`),
+  `a_report_on_replaced_text_races_no_later_snapshot` (без сброса неподтверждённого отчёта —
+  `Keep` вместо снимка приложения), `the_input_method_restarts_only_when_its_composition_is_touched`
+  (со сравнением границ композиции — перезапуск на сдвинутой композиции; со старым правилом —
+  перезапуск на каждом тексте), `a_text_snapshot_that_raced_an_edit_wins_and_restarts`,
+  `a_selection_snapshot_that_saw_every_edit_is_taken`,
+  `a_composition_the_owner_ends_restarts_the_input_method`,
+  `an_edit_for_the_field_focus_left_is_dropped`, `a_refused_step_asks_for_a_new_snapshot`,
+  `a_report_before_any_snapshot_is_no_edit`, `a_tap_on_the_focused_field_shows_the_keyboard`;
+  `a_fields_bounds_are_its_box_and_its_text` в `flui-widgets` (без поправки — ширина 2 у пустого
+  поля). Galaxy S21 (Android 15, коммит `ac46dfbdc`): касание после Back снова показало клавиатуру,
+  правка приложения без композиции не перезапустила её, и клавиатура удалила символ приложения
+  своим backspace; Cut, Copy, извлечённый текст и правка в гонке со снимком на устройстве не
+  запускались — записано в строке `ime-composition-and-candidate-placement` паритета.
+  Проверки и непрогнанное — в теле PR.
 
 ## Отступление от порядка, решённое владельцем
 
