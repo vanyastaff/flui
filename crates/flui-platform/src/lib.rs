@@ -184,7 +184,9 @@ pub use input::{
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use locale::{InvalidLocale, Locale};
-pub use opened::{Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile};
+pub use opened::{
+    Launch, MAX_OPENED_ITEMS, MAX_OPENED_URL_LEN, OpenTarget, Opened, OpenedFile, OpenedOverflow,
+};
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{

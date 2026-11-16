@@ -955,7 +955,7 @@ mod input {
                         .focused()
                         .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
                     if !focused || self.end_composition(&store) == CompositionEnd::Abandoned {
-                        let _ = flui_platform::text_store::commit_composition_in_place(&*store);
+                        crate::text::refusal::commit_in_place(&*store);
                     }
                 }
             }

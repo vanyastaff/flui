@@ -1307,23 +1307,6 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         Ok(window)
     }
 
-    fn active(owner: &MacOSLoop, _: &MacOSWindows) -> Option<WindowId> {
-        owner
-            .affinity
-            .debug_assert_owner("MacOSPlatform::active_window");
-        debug_assert_appkit_main_thread("MacOSPlatform::active_window");
-        // `keyWindow` answers `None` when no window is key.
-        // Off the main thread no window is key to this thread's knowledge:
-        // the application is read only where a marker proves it may be.
-        let key_window = owner.app.get(MainThreadMarker::new()?).keyWindow()?;
-        // The registry, keyed by `NSWindow` address, holds each open window
-        // until it closes, so the address names that window and no other;
-        // a key window not in it (a panel, a window that closed) is none of
-        // this platform's.
-        let key = objc2::rc::Retained::as_ptr(&key_window) as u64;
-        owner.windows.get(&key).map(|window| window.id())
-    }
-
     fn capabilities(_: &MacOSLoop, windows: &MacOSWindows) -> WindowCapabilities {
         // Every window the platform opens routes through the AppKit main lane
         // (`MacOSWindow::try_new`).

@@ -1,18 +1,21 @@
 //! The launcher: the URI policy at the seam, and a widget's requests
 //! reaching the system and answering at an owner turn.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
+use std::time::Duration;
 
 use flui_platform::capability::Abandoned;
+use flui_platform::capability::scripted::{Answer, Expect, Scenario, ScenarioFailure};
 use flui_platform::launch::{
     ExternalUri, InvalidUri, LaunchError, LaunchResult, LauncherCapability, MAX_EXTERNAL_URI_LEN,
 };
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_system::SystemPlugin;
 use flui_system::testing::{LaunchRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
+use flui_testing::{HeadlessHost, HeadlessWindow};
 
-use crate::{acquire, outcome_slot, turn};
+use crate::{acquire, acquire_on, outcome_slot, turn};
 
 #[test]
 fn external_uri_admits_handler_schemes_and_refuses_the_rest() {
@@ -67,6 +70,7 @@ fn a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn() {
     let (mut host, handle) = acquire::<LauncherCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides a launcher");
     let uri = ExternalUri::try_new("https://example.com").expect("a web URI");
+    launcher.answer_next(Ok(()));
 
     let answered = outcome_slot::<Result<LaunchResult, Abandoned>>();
     let slot = Rc::clone(&answered);
@@ -177,7 +181,7 @@ fn a_held_request_answers_when_released() {
     let answered = outcome_slot::<Result<LaunchResult, Abandoned>>();
     let slot = Rc::clone(&answered);
     handle
-        .open_path(&PathBuf::from("/srv/report.pdf"))
+        .open_path(&std::env::temp_dir().join("flui-system-report.pdf"))
         .on_complete(move |outcome| *slot.borrow_mut() = Some(outcome));
     turn(&mut host);
     assert!(answered.borrow().is_none(), "held until released");
@@ -201,4 +205,55 @@ fn the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere() {
         let refusal = dialogs.expect_err("no provider yet off Linux");
         assert_eq!(refusal.reason, UnsupportedReason::NotYetOnThisHost);
     }
+}
+
+#[test]
+fn the_system_doubles_answer_on_the_hosts_scenario_and_report_what_was_not_scripted() {
+    let scenario = Scenario::new();
+    let plugin = ScriptedSystem::on(&scenario);
+    let mut host = HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &plugin);
+    let launcher = acquire_on::<LauncherCapability>(&mut host)
+        .expect("the scripted plugin provides a launcher");
+    let uri = ExternalUri::try_new("https://example.com").expect("a web URI");
+    plugin.launcher().script().expect(
+        Expect::exactly(LaunchRequest::OpenUri(uri.clone())),
+        Answer::value(Err(LaunchError::Denied)).after(Duration::from_secs(2)),
+    );
+
+    let opened = outcome_slot::<Result<LaunchResult, Abandoned>>();
+    let slot = Rc::clone(&opened);
+    launcher
+        .open_uri(&uri)
+        .on_complete(move |outcome| *slot.borrow_mut() = Some(outcome));
+    let revealed = outcome_slot::<Result<LaunchResult, Abandoned>>();
+    let slot = Rc::clone(&revealed);
+    launcher
+        .reveal_path(&std::env::temp_dir().join("flui-system-report.pdf"))
+        .on_complete(move |outcome| *slot.borrow_mut() = Some(outcome));
+
+    let _ = host.pump(Duration::from_secs(1));
+    assert_eq!(*opened.borrow(), None, "the answer is due at 2 s");
+    assert_eq!(
+        *revealed.borrow(),
+        Some(Err(Abandoned::ProviderDropped)),
+        "nothing answers a reveal: no success is made up"
+    );
+    let _ = host.pump(Duration::from_secs(1));
+    assert_eq!(*opened.borrow(), Some(Ok(Err(LaunchError::Denied))));
+
+    let failures = scenario.verify().expect_err("the reveal was not scripted");
+    assert!(
+        matches!(
+            failures.failures(),
+            [ScenarioFailure::Unexpected {
+                script: "launcher",
+                ..
+            }]
+        ),
+        "{failures}"
+    );
+    assert!(
+        plugin.dialogs().requests().is_empty(),
+        "the dialogs share the scenario, not the requests"
+    );
 }

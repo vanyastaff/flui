@@ -5229,7 +5229,7 @@ GPU-память простаивающего или невидимого окн
   `D:\flui`; `cargo fmt -p flui -p xtask -p flui-native -- --check` — зелёный. Заодно убрана
   недействительная rustdoc-ссылка на cfg-зависимый `TextInputV3`, не дававшая `doc-strict`
   завершиться на Windows.
-- [ ] **LY55**, часть `parking_lot` — #2327 (`91f693962`), ветка `platform/contract-std-mutex`.
+- [x] **LY55**, часть `parking_lot` — #2327 (`91f693962`), ветка `platform/contract-std-mutex`.
   Контракт и его
   зависимость `flui-foundation` больше не используют `parking_lot`: `DisplayRegistry`,
   `Completion`, `FakeHaptics`, `ScriptedHttp`, `ManualClock` и `ClaimSlot` переведены на
@@ -5245,7 +5245,7 @@ GPU-память простаивающего или невидимого окн
   известного запуска `cargo fmt --all` во вложенном worktree; форматирование изменённых пакетов
   проверено отдельно. Остаются части LY55: `tracing` в text store и удаление `active_window`,
   `compositor_name`, публичного пути keyboard layout; они не входят в этот PR.
-- [ ] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
+- [x] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
   Метод удалён из
   `Platform`, `SharedPlatform` (сам тип ушёл в #2494), `host::Services` и всех восьми loop-реализаций; `Platform::name`
   остаётся. Продакшен-читателей метода не было. ADR-0039 обновлён, trybuild-снимки изменились
@@ -5256,12 +5256,51 @@ GPU-память простаивающего или невидимого окн
   падают и на неизменённой базе, поэтому не относятся к этому PR. Clippy тех же крейтов с
   `-D warnings`, `wasm-check`, `workspace`, `reach` и остальные `xtask checks` зелёные, кроме
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
-  отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
-  публичный путь keyboard layout.
-  `opened.rs` (отброшенные сверх предела URL), `reach-forbid` контракта его не называет;
-  `Platform::active_window` и `OwnerPlatform::active_window` на месте, выше хоста их читают
-  только тесты (`tests/handler_reentry.rs`); `Platform::keyboard_layout` и
-  `on_keyboard_layout_change` остаются методами публичного запечатанного `Platform`.
+  отсутствующий `zig` и остаётся на CI. Остальное закрывает запись ниже.
+- [x] **LY55** — #2660, ветка `platform/contract-without-tracing`. Контракт больше не зависит от
+  `tracing` и отдаёт каждое условие тому, кто решает. Отказ store в правке: сразу — ошибка
+  вызывающего (`commit_composition_in_place` теперь возвращает её, как `project_ime_event`);
+  в отложенном grant — вызов `late_refusal`, который передаёт вызывающий (обе функции идут
+  через один `edit_async`). Хосты коммитят композицию на месте одной функцией
+  `text::refusal::commit_in_place`, которая сообщает отказ в обоих случаях (TSF, зеркала Web и
+  Android, AppKit/UIKit, текстовый ввод Wayland); `TextInputOwner` сопоставляет исход явно и
+  тоже сообщает отказ. Ограничение того, что открыла ОС, — `Opened::bounded`, возвращающий
+  `(Opened, OpenedOverflow)`; публичного поля `Opened::overflow` нет. Хост сообщает переполнение
+  там, где ограничивает (`owner::opened::bounded`): аргументы запуска (и второй экземпляр до
+  пересылки), `file:`-URI, приём пересланного запуска, адрес страницы, интент Android (в том
+  числе пустой и документы сверх места; место считается после ссылок, которые останутся, так
+  что слишком длинная ссылка документ не вытесняет). Склейка запуска в `take_launch` берёт cold-отчёты, пока
+  их не больше `MAX_OPENED_ITEMS`, остальные доходят до `AppHandler::opened` после `ready`.
+  Манифест: `tracing` удалён и стоит в `reach-forbid`; единственный путь к нему — собственная
+  инструментация `flui-foundation` (`reach-exceptions`, grant ADR-0151 §7). `Platform` и
+  `OwnerPlatform` без `active_window` (вместе с позицией `host::Window::active` на восьми хостах,
+  полем `active` у headless и Wayland, `IOSLoop::active`, macOS-только `OwnerMap::get` и id окна
+  в `WebState::window`) и без `keyboard_layout`/`on_keyboard_layout_change`: раскладка осталась
+  позицией ввода ядра, запечатанной (публичный трейт в закрытом модуле `host`, как
+  `host_window::sealed`), так что вне крейта её не вызвать, как и решил ADR-0151 §9; тесты в
+  `tests/` входят через единственную дверь `testing::keyboard_layout` за фичей `testing`.
+  ADR-0039 получил `Superseded-by`. Удалены
+  непрочитанные `TargetPlatform::{is_mobile, is_desktop, is_touch_primary}` и
+  `PlatformInput::as_drag_drop`.
+  Тесты, в скобках результат без исправления: `a_refused_edit_reaches_the_caller_or_its_late_reporter`
+  (сначала `Ok(Granted)` вместо `Err(Protected)`, затем поздний отказ не доходит);
+  `a_refused_commit_in_place_is_reported_once`, `a_field_refusing_the_commit_on_blur_is_reported_once`
+  (AppKit/UIKit и текстовый ввод Wayland) и строка «termination and commit refused» TSF (ни
+  одного сообщения); сайты зеркал Web и Android собираются только для своих целей, их сообщение
+  проверяет только CI-компиляция; `a_launch_reports_what_bounding_its_arguments_dropped`,
+  `an_intent_reports_what_bounding_dropped_even_when_nothing_is_left` (ни одного сообщения; с
+  прежним расчётом места документ рядом с длинной ссылкой отброшен);
+  `a_forwarded_launch_reports_its_drop_where_it_happens` (только в WSL); строка «a launch too
+  large to join keeps the rest queued» в `app_delivery_contracts` (хвост отброшен). В
+  `handler_reentry.rs` деструктор обработчика теперь открывает окно, то есть берёт таблицу окон
+  хоста на запись (headless `HeadlessWindows::tracked`, Win32 `WindowSet::by_handle`): с
+  возвращённым удержанием `by_handle` вокруг `clear_then` таблица Win32 падает в `set.rs`.
+  Проверки: на Windows clippy `-D warnings`, nextest flui-platform, flui-native, flui-interaction
+  и flui-app, `reach`, `doc-strict`, `checks`, `expectations`; в WSL clippy, `cargo doc -D
+  warnings` и юнит-тесты Linux. На `main` @ `53c3e028f` на этом Windows-хосте уже падают
+  `an_intent_opens_its_link_or_documents` и trybuild-снимок `owner_platform_is_not_send`. Не
+  собирались здесь macOS, iOS, Android и wasm32 (CI `cross-typecheck`); тесты X11 и Wayland не
+  запускались.
 - [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
   #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
@@ -5274,15 +5313,60 @@ GPU-память простаивающего или невидимого окн
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
   kind нет. Остаётся правило про `build.rs` с посаженным нарушением: `rg 'javac|swiftc|d8'
   tools/xtask/src/workspace` пуст.
-- [ ] **LY54** (не закрыта: на `main` только половина `flui-testing`; фичи `scripted` и сценарного
-  примитива нет) — #2033 (`5b4ece201`) дал `HeadlessHost::with_capabilities(window, registry)` и
-  `HeadlessHost::with_plugin(window, plugin)` (`crates/flui-testing/src/host.rs`): тест ставит
-  провайдер без ручной сборки runtime. Двойники остаются по одному на возможность, каждый со
-  своими переключателями: `ScriptedClipboard` и `ScriptedPrimarySelection` во `flui-testing`,
-  `ScriptedHttp`, `ScriptedLauncher` и `FakeHaptics` в `flui_platform::testing`, `ScriptedSystem`
-  во `flui-system`. Остаётся: фича `scripted` контракта и сам примитив (упорядоченный скрипт
-  ответов, отзывы разрешений, внедрённые ошибки, потоки событий в виртуальном времени), перевод
-  двойников на него, сценарий из колонки «Тесты».
+- [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
+  дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
+  Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:
+  `Scenario` (один `ManualClock` и журнал отказов), `Script<R, A>` (шаги `Expect` + `Answer`:
+  `value`, `computed`, `abandon`, `after(delay)`, и `expect_held` для удержания; запрос берёт
+  самый ранний шаг, который его принимает, затем постоянный ответ `otherwise`), `Track<T>` и
+  `ServiceState` (разрешение, служба вкл/выкл), `Events<E>` с `StreamEnd`. Всё owner-local,
+  `Send` не требуется: `CompletionSource::pending` и `Resolver::resolve` больше не требуют `Send`
+  от ответа (резолвер `Send` ровно тогда, когда ответ `Send`), две позиции ушли из
+  `send-positions.toml`. Каждый ответ идёт через `Resolver`, то есть оседает на ходу владельца;
+  запрос без ответа — `ScenarioFailure::Unexpected`, его completion кончается `ProviderDropped`,
+  тихого ответа по умолчанию нет. `Scenario::verify` перечисляет удержанные без ответа запросы,
+  неиспользованные шаги, недостигнутые изменения и события после конца потока; скрипт, брошенный
+  с долгами, передаёт их сценарию (все, до поднятия паники `Debug`), а сценарий, уничтоженный с
+  непроверенными отказами, паникует (если поток уже не разматывается). Признанное `verify`
+  хранится позицией в журнале и id долгов и запланированных изменений, а не значением: отказ
+  после `verify`, даже равный признанному, новый. Сообщения из других потоков ограничены
+  `MAX_REPORTS` (дальше счётчик `ReportsDropped`) и после конца сценария отклоняются; скрипт
+  хранит первые `MAX_RECORDED_REQUESTS` запросов. Код теста (матчер, вычисляемый ответ, `Clone`/`Debug`
+  значений) идёт без заимствований и под `FirstPanic`: обслуживаемый запрос остаётся удержанным,
+  остальные получают ответ, первая паника поднимается. Часы держит и двигает только один
+  `ScenarioDriver` (второй хост на том же сценарии — `AlreadyDriven`, `try_with_scenario`);
+  сценарий показывает лишь `now()`, а `HeadlessHost::clock()` и `Tester::clock()` отдают
+  `HostClock`, который двигается только через драйвер; у `HeadlessHost` `pump`, `advance`, `run_script` и
+  повтор записи двигают время только через него, а `time_to_next_frame` и `pump_until_settled`
+  ждут запланированных изменений как любой дедлайн. На примитив переведены `ScriptedLauncher`,
+  `ScriptedFileDialogs` (`ScriptedSystem::on`), `ScriptedClipboard` и
+  `ScriptedPrimarySelection` (у двух последних `service()`); у лаунчера и диалогов больше нет
+  неявных `Ok(())` и отмены. Не переведены, с причиной в `crates/flui-platform/ARCHITECTURE.md`
+  («A capability's double is built from one scenario primitive»): `FakeHaptics` (синхронный
+  ответ через trait окна), `ScriptedHttp` (клиент `Send + Sync`, его futures вне owner-потока,
+  ADR-0280; непрописанный URL он сообщает в сценарий через `FailureReport`, у хоста это включено)
+  и `flui_testing::storage::MemoryStorage` (хранилище, а не скрипт: неожиданному запросу не с
+  чем расходиться). Тесты runtime и app, которые держал `InMemoryClipboard`, перевёл #2033
+  (`5b4ece201`): он удалил `InMemoryClipboard` (`rg InMemoryClipboard crates` пуст), тесты
+  clipboard стали таблицей `capability_seam` во `flui-testing`, тесты app —
+  `crates/flui-app/tests/capability_registration.rs`. Подключение примитива к `flui-app[driver]`
+  и двойники ядра — LY100.
+  Тесты (`crates/flui-testing/tests/scenario.rs`): `deny_then_allow_then_revoke_at_three_seconds`
+  (сценарий колонки «Тесты»), `a_request_nothing_answers_ends_its_completion_and_fails_the_run`,
+  `a_step_answers_the_request_it_matches_not_the_next_one_in_line`,
+  `a_delayed_answer_settles_at_the_first_turn_at_or_after_its_instant`,
+  `a_service_turned_off_refuses_acquisition_until_it_is_back`,
+  `an_event_stream_delivers_on_virtual_time_and_ends_once`,
+  `a_caller_that_asks_again_from_its_answer_is_answered_at_the_next_turn`,
+  `a_held_request_and_an_unused_step_fail_the_run`; строка таблицы `capability_seam`
+  `scripted_reads_answer_in_order_before_the_clipboards_text`; во `flui-system`
+  `the_system_doubles_answer_on_the_hosts_scenario_and_report_what_was_not_scripted`. С
+  откатами: без `run_due` в `pump` падают пять тестов сценария и таблица `capability_seam`; с
+  сопоставлением по позиции вместо значения — `a_step_answers_…`; без записи `Unexpected` —
+  `a_request_nothing_answers_…` и тест `flui-system`; с возвращённым `Ok(())` по умолчанию у
+  лаунчера — тест `flui-system`. Тесты `flui-system` теперь берут абсолютные пути через
+  `temp_dir`: `/srv/…` и `/home` относительны на Windows, и два теста там падали. Примитив вне
+  фичи недоступен (модуль за `cfg(feature = "scripted")`). Запуски на устройствах не нужны.
 - [ ] **LY57** (не закрыта: крейт, плагин и две возможности на `main`; провайдеров Windows,
   остальных служб и общей conformance-таблицы нет) — #2150 (`9450db8e1`), портал Linux #2158,
   `Unsupported` в ошибках запуска и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт —
@@ -5291,8 +5375,8 @@ GPU-память простаивающего или невидимого окн
   `flui::services::system` за фичей `system`, выключенной по умолчанию. Возможности: файловые
   диалоги (`FileDialogCapability`, `FileDialogs`, модальны окну виджета, один на окно) и запуск
   (`LauncherCapability`, `Launcher` в контракте, `flui_platform::launch`: URI, открыть путь,
-  reveal, trash). Двойники — по одному на возможность (`ScriptedSystem` над `ScriptedLauncher` и
-  `ScriptedFileDialogs`), не на примитиве LY54, которого на `main` нет. Вне Linux плагин
+  reveal, trash). Двойники `ScriptedLauncher` и `ScriptedFileDialogs` (их плагин `ScriptedSystem`,
+  `ScriptedSystem::on`) построены на сценарном примитиве LY54. Вне Linux плагин
   регистрирует отказ `NotYetOnThisHost`. Тесты (`crates/flui-system/tests/`):
   `the_declared_plugin_is_the_crates_default_plugin`;
   `a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn`,

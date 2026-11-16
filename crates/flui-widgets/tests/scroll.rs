@@ -3733,7 +3733,7 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                 ),
             )));
             for y in [120.0, 100.0] {
-                host.clock().advance(Duration::from_millis(8));
+                host.advance(Duration::from_millis(8));
                 host.dispatch(PlatformInput::Pointer(PointerEvent::Move(
                     PointerMove::new(
                         pointer,

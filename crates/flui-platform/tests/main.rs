@@ -82,3 +82,6 @@ mod launch_key;
 
 #[path = "opened.rs"]
 mod opened;
+
+#[path = "text_store_refusal.rs"]
+mod text_store_refusal;

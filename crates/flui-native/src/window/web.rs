@@ -1260,7 +1260,7 @@ impl host::Window<WebLoop> for WebWindow {
                     if state
                         .window
                         .as_ref()
-                        .is_some_and(|(_, current)| Arc::ptr_eq(current, &retiring))
+                        .is_some_and(|current| Arc::ptr_eq(current, &retiring))
                     {
                         state.window.take()
                     } else {
@@ -1271,7 +1271,7 @@ impl host::Window<WebLoop> for WebWindow {
             },
         )?;
         owner.with_state(|s| {
-            s.window = Some((id, delivery));
+            s.window = Some(delivery);
         });
 
         let window = Rc::new(window);
@@ -1279,10 +1279,6 @@ impl host::Window<WebLoop> for WebWindow {
             .delivery
             .publish_through_owner(&window, |window: &WebWindow| window.publisher().read());
         Ok(window)
-    }
-
-    fn active(owner: &WebLoop, _: &WindowPositions<CanvasRef>) -> Option<WindowId> {
-        owner.state.lock().window.as_ref().map(|(id, _)| *id)
     }
 
     fn capabilities(_: &WebLoop, _: &WindowPositions<CanvasRef>) -> WindowCapabilities {

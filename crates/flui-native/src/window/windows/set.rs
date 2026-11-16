@@ -12,13 +12,11 @@ use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
-    UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowPlacement, IsWindowVisible, WINDOWPLACEMENT,
-    },
+    UI::WindowsAndMessaging::{GetWindowPlacement, IsWindowVisible, WINDOWPLACEMENT},
 };
 
 use flui_platform::{
-    CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId,
+    CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler,
     WindowIdMint, WindowOptions,
 };
 
@@ -46,7 +44,7 @@ use crate::window::state::device_extent;
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
     /// The windows, which only the owner thread holds (ADR-0327 §5). The only
-    /// way from an HWND to a [`WindowId`]: a handle not in it names no window
+    /// way from an HWND to a [`WindowId`](flui_platform::WindowId): a handle not in it names no window
     /// of this platform.
     by_handle: RefCell<FxHashMap<isize, Rc<WindowsWindow>>>,
     /// Issues the id of every window the set opens,
@@ -364,23 +362,6 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         drop(previous);
 
         Ok(window)
-    }
-
-    fn active(owner: &WindowsLoop, windows: &WindowSet) -> Option<WindowId> {
-        owner.affinity.debug_assert_owner("WindowsWindow::active");
-        // SAFETY: `GetForegroundWindow` takes no arguments; `hwnd` is just
-        // an opaque value looked up, never dereferenced.
-        let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.is_invalid() {
-            return None;
-        }
-        // Another application's window, or one of ours that closed, is in
-        // no entry: the foreground window is then none of this platform's.
-        windows
-            .by_handle
-            .borrow()
-            .get(&(hwnd.0 as isize))
-            .map(|window| window.window_id)
     }
 
     fn capabilities(_: &WindowsLoop, windows: &WindowSet) -> WindowCapabilities {
