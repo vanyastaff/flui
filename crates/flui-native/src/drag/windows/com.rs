@@ -14,9 +14,7 @@ use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::Point;
-use flui_platform::data_transfer::{
-    RepresentationDescriptor, RepresentationIndex, TransferActions,
-};
+use flui_platform::data_transfer::{RepresentationIndex, TransferActions};
 use flui_platform::drag::{OsDragProvider, OsDragTerms};
 use flui_platform::{DragDropEvent, PlatformInput};
 use windows::Win32::{

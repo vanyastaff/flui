@@ -34,8 +34,8 @@ use flui_platform::data_transfer::{
     TransferPayload, TransferRequest,
 };
 use flui_platform::drag::{
-    DragError, DragSessionKey, OsDragEnd, OsDragParts, OsDragProvider, OsDragRequest,
-    OsDragTerms, ProcessNonce,
+    DragError, DragSessionKey, OsDragEnd, OsDragParts, OsDragProvider, OsDragRequest, OsDragTerms,
+    ProcessNonce,
 };
 use flui_platform::{
     DispatchEventResult, DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
@@ -1360,7 +1360,11 @@ fn a_request_from_a_press_the_window_does_not_hold_is_refused() {
             _ => None,
         })
     };
-    assert_eq!(pointer(&first), pointer(&again), "the mouse keeps its pointer id");
+    assert_eq!(
+        pointer(&first),
+        pointer(&again),
+        "the mouse keeps its pointer id"
+    );
     assert_ne!(press_of(&again), ended_press);
     let ended = Rc::new(Cell::new(None));
     hold_mouse_buttons(MK_LBUTTON.0);

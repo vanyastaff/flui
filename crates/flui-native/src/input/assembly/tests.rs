@@ -575,11 +575,16 @@ fn the_originating_reading_lives_for_its_sequence() {
     let first = down.press().expect("a decoded press names its sequence");
     decode(&mut contacts, &touch(4, ReadingAction::Move, 2)).expect("valid");
     assert_eq!(contacts.press_origin(first), Some(&press));
-    let PointerEvent::Up(up) = single(&decode(&mut contacts, &touch(4, RELEASE, 3)).expect("valid"))
+    let PointerEvent::Up(up) =
+        single(&decode(&mut contacts, &touch(4, RELEASE, 3)).expect("valid"))
     else {
         panic!("up")
     };
-    assert_eq!(up.press(), Some(first), "the release names the sequence it ends");
+    assert_eq!(
+        up.press(),
+        Some(first),
+        "the release names the sequence it ends"
+    );
     assert_eq!(contacts.press_origin(first), None);
     // The next press of the same contact is another sequence: the ended one
     // finds nothing, though the pointer id may be the same.
@@ -589,7 +594,11 @@ fn the_originating_reading_lives_for_its_sequence() {
     };
     let second = next.press().expect("a decoded press names its sequence");
     assert_ne!(second, first);
-    assert_eq!(contacts.press_origin(first), None, "an ended press stays ended");
+    assert_eq!(
+        contacts.press_origin(first),
+        None,
+        "an ended press stays ended"
+    );
     assert_eq!(contacts.press_origin(second), Some(&again));
 }
 

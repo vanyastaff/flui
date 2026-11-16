@@ -72,9 +72,24 @@ fn os_drag_terms_refuse_what_no_os_session_may_offer() {
     for (name, serialized, allowed, expected) in [
         ("text under copy", vec![text()], COPY, Ok(2)),
         ("identity alone", Vec::new(), MOVE, Ok(1)),
-        ("no action", vec![text()], TransferActions::empty(), Err(DragRequestError::NoActions)),
-        ("a claimed identity", vec![text(), claimed()], COPY, Err(DragRequestError::ClaimsIdentity)),
-        ("the last index taken by the identity", vec![text(); most], COPY, Ok(most + 1)),
+        (
+            "no action",
+            vec![text()],
+            TransferActions::empty(),
+            Err(DragRequestError::NoActions),
+        ),
+        (
+            "a claimed identity",
+            vec![text(), claimed()],
+            COPY,
+            Err(DragRequestError::ClaimsIdentity),
+        ),
+        (
+            "the last index taken by the identity",
+            vec![text(); most],
+            COPY,
+            Ok(most + 1),
+        ),
         (
             "past the last index",
             vec![text(); most + 1],
@@ -85,7 +100,10 @@ fn os_drag_terms_refuse_what_no_os_session_may_offer() {
         let key = key();
         let terms = OsDragTerms::try_new(key, serialized, allowed);
         assert_eq!(
-            terms.as_ref().map(|terms| terms.representations().len()).map_err(|error| *error),
+            terms
+                .as_ref()
+                .map(|terms| terms.representations().len())
+                .map_err(|error| *error),
             expected,
             "{name}"
         );
@@ -96,7 +114,11 @@ fn os_drag_terms_refuse_what_no_os_session_may_offer() {
                 Some(key),
                 "{name}: the identity is last"
             );
-            assert_eq!(usize::from(last.0), terms.representations().len() - 1, "{name}");
+            assert_eq!(
+                usize::from(last.0),
+                terms.representations().len() - 1,
+                "{name}"
+            );
             assert_eq!(terms.allowed(), allowed, "{name}");
         }
     }

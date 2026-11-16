@@ -21,8 +21,7 @@ use flui_platform::data_transfer::{
     TransferRequest,
 };
 use flui_platform::drag::{
-    DragError, DragSessionKey, OsDragEnd, OsDragProvider, OsDragRequest, OsDragTerms,
-    ProcessNonce,
+    DragError, DragSessionKey, OsDragEnd, OsDragProvider, OsDragRequest, OsDragTerms, ProcessNonce,
 };
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput, WindowId};

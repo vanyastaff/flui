@@ -1042,8 +1042,12 @@ fn os_drag_request(ended: &Rc<RefCell<Vec<OsDragEnd>>>) -> OsDragRequest {
         declared_len: None,
     };
     let ended = Rc::clone(ended);
-    let terms = OsDragTerms::try_new(key, vec![text], TransferActions::COPY | TransferActions::MOVE)
-        .expect("one text representation under COPY and MOVE");
+    let terms = OsDragTerms::try_new(
+        key,
+        vec![text],
+        TransferActions::COPY | TransferActions::MOVE,
+    )
+    .expect("one text representation under COPY and MOVE");
     OsDragRequest::new(
         terms,
         None,

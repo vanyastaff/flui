@@ -580,7 +580,8 @@ fn moved(session: &DragSession, x: f64) -> MoveOutcome {
 }
 
 fn take_started() -> Vec<OsDragParts> {
-    STARTED.with(|started| std::mem::take(&mut *started.borrow_mut()))
+    STARTED
+        .with(|started| std::mem::take(&mut *started.borrow_mut()))
         .into_iter()
         .map(OsDragRequest::into_parts)
         .collect()
@@ -963,8 +964,16 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     assert_eq!(outcome, MoveOutcome::Escalating, "{name}");
                     assert_eq!(pending.len(), 1, "{name}");
                     let request = enter_os(pending.remove(0));
-                    assert_eq!(request.terms.allowed(), MOVE, "within_app is advertised: {name}");
-                    assert_eq!(request.terms.representations().len(), 1, "identity only: {name}");
+                    assert_eq!(
+                        request.terms.allowed(),
+                        MOVE,
+                        "within_app is advertised: {name}"
+                    );
+                    assert_eq!(
+                        request.terms.representations().len(),
+                        1,
+                        "identity only: {name}"
+                    );
                     assert_eq!(session.stage(), Ok(DragStage::System), "{name}");
                 }
             }
@@ -1094,7 +1103,8 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
         let request = enter_one(&f);
         assert_eq!(
-            request.terms.allowed(), MOVE,
+            request.terms.allowed(),
+            MOVE,
             "the identity-only session advertises within_app"
         );
         let offer = f.offer_for(&request);
@@ -2454,7 +2464,10 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
         session
             .pointer_released(at(150.0), None)
             .expect("a live session");
-        assert!(f.owner.take_pending_os_drags().is_empty(), "nothing to enter");
+        assert!(
+            f.owner.take_pending_os_drags().is_empty(),
+            "nothing to enter"
+        );
     });
     in_lane(|f| {
         let claimed = TransferFormat::Custom {
@@ -2475,7 +2488,10 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
         );
         let refused = DragError::Terms(DragRequestError::ClaimsIdentity);
         assert_eq!(moved(&session, 150.0), MoveOutcome::Refused(refused));
-        assert!(f.owner.take_pending_os_drags().is_empty(), "nothing to enter");
+        assert!(
+            f.owner.take_pending_os_drags().is_empty(),
+            "nothing to enter"
+        );
         assert_eq!(session.stage(), Ok(DragStage::InWindow));
     });
 }

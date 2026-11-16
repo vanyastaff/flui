@@ -1108,9 +1108,7 @@ use flui_platform::{
         DragTransport, DropFeedback, RepresentationIndex, TransferActions, TransferError,
         TransferLimits, TransferPayload, TransferRequest,
     },
-    drag::{
-        DragError, OsDragEndHook, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
-    },
+    drag::{DragError, OsDragEndHook, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
 };
 #[cfg(target_os = "android")]
 use jni::{
@@ -1561,14 +1559,15 @@ fn serve(
         clippy::disallowed_methods,
         reason = "ADR-0287: a drag provider's panic fails the transfer instead of crossing the JNI"
     )]
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(index).ok()))
-    .unwrap_or_else(|payload| {
-        flui_foundation::panic::discard_payload(payload);
-        contain_owner_callback(|| {
-            tracing::error!(target: "flui_native::android", "a drag's provider panicked");
-        });
-        None
-    })
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(index).ok())).unwrap_or_else(
+        |payload| {
+            flui_foundation::panic::discard_payload(payload);
+            contain_owner_callback(|| {
+                tracing::error!(target: "flui_native::android", "a drag's provider panicked");
+            });
+            None
+        },
+    )
 }
 
 #[cfg(target_os = "android")]

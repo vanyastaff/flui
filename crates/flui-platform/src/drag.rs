@@ -360,12 +360,17 @@ impl OsDragTerms {
     }
 
     /// Each representation with the index its provider serves it under.
-    pub fn indexed(&self) -> impl ExactSizeIterator<Item = (RepresentationIndex, &RepresentationDescriptor)> {
-        self.representations.iter().enumerate().map(|(index, descriptor)| {
-            let index = u16::try_from(index)
-                .expect("BUG: OsDragTerms::try_new keeps every index within u16");
-            (RepresentationIndex(index), descriptor)
-        })
+    pub fn indexed(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (RepresentationIndex, &RepresentationDescriptor)> {
+        self.representations
+            .iter()
+            .enumerate()
+            .map(|(index, descriptor)| {
+                let index = u16::try_from(index)
+                    .expect("BUG: OsDragTerms::try_new keeps every index within u16");
+                (RepresentationIndex(index), descriptor)
+            })
     }
 
     /// The actions advertised to the OS; never empty.

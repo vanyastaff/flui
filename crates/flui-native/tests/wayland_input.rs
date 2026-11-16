@@ -41,7 +41,9 @@ mod cases {
     use flui_platform::data_transfer::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce};
+    use flui_platform::drag::{
+        DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
+    };
     use flui_platform::keyboard::{Code, Key, KeyState};
     use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
