@@ -503,7 +503,7 @@ pub(crate) fn the_back_button_is_held_apart_from_the_back_key() {
         );
         assert_eq!(
             log.borrow().last(),
-            Some(&(back, code, KeyState::Down(KeyPress::First))),
+            Some(&(back, code, KeyState::Down(KeyPress::AutoRepeat))),
             "the {code:?} key's repeat still reaches the node"
         );
         assert_eq!(log.borrow().len(), 4);

@@ -24,7 +24,7 @@ use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
-    ScrollPrecision, ScrollUnit,
+    ScrollDirection, ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{
     AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ControlsOffset,
@@ -1340,6 +1340,12 @@ fn scroll_to_wire(reading: &ContactScroll) -> DtoResult<wire::Scroll> {
         delta: [reading.delta.x(), reading.delta.y()],
         precise,
         notched,
+        direction: match reading.direction {
+            ScrollDirection::Unknown => None,
+            ScrollDirection::FromDevice => Some(wire::ScrollDirection::FromDevice),
+            ScrollDirection::InvertedFromDevice => Some(wire::ScrollDirection::InvertedFromDevice),
+            _ => return Err(DtoError::Unmirrored("ScrollDirection")),
+        },
         time_ns: nanos(reading.time),
         modifiers: modifiers_to_wire(reading.modifiers)?,
     })
@@ -1384,6 +1390,12 @@ fn scroll_from_wire(scroll: wire::Scroll) -> DtoResult<ContactScroll> {
                     "a scroll is precise or notched, not both".into(),
                 ));
             }
+        },
+        direction: match scroll.direction {
+            None => ScrollDirection::Unknown,
+            Some(wire::ScrollDirection::FromDevice) => ScrollDirection::FromDevice,
+            Some(wire::ScrollDirection::InvertedFromDevice) => ScrollDirection::InvertedFromDevice,
+            Some(other) => return Err(unread(other.name())),
         },
         time: EventTime::from_nanos(scroll.time_ns),
         modifiers: modifiers_from_wire(&scroll.modifiers)?,

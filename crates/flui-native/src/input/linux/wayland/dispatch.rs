@@ -2178,6 +2178,26 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     },
                 )
             }
+            wl_pointer::Event::AxisRelativeDirection {
+                axis: which,
+                direction,
+            } => {
+                let Some(which) = axis(which) else {
+                    return;
+                };
+                let inverted = match direction {
+                    WEnum::Value(wl_pointer::AxisRelativeDirection::Inverted) => true,
+                    WEnum::Value(wl_pointer::AxisRelativeDirection::Identical) => false,
+                    _ => return,
+                };
+                (
+                    arrival(None),
+                    PointerWire::AxisRelativeDirection {
+                        axis: which,
+                        inverted,
+                    },
+                )
+            }
             _ => return,
         };
         let framed = pointer.version() >= POINTER_FRAMES;

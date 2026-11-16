@@ -337,6 +337,77 @@ fn a_wheel_frame_is_one_step_in_detents() {
     }
 }
 
+/// A version 9 seat says whether the fingers moved against the scroll
+/// (natural scrolling): the scroll carries it, the stop that ends the scroll
+/// keeps it, and a seat that never says leaves it unknown.
+#[test]
+fn a_scroll_carries_the_direction_the_compositor_reports() {
+    use flui_platform::pointer::ScrollDirection;
+
+    let directions = |frames: &[&[PointerWire]]| {
+        let mut assembly = seated();
+        let mut wire = vec![
+            mouse(PointerWire::Enter {
+                surface: WINDOW,
+                x: 5.0,
+                y: 5.0,
+            }),
+            mouse(PointerWire::Frame),
+        ];
+        for frame in frames {
+            wire.extend(frame.iter().copied().map(mouse));
+            wire.push(mouse(PointerWire::Frame));
+        }
+        let mut out = Vec::new();
+        for (index, event) in wire.into_iter().enumerate() {
+            let ms = 10 + 2 * u32::try_from(index).expect("few events");
+            for routed in assembly.assemble(SeatWire {
+                time: at(ms),
+                event,
+            }) {
+                if let Routed::To(_, PlatformInput::Pointer(PointerEvent::Scroll(scroll))) = routed
+                {
+                    out.push(scroll.direction);
+                }
+            }
+        }
+        out
+    };
+    let finger = |inverted: Option<bool>| {
+        let mut frame = vec![PointerWire::AxisSource(AxisSource::Finger)];
+        frame.extend(inverted.map(|inverted| PointerWire::AxisRelativeDirection {
+            axis: Axis::Vertical,
+            inverted,
+        }));
+        frame.push(PointerWire::Axis {
+            axis: Axis::Vertical,
+            value: 4.0,
+        });
+        frame
+    };
+    let stop = [
+        PointerWire::AxisSource(AxisSource::Finger),
+        PointerWire::AxisStop(Axis::Vertical),
+    ];
+    assert_eq!(
+        directions(&[&finger(Some(true)), &stop]),
+        [
+            ScrollDirection::InvertedFromDevice,
+            ScrollDirection::InvertedFromDevice
+        ],
+        "natural scrolling, and the stop that ends it"
+    );
+    assert_eq!(
+        directions(&[&finger(Some(false))]),
+        [ScrollDirection::FromDevice]
+    );
+    assert_eq!(
+        directions(&[&finger(None), &stop]),
+        [ScrollDirection::Unknown, ScrollDirection::Unknown],
+        "a seat before version 9 does not say"
+    );
+}
+
 /// Fingers on a touchpad scroll in phases: the first frame begins, the next
 /// change, and the stop at the lift ends; a leave mid-scroll cancels it.
 #[test]

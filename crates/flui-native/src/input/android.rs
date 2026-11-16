@@ -234,7 +234,7 @@ pub(crate) mod motion {
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
         PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta,
-        ScrollPhase, ScrollPrecision, ScrollUnit,
+        ScrollDirection, ScrollPhase, ScrollPrecision, ScrollUnit,
     };
     use web_time::Instant;
 
@@ -884,6 +884,7 @@ pub(crate) mod motion {
                             phase: None,
                             delta,
                             precision: ScrollPrecision::Unknown,
+                            direction: ScrollDirection::Unknown,
                             time: event.time,
                             modifiers: motion.modifiers,
                         }));
@@ -1006,6 +1007,7 @@ pub(crate) mod motion {
                         phase: Some(owned),
                         delta,
                         precision: ScrollPrecision::Precise,
+                        direction: ScrollDirection::Unknown,
                         time: event.time,
                         modifiers: motion.modifiers,
                     }));

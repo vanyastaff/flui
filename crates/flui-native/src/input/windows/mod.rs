@@ -1133,7 +1133,7 @@ mod raw {
 
     use flui_platform::{
         EventTime, Modifiers as KeyboardModifiers,
-        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
         pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
     };
     use windows::Win32::{

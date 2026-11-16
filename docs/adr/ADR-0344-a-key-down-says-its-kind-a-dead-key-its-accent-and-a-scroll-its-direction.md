@@ -84,7 +84,10 @@ keeps the accent across a modifier and drops it on a key that types nothing or o
 
 `ScrollEvent::direction: ScrollDirection` with `Unknown` (the default), `FromDevice` and
 `InvertedFromDevice`. The delta stays in content terms on every platform; the direction is for a
-control that maps a scroll onto a value and wants to move with the fingers.
+control that maps a scroll onto a value and wants to move with the fingers. macOS reads
+AppKit's `isDirectionInvertedFromDevice`, Safari `webkitDirectionInvertedFromDevice`
+and the native Wayland host `wl_pointer.axis_relative_direction`; the native recording carries
+the direction of each scroll row.
 
 ### 4. No revision or pen squeeze until a host produces one
 
@@ -107,7 +110,7 @@ and its scroll an optional `direction`; the format is version 4 and refuses vers
   the accent to show while it waits.
 - Bad, because every place that built a key event changed, and a 0.13 agent client is refused by
   a 0.14 application.
-- Neutral, because Wayland's `axis_relative_direction` and X11 report no direction yet: their
+- Neutral, because Windows, X11, Android and iOS report no direction: their
   scrolls say `Unknown` (`docs/gaps.md`).
 
 ### Confirmation
@@ -120,4 +123,5 @@ and its scroll an optional `direction`; the format is version 4 and refuses vers
   a stand-in key map), `a_repeat_and_a_missing_release_are_kinds_of_key_down` and
   `a_dead_key_carries_its_accent_and_no_named_key_spells_it` (flui-platform),
   `every_vocabulary_variant_round_trips_through_the_recording_dto` (flui-testing),
-  `every_published_schema_is_additive_to_the_next` (flui-protocol).
+  `every_published_schema_is_additive_to_the_next` (flui-protocol),
+  `a_scroll_carries_the_direction_the_compositor_reports` (flui-native, the Wayland wire).
