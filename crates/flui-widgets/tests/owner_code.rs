@@ -772,6 +772,10 @@ impl TextStoreHost for Host {
         self.panic_if_told("complete");
         Ok(CompositionEnd::Abandoned)
     }
+
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {
+        self.log.borrow_mut().push("show keyboard");
+    }
 }
 
 fn pull_owner(host: Rc<Host>) -> Rc<TextInputOwner> {

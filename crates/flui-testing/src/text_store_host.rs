@@ -20,6 +20,9 @@ pub enum StoreHostCall {
     Unfocus,
     /// `complete_composition(store)`, whatever the answer.
     CompleteComposition,
+    /// `show_keyboard(store)` for the focused store: a tap on its field
+    /// asked for the soft keyboard.
+    ShowKeyboard,
 }
 
 /// A [`TextStoreHost`] that records every call and serves the focused store
@@ -137,5 +140,16 @@ impl TextStoreHost for RecordingTextStoreHost {
             Ok(LockOutcome::Granted) => CompositionEnd::Committed,
             _ => CompositionEnd::Abandoned,
         })
+    }
+
+    fn show_keyboard(&self, store: &Rc<dyn TextStore>) {
+        let focused = self
+            .focused
+            .borrow()
+            .as_ref()
+            .is_some_and(|focused| Rc::ptr_eq(focused, store));
+        if focused {
+            let _depth = self.enter(StoreHostCall::ShowKeyboard);
+        }
     }
 }
