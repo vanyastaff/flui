@@ -23,6 +23,12 @@
 //! [platforms.ios]
 //! min = "15.0"
 //!
+//! # Optional: the key a release APK is signed with; its passwords come from
+//! # FLUI_ANDROID_KEYSTORE_PASSWORD (and FLUI_ANDROID_KEY_PASSWORD).
+//! [signing.android]
+//! keystore = "keys/upload.jks"
+//! alias = "upload"
+//!
 //! # Optional: the path a web build is served from, its page's `<base href>`.
 //! [web]
 //! base_href = "/apps/demo/"
@@ -36,7 +42,9 @@
 //! the CLI keeps no state about the user and has no telemetry to configure.
 
 use crate::app_id::AppId;
+use crate::build::android_signing::AndroidReleaseKey;
 use crate::build::app_floor::{AppFloors, PlatformsConfig};
+use crate::build::app_version::AppVersion;
 use crate::build::web_page::{BaseHref, ThemeColor, WebPage};
 use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
@@ -58,9 +66,27 @@ pub(crate) struct FluiConfig {
     /// raises FLUI's: `[platforms.<environment>] min`.
     #[serde(default, skip_serializing_if = "PlatformsConfig::is_empty")]
     pub(crate) platforms: PlatformsConfig,
+    /// The keys a release package is signed with: `[signing.<environment>]`.
+    #[serde(default, skip_serializing_if = "SigningConfig::is_empty")]
+    pub(crate) signing: SigningConfig,
     /// What a web build's page states: `[web] base_href`.
     #[serde(default, skip_serializing_if = "WebConfig::is_default")]
     pub(crate) web: WebConfig,
+}
+
+/// `[signing]`: the key each environment's release packages are signed
+/// with, when the application names one.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) struct SigningConfig {
+    /// `[signing.android]`: the release key of the APK.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) android: Option<AndroidReleaseKey>,
+}
+
+impl SigningConfig {
+    fn is_empty(&self) -> bool {
+        self.android.is_none()
+    }
 }
 
 /// The web build's page.
@@ -247,8 +273,9 @@ fn legacy_organization_id(content: &str) -> Option<String> {
 pub(crate) struct AppConfig {
     /// Application name (used as crate name).
     pub(crate) name: String,
-    /// Application version (semver).
-    pub(crate) version: String,
+    /// The application's version, SemVer, from which every package's version
+    /// is derived ([`AppVersion`]).
+    pub(crate) version: AppVersion,
     /// The application identifier (reverse-DNS, `com.example.my_app`), from
     /// which every platform name is derived ([`AppId`]).
     pub(crate) id: AppId,
@@ -401,7 +428,7 @@ mod tests {
         FluiConfig {
             app: AppConfig {
                 name: "my-app".into(),
-                version: "0.1.0".into(),
+                version: AppVersion::try_new("0.1.0").expect("a SemVer version"),
                 id: AppId::try_new("com.example.my_app").expect("an identifier"),
             },
             build: BuildConfig {
@@ -409,6 +436,7 @@ mod tests {
             },
             hot_reload: None,
             platforms: PlatformsConfig::default(),
+            signing: SigningConfig::default(),
             web: WebConfig::default(),
         }
     }

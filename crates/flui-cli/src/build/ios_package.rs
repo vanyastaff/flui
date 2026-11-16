@@ -481,9 +481,9 @@ pub(crate) async fn package_application(
         bundle.version.clone_from(&package.version);
         bundle
     };
-    let version = cargo_metadata::semver::Version::parse(&bundle.version)
-        .map_err(|error| invalid(format!("invalid application SemVer: {error}")))?;
-    let numeric = format!("{}.{}.{}", version.major, version.minor, version.patch);
+    let version = crate::build::app_version::AppVersion::try_new(&bundle.version)
+        .map_err(|error| invalid(format!("invalid application version: {error}")))?;
+    let numeric = version.apple_bundle_version();
     bundle.version = version.to_string();
     validate_bundle(&bundle)?;
     let executable = executable.canonicalize()?;

@@ -1,7 +1,7 @@
 //! Bounded execution of external tools.
 //!
 //! Every probe the CLI makes into the environment (`adb`, `xcrun`, a
-//! browser's `--version`, `rustup target list`) runs through
+//! browser's `--version`, `rustc --print target-libdir`) runs through
 //! [`output_with_timeout`]. An unbounded `Command::output()` is how `flui
 //! devices` once hung forever on macOS: `Safari -v` does not print a version,
 //! it *launches Safari*, and the CLI sat waiting for a GUI process to exit.

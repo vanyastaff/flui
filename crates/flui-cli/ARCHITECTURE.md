@@ -26,8 +26,22 @@ application's logging backend, not the CLI's.
 The run session reads the selected device's ordered ABI list before invoking
 cargo-ndk. It chooses the first supported ABI instead of forcing ARM64 on x86
 emulators. Environment validation checks that ABI's exact Rust target in the
-project's toolchain and reports its `rustup target add` command before invoking
-cargo-ndk if it is missing. A failed build with hot reload disabled exits as a build failure;
+project's toolchain (`rustc --print target-libdir --target <triple>` under a
+deadline, so a toolchain without rustup is read too). A target without
+libraries still builds when the project's cargo configuration (or
+`CARGO_UNSTABLE_BUILD_STD`) asks for `build-std` and the toolchain has
+`rust-src` (`a_target_is_buildable_from_its_libraries_or_from_source`);
+otherwise the refusal names the toolchain looked at (release and sysroot), its
+`rustup target add` command and the `build-std` alternative, before cargo-ndk
+runs. The tool installs nothing itself.
+
+The `targetSdk` is FLUI's declared value from `platform-support.toml`, never
+lowered to fit the machine: it names the behaviour changes FLUI meets. The
+packager without Gradle links against the highest installed `android.jar`,
+which must not be below it, and checks that, with the build-tools, before the
+native build; a missing platform is `BuildError::AndroidPlatformMissing`, naming
+the levels installed and the one needed (`a_platform_older_than_the_target_is_refused`
+in `the_apk_meets_the_store_levels`). A failed build with hot reload disabled exits as a build failure;
 there is no watcher that could repair it. `android_run_builds_the_selected_device_native_abi`
 pins the target argument, missing-target admission and bounded failure through the CLI process.
 
@@ -46,6 +60,53 @@ package. A literal `minSdk` or `applicationId` in the script that differs, or on
 read, is a second statement and is refused before Gradle runs
 (`a_build_script_states_what_flui_toml_states_or_is_refused`). The `namespace` stays as scaffolded:
 it is the package of the app's own Java or Kotlin code.
+
+### One version, one NDK and one signing key reach both packagers
+
+`flui.toml`'s `[app] version` is SemVer, parsed when the file loads (`build/app_version.rs`), and
+is the only source of every package's version: Android's `versionName` is the version as written
+and its `versionCode` is `major * 10000 + minor * 100 + patch`, refused when a minor or patch
+component is above 99, when the code is above Google Play's 2 100 000 000, or for `0.0.0`; Apple's
+bundle versions take `major.minor.patch`. The packager without Gradle passes both to `aapt2 link`;
+a Gradle project receives `flui.versionCode` and `flui.versionName`, and a literal in its script
+that differs is refused (`gradle_states_the_version_the_ndk_and_the_release_key_once`).
+
+The NDK `flui build` resolves (`ANDROID_NDK_HOME`, else the highest version under the SDK's `ndk/`,
+compared by number) is exported as `ANDROID_NDK_HOME` and `ANDROID_HOME` on every `cargo ndk`
+call, the scene plugin's included, and passed to Gradle as `-Pflui.ndkPath`, which the scaffolded
+script reads as its `ndkPath`; an `ndkVersion` or another `ndkPath` in the script is refused. A
+relative `ANDROID_HOME` or `ANDROID_NDK_HOME` is made absolute once, against the directory the
+tool started in, so `cargo ndk` and Gradle get the same directory.
+
+Invariant: a build never writes this machine's or this build's values into the committed
+`gradle.properties` of the project's Android platform. That file holds the project's facts (floor, target,
+package, version), the same on every machine; the NDK, the Java sources and R8 rules of the linked
+crates (paths into this machine's cargo registry) and the release key go on the `gradlew` command
+line as `-Pflui.…`, and the scaffolded script reads each with a fallback, so a plain `./gradlew`
+still builds, with Gradle's own NDK and the debug key. A build leaves the scaffolded tree byte for
+byte as it was (`a_build_leaves_the_scaffolded_project_as_it_was`), and removes those properties
+from a file an older `flui build` wrote them into.
+
+Which key signs is decided once (`build/android_signing.rs`): a debug build signs with the debug
+keystore where the Android Gradle plugin keeps it (`ANDROID_USER_HOME`, `ANDROID_PREFS_ROOT` or
+`ANDROID_SDK_HOME`, then Java's `user.home`: `USERPROFILE` on Windows, `HOME` elsewhere), so an APK
+from either packager installs over the other's; a release build signs with `[signing.android]`
+(keystore and alias), its passwords read from `FLUI_ANDROID_KEYSTORE_PASSWORD` and
+`FLUI_ANDROID_KEY_PASSWORD` by `apksigner` (`env:`) and by Gradle, never written to argv or a file;
+a release of an application that names no key is signed with the debug key and the build warns,
+so `flui run --release` still installs. A Gradle release whose script reads no
+`flui.signing.storeFile` is refused before Gradle runs, and an `app-<profile>-unsigned.apk` newer
+than the signed one is refused after (`a_gradle_apk_that_is_not_signed_is_refused`). Both packagers
+write `<name>-<profile>.apk`, and the packager without Gradle removes its unsigned intermediates.
+It also states `android:extractNativeLibs="false"`, which the Android Gradle plugin writes itself,
+so the stored, aligned libraries are mapped from the archive
+(`the_linked_manifest_maps_the_libraries_from_the_archive`).
+
+`flui run --scene` pushes to one device by serial (`--device`, or the one online) and copies the
+plugin with `adb -s <serial> shell run-as <AppId> cp <staged> files/<lib>`, each word its own
+argument, since `adb shell` joins them for the device's shell; the package is an `AppId`, and the
+library is the one `cargo ndk -o` copied for the scene crate
+(`the_scene_plugin_is_copied_into_the_application_on_the_named_device`).
 
 ### Manifests declare what the linked crates declare
 
@@ -126,12 +187,12 @@ The base names `FluiActivity` with `hasCode`, `singleTop` and the back flag
 (`the_base_names_flui_activity_with_the_code_it_needs`); its class comes from the dex
 `flui-native` declares (`android.dex`, schema 2), which the packager without Gradle stores in the
 APK as `classes.dex` (then `classes2.dex`, … for further crates), and Gradle compiles the declared
-sources (`android.java`) from `flui.javaSources`, refusing a build script that does not read it
+sources (`android.java`) from `-Pflui.javaSources`, refusing a build script that does not read it
 (`libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
 `gradle_compiles_the_java_sources_the_crates_declare`). No `javac` or `d8` runs on the SDK-tools
 path. The library checks the classes' protocol before it starts (ADR-0255 decision 5). The R8
 rules the crates declare (`android.proguard`; `flui-native` keeps `dev.flui.**`, which only native
-code names) reach a Gradle release as `flui.proguardFiles`, beside the app's own scaffolded
+code names) reach a Gradle release as `-Pflui.proguardFiles`, beside the app's own scaffolded
 `proguard-rules.pro`, and a script that does not read them is refused
 (`a_minified_release_keeps_what_the_crates_rules_keep`). The generated manifest and the
 scaffolded script have goldens (`the_generated_manifest_matches_its_golden`,
@@ -430,7 +491,9 @@ the text is for people. `dx` and `tauri` document no such table.
 on macOS because `Safari -v` launches Safari rather than printing a version;
 browser versions are now read from `Info.plist` and every probe is killed at
 its deadline and reported as a timeout. A `Problem` row, not an error, is the
-result of a missing or hung tool: discovery never fails the command.
+result of a missing or hung tool: discovery never fails the command. The
+builders' own probes (`cargo ndk --version`, `rustc --print target-libdir`,
+`rustc -vV`) run through the same deadline (`build/util/environment.rs`).
 
 ### The dev loop multiplexes four sources
 
