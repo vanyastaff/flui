@@ -126,13 +126,26 @@ impl WindowCapability {
 pub struct WindowCapabilities {
     /// What the window honours and why not.
     parts: CapabilityParts,
-    /// The publication these capabilities are; `None` for capabilities no
-    /// window published.
-    publication: Option<Publication>,
+    /// Whether these capabilities are a publication, and which, or were
+    /// withdrawn.
+    edition: Edition,
     /// The snapshot revision at which these capabilities were published;
     /// kept by [`WindowState::successor`](crate::WindowState::successor), zero
     /// for capabilities no snapshot has published.
     revision: WindowRevision,
+}
+
+/// Whether capabilities are a window's publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edition {
+    /// Built by hand, edited or computed: no window published them.
+    Unpublished,
+    /// This publication.
+    Published(Publication),
+    /// A window held them as a publication and can publish no more
+    /// (`WindowCapabilities::withdraw`): they say nothing is honoured, and
+    /// every later snapshot of the window keeps them so.
+    Withdrawn,
 }
 
 /// One publication of a window's capabilities, unique in the process: minted
@@ -319,59 +332,79 @@ impl WindowCapabilities {
     /// process were before: what a host stamps on a window's first snapshot,
     /// which [`WindowState::successor`](crate::WindowState::successor) then
     /// carries while the capabilities stay the same. Publishing again gives
-    /// another publication, which no token admitted before opens under.
+    /// another publication, which no token admitted before opens under; a
+    /// caller can publish capabilities of its own, but a window opens a token
+    /// only under its own publication (ADR-0341).
     ///
     /// # Errors
     /// [`IdExhausted`] once the process issued every publication it can.
     pub fn publish(mut self) -> Result<Self, IdExhausted> {
-        self.publication = Some(Publication::mint()?);
+        self.edition = Edition::Published(Publication::mint()?);
         Ok(self)
     }
 
-    /// These capabilities as no publication, keeping what they honour and
-    /// their revision: what a window holds once it can no longer publish what
-    /// it honours ([`WindowStateExhausted`](crate::WindowStateExhausted),
-    /// ADR-0341). Every token admitted against the publication they were
-    /// answers [`ApplyError::Superseded`](crate::ApplyError::Superseded), and
-    /// admission refuses them.
+    /// What a window publishes once it can publish no more of what it
+    /// honours (ADR-0341): capabilities that honour nothing, at this
+    /// revision, which [`WindowState::successor`](crate::WindowState::successor)
+    /// keeps so for every later snapshot. Every token admitted against the
+    /// publication these were answers
+    /// [`ApplyError::Superseded`](crate::ApplyError::Superseded), and admission
+    /// refuses them; as they honour nothing, a reader of the snapshot sees the
+    /// change.
     #[must_use]
-    pub const fn withdraw(mut self) -> Self {
-        self.publication = None;
-        self
+    pub const fn withdraw(self) -> Self {
+        Self {
+            parts: Self::NONE.parts,
+            edition: Edition::Withdrawn,
+            revision: self.revision,
+        }
+    }
+
+    /// Whether a window withdrew these capabilities because it can publish no
+    /// more ([`withdraw`](Self::withdraw)).
+    #[must_use]
+    pub const fn is_withdrawn(&self) -> bool {
+        matches!(self.edition, Edition::Withdrawn)
     }
 
     /// The publication these capabilities are, for the admission that binds
-    /// a token to it.
+    /// a token to it; `None` for capabilities no window published and for
+    /// withdrawn ones.
     pub(crate) const fn publication(&self) -> Option<Publication> {
-        self.publication
+        match self.edition {
+            Edition::Published(publication) => Some(publication),
+            Edition::Unpublished | Edition::Withdrawn => None,
+        }
     }
 
     /// These capabilities as a sample of the window that published `previous`:
-    /// the publication and revision `previous` carries, whatever the sample's.
+    /// the edition and revision `previous` carries, whatever the sample's, and
+    /// nothing honoured where `previous` was withdrawn.
     pub(crate) const fn carried_from(mut self, previous: &Self) -> Self {
-        self.publication = previous.publication;
+        if let Edition::Withdrawn = previous.edition {
+            return *previous;
+        }
+        self.edition = previous.edition;
         self.revision = previous.revision;
         self
     }
 
     /// These capabilities as the snapshot at `revision` holds them after they
-    /// changed from `previous`: a new publication where `previous` was one, and
-    /// still none where it was not, so a sample of hand-built capabilities
-    /// never becomes admissible by being succeeded.
-    ///
-    /// # Errors
-    /// [`IdExhausted`] once the process issued every publication it can.
-    pub(crate) fn changed_from(
-        mut self,
-        previous: &Self,
-        revision: WindowRevision,
-    ) -> Result<Self, IdExhausted> {
-        self.publication = match previous.publication {
-            Some(_) => Some(Publication::mint()?),
-            None => None,
-        };
+    /// changed from `previous`: a new publication where `previous` was one, or
+    /// withdrawn ones where the process has none left; still none where
+    /// `previous` was none, so a sample of hand-built capabilities never
+    /// becomes admissible by being succeeded.
+    pub(crate) fn changed_from(mut self, previous: &Self, revision: WindowRevision) -> Self {
         self.revision = revision;
-        Ok(self)
+        match previous.edition {
+            Edition::Published(_) => match Publication::mint() {
+                Ok(publication) => self.edition = Edition::Published(publication),
+                Err(IdExhausted) => return self.withdraw(),
+            },
+            Edition::Unpublished => self.edition = Edition::Unpublished,
+            Edition::Withdrawn => return self.withdraw(),
+        }
+        self
     }
 
     /// How this window honours `command`, or why it does not.
@@ -562,7 +595,7 @@ impl CapabilityParts {
     pub const fn into_capabilities(self) -> WindowCapabilities {
         WindowCapabilities {
             parts: self,
-            publication: None,
+            edition: Edition::Unpublished,
             revision: WindowRevision::ZERO,
         }
     }

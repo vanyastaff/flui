@@ -232,6 +232,6 @@ pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandl
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CommandRefusal, PlatformFailure, SizeConstraints,
-    SubmitError, WindowCommand, WindowControl, WindowMode, WindowRevision, WindowState,
-    WindowStateExhausted, WindowStateParts,
+    SubmitError, WindowCommand, WindowControl, WindowMode, WindowRevision, WindowRevisionExhausted,
+    WindowState, WindowStateParts,
 };

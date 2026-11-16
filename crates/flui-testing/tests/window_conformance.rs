@@ -31,13 +31,18 @@ struct Faulty(
     Fault,
     WindowId,
     KeptSnapshot,
-    ClaimedCapabilities,
+    std::cell::RefCell<Option<Claimed>>,
 );
 
-/// The capabilities a window with a presentation fault publishes as its own:
-/// the window system's, as the host last read them, and its claim over them,
-/// published once for each set the window system holds.
-type ClaimedCapabilities = std::cell::RefCell<Option<(WindowCapabilities, WindowCapabilities)>>;
+/// What a window with a presentation fault publishes as its own, for one set
+/// of capabilities its window system holds.
+#[derive(Debug, Clone, Copy)]
+struct Claimed {
+    /// The window system's capabilities, as the host last read them.
+    read: WindowCapabilities,
+    /// Its claim over them, published once.
+    published: WindowCapabilities,
+}
 
 /// The snapshot a window with [`Fault::DropsFactsWithABadReport`] keeps
 /// answering while its window system reports no window: set when the report
@@ -48,7 +53,7 @@ impl Faulty {
     /// `window` with `fault`, reporting its own id.
     fn new(window: Rc<dyn PlatformWindow>, fault: Fault, kept: KeptSnapshot) -> Self {
         let id = window.id();
-        Self(window, fault, id, kept, ClaimedCapabilities::default())
+        Self(window, fault, id, kept, std::cell::RefCell::default())
     }
 
     /// What the window publishes over the window system's `held`: `held`
@@ -61,7 +66,7 @@ impl Faulty {
             _ => return held,
         };
         let mut claimed = self.4.borrow_mut();
-        if let Some((read, published)) = *claimed
+        if let Some(Claimed { read, published }) = *claimed
             && read.revision() == held.revision()
             && read == held
         {
@@ -70,7 +75,10 @@ impl Faulty {
         let published = presentation_claimed(held, claim)
             .publish()
             .expect("the process has publications left");
-        *claimed = Some((held, published));
+        *claimed = Some(Claimed {
+            read: held,
+            published,
+        });
         published
     }
 }
@@ -103,6 +111,12 @@ impl PlatformWindow for Faulty {
             Fault::SnapshotWithoutFacts => state.metrics = None,
             Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
             Fault::HidesWhenMinimized => state.visible &= state.mode != WindowMode::Minimized,
+            Fault::RepublishesOnEveryRead => {
+                state.capabilities = state
+                    .capabilities
+                    .publish()
+                    .expect("the process has publications left");
+            }
             Fault::ClaimsPresentation | Fault::DisclaimsPresentation => {
                 state.capabilities = self.published(state.capabilities);
             }
@@ -142,6 +156,15 @@ impl PlatformWindow for Faulty {
             let admitted = command
                 .admit(&held)
                 .expect("the claim names no capability a command is admitted against");
+            return self.0.apply(admitted);
+        }
+        if matches!(self.1, Fault::RepublishesOnEveryRead) {
+            // The host opens the token under what it reads now, a publication
+            // of its own every time.
+            let command = command.against(&self.state().capabilities)?;
+            let admitted = command
+                .admit(&self.0.state().capabilities)
+                .expect("the republished capabilities are the window system's");
             return self.0.apply(admitted);
         }
         self.0.apply(command)
@@ -285,6 +308,9 @@ enum Fault {
     DropsFactsWithABadReport,
     /// The window answers `Ok` to the input regions of a window that closed.
     TakesInputRegionsAfterClose,
+    /// The host publishes the window's capabilities anew on every read, so a
+    /// command admitted against its snapshot never opens.
+    RepublishesOnEveryRead,
 }
 
 impl Fixture {
@@ -320,7 +346,8 @@ impl Fixture {
                 | Fault::ClaimsPresentation
                 | Fault::DisclaimsPresentation
                 | Fault::HidesWhenMinimized
-                | Fault::DropsFactsWithABadReport),
+                | Fault::DropsFactsWithABadReport
+                | Fault::RepublishesOnEveryRead),
             ) => Rc::new(Faulty::new(Rc::clone(&model) as _, fault, Rc::clone(&kept))),
             _ => Rc::clone(&model) as _,
         };
@@ -349,7 +376,7 @@ impl WindowFixture for Fixture {
                 fault,
                 self.window.id(),
                 KeptSnapshot::default(),
-                ClaimedCapabilities::default(),
+                std::cell::RefCell::default(),
             )),
             _ => another as _,
         })
@@ -623,7 +650,20 @@ fn a_window_that_ignores_the_token_is_caught() {
     let checks = caught(Fault::IgnoresTheToken);
     assert_eq!(
         checks,
-        ["a_command_admitted_before_a_revision_is_superseded"]
+        [
+            "a_command_admitted_before_a_revision_is_superseded",
+            "a_window_opens_only_its_own_publication"
+        ]
+    );
+}
+
+/// A host that publishes anew on every read never opens a command admitted
+/// against its own snapshot.
+fn a_window_that_republishes_on_every_read_is_caught() {
+    let checks = caught(Fault::RepublishesOnEveryRead);
+    assert!(
+        checks.contains(&"a_window_opens_only_its_own_publication"),
+        "caught by {checks:?}"
     );
 }
 
@@ -726,6 +766,10 @@ fn window_conformance_checks() {
             (
                 "a_window_that_ignores_the_token_is_caught",
                 a_window_that_ignores_the_token_is_caught as fn(),
+            ),
+            (
+                "a_window_that_republishes_on_every_read_is_caught",
+                a_window_that_republishes_on_every_read_is_caught as fn(),
             ),
             (
                 "a_window_that_publishes_a_report_of_no_window_is_caught",

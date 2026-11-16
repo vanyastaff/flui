@@ -6100,12 +6100,14 @@ GPU-память простаивающего или невидимого окн
   только «другая публикация того же или чужого окна». Проверка команды в `against` (`permits`)
   не нужна: одна публикация — один набор возможностей, который читатель не меняет, а `successor`
   при изменении выпускает новую, так что набор, против которого `admit` проверил команду, и есть
-  набор окна при совпадении публикации. Исчерпание — `WindowStateExhausted { Revisions,
-  Publications }`; замёрзшая ячейка, чьи возможности уже нельзя опубликовать (`Publications`, или
-  `Revisions` при изменившихся возможностях), и окно, открытое без свободной публикации, снимают
-  публикацию (`WindowCapabilities::withdraw`): токены отвечают `Superseded`, допуск —
-  `Unpublished` (тест `a_freeze_that_moves_the_capabilities_withdraws_their_publication`; без
-  снятия токен, допущенный до потери `maximizes`, открывается). Удалены `CapabilitiesOwner`, `owned_by`, `WindowRevisionExhausted` и счётчик
+  набор окна при совпадении публикации. Окно без публикации не публикует возможностей: снятые
+  (`WindowCapabilities::withdraw`) ничего не исполняют, снимок меняется и `state_changed` уходит
+  один раз. Счётчики отказывают порознь: без свободной публикации изменившиеся возможности
+  снимаются, а геометрия, метрики и фокус публикуются дальше (окно, открытое после этого,
+  открывается со снятыми возможностями, `open` не отказывает); на последней ревизии ячейка
+  замерзает и снимает возможности всегда, изменились они или нет (тест
+  `a_frozen_window_withdraws_its_capabilities`: без снятия команда, допущенная до потери
+  `maximizes`, проходит). Удалены `CapabilitiesOwner`, `owned_by` и счётчик
   `window::state::NEXT_CAPABILITIES_OWNER`. Класс: окна Android, UIKit и оба headless отвечают
   на неисполняемую команду `ApplyError::Platform`, а не `Ok`; публикуют возможности один раз
   двойники `flui-testing`, `flui-app`, публичный `flui_runtime::testing::TestWindow` и двойники
@@ -6123,7 +6125,12 @@ GPU-память простаивающего или невидимого окн
   (`successor` чеканит публикацию для неопубликованного предшественника; `admit` принимает
   неопубликованное); `parts_leave_the_revision_and_publication_to_the_publishing_window` (`admit`
   принимает неопубликованное); trybuild `published_capabilities_cannot_be_edited` (на `main`
-  компилируется). Проверки: на Windows `check` и clippy рабочего пространства, nextest
+  компилируется); строки conformance `a_window_opens_only_its_own_publication` (токен своего снимка
+  открывается, токен своей `publish()` вызывающего — `Superseded`) и расширенная
+  `a_window_opened_after_a_close_has_an_id_of_its_own` (токен закрытого окна — `Superseded`) идут на
+  каждом хосте кита; `a_window_that_republishes_on_every_read_is_caught` показывает, что первая
+  ловит хост, публикующий заново на каждом чтении; `withdrawn_capabilities_honour_nothing_in_every_later_snapshot`.
+  Проверки: на Windows `check` и clippy рабочего пространства, nextest
   затронутых крейтов, trybuild `flui-platform` и `flui-native`, `doc-strict`, `checks`,
   `expectations`; в WSL clippy `flui-native --all-targets`. Только CI компилирует правки в
   `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,

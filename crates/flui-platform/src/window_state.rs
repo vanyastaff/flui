@@ -67,19 +67,13 @@ impl WindowRevision {
     pub const LAST: Self = Self(u64::MAX);
 }
 
-/// Why a window state cannot advance ([`WindowState::successor`]): nothing
-/// wraps, so the snapshot refuses the change and publishes nothing again.
+/// A window state cannot advance: the last revision was reached. Running
+/// out of capability publications is no such failure: the window keeps
+/// publishing its other facts with its capabilities withdrawn
+/// ([`WindowCapabilities::withdraw`], ADR-0341).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum WindowStateExhausted {
-    /// The window reached its last revision.
-    #[error("the window's revisions are exhausted")]
-    Revisions,
-    /// The window's capabilities changed and the process has issued every
-    /// publication it can, so they cannot be published (ADR-0341).
-    #[error("the process's capability publications are exhausted")]
-    Publications,
-}
+#[error("window revisions exhausted")]
+pub struct WindowRevisionExhausted;
 
 /// How a window occupies its display.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -422,17 +416,18 @@ impl WindowState {
     /// commands the same way, both stay this snapshot's; when that changes,
     /// the new snapshot's revision becomes theirs, capabilities this snapshot
     /// held as a publication become a new one (ADR-0341), and capabilities of
-    /// no publication stay of none. A successor a caller computes from a
-    /// window's snapshot is therefore a publication of its own, which no token
-    /// admitted against the window's capabilities opens under, and the other
-    /// way round.
+    /// no publication stay of none. When the process has no publication left,
+    /// the changed capabilities are withdrawn
+    /// ([`WindowCapabilities::withdraw`]) and stay so in every later
+    /// snapshot, while the window's other facts go on publishing. A successor
+    /// a caller computes from a window's snapshot is therefore a publication
+    /// of its own, which no token admitted against the window's capabilities
+    /// opens under, and the other way round.
     ///
     /// # Errors
-    /// [`WindowStateExhausted::Revisions`] when `sample` differs and this
-    /// snapshot is at the last revision, [`WindowStateExhausted::Publications`]
-    /// when its capabilities differ and the process issued every publication
-    /// it can. Neither wraps.
-    pub fn successor(&self, mut sample: Self) -> Result<Self, WindowStateExhausted> {
+    /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
+    /// at the last revision. The revision never wraps.
+    pub fn successor(&self, mut sample: Self) -> Result<Self, WindowRevisionExhausted> {
         sample.revision = self.revision;
         sample.capabilities = sample.capabilities.carried_from(&self.capabilities);
         if sample.metrics.is_none() {
@@ -442,16 +437,10 @@ impl WindowState {
         if sample == *self {
             return Ok(sample);
         }
-        let next = self
-            .revision
-            .next()
-            .ok_or(WindowStateExhausted::Revisions)?;
+        let next = self.revision.next().ok_or(WindowRevisionExhausted)?;
         sample.revision = next;
         if sample.capabilities != self.capabilities {
-            sample.capabilities = sample
-                .capabilities
-                .changed_from(&self.capabilities, next)
-                .map_err(|flui_foundation::IdExhausted| WindowStateExhausted::Publications)?;
+            sample.capabilities = sample.capabilities.changed_from(&self.capabilities, next);
         }
         Ok(sample)
     }
@@ -538,15 +527,18 @@ impl WindowCommand {
     /// token is bound to the capabilities' publication
     /// ([`WindowCapabilities`], "Publication").
     ///
-    /// Pass the capabilities of the window's published snapshot
-    /// ([`WindowState::capabilities`]): capabilities built by hand, edited or
-    /// computed by a caller are no window's publication, and admission refuses
-    /// them (ADR-0341).
+    /// A command is admitted only against a publication, and a window opens it
+    /// only under its own (ADR-0341): pass the capabilities of the window's
+    /// published snapshot ([`WindowState::capabilities`]). Capabilities built
+    /// by hand, edited or withdrawn are no publication, and admission
+    /// refuses them; capabilities a caller published itself, or computed with
+    /// [`WindowState::successor`], are admitted, and
+    /// no window opens the token.
     ///
     /// # Errors
     /// What [`validate`](Self::validate) refuses;
-    /// [`AdmissionError::Unpublished`] when `capabilities` are no window's
-    /// publication, which admitting again never changes; or
+    /// [`AdmissionError::Unpublished`] when `capabilities` are no
+    /// publication, which admitting them again never changes; or
     /// [`AdmissionError::Unsupported`] when the command's capability is
     /// [`Absent`](WindowCapability::Absent) in `capabilities`: the window
     /// does not take it, for the reason the capability carries.
@@ -676,11 +668,11 @@ pub enum AdmissionError {
     /// The command's numbers cannot describe a window; the error names them.
     #[error("the command's geometry describes no window: {0}")]
     InvalidGeometry(InvalidGeometry),
-    /// The capabilities the command was admitted against are no window's
-    /// publication: built by hand, taken apart and edited, or computed by the
-    /// caller (ADR-0341). Admitting against them again is refused again; admit
-    /// against the window's snapshot.
-    #[error("the capabilities are no window's publication")]
+    /// The capabilities the command was admitted against are no publication:
+    /// built by hand, taken apart and edited, or withdrawn by a window that can
+    /// publish no more (ADR-0341). Admitting against them again is refused
+    /// again; admit against the window's snapshot.
+    #[error("the capabilities are no publication")]
     Unpublished,
 }
 

@@ -180,7 +180,10 @@ this one path (ADR-0151 §9).
   `WindowCommand::admit_and_apply` is the one path that applies at once
   (admit against the snapshot, apply, admit once more on `Superseded`), and
   answers `CommandRefusal` (`Admission` or `Apply`). `successor` refuses
-  with `WindowStateExhausted` (`Revisions`, `Publications`).
+  only at the last revision (`WindowRevisionExhausted`); with no publication
+  left, it withdraws changed capabilities (`WindowCapabilities::withdraw`:
+  they honour nothing, admit nothing and stay so) while the window's other
+  facts publish on.
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,
   `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no

@@ -56,6 +56,11 @@
 //!   drawable metrics and scale, focus, visibility, occlusion where it can be
 //!   asked) is the snapshot's
 //!   (ADR-0254 §1). The capabilities the checks read are the snapshot's.
+//! - **A window opens only its own publication** (ADR-0341). A command
+//!   admitted against the window's snapshot opens, so a window that publishes
+//!   anew on every read is caught; one admitted against capabilities the caller
+//!   published itself, or against another window's, answers
+//!   [`Superseded`](ApplyError::Superseded).
 //! - **A window's id is its own.** A window the host opens after the one
 //!   under test closed has another [`WindowId`](flui_platform::WindowId),
 //!   whatever handle the window system reuses for it (ADR-0039 §4). A
@@ -238,6 +243,10 @@ const CHECKS: &[(&str, Check)] = &[
     (
         "a_command_admitted_before_a_revision_is_superseded",
         a_command_admitted_before_a_revision_is_superseded,
+    ),
+    (
+        "a_window_opens_only_its_own_publication",
+        a_window_opens_only_its_own_publication,
     ),
     (
         "per_frame_verbs_report_unsupported_exactly_when_unavailable",
@@ -811,6 +820,45 @@ fn a_surface_target_is_send_sync_and_unavailable_after_close(
     finish(broken)
 }
 
+/// A window opens a command only under its own publication (ADR-0341): the
+/// normal mode, which every window takes, admitted against the window's
+/// snapshot opens; admitted against the same capabilities published by the
+/// caller, it answers `Superseded`. A window that publishes anew on every read
+/// fails the first half.
+fn a_window_opens_only_its_own_publication(fixture: &mut dyn WindowFixture) -> Result<(), String> {
+    let window = fixture.window();
+    let normal = WindowCommand::SetMode(WindowMode::Normal);
+    let mut broken = Vec::new();
+    if let Ok(published_by_the_caller) = window.state().capabilities.publish() {
+        match normal.clone().admit(&published_by_the_caller) {
+            Ok(foreign) => match window.apply(foreign) {
+                Err(ApplyError::Superseded { .. }) => {}
+                other => broken.push(format!(
+                    "the normal mode admitted against capabilities the caller published \
+                     answered {other:?}, not Superseded"
+                )),
+            },
+            Err(refused) => broken.push(format!(
+                "capabilities the caller published refused the normal mode: {refused}"
+            )),
+        }
+    }
+    match normal.admit(&window.state().capabilities) {
+        Ok(own) => {
+            if let Err(error) = window.apply(own) {
+                broken.push(format!(
+                    "the normal mode admitted against the window's snapshot answered {error:?}"
+                ));
+            }
+        }
+        Err(refused) => broken.push(format!(
+            "the window's snapshot refused the normal mode: {refused}"
+        )),
+    }
+    fixture.settle();
+    finish(broken)
+}
+
 fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String> {
     let window = fixture.window();
     let honoured_input_regions = fixture.input_capabilities().honours_input_regions();
@@ -847,11 +895,13 @@ fn a_closed_window_refuses(fixture: &mut dyn WindowFixture) -> Result<(), String
 /// `a_window_opened_after_a_close_has_an_id_of_its_own` (ADR-0039 §4): the
 /// host issues the next window another id, even where the operating system
 /// hands that window the closed one's handle or address, so nothing addressed
-/// to the closed window reaches it.
+/// to the closed window reaches it, and a command admitted against the closed
+/// window's publication answers `Superseded` there (ADR-0341).
 fn a_window_opened_after_a_close_has_an_id_of_its_own(
     fixture: &mut dyn WindowFixture,
 ) -> Result<(), String> {
     let closed = fixture.window().id();
+    let closed_capabilities = fixture.window().state().capabilities;
     let mut broken = Vec::new();
     close_window(fixture, &mut broken);
     if let Some(another) = fixture.open_another() {
@@ -860,6 +910,17 @@ fn a_window_opened_after_a_close_has_an_id_of_its_own(
             broken.push(format!(
                 "a window opened after {closed:?} closed has its id"
             ));
+        }
+        // Another window's publication opens nothing here (ADR-0341).
+        let normal = WindowCommand::SetMode(WindowMode::Normal);
+        if let Ok(foreign) = normal.admit(&closed_capabilities) {
+            match another.apply(foreign) {
+                Err(ApplyError::Superseded { .. }) => {}
+                other => broken.push(format!(
+                    "a command admitted against the closed window's capabilities answered \
+                     {other:?} on the window opened after it, not Superseded"
+                )),
+            }
         }
     }
     finish(broken)

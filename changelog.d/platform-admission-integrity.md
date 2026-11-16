@@ -1,14 +1,14 @@
 ### Added
 
-- `AdmissionError::Unpublished`: `WindowCommand::admit` refuses capabilities that are no window's
-  publication (built by hand, taken apart and edited, or computed by the caller). Admitting again
-  never helps; admit against the window's snapshot.
-- `WindowStateExhausted { Revisions, Publications }`: what `WindowState::successor` refuses
-  with, naming whether the window ran out of revisions or the process out of publications.
-- `WindowCapabilities::withdraw`: capabilities as no publication. A window whose state freezes
-  with capabilities it can no longer publish, or that opens when the process has no publication
-  left, holds withdrawn capabilities: it admits no command and opens no token, instead of carrying
-  out what it may have lost.
+- `AdmissionError::Unpublished`: `WindowCommand::admit` refuses capabilities that are no
+  publication (built by hand, taken apart and edited, or withdrawn). Admitting again never helps;
+  admit against the window's snapshot.
+- `WindowCapabilities::withdraw` and `is_withdrawn`: what a window publishes once it can publish
+  no more of what it honours. A frozen window (its revisions used up) and a window whose
+  capabilities change after the process ran out of publications publish withdrawn capabilities:
+  they honour nothing, so readers see the change and `state_changed` fires once; the window admits
+  no command and opens no token, instead of carrying out what it may have lost. A window opened
+  when the process has no publication left opens with them, and its other facts publish as usual.
 
 ### Changed
 
@@ -27,4 +27,3 @@
   `WindowCapabilities::NONE` or other hand-built capabilities is refused `Unpublished`.
 - The Android and iOS windows and the headless windows answer `ApplyError::Platform` for a command
   they do not carry out, never `Ok`.
-

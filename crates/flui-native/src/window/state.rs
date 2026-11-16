@@ -207,9 +207,12 @@ pub(crate) enum StateDiagnostic {
     /// A read's geometry describes no window; the published geometry stands
     /// until a read describes one. Said once per run of such reads.
     Refused(InvalidGeometry),
-    /// The window's revisions, or the process's capability publications, are
-    /// used up: the window publishes nothing again.
-    Frozen(flui_platform::WindowStateExhausted),
+    /// The window's revisions are used up: the window publishes nothing again,
+    /// and its capabilities are withdrawn.
+    Frozen(flui_platform::WindowRevisionExhausted),
+    /// The process has no capability publication left: the window's
+    /// capabilities are withdrawn, and its other facts go on publishing.
+    Withdrawn,
 }
 
 impl StateDiagnostic {
@@ -219,6 +222,9 @@ impl StateDiagnostic {
             Self::Refused(refused) => tracing::warn!(
                 %refused,
                 "a window system's report describes no window; its published geometry stands"
+            ),
+            Self::Withdrawn => tracing::warn!(
+                "the process has no capability publication left; a window takes no command"
             ),
             Self::Frozen(error) => {
                 tracing::warn!(%error, "a window stops publishing state changes");
@@ -439,7 +445,10 @@ struct Slot {
     /// most one refusal (the first of the current run of refused reads) and
     /// the freeze, which happens once.
     unreported_refusal: Option<InvalidGeometry>,
-    unreported_freeze: Option<flui_platform::WindowStateExhausted>,
+    unreported_freeze: Option<flui_platform::WindowRevisionExhausted>,
+    /// The window's capabilities were withdrawn for want of a publication,
+    /// not yet said.
+    unreported_withdrawal: bool,
     /// A note the first read carried, which no delivery has taken yet.
     unreported_note: Option<Note>,
 }
@@ -524,17 +533,17 @@ impl WindowStateCell {
         if refused.is_some() {
             initial = on_published_geometry(initial, None);
         }
-        // A process with no publication left opens the window frozen and
-        // unpublished, as a later capability change would leave it: the
-        // window takes no command and the freeze is said with its first
+        // A process with no publication left opens the window with its
+        // capabilities withdrawn: it takes no command, its other facts publish
+        // as any window's do, and the withdrawal is said with its first
         // delivery. Refusing the open is not every host's to do: an Android
         // activity or a UIKit scene exists before its window is built.
-        let freeze = if let Ok(published) = initial.capabilities.publish() {
+        let withdrawn = if let Ok(published) = initial.capabilities.publish() {
             initial.capabilities = published;
-            None
+            false
         } else {
             initial.capabilities = initial.capabilities.withdraw();
-            Some(flui_platform::WindowStateExhausted::Publications)
+            true
         };
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         let journal = {
@@ -548,10 +557,11 @@ impl WindowStateCell {
             last: Mutex::new(Slot {
                 state: initial,
                 read_after: 0,
-                frozen: freeze.is_some(),
+                frozen: false,
                 refusing: refused.is_some(),
                 unreported_refusal: refused,
-                unreported_freeze: freeze,
+                unreported_freeze: None,
+                unreported_withdrawal: withdrawn,
                 unreported_note: note,
             }),
             invalidations: AtomicU64::new(1),
@@ -658,16 +668,20 @@ impl WindowStateCell {
             note = read.note.take();
             read
         });
-        let (refusal, freeze, opening_note) = {
+        let (refusal, freeze, withdrawal, opening_note) = {
             let mut slot = self.last.lock();
             (
                 slot.unreported_refusal.take(),
                 slot.unreported_freeze.take(),
+                std::mem::take(&mut slot.unreported_withdrawal),
                 slot.unreported_note.take(),
             )
         };
         if let Some(refused) = refusal {
             delivery.diagnose(move || StateDiagnostic::Refused(refused).emit());
+        }
+        if withdrawal {
+            delivery.diagnose(|| StateDiagnostic::Withdrawn.emit());
         }
         if let Some(error) = freeze {
             delivery.diagnose(move || StateDiagnostic::Frozen(error).emit());
@@ -709,8 +723,8 @@ impl WindowStateCell {
     /// nothing differs or a read begun later has published already, otherwise
     /// the next revision. A sample whose geometry was refused publishes its
     /// other facts on the published geometry. At the last revision the cell
-    /// freezes on its final snapshot, with one diagnostic, and publishes
-    /// nothing again.
+    /// freezes on its final snapshot with its capabilities withdrawn, announces
+    /// that once, says one diagnostic, and publishes nothing again.
     fn commit(&self, sample: Sample, invalidations: u64) -> Published {
         let mut slot = self.last.lock();
         if slot.read_after > invalidations {
@@ -740,14 +754,13 @@ impl WindowStateCell {
                 }
             }
         }
-        // Whether the window system now says the window honours something
-        // else: a freeze then withdraws the publication, since what the
-        // window honours can no longer be published.
-        let capabilities_moved = sample.capabilities != slot.state.capabilities;
         match slot.state.successor(sample) {
             Ok(next) => {
                 let changed = next.revision != slot.state.revision;
                 if changed {
+                    if next.capabilities.is_withdrawn() && !slot.state.capabilities.is_withdrawn() {
+                        slot.unreported_withdrawal = true;
+                    }
                     slot.state = next.clone();
                 }
                 // The capture's sink runs with the slot released, as the
@@ -764,21 +777,26 @@ impl WindowStateCell {
                 }
             }
             Err(error) => {
-                // Frozen, the window keeps its last snapshot. If what it
-                // honours moved, or no publication is left to say so, that
-                // snapshot's publication no longer tells what the window
-                // takes: it is withdrawn, so every token answers `Superseded`
-                // and admission answers `Unpublished` (ADR-0341).
-                if capabilities_moved || error == flui_platform::WindowStateExhausted::Publications
-                {
-                    slot.state.capabilities = slot.state.capabilities.withdraw();
-                }
+                // Frozen, the window publishes nothing again, so it can no
+                // longer say what it honours: its capabilities are withdrawn,
+                // whatever the window system says now (ADR-0341). The frozen
+                // snapshot honours nothing, every token answers `Superseded`,
+                // admission answers `Unpublished`, and the change is announced
+                // once at the revision the window froze at, the last snapshot
+                // that revision names.
+                let withdrawn = slot.state.capabilities.withdraw();
+                let changed = withdrawn != slot.state.capabilities;
+                slot.state.capabilities = withdrawn;
                 slot.frozen = true;
                 slot.unreported_freeze = Some(error);
-                Published {
-                    state: slot.state.clone(),
-                    changed: false,
+                let state = slot.state.clone();
+                drop(slot);
+                #[cfg(all(debug_assertions, feature = "native-capture"))]
+                if changed {
+                    self.journal
+                        .record(crate::journal::capture::Captured::WindowState(&state));
                 }
+                Published { state, changed }
             }
         }
     }
@@ -1163,14 +1181,16 @@ mod tests {
         );
     }
 
-    /// A freeze that arrives with a change in what the window honours withdraws
-    /// the snapshot's publication: the window can no longer say what it takes,
-    /// so a command admitted before answers `Superseded` and admitting it again
-    /// answers `Unpublished`, instead of the window carrying out what it lost.
-    /// A freeze with the same capabilities keeps them published.
+    /// Frozen means unpublished: a window frozen at its last revision, even by
+    /// a sample with the same capabilities, withdraws them. The frozen
+    /// snapshot honours nothing, the change is announced once, a command
+    /// admitted before answers `Superseded`, and admitting again answers
+    /// `Unpublished`, also after the window system takes maximizing away.
     #[test]
-    fn a_freeze_that_moves_the_capabilities_withdraws_their_publication() {
-        use flui_platform::{AdmissionError, ApplyError, WindowCapabilities, WindowCommand};
+    fn a_frozen_window_withdraws_its_capabilities() {
+        use flui_platform::{
+            AdmissionError, ApplyError, WindowCapabilities, WindowCapability, WindowCommand,
+        };
 
         let mut last = window(1.0).with_capabilities(WindowCapabilities::ALL);
         last.revision = WindowRevision::LAST;
@@ -1182,43 +1202,34 @@ mod tests {
             .expect("the window maximizes");
 
         cell.invalidate();
-        let same = cell
+        let frozen = cell
             .state_with(|| Sample::from(window(2.0).with_capabilities(WindowCapabilities::ALL)));
-        assert!(!same.changed, "frozen");
-        let still = maximize
-            .clone()
-            .admit(&cell.published_capabilities())
-            .expect("the same capabilities stay published");
-
-        let mut without_maximize = WindowCapabilities::ALL.into_parts();
-        without_maximize.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
-        let moved = WindowStateCell::new({
-            let mut at_last = window(1.0).with_capabilities(WindowCapabilities::ALL);
-            at_last.revision = WindowRevision::LAST;
-            at_last
-        });
-        let before = maximize
-            .clone()
-            .admit(&moved.published_capabilities())
-            .expect("the window maximizes");
-        moved.invalidate();
-        let _ = moved.state_with(|| {
-            Sample::from(window(1.0).with_capabilities(without_maximize.into_capabilities()))
-        });
+        assert!(frozen.changed, "the withdrawal is announced");
+        assert_eq!(frozen.state.revision, WindowRevision::LAST);
         assert_eq!(
-            before.against(&moved.published_capabilities()),
+            frozen.state.capabilities.maximizes(),
+            WindowCapability::NOT_ON_THIS_PLATFORM,
+            "a withdrawn snapshot honours nothing"
+        );
+        assert_eq!(
+            admitted.against(&cell.published_capabilities()),
             Err(ApplyError::Superseded {
                 command: maximize.clone()
-            }),
-            "a token admitted before the lost capability no longer opens"
+            })
         );
+
+        let mut without_maximize = WindowCapabilities::ALL.into_parts();
+        without_maximize.maximizes = WindowCapability::NOT_ON_THIS_PLATFORM;
+        cell.invalidate();
+        let later = cell.state_with(|| {
+            Sample::from(window(1.0).with_capabilities(without_maximize.into_capabilities()))
+        });
+        assert!(!later.changed, "frozen");
         assert_eq!(
-            maximize.admit(&moved.published_capabilities()),
+            maximize.admit(&cell.published_capabilities()),
             Err(AdmissionError::Unpublished),
-            "and nothing is admitted again"
+            "nothing is admitted once frozen"
         );
-        assert!(admitted.against(&cell.published_capabilities()).is_ok());
-        assert!(still.against(&cell.published_capabilities()).is_ok());
     }
 }
 

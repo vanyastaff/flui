@@ -8,7 +8,7 @@ use flui_platform::{
     SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
     WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
     WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption, WindowOptions,
-    WindowRevision, WindowState, WindowStateExhausted,
+    WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -550,11 +550,11 @@ fn the_last_revision_refuses_instead_of_wrapping() {
     at_last.revision = WindowRevision::LAST;
     assert_eq!(
         at_last.successor(base_state().with_visible(false)),
-        Err(WindowStateExhausted::Revisions)
+        Err(WindowRevisionExhausted)
     );
     assert_eq!(
         at_last.successor(base_state().with_visible(false)),
-        Err(WindowStateExhausted::Revisions),
+        Err(WindowRevisionExhausted),
         "exhaustion is permanent"
     );
     let unchanged = at_last
@@ -815,6 +815,42 @@ fn an_edit_of_published_capabilities_is_refused_at_admission() {
         opens(admit(&copy), &window),
         Ok(()),
         "a copy is the publication"
+    );
+}
+
+/// Withdrawn capabilities honour nothing, admit nothing and open no token,
+/// and the window keeps them so: a later snapshot claiming capabilities again
+/// still holds withdrawn ones that honour nothing, while its other facts
+/// publish, so the counters of publications and revisions fail apart.
+fn withdrawn_capabilities_honour_nothing_in_every_later_snapshot() {
+    let published = as_published(WindowCapabilities::ALL);
+    let hide = WindowCommand::Hide
+        .admit(&published)
+        .expect("the window hides");
+    let withdrawn = published.withdraw();
+    assert!(withdrawn.is_withdrawn());
+    assert_eq!(withdrawn, WindowCapabilities::NONE, "it honours nothing");
+    assert_eq!(opens(hide, &withdrawn), Err(()));
+    assert_eq!(
+        WindowCommand::SetMode(WindowMode::Normal).admit(&withdrawn),
+        Err(AdmissionError::Unpublished)
+    );
+
+    let frozen = base_state().with_capabilities(withdrawn);
+    let later = frozen
+        .successor(
+            base_state()
+                .with_capabilities(WindowCapabilities::ALL)
+                .with_focused(true),
+        )
+        .expect("a revision is left");
+    assert!(later.focused, "the other facts publish");
+    assert_eq!(later.revision.get(), frozen.revision.get() + 1);
+    assert!(later.capabilities.is_withdrawn());
+    assert_eq!(later.capabilities, WindowCapabilities::NONE);
+    assert_eq!(
+        WindowCommand::Hide.admit(&later.capabilities),
+        Err(AdmissionError::Unpublished)
     );
 }
 
@@ -1081,6 +1117,10 @@ fn window_command_validate() {
             (
                 "a_successor_of_unpublished_capabilities_stays_unpublished",
                 a_successor_of_unpublished_capabilities_stays_unpublished,
+            ),
+            (
+                "withdrawn_capabilities_honour_nothing_in_every_later_snapshot",
+                withdrawn_capabilities_honour_nothing_in_every_later_snapshot,
             ),
             (
                 "a_capability_restored_is_the_one_never_taken_away",

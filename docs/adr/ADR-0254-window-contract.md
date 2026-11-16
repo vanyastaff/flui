@@ -5,9 +5,12 @@
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.
 - **Superseded-by:** [ADR-0341](ADR-0341-an-admitted-command-is-bound-to-a-publication-of-the-windows-capabilities.md)
-  for §2's binding of an `AdmittedCommand` only: the token carries the publication of the
-  capabilities it was admitted against, not their revision, and admission refuses capabilities no
-  window published.
+  for §2's binding of an `AdmittedCommand`, the variants of `AdmissionError` and the meaning of
+  `ApplyError::Superseded` (here and in the Confirmation): the token carries the publication of the
+  capabilities it was admitted against, not their revision; `AdmissionError` also has
+  `Unpublished`, which admission answers for capabilities that are no publication; and
+  `Superseded` means the window holds another publication than the token's, of which a moved
+  capabilities revision is one case.
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
   crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a

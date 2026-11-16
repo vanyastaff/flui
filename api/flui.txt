@@ -13514,6 +13514,7 @@ pub const fn flui::platform::WindowCapabilities::enters_fullscreen(&self) -> flu
 pub const fn flui::platform::WindowCapabilities::frame_rate_hint(&self) -> flui::platform::Availability
 pub const fn flui::platform::WindowCapabilities::hides(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::into_parts(self) -> flui::platform::CapabilityParts
+pub const fn flui::platform::WindowCapabilities::is_withdrawn(&self) -> bool
 pub const fn flui::platform::WindowCapabilities::material(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::maximizes(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::minimizes(&self) -> flui::platform::WindowCapability
@@ -13787,6 +13788,15 @@ pub const flui::platform::WindowRevision::LAST: Self = _
 pub const flui::platform::WindowRevision::ZERO: Self = _
 pub const fn flui::platform::WindowRevision::get(self) -> u64
 pub const fn flui::platform::WindowRevision::next(self) -> Option<Self>
+pub struct flui::platform::WindowRevisionExhausted;
+impl Clone for flui::platform::WindowRevisionExhausted
+impl Copy for flui::platform::WindowRevisionExhausted
+impl Eq for flui::platform::WindowRevisionExhausted
+impl PartialEq for flui::platform::WindowRevisionExhausted
+impl core::error::Error for flui::platform::WindowRevisionExhausted
+impl core::fmt::Debug for flui::platform::WindowRevisionExhausted
+impl core::fmt::Display for flui::platform::WindowRevisionExhausted
+impl core::marker::StructuralPartialEq for flui::platform::WindowRevisionExhausted
 #[non_exhaustive] pub struct flui::platform::WindowState
 field flui::platform::WindowState::active: bool // at 18
 field flui::platform::WindowState::appearance: flui::platform::WindowAppearance // at 14
@@ -13815,7 +13825,7 @@ impl core::marker::StructuralPartialEq for flui::platform::WindowState
 pub fn flui::platform::WindowState::into_parts(self) -> flui::platform::WindowStateParts
 pub fn flui::platform::WindowState::is_seen(&self) -> bool
 pub fn flui::platform::WindowState::new(outer: flui::platform::WindowGeometry, content_size: flui::platform::WindowExtent) -> Self
-pub fn flui::platform::WindowState::successor(&self, sample: Self) -> Result<Self, flui::platform::WindowStateExhausted>
+pub fn flui::platform::WindowState::successor(&self, sample: Self) -> Result<Self, flui::platform::WindowRevisionExhausted>
 pub fn flui::platform::WindowState::with_active(self, active: bool) -> Self
 pub fn flui::platform::WindowState::with_appearance(self, appearance: flui::platform::WindowAppearance) -> Self
 pub fn flui::platform::WindowState::with_capabilities(self, capabilities: flui::platform::WindowCapabilities) -> Self
@@ -13833,17 +13843,6 @@ pub fn flui::platform::WindowState::with_occluded(self, occluded: bool) -> Self
 pub fn flui::platform::WindowState::with_resizable(self, resizable: bool) -> Self
 pub fn flui::platform::WindowState::with_title(self, title: Option<String>) -> Self
 pub fn flui::platform::WindowState::with_visible(self, visible: bool) -> Self
-#[non_exhaustive] pub enum flui::platform::WindowStateExhausted
-impl Clone for flui::platform::WindowStateExhausted
-impl Copy for flui::platform::WindowStateExhausted
-impl Eq for flui::platform::WindowStateExhausted
-impl PartialEq for flui::platform::WindowStateExhausted
-impl core::error::Error for flui::platform::WindowStateExhausted
-impl core::fmt::Debug for flui::platform::WindowStateExhausted
-impl core::fmt::Display for flui::platform::WindowStateExhausted
-impl core::marker::StructuralPartialEq for flui::platform::WindowStateExhausted
-variant flui::platform::WindowStateExhausted::Publications // at 1
-variant flui::platform::WindowStateExhausted::Revisions // at 0
 pub struct flui::platform::WindowStateParts
 field flui::platform::WindowStateParts::active: bool // at 17
 field flui::platform::WindowStateParts::appearance: flui::platform::WindowAppearance // at 13
