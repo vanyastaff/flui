@@ -34211,7 +34211,7 @@ variant flui_protocol::native_recording::WindowMode::Normal // at 0
 pub struct flui_protocol::native_recording::WindowState
 field flui_protocol::native_recording::WindowState::active: bool // at 20
 field flui_protocol::native_recording::WindowState::appearance: flui_protocol::native_recording::Appearance // at 14
-field flui_protocol::native_recording::WindowState::capabilities: flui_protocol::native_recording::Capabilities // at 21
+field flui_protocol::native_recording::WindowState::capabilities: flui_protocol::native_recording::Capabilities // at 22
 field flui_protocol::native_recording::WindowState::constraints: flui_protocol::native_recording::SizeConstraints // at 9
 field flui_protocol::native_recording::WindowState::content_size: [f64; 2] // at 2
 field flui_protocol::native_recording::WindowState::display: Option<u64> // at 12
@@ -34230,6 +34230,7 @@ field flui_protocol::native_recording::WindowState::revision: u64 // at 0
 field flui_protocol::native_recording::WindowState::safe_area: [f64; 4] // at 15
 field flui_protocol::native_recording::WindowState::system_gestures: [f64; 4] // at 17
 field flui_protocol::native_recording::WindowState::title: Option<String> // at 8
+field flui_protocol::native_recording::WindowState::user_placing: bool // at 21
 field flui_protocol::native_recording::WindowState::visible: bool // at 5
 impl Clone for flui_protocol::native_recording::WindowState
 impl PartialEq for flui_protocol::native_recording::WindowState

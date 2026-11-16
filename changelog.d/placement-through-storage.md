@@ -11,6 +11,8 @@
   the user is placing the window through the window system. Win32 states it
   during its size-move loop and the caption's maximize, minimize and restore;
   the other hosts state `None` for now.
+- Agent protocol 0.13: a recorded window state carries `user_placing`, an
+  optional field, so a 0.12 reader still reads it.
 - `flui_native::HeadlessOwnerTurns::drive_at` and
   `HeadlessHostWindow::simulate_interaction`, and the app test kit's
   `HeadlessRunHandle::turn_deadline` and `run_owner_turn_at`: a test serves the
