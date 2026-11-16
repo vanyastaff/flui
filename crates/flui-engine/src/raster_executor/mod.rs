@@ -468,7 +468,6 @@ impl<B: RasterBackend> RasterExecutor<B> {
             return 0;
         };
         let cause = cause(&failure);
-        let panicked = matches!(failure, SlotFailure::Panicked(_));
         // A frame sent before the refusal was visible settles here; later
         // ones are refused at send.
         let (frame, extra) = {
@@ -477,7 +476,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
             let extra = state.hold_failure(failure);
             let frame = state.frame.take();
             if let Some(frame) = frame.as_ref() {
-                state.settle(frame, RasterVerdict::Failed, panicked);
+                state.settle(frame, RasterVerdict::Failed);
             }
             (frame, extra)
         };
@@ -914,11 +913,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 }),
                 None => {
                     let panicked = caught.into_payload().map(SlotFailure::Panicked);
-                    if failure.is_none() {
-                        failure = panicked;
-                    } else {
-                        discarded = panicked;
-                    }
+                    discarded = join(&mut failure, panicked);
                     None
                 }
             }
@@ -948,12 +943,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         } else {
             render(backend, slot, &frame)
         };
-        let discarded_render = if failure.is_none() {
-            failure = render_failure;
-            None
-        } else {
-            render_failure
-        };
+        let discarded_render = join(&mut failure, render_failure);
         let extra = {
             let mut state = slot.inbox.lock();
             // The answer counts only while no newer size was sent since the
@@ -964,9 +954,11 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 state.surface = state.surface.on(answer);
             }
             surface_lost(&mut state, &mut slot.applied, surface_loss);
-            let panicked = matches!(failure, Some(SlotFailure::Panicked(_)));
-            state.settle(&frame, verdict, panicked);
-            failure.and_then(|failure| state.hold_failure(failure))
+            // Held before the settlement, which carries the mark of every
+            // panic held since the slot's last one.
+            let extra = failure.and_then(|failure| state.hold_failure(failure));
+            state.settle(&frame, verdict);
+            extra
         };
         retire(Some(frame), extra, first);
         retire(None, discarded, first);
@@ -1250,7 +1242,7 @@ fn close(inbox: &SlotInbox, first: &mut FirstPanic) -> usize {
         state.phase = SlotPhase::Detached;
         let frame = state.frame.take();
         if let Some(frame) = frame.as_ref() {
-            state.settle(frame, RasterVerdict::Failed, false);
+            state.settle(frame, RasterVerdict::Failed);
         }
         state.in_flight = 0;
         frame
@@ -1283,4 +1275,21 @@ fn hold_panic(inbox: &SlotInbox, caught: FirstPanic, first: &mut FirstPanic) {
     };
     let extra = inbox.lock().hold_failure(SlotFailure::Panicked(payload));
     retire(None, extra, first);
+}
+
+/// Join `next` into a turn's `failure` and answer the one discarded: a panic
+/// takes the place of a refusal, since its payload is what the owner reports,
+/// and otherwise the first stands.
+fn join(failure: &mut Option<SlotFailure>, next: Option<SlotFailure>) -> Option<SlotFailure> {
+    match (failure.as_ref(), next) {
+        (_, None) => None,
+        (None, next) => {
+            *failure = next;
+            None
+        }
+        (Some(SlotFailure::Refused(_)), Some(next @ SlotFailure::Panicked(_))) => {
+            failure.replace(next)
+        }
+        (Some(_), next) => next,
+    }
 }

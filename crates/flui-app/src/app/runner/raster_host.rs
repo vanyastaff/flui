@@ -116,7 +116,9 @@ impl Default for SharedRasterHost {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct ThreadLink {
-    thread: Option<(Rc<flui_engine::ExecutorHandle>, RasterSender)>,
+    /// Weak: the executor the host retires stops when the host lets go of
+    /// it, not when the last window lets go of the link.
+    thread: Option<(std::rc::Weak<flui_engine::ExecutorHandle>, RasterSender)>,
     slots: rustc_hash::FxHashMap<PresentationAddress, SlotId>,
 }
 
@@ -127,7 +129,7 @@ impl ThreadLink {
     fn detach_wait(&self, address: PresentationAddress) -> Option<DetachWait> {
         let (handle, sender) = self.thread.as_ref()?;
         Some(DetachWait {
-            handle: Rc::clone(handle),
+            handle: handle.upgrade()?,
             sender: sender.clone(),
             slot: *self.slots.get(&address)?,
         })
@@ -219,7 +221,7 @@ impl SharedRasterHost {
             let detaching = std::mem::take(&mut host.detaching);
             drop(host);
             for wait in detaching {
-                wait.wait();
+                let _down = wait.wait();
             }
         }
         Some(answer)
@@ -240,13 +242,24 @@ impl SharedRasterHost {
             // this returns: its slot comes down first, and the host forgets it
             // when the turn that holds it ends.
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(wait) = self
-                .link
-                .try_borrow()
-                .ok()
-                .and_then(|link| link.detach_wait(address))
             {
-                wait.wait();
+                // Read, then let go of the link before the wait, which removes
+                // the slot from it.
+                let wait = self
+                    .link
+                    .try_borrow()
+                    .ok()
+                    .and_then(|link| link.detach_wait(address));
+                if let Some(wait) = wait {
+                    // The slot it took down is not the link's any more: the
+                    // host's deferred detach then expects the thread to answer
+                    // it stale, and still says so of any other slot.
+                    if wait.wait()
+                        && let Ok(mut link) = self.link.try_borrow_mut()
+                    {
+                        let _forgotten = link.slots.remove(&address);
+                    }
+                }
             }
             return;
         }
@@ -376,13 +389,17 @@ struct DetachWait {
 #[cfg(not(target_arch = "wasm32"))]
 impl DetachWait {
     /// Wait until the thread took the slot down, at most
-    /// [`flui_engine::DETACH_DEADLINE`].
-    fn wait(self) {
-        if let Err(failure) =
-            self.handle
-                .detach(&self.sender, self.slot, flui_engine::DETACH_DEADLINE)
+    /// [`flui_engine::DETACH_DEADLINE`]; answers whether it did.
+    fn wait(self) -> bool {
+        match self
+            .handle
+            .detach(&self.sender, self.slot, flui_engine::DETACH_DEADLINE)
         {
-            tracing::error!(%failure, "raster host: the raster thread did not take a window's slot down");
+            Ok(()) => true,
+            Err(failure) => {
+                tracing::error!(%failure, "raster host: the raster thread did not take a window's slot down");
+                false
+            }
         }
     }
 }
@@ -816,19 +833,36 @@ impl RasterHost {
         let _turned = caught.contain(|| placed.executor.turn());
         // A raster thread attaches on its own turn: the owner waits for its
         // answer, so a window the thread refuses is refused here as it is
-        // inline. A thread that does not answer in time died, which refuses
-        // every window from now on.
+        // inline. A thread still in a turn at the deadline (a device rebuild,
+        // a blocked acquire) is not a wedge: the window is accepted with its
+        // slot attaching; a refusal that comes later fails each of the
+        // window's frames, which the window is not yet quarantined for
+        // (docs/gaps.md). A dead thread refuses the window below.
         #[cfg(not(target_arch = "wasm32"))]
-        if let Executor::Threaded(handle) = &placed.executor
-            && let Err(failure) =
-                handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE)
-        {
-            tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach");
+        let attaching = match &placed.executor {
+            Executor::Threaded(handle) => {
+                match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
+                    Ok(answered) => !answered,
+                    Err(failure) => {
+                        tracing::error!(%failure, "raster host: the raster thread died before it answered a window's attach");
+                        false
+                    }
+                }
+            }
+            Executor::Inline(_) => false,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let attaching = false;
+        if attaching {
+            tracing::warn!(
+                "raster host: the raster thread has not answered a window's attach yet; the window waits for it"
+            );
         }
         let refusal = match placed.sender.record(slot).map(|record| record.phase) {
             // A panic of the turn alone (not of the slot's attach) leaves the
             // slot attached; the window reports it after its first frame.
             Some(flui_engine::SlotPhase::Attached) => None,
+            Some(flui_engine::SlotPhase::Attaching) if attaching => None,
             _ => match placed.sender.take_failure(slot) {
                 Some(SlotFailure::Refused(error)) => Some(error),
                 Some(SlotFailure::Panicked(payload)) => {
@@ -950,7 +984,7 @@ impl RasterHost {
                 .map_err(EngineError::surface_creation)?;
                 let handle = Rc::new(handle);
                 *self.link.borrow_mut() = ThreadLink {
-                    thread: Some((Rc::clone(&handle), sender.clone())),
+                    thread: Some((Rc::downgrade(&handle), sender.clone())),
                     slots: rustc_hash::FxHashMap::default(),
                 };
                 (Executor::Threaded(handle), sender)
@@ -1089,12 +1123,22 @@ impl RasterHost {
             );
             flui_foundation::panic::discard_payload(payload);
         }
+        // A slot the busy path's wait already took down answers stale; any
+        // other stale answer is a fault the log keeps.
+        #[cfg(not(target_arch = "wasm32"))]
+        let taken_down = matches!(placed.executor, Executor::Threaded(_))
+            && self
+                .link
+                .try_borrow()
+                .is_ok_and(|link| !link.slots.contains_key(&address));
+        #[cfg(target_arch = "wasm32")]
+        let taken_down = false;
         match placed
             .sender
             .send(RasterCommand::Detach { slot: slot.slot })
         {
-            // A detach that met this host busy took the slot down already.
-            Ok(_) | Err(RasterSendError::StaleSlot(_)) => {}
+            Ok(_) => {}
+            Err(RasterSendError::StaleSlot(_)) if taken_down => {}
             Err(error) => {
                 tracing::warn!(%error, "raster host: a window's detach was refused");
             }
@@ -2186,6 +2230,39 @@ impl FrameSink for SlotFrame {
     }
 }
 
+/// What a window's frames a raster thread finished became, as
+/// [`RasterSlot::settle`] answers it.
+#[cfg_attr(
+    all(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        not(all(test, feature = "testing"))
+    ),
+    expect(dead_code, reason = "only the desktop loop turns a raster thread")
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadSettled {
+    /// No frame of the window settled.
+    Nothing,
+    /// One presented: the first reveals the window, and the pacing fallback
+    /// stands down.
+    Presented,
+    /// Frames settled and none presented (refused, retried, failed, not
+    /// shown): the first reveal counts each toward its fallback, as a frame
+    /// that presented nothing within its wake.
+    NotPresented,
+}
+
+impl ThreadSettled {
+    /// Fold in one more of the window's frames, `shown` when it presented.
+    fn and(self, shown: bool) -> Self {
+        if shown || self == Self::Presented {
+            Self::Presented
+        } else {
+            Self::NotPresented
+        }
+    }
+}
+
 /// One window's slot as its frame driver holds it: the host, the window's
 /// address on it, the size the platform last announced, and the device's
 /// health as the window last reported it to its UI runtime.
@@ -2225,12 +2302,14 @@ impl RasterSlot {
     }
 
     /// Hand `ui_runtime` what a raster thread settled of the window's frames
-    /// (`UiRuntime::settle_frame`), with no borrow of the host held; a panic
-    /// of the code they ran is held for the end of the wake. Run first in every wake of
-    /// the window, whatever the wake goes on to do, so a frame the thread
-    /// finished frees its place before the wake's gate reads it. Answers
-    /// whether one the runtime held presented. An inline executor leaves nothing to
-    /// settle here.
+    /// (`UiRuntime::settle_frame`), with no borrow of the host held. Run
+    /// first in every wake of the window, whatever the wake goes on to do,
+    /// so a frame the thread finished frees its place before the wake's gate
+    /// reads it. Answers what the window's frames became, for its pacing and
+    /// its first reveal, and the first panic of the code the settlements
+    /// ran, which the window's wake resumes once the rest of it ran: it is
+    /// this window's, and no other window's wake reports it. An inline
+    /// executor leaves nothing to settle here.
     #[cfg_attr(
         all(
             any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
@@ -2238,9 +2317,13 @@ impl RasterSlot {
         ),
         expect(dead_code, reason = "only the desktop loop turns a raster thread")
     )]
-    pub(crate) fn settle(&self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) -> bool {
+    pub(crate) fn settle(
+        &self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+    ) -> (ThreadSettled, FirstPanic) {
+        let mut caught = FirstPanic::new();
         if self.host.placement == RasterPlacement::Inline {
-            return false;
+            return (ThreadSettled::Nothing, caught);
         }
         let address = self.address;
         let mut drained = self
@@ -2252,29 +2335,21 @@ impl RasterSlot {
         let _drained = self
             .host
             .try_with(|host| host.drain_settled(address, &mut drained));
-        if drained.is_empty() {
-            self.give_back(drained);
-            return false;
-        }
         // Every settlement reaches the runtime whatever an earlier one ran
         // into: a frame left unsettled holds its place for good.
-        let mut caught = FirstPanic::new();
-        let mut presented = false;
+        let mut settled = ThreadSettled::Nothing;
         for settlement in drained.drain(..) {
             let shown = settlement.verdict == SubmitVerdict::Presented;
-            let settled = caught.contain(|| ui_runtime.settle_frame(settlement));
-            // Only a frame the runtime held is this window's present.
-            presented |= shown && matches!(settled, Some(flui_runtime::sink::Settled::Applied));
+            let answer = caught.contain(|| ui_runtime.settle_frame(settlement));
+            // A settlement the runtime held no frame for is another life's.
+            // One whose settling panicked is still this window's frame.
+            if matches!(answer, Some(flui_runtime::sink::Settled::Stale)) {
+                continue;
+            }
+            settled = settled.and(shown);
         }
         self.give_back(drained);
-        // A panic of the code the settlements ran is held for the end of the
-        // wake (`report_frame_panic`), so the wake's own frame still runs.
-        if let Ok(mut held) = self.host.deferred.panic.try_borrow_mut() {
-            held.absorb(caught);
-        } else {
-            caught.resume();
-        }
-        presented
+        (settled, caught)
     }
 
     /// Keep `scratch`'s room for the next wake's settlements.

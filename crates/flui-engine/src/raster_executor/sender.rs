@@ -629,7 +629,9 @@ impl RasterSender {
         drained
     }
 
-    /// The first failure of `slot` since the last take.
+    /// The failure `slot` holds since the last take: the first, or the first
+    /// panic in place of a refusal held before it, since the owner reports a
+    /// panic and only logs a refusal.
     #[must_use]
     pub fn take_failure(&self, slot: SlotId) -> Option<SlotFailure> {
         let inbox = self.inbox(slot)?;
@@ -671,7 +673,7 @@ impl RasterSender {
                     continue;
                 }
                 if let Some(frame) = state.frame.take() {
-                    state.settle(&frame, super::RasterVerdict::Failed, false);
+                    state.settle(&frame, super::RasterVerdict::Failed);
                     failed.push(frame);
                 }
             }

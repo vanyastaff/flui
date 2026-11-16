@@ -18,7 +18,7 @@ use super::owner_dispatch::{
     prepare_ui_runtime_alongside,
 };
 use super::placement::RememberedPlacement;
-use super::raster_host::RasterSlot;
+use super::raster_host::{RasterSlot, ThreadSettled};
 use super::window_routes::WindowRoutes;
 use crate::app::AppConfig;
 
@@ -535,12 +535,32 @@ impl DesktopFrameDriver {
         // What a raster thread finished since the last wake settles first,
         // whatever this wake goes on to do: a settled frame frees its place,
         // which the gate below reads, and its failure arms the runtime's
-        // retry (ADR-0305 §4). A frame that presented there paces the window
-        // as one presented by this wake's own frame does.
-        if self.raster.settle(ui_runtime) {
-            let settled_at = web_time::Instant::now();
-            self.after_presented(settled_at);
+        // retry (ADR-0305 §4). What the frames became paces the window and
+        // counts toward its first reveal as a frame of this wake does. A
+        // panic of the code the settlements ran is this window's: the rest
+        // of the wake runs, then it resumes here.
+        let (settled, mut caught) = self.raster.settle(ui_runtime);
+        let settled_at = web_time::Instant::now();
+        match settled {
+            ThreadSettled::Nothing => {}
+            ThreadSettled::Presented => self.after_presented(settled_at),
+            ThreadSettled::NotPresented => {
+                if self.deadlines.first_reveal.after_frame(false, settled_at) {
+                    self.reveal();
+                }
+            }
         }
+        let _ran = caught.contain(|| self.turn(ui_runtime, presentation));
+        caught.resume();
+    }
+
+    /// The wake past its settlements: the gate, then the frame and its
+    /// pacing.
+    fn turn(
+        &mut self,
+        ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
+        presentation: flui_foundation::PresentationId,
+    ) {
         // The application's request to rebuild a given-up device: it takes
         // the device out of the runtime's abandoned state, which the frame's
         // slot reads as the request (`RasterSlot::pump`).
@@ -613,9 +633,8 @@ impl DesktopFrameDriver {
         }
         match action {
             WakeAction::Skip => {
-                // What the wake's settlements left (a GPU panic of a frame
-                // the raster thread finished, a panic of the code they ran) is
-                // reported though no frame runs.
+                // What the wake's settlements left of a GPU panic of a frame
+                // the raster thread finished is reported though no frame runs.
                 self.raster.report_frame_panic(ui_runtime);
                 return;
             }

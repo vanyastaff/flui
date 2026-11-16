@@ -15,7 +15,8 @@ use flui_layer::{DamageMode, DamageRegion, ScenePublication};
 use flui_runtime::sink::{FrameSettlement, SubmitVerdict};
 
 use super::{
-    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, damage_mode_from,
+    RasterFactory, RasterHost, RasterSlot, RestorePace, SharedRasterHost, ThreadSettled,
+    damage_mode_from,
 };
 
 const SIZE: (u32, u32) = (640, 480);
@@ -1336,7 +1337,10 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
         ui_runtime_id: ui_runtime.id(),
         presentation_id: ui_runtime.active_presentation_for_test(),
     };
-    let (shared, _slots, _wakes) = threaded_host_at(at);
+    let (shared, slots, _wakes) = threaded_host_at(at);
+    // The first frame's render is held, so the second queues behind it
+    // instead of taking the place of a frame the thread has not begun.
+    let render = slots.hold_next_render();
     let mut slot = RasterSlot {
         host: shared.clone(),
         address: at,
@@ -1359,14 +1363,24 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
         assert!(!presented, "a queued frame has not presented yet");
     };
     frame(&mut slot, &mut ui_runtime);
+    assert!(
+        render.began_within(THREAD_WAIT),
+        "the thread renders the first frame"
+    );
     frame(&mut slot, &mut ui_runtime);
     assert_eq!(held(&shared), 2, "two frames in flight");
     frame(&mut slot, &mut ui_runtime);
     assert_eq!(held(&shared), 2, "the runtime holds the third");
+    render.release();
     let started = std::time::Instant::now();
     let mut presented = false;
     while held(&shared) > 0 && started.elapsed() < THREAD_WAIT {
-        presented |= slot.settle(&mut ui_runtime);
+        let (settled, caught) = slot.settle(&mut ui_runtime);
+        assert!(
+            caught.into_payload().is_none(),
+            "nothing the settlements ran panicked"
+        );
+        presented |= settled == ThreadSettled::Presented;
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(presented, "the wake saw a frame the runtime held present");
@@ -1382,4 +1396,46 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
         ui_runtime.settle_frame(foreign),
         flui_runtime::sink::Settled::Stale
     );
+}
+
+/// A frame the raster thread finished without presenting counts toward the
+/// window's first reveal: the wake answers it not presented, which the
+/// reveal's fallback counts as a frame of the wake that presented nothing,
+/// so a window whose first frames the thread refuses is still shown.
+///
+/// Red-check: answer `Nothing` for a settlement that did not present and a
+/// window whose renders fail is never revealed.
+#[test]
+fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.active_presentation_for_test(),
+    };
+    let (shared, slots, _wakes) = threaded_host_at(at);
+    slots.script_render(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    let mut slot = RasterSlot {
+        host: shared,
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+    };
+    ui_runtime.mark_primary_needs_full_repaint();
+    let presented = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+    assert!(!presented, "a queued frame has not presented yet");
+    let started = std::time::Instant::now();
+    let mut settled = ThreadSettled::Nothing;
+    while settled == ThreadSettled::Nothing && started.elapsed() < THREAD_WAIT {
+        let caught;
+        (settled, caught) = slot.settle(&mut ui_runtime);
+        assert!(
+            caught.into_payload().is_none(),
+            "nothing the settlements ran panicked"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert_eq!(settled, ThreadSettled::NotPresented);
 }

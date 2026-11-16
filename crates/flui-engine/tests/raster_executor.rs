@@ -669,12 +669,14 @@ fn a_frames_texture_updates_apply_before_it_whether_shown_or_superseded() {
 }
 
 /// When a turn's resize fails and its frame's texture update then panics,
-/// the slot's record holds the resize's failure, the first of the turn.
+/// the slot's record holds the panic and the frame settles marked with it:
+/// the owner reports a panic and only logs a refusal, so a refusal earlier
+/// in the turn must not hide it.
 ///
-/// Red-check: hold the texture panic in the inbox as it happens and the
-/// record holds the panic.
+/// Red-check: keep the first failure of the turn and the record holds the
+/// resize's refusal, the settlement unmarked.
 #[test]
-fn a_texture_panic_after_a_failed_resize_keeps_the_resize_failure() {
+fn a_texture_panic_after_a_failed_resize_is_the_failure_held() {
     let mut rig = rig();
     let at = attached(&mut rig, 1);
     let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
@@ -707,12 +709,17 @@ fn a_texture_panic_after_a_failed_resize_keeps_the_resize_failure() {
         })
         .expect("accepted");
     let _ = rig.executor.turn();
+    let settled = drain(&rig.sender, at.slot);
+    assert!(
+        !settled.is_empty() && settled.iter().all(|settlement| settlement.panicked),
+        "the frame's settlement is marked with the turn's panic: {settled:?}"
+    );
     assert!(
         matches!(
             rig.sender.take_failure(at.slot),
-            Some(SlotFailure::Refused(EngineError::GpuUnavailable))
+            Some(SlotFailure::Panicked(_))
         ),
-        "the resize's failure is the one held"
+        "the panic is the failure held"
     );
 }
 /// A frame renders only against the generation the slot's configuration

@@ -512,19 +512,23 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   placements.
 - Threaded, the owner's host waits for the thread's answer to a window's attach
   (`ExecutorHandle::await_attach`), so a window the thread refuses is refused at its attach as it
-  is inline. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the slot's
-  `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version, surface
-  and retry), and its sink's in-flight limit is the placement's depth. A settlement carries
-  whether a call of its frame's turn panicked (`SlotSettlement::panicked`), which is how an owner
-  that drains later than the turn tells the frame a slot's panic came with. The thread's wake
-  asks every attached window for a frame through its `RedrawRequester`, each one contained;
-  each window's wake drains its own slot's settlements into `UiRuntime::settle_frame` first,
-  before its frame gate and whatever the wake goes on to do, and holds a panic of the code they
-  ran for the end of the wake. Neither the window's first-reveal fallback nor its pacing
-  fallback arms while the thread holds a frame of the window: the settlement paces it. A
-  window's detach waits for the thread (`ExecutorHandle::detach`) once the host's borrow is
-  released, or at once through the host's link to the thread when it meets the host busy, since
-  the window goes when the detach returns.
+  is inline; a thread still in a turn at the deadline is not a wedge, and the window is accepted
+  with its slot attaching. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
+  slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
+  surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
+  carries whether a call of its frame's turn panicked (`SlotSettlement::panicked`), which is how
+  an owner that drains later than the turn tells the frame a slot's panic came with; a slot holds
+  a panic in place of a refusal held before it, since the owner reports the one and only logs the
+  other. The thread's wake asks every attached window for a frame through its
+  `RedrawRequester`, each one contained; each window's wake drains its own slot's settlements
+  into `UiRuntime::settle_frame` first, before its frame gate and whatever the wake goes on to do,
+  and holds a panic of the code they ran for the end of that window's wake. Neither the window's
+  first-reveal fallback nor its pacing fallback arms while the thread holds a frame of the window:
+  its settlement does, a presented frame revealing the window and one that presented nothing
+  counting toward the reveal's fallback as a frame of the wake would. A window's detach waits for
+  the thread (`ExecutorHandle::detach`) once the host's borrow is released, or at once through the
+  host's link to the thread when it meets the host busy, since the window goes when the detach
+  returns.
 - Until a run makes a platform threaded, a debug build on Linux places the desktop loop's
   executor on its raster thread when started with `FLUI_RASTER_PLACEMENT=threaded`; a release
   build and every other host ignore the variable, Windows until the owner's wait services sent
@@ -645,14 +649,18 @@ the facade. Every production use of `with_backend` becomes:
   `crates/flui-engine/tests/raster_thread.rs`, `a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline`
   `a_frame_queued_behind_a_wedged_render_settles_after_it` and
   `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9),
-  `the_owner_waits_for_the_threads_answer_to_an_attach` and
-  `a_frame_that_panicked_settles_marked_so` (§10); on the host's threaded
+  `the_owner_waits_for_the_threads_answer_to_an_attach`,
+  `a_slow_turn_does_not_kill_the_executor_an_attach_waits_on`,
+  `a_frame_that_panicked_settles_marked_so`, with
+  `crates/flui-engine/tests/raster_executor.rs`'s
+  `a_texture_panic_after_a_failed_resize_is_the_failure_held` (§10); on the host's threaded
   placement, in `crates/flui-app/src/app/runner/raster_host/tests.rs`,
   `a_threaded_frame_is_queued_and_settles_through_the_windows_drain`,
   `a_threaded_frame_replaces_the_one_waiting_behind_a_render`,
   `a_threaded_windows_detach_returns_once_its_slot_is_down`,
-  `a_window_the_raster_thread_refuses_is_refused_at_attach` and
-  `a_window_wake_settles_what_the_raster_thread_finished`, with the pacing it leaves in
+  `a_window_the_raster_thread_refuses_is_refused_at_attach`,
+  `a_window_wake_settles_what_the_raster_thread_finished` and
+  `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal`, with the pacing it leaves in
   `crates/flui-app/src/app/runner/frame_pacing.rs`'s `a_held_frame_arms_no_fallback` (§10);
   ADR-0244's
   `gpu_backend_fallback_order`; and
