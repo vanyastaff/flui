@@ -1334,7 +1334,9 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
     {
         first_panic.contain(|| super::placement::flush_all_by(exit.services()));
-        first_panic.absorb(super::placement::retire());
+        if let Some(retired) = first_panic.contain(super::placement::retire) {
+            first_panic.absorb(retired);
+        }
     }
     log(TeardownStep::Flush);
 

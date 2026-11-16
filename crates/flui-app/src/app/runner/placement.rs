@@ -401,7 +401,23 @@ pub(super) fn finish(address: PresentationAddress) {
     let now = now();
     recorder.begin_flush(now);
     if recorder.continue_flush(now) == FlushState::Waiting {
-        APP_RUNTIME.with(|slot| slot.borrow_mut().placement.closing.push(recorder));
+        let unkept = APP_RUNTIME.with(|slot| match slot.try_borrow_mut() {
+            Ok(mut runtime) => {
+                runtime.placement.closing.push(recorder);
+                None
+            }
+            Err(_) => Some(recorder),
+        });
+        if let Some(recorder) = unkept {
+            // Closed from inside a borrow of the runtime (a `Drop` it runs):
+            // the write is with storage, but nothing is left to wait for it.
+            tracing::warn!(
+                storage = recorder.name().as_str(),
+                "a closing window's last placement is written unwatched; its loss would go \
+                 unreported"
+            );
+            drop_contained(recorder);
+        }
     }
 }
 

@@ -596,13 +596,20 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui-view`, `flui-painting` and `flui-engine` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-native`, `flui-widgets` and `flui-interaction` the most.
 - A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
 
-### Window placement bypasses an application's storage provider
+### The host acquires capabilities outside ADR-0152's seam
 
-> **Environments:** desktop · **Who it hurts:** Applications that replace `StorageCapability` (an encrypted store, say) and ask a window to remember its placement · **Parity:** none (capability seam)
+> **Environments:** desktop · **Who it hurts:** Contributors and capability crates that read ADR-0152 as the whole rule for who acquires a capability · **Parity:** none (capability seam)
 
-- A window that remembers its placement (`AppConfig::restore_placement`) reads and writes it through the host's built-in store (`runtime_storage()` in `crates/flui-app/src/app/runner/placement.rs`). An application that overrides `StorageCapability` with `Application::capability` still gets its window placement read from and written to the plain host store under the run's data directory, and one with an override and no data directory gets no placement at all.
-- The read precedes the first window, and a provider is resolved through a `ProviderContext` (an owner poster, completions, runtime locals) that only a UI runtime has. [ADR-0152](adr/ADR-0152-capability-seam-revised.md) §2 has providers live per UI runtime and handles acquired in lifecycle hooks; it does not cover the host acquiring a capability for itself.
-- The check is an application run with a storage override and `restore_placement`, whose override sees the placement's read and write while the host store sees neither.
+- [ADR-0152](adr/ADR-0152-capability-seam-revised.md) §2 has providers live per UI runtime and handles acquired in a widget's lifecycle hooks. The desktop host now also acquires the application's `StorageCapability` for itself, before any UI runtime exists, to keep window placements there: through `flui_runtime::capability::HostCapabilities` over the launch registry, with an owner-job queue of its own and no window. The rule is written in `crates/flui-app/ARCHITECTURE.md` ("The host keeps window placements in the application's storage"); no ADR states it, so a provider author learns from no decision record that `ProviderContext::window()` is `None` for the host as well as for a widget before its first window.
+- The entry closes when an ADR states the host's acquisition (who may acquire outside a UI runtime, which context it gets, when its completions retire) and supersedes the sentence of ADR-0152 §2 it extends.
+
+### Window placement restores neither a scale change on the same display nor an OS's tiled state
+
+> **Environments:** desktop · **Who it hurts:** Users of a remembered window on a display whose scale changed between runs, or who tiled the window · **Parity:** [Windows](platform-parity.md#windows)
+
+- A placement keeps the window's size in its display's logical pixels and records the scale, but `WindowPlacement::resolve` rescales only when the window opens on another display. A display that is the same (same `persistent_key`) at a different scale (125 % last run, 150 % now) restores the logical size, so the window covers more physical pixels than it did; Win32's `SetWindowPlacement` has the opposite defect (physical workspace coordinates, wrong at another DPI), and `tauri-plugin-window-state` and `electron-window-state` store physical pixels and carry it. Which is right is a decision: the logical size follows the system's own text scaling, the physical one what the user dragged.
+- A window tiled by the system (Windows Snap, the macOS tiling of a top-edge drag, a GNOME half-screen) is remembered by what the host reports: Win32 reports a snapped window as `Normal` at the snapped rectangle, so it comes back at that rectangle, untiled; AppKit's stale `normal_geometry` after a tile is under [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit). No contract mode names a tiled state.
+- The check is the placement table of `flui-platform` with a same-key display at another scale, and a run on Windows of a snapped window closed and reopened.
 
 ### Widget states still fill their handles in `init_state`
 
