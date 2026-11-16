@@ -1978,7 +1978,9 @@ impl PresentationState {
         )
     }
 
-    /// Record the limit of the sink this presentation's frame is handed to.
+    /// Record the limit of the sink this presentation's frame is handed to. A sink that names more
+    /// than the presentation keeps pending breaks its bound, and the newest records fold past the
+    /// ring's bound.
     pub(crate) fn set_in_flight_limit(&self, limit: NonZeroUsize) {
         self.in_flight_limit.set(limit);
     }

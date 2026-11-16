@@ -207,6 +207,19 @@ pub(crate) fn a_frame_in_flight_bounds_the_owners_sleep() {
     // The wake is read first: the floor read after it lies no earlier on the same clock.
     let wake = ui_runtime.next_wake();
     let floor = primary(&ui_runtime).expect("a frame in flight keeps a floor");
+    let submitted = ui_runtime
+        .presentations
+        .primary()
+        .pending_frames
+        .borrow()
+        .front()
+        .expect("BUG: two frames are pending")
+        .submitted_at();
+    assert_eq!(
+        floor.duration_since(submitted).as_nanos() % super::IN_FLIGHT_FLOOR.as_nanos(),
+        0,
+        "the floor counts whole intervals from the oldest frame's submit, not from each read"
+    );
     let now = ui_runtime.presentations.primary().clock().now();
     assert!(floor <= now + super::IN_FLIGHT_FLOOR);
     assert!(
@@ -218,6 +231,31 @@ pub(crate) fn a_frame_in_flight_bounds_the_owners_sleep() {
         primary(&ui_runtime),
         None,
         "with nothing in flight the floor goes"
+    );
+}
+
+/// Work that reached a presentation at its in-flight limit without demand on its clock (a tree
+/// dirtied after the gated pump, whose wake the gate held back) is asked for by the settlement
+/// that frees a place (ADR-0305 §5).
+pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
+    let mut ui_runtime = mount_box();
+    let mut sink =
+        ScriptedSink::new(|_, _| SubmitVerdict::Queued).holding(std::num::NonZeroUsize::MIN);
+    assert!(!ui_runtime.render_frame(&mut sink), "the frame is queued");
+    let [epoch] = sink.epochs[..] else {
+        panic!("one frame was submitted, got {:?}", sink.epochs);
+    };
+    let primary = ui_runtime.presentations.primary();
+    ui_runtime.mark_needs_full_repaint_for(primary);
+    ui_runtime.mark_rendered();
+    assert!(
+        primary.clock().demand_mask().is_empty() && !ui_runtime.needs_redraw(),
+        "the dirt carries no clock demand and no wake"
+    );
+    assert_eq!(settle(&mut ui_runtime, epoch), Settled::Applied);
+    assert!(
+        ui_runtime.needs_redraw(),
+        "the freed place asks for the dirty tree's frame"
     );
 }
 

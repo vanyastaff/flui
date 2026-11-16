@@ -313,7 +313,11 @@ impl UiRuntime {
                     self.mark_needs_full_repaint_for(producer);
                 }
                 self.wake_frame();
-            } else if !producer.frames_in_flight().is_saturated() && producer.has_frame_work() {
+            } else if producer.failure_retry_at().is_none()
+                && !producer.device_abandoned()
+                && !producer.frames_in_flight().is_saturated()
+                && producer.has_frame_work()
+            {
                 // Work the in-flight gate kept while the sink held as many frames as it may:
                 // this settlement freed a place, and nothing else wakes the loop for it
                 // (ADR-0305 §5).

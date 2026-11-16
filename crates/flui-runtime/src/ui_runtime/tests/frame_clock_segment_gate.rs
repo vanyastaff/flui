@@ -728,7 +728,7 @@ pub(crate) fn an_animation_at_the_in_flight_limit_waits_for_the_settlement() {
         AnimationController::builder(Duration::from_secs(10)).build_on(Some(&runtime.vsync()));
     owner.controller().forward().expect("fresh run");
     for step in 1..=3_u64 {
-        // A listener of the animation repaints on each tick.
+        // Each frame of the animation has something to paint.
         runtime.mark_primary_needs_full_repaint();
         runtime.set_now_secs_for_test(0.016 * step as f64);
         let _ = runtime.pump(
