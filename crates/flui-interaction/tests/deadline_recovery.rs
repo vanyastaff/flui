@@ -35,6 +35,9 @@ fn wake() {
 struct WakeWindow {
     drops: Arc<std::sync::atomic::AtomicUsize>,
     panic_on_drop: bool,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 impl flui_platform::PlatformWindow for WakeWindow {
@@ -63,13 +66,14 @@ impl flui_platform::PlatformWindow for WakeWindow {
         )
         .with_focused(true)
         .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
+        .with_capabilities(self.capabilities)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
 
@@ -688,6 +692,9 @@ fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
         drops: Arc::default(),
         panic_on_drop: false,
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
     let notices = Rc::new(Cell::new(0));
@@ -725,6 +732,9 @@ fn a_wake_failure_destroys_the_last_backend_owner_before_unwind() {
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(WakeWindow {
         drops: Arc::clone(&drops),
         panic_on_drop: true,
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&window));
     let owner = Rc::new(RefCell::new(Some(window)));

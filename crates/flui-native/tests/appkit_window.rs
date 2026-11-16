@@ -459,7 +459,7 @@ mod cases {
             .unwrap_or_else(|refusal| panic!("SetMaterial(System) was refused: {refusal:?}"));
         fixture.settle();
         assert_eq!(fixture.material(), Some(WindowMaterial::System));
-        let claimed = fixture.window.state().capabilities.reports_presentation;
+        let claimed = fixture.window.state().capabilities.reports_presentation();
         let request = fixture
             .present_and_request_frame()
             .expect("the window asks for a frame");

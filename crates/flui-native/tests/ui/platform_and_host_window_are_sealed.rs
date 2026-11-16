@@ -138,7 +138,7 @@ impl PlatformWindow for OutsideWindow {
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        command.against(&WindowCapabilities::NONE)?;
+        command.against(&WindowCapabilities::NONE)?; // This file never compiles; not a model double.
         Ok(())
     }
 
