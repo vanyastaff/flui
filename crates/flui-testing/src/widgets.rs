@@ -1880,7 +1880,7 @@ impl LaidOut {
     /// there would only cost deadline-timing tests (long-press/double-tap
     /// window boundaries) virtual time they did not ask to spend.
     fn advance_pointer_clock(&self, dt: Duration) {
-        self.host.clock().advance(dt);
+        self.host.advance(dt);
     }
 
     /// Allocate a fresh pointer id for a new contact and remember it.

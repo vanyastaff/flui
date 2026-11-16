@@ -35,9 +35,6 @@ raw-window-handle = { workspace = true, features = ["alloc"] }
 thiserror = { workspace = true }
 # `Locale` and the other platform values serialize under the `serde` feature.
 serde = { workspace = true, optional = true }
-# An edit the `ImeEvent` projection could not apply, reported where a
-# deferred grant has no caller left to return an error to.
-tracing = { workspace = true }
 
 [dev-dependencies]
 # Pins that the commit gate is owner-thread only.
@@ -62,8 +59,13 @@ required-features = ["testing"]
 [features]
 default = []
 serde = ["dep:serde"]
-# The doubles of the contracts this crate owns, in `testing` (ADR-0243).
-testing = []
+# The doubles of the contracts this crate owns, in `testing` (ADR-0243),
+# built on the scenario primitive.
+testing = ["scripted"]
+# The scenario primitive (`capability::scripted`) a capability's simulated
+# provider is built from, here because a capability crate cannot depend on
+# `flui-testing` (ADR-0154 §10).
+scripted = []
 
 # A browser page's entropy for `ProcessNonce::mint`: wasm32-unknown-unknown's
 # std has none, so `RandomState` alone mints the same nonce on every page.
@@ -76,12 +78,22 @@ all-features = true
 # Tier C, order 1: the contracts sit below every backend (ADR-0082 §1) and
 # above the values tier; its dependents are `flui-interaction`, `flui-native`,
 # `flui-widgets` and `flui-app`. On top of its tier's set this crate may never
-# reach AccessKit or tokio (ADR-0082 Verification).
+# reach AccessKit or tokio (ADR-0082 Verification), and does not log: the
+# caller of a contract function does (ADR-0151 §7). `flui-foundation`'s own
+# instrumentation is the one path to `tracing`, excused there.
 [package.metadata.flui]
 tier = "C"
 tier-kind = "stable"
 order = 1
-reach-forbid = ["accesskit", "dpi", "keyboard-types", "parking_lot", "tokio", "ui-events"]
+reach-forbid = [
+    "accesskit",
+    "dpi",
+    "keyboard-types",
+    "parking_lot",
+    "tokio",
+    "tracing",
+    "ui-events",
+]
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "window_capabilities::PUBLICATIONS", grant = "ADR-0097", class = "counter", reason = "publications of window capabilities, one per window opened and per capability change, issued by an `AtomicIdMint` that refuses at exhaustion instead of reissuing one, so an admitted command never opens under capabilities it was not checked against" },

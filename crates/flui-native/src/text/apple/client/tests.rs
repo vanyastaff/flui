@@ -300,7 +300,7 @@ fn completing_a_composition_makes_appkit_forget_its_marked_text() {
         assert_eq!(end, Ok(expected), "commits: {commits}");
         if !commits {
             // What the presentation does with `Abandoned`.
-            let _ = commit_composition_in_place(&*store);
+            let _ = commit_composition_in_place(&*store, drop);
         }
         assert_eq!(store.composition(), None, "commits: {commits}");
         assert_eq!(store.text(), "にほん", "commits: {commits}");
@@ -476,6 +476,17 @@ fn a_protected_field_holds_secure_input_while_it_has_focus() {
         0,
         "a retired client takes nothing"
     );
+}
+
+/// Focus leaving a field commits its composition in place; a field that
+/// refuses the edit is reported once, and focus still moves.
+#[test]
+fn a_field_refusing_the_commit_on_blur_is_reported_once() {
+    let field = Rc::new(crate::text::refusal::read_only::ReadOnlyField::default());
+    let (client, _context) = serving(&field);
+    let reports = crate::text::refusal::reports_in(|| client.focus_store(None));
+    assert_eq!(reports, 1, "the refusal is reported once");
+    assert!(client.focused().is_none(), "focus moved anyway");
 }
 
 /// A field focused before the view exists is held once the view binds, and

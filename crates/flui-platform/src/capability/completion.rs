@@ -183,11 +183,14 @@ impl CompletionSource {
 
     /// A pending completion and the resolver that answers it.
     ///
-    /// The resolver may move to any thread; the completion settles at the
-    /// owner's next turn after [`Resolver::resolve`], never inline. Once the
-    /// owner has retired, the completion is born
+    /// The resolver is `Send` when `T` is: an answer the operating system
+    /// gives on another thread moves there, and an owner-local answer (a
+    /// scenario's, a value holding an `Rc`) stays on the owner. Either way the
+    /// completion settles at the owner's next turn after
+    /// [`Resolver::resolve`], never inline. Once the owner has retired, the
+    /// completion is born
     /// [`OwnerRetired`](Abandoned::OwnerRetired).
-    pub fn pending<T: Send + 'static>(&self) -> (Completion<T>, Resolver<T>) {
+    pub fn pending<T: 'static>(&self) -> (Completion<T>, Resolver<T>) {
         let shared: Shared<T> = Arc::new(Mutex::new(None));
         let local = Rc::new(Local {
             shared: Arc::clone(&shared),
@@ -443,7 +446,7 @@ impl<T> Resolver<T> {
     }
 }
 
-impl<T: Send + 'static> Resolver<T> {
+impl<T: 'static> Resolver<T> {
     /// Answers the completion with `value`; it settles at the owner's next
     /// turn.
     ///

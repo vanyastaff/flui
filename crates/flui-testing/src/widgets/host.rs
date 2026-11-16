@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{Vsync, VsyncRegistration, VsyncRegistrationError};
-use flui_foundation::{ElementId, ManualClock};
+use flui_foundation::ElementId;
 use flui_interaction::events::PointerEvent;
 use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
@@ -204,8 +204,14 @@ impl WidgetHost {
         &self.pipeline
     }
 
-    pub(super) fn clock(&self) -> &ManualClock {
+    pub(super) fn clock(&self) -> &crate::HostClock {
         self.ui_runtime.clock()
+    }
+
+    /// Move the clock between two input events, applying what the host's
+    /// scenario has due ([`HeadlessHost::advance`]).
+    pub(super) fn advance(&self, dt: std::time::Duration) {
+        self.ui_runtime.advance(dt);
     }
 
     /// Whether the last pump submitted a scene.

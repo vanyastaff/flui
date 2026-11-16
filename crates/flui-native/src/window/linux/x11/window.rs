@@ -2549,15 +2549,6 @@ impl host::Window<X11Loop> for X11Window {
         shared.open(owner, options, handler)
     }
 
-    /// The window that has the input focus.
-    fn active(_: &X11Loop, shared: &X11Windows) -> Option<WindowId> {
-        shared
-            .open_windows()
-            .into_iter()
-            .find(|window| PlatformWindow::state(&**window).focused)
-            .map(|window| window.id)
-    }
-
     fn capabilities(_: &X11Loop, shared: &X11Windows) -> WindowCapabilities {
         capabilities(shared.support())
     }

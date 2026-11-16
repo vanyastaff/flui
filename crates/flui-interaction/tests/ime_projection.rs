@@ -32,7 +32,7 @@ fn preedit_event(text: &str, cursor: Option<(usize, usize)>) -> ImeEvent {
 
 fn apply(store: &InMemoryTextStore, event: &ImeEvent) {
     assert_eq!(
-        project_ime_event(store, event),
+        project_ime_event(store, event, drop),
         Ok(LockOutcome::Granted),
         "{event:?}"
     );
@@ -112,7 +112,7 @@ fn a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor() {
         ImeEvent::Commit("東".to_owned()),
     ] {
         assert_eq!(
-            project_ime_event(&*store, &event),
+            project_ime_event(&*store, &event, drop),
             Ok(LockOutcome::Deferred)
         );
     }

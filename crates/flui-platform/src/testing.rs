@@ -12,6 +12,20 @@
 //! `ScriptedHttp`, the [`HttpClient`](crate::http::HttpClient) a headless host
 //! registers so no test reaches the network, and
 //! `ScriptedLauncher`, the scripted [`LauncherBackend`](crate::launch::LauncherBackend).
+//!
+//! A double whose service answers later is built on the scenario primitive,
+//! [`capability::scripted`](crate::capability::scripted), so its answers are
+//! matched by request, missing ones are typed failures and time is the
+//! scenario's clock. Three doubles are not, each for its contract's sake:
+//! `FakeHaptics` answers synchronously through a window's trait object, with
+//! no completion to settle; `ScriptedHttp` serves a `Send + Sync` client
+//! whose futures run off the owner thread (ADR-0280), where an owner-local
+//! scenario cannot reach, so it fails a URL nobody scripted with
+//! [`HttpError::Connect`](crate::http::HttpError::Connect) naming it and,
+//! attached to a scenario (`ScriptedHttp::report_to`), reports it into the
+//! scenario's ledger; and `flui_testing::storage::MemoryStorage` is a store,
+//! not a script, behind the `Send + Sync` storage contract, with nothing a
+//! request could be unexpected against.
 
 #[cfg(feature = "testing")]
 mod haptics;
