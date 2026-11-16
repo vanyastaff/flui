@@ -137,7 +137,9 @@ pub(crate) fn a_tree_without_a_region_reports_none() {
 
 pub(crate) fn a_scale_change_resends_unchanged_logical_regions() {
     let mut laid = mounted(excluded(30.0, 40.0));
-    laid.set_scale_factor(2.0);
+    laid.set_scale_factor(
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
     assert_eq!(
         laid.window().input_region_updates(),
         vec![vec![device(10, 20, 40, 60)], vec![device(20, 40, 80, 120)]]
@@ -182,7 +184,9 @@ pub(crate) fn fractional_region_edges_round_outward() {
         window(GREY, 10.1, 0.0, excluded(0.2, 7.0)),
         tight(200.0, 200.0),
     );
-    laid.set_scale_factor(1.5);
+    laid.set_scale_factor(
+        flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
+    );
     // [15.15, 15.45] × [0, 10.5] covers one pixel column, never none.
     assert_eq!(
         laid.window().input_region_updates().last(),

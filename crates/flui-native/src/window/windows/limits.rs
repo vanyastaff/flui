@@ -12,10 +12,9 @@
 
 #![forbid(unsafe_code)]
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 
-/// The DPI Windows reports for a window it could not measure.
-const BASE_DPI: u32 = 96;
+use crate::window::state::device_limits;
 
 /// A size in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,40 +53,32 @@ impl TrackLimits {
     }
 }
 
-/// The inner-size limits as outer sizes at `dpi`.
+/// The inner-size limits as outer sizes at `ratio`, the window's DPI over the
+/// base DPI.
 ///
-/// `frame` is the width and height the window's non-client area adds to its
-/// client area at that DPI. A minimum rounds up and a maximum rounds down, so
-/// the client area never ends outside the logical limits; a limit that is not
-/// finite is no limit. When rounding leaves the maximum below the minimum (a
-/// fractional limit with both equal), the window is pinned to the minimum.
-/// A `dpi` of zero, which Windows reports for a handle it cannot measure, is
-/// the base DPI.
+/// The limits in device pixels are the hosts' one limit rule's
+/// ([`device_limits`]): a minimum rounds up and a maximum down, a limit that
+/// is not finite is no limit, and a maximum that rounding leaves below the
+/// minimum is raised to it, so the window is pinned to the minimum. `frame`,
+/// the width and height the window's non-client area adds to its client area
+/// at that DPI, is then added to each.
 pub(crate) fn track_limits(
     min: Option<Size<f64>>,
     max: Option<Size<f64>>,
-    dpi: u32,
+    ratio: DevicePixelRatio,
     frame: PixelSize,
 ) -> TrackLimits {
-    let scale = f64::from(if dpi == 0 { BASE_DPI } else { dpi }) / f64::from(BASE_DPI);
-    let outer = |size: Size<f64>, round: fn(f64) -> f64| {
-        let component = |logical: f64, frame: i32| {
-            (logical.is_finite() && logical > 0.0)
-                .then(|| round(logical * scale))
-                // `as` saturates at the `i32` range, which the frame then
-                // adds to without wrapping.
-                .map(|device| (device as i32).saturating_add(frame))
-        };
-        Some(PixelSize::new(
-            component(size.width, frame.width)?,
-            component(size.height, frame.height)?,
-        ))
+    let limits = device_limits(min, max, ratio);
+    let outer = |(width, height): (u32, u32)| {
+        PixelSize::new(
+            width.cast_signed().saturating_add(frame.width),
+            height.cast_signed().saturating_add(frame.height),
+        )
     };
-    let min = min.and_then(|size| outer(size, f64::ceil));
-    let max = max
-        .and_then(|size| outer(size, f64::floor))
-        .map(|max| min.map_or(max, |min| max.component_max(min)));
-    TrackLimits { min, max }
+    TrackLimits {
+        min: limits.min.map(outer),
+        max: limits.max.map(outer),
+    }
 }
 
 /// The rectangle `WM_GETMINMAXINFO` carries, as the OS filled it in.
@@ -123,11 +114,21 @@ pub(crate) fn constrain(info: MinMaxInfo, limits: TrackLimits) -> MinMaxInfo {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
+    use flui_platform::MAX_SURFACE_EXTENT;
 
     use super::{MinMaxInfo, PixelSize, constrain, track_limits};
 
     const FRAME: PixelSize = PixelSize::new(16, 39);
+
+    /// The ratio a window at `reported` DPI is at, read by the hosts' one
+    /// rule: a DPI of zero, which Windows reports for a handle it cannot
+    /// measure, is the base DPI.
+    fn dpi(reported: u32) -> DevicePixelRatio {
+        crate::display::scale::ScaleStreak::default()
+            .read(f64::from(reported) / 96.0, "test")
+            .0
+    }
 
     fn px(width: i32, height: i32) -> PixelSize {
         PixelSize::new(width, height)
@@ -145,7 +146,7 @@ mod tests {
         let limits = track_limits(
             Some(Size::new(300.0, 200.0)),
             Some(Size::new(900.0, 700.0)),
-            96,
+            dpi(96),
             FRAME,
         );
         assert_eq!(limits.min, Some(px(316, 239)));
@@ -157,7 +158,7 @@ mod tests {
         let limits = track_limits(
             Some(Size::new(100.3, 100.3)),
             Some(Size::new(500.3, 500.3)),
-            144,
+            dpi(144),
             px(0, 0),
         );
         assert_eq!(
@@ -174,7 +175,7 @@ mod tests {
 
     fn equal_fractional_limits_pin_the_window_to_the_minimum() {
         let size = Size::new(100.5, 100.5);
-        let limits = track_limits(Some(size), Some(size), 96, px(0, 0));
+        let limits = track_limits(Some(size), Some(size), dpi(96), px(0, 0));
         assert_eq!(limits.min, Some(px(101, 101)));
         assert_eq!(
             limits.max,
@@ -188,22 +189,28 @@ mod tests {
             let limits = track_limits(
                 Some(Size::new(bad, 100.0)),
                 Some(Size::new(100.0, bad)),
-                96,
+                dpi(96),
                 FRAME,
             );
             assert_eq!((limits.min, limits.max), (None, None), "{bad}");
         }
     }
 
-    fn a_huge_limit_saturates_instead_of_wrapping() {
-        let limits = track_limits(None, Some(Size::new(1.0e300, 1.0e300)), 192, FRAME);
-        assert_eq!(limits.max, Some(px(i32::MAX, i32::MAX)));
-        let limits = track_limits(Some(Size::new(f64::MAX, 10.0)), None, 96, FRAME);
-        assert_eq!(limits.min, Some(px(i32::MAX, 49)));
+    fn a_huge_limit_is_held_at_the_largest_surface() {
+        let max = MAX_SURFACE_EXTENT.cast_signed();
+        let limits = track_limits(None, Some(Size::new(1.0e300, 1.0e300)), dpi(192), FRAME);
+        assert_eq!(limits.max, Some(px(max + 16, max + 39)));
+        let limits = track_limits(Some(Size::new(f64::MAX, 10.0)), None, dpi(96), FRAME);
+        assert_eq!(limits.min, Some(px(max + 16, 49)));
+        // A minimum past the largest surface is held at it too: the window
+        // is never asked to be wider than any renderer draws.
+        let limits = track_limits(Some(Size::new(20_000.0, 100.0)), None, dpi(96), FRAME);
+        assert_eq!(limits.min, Some(px(max + 16, 139)));
     }
 
     fn an_unmeasured_window_is_at_the_base_dpi() {
-        let at = |dpi| track_limits(Some(Size::new(100.0, 100.0)), None, dpi, px(0, 0));
+        let at =
+            |reported| track_limits(Some(Size::new(100.0, 100.0)), None, dpi(reported), px(0, 0));
         assert_eq!(at(0), at(96));
         assert_ne!(at(96), at(192));
     }
@@ -211,13 +218,13 @@ mod tests {
     fn the_minimum_only_raises_the_os_minimum() {
         let raised = constrain(
             os_default(),
-            track_limits(Some(Size::new(400.0, 300.0)), None, 96, FRAME),
+            track_limits(Some(Size::new(400.0, 300.0)), None, dpi(96), FRAME),
         );
         assert_eq!(raised.min_track, px(416, 339));
         assert_eq!(raised.max_track, os_default().max_track);
         let below = constrain(
             os_default(),
-            track_limits(Some(Size::new(20.0, 10.0)), None, 96, FRAME),
+            track_limits(Some(Size::new(20.0, 10.0)), None, dpi(96), FRAME),
         );
         assert_eq!(
             below.min_track,
@@ -229,13 +236,13 @@ mod tests {
     fn the_maximum_caps_dragging_and_maximizing() {
         let capped = constrain(
             os_default(),
-            track_limits(None, Some(Size::new(800.0, 600.0)), 96, FRAME),
+            track_limits(None, Some(Size::new(800.0, 600.0)), dpi(96), FRAME),
         );
         assert_eq!(capped.max_track, px(816, 639));
         assert_eq!(capped.max_size, px(816, 639));
         let roomy = constrain(
             os_default(),
-            track_limits(None, Some(Size::new(5000.0, 5000.0)), 96, FRAME),
+            track_limits(None, Some(Size::new(5000.0, 5000.0)), dpi(96), FRAME),
         );
         assert_eq!(roomy.max_track, px(5016, 5039));
         assert_eq!(
@@ -249,20 +256,20 @@ mod tests {
         let limits = track_limits(
             Some(Size::new(400.0, 300.0)),
             Some(Size::new(800.0, 600.0)),
-            96,
+            dpi(96),
             FRAME,
         );
         assert_eq!(limits.clamp(px(100, 100)), px(416, 339));
         assert_eq!(limits.clamp(px(5000, 5000)), px(816, 639));
         assert_eq!(limits.clamp(px(500, 400)), px(500, 400));
-        let none = track_limits(None, None, 96, FRAME);
+        let none = track_limits(None, None, dpi(96), FRAME);
         assert_eq!(none.clamp(px(1, 1)), px(1, 1));
     }
 
     fn a_maximum_below_the_smallest_size_is_that_size() {
         let capped = constrain(
             os_default(),
-            track_limits(None, Some(Size::new(1.0, 1.0)), 96, px(0, 0)),
+            track_limits(None, Some(Size::new(1.0, 1.0)), dpi(96), px(0, 0)),
         );
         assert_eq!(capped.max_track, os_default().min_track);
         assert_eq!(capped.max_size, os_default().min_track);
@@ -271,7 +278,7 @@ mod tests {
             track_limits(
                 Some(Size::new(400.0, 300.0)),
                 Some(Size::new(1.0, 1.0)),
-                96,
+                dpi(96),
                 px(0, 0),
             ),
         );
@@ -280,7 +287,7 @@ mod tests {
     }
 
     fn no_limits_keep_the_os_rectangle() {
-        let none = track_limits(None, None, 96, FRAME);
+        let none = track_limits(None, None, dpi(96), FRAME);
         assert_eq!(constrain(os_default(), none), os_default());
     }
 
@@ -306,8 +313,8 @@ mod tests {
                     a_limit_that_is_not_a_size_is_no_limit as fn(),
                 ),
                 (
-                    "a_huge_limit_saturates_instead_of_wrapping",
-                    a_huge_limit_saturates_instead_of_wrapping as fn(),
+                    "a_huge_limit_is_held_at_the_largest_surface",
+                    a_huge_limit_is_held_at_the_largest_surface as fn(),
                 ),
                 (
                     "an_unmeasured_window_is_at_the_base_dpi",

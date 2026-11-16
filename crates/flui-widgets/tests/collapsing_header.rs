@@ -707,10 +707,12 @@ pub(crate) fn collapsing_header_rests_within_half_a_device_pixel() {
     for device in DEVICES {
         for (ratio, expanded) in [(0.5, true), (1.0, false)] {
             let mut screen = Screen::new(extents(), |header| header);
-            screen
-                .laid
-                .pipeline_owner()
-                .with_mut(|owner| owner.set_device_pixel_ratio(ratio));
+            screen.laid.pipeline_owner().with_mut(|owner| {
+                owner.set_device_pixel_ratio(
+                    flui_foundation::geometry::DevicePixelRatio::try_new(ratio)
+                        .expect("a ratio in range"),
+                );
+            });
             screen.laid.enable_semantics();
             screen.laid.replay(&drag(
                 device,

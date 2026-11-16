@@ -16,7 +16,7 @@ use std::sync::{
 use android_activity::AndroidApp;
 use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmittedCommand, ApplyError, FrameRateHint, Unsupported, UnsupportedReason, WindowAppearance,
@@ -24,6 +24,7 @@ use flui_platform::{
 };
 use parking_lot::Mutex;
 
+use crate::display::scale::{RefusedScale, ScaleStreak};
 use crate::host::{self, WindowFacets, WindowPositions};
 use crate::input::regions::ProjectedInputRegions;
 use crate::owner::android::java_view::{ActivityDragSource, JavaView, KeyboardReport};
@@ -92,6 +93,9 @@ pub struct AndroidWindow {
     /// The last refresh-rate request, applied again to every native window that
     /// replaces the one it was made on.
     frame_rate_hint: Arc<Mutex<FrameRateHint>>,
+    /// Whether the last density the loop read was refused, so a run of
+    /// refusals is reported once.
+    scale_streak: Arc<Mutex<ScaleStreak>>,
     /// The published window state (ADR-0237).
     snapshot: Arc<WindowStateCell>,
 }
@@ -163,6 +167,7 @@ impl AndroidWindow {
             preferences,
             displays,
             frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
+            scale_streak: Arc::default(),
             snapshot,
             api,
         }
@@ -285,8 +290,17 @@ impl ActivityWindow for AndroidWindow {
             .publish_report(&self.delivery, || self.sample());
     }
 
-    fn scale(&self) -> f64 {
-        native_scale(&self.app, self.preferences.as_ref())
+    fn scale(&self) -> DevicePixelRatio {
+        // The streak's lock is let go before the refusal is reported.
+        let (scale, refused) = native_scale(
+            &self.app,
+            self.preferences.as_ref(),
+            &mut self.scale_streak.lock(),
+        );
+        if let Some(refused) = refused {
+            refused.report();
+        }
+        scale
     }
 
     /// The view's installation finished: what the window can do now.
@@ -449,15 +463,20 @@ fn native_extent(app: &AndroidApp) -> (i32, i32) {
 
 /// Device pixels per logical pixel: the density the preference source reads
 /// from the Activity's display metrics, else the native configuration's.
-fn native_scale(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> f64 {
+fn native_scale(
+    app: &AndroidApp,
+    preferences: &dyn ActivityPreferences,
+    streak: &mut ScaleStreak,
+) -> (DevicePixelRatio, Option<RefusedScale>) {
     if let Ok(ratio) = preferences.pixel_ratio() {
-        return ratio.get();
+        return (ratio, None);
     }
     // android-activity config returns density as DPI / 160
-    // Default to 2.0 if config is unavailable
+    // Default to 2.0 if config is unavailable; a density that is none is
+    // the hosts' one rule's to read.
     let config = app.config();
     let density = config.density().unwrap_or(320);
-    density as f64 / 160.0
+    streak.read(f64::from(density) / 160.0, "Android configuration density")
 }
 
 /// What the window kept of facts the Activity reported earlier: the night
@@ -483,12 +502,14 @@ fn sample_state(
     kept: &Kept,
 ) -> Sample {
     let (width, height) = native_extent(app);
-    let scale = native_scale(app, preferences);
-    let size = if scale > 0.0 {
-        Size::new(f64::from(width) / scale, f64::from(height) / scale)
-    } else {
-        Size::new(f64::from(width), f64::from(height))
-    };
+    // The loop reports a refused density from its own reading
+    // (`ActivityWindow::scale`); a sample runs where nothing may be reported.
+    let (scale, _reported_by_the_loop) =
+        native_scale(app, preferences, &mut ScaleStreak::default());
+    let size = Size::new(
+        scale.to_logical(f64::from(width)),
+        scale.to_logical(f64::from(height)),
+    );
     let focused = activity.focused.load(Ordering::SeqCst);
     let geometry = flui_platform::WindowExtent::try_new(size).map(|extent| SampledGeometry {
         outer: WindowGeometry::unplaced(extent),
@@ -508,7 +529,7 @@ fn sample_state(
             // No native window (terminated, or not yet made) is no drawable area.
             metrics: flui_foundation::geometry::WindowMetrics::try_new(
                 Size::new(width, height),
-                scale,
+                scale.get(),
             )
             .ok(),
             appearance: kept.appearance,
@@ -708,7 +729,11 @@ impl host::Window<AndroidLoop> for AndroidWindow {
         activity_capabilities(activity_facts(owner.api, owner.displays.as_ref()))
     }
 
-    fn frame_inset(_: &AndroidLoop, _: &WindowPositions<ActivityRef>, _: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &AndroidLoop,
+        _: &WindowPositions<ActivityRef>,
+        _: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         // The Activity fills its display with no frame, title or border.
         Size::new(0.0, 0.0)
     }
@@ -1015,78 +1040,17 @@ mod insets {
     //! the Java view thread.
 
     use android_activity::AndroidApp;
-    use flui_foundation::geometry::{EdgeInsets, Size};
-    use flui_platform::{KeyboardInset, WindowInsets};
+    use flui_foundation::geometry::Size;
+    use flui_platform::WindowInsets;
     use jni::objects::JObject;
     use jni::{Env, JValue, jni_sig, jni_str};
 
     use crate::version::gate::android::{
         AndroidApi, DisplayCutout, InsetsByType, SystemGestureInsets,
     };
+    use crate::window::activity_insets::Edges;
+    pub(super) use crate::window::activity_insets::Sample;
     use crate::window::keyboard_motion::KeyboardMotion;
-
-    /// Device-pixel edges as top, right, bottom, left.
-    type Edges = [i32; 4];
-
-    #[derive(Clone, Copy)]
-    pub(super) struct Sample {
-        size: Size<i32>,
-        /// The system bars and the display cutout.
-        safe_area: Edges,
-        /// The input method's window where it covers the view.
-        keyboard: Edges,
-        /// The edges system gestures take.
-        system_gestures: Edges,
-    }
-
-    impl Sample {
-        /// Whether this sample was taken at `size`.
-        pub(super) fn is_for(self, size: Size<i32>) -> bool {
-            self.size == size
-        }
-
-        /// The sample in logical pixels at `scale`. The keyboard moves along
-        /// `motion` when this sample is that motion's end, and is at rest
-        /// otherwise: a sample alone says only where the keyboard ends up.
-        /// `None` for a sample taken at another size or a scale that makes no
-        /// logical pixels.
-        pub(super) fn logical(
-            self,
-            size: Size<i32>,
-            scale: f64,
-            motion: Option<KeyboardMotion>,
-        ) -> Option<WindowInsets> {
-            if self.size != size
-                || size.width <= 0
-                || size.height <= 0
-                || !scale.is_finite()
-                || scale <= 0.0
-            {
-                return None;
-            }
-            let logical = |[top, right, bottom, left]: Edges| {
-                EdgeInsets::new(
-                    f64::from(top.clamp(0, size.height)) / scale,
-                    f64::from(right.clamp(0, size.width)) / scale,
-                    f64::from(bottom.clamp(0, size.height)) / scale,
-                    f64::from(left.clamp(0, size.width)) / scale,
-                )
-            };
-            let target = logical(self.keyboard);
-            let keyboard = match motion.and_then(|motion| {
-                motion.keyboard(target, self.keyboard[2].clamp(0, size.height), scale)
-            }) {
-                Some(moving) => moving,
-                None => KeyboardInset::try_at_rest(target).ok()?,
-            };
-            WindowInsets::try_new(
-                logical(self.safe_area),
-                keyboard,
-                logical(self.system_gestures),
-            )
-            .ok()
-        }
-    }
 
     #[derive(Clone, Copy)]
     pub(super) enum Query {
@@ -1282,46 +1246,6 @@ mod insets {
             *edge = env.get_field(insets, name, jni_sig!("I"))?.i()?;
         }
         Ok(edges)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn android_insets_native_metrics() {
-            let size = Size::new(1080, 2400);
-            let sample = Sample {
-                size,
-                safe_area: [128, 0, 63, 0],
-                keyboard: [0, 0, 840, 0],
-                system_gestures: [0, 63, 63, 63],
-            };
-            let insets = sample
-                .logical(size, 2.625, None)
-                .expect("a sample at its own size");
-            assert_eq!(
-                insets.safe_area(),
-                EdgeInsets::new(128.0 / 2.625, 0.0, 24.0, 0.0)
-            );
-            assert_eq!(
-                insets.keyboard(),
-                KeyboardInset::try_at_rest(EdgeInsets::new(0.0, 0.0, 320.0, 0.0))
-                    .expect("a valid keyboard"),
-                "a keyboard sampled from the insets is at rest"
-            );
-            assert_eq!(
-                insets.system_gestures(),
-                EdgeInsets::new(0.0, 24.0, 24.0, 24.0)
-            );
-            assert!(
-                sample.logical(Size::new(2400, 1080), 2.625, None).is_none(),
-                "an old portrait reply cannot enter a landscape frame"
-            );
-            for scale in [0.0, f64::INFINITY, f64::NAN, f64::MIN_POSITIVE / 100.0] {
-                assert!(sample.logical(size, scale, None).is_none());
-            }
-        }
     }
 }
 

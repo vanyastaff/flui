@@ -510,7 +510,9 @@ fn a_pixel_ratio_change_retires_the_nodes_it_replaces() {
     let mut owner = frame(&mut scene, owner);
     let first = scene.version().len();
     for ratio in [2.0, 1.5, 3.0] {
-        owner.set_device_pixel_ratio(ratio);
+        owner.set_device_pixel_ratio(
+            flui_foundation::geometry::DevicePixelRatio::try_new(ratio).expect("a ratio in range"),
+        );
         owner = frame(&mut scene, owner);
         assert_eq!(
             scene.version().len(),

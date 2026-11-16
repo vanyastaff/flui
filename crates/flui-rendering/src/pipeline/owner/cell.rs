@@ -90,7 +90,7 @@ impl PipelineCell {
     /// use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     ///
     /// let cell = PipelineCell::new(PipelineOwner::new(flui_rendering::TextContextHandle::standalone()));
-    /// let dpr = cell.with(PipelineOwner::device_pixel_ratio);
+    /// let dpr = cell.with(PipelineOwner::device_pixel_ratio).get();
     /// assert_eq!(dpr, 1.0, "a fresh PipelineOwner defaults to 1x");
     ///
     /// // Nesting is fine -- two coexisting shared borrows never panic.

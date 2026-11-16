@@ -1218,8 +1218,8 @@ pub(crate) mod scroll {
             for value in [-1.0, f64::NAN, f64::INFINITY] {
                 assert!(PixelFactors::from_physical(value, 1.0, DevicePixelRatio::ONE).is_none());
             }
-            let tiny = DevicePixelRatio::try_new(f64::from_bits(1)).expect("finite density");
-            assert!(PixelFactors::from_physical(1.0, 1.0, tiny).is_none());
+            // A factor the smallest ratio grows past every number is refused.
+            assert!(PixelFactors::from_physical(f64::MAX, 1.0, DevicePixelRatio::MIN).is_none());
             assert!(cache.policy().delta(f32::NAN, 0.0).is_none());
         }
     }

@@ -121,23 +121,20 @@ pub(crate) mod geometry {
     /// the point an input method asks about (TSF `GetACPFromPoint`).
     ///
     /// The difference of the two `i32` coordinates is taken in `f64`, where it
-    /// is exact, since it need not fit an `i32`. Dividing it by the ratio can
-    /// still overflow: a ratio below one grows it, and [`DevicePixelRatio`]
-    /// admits any finite positive ratio. A point whose logical coordinates are
-    /// not finite has no position in the document, nearest or exact, so the
-    /// answer is `None`, which the caller reports as a point outside it (TSF
-    /// `TS_E_INVALIDPOINT`).
+    /// is exact, since it need not fit an `i32`. Dividing it by the ratio
+    /// keeps it finite: [`DevicePixelRatio`] is at least
+    /// [`DevicePixelRatio::MIN`], so the largest difference grows to at most
+    /// 32 times 2³², far inside `f64`.
     #[must_use]
     pub fn screen_point_to_client(
         screen: DevicePoint,
         client_origin: DevicePoint,
         ratio: DevicePixelRatio,
-    ) -> Option<Point<f64>> {
-        let point = Point::new(
+    ) -> Point<f64> {
+        Point::new(
             ratio.to_logical(f64::from(screen.x) - f64::from(client_origin.x)),
             ratio.to_logical(f64::from(screen.y) - f64::from(client_origin.y)),
-        );
-        (point.x.is_finite() && point.y.is_finite()).then_some(point)
+        )
     }
 
     /// `device` rounded outwards by `round`, unless it is within

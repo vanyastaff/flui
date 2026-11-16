@@ -24,6 +24,8 @@ pub(crate) mod state;
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod activity;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod activity_insets;
 #[cfg(target_os = "android")]
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]

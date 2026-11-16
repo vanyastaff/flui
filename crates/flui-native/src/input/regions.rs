@@ -41,25 +41,17 @@ impl ProjectedInputRegions {
     /// region at a fractional scale keeps at least one pixel. A region whose device edges
     /// are not finite, or whose rounded edges or width and height are not representable as
     /// `i32`, is dropped with a diagnostic rather than saturated or wrapped; an empty one is
-    /// dropped silently. A `scale` that is zero, negative or not finite projects nothing:
-    /// the call reports it and keeps what the OS holds.
+    /// dropped silently.
     pub(crate) fn update(
         &mut self,
         regions: &[InputRegion],
-        scale: f64,
+        ratio: DevicePixelRatio,
         display: Option<DisplayId>,
     ) -> Option<&[DeviceInputRegion]> {
-        let Some(ratio) = DevicePixelRatio::try_new(scale) else {
-            tracing::warn!(
-                scale,
-                "input regions not projected: the window scale is not a positive finite number"
-            );
-            return None;
-        };
         self.scratch.clear();
         self.scratch
             .extend(regions.iter().filter_map(|region| project(*region, ratio)));
-        let key = Some((scale.to_bits(), display));
+        let key = Some((ratio.get().to_bits(), display));
         let unchanged = if self.key.is_none() {
             self.scratch.is_empty()
         } else {

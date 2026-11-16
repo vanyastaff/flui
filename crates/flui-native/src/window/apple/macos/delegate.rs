@@ -720,18 +720,27 @@ impl MacOSWindow {
         // SAFETY: `ns_window` is alive for the lifetime of `self`; the
         // content view is NIL-checked before use.
         unsafe {
-            let new_scale: f64 = msg_send![self.ns_window, backingScaleFactor];
+            let reported: f64 = msg_send![self.ns_window, backingScaleFactor];
 
-            // Update window state
-            let changed = {
+            // Update window state, by the hosts' one rule; the refusal and
+            // the change are reported once the state is let go.
+            let (changed, new_scale, refused) = {
                 let mut state = self.state.lock();
-                let changed = (state.scale_factor - new_scale).abs() > 0.01;
+                let (new_scale, refused) = state
+                    .scale_streak
+                    .read(reported, "NSWindow backingScaleFactor");
+                let changed = (state.scale_factor.get() - new_scale.get()).abs() > 0.01;
                 if changed {
                     state.scale_factor = new_scale;
-                    tracing::info!("Window scale factor changed to {}", new_scale);
                 }
-                changed
+                (changed, new_scale, refused)
             };
+            if let Some(refused) = refused {
+                refused.report();
+            }
+            if changed {
+                tracing::info!("Window scale factor changed to {}", new_scale.get());
+            }
 
             // Re-read the display in the same pass: this handler is reached on
             // both a backing-properties change and a screen change

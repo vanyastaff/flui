@@ -2890,9 +2890,11 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
         .physics(physics)
         .child(SizedBox::new(300.0, 5000.0));
     let scoped = fling_scoped(widget, Vsync::new(), tight(300.0, 300.0));
-    scoped
-        .pipeline_owner()
-        .with_mut(|owner| owner.set_device_pixel_ratio(2.0));
+    scoped.pipeline_owner().with_mut(|owner| {
+        owner.set_device_pixel_ratio(
+            flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+        );
+    });
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0);
     scoped.dispatch_pointer_move(150.0, 150.0);
@@ -3696,7 +3698,10 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                 SizedBox::new(300.0, 4800.0).boxed(),
             ]));
         let mut host = HeadlessHost::new(HeadlessWindow::new(300, 300));
-        host.set_scale_factor(host.primary_window(), 2.0);
+        host.set_scale_factor(
+            host.primary_window(),
+            flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+        );
         host.attach(&parent)
             .expect("mount dense nested scroll owner");
         let _ = host.pump(Duration::ZERO);

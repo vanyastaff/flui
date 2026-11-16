@@ -1147,7 +1147,7 @@ mod input {
             type Found = Option<([f32; 7], Option<CharacterBounds>)>;
             let found: Rc<RefCell<Found>> = Rc::default();
             let out = Rc::clone(&found);
-            let scale = self.view.scale();
+            let scale = self.view.scale().get();
             let grant = LockGrant::read(move |session| {
                 let caret = session.rect_for_range(session.selection().range());
                 if let Ok(caret) = caret {
