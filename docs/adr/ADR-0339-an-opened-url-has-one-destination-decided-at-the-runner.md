@@ -90,7 +90,7 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl>, dropped_as: Lo
   goes in; being opened, the URL is bound to that opening, delivered when it commits and refused
   when it fails; closed, the desktop opens it for the URL (§4) and the other runners wait for the
   window their host opens; while the loop's state is borrowed it is not known (`Busy`), and the URL
-  waits a turn. The one function that answers this (`destination`) is what the routing
+  waits for the owner turn its delivery asks for. The one function that answers this (`destination`) is what the routing
   step, the loans of §5 and the reopen ask: a window being built takes the application's URL only
   when it is the main window being opened. URLs held for that target open first, so
   the order is the platform's. The window a URL reaches is made visible to the user, on every host:
@@ -191,7 +191,8 @@ its GPU slot, one attempt in thirty turns, then the refusal), the in-crate
 `a_link_into_a_window_closed_before_it_commits_is_refused` (§5: a window closed after its
 installation was submitted is not reopened), with `a_loan_is_committed_or_returns_its_urls_without_routing`,
 `a_loan_dropped_during_an_unwind_only_returns_its_urls` and
-`a_loan_dropped_while_the_loops_state_is_borrowed_asks_for_its_turn` for the guard itself (the exits no test
+`a_loan_dropped_while_the_loops_state_is_borrowed_asks_for_its_turn` for the guard itself, and
+`a_link_that_finds_the_loops_state_borrowed_is_routed_on_the_turn_it_asks_for` (§2) (the exits no test
 reaches are in
 [gaps](../gaps.md#some-exits-of-a-windows-installation-have-no-test)),
 `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end`,

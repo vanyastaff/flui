@@ -320,8 +320,13 @@ impl OpenRouting {
                         reveal(address);
                     }
                 }
-                Destination::Waiting(_) => {
+                Destination::Waiting(wait) => {
                     self.hold(urls);
+                    // Nothing else may wake an idle application for a URL
+                    // that found the loop's state borrowed.
+                    if wait == Wait::Busy {
+                        self.request_turn();
+                    }
                     self.route_held_into(&mut first);
                 }
                 Destination::Refused(refusal) => refusal.report_urls(urls.len()),
@@ -388,7 +393,7 @@ impl OpenRouting {
             };
             match (url.bound, wait) {
                 (Some(bound), _) if failures > bound => Some(Refusal::WindowFailed),
-                (Some(_), _) | (None, Wait::Later) => None,
+                (Some(_), _) | (None, Wait::Later | Wait::Busy) => None,
                 (None, Wait::MainOpening) => {
                     url.bound = Some(failures);
                     None
@@ -575,16 +580,20 @@ impl OpenRouting {
             .into_iter()
             .filter(|target| match destination(*target) {
                 Destination::Waiting(Wait::MainOpening | Wait::MainClosed) => builds_main,
-                Destination::Waiting(Wait::Later) => WindowRegistry::names_window(*target, window),
+                Destination::Waiting(Wait::Later | Wait::Busy) => {
+                    WindowRegistry::names_window(*target, window)
+                }
                 Destination::Open(..) | Destination::Refused(_) => false,
             })
             .collect();
         let mut loan = self.lend(&lent)?;
-        loan.open_each(|url| {
-            if let Err(error) = ui_runtime.open_url(presentation, url) {
+        let refused = loan.open_each(|url| ui_runtime.open_url(presentation, url));
+        for error in refused {
+            // A subscriber is user code: its panic is not the navigation's.
+            super::terminal::contain_diagnostic(|| {
                 tracing::info!(refusal = error.reason(), "an opened URL was not opened");
-            }
-        });
+            });
+        }
         Some(loan)
     }
 
@@ -605,14 +614,16 @@ impl OpenRouting {
             .filter(|target| match destination(*target) {
                 Destination::Open(_, opened) => opened == address,
                 Destination::Waiting(Wait::MainOpening | Wait::MainClosed) => installs_main,
-                Destination::Waiting(Wait::Later) | Destination::Refused(_) => false,
+                Destination::Waiting(Wait::Later | Wait::Busy) | Destination::Refused(_) => false,
             })
             .collect();
         let mut loan = self.lend(&targets)?;
         let host = installed_host()?;
-        loan.open_each(|url| {
-            open_url(&host, address, url.to_owned());
-        });
+        let refused = loan.open_each(|url| dispatch_url(&host, address, url.to_owned()));
+        for error in refused {
+            // A subscriber is user code: its panic is not the navigation's.
+            super::terminal::contain_diagnostic(|| report_unreached(address, &error));
+        }
         Some(loan)
     }
 
@@ -690,15 +701,23 @@ impl OpenedLoan {
     /// as that panic: the panic resumes once every URL had its turn, failing
     /// the installation that runs this, and the loan's URLs are refused for
     /// it (ADR-0339 §6).
-    fn open_each(&mut self, mut open: impl FnMut(&str)) {
+    ///
+    /// `open` runs the navigation alone and returns why a URL did not reach
+    /// the window; the refusals come back to be logged outside it, so a
+    /// subscriber's panic is never taken for the navigation's.
+    fn open_each<E>(&mut self, mut open: impl FnMut(&str) -> Result<(), E>) -> Vec<E> {
         let mut first = FirstPanic::new();
+        let mut refused = Vec::new();
         for held in &self.urls {
-            first.contain(|| open(&held.url));
+            if let Some(Err(error)) = first.contain(|| open(&held.url)) {
+                refused.push(error);
+            }
         }
         if first.is_held() {
             self.dropped_as = LoanEnd::NavigationPanicked;
         }
         first.resume();
+        refused
     }
 
     /// The installation committed: the URLs are its window's.
@@ -1005,9 +1024,11 @@ enum Wait {
     /// The main window, not open and not being opened: the reopen route
     /// starts its opening for the URL, where the run has one.
     MainClosed,
-    /// Its own window's installation, under way, or a later turn while the
-    /// loop's state is busy.
+    /// Its own window's installation, under way.
     Later,
+    /// The loop's state is borrowed, so no destination can be read now: the
+    /// next owner turn routes the URL.
+    Busy,
 }
 
 /// The run's installed host, unless the loop's state is busy or gone.
@@ -1028,7 +1049,7 @@ fn installed_host() -> Option<super::InstalledHost> {
 /// first, waiting while it is being opened or closed.
 fn destination(target: OpenTarget) -> Destination {
     let Some(host) = installed_host() else {
-        return Destination::Waiting(Wait::Later);
+        return Destination::Waiting(Wait::Busy);
     };
     let main = super::host::main_window();
     let main_address = match main {
@@ -1038,7 +1059,8 @@ fn destination(target: OpenTarget) -> Destination {
     match host.open_target(target, main_address) {
         OpenDestination::Presentation(address) => Destination::Open(host, address),
         OpenDestination::Pending => Destination::Waiting(match (target, main) {
-            (OpenTarget::Window(_), _) | (_, MainWindow::Busy) => Wait::Later,
+            (OpenTarget::Window(_), _) => Wait::Later,
+            (_, MainWindow::Busy) => Wait::Busy,
             (_, MainWindow::Opening) => Wait::MainOpening,
             (_, MainWindow::Open(_) | MainWindow::Closed) => Wait::MainClosed,
         }),
@@ -1058,26 +1080,31 @@ fn open_urls(
 ) -> usize {
     let mut reached = 0_usize;
     for url in urls {
-        if first.contain(|| open_url(host, address, url)) == Some(true) {
-            reached += 1;
+        match first.contain(|| dispatch_url(host, address, url)) {
+            Some(Ok(())) => reached += 1,
+            Some(Err(error)) => report_unreached(address, &error),
+            None => {}
         }
     }
     reached
 }
 
-/// Open `url` in the presentation at `address`; whether it reached it.
-fn open_url(host: &super::InstalledHost, address: PresentationAddress, url: String) -> bool {
-    let opened = host
-        .logical()
+/// Hand `url` to the presentation at `address`, in order with its accepted
+/// work; why it did not reach it.
+fn dispatch_url(
+    host: &super::InstalledHost,
+    address: PresentationAddress,
+    url: String,
+) -> Result<(), flui_runtime::owner::DispatchError> {
+    host.logical()
         .presentation_dispatcher(address)
-        .and_then(|target| target.open_url(url, host.effects()));
-    match opened {
-        Ok(_) => true,
-        Err(error) => {
-            tracing::warn!(?address, %error, "an opened URL could not reach its window");
-            false
-        }
-    }
+        .and_then(|target| target.open_url(url, host.effects()))
+        .map(|_delivery| ())
+}
+
+/// Log that an opened URL did not reach the presentation at `address`.
+fn report_unreached(address: PresentationAddress, error: &flui_runtime::owner::DispatchError) {
+    tracing::warn!(?address, %error, "an opened URL could not reach its window");
 }
 #[cfg(all(test, feature = "single-instance", any(target_os = "linux", windows)))]
 mod tests {
@@ -1147,7 +1174,7 @@ mod loan_tests {
     use flui_platform::{Launch, OpenTarget, Opened};
     use flui_view::navigation::OpenDeclarations;
 
-    use super::{APP_RUNTIME, LoanEnd, OpenRouting, OpenSettings, OpenedLoan};
+    use super::{LoanEnd, OpenRouting, OpenSettings};
 
     /// A routing that declares `myapp`, with no run on this thread: a URL
     /// finds no window, so one for the application stays held.
@@ -1290,7 +1317,7 @@ mod loan_tests {
             reason = "the test unwinds out of the navigation on purpose"
         )]
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            loan.open_each(|_| panic!("the navigation panics"));
+            let _refused: Vec<()> = loan.open_each(|_| panic!("the navigation panics"));
         }));
         assert!(unwound.is_err(), "the navigation's panic leaves the loan");
         assert_eq!(
@@ -1308,8 +1335,17 @@ mod loan_tests {
     /// A loan that ends while the loop's state is borrowed (an installation
     /// dropped under a borrow of it) still asks the owner for a turn, through
     /// the proxy the routing keeps, and that turn routes what it returned.
+    // The headless kit that runs an owner is built where `crate::testing` is.
+    #[cfg(all(
+        feature = "testing",
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
     #[test]
     fn a_loan_dropped_while_the_loops_state_is_borrowed_asks_for_its_turn() {
+        use super::{APP_RUNTIME, OpenedLoan};
+
         flui_testing::disarm_interest_cache();
         let run = crate::testing::HeadlessRun::start_resident(
             crate::app::Application::new()
@@ -1341,6 +1377,61 @@ mod loan_tests {
             log.count_containing("its window could not be opened"),
             1,
             "the turn the loan asked for routed it: {log}"
+        );
+        drop(run);
+    }
+
+    /// A link the platform reports while the loop's state is borrowed finds
+    /// no destination yet; with nothing else happening in the resident
+    /// application, the turn its delivery asked for routes it: it opens the
+    /// main window.
+    // The headless kit that runs an owner is built where `crate::testing` is.
+    #[cfg(all(
+        feature = "testing",
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    #[test]
+    fn a_link_that_finds_the_loops_state_borrowed_is_routed_on_the_turn_it_asks_for() {
+        use super::APP_RUNTIME;
+
+        flui_testing::disarm_interest_cache();
+        let run = crate::testing::HeadlessRun::start_resident(
+            crate::app::Application::new()
+                .declares(OpenDeclarations::new().url_schemes(&["myapp"]))
+                .config(
+                    crate::app::AppConfig::new().exit_policy(crate::app::ExitPolicy::ExplicitQuit),
+                ),
+            |_: &crate::app::AppHandle| flui_widgets::SizedBox::new(1.0, 1.0),
+        );
+        run.run_owner_turn();
+        run.run_owner_turn();
+        assert!(
+            run.open_windows().is_empty(),
+            "a resident run starts with no window"
+        );
+        let routing = super::super::host::current_open_routing()
+            .expect("the run routes what the system opens");
+        APP_RUNTIME.with(|slot| {
+            let _busy = slot.borrow_mut();
+            routing.deliver(
+                Opened::bounded(
+                    ["myapp:///a".to_owned()],
+                    [],
+                    OpenTarget::Application,
+                    Launch::Running,
+                )
+                .0,
+            );
+        });
+        for _ in 0..4 {
+            run.run_owner_turn();
+        }
+        assert_eq!(
+            run.open_windows().len(),
+            1,
+            "the turn the delivery asked for routed the link, which opened the main window"
         );
         drop(run);
     }

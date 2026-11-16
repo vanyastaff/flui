@@ -555,7 +555,8 @@ here is where the code keeps it.
 - `destination` is the one authority: the routing step, the loans (`open_held_in`,
   `lend_to_installing`) and the reopen ask it. A URL for the application goes to the main window
   alone (`host::main_window`: `Open`, `Opening`, `Closed` on every runner, `Busy` while the loop's
-  state is borrowed, when the URL waits a turn; the desktop reads its
+  state is borrowed, when the URL is held and `deliver` asks for the owner turn that routes it
+  (`Wait::Busy`); the desktop reads its
   `Ingress`, the other runners their one window), never a focused or first-opened other window;
   a window being built takes it only as the main window being opened (`is_main_window`, which each runner states).
 - Each owner turn calls `host::route_owed_opened_urls` (desktop and web in the owner-turn hook,
