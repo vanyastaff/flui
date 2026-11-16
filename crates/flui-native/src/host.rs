@@ -35,9 +35,9 @@
 
 mod clipboard;
 
-#[cfg(any(wayland_host, x11_host))]
+#[cfg(any(wayland_host, x11_host, windows))]
 pub(crate) use clipboard::MAX_TEXT;
-#[cfg(any(target_arch = "wasm32", wayland_host, x11_host))]
+#[cfg(any(target_arch = "wasm32", wayland_host, x11_host, test))]
 pub(crate) use clipboard::owned_text;
 #[cfg(windows)]
 pub(crate) use clipboard::text_fits;
@@ -615,18 +615,19 @@ impl<W: ?Sized> Text<W> for Absent<position::Text> {
 }
 
 /// A host without a clipboard reads none: a read answers
-/// [`ClipboardError::Unavailable`](flui_platform::ClipboardError), a write
-/// is dropped.
+/// [`ClipboardError::Unavailable`](flui_platform::ClipboardError), and a
+/// write is refused with it.
 impl SyncClipboard for Absent<position::Clipboard> {
     fn read_now(&self) -> flui_platform::ClipboardRead {
         Err(flui_platform::ClipboardError::Unavailable)
     }
 
-    fn write_now(&self, write: flui_platform::ClipboardWrite) {
+    fn write_now(&self, write: flui_platform::ClipboardWrite) -> flui_platform::ClipboardWritten {
         drop(write);
+        Err(flui_platform::ClipboardError::Unavailable)
     }
 
-    /// A dropped write is kept nowhere.
+    /// A refused write is kept nowhere, so nothing can keep a history of it.
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Honored
     }

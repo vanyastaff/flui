@@ -33,11 +33,13 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 
-use flui_platform::{ClipboardRead, ClipboardWrite, Concealment, capability::Resolver};
+use flui_platform::{
+    ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, capability::Resolver,
+};
 use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
-use self::selection::{Command, Generation, Name, Notice, Selections};
+use self::selection::{Command, Generation, Name, Notice, Owed, Selections};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::error::PlatformError;
 use crate::host;
@@ -110,11 +112,13 @@ impl X11Clipboard {
     }
 
     /// Send `command` and wake the thread for it. A thread that has ended
-    /// drops the command, and a read's resolver with it, which answers
-    /// nothing rather than waiting forever.
+    /// takes no command: a read or write is answered
+    /// [`ClipboardError::Gone`](flui_platform::ClipboardError::Gone).
     fn send(&self, command: Command) {
-        if self.commands.send(command).is_ok() {
-            ring(&self.bell);
+        match self.commands.send(command) {
+            Ok(()) => ring(&self.bell),
+            // The command drops here, and its read or write answers `Gone`.
+            Err(mpsc::SendError(command)) => drop(command),
         }
     }
 
@@ -192,11 +196,15 @@ fn ring(bell: &OwnedFd) {
 
 impl host::NativeClipboard for X11Clipboard {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        self.send(Command::Read(Name::Clipboard, answer));
+        self.send(Command::Read(Name::Clipboard, Owed::new(answer)));
     }
 
-    fn write(&self, write: ClipboardWrite) {
-        self.send(Command::Write(write));
+    /// Answered once the clipboard thread owns the selection with the write,
+    /// or another client took it first; [`Gone`] once the thread has ended.
+    ///
+    /// [`Gone`]: flui_platform::ClipboardError::Gone
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
+        self.send(Command::Write(write, Owed::new(answer)));
     }
 
     /// A concealed write is offered with KDE's password-manager hint, which
@@ -235,7 +243,7 @@ impl host::NativePrimarySelection for X11Clipboard {
         match self.current() {
             // Asked with nothing held: the closure may call back in.
             Some(text) => answer_with(text, answer),
-            None => self.send(Command::Read(Name::Primary, answer)),
+            None => self.send(Command::Read(Name::Primary, Owed::new(answer))),
         }
     }
 }

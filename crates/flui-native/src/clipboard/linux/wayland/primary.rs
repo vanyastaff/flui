@@ -23,6 +23,16 @@
 //!   pipe meanwhile.
 //! - **A read of the application's own selection** asks its closure at
 //!   once, again with nothing held.
+//! - **A claim with no input in focus to set it under is kept in the
+//!   process**: a middle press in the same application pastes it, until
+//!   another client's selection arrives, which drops it. The serial is the
+//!   clipboard's ([`LastInput::latest_in_focus`]): none from before the
+//!   keyboard left the window, or from a window that closed. A claim answers
+//!   nobody, so this keeping promises no one anything.
+//! - **After the loop releases the selection** a read answers
+//!   [`ClipboardError::Gone`].
+//!
+//! [`LastInput::latest_in_focus`]: crate::owner::linux::wayland::LastInput::latest_in_focus
 
 use std::os::fd::OwnedFd;
 use std::rc::Rc;
@@ -64,6 +74,8 @@ pub(super) struct Primary {
     sends: Vec<Request>,
     /// The reads of other clients' selections under way.
     reads: super::SelectionReads,
+    /// The loop let go of the selection: a read can no longer succeed.
+    released: bool,
 }
 
 struct PrimaryDevice {
@@ -195,6 +207,7 @@ impl Primary {
 
     /// Everything to let go of as the loop ends.
     pub(super) fn take(&mut self) -> Released {
+        self.released = true;
         Released {
             devices: std::mem::take(&mut self.devices),
             owned: self.owned.take(),
@@ -241,7 +254,8 @@ impl Released {
 /// The primary selection of [`super::SeatClipboard`].
 impl super::SeatClipboard {
     pub(super) fn offer_primary(&self, text: SelectionText) {
-        let last = self.shared.last_input.latest();
+        // A claim is set only under a serial this window may still use.
+        let last = self.shared.last_input.latest_in_focus();
         let previous = self.shared.primary.with(|primary| {
             let source = last.and_then(|input| {
                 let (_, manager) = primary.manager.as_ref()?;
@@ -291,6 +305,9 @@ impl super::SeatClipboard {
             .shared
             .primary
             .with(|primary| {
+                if primary.released {
+                    return Read::Now(Err(ClipboardError::Gone));
+                }
                 let device = primary
                     .devices
                     .iter()
@@ -314,7 +331,8 @@ impl super::SeatClipboard {
                     })
                     .unwrap_or(Read::Now(Ok(None)))
             })
-            .unwrap_or(Read::Now(Err(ClipboardError::Unavailable)));
+            // Off the owner thread no read can reach the selection.
+            .unwrap_or(Read::Now(Err(ClipboardError::Gone)));
         match read {
             // A retired owner has nobody left to answer.
             Read::Now(text) => drop(answer.resolve(text)),

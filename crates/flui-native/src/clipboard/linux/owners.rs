@@ -2,92 +2,106 @@
 //!
 //! A Wayland selection belongs to one seat's data device: the application
 //! sets its text as the selection of the seat the last input came from, and
-//! another seat keeps whatever selection it held. Before any input it holds
-//! its text in this process alone, under no seat.
+//! another seat keeps whatever selection it held.
 //!
 //! [`Owners`] keeps one entry for each seat the application set a selection
-//! on, and at most one held under none, newest last. A write replaces only
-//! the entry of its own seat, so a copy on one seat never releases what
-//! another seat holds; a read on a seat answers the newest entry set on it
-//! or held under none.
+//! on, and at most one text kept in this process alone: a write on a seat
+//! with no data device, or under a compositor with no data device manager,
+//! has no system clipboard to go to and answers `ApplicationOnly`
+//! (ADR-0337 §1). The kept text is the newest selection while it lives:
+//! every read answers it, and it gives way to a newer write or to the first
+//! selection that arrives. It is never offered to a seat later: a selection
+//! the compositor re-sends as the keyboard enters and a newer copy made in
+//! another application look the same, so an offer could overwrite the
+//! user's copy.
 
-/// The application's selections by seat, newest last: at most one entry
-/// per seat, and at most one under no seat (`None`).
+/// The application's selections by seat, and the text kept under none.
 pub(crate) struct Owners<S, T> {
-    entries: Vec<(Option<S>, T)>,
+    /// One entry per seat.
+    seated: Vec<(S, T)>,
+    /// The text kept in this process alone, newer than every seated entry.
+    kept: Option<T>,
 }
 
 impl<S, T> Default for Owners<S, T> {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            seated: Vec::new(),
+            kept: None,
         }
     }
 }
 
 impl<S: PartialEq, T> Owners<S, T> {
-    /// Sets `item` as the newest selection of `seat`, and returns the one it
-    /// replaces on that seat, for its owner to release.
-    pub(crate) fn set(&mut self, seat: Option<S>, item: T) -> Option<T> {
-        let replaced = self
-            .entries
+    /// Sets `item` as `seat`'s selection, a write newer than the text kept
+    /// under no seat, which it replaces. Returns what it replaces (`seat`'s
+    /// earlier selection, then the kept text), for its owner to release.
+    pub(crate) fn set(&mut self, seat: S, item: T) -> impl Iterator<Item = T> + use<S, T> {
+        let earlier = self
+            .seated
             .iter()
             .position(|(held, _)| *held == seat)
-            .map(|at| self.entries.remove(at).1);
-        self.entries.push((seat, item));
-        replaced
+            .map(|at| self.seated.remove(at).1);
+        let kept = self.kept.take();
+        self.seated.push((seat, item));
+        earlier.into_iter().chain(kept)
     }
 
-    /// The selection set on `seat`, made the newest: a write that changes it
-    /// in place is the last one made.
+    /// Keeps `item` in this process alone. Returns the text kept before,
+    /// which it replaces.
+    pub(crate) fn keep(&mut self, item: T) -> Option<T> {
+        self.kept.replace(item)
+    }
+
+    /// Takes the kept text: a newer write answered for the clipboard, or a
+    /// selection arrived.
+    pub(crate) fn take_kept(&mut self) -> Option<T> {
+        self.kept.take()
+    }
+
+    /// The selection set on `seat`.
     pub(crate) fn get_mut(&mut self, seat: &S) -> Option<&mut T> {
-        let at = self
-            .entries
-            .iter()
-            .position(|(held, _)| held.as_ref() == Some(seat))?;
-        let entry = self.entries.remove(at);
-        self.entries.push(entry);
-        self.entries.last_mut().map(|(_, item)| item)
-    }
-
-    /// The selection a read on `seat` answers: the newest set on that seat or
-    /// held under none. A read with no seat answers only the one held under
-    /// none.
-    pub(crate) fn read(&self, seat: Option<&S>) -> Option<&T> {
-        self.entries
-            .iter()
-            .rev()
-            .find(|(held, _)| held.is_none() || held.as_ref() == seat)
+        self.seated
+            .iter_mut()
+            .find(|(held, _)| held == seat)
             .map(|(_, item)| item)
     }
 
-    /// The first selection `matches` names, in place.
+    /// The selection a read on `seat` answers: the kept text while there is
+    /// one, else the one set on that seat. A read with no seat answers only
+    /// the kept text.
+    pub(crate) fn read(&self, seat: Option<&S>) -> Option<&T> {
+        if let Some(kept) = &self.kept {
+            return Some(kept);
+        }
+        let seat = seat?;
+        self.seated
+            .iter()
+            .find(|(held, _)| held == seat)
+            .map(|(_, item)| item)
+    }
+
+    /// The first seated selection `matches` names, in place.
     pub(crate) fn find_mut(&mut self, matches: impl Fn(&T) -> bool) -> Option<&mut T> {
-        self.entries
+        self.seated
             .iter_mut()
             .map(|(_, item)| item)
             .find(|item| matches(item))
     }
 
-    /// Removes the first selection `matches` names: the one whose source the
-    /// compositor cancelled.
+    /// Removes the first seated selection `matches` names: the one whose
+    /// source the compositor cancelled.
     pub(crate) fn remove(&mut self, matches: impl Fn(&T) -> bool) -> Option<T> {
-        let at = self.entries.iter().position(|(_, item)| matches(item))?;
-        Some(self.entries.remove(at).1)
+        let at = self.seated.iter().position(|(_, item)| matches(item))?;
+        Some(self.seated.remove(at).1)
     }
 
-    /// Removes the selection held under no seat: another client's selection
-    /// arrived, and it is the selection now.
-    pub(crate) fn remove_unseated(&mut self) -> Option<T> {
-        let at = self.entries.iter().position(|(held, _)| held.is_none())?;
-        Some(self.entries.remove(at).1)
-    }
-
-    /// Every selection, oldest first, for its owner to release.
+    /// Every selection, the kept text last, for its owner to release.
     pub(crate) fn into_items(self) -> Vec<T> {
-        self.entries
+        self.seated
             .into_iter()
             .map(|(_, item)| item)
+            .chain(self.kept)
             .collect::<Vec<T>>()
     }
 }
@@ -101,54 +115,47 @@ mod tests {
     #[test]
     fn a_copy_on_one_seat_keeps_the_other_seats_selection() {
         let mut owners = Owners::<u32, &str>::default();
-        assert_eq!(owners.set(Some(1), "first on 1"), None);
-        assert_eq!(owners.set(Some(2), "on 2"), None);
-        assert_eq!(owners.set(Some(1), "second on 1"), Some("first on 1"));
+        assert_eq!(owners.set(1, "first on 1").count(), 0);
+        assert_eq!(owners.set(2, "on 2").count(), 0);
+        assert_eq!(
+            owners.set(1, "second on 1").collect::<Vec<&str>>(),
+            ["first on 1"]
+        );
         assert_eq!(owners.read(Some(&1)), Some(&"second on 1"));
         assert_eq!(owners.read(Some(&2)), Some(&"on 2"));
         assert_eq!(owners.into_items(), ["on 2", "second on 1"]);
     }
 
-    /// Text held under no seat answers every seat that set nothing newer, and
-    /// a read with no seat; a seat's own newer selection wins on that seat.
+    /// Kept text answers every seat and a read with no seat; a newer write
+    /// on any seat replaces it, as a newer kept text does, and so does the
+    /// first selection that arrives.
     #[test]
-    fn text_held_under_no_seat_answers_until_a_newer_one() {
+    fn kept_text_gives_way_to_a_newer_write_or_a_selection() {
         let mut owners = Owners::<u32, &str>::default();
-        assert_eq!(owners.set(Some(1), "on 1"), None);
-        assert_eq!(owners.set(None, "held"), None);
-        assert_eq!(owners.read(Some(&1)), Some(&"held"));
-        assert_eq!(owners.read(Some(&2)), Some(&"held"));
-        assert_eq!(owners.read(None), Some(&"held"));
-        assert_eq!(owners.set(Some(2), "on 2"), None);
-        assert_eq!(owners.read(Some(&2)), Some(&"on 2"));
-        assert_eq!(owners.read(Some(&1)), Some(&"held"));
-        assert_eq!(owners.remove_unseated(), Some("held"));
+        owners.set(1, "on 1").for_each(drop);
+        assert_eq!(owners.keep("kept"), None);
+        assert_eq!(owners.read(Some(&2)), Some(&"kept"));
+        assert_eq!(owners.read(None), Some(&"kept"));
+        assert_eq!(owners.keep("kept again"), Some("kept"));
+        assert_eq!(owners.set(2, "on 2").collect::<Vec<&str>>(), ["kept again"]);
         assert_eq!(owners.read(Some(&1)), Some(&"on 1"));
+        assert_eq!(owners.read(Some(&2)), Some(&"on 2"));
         assert_eq!(owners.read(None), None);
+
+        owners.keep("kept for want of a device");
+        assert_eq!(owners.take_kept(), Some("kept for want of a device"));
+        assert_eq!(owners.read(Some(&1)), Some(&"on 1"));
     }
 
     /// A cancelled source removes its own entry alone.
     #[test]
     fn a_cancelled_selection_leaves_the_others() {
         let mut owners = Owners::<u32, &str>::default();
-        owners.set(Some(1), "on 1");
-        owners.set(Some(2), "on 2");
+        owners.set(1, "on 1").for_each(drop);
+        owners.set(2, "on 2").for_each(drop);
         assert_eq!(owners.remove(|item| *item == "on 1"), Some("on 1"));
         assert_eq!(owners.remove(|item| *item == "on 1"), None);
         assert_eq!(owners.read(Some(&1)), None);
         assert_eq!(owners.read(Some(&2)), Some(&"on 2"));
-    }
-
-    /// A selection changed in place is the newest: it answers its seat over
-    /// text held under no seat since.
-    #[test]
-    fn a_selection_changed_in_place_is_the_newest() {
-        let mut owners = Owners::<u32, &str>::default();
-        owners.set(Some(1), "on 1");
-        owners.set(None, "held");
-        assert_eq!(owners.get_mut(&2), None);
-        *owners.get_mut(&1).expect("set on 1") = "changed on 1";
-        assert_eq!(owners.read(Some(&1)), Some(&"changed on 1"));
-        assert_eq!(owners.into_items(), ["held", "changed on 1"]);
     }
 }
