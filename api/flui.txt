@@ -9563,51 +9563,6 @@ pub fn flui::native::NativeWindow::with<R>(&self, f: impl FnOnce(&dyn flui::nati
 pub enum flui::native::NativeWindowCapability
 impl core::fmt::Debug for flui::native::NativeWindowCapability
 impl flui::platform::capability::Capability for flui::native::NativeWindowCapability { type Handle = flui::native::NativeWindow; }
-pub mod flui::native::windows
-pub struct flui::native::windows::Win32Window<'a>(_)
-impl<'a> Clone for flui::native::windows::Win32Window<'a>
-impl<'a> Copy for flui::native::windows::Win32Window<'a>
-impl<'a> core::fmt::Debug for flui::native::windows::Win32Window<'a>
-pub fn flui::native::windows::Win32Window::backdrop(self) -> Result<flui::native::windows::WindowsBackdrop, flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::corner_preference(self) -> Result<flui::platform::os_options::WindowsCornerPreference, flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::dark_mode(self) -> Result<bool, flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::dpi(self) -> Result<u32, flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::set_backdrop(self, backdrop: flui::native::windows::WindowsBackdrop) -> Result<(), flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::set_corner_preference(self, preference: flui::platform::os_options::WindowsCornerPreference) -> Result<(), flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::set_dark_mode(self, dark: bool) -> Result<(), flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::set_theme(self, theme: flui::platform::os_options::WindowsTheme) -> Result<(), flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::set_title_bar_color(self, color: Option<flui::prelude::Color>) -> Result<(), flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-pub fn flui::native::windows::Win32Window::theme(self) -> Result<flui::platform::os_options::WindowsTheme, flui::native::windows::Win32WindowError> // impl flui::native::windows::Win32Window<'_>
-#[non_exhaustive] pub enum flui::native::windows::Win32WindowError
-impl Clone for flui::native::windows::Win32WindowError
-impl Copy for flui::native::windows::Win32WindowError
-impl Eq for flui::native::windows::Win32WindowError
-impl From<flui::platform::Unsupported> for flui::native::windows::Win32WindowError
-impl PartialEq for flui::native::windows::Win32WindowError
-impl core::error::Error for flui::native::windows::Win32WindowError
-impl core::fmt::Debug for flui::native::windows::Win32WindowError
-impl core::fmt::Display for flui::native::windows::Win32WindowError
-impl core::marker::StructuralPartialEq for flui::native::windows::Win32WindowError
-variant flui::native::windows::Win32WindowError::NotOpaque // at 3
-variant flui::native::windows::Win32WindowError::Refused { request: &'static str, hresult: i32 } // at 1
-variant flui::native::windows::Win32WindowError::Unrecognized { request: &'static str, value: i32 } // at 2
-variant flui::native::windows::Win32WindowError::Unsupported(flui::platform::Unsupported) // at 0
-#[non_exhaustive] pub enum flui::native::windows::WindowsBackdrop
-impl Clone for flui::native::windows::WindowsBackdrop
-impl Copy for flui::native::windows::WindowsBackdrop
-impl Eq for flui::native::windows::WindowsBackdrop
-impl PartialEq for flui::native::windows::WindowsBackdrop
-impl core::fmt::Debug for flui::native::windows::WindowsBackdrop
-impl core::hash::Hash for flui::native::windows::WindowsBackdrop
-impl core::marker::StructuralPartialEq for flui::native::windows::WindowsBackdrop
-variant flui::native::windows::WindowsBackdrop::Acrylic // at 4
-variant flui::native::windows::WindowsBackdrop::Auto // at 0
-variant flui::native::windows::WindowsBackdrop::Mica // at 2
-variant flui::native::windows::WindowsBackdrop::MicaAlt // at 3
-variant flui::native::windows::WindowsBackdrop::None // at 1
-pub trait flui::native::windows::WindowsWindowExt
-fn flui::native::windows::WindowsWindowExt::win32(&self) -> Option<flui::native::windows::Win32Window<'_>>
-impl flui::native::windows::WindowsWindowExt for dyn flui::native::HostWindow + '_
 pub fn flui::native::with_window<R>(address: flui::foundation::PresentationAddress, f: impl FnOnce(&dyn flui::native::HostWindow) -> R) -> Option<R>
 pub fn flui::open_secondary_window(config: flui::AppConfig, policy: flui::WindowPolicy) -> Result<(), flui::AppWindowError>
 pub fn flui::open_window<V>(config: flui::AppConfig, policy: flui::WindowPolicy, root: V) -> Result<flui::app::WindowRequest, flui::AppWindowError> where V: flui::prelude::View + Clone + 'static
@@ -12850,6 +12805,7 @@ impl PartialEq for flui::platform::OpenedFile
 impl core::fmt::Debug for flui::platform::OpenedFile
 pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
+pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
 #[non_exhaustive] pub struct flui::platform::OpeningGeometry
 field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
 field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
@@ -22843,6 +22799,11 @@ impl core::marker::StructuralPartialEq for flui::services::system::testing::Dial
 variant flui::services::system::testing::DialogRequest::Open { window: flui::platform::WindowId, request: flui::services::system::dialog::OpenRequest } // at 0
 variant flui::services::system::testing::DialogRequest::Save { window: flui::platform::WindowId, request: flui::services::system::dialog::SaveRequest } // at 1
 reexport flui::services::system::testing::LaunchRequest => flui::platform::testing::LaunchRequest
+pub struct flui::services::system::testing::PortalOnBus { .. }
+impl Clone for flui::services::system::testing::PortalOnBus
+impl core::fmt::Debug for flui::services::system::testing::PortalOnBus
+impl flui::platform::capability::Plugin for flui::services::system::testing::PortalOnBus
+pub fn flui::services::system::testing::PortalOnBus::new(address: impl Into<alloc::rcs::arc::Arc<str>>) -> Self
 pub struct flui::services::system::testing::ScriptedFileDialogs { .. }
 impl Clone for flui::services::system::testing::ScriptedFileDialogs
 impl Default for flui::services::system::testing::ScriptedFileDialogs
