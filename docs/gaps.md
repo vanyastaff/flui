@@ -723,7 +723,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** Android · **Who it hurts:** Fields whose application rewrites the text on each edit (masks, upper-casing, length limits) · **Parity:** [Input](platform-parity.md#input) (IME composition and candidate placement)
 
 - The application's text wins a race with the keyboard (ADR-0347 §3): a formatter that rewrites the text in answer to a replayed edit publishes a text snapshot, and a key the keyboard reported before the view took it is dropped while the keyboard restarts on the formatted text. Typing faster than one owner turn per key loses keys in such a field. A formatter that rewrites the composed word restarts the keyboard on every key where the keyboard composes every word (Gboard's Latin layouts).
-- Read from the model (`a_text_snapshot_that_raced_an_edit_wins_and_restarts`); not provoked on a device.
+- Read from the model (`a_text_snapshot_that_raced_an_edit_wins_and_restarts`). On a Galaxy S21 (Android 15, Samsung Keyboard, 2026-11-16) 20 letters tapped from `adb` about 100 ms apart while the application upper-cased the text every 700 ms all reached the field: the loss needs typing faster than that, which no run provoked.
 - The entry closes when a text snapshot caused by replaying the view's own edit no longer counts as a race against the reports that followed it, with a test and a device run of a formatter under fast typing.
 
 ### android-activity logs a spurious looper callback sixty times a second

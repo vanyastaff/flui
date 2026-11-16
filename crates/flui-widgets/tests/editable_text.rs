@@ -972,10 +972,8 @@ pub(crate) fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
     };
     let controller = TextEditingController::with_text("hello");
     let node = FocusNode::with_debug_label("tapped field");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller,
-        Rc::clone(&node),
-    ));
+    let mut harness =
+        crate::common::harness::mount_with_ime(EditableText::new(controller, Rc::clone(&node)));
     let _ = node.request_focus();
     harness.tick();
     assert_eq!(asked(&harness), 0, "focus alone asks nothing more");
