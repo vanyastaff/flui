@@ -753,6 +753,8 @@ mod tests {
         > {
             Ok(flui_platform::text_store::CompositionEnd::Committed)
         }
+
+        fn show_keyboard(&self, _: &std::rc::Rc<dyn flui_platform::TextStore>) {}
     }
 
     /// A pull-model window's host reaches the presentation the runner builds

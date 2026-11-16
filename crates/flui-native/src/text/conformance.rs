@@ -189,18 +189,16 @@ impl std::fmt::Debug for AppKitClient {
 }
 
 /// A field focused on the Android backend's mirror: the owner published the
-/// store's snapshot to `FluiView`, and each report the view makes after an
-/// input method edit is replayed into the store.
+/// store's snapshot to `FluiView`, which took it, and each report the view
+/// makes after an input method edit is replayed into the store.
 pub struct AndroidMirror {
     store: Rc<dyn TextStore>,
+    ledger: Rc<crate::text::android::ime::Ledger>,
     mirror: std::cell::RefCell<crate::text::android::ime::Mirror>,
     snapshot: crate::text::android::ime::Snapshot,
 }
 
 impl AndroidMirror {
-    /// The generation of the one snapshot the owner publishes.
-    const PUBLISHED: u32 = 1;
-
     /// The store's snapshot published to the view, which now holds it.
     ///
     /// # Panics
@@ -208,17 +206,16 @@ impl AndroidMirror {
     /// When the store refuses a synchronous read, which a free store grants.
     #[must_use]
     pub fn focus(store: Rc<dyn TextStore>) -> Self {
+        use crate::text::android::ime::{Change, Ledger, Mirror};
         use flui_platform::text_store::{LockGrant, LockTiming};
 
+        let ledger = Rc::new(Ledger::default());
         let read = Rc::new(std::cell::RefCell::new(None));
-        let out = Rc::clone(&read);
+        let (out, publisher) = (Rc::clone(&read), Rc::clone(&ledger));
         let _granted = store
             .request_lock(
                 LockGrant::read(move |session| {
-                    *out.borrow_mut() = Some(crate::text::android::ime::Snapshot::read(
-                        session,
-                        Self::PUBLISHED,
-                    ));
+                    *out.borrow_mut() = Some(publisher.publish(session, Change::Focus));
                 }),
                 LockTiming::Sync,
             )
@@ -226,10 +223,11 @@ impl AndroidMirror {
         let snapshot = read
             .take()
             .expect("BUG: a granted sync read has run when the grant returns");
-        let mut mirror = crate::text::android::ime::Mirror::default();
-        mirror.hold(Self::PUBLISHED, &snapshot.text);
+        let mut mirror = Mirror::default();
+        let _install = mirror.install(&snapshot);
         Self {
             store,
+            ledger,
             mirror: std::cell::RefCell::new(mirror),
             snapshot,
         }
@@ -258,12 +256,12 @@ impl AndroidMirror {
             composition_start,
             composition_end,
         };
-        let Some(edit) = self.mirror.borrow_mut().report(Self::PUBLISHED, &report) else {
+        let Some(edit) = self.mirror.borrow_mut().report(&report) else {
             return;
         };
+        let ledger = Rc::clone(&self.ledger);
         let grant = LockGrant::read_write(move |session| {
-            let _replayed =
-                crate::text::android::ime::replay_current(&edit, Self::PUBLISHED, session);
+            let _replayed = ledger.replay(&edit, session);
         });
         if let Err(error) = self.store.request_lock(grant, LockTiming::Async) {
             tracing::debug!(?error, "the focused store refused the input method's edit");
