@@ -848,7 +848,7 @@ thread_local! {
     /// unwind on a thread that never reached platform init -- can never
     /// itself trigger singleton construction or full system-font
     /// enumeration. Real service resolution happens only when a UI runtime is
-    /// built or installed: `build_ui_runtime`, which every runner calls
+    /// built or installed: `build_lending_ui_runtime`, which every runner calls
     /// to build its UI runtime, or the explicit `ensure_services` call in
     /// the prepared installation entry points.
     pub(super) static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
@@ -950,6 +950,11 @@ pub(crate) fn install_owner_platform(
                             first.contain(super::main_window::drive_main_window);
                             first.contain(super::main_window::drive_program_quit);
                         }
+                    }
+                    // What an opened URL's loan returned is routed here,
+                    // outside the destructor that returned it.
+                    if current() {
+                        route_owed_opened_urls();
                     }
                     commands.absorb(first);
                     commands.resume();
@@ -1222,14 +1227,17 @@ impl RunnerHandler {
 /// the host opens the window they wait for. Asked again while the window is
 /// coming, the route only keeps the intent it set.
 pub(super) fn reopen_current_run() {
-    let routes = APP_RUNTIME.with(|slot| {
-        let state = slot.try_borrow().ok()?;
-        state
-            .run_routes
-            .iter()
-            .rev()
-            .find_map(std::rc::Weak::upgrade)
-    });
+    let routes = APP_RUNTIME
+        .try_with(|slot| {
+            let state = slot.try_borrow().ok()?;
+            state
+                .run_routes
+                .iter()
+                .rev()
+                .find_map(std::rc::Weak::upgrade)
+        })
+        .ok()
+        .flatten();
     let reopen = routes.and_then(|routes| {
         routes
             .try_borrow()
@@ -1238,6 +1246,64 @@ pub(super) fn reopen_current_run() {
     });
     if let Some(reopen) = reopen {
         reopen();
+    }
+}
+
+/// The run's main window, as an opened URL for the application sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MainWindow {
+    /// The run has no main window to reopen (iOS, Android, the web).
+    None,
+    /// The run has a main window, not open now.
+    Closed,
+    /// The main window is open at this address.
+    Open(flui_foundation::PresentationAddress),
+}
+
+/// The run's main window on this thread.
+pub(super) fn main_window() -> MainWindow {
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    {
+        let ingress = APP_RUNTIME
+            .try_with(|slot| slot.try_borrow().ok()?.main_ingress.clone())
+            .ok()
+            .flatten();
+        match ingress.map(|ingress| ingress.open_address()) {
+            Some(Some(address)) => MainWindow::Open(address),
+            Some(None) => MainWindow::Closed,
+            None => MainWindow::None,
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+    {
+        MainWindow::None
+    }
+}
+
+/// Ask the owner for a turn, without running any code it does not own: what
+/// an opened URL's loan returned is routed in it
+/// ([`route_owed_opened_urls`]). Safe from a destructor.
+pub(super) fn request_owner_turn() {
+    let wake = APP_RUNTIME
+        .try_with(|slot| slot.try_borrow().ok()?.owner_turn_wake.clone())
+        .ok()
+        .flatten();
+    if let Some(wake) = wake {
+        let _ = wake();
+    }
+}
+
+/// Route what opened URLs' loans returned since the last turn
+/// ([`OpenRouting::route_owed`](super::opened::OpenRouting::route_owed)), from
+/// the owner's turn, outside every destructor and borrow. A panic in a URL's
+/// navigation ends the run, as one in the handler's other methods does.
+pub(super) fn route_owed_opened_urls() {
+    if let Some(routing) = current_open_routing() {
+        contained((), "opened URLs", || routing.route_owed());
     }
 }
 

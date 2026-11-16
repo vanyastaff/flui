@@ -288,8 +288,17 @@ fn runner_open() {
                 runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link as fn(),
             ),
             (
-                "runner_open::a_link_outlives_a_window_that_failed_to_install",
-                runner_open::a_link_outlives_a_window_that_failed_to_install as fn(),
+                "runner_open::a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused",
+                runner_open::a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_goes_to_the_main_window_never_a_hidden_helper",
+                runner_open::a_link_goes_to_the_main_window_never_a_hidden_helper as fn(),
+            ),
+            (
+                "runner_open::a_link_restores_the_minimized_window_it_opens_in",
+                runner_open::a_link_restores_the_minimized_window_it_opens_in as fn(),
             ),
             (
                 "runner_open::a_link_shows_the_hidden_window_it_opens_in",

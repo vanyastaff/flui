@@ -68,7 +68,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0312 §6) was installed with the
-        // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
+        // owner platform; the ui_runtime below takes it through `build_lending_ui_runtime`.
         //
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).

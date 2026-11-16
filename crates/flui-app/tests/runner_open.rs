@@ -630,19 +630,131 @@ fn closed_main_window(built: &Built) -> (HeadlessRunHandle, flui_app::testing::S
     (run, renderer)
 }
 
-pub(crate) fn a_link_outlives_a_window_that_failed_to_install() {
+pub(crate) fn a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused() {
+    flui_testing::disarm_interest_cache();
     let built = Built::default();
     let (run, renderer) = closed_main_window(&built);
-    // The window the link reopens is refused its GPU slot after the link
-    // was opened into its runtime: the link comes back from the failed
-    // window and opens the next one by itself.
-    renderer.refuse_next_window();
+    // Every window is refused its GPU slot, as on a host whose device cannot
+    // draw the window: the link causes one opening, and then it is refused.
+    let ((), log) = flui_testing::capture(|| {
+        renderer.refuse_next_window();
+        run.open(link("myapp:///note/3", Launch::Running));
+        for _ in 0..30 {
+            renderer.refuse_next_window();
+            run.run_owner_turn();
+        }
+    });
+    assert_eq!(
+        log.count_containing("GPU init failed"),
+        1,
+        "the link caused one opening of the main window: {log}"
+    );
+    assert_eq!(
+        log.count_containing("its window could not be opened"),
+        1,
+        "and is refused once that opening failed: {log}"
+    );
+    assert!(run.open_windows().is_empty(), "no window is open");
+    assert!(built.borrow().is_empty(), "nothing was built");
+    drop(run);
+}
+
+pub(crate) fn a_link_goes_to_the_main_window_never_a_hidden_helper() {
+    let built = Built::default();
+    let opening = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&opening);
+    let helper_built = Rc::clone(&built);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |_| {
+            *ready.borrow_mut() = Some(
+                flui_app::open_window(
+                    AppConfig::new(),
+                    WindowPolicy::Isolated,
+                    router("helper", &helper_built),
+                )
+                .expect("an isolated window opens on the headless platform"),
+            );
+        }),
+    );
+    turns(&run, 3);
+    let address = opening
+        .borrow_mut()
+        .as_mut()
+        .expect("on_ready opened the helper")
+        .try_result()
+        .expect("the helper's opening is answered")
+        .expect("the helper opened");
+    // The helper is the window opened first, and the application hides it.
+    let helper = flui_app::app::window_handle(address).expect("the helper's handle");
+    helper.hide().expect("the helper takes the hide");
+    turns(&run, 3);
+
     run.open(link("myapp:///note/3", Launch::Running));
-    turns(&run, 8);
-    assert_eq!(run.open_windows().len(), 1, "the next main window opened");
+    turns(&run, 4);
+    assert_eq!(
+        run.open_windows().len(),
+        2,
+        "the link reopened the main window beside the helper"
+    );
     assert!(
         built_page(&built, "main", &Page::Note { id: 3 }),
-        "on the link the failed window gave back: {:?}",
+        "the main window opened on the link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "helper", &Page::Note { id: 3 }),
+        "the helper never took it: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !helper.state().expect("the helper is open").visible,
+        "the helper stays hidden"
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_restores_the_minimized_window_it_opens_in() {
+    let built = Built::default();
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |app: &AppHandle| {
+            *ready.borrow_mut() = Some(app.clone());
+        }),
+    );
+    turns(&run, 2);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let mut shown = app
+        .request_show_main_window()
+        .expect("the run accepts the show");
+    turns(&run, 3);
+    let address = shown
+        .try_result()
+        .expect("the show is answered")
+        .expect("the main window opened");
+    let window = flui_app::app::window_handle(address).expect("the main window's handle");
+    window
+        .set_mode(flui_platform::WindowMode::Minimized)
+        .expect("the window takes the minimize");
+    turns(&run, 3);
+    assert_eq!(
+        window.state().expect("open").mode,
+        flui_platform::WindowMode::Minimized,
+        "the window is minimized"
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 3);
+    assert_ne!(
+        window.state().expect("open").mode,
+        flui_platform::WindowMode::Minimized,
+        "the link restores the window it opened in"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "{:?}",
         built.borrow()
     );
     drop(run);

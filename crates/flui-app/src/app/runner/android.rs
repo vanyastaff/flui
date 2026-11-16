@@ -97,7 +97,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0312 §6) was installed with the
-        // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
+        // owner platform; the ui_runtime below takes it through `build_lending_ui_runtime`.
         //
         // 0b. The bound on backgrounded pumps: a deadline the wake hook
         // reports, not a sleep on the loop thread.
@@ -382,7 +382,12 @@ where
             });
             install_owner_platform(owner)?;
             with_owner_platform(|owner| {
-                owner.on_wake(Box::new(super::host::drive_native_text_sizing))
+                owner.on_wake(Box::new(|| {
+                    super::host::drive_native_text_sizing();
+                    // What an opened URL's loan returned is routed here,
+                    // outside the destructor that returned it.
+                    super::host::route_owed_opened_urls();
+                }))
             })
             .expect("BUG: Android owner was just installed")?;
             super::host::install_configured_executors(&config);

@@ -131,6 +131,9 @@ fn drive_owner() {
     // its windows: this wake is the one a command asks for.
     super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
     super::host::drive_native_text_sizing();
+    // What an opened URL's loan returned is routed here, outside the
+    // destructor that returned it.
+    super::host::route_owed_opened_urls();
     if let Some(mut lease) = lease_controller() {
         lease
             .controller

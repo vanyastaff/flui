@@ -141,6 +141,15 @@ impl InstallationWindow {
 
 impl Drop for InstallationWindow {
     fn drop(&mut self) {
+        // A loan ends first, as plain state: its URLs return for the owner's
+        // next turn, refused when the window was closed before the commit.
+        if let Some(loan) = self.opened.take() {
+            if self.closed.load(Ordering::Acquire) {
+                loan.window_closed();
+            } else {
+                drop(loan);
+            }
+        }
         let Some(window) = self.window.take() else {
             return;
         };
@@ -159,11 +168,6 @@ impl Drop for InstallationWindow {
             // A retired window agent's drop runs contained; the first failure is kept.
             first.contain(|| drop(agent));
         }
-        // An installation that ended without committing gives the URLs opened
-        // into its runtime back, once its window is gone, and they are routed
-        // again; their navigations run contained, the first failure is kept.
-        let opened = self.opened.take();
-        first.contain(|| drop(opened));
         first.resume();
     }
 }
@@ -232,7 +236,7 @@ impl WindowInstall {
         self.window.agent = agent;
     }
 
-    /// Own the loan of the opened URLs `build_ui_runtime` opened into this
+    /// Own the loan of the opened URLs `build_lending_ui_runtime` opened into this
     /// installation's UI runtime: committed when it commits, given back by
     /// any other end of it.
     pub(super) fn lend_opened(&mut self, loan: Option<super::opened::OpenedLoan>) {

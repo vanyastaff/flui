@@ -65,25 +65,29 @@ enum OpenDestination { Presentation(PresentationAddress), Pending, Closed, NotOp
 
 // flui-app (crate-private): what waits, by the target's rule
 struct HeldUrls {
-    application: Option<String>,                    // the newest alone
-    windows: Vec<(OpenTarget, VecDeque<String>)>,   // per window, in order, at most MAX_HELD_PER_WINDOW
+    application: Option<HeldUrl>,                    // the newest alone
+    windows: Vec<(OpenTarget, VecDeque<HeldUrl>)>,   // per window, in order, at most MAX_HELD_PER_WINDOW
 }
 
 // flui-app (crate-private): URLs opened into a window whose installation has not
-// committed; the installation owns it, `commit` keeps them, `Drop` gives them back
-// and routes them again at once
+// committed; the installation owns it, `commit` keeps them, `window_closed` and
+// `Drop` return them, and the owner's next turn routes what came back
 #[must_use]
-struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<(OpenTarget, String)> }
+struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: target, url, order
 ```
 
 - **§1. Admission first.** The runner admits each URL by `OpenDeclarations::admit`, the rule the UI
   runtime applies again, before it routes it. A URL the application does not open is refused as it
   arrives: it is never held and never opens a window.
-- **§2. One destination.** A URL for a window goes to that window's presentation; one for the
-  application to the presentation whose window was focused last, else the first opened. URLs held
-  for that target open first, so the order is the platform's. A URL delivered to a window that is
-  not shown (a tray application that hid its only window) shows that window and brings it forward,
-  on every host; a URL the runner refuses shows nothing. A URL for a window whose presentation
+- **§2. One destination.** A URL for a window goes to that window's presentation. One for the
+  application goes to the window focused last while that window is shown, else to the run's main
+  window, the one its `run` or `run_resident` factory builds, reopened when it is not open (§4),
+  never to whichever window happens to have opened first; a run with no main window (iOS,
+  Android, the web) gives it to its window opened first. URLs held for that target open first, so
+  the order is the platform's. The window a URL reaches is made visible to the user, on every host:
+  shown if hidden (a tray application's), restored if minimized, and brought forward under the
+  system's focus rules; only that window, and nothing for a URL the runner refuses. A URL for a
+  window whose presentation
   was removed is refused (`Closed`); one for a window with no presentation and no installation
   under way (nobody announced it, or its installation failed) is refused (`NotOpen`).
 - **§3. The hold is bounded by its target's rule.** For the application as a whole only the newest
@@ -103,10 +107,16 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<(OpenTarget, String)> }
   opened into a window's UI runtime before the installation commits, as the runtime is built or as
   the installation becomes ready, is held by an `OpenedLoan` the installation owns from the moment
   the URL leaves the hold. The installation's commit keeps them; every other end of it (a failure
-  before or after it is submitted, a cancel, a window closed before it commits) drops the guard,
-  which gives them back to the hold and routes them again at once, by the rule a URL that just
-  arrived follows: into an open window, the main window reopened, or refused. A loan is never
-  inferred from what the registry holds, so a URL never opens in two windows.
+  before or after it is submitted, a cancel, a window closed before it commits) drops the guard.
+  The guard's drop only returns the URLs to the router and asks the owner for a turn: it runs no
+  code it does not own, so it may run in any destructor, an unwind included. The owner's next turn
+  routes what came back once: a URL whose window was closed before it committed is refused (its
+  window closed); one whose installation failed goes into a window open now, unless a newer URL
+  for the application was admitted since (each admitted URL has its place in an order the router
+  keeps, and the older is refused as superseded), and is refused otherwise (its window could not be
+  opened). A URL causes at most one opening of the main window: a failed one is never retried for
+  it, and the user's next action (a Dock click, a later launch) starts a new attempt. A loan is
+  never inferred from what the registry holds, so a URL never opens in two windows.
 - **§6. Every other end is reported.** What is held is refused in the log, by reason and never with
   the URL, when the bootstrap fails or panics (with the launch's files, which the application then
   never hears) and when the run ends. A panic in `on_open_files` or in a URL's navigation ends the
@@ -140,10 +150,15 @@ bound, the window opens on the ninth),
 `a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link` and
 `a_link_for_a_closed_window_is_refused_as_it_arrives` and
 `a_link_shows_the_hidden_window_it_opens_in` (§2),
-`a_link_outlives_a_window_that_failed_to_install` (§5: the GPU refuses the window, and the loan
-opens the next one with no other event), with `a_loan_is_committed_or_given_back_by_its_drop` for
-the guard itself (the exits the headless kit cannot reach are in
-[gaps](../gaps.md#the-headless-kit-cannot-end-an-installation-between-its-build-and-its-commit)),
+`a_link_goes_to_the_main_window_never_a_hidden_helper` and
+`a_link_restores_the_minimized_window_it_opens_in` (§2),
+`a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused` (§5: every window refused
+its GPU slot, one attempt in thirty turns, then the refusal), the in-crate
+`a_link_into_a_window_closed_before_it_commits_is_refused` (§5: a window closed after its
+installation was submitted is not reopened), with `a_loan_is_committed_or_returns_its_urls_without_routing`
+and `a_loan_dropped_during_an_unwind_only_returns_its_urls` for the guard itself (the exits no test
+reaches are in
+[gaps](../gaps.md#some-exits-of-a-windows-installation-have-no-test)),
 `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end`,
 `a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned` and
 `a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead` (§4),

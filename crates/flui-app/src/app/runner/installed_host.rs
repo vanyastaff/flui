@@ -214,8 +214,9 @@ impl InstalledHost {
         &self,
         target: flui_platform::OpenTarget,
         active: Option<PresentationAddress>,
+        fallback: crate::app::window_registry::ApplicationFallback,
     ) -> OpenDestination {
-        match self.0.native.open_target(target, active) {
+        match self.0.native.open_target(target, active, fallback) {
             OpenDestination::Pending if matches!(target, flui_platform::OpenTarget::Window(_)) => {
                 // The windows are platform code: asked with nothing borrowed.
                 let installing: Vec<Rc<dyn flui_platform::PlatformWindow>> = self

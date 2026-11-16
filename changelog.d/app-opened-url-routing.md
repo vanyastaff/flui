@@ -24,6 +24,10 @@
   application are reported as refused instead of disappearing without a log line.
 - **`flui-app`**: a reopen (a Dock click, or a link that finds no window) made while a quit is
   pending opens the main window if the quit is abandoned, and nothing if it goes ahead.
-- **`flui-app`**: a link the application opens in a window it hid (a tray application) shows that
-  window and brings it forward, on every host; a link it refuses shows nothing. A link opened into
-  a window whose installation then fails opens the next window by itself.
+- **`flui-app`**: the window a link opens in is made visible on every host: shown if the
+  application hid it (a tray application), restored if minimized, brought forward; a link it
+  refuses shows nothing. A link for the application goes to its main window, reopened when
+  closed, never to a hidden helper window that happened to open first.
+- **`flui-app`**: a link causes at most one opening of the main window. If that window fails to
+  open, the link goes to another open window or is refused ("its window could not be opened"), and
+  a window the user closes before it finished opening does not come back for the link.

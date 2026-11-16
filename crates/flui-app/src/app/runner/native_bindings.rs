@@ -146,8 +146,12 @@ impl NativeBindings {
         &self,
         target: flui_platform::OpenTarget,
         active: Option<PresentationAddress>,
+        fallback: crate::app::window_registry::ApplicationFallback,
     ) -> crate::app::window_registry::OpenDestination {
-        self.0.windows.borrow().open_target(target, active)
+        self.0
+            .windows
+            .borrow()
+            .open_target(target, active, fallback)
     }
 
     /// Lease the presentation's driver, first applying a resize that arrived

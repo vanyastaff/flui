@@ -1394,6 +1394,129 @@ mod tests {
         }
     }
 
+    /// The window a link that launched the application opened in is closed
+    /// after its installation was submitted, during an owner turn, and before
+    /// it commits: the link is refused as its window closed, and no reopen
+    /// brings the window the user closed back.
+    fn a_link_into_a_window_closed_before_it_commits_is_refused() {
+        use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+        use super::super::owner_dispatch::{
+            RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
+            prepare_ui_runtime_alongside,
+        };
+        use flui_platform::{Launch, OpenTarget, Opened};
+        use flui_runtime::ui_runtime::UiRuntime;
+
+        flui_testing::disarm_interest_cache();
+        let installs = Rc::new(Cell::new(0_u32));
+        let reopens = Rc::new(Cell::new(0_u32));
+        let _owner = OwnerHostClearGuard::arm();
+        let _cleanup = LoopTeardown::default();
+        let platform = HeadlessPlatform::new();
+        platform.host_events().open(Opened::new(
+            ["myapp:///note/3".to_owned()],
+            [],
+            OpenTarget::Application,
+            Launch::Cold,
+        ));
+        let settings = crate::app::runner::OpenSettings {
+            declarations: Some(
+                flui_view::navigation::OpenDeclarations::new().url_schemes(&["myapp"]),
+            ),
+            ..crate::app::runner::OpenSettings::default()
+        };
+        let counted = Rc::clone(&installs);
+        let installs_seen = Rc::clone(&installs);
+        let reopened = Rc::clone(&reopens);
+        let (ran, log) = flui_testing::capture(|| {
+            Box::new(platform).run(crate::app::runner::opening_app_handler(
+                settings,
+                move |owner| {
+                    let handle = install_test_controller(
+                        owner,
+                        Box::new(move |_, window, host, _| {
+                            counted.set(counted.get() + 1);
+                            let (runtime, opened) = super::super::host::build_lending_ui_runtime(
+                                super::super::presentation_window(Rc::clone(&window)),
+                                1.0,
+                            )
+                            .expect("the window's runtime is built");
+                            assert!(opened.is_some(), "the held link is lent to the window");
+                            runtime
+                                .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+                                .expect("mount root");
+                            let window: Rc<dyn flui_platform::PlatformWindow> = window;
+                            let mut prepared =
+                                prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
+                            prepared.lend_opened(opened);
+                            let address = prepared.dispatcher().address;
+                            prepared
+                                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                                    installed: None,
+                                    sink: flui_runtime::testing::ScriptedSink::new(|_, _| {
+                                        flui_runtime::sink::SubmitVerdict::Presented
+                                    }),
+                                    prelude: None,
+                                    resize: None,
+                                }))
+                                .expect("prepare frame driver");
+                            prepared.lifecycle(host);
+                            let installation = prepared.submit();
+                            assert!(
+                                installation.outcome().is_none(),
+                                "the installation commits after this owner turn"
+                            );
+                            window.close_now();
+                            Ok(RenderedMain {
+                                window,
+                                address,
+                                installation,
+                            })
+                        }),
+                        None,
+                    );
+                    // A reopen the held link asks for before its window
+                    // opens is its one attempt; one asked after the window
+                    // was opened and closed would bring that window back.
+                    let opened_once = Rc::clone(&installs_seen);
+                    super::super::host::route_reopen(move || {
+                        if opened_once.get() > 0 {
+                            reopened.set(reopened.get() + 1);
+                        }
+                    });
+                    let outer = install_platform_ui_runtime(
+                        UiRuntime::for_test(),
+                        &crate::app::window_test_support::headless_test_window(),
+                    );
+                    dispatch_platform_ui_runtime(
+                        outer,
+                        RuntimeTask::TestCallback(Box::new(move |_| {
+                            drop(
+                                handle
+                                    .request_show_main_window()
+                                    .expect("admit show request"),
+                            );
+                        })),
+                    )
+                    .expect("complete caller and installation");
+                    Ok(())
+                },
+            ))
+        });
+        ran.expect("headless bootstrap");
+        assert_eq!(installs.get(), 1, "one window was opened for the link");
+        assert_eq!(
+            reopens.get(),
+            0,
+            "the window the user closed is not reopened for the link"
+        );
+        assert_eq!(
+            log.count_containing("its window closed"),
+            1,
+            "the link is refused as its window closed: {log}"
+        );
+    }
+
     fn a_contained_callback_failure_runs_accepted_window_work() {
         use super::super::owner_dispatch::{
             RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
@@ -1634,6 +1757,10 @@ mod tests {
                     main_window_waits_for_deferred_runtime_publication as fn(),
                 ),
                 (
+                    "a_link_into_a_window_closed_before_it_commits_is_refused",
+                    a_link_into_a_window_closed_before_it_commits_is_refused as fn(),
+                ),
+                (
                     "main_window_pending_coalesces_and_recovers_after_installer_panic",
                     main_window_pending_coalesces_and_recovers_after_installer_panic as fn(),
                 ),
@@ -1828,7 +1955,7 @@ mod tests {
     /// application's identifier; a desktop application with neither has no
     /// storage. Driven through `run_with_platform` itself, so the host's
     /// storage comes from the runner; the UI runtime is an `Isolated` window
-    /// opened from `on_ready`, which reaches `host::build_ui_runtime` as every
+    /// opened from `on_ready`, which reaches `host::build_lending_ui_runtime` as every
     /// runner site does, without a GPU.
     #[test]
     fn the_run_storage_dir_reaches_lifecycle_context() {

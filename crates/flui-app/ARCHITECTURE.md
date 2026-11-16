@@ -544,14 +544,22 @@ here is where the code keeps it.
   `build_lending_ui_runtime` returns and the runner hands to its `WindowInstall`
   (`lend_opened`); `finish_install` adds the URLs it opens as the installation becomes ready
   (`lend_to_installing`). `InstallationWindow::publish` commits it; any other end drops the
-  `InstallationWindow` (or the guard, before the installation is prepared), whose `Drop` gives
-  the URLs back and routes them at once. Nothing infers a loan from the registry.
+  `InstallationWindow` (`OpenedLoan::window_closed` when the window was closed) or the guard,
+  before the installation is prepared. The drop only moves the URLs into `OpenRouting::returned`
+  and calls `host::request_owner_turn`: no log line, no route, no navigation, so it is safe in an
+  unwinding destructor. Nothing infers a loan from the registry.
+- Each owner turn calls `host::route_owed_opened_urls` (desktop and web in the owner-turn hook,
+  iOS in `drive_owner`, Android in its wake), which routes what came back once: refused when the
+  window was closed, into a window open now or refused when the installation failed, refused as
+  superseded when a newer URL for the application was admitted since (`HeldUrl::order`). Never a
+  second opening.
 - `OpenRouting::route_held` is the one step for "a URL is in the hold": into an open presentation
-  (shown and brought forward if its window is not shown), kept, refused, or the main window
-  reopened through `host::reopen_current_run`. Arrival, the end of the bootstrap and a loan given
-  back call it.
+  (made visible by `reveal`: shown, restored, brought forward), kept, refused, or the main window
+  reopened through `host::reopen_current_run`. A URL for the application goes to the shown window
+  focused last, else the main window (`host::main_window`, `ApplicationFallback`), never the
+  window opened first unless the run has no main window.
 - `Ingress::request_native_show` keeps a reopen asked during a quit and shows it only if the quit
-  is abandoned, and asks again when the main window it counted on fails to open.
+  is abandoned.
 - Every refusal is one `tracing` warning with the count and `Refusal::reason`, never the URL.
 
 Pinned by `runner_open`'s rows and the failed-bootstrap rows of `app_handler_routes`.
