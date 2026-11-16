@@ -540,6 +540,7 @@ impl WindowsWindow {
                         Arc::downgrade(&windows)
                             as std::sync::Weak<dyn crate::owner::windows::ClassWindows>,
                         Rc::clone(&frames),
+                        std::sync::Weak::clone(&app_hooks.borrow().signal),
                     ),
                 ),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),

@@ -118,10 +118,11 @@ impl OpeningWindow {
 
     /// Record the placement of the window, presented at `address`, from now
     /// on, when it remembers one.
-    fn keep_placement(self, address: flui_foundation::PresentationAddress) {
-        if let Some(remembered) = self.remembered {
-            remembered.keep(address);
-        }
+    fn keep_placement(
+        self,
+        address: flui_foundation::PresentationAddress,
+    ) -> Option<super::placement::PlacementClose> {
+        self.remembered?.keep(address)
     }
 }
 
@@ -353,10 +354,12 @@ where
     // `Platform::run` actually returns, for the clipboard/redraw-window
     // cleanup no per-window close performs.
     let closing_window_id = window.id();
-    opening.keep_placement(owner_dispatch.address);
+    let placement = opening.keep_placement(owner_dispatch.address);
     installation.on_close(move || {
         tracing::info!("Window closed");
-        super::placement::finish(owner_dispatch.address);
+        if let Some(placement) = &placement {
+            let _: super::placement::Closing = placement.finish();
+        }
         super::main_window::main_window_closing(owner_dispatch.address);
         #[expect(
             clippy::disallowed_methods,

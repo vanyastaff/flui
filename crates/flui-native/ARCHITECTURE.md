@@ -863,11 +863,26 @@ trait depends on `flui-platform` instead.
   instead of hanging) and
   `web_session_end_handler_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
+- **A turn deadline is a promise of an owner turn, window or not.** The
+  application's handler answers two deadlines. `wake_deadline` is work a
+  frame serves: a loop asks its windows for frames at it
+  (`owner::wake_deadline::WakeDeadline`). `turn_deadline` is work no frame
+  serves (a bounded wait, a held write): at it the loop gives the owner one
+  turn through `OwnerSignal::wake`, with or without a window open, and asks no
+  window for a frame (`owner::wake_deadline::TurnDeadline`, which delivers an
+  instant once, so a handler that leaves it in place cannot spin the loop).
+  The Win32 loop and its modal loops, and the X11 and Wayland loops, wait on
+  both; the AppKit host asks the turn deadline after each owner turn and once
+  the handler bootstrapped, and schedules the turn on the main queue. UIKit,
+  Android, the web and headless do not ask it ([gaps](../../docs/gaps.md#uikit-android-and-the-web-give-no-owner-turn-at-a-turn-deadline)).
+  `a_turn_deadline_gives_the_owner_a_turn_with_no_window` (the `app_handler`
+  table, on Win32) and `a_turn_deadline_is_delivered_once_at_its_instant`
+  hold it.
 - **The application's handler is passed to `run` (ADR-0254 §4).**
-  `AppHandler` (in `platform.rs`) has one method per obligation and no
-  default: `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
-  `host_notice`, `exit_policy` and `wake_deadline`, each borrowing the owner
-  capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
+  `AppHandler` (in `platform.rs`) has one method per obligation:
+  `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
+  `host_notice`, `exit_policy`, `wake_deadline` and `turn_deadline` (the one
+  with a default, `None`), each borrowing the owner capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
   its sources report to from construction on: `run` binds the handler on the
   owner thread in an owner slot, with the platform and the owner hooks held
   weakly (the platform owns the loop that owns the delivery), and each call

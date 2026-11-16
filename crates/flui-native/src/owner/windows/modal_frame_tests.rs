@@ -51,6 +51,7 @@ fn a_due_deadline_gets_one_modal_frame_per_generation() {
         Arc::clone(&run.delivery),
         Arc::downgrade(&windows) as std::sync::Weak<dyn ClassWindows>,
         Rc::clone(&frames),
+        std::sync::Weak::new(),
     );
 
     assert_eq!(modal.deliver(), 1, "a due deadline asks again at once");

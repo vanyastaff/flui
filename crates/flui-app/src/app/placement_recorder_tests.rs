@@ -18,8 +18,8 @@ use flui_testing::storage::MemoryStorage;
 use flui_view::persist::StorageHandle;
 
 use super::{
-    Baseline, FlushState, PlacementRecall, PlacementRecorder, RECALL_BOUND, Recalled,
-    WRITE_INTERVAL, earliest_due, restore_into, settle,
+    FlushState, PlacementRecall, PlacementRecorder, RECALL_BOUND, Recalled, StoredPlacement,
+    WRITE_ATTEMPTS, WRITE_INTERVAL, earliest_due, restore_into, settle,
 };
 
 const NAME: StorageName = StorageName::machine_local("window-main");
@@ -58,8 +58,12 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let storage = MemoryStorage::new();
-        let recorder =
-            PlacementRecorder::new(handle(&storage), NAME, Baseline::Nothing, Arc::new(|| {}));
+        let recorder = PlacementRecorder::new(
+            handle(&storage),
+            NAME,
+            StoredPlacement::Nothing,
+            Arc::new(|| {}),
+        );
         Self {
             storage,
             recorder,
@@ -74,7 +78,7 @@ impl Fixture {
 
     fn observe(&self, state: &WindowState, after: Duration) {
         self.recorder
-            .observe(state, &self.displays, self.after(after));
+            .observe(state, &self.displays, Some(0), self.after(after));
     }
 
     fn stored_offset(&self) -> Option<Point<f64>> {
@@ -241,11 +245,11 @@ fn a_storage_that_panics_costs_the_window_its_placement_only() {
     let recall = PlacementRecall::start(&storage, NAME, Instant::now(), Waker::noop().clone());
     assert_eq!(recall.outcome(), Some(&Recalled::Panicked));
 
-    let recorder = PlacementRecorder::new(storage, NAME, Baseline::Nothing, Arc::new(|| {}));
+    let recorder = PlacementRecorder::new(storage, NAME, StoredPlacement::Nothing, Arc::new(|| {}));
     let now = Instant::now();
-    recorder.observe(&at(10.0, 10.0), &displays(), now);
+    recorder.observe(&at(10.0, 10.0), &displays(), Some(0), now);
     assert_eq!(
-        recorder.poll_flush(&mut Context::from_waker(Waker::noop()), now),
+        recorder.poll_flush(Waker::noop(), now),
         FlushState::Refused,
         "a write that panics is a refused one"
     );
@@ -257,17 +261,17 @@ fn a_window_that_could_not_read_its_placement_overwrites_it_only_when_it_moves()
     let recorder = PlacementRecorder::new(
         handle(&storage),
         NAME,
-        Recalled::TimedOut.baseline(),
+        Recalled::TimedOut.stored(),
         Arc::new(|| {}),
     );
     let now = Instant::now();
-    recorder.observe(&at(10.0, 10.0), &displays(), now);
+    recorder.observe(&at(10.0, 10.0), &displays(), Some(0), now);
     assert_eq!(
         storage.contents(&NAME).as_deref(),
         Some(&b"what an earlier run kept"[..]),
         "the default it opened at does not replace what storage may hold"
     );
-    recorder.observe(&at(300.0, 200.0), &displays(), now);
+    recorder.observe(&at(300.0, 200.0), &displays(), Some(0), now);
     assert!(
         storage
             .contents(&NAME)
@@ -281,7 +285,7 @@ fn the_end_of_the_loop_reports_a_placement_storage_did_not_take() {
     let barrier = fixture.storage.hold_commits();
     fixture.observe(&at(100.0, 80.0), Duration::ZERO);
     let now = fixture.after(Duration::from_millis(1));
-    let lost = settle(&[Rc::new(fixture.recorder)], now, Duration::ZERO);
+    let lost = settle(&[Rc::new(fixture.recorder)], now, Duration::ZERO, || {});
     drop(barrier);
     assert_eq!(lost, [NAME]);
 }
@@ -319,6 +323,323 @@ fn a_display_change_alone_measures_the_window_again() {
         .recorder
         .redisplay(&moved, fixture.after(WRITE_INTERVAL));
     assert_eq!(fixture.stored_offset(), Some(Point::new(40.0, 80.0)));
+}
+
+/// The displays the host sampled, with the usable area starting `left`
+/// pixels in.
+fn displays_with_left_edge(left: i32) -> DisplaySnapshot {
+    let registry = DisplayRegistry::new();
+    let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
+    DisplaySnapshot::empty()
+        .successor(vec![
+            DisplayInfo::new(
+                id,
+                "main",
+                Bounds::new(Point::new(left, 0), Size::new(1920 - left, 1080)),
+                1.0,
+            )
+            .with_primary(true)
+            .with_persistent_key("key-main"),
+        ])
+        .expect("revision")
+}
+
+fn scaled(state: WindowState, scale: f64) -> WindowState {
+    state.with_metrics(Some(
+        flui_foundation::geometry::WindowMetrics::try_new(
+            flui_foundation::geometry::DeviceSize::new(800, 600),
+            scale,
+        )
+        .expect("a drawable area"),
+    ))
+}
+
+/// A window whose stored placement could not be read keeps what storage may
+/// hold against everything but the user: where it opened, a display change,
+/// a scale change and a command the application applied each change its
+/// placement and write nothing; a move the user makes does.
+fn an_unread_placement_is_overwritten_only_by_the_user() {
+    let since_open: [(&str, fn(&PlacementRecorder, Instant)); 3] = [
+        ("a display change", |recorder, now| {
+            recorder.redisplay(&displays_with_left_edge(60), now);
+        }),
+        ("a scale change", |recorder, now| {
+            recorder.observe(&scaled(at(150.0, 80.0), 1.5), &displays(), Some(0), now);
+        }),
+        ("a command the application applied", |recorder, now| {
+            recorder.observe(
+                &scaled(at(100.0, 80.0), 1.0).with_mode(WindowMode::Maximized),
+                &displays(),
+                Some(1),
+                now,
+            );
+        }),
+    ];
+    let kept = b"what an earlier run kept".to_vec();
+    let start = Instant::now();
+    for (case, change) in since_open {
+        let storage = MemoryStorage::new();
+        storage.put(&NAME, kept.clone());
+        let recorder = PlacementRecorder::new(
+            handle(&storage),
+            NAME,
+            Recalled::TimedOut.stored(),
+            Arc::new(|| {}),
+        );
+        recorder.observe(&scaled(at(100.0, 80.0), 1.0), &displays(), Some(0), start);
+        change(&recorder, start + WRITE_INTERVAL);
+        recorder.begin_flush(start + WRITE_INTERVAL * 2);
+        assert_eq!(
+            storage.contents(&NAME),
+            Some(kept.clone()),
+            "{case}: nothing the user did is written, a close included"
+        );
+    }
+
+    let storage = MemoryStorage::new();
+    storage.put(&NAME, kept.clone());
+    let recorder = PlacementRecorder::new(
+        handle(&storage),
+        NAME,
+        Recalled::TimedOut.stored(),
+        Arc::new(|| {}),
+    );
+    recorder.observe(&scaled(at(100.0, 80.0), 1.0), &displays(), Some(0), start);
+    recorder.observe(
+        &scaled(at(400.0, 80.0), 1.0),
+        &displays(),
+        Some(0),
+        start + WRITE_INTERVAL,
+    );
+    let written = storage.contents(&NAME).expect("a placement");
+    assert_eq!(
+        WindowPlacement::from_bytes(&written)
+            .expect("a placement")
+            .offset,
+        Some(Point::new(400.0, 80.0)),
+        "the user's move is written"
+    );
+}
+
+/// A storage that keeps refusing is tried [`WRITE_ATTEMPTS`] times, each
+/// after twice the wait of the one before, then not again until the window's
+/// placement changes: an idle application asks its owner for no more turns.
+fn a_refusing_storage_is_tried_a_bounded_number_of_times() {
+    let fixture = Fixture::new();
+    fixture.storage.fail_next(StorageError::Busy);
+    fixture.storage.fail_next(StorageError::Busy);
+    fixture.storage.fail_next(StorageError::Busy);
+    fixture.observe(&at(100.0, 80.0), Duration::ZERO);
+    let mut attempts = 1;
+    let mut at_time = Duration::ZERO;
+    while let Some(due) = fixture.recorder.next_due(fixture.after(at_time)) {
+        let wait = due.saturating_duration_since(fixture.after(at_time));
+        assert_eq!(
+            wait,
+            WRITE_INTERVAL * (1 << attempts.min(WRITE_ATTEMPTS)),
+            "the wait doubles after each refusal"
+        );
+        at_time += wait;
+        fixture.recorder.tick(fixture.after(at_time));
+        attempts += 1;
+        assert!(attempts <= WRITE_ATTEMPTS, "no more than the bound");
+    }
+    assert_eq!(attempts, WRITE_ATTEMPTS, "every attempt was made");
+    assert_eq!(fixture.stored_offset(), None, "nothing stored");
+    assert_eq!(
+        fixture
+            .recorder
+            .next_due(fixture.after(at_time + WRITE_INTERVAL * 100)),
+        None,
+        "no deadline remains"
+    );
+
+    fixture.observe(&at(200.0, 80.0), at_time + WRITE_INTERVAL);
+    assert_eq!(
+        fixture.stored_offset(),
+        Some(Point::new(200.0, 80.0)),
+        "a new placement is tried again"
+    );
+}
+
+/// A window reopened from a closed window's placement owes what that window
+/// owed: a refused last write leaves storage without the placement, and the
+/// new window writes it though it has not moved.
+fn a_handed_over_placement_carries_its_debt() {
+    let storage = MemoryStorage::new();
+    let closed = PlacementRecorder::new(
+        handle(&storage),
+        NAME,
+        StoredPlacement::Nothing,
+        Arc::new(|| {}),
+    );
+    storage.fail_next(StorageError::Busy);
+    let now = Instant::now();
+    closed.observe(&at(100.0, 80.0), &displays(), Some(0), now);
+    let (bytes, stored) = closed.hand_over().expect("the closed window's placement");
+    assert!(
+        storage.contents(&NAME).is_none(),
+        "the last write was refused"
+    );
+
+    let reopened = PlacementRecorder::new(handle(&storage), NAME, stored, Arc::new(|| {}));
+    reopened.observe(&at(100.0, 80.0), &displays(), Some(0), now);
+    assert_eq!(storage.contents(&NAME), Some(bytes), "the debt is paid");
+}
+
+std::thread_local! {
+    /// What a re-entering storage runs from its `publish`, its future's
+    /// `poll` and that future's drop.
+    static REENTRY: std::cell::RefCell<Option<Rc<dyn Fn(&str)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn reenter(at: &str) {
+    let call = REENTRY.with(|slot| slot.borrow().clone());
+    if let Some(call) = call {
+        call(at);
+    }
+}
+
+/// Where a [`ReenteringStore`] panics, once.
+type PanicOnce = Arc<std::sync::Mutex<Option<&'static str>>>;
+
+fn panics_here(once: &PanicOnce, at: &str) -> bool {
+    let mut armed = once
+        .lock()
+        .expect("BUG: the flag is never held across a panic");
+    if *armed == Some(at) {
+        *armed = None;
+        return true;
+    }
+    false
+}
+
+/// A store that calls back into the recorder from each piece of its code
+/// the recorder runs, and panics once in the piece `panic_at` names.
+struct ReenteringStore {
+    inner: MemoryStorage,
+    panic_at: PanicOnce,
+}
+
+struct ReenteringWrite {
+    inner: StorageFuture<flui_platform::StoredVersion>,
+    panic_at: PanicOnce,
+}
+
+impl std::future::Future for ReenteringWrite {
+    type Output = Result<flui_platform::StoredVersion, StorageError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        ctx: &mut Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        reenter("poll");
+        assert!(
+            !panics_here(&self.panic_at, "poll"),
+            "the store panics in poll"
+        );
+        self.inner.as_mut().poll(ctx)
+    }
+}
+
+impl Drop for ReenteringWrite {
+    fn drop(&mut self) {
+        reenter("drop");
+        if panics_here(&self.panic_at, "drop") && !std::thread::panicking() {
+            panic!("the store panics in drop");
+        }
+    }
+}
+
+impl Storage for ReenteringStore {
+    fn read(&self, name: &StorageName, limit: u64) -> StorageFuture<Stored> {
+        self.inner.read(name, limit)
+    }
+
+    fn publish(
+        &self,
+        name: &StorageName,
+        bytes: Vec<u8>,
+        mode: flui_platform::WriteMode,
+    ) -> StorageFuture<flui_platform::StoredVersion> {
+        reenter("publish");
+        assert!(
+            !panics_here(&self.panic_at, "publish"),
+            "the store panics in publish"
+        );
+        Box::pin(ReenteringWrite {
+            inner: self.inner.publish(name, bytes, mode),
+            panic_at: Arc::clone(&self.panic_at),
+        })
+    }
+
+    fn copy_aside(&self, name: &StorageName) -> StorageFuture<flui_platform::CopiedAside> {
+        self.inner.copy_aside(name)
+    }
+}
+
+/// A store that calls back into the recorder from its `publish`, its
+/// future's `poll` and its future's drop finds the recorder working and
+/// starts no second write; one that panics in any of them costs that write,
+/// and the next write the window owes still goes through.
+fn storage_code_runs_with_nothing_borrowed() {
+    for panic_at in [None, Some("publish"), Some("poll"), Some("drop")] {
+        let inner = MemoryStorage::new();
+        let recorder = Rc::new(PlacementRecorder::new(
+            StorageHandle::new(Arc::new(ReenteringStore {
+                inner: inner.clone(),
+                panic_at: Arc::new(std::sync::Mutex::new(panic_at)),
+            })),
+            NAME,
+            StoredPlacement::Nothing,
+            Arc::new(|| {}),
+        ));
+        let now = Instant::now();
+        let weak = Rc::downgrade(&recorder);
+        let reentries = Rc::new(std::cell::Cell::new(0));
+        let counted = Rc::clone(&reentries);
+        REENTRY.with(|slot| {
+            slot.replace(Some(Rc::new(move |_| {
+                if let Some(recorder) = weak.upgrade() {
+                    counted.set(counted.get() + 1);
+                    recorder.tick(now);
+                    let _ = recorder.next_due(now);
+                }
+            })));
+        });
+        recorder.observe(&at(100.0, 80.0), &displays(), Some(0), now);
+        assert!(reentries.get() > 0, "{panic_at:?}: the store came back in");
+        if panic_at.is_none() {
+            let stored = inner
+                .contents(&NAME)
+                .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
+                .and_then(|placement| placement.offset);
+            assert_eq!(
+                stored,
+                Some(Point::new(100.0, 80.0)),
+                "a store that comes back in finds nothing borrowed: its write goes through"
+            );
+        }
+        // The next placement the window reports is written whatever the last
+        // attempt did.
+        recorder.observe(
+            &at(300.0, 80.0),
+            &displays(),
+            Some(0),
+            now + WRITE_INTERVAL * 8,
+        );
+        REENTRY.with(|slot| slot.replace(None));
+        let stored = inner
+            .contents(&NAME)
+            .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
+            .and_then(|placement| placement.offset);
+        assert_eq!(
+            stored,
+            Some(Point::new(300.0, 80.0)),
+            "{panic_at:?}: the write after the panicking one goes through"
+        );
+    }
 }
 
 fn restore_opens_the_window_where_it_was_and_back_onto_a_display() {
@@ -523,12 +844,12 @@ fn a_refused_write_is_owed_again_and_not_counted_as_stored() {
     assert_eq!(fixture.stored_offset(), None, "the disk refused it");
     assert_eq!(
         fixture.recorder.next_due(fixture.after(Duration::ZERO)),
-        Some(fixture.after(WRITE_INTERVAL)),
-        "still owed: tried again when the interval is over"
+        Some(fixture.after(WRITE_INTERVAL * 2)),
+        "still owed: tried again once twice the interval is over"
     );
 
-    // The same placement again: it must not be skipped as already written.
-    fixture.observe(&at(100.0, 80.0), WRITE_INTERVAL);
+    // The same placement: it must not be skipped as already written.
+    fixture.recorder.tick(fixture.after(WRITE_INTERVAL * 2));
     assert_eq!(fixture.stored_offset(), Some(Point::new(100.0, 80.0)));
 }
 
@@ -539,14 +860,14 @@ fn a_write_in_flight_waits_for_storage_to_wake_the_owner() {
     let recorder = PlacementRecorder::new(
         handle(&storage),
         NAME,
-        Baseline::Nothing,
+        StoredPlacement::Nothing,
         Arc::new(move || {
             counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }),
     );
     let now = Instant::now();
     let barrier = storage.hold_commits();
-    recorder.observe(&at(100.0, 80.0), &displays(), now);
+    recorder.observe(&at(100.0, 80.0), &displays(), Some(0), now);
     assert_eq!(
         recorder.next_due(now),
         None,
@@ -609,14 +930,14 @@ fn a_placement_already_stored_is_not_written_again() {
     let recorder = PlacementRecorder::new(
         handle(&storage),
         NAME,
-        Baseline::Holds(placement.to_bytes()),
+        StoredPlacement::Holds(placement.to_bytes()),
         Arc::new(|| {}),
     );
     let now = Instant::now();
-    recorder.observe(&at(100.0, 80.0), &displays(), now);
+    recorder.observe(&at(100.0, 80.0), &displays(), Some(0), now);
     assert_eq!(storage.contents(&NAME).as_deref(), Some(&b"sentinel"[..]));
 
-    recorder.observe(&at(500.0, 80.0), &displays(), now + WRITE_INTERVAL);
+    recorder.observe(&at(500.0, 80.0), &displays(), Some(0), now + WRITE_INTERVAL);
     assert_ne!(
         storage.contents(&NAME).as_deref(),
         Some(&b"sentinel"[..]),
@@ -664,7 +985,7 @@ fn closing_writes_the_held_placement_without_waiting_for_the_interval() {
 
     let storage = fixture.storage.clone();
     let now = fixture.after(Duration::from_millis(20));
-    settle(&[Rc::new(fixture.recorder)], now, BUDGET);
+    settle(&[Rc::new(fixture.recorder)], now, BUDGET, || {});
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
     assert_eq!(stored.offset, Some(Point::new(250.0, 90.0)));
@@ -684,7 +1005,7 @@ fn a_flush_keeps_going_until_storage_holds_the_newest_placement() {
 
     let storage = fixture.storage.clone();
     let now = fixture.after(Duration::from_millis(20));
-    settle(&[Rc::new(fixture.recorder)], now, BUDGET);
+    settle(&[Rc::new(fixture.recorder)], now, BUDGET, || {});
 
     let stored = WindowPlacement::from_bytes(&storage.contents(&NAME).expect("stored"))
         .expect("a placement");
@@ -709,7 +1030,7 @@ fn several_windows_share_one_budget_when_the_session_ends() {
             Rc::new(PlacementRecorder::new(
                 handle(&storage),
                 *name,
-                Baseline::Nothing,
+                StoredPlacement::Nothing,
                 Arc::new(|| {}),
             ))
         })
@@ -717,11 +1038,11 @@ fn several_windows_share_one_budget_when_the_session_ends() {
     let now = Instant::now();
     let barrier = storage.hold_commits();
     for recorder in &recorders {
-        recorder.observe(&at(10.0, 10.0), &displays(), now);
+        recorder.observe(&at(10.0, 10.0), &displays(), Some(0), now);
     }
 
     let started = Instant::now();
-    settle(&recorders, now, budget);
+    settle(&recorders, now, budget, || {});
     let spent = started.elapsed();
     drop(barrier);
 
@@ -737,20 +1058,30 @@ fn the_earliest_due_of_several_recorders_is_what_the_owner_wakes_for() {
     let first = Rc::new(PlacementRecorder::new(
         handle(&storage),
         NAME,
-        Baseline::Nothing,
+        StoredPlacement::Nothing,
         Arc::new(|| {}),
     ));
     let second = Rc::new(PlacementRecorder::new(
         handle(&storage),
         StorageName::machine_local("window-two"),
-        Baseline::Nothing,
+        StoredPlacement::Nothing,
         Arc::new(|| {}),
     ));
     let now = Instant::now();
-    first.observe(&at(1.0, 1.0), &displays(), now);
-    first.observe(&at(2.0, 2.0), &displays(), now);
-    second.observe(&at(1.0, 1.0), &displays(), now + Duration::from_millis(500));
-    second.observe(&at(2.0, 2.0), &displays(), now + Duration::from_millis(600));
+    first.observe(&at(1.0, 1.0), &displays(), Some(0), now);
+    first.observe(&at(2.0, 2.0), &displays(), Some(0), now);
+    second.observe(
+        &at(1.0, 1.0),
+        &displays(),
+        Some(0),
+        now + Duration::from_millis(500),
+    );
+    second.observe(
+        &at(2.0, 2.0),
+        &displays(),
+        Some(0),
+        now + Duration::from_millis(600),
+    );
     assert_eq!(
         earliest_due(now, [&first, &second]),
         Some(now + WRITE_INTERVAL),
@@ -795,6 +1126,22 @@ fn placement_recorder() {
             (
                 "a_display_change_alone_measures_the_window_again",
                 a_display_change_alone_measures_the_window_again as fn(),
+            ),
+            (
+                "an_unread_placement_is_overwritten_only_by_the_user",
+                an_unread_placement_is_overwritten_only_by_the_user as fn(),
+            ),
+            (
+                "a_refusing_storage_is_tried_a_bounded_number_of_times",
+                a_refusing_storage_is_tried_a_bounded_number_of_times as fn(),
+            ),
+            (
+                "a_handed_over_placement_carries_its_debt",
+                a_handed_over_placement_carries_its_debt as fn(),
+            ),
+            (
+                "storage_code_runs_with_nothing_borrowed",
+                storage_code_runs_with_nothing_borrowed as fn(),
             ),
             (
                 "restore_opens_the_window_where_it_was_and_back_onto_a_display",

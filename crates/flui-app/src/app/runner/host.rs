@@ -558,10 +558,6 @@ fn end_session_now() {
     // ends the application here.
     let ends_application = session_end_platform(flui_native::OwnerPlatform::session_end_support)
         .is_some_and(|support| support != flui_platform::SessionEndSupport::NotifyOnly);
-    // What the host keeps itself is written first, within the same deadline
-    // as the documents.
-    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
-    super::placement::flush_all_by(deadline);
     // Application code runs while the budget can absorb it: a subscriber or a
     // Detached observer may still publish what the flush then writes. Each
     // runtime's code starts only while the margin is left, whatever the
@@ -576,6 +572,14 @@ fn end_session_now() {
         deliver_session_end_close(deadline);
     }
     flush_for_session_end(deadline);
+    // What the host keeps for itself, the window placements, comes after
+    // the application's own work and the documents: it takes what the budget
+    // has left, never more than its own small bound, and reports by name what
+    // it lost.
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+    super::placement::flush_all_by(
+        deadline.min(std::time::Instant::now() + super::placement::SESSION_END_PLACEMENT_BOUND),
+    );
     if ends_application {
         // The UI runtimes are torn down here only while their destructors
         // can start within the budget and none is on the stack; otherwise
@@ -1055,6 +1059,8 @@ pub(crate) struct AppRoutes {
     reopen: Option<Rc<dyn Fn()>>,
     exit_policy: Option<Rc<dyn Fn() -> bool>>,
     wake_deadline: Option<Rc<dyn Fn() -> Option<web_time::Instant>>>,
+    /// The instant the owner needs a turn at for work that is no frame.
+    turn_deadline: Option<Rc<dyn Fn() -> Option<web_time::Instant>>>,
     /// Where what the operating system opens goes; set when the handler is
     /// made, so it is there before `ready` and the first window.
     opened: Option<Rc<super::opened::OpenRouting>>,
@@ -1301,6 +1307,13 @@ impl flui_native::AppHandler for RunnerHandler {
                 .and_then(|deadline| deadline())
         })
     }
+
+    fn turn_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<web_time::Instant> {
+        contained(None, "turn deadline", || {
+            self.route(|routes| routes.turn_deadline.clone())
+                .and_then(|deadline| deadline())
+        })
+    }
 }
 
 /// Routes the platform's exit question to this thread's `AppRuntime`, instead
@@ -1459,6 +1472,7 @@ pub(super) fn install_platform_quit_hook() {
 ))]
 pub(super) fn install_wake_deadline_hook() {
     let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+    let turn_identity = Arc::clone(&identity);
     route_wake_deadline(move || {
         APP_RUNTIME.with(|slot| {
             let state = slot.borrow();
@@ -1469,6 +1483,38 @@ pub(super) fn install_wake_deadline_hook() {
             }
         })
     });
+    // The owner turns window placements need: no frame serves them, and the
+    // main window waiting for its placement read has none yet.
+    set_route(
+        |routes| &mut routes.turn_deadline,
+        Rc::new(move || {
+            APP_RUNTIME.with(|slot| {
+                let state = slot.borrow();
+                if Arc::ptr_eq(&state.loop_identity, &turn_identity) {
+                    state.turn_deadline()
+                } else {
+                    None
+                }
+            })
+        }) as Rc<dyn Fn() -> Option<web_time::Instant>>,
+    );
+}
+
+/// The instant the running loop is asked to give the owner a turn at: the
+/// answer of the turn-deadline route [`install_wake_deadline_hook`] set.
+#[cfg(all(
+    feature = "testing",
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) fn loop_turn_deadline() -> Option<web_time::Instant> {
+    let routes = APP_RUNTIME.with(|slot| {
+        let runs = &slot.borrow().run_routes;
+        runs.last().and_then(std::rc::Weak::upgrade)
+    })?;
+    let route = routes.borrow().turn_deadline.clone()?;
+    route()
 }
 
 /// The earliest armed source; an absent source contributes no deadline.

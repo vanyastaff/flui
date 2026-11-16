@@ -514,52 +514,61 @@ queued frame that runs once and the one a shut host drops, and
 A window that remembers its placement (`AppConfig::restore_placement`) keeps
 it in the storage the run's capability registry provides: the application's
 override of `StorageCapability` when it registers one, otherwise the host's
-own store. The registry is the launch registry, the one conflicts were checked
-against before the platform started. The host acquires from it through
-`flui_runtime::capability::HostCapabilities`, a scope with an owner-job queue
-of its own and no window: a provider sees a `ProviderContext` whose `window()`
-is `None`, and what it posts back runs at the owner's next turn
-(`runner::placement::tick`). It acquires once per window that opens, as a
-widget's acquisition asks the provider each time. ADR-0152 §2 states the seam
-for widgets of a UI runtime only; this host scope is the rule here until an
-ADR states it ([gaps](../../docs/gaps.md#the-host-acquires-capabilities-outside-adr-0152s-seam)).
+own store. The host acquires it through `flui_runtime::capability::HostCapabilities`
+over the launch registry, once per window that opens ([ADR-0336](../../docs/adr/ADR-0336-the-host-acquires-capabilities-from-the-launch-registry.md)).
+The state is one `runner::placement::PlacementShared`, held by the
+application runtime and by each remembered window's close handle; each list is
+a cell of its own, borrowed only for a step that runs none of the
+application's code. Storage, a provider and a window's subscription always
+run with nothing borrowed.
 
+- **The owner's turns come from the turn deadline.** `AppRuntime::turn_deadline`
+  answers `AppHandler::turn_deadline` with the placements' next due instant
+  and the main window's read bound; a desktop loop gives the owner a turn at
+  it, with or without a window open, and asks no window for a frame
+  (`crates/flui-native/ARCHITECTURE.md`). Placement adds nothing to the frame
+  deadline.
 - **The read never blocks the owner.** `PlacementRecall` starts the read
   before the window opens and settles with a typed outcome (`Recalled`). The
-  window waits at most `RECALL_BOUND`, measured on the host's placement clock
-  (`PlacementHost::clock`: the system clock, a `ManualClock` in tests), and
-  then opens from its configuration. The owner wakes for storage's answer
-  through the read's waker, and for the bound through a short-lived thread
-  that sleeps it out: a desktop loop serves a due wake deadline by asking its
-  windows for frames, and the main window waiting here has none yet. The main
-  window waits in `MainController::recalling`; a content window opened with
-  `open_window` waits in `PlacementHost::awaiting`, its failures then reaching
-  its `WindowRequest`.
+  window waits at most `RECALL_BOUND`, measured on the placement clock
+  (`SystemClock`, a `ManualClock` in tests), and then opens from its
+  configuration. The main window waits in `MainController::recalling`; a
+  content window opened with `open_window` waits in `PlacementShared::awaiting`,
+  its failures then reaching its `WindowRequest`.
 - **A late answer is never applied.** The read belongs to the window that
   started it and is dropped when the window opens, so an answer after the bound
-  has nothing to arrive at, least of all a window the user has moved since.
+  has nothing to arrive at.
 - **Failure costs the placement, not the launch.** A provider that refuses or
   panics, a storage whose read or future panics, and bytes that are no
   placement (`WindowPlacement::from_bytes`, then `resolve` against this run's
   displays, which moves a window back onto a live display) each open the
   window from its configuration. A panic is reported and its payload
   discarded.
-- **What storage holds is overwritten only by what the window did.** A read
-  that timed out, was refused or panicked leaves the recorder a
-  `Baseline::Unknown`: the window's first placement, its default, is taken as
-  what storage holds, and only a change the user makes is written.
-- **Writes.** At most one every `WRITE_INTERVAL` while the window changes, at
-  once when it closes, and again when the host accepts a new display snapshot
-  (a placement is kept relative to a display's usable area). A closing window
-  hands its last placement to storage and the owner turns on; the loop's
-  teardown waits for every write still out within the exit deadline's
-  services part, before the pools close, and names each placement storage did
-  not take. A session end does the same within its own deadline.
+- **Only the user overwrites a placement the run could not read.** After a
+  read that timed out, was refused or panicked, the recorder holds
+  `StoredPlacement::Unknown`, which owes nothing until a change it attributes
+  to the user (`ChangeOrigin::User`): a report that differs from the last one
+  at the same scale, against the same display snapshot, with no command of
+  the application applied in between. Where the window opened, a display
+  change, a scale change and an application's command never write.
+- **Writes are bounded.** At most one every `WRITE_INTERVAL` while the window
+  changes. A refused write is tried again after twice the wait of the attempt
+  before, `WRITE_ATTEMPTS` times in all, and then not until the window's
+  placement changes or the window closes; giving up is reported once, and an
+  idle application asks for no more turns.
+- **Closing and ending.** A closing window hands its last placement to storage
+  and the owner turns on. A close that finds the state busy answers
+  `Closing::Deferred` and is carried out at the next turn. The loop's teardown
+  waits for every write still out within the exit deadline's services part,
+  before the pools close, running what providers post back meanwhile, and
+  names each placement storage did not take. A session end does the same after
+  the application's own work and the documents, within what the budget has
+  left and at most `SESSION_END_PLACEMENT_BOUND`.
 - **One window per name.** An open window holds its placement's
   `StorageName`; a second window asking for it opens from its configuration
-  and is not remembered until the first closes. A window reopened under a name
-  whose last write is still out opens from that placement in memory, not from
-  a read that races the write.
+  and is not remembered. A window reopened under a name whose last write is
+  still out opens from that window's placement and owes what it owed
+  (`PlacementRecorder::hand_over`).
 
 `placement_recorder` (the model's table) and the runner's `placement::tests`
 hold each rule.

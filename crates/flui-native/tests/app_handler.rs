@@ -284,6 +284,62 @@ fn the_wake_deadline_is_asked_and_kept() {
     assert_eq!(log.count(AppCall::Quit), 1);
 }
 
+/// A turn deadline asked with no window open gives the owner one turn at
+/// its instant, not before, asks no window for a frame and is not polled for:
+/// the loop asks again only once per idle iteration it wakes for.
+#[cfg(target_os = "windows")]
+fn a_turn_deadline_gives_the_owner_a_turn_with_no_window() {
+    let log = AppLog::new();
+    let due = Rc::new(std::cell::OnceCell::new());
+    let answer = Rc::clone(&due);
+    log.answer_turn_deadline_with(move || {
+        Some(
+            *answer.get_or_init(|| web_time::Instant::now() + std::time::Duration::from_millis(40)),
+        )
+    });
+    let turns = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&turns);
+    let quit_at = Rc::clone(&due);
+    log.bootstrap(move |owner| {
+        // The run ends anyway after three seconds, so a loop that never gives
+        // the turn fails the assertion below instead of hanging.
+        let stop = owner.proxy();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let _ = stop.request_quit();
+        });
+        let quit = owner.proxy();
+        owner
+            .on_wake(Box::new(move || {
+                let now = web_time::Instant::now();
+                seen.borrow_mut().push(now);
+                // Only the deadline's turn ends the run: a turn the loop
+                // gives for another reason before it does not.
+                if quit_at.get().is_some_and(|due| now >= *due) {
+                    let _ = quit.request_quit();
+                }
+            }))
+            .expect("the owner takes a wake callback");
+        Ok(())
+    });
+    Box::new(flui_native::WindowsPlatform::try_new().expect("native Windows platform"))
+        .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+        .expect("the loop ends on a quit");
+    let due = *due.get().expect("the deadline was asked");
+    let turns = turns.borrow();
+    assert!(
+        turns
+            .iter()
+            .any(|turn| *turn >= due && *turn < due + std::time::Duration::from_secs(1)),
+        "the deadline gave the owner a turn at its instant: {turns:?}"
+    );
+    assert!(
+        log.count(AppCall::TurnDeadline) <= 4,
+        "asked once per idle iteration, not polled: {}",
+        log.count(AppCall::TurnDeadline)
+    );
+}
+
 #[test]
 fn app_handler_obligation_table() {
     crate::run_table(
@@ -328,6 +384,11 @@ fn app_handler_obligation_table() {
             (
                 "the wake deadline is asked and kept",
                 the_wake_deadline_is_asked_and_kept,
+            ),
+            #[cfg(target_os = "windows")]
+            (
+                "a turn deadline gives the owner a turn with no window",
+                a_turn_deadline_gives_the_owner_a_turn_with_no_window,
             ),
         ],
     );

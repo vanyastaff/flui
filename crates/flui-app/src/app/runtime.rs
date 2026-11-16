@@ -1082,27 +1082,6 @@ impl AppRuntime {
             .frame_deadline(self.installed_host.logical());
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let frame = None;
-        // A window placement held back by the write throttle is written when
-        // its interval is over, and a window waiting for its placement read
-        // opens at the read's bound. Frame-independent like text sizing: a
-        // minimized window has frames disabled, and the write must not wait
-        // for it to come back (`after_turn` ticks the placements).
-        #[cfg(all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        ))]
-        let placement = [
-            self.placement.next_due(),
-            self.main_controller
-                .as_ref()
-                .and_then(super::runner::main_window::MainController::recall_deadline),
-        ]
-        .into_iter()
-        .flatten()
-        .min();
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        let placement = None;
         // The raster work a window's own frame serves (its owed surface, the
         // device's next rebuild), for each window whose frames run: a window
         // whose frames are off would hand the loop a deadline no wake moves.
@@ -1116,7 +1095,30 @@ impl AppRuntime {
             frame,
             raster,
             self.installed_host.native().text_sizing_deadline(),
-            placement,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// When the owner needs a turn for work no frame serves: a window
+    /// placement held back by the write throttle or retrying a refused write,
+    /// and a window waiting for its placement read, which opens at the read's
+    /// bound. The loop gives that turn with or without a window open and asks
+    /// no window for a frame (`AppHandler::turn_deadline`); `after_turn`
+    /// ticks the placements and drives the main window.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    #[must_use]
+    pub(super) fn turn_deadline(&self) -> Option<web_time::Instant> {
+        [
+            self.placement.next_due(),
+            self.main_controller
+                .as_ref()
+                .and_then(super::runner::main_window::MainController::recall_deadline),
         ]
         .into_iter()
         .flatten()

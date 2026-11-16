@@ -5,15 +5,23 @@
 //!
 //! The storage is the one the run's capability registry provides, the
 //! application's override of `StorageCapability` when it has one: the host
-//! acquires it through [`HostCapabilities`], as a widget would, with no window.
-//! Nothing here blocks the owner thread on storage, except the final flush at
-//! the end of the loop or of the session, within that end's deadline.
+//! acquires it through [`HostCapabilities`] (ADR-0332). Nothing here blocks the
+//! owner thread on storage, except the final flush at the end of the loop or of
+//! the session, within that end's deadline. The owner's turns come from storage's
+//! answers and from the loop's turn deadline (`AppHandler::turn_deadline`,
+//! `AppRuntime::turn_deadline`), which a loop serves with or without a window
+//! open.
+//!
+//! The state lives in one [`PlacementShared`] that the application runtime and
+//! every window's close handle hold, each list in a cell of its own that is
+//! borrowed only for a step that runs none of the application's code: storage,
+//! a provider and a window's subscription always run with nothing borrowed.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Wake, Waker};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flui_foundation::panic::{FirstPanic, drop_contained};
 use flui_foundation::{MonotonicClock, PresentationAddress, SystemClock};
@@ -26,27 +34,54 @@ use super::desktop::OpeningWindow;
 use super::host::{APP_RUNTIME, with_owner_platform};
 use crate::app::AppConfig;
 use crate::app::placement_recorder::{
-    FlushState, PlacementRecall, PlacementRecorder, RECALL_BOUND, Recalled, earliest_due,
+    FlushState, PlacementRecall, PlacementRecorder, Recalled, StoredPlacement, earliest_due,
     restore_into, settle,
 };
 
+/// How long the end of a session waits, at most, for the window placements
+/// still owed, after the application's own work at that end: window metadata
+/// takes what the session's budget has left and never more than this.
+pub(crate) const SESSION_END_PLACEMENT_BOUND: Duration = Duration::from_millis(250);
+
 /// The run's window placements, held by the application runtime for the
 /// loop's life.
+#[derive(Default)]
 pub(in crate::app) struct PlacementHost {
+    shared: Rc<PlacementShared>,
+}
+
+/// The placement state the runtime and every window's close handle share.
+pub(in crate::app) struct PlacementShared {
     /// The clock the placement read's bound and the write interval are
     /// measured on: the system's, a manual one in tests.
-    clock: Rc<dyn MonotonicClock>,
+    clock: RefCell<Rc<dyn MonotonicClock>>,
     /// Where the host acquires the application's storage, from the launch
     /// registry; `None` before a loop installs it and after it retires.
-    capabilities: Option<Rc<HostCapabilities>>,
+    capabilities: RefCell<Option<Rc<HostCapabilities>>>,
     /// The names a window holds, open or opening.
     claims: Claims,
     /// The open windows that remember their placement, by presentation.
-    live: Vec<LiveWindow>,
+    live: RefCell<Vec<LiveWindow>>,
     /// The windows that closed while their last placement was being written.
-    closing: Vec<Rc<PlacementRecorder>>,
+    closing: RefCell<Vec<Rc<PlacementRecorder>>>,
     /// Windows that wait for their placement read before they open.
-    awaiting: Vec<AwaitingOpen>,
+    awaiting: RefCell<Vec<AwaitingOpen>>,
+    /// Closes that found [`Self::live`] busy: carried out at the next tick.
+    deferred_closes: RefCell<Vec<PresentationAddress>>,
+}
+
+impl Default for PlacementShared {
+    fn default() -> Self {
+        Self {
+            clock: RefCell::new(Rc::new(SystemClock)),
+            capabilities: RefCell::new(None),
+            claims: Claims::default(),
+            live: RefCell::new(Vec::new()),
+            closing: RefCell::new(Vec::new()),
+            awaiting: RefCell::new(Vec::new()),
+            deferred_closes: RefCell::new(Vec::new()),
+        }
+    }
 }
 
 struct LiveWindow {
@@ -63,34 +98,30 @@ struct AwaitingOpen {
     open: Box<dyn FnOnce(OpeningWindow)>,
 }
 
-impl Default for PlacementHost {
-    fn default() -> Self {
-        Self {
-            clock: Rc::new(SystemClock),
-            capabilities: None,
-            claims: Claims::default(),
-            live: Vec::new(),
-            closing: Vec::new(),
-            awaiting: Vec::new(),
-        }
-    }
-}
-
 impl PlacementHost {
-    /// When the owner should wake for the placements, seen from `now`: a held
-    /// write whose interval ends, a write storage answered, or a window whose
-    /// wait for its read ends.
+    /// When the owner needs a turn for the placements: a held write whose
+    /// interval ends, a write storage answered, a close carried over, or a
+    /// window whose wait for its read ends. `None` while a list is busy:
+    /// the turn that holds it asks again.
     pub(in crate::app) fn next_due(&self) -> Option<Instant> {
-        let now = self.clock.now();
+        let shared = &self.shared;
+        let now = shared.now();
+        let (Ok(live), Ok(closing), Ok(awaiting), Ok(deferred)) = (
+            shared.live.try_borrow(),
+            shared.closing.try_borrow(),
+            shared.awaiting.try_borrow(),
+            shared.deferred_closes.try_borrow(),
+        ) else {
+            return None;
+        };
+        if !deferred.is_empty() {
+            return Some(now);
+        }
         let writes = earliest_due(
             now,
-            self.live
-                .iter()
-                .map(|window| &window.recorder)
-                .chain(&self.closing),
+            live.iter().map(|window| &window.recorder).chain(&*closing),
         );
-        let reads = self
-            .awaiting
+        let reads = awaiting
             .iter()
             .filter_map(|awaiting| awaiting.opening.recall_deadline())
             .min();
@@ -99,45 +130,80 @@ impl PlacementHost {
 
     /// Measure placements on `clock` from now on.
     #[cfg(all(test, feature = "testing"))]
-    pub(in crate::app) fn set_clock(&mut self, clock: Rc<dyn MonotonicClock>) {
-        self.clock = clock;
+    pub(in crate::app) fn set_clock(&self, clock: Rc<dyn MonotonicClock>) {
+        self.shared.clock.replace(clock);
+    }
+
+    /// The state every window's close handle shares.
+    #[cfg(all(test, feature = "testing"))]
+    pub(in crate::app) fn shared(&self) -> Rc<PlacementShared> {
+        Rc::clone(&self.shared)
     }
 }
 
-/// The host's placement clock, now.
-pub(super) fn now() -> Instant {
-    let clock = APP_RUNTIME.with(|slot| Rc::clone(&slot.borrow().placement.clock));
-    clock.now()
+impl PlacementShared {
+    fn now(&self) -> Instant {
+        let clock = Rc::clone(&*self.clock.borrow());
+        clock.now()
+    }
+
+    /// The open windows' recorders, cloned out of the list.
+    fn live_recorders(&self) -> Vec<Rc<PlacementRecorder>> {
+        self.live
+            .borrow()
+            .iter()
+            .map(|window| Rc::clone(&window.recorder))
+            .collect()
+    }
+}
+
+/// The run's placement state; `None` while the application runtime is
+/// mutably borrowed.
+fn shared() -> Option<Rc<PlacementShared>> {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .map(|runtime| Rc::clone(&runtime.placement.shared))
+    })
 }
 
 /// The loop starts: the host acquires storage from `registry`, the one the
-/// run's conflicts were checked against, and what a provider posts back
-/// wakes the owner. Forgets what an earlier loop on this thread left.
+/// run's conflicts were checked against. What a provider posts back wakes
+/// the owner for a turn, and unparks the owner thread while it waits for the
+/// last writes at the end of the loop or of the session ([`settle`]).
+/// Forgets what an earlier loop on this thread left.
 pub(super) fn install(registry: CapabilityRegistry) {
     let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {
         return;
     };
+    let Some(shared) = shared() else {
+        return;
+    };
+    let owner = std::thread::current();
     let capabilities = Rc::new(HostCapabilities::new(registry, move || {
         let _ = proxy.wake();
+        owner.unpark();
     }));
-    let replaced = APP_RUNTIME.with(|slot| {
-        let placement = &mut slot.borrow_mut().placement;
-        (
-            placement.capabilities.replace(capabilities),
-            std::mem::take(&mut placement.live),
-            std::mem::take(&mut placement.closing),
-            std::mem::take(&mut placement.awaiting),
-        )
-    });
+    let replaced = (
+        shared.capabilities.replace(Some(capabilities)),
+        std::mem::take(&mut *shared.live.borrow_mut()),
+        std::mem::take(&mut *shared.closing.borrow_mut()),
+        std::mem::take(&mut *shared.awaiting.borrow_mut()),
+    );
+    shared.deferred_closes.borrow_mut().clear();
     drop_contained(replaced);
 }
 
 /// What a window that remembers its placement opens with: the storage it is
 /// kept in, its name, held for this window alone, and the read of it.
 pub(super) struct RememberedPlacement {
+    shared: Rc<PlacementShared>,
     storage: StorageHandle,
     claim: NameClaim,
     recall: PlacementRecall,
+    /// What storage holds as a closed window of the same name left it, when
+    /// the window opens from that window's placement instead of a read.
+    handed_over: Option<StoredPlacement>,
 }
 
 impl RememberedPlacement {
@@ -146,28 +212,14 @@ impl RememberedPlacement {
     /// for no placement, when another window holds its name, or when the run
     /// has no storage to keep it in.
     ///
-    /// A window that closed this run under the same name leaves its newest
-    /// placement in memory: the window opens from that, which no read racing
-    /// the closed window's last write could give.
+    /// A window that closed this run under the same name while its last write
+    /// is still out leaves its newest placement and what it still owes: the
+    /// window opens from that placement, which no read racing that write could
+    /// give, and owes what the closed window did.
     pub(super) fn recall(config: &AppConfig) -> Option<Self> {
         let name = config.placement?;
-        let (claim, fresher, capabilities, clock) = APP_RUNTIME.with(|slot| {
-            let runtime = slot.borrow();
-            let placement = &runtime.placement;
-            let fresher = placement
-                .closing
-                .iter()
-                .rev()
-                .find(|recorder| recorder.name() == name)
-                .and_then(|recorder| recorder.latest());
-            (
-                placement.claims.claim(name),
-                fresher,
-                placement.capabilities.clone(),
-                Rc::clone(&placement.clock),
-            )
-        });
-        let Some(claim) = claim else {
+        let shared = shared()?;
+        let Some(claim) = shared.claims.claim(name) else {
             tracing::warn!(
                 storage = name.as_str(),
                 "another open window remembers its placement under this name; this window \
@@ -175,25 +227,40 @@ impl RememberedPlacement {
             );
             return None;
         };
+        let closing = shared
+            .closing
+            .borrow()
+            .iter()
+            .rev()
+            .find(|recorder| recorder.name() == name)
+            .cloned();
+        let handed = closing.and_then(|recorder| recorder.hand_over());
+        let capabilities = shared.capabilities.borrow().clone();
         let storage = acquire_storage(capabilities.as_deref(), name)?;
-        let recall = match fresher {
-            Some(bytes) => PlacementRecall::settled(name, Recalled::of_bytes(&bytes, &name)),
-            None => PlacementRecall::start(&storage, name, clock.now(), owner_waker()?),
+        let (recall, handed_over) = match handed {
+            Some((bytes, stored)) => (
+                PlacementRecall::settled(name, Recalled::of_bytes(&bytes, &name)),
+                Some(stored),
+            ),
+            None => (
+                PlacementRecall::start(&storage, name, shared.now(), owner_waker()?),
+                None,
+            ),
         };
-        if recall.deadline().is_some() {
-            wake_owner_at_bound();
-        }
         Some(Self {
+            shared,
             storage,
             claim,
             recall,
+            handed_over,
         })
     }
 
     /// Whether the read settled, taking storage's answer or giving up on it at
     /// the bound.
     pub(super) fn poll(&mut self) -> bool {
-        self.recall.poll(now()).is_some()
+        let now = self.shared.now();
+        self.recall.poll(now).is_some()
     }
 
     /// When the window stops waiting for the read; `None` once it settled.
@@ -233,50 +300,134 @@ impl RememberedPlacement {
     }
 
     /// Start recording the placement of the window presented at `address`,
-    /// which opened with this.
-    pub(super) fn keep(self, address: PresentationAddress) {
+    /// which opened with this; the handle its close goes through.
+    pub(super) fn keep(self, address: PresentationAddress) -> Option<PlacementClose> {
         let Self {
+            shared,
             storage,
             claim,
             recall,
+            handed_over,
         } = self;
         let name = recall.name();
-        let baseline = recall
-            .outcome()
-            .map_or(Recalled::TimedOut.baseline(), Recalled::baseline);
+        let stored = handed_over.unwrap_or_else(|| {
+            recall
+                .outcome()
+                .map_or(Recalled::TimedOut.stored(), Recalled::stored)
+        });
         drop_contained(recall);
-        let Some(handle) =
-            APP_RUNTIME.with(|slot| slot.borrow().window_commands.handle_for(address))
-        else {
-            return;
-        };
+        let handle = APP_RUNTIME.with(|slot| {
+            slot.try_borrow()
+                .ok()
+                .and_then(|runtime| runtime.window_commands.handle_for(address))
+        })?;
         // Storage answers on its own thread: wake the owner, which takes the answer
         // at its next turn.
-        let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {
-            return;
-        };
+        let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)?;
         let wake_owner: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.wake();
         });
-        let recorder = Rc::new(PlacementRecorder::new(storage, name, baseline, wake_owner));
+        let recorder = Rc::new(PlacementRecorder::new(storage, name, stored, wake_owner));
         let weak = Rc::downgrade(&recorder);
+        // Weak: the recorder, in the shared lists, holds this subscription.
+        let clock = Rc::downgrade(&shared);
         let Ok((state, subscription)) = handle.subscribe(move |state| {
-            if let Some(recorder) = weak.upgrade() {
-                recorder.observe(state, &current_displays(), now());
+            if let (Some(recorder), Some(shared)) = (weak.upgrade(), clock.upgrade()) {
+                recorder.observe(
+                    state,
+                    &current_displays(),
+                    applied_commands(address),
+                    shared.now(),
+                );
             }
         }) else {
-            return;
+            return None;
         };
         recorder.hold(subscription);
-        recorder.observe(&state, &current_displays(), now());
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().placement.live.push(LiveWindow {
-                address,
-                recorder,
-                _claim: claim,
-            });
+        recorder.observe(
+            &state,
+            &current_displays(),
+            applied_commands(address),
+            shared.now(),
+        );
+        shared.live.borrow_mut().push(LiveWindow {
+            address,
+            recorder,
+            _claim: claim,
         });
+        Some(PlacementClose { shared, address })
     }
+}
+
+/// How many of the application's commands were handed to the window at
+/// `address`; `None` when that cannot be read now.
+fn applied_commands(address: PresentationAddress) -> Option<u64> {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .and_then(|runtime| runtime.window_commands.applied_commands(address))
+    })
+}
+
+/// The handle a remembered window's close goes through: it holds the
+/// placement state itself, so a close reached from inside a borrow of the
+/// application runtime still finds it.
+pub(super) struct PlacementClose {
+    shared: Rc<PlacementShared>,
+    address: PresentationAddress,
+}
+
+/// What a window's close did with its placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Closing {
+    /// The window's name is free and its last placement is with storage.
+    Started,
+    /// The placement state was busy: the close is carried out at the owner's
+    /// next turn, which the turn deadline asks for.
+    Deferred,
+    /// The window was not recorded, or its close was carried out already.
+    NotKept,
+}
+
+impl PlacementClose {
+    /// A handle on the close of the window presented at `address`.
+    #[cfg(all(test, feature = "testing"))]
+    pub(super) fn of(shared: Rc<PlacementShared>, address: PresentationAddress) -> Self {
+        Self { shared, address }
+    }
+
+    /// The window is closing: free its name and hand its last placement to
+    /// storage. The owner does not wait for the answer: [`tick`] takes it,
+    /// and the end of the loop waits for what is still out.
+    pub(super) fn finish(&self) -> Closing {
+        finish_in(&self.shared, self.address)
+    }
+}
+
+fn finish_in(shared: &PlacementShared, address: PresentationAddress) -> Closing {
+    let window = {
+        let Ok(mut live) = shared.live.try_borrow_mut() else {
+            shared.deferred_closes.borrow_mut().push(address);
+            return Closing::Deferred;
+        };
+        let Some(at) = live.iter().position(|window| window.address == address) else {
+            return Closing::NotKept;
+        };
+        live.remove(at)
+    };
+    let LiveWindow {
+        recorder,
+        _claim: claim,
+        ..
+    } = window;
+    drop(claim);
+    recorder.release_window();
+    let now = shared.now();
+    recorder.begin_flush(now);
+    if recorder.continue_flush(now) == FlushState::Waiting {
+        shared.closing.borrow_mut().push(recorder);
+    }
+    Closing::Started
 }
 
 /// The storage the run's registry provides, acquired for the host now. A
@@ -324,34 +475,6 @@ fn owner_waker() -> Option<Waker> {
     Some(Waker::from(Arc::new(OwnerWake(proxy))))
 }
 
-/// Wake the owner once [`RECALL_BOUND`] has passed, for the window waiting on
-/// its placement read.
-///
-/// The loop's wake deadline alone does not give the owner a turn: a desktop
-/// loop serves a due deadline by asking its windows for a frame, and the main
-/// window waiting here has none yet. So a short-lived thread sleeps out the
-/// bound and wakes the owner, whose turn then opens the window at its default
-/// if the read still has not answered. A wake that reaches a loop already gone
-/// is refused and ignored.
-fn wake_owner_at_bound() {
-    let Some(proxy) = with_owner_platform(flui_native::OwnerPlatform::proxy) else {
-        return;
-    };
-    let spawned = std::thread::Builder::new()
-        .name("flui-placement-bound".into())
-        .spawn(move || {
-            std::thread::sleep(RECALL_BOUND);
-            let _ = proxy.wake();
-        });
-    if let Err(error) = spawned {
-        tracing::warn!(
-            %error,
-            "no thread to wake the owner at the placement read's bound; the window \
-             opens at the next owner turn after it"
-        );
-    }
-}
-
 struct OwnerWake(flui_native::PlatformProxy);
 
 impl Wake for OwnerWake {
@@ -366,130 +489,96 @@ impl Wake for OwnerWake {
 
 /// Open the window `opening` describes with `open` once its placement read
 /// settles, which it has not yet: at the owner turn that takes storage's
-/// answer or reaches the read's bound. A loop that ends first drops `open`
-/// unrun.
+/// answer or the one the read's bound brings. A loop that ends first drops
+/// `open` unrun.
 pub(super) fn when_recalled(opening: OpeningWindow, open: Box<dyn FnOnce(OpeningWindow)>) {
-    APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
-            .placement
+    match shared() {
+        Some(shared) => shared
             .awaiting
-            .push(AwaitingOpen { opening, open });
-    });
-}
-
-/// The window at `address` is closing: its name is free from now on, and its
-/// last placement is handed to storage. The owner does not wait for the
-/// answer: [`tick`] takes it, and the end of the loop waits for what is still
-/// out.
-pub(super) fn finish(address: PresentationAddress) {
-    let window = APP_RUNTIME.with(|slot| {
-        let mut runtime = slot.try_borrow_mut().ok()?;
-        let live = &mut runtime.placement.live;
-        let at = live.iter().position(|window| window.address == address)?;
-        Some(live.remove(at))
-    });
-    let Some(LiveWindow {
-        recorder,
-        _claim: claim,
-        ..
-    }) = window
-    else {
-        return;
-    };
-    drop(claim);
-    recorder.release_window();
-    let now = now();
-    recorder.begin_flush(now);
-    if recorder.continue_flush(now) == FlushState::Waiting {
-        let unkept = APP_RUNTIME.with(|slot| match slot.try_borrow_mut() {
-            Ok(mut runtime) => {
-                runtime.placement.closing.push(recorder);
-                None
-            }
-            Err(_) => Some(recorder),
-        });
-        if let Some(recorder) = unkept {
-            // Closed from inside a borrow of the runtime (a `Drop` it runs):
-            // the write is with storage, but nothing is left to wait for it.
-            tracing::warn!(
-                storage = recorder.name().as_str(),
-                "a closing window's last placement is written unwatched; its loss would go \
-                 unreported"
-            );
-            drop_contained(recorder);
-        }
+            .borrow_mut()
+            .push(AwaitingOpen { opening, open }),
+        None => drop_contained((opening, open)),
     }
 }
 
-/// The session is ending: write every window's placement now, by
-/// `deadline`, the session end's own (ADR-0260), so window metadata never
-/// spends the documents' time. A placement storage did not take by then is
-/// reported, by name.
+/// Write every owed placement now and wait for storage, by `deadline`: the
+/// end of the loop, or of the session after the application's own work. What
+/// providers post back to the owner meanwhile runs between the looks at the
+/// answers. A placement storage did not take by then is reported, by name.
 pub(super) fn flush_all_by(deadline: Instant) {
-    let (recorders, closed) = APP_RUNTIME.with(|slot| {
-        slot.try_borrow_mut().map_or_default(|mut runtime| {
-            let placement = &mut runtime.placement;
-            let closed = std::mem::take(&mut placement.closing);
-            let recorders: Vec<Rc<PlacementRecorder>> = placement
-                .live
-                .iter()
-                .map(|window| Rc::clone(&window.recorder))
-                .chain(closed.iter().cloned())
-                .collect();
-            (recorders, closed)
-        })
-    });
-    let now = now();
-    settle(
+    let Some(shared) = shared() else {
+        return;
+    };
+    let closed = std::mem::take(&mut *shared.closing.borrow_mut());
+    let recorders: Vec<Rc<PlacementRecorder>> = shared
+        .live_recorders()
+        .into_iter()
+        .chain(closed.iter().cloned())
+        .collect();
+    if recorders.is_empty() {
+        return;
+    }
+    let capabilities = shared.capabilities.borrow().clone();
+    let mut posted = FirstPanic::new();
+    let _: Vec<StorageName> = settle(
         &recorders,
-        now,
+        shared.now(),
         deadline.saturating_duration_since(Instant::now()),
+        || {
+            if let Some(capabilities) = &capabilities {
+                posted.absorb(capabilities.run_posted());
+            }
+        },
     );
+    if let Some(payload) = posted.into_payload() {
+        tracing::error!(
+            panic = flui_foundation::panic::payload_text(payload.as_ref()),
+            "a storage provider's posted work panicked while the window placements were \
+             written"
+        );
+        flui_foundation::panic::discard_payload(payload);
+    }
     drop_contained(closed);
 }
 
 /// Take what the owner's turn brought: what the host's providers posted,
-/// storage's answers to writes and reads, and the held writes whose interval
-/// is over; then open the windows whose read settled. The owner calls it after
-/// every turn, so a wake for any of these does it whatever the frames are
-/// doing.
+/// closes carried over, storage's answers to writes and reads, and the held
+/// writes whose interval is over; then open the windows whose read settled.
+/// The owner calls it after every turn.
 pub(super) fn tick() {
-    let (capabilities, live, closing) = APP_RUNTIME.with(|slot| {
-        slot.try_borrow().map_or_default(|runtime| {
-            let placement = &runtime.placement;
-            (
-                placement.capabilities.clone(),
-                placement
-                    .live
-                    .iter()
-                    .map(|window| Rc::clone(&window.recorder))
-                    .collect::<Vec<_>>(),
-                placement.closing.clone(),
-            )
-        })
-    });
+    let Some(shared) = shared() else {
+        return;
+    };
     let mut first = FirstPanic::new();
+    let capabilities = shared.capabilities.borrow().clone();
     if let Some(capabilities) = capabilities {
         first.absorb(capabilities.run_posted());
     }
-    let now = now();
-    for recorder in live {
-        recorder.tick(now);
+    let deferred = std::mem::take(&mut *shared.deferred_closes.borrow_mut());
+    for address in deferred {
+        let _: Option<Closing> = first.contain(|| finish_in(&shared, address));
     }
+    let now = shared.now();
+    for recorder in shared.live_recorders() {
+        first.contain(|| recorder.tick(now));
+    }
+    let closing = shared.closing.borrow().clone();
     let finished: Vec<Rc<PlacementRecorder>> = closing
         .into_iter()
-        .filter(|recorder| recorder.continue_flush(now) != FlushState::Waiting)
+        .filter(|recorder| {
+            first
+                .contain(|| recorder.continue_flush(now))
+                .is_none_or(|state| state != FlushState::Waiting)
+        })
         .collect();
     if !finished.is_empty() {
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .placement
-                .closing
-                .retain(|recorder| !finished.iter().any(|done| Rc::ptr_eq(done, recorder)));
-        });
+        shared
+            .closing
+            .borrow_mut()
+            .retain(|recorder| !finished.iter().any(|done| Rc::ptr_eq(done, recorder)));
     }
     drop_contained(finished);
-    first.absorb(open_recalled());
+    first.absorb(open_recalled(&shared));
     first.resume();
 }
 
@@ -498,9 +587,8 @@ pub(super) fn tick() {
 ///
 /// Each open runs contained: one that panics leaves the others opened, and
 /// the first panic is returned.
-fn open_recalled() -> FirstPanic {
-    let awaiting =
-        APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().placement.awaiting));
+fn open_recalled(shared: &PlacementShared) -> FirstPanic {
+    let awaiting = std::mem::take(&mut *shared.awaiting.borrow_mut());
     let mut first = FirstPanic::new();
     let mut waiting = Vec::new();
     for mut entry in awaiting {
@@ -513,15 +601,11 @@ fn open_recalled() -> FirstPanic {
     }
     // An open may have queued another window, or ended the loop: the waiting
     // go back in front of the new ones, and a retired host keeps none.
-    let dropped = APP_RUNTIME.with(|slot| {
-        let placement = &mut slot.borrow_mut().placement;
-        if placement.capabilities.is_none() {
-            return waiting;
-        }
-        placement.awaiting.splice(0..0, waiting);
-        Vec::new()
-    });
-    first.contain(|| drop(dropped));
+    if shared.capabilities.borrow().is_none() {
+        first.contain(|| drop(waiting));
+    } else {
+        shared.awaiting.borrow_mut().splice(0..0, waiting);
+    }
     first
 }
 
@@ -529,21 +613,15 @@ fn open_recalled() -> FirstPanic {
 /// placement against it, so a placement kept relative to a display's usable
 /// area is written again when that area moved under a window that did not.
 pub(super) fn displays_changed() {
-    let live = APP_RUNTIME.with(|slot| {
-        slot.try_borrow().map_or_default(|runtime| {
-            runtime
-                .placement
-                .live
-                .iter()
-                .map(|window| Rc::clone(&window.recorder))
-                .collect::<Vec<_>>()
-        })
-    });
+    let Some(shared) = shared() else {
+        return;
+    };
+    let live = shared.live_recorders();
     if live.is_empty() {
         return;
     }
     let displays = current_displays();
-    let now = now();
+    let now = shared.now();
     for recorder in live {
         recorder.redisplay(&displays, now);
     }
@@ -553,19 +631,17 @@ pub(super) fn displays_changed() {
 /// window still waiting for its read is dropped unopened and every recorder
 /// is forgotten. Returns the first panic of that for the loop's teardown.
 pub(super) fn retire() -> FirstPanic {
-    let (capabilities, released) = APP_RUNTIME.with(|slot| {
-        let mut runtime = slot.borrow_mut();
-        let placement = &mut runtime.placement;
-        (
-            placement.capabilities.take(),
-            (
-                std::mem::take(&mut placement.awaiting),
-                std::mem::take(&mut placement.live),
-                std::mem::take(&mut placement.closing),
-            ),
-        )
-    });
     let mut first = FirstPanic::new();
+    let Some(shared) = shared() else {
+        return first;
+    };
+    let capabilities = shared.capabilities.borrow_mut().take();
+    let released = (
+        std::mem::take(&mut *shared.awaiting.borrow_mut()),
+        std::mem::take(&mut *shared.live.borrow_mut()),
+        std::mem::take(&mut *shared.closing.borrow_mut()),
+    );
+    shared.deferred_closes.borrow_mut().clear();
     first.contain(|| drop(released));
     if let Some(capabilities) = capabilities {
         first.absorb(capabilities.retire());

@@ -52,9 +52,7 @@ fn start_on_manual_clock(application: Application) -> (HeadlessRunHandle, Manual
     let clock = ManualClock::new();
     let placement_clock = clock.clone();
     APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
-            .placement
-            .set_clock(Rc::new(placement_clock));
+        slot.borrow().placement.set_clock(Rc::new(placement_clock));
     });
     let ingress = APP_RUNTIME
         .with(|slot| slot.borrow().main_ingress.clone())
@@ -72,10 +70,10 @@ fn content_size(run: &HeadlessRunHandle) -> Size<f64> {
     window.state().content_size.get()
 }
 
-/// The owner's turn at the read's bound, as the bound's wake gives it
-/// (`wake_owner_at_bound`, whose thread sleeps on the real clock the test
-/// does not wait for).
-fn wake_at_bound(run: &HeadlessRunHandle) {
+/// The owner's turn a desktop loop gives at the application's turn
+/// deadline (`AppHandler::turn_deadline`); the headless loop has no idle wait
+/// and gives it here, as one wake.
+fn turn_at_deadline(run: &HeadlessRunHandle) {
     crate::app::runner::host::with_owner_platform(|owner| owner.proxy().wake())
         .expect("a running loop has an owner")
         .expect("the owner takes a wake");
@@ -83,7 +81,7 @@ fn wake_at_bound(run: &HeadlessRunHandle) {
 }
 
 fn recording() -> usize {
-    APP_RUNTIME.with(|slot| slot.borrow().placement.live.len())
+    APP_RUNTIME.with(|slot| slot.borrow().placement.shared().live.borrow().len())
 }
 
 /// A window that remembers its placement reads the stored one once, before
@@ -148,14 +146,19 @@ fn a_window_opens_at_its_default_when_the_read_does_not_answer_in_time() {
         "the window waits for its read"
     );
     let started = flui_foundation::MonotonicClock::now(&clock);
-    assert!(
-        run.wake_deadline()
-            .is_some_and(|deadline| deadline <= started + RECALL_BOUND),
-        "the loop wakes by the read's bound"
+    assert_eq!(
+        run.turn_deadline(),
+        Some(started + RECALL_BOUND),
+        "the owner gets a turn at the read's bound"
+    );
+    assert_eq!(
+        run.wake_deadline(),
+        None,
+        "and no window is asked for a frame for it"
     );
 
     clock.advance(RECALL_BOUND);
-    wake_at_bound(&run);
+    turn_at_deadline(&run);
     let default = content_size(&run);
     assert_ne!(default, Size::new(640.0, 480.0), "it opened at its default");
 
@@ -257,5 +260,248 @@ fn the_host_acquires_the_storage_once_per_window() {
         });
     let (run, _clock) = start_on_manual_clock(application);
     assert_eq!(asked.get(), 1);
+    run.join().expect("the run ends");
+}
+
+/// A close that finds the placement state busy is carried over to the next
+/// owner turn, not dropped: the window's name is freed and its last
+/// placement written then. A close reached from inside a borrow of the
+/// application runtime does not need the runtime at all.
+#[test]
+fn a_close_that_finds_the_state_busy_is_carried_over() {
+    let storage = MemoryStorage::new();
+    let (run, _clock) = start_on_manual_clock(remembering(&storage));
+    let shared = APP_RUNTIME.with(|slot| slot.borrow().placement.shared());
+    let address = shared.live.borrow()[0].address;
+    let close = super::PlacementClose::of(Rc::clone(&shared), address);
+
+    let held = shared.live.borrow();
+    let closing = close.finish();
+    drop(held);
+    assert_eq!(closing, super::Closing::Deferred);
+    assert_eq!(recording(), 1, "nothing is dropped meanwhile");
+    assert!(
+        run.turn_deadline().is_some(),
+        "the carried close asks the owner for a turn"
+    );
+    turn_at_deadline(&run);
+    assert_eq!(recording(), 0, "the next turn carried the close out");
+    assert!(
+        shared.claims.0.borrow().is_empty(),
+        "and freed the window's name"
+    );
+
+    let outcome = APP_RUNTIME.with(|slot| {
+        let _held = slot.borrow_mut();
+        close.finish()
+    });
+    assert_eq!(
+        outcome,
+        super::Closing::NotKept,
+        "inside the runtime's borrow the close answers, carried out already"
+    );
+    run.join().expect("the run ends");
+}
+
+/// A store whose answers reach the owner as posted jobs: the provider hands
+/// it the owner's poster, and a write lands when the job runs there.
+struct PostedStore {
+    inner: MemoryStorage,
+    poster: flui_platform::capability::OwnerPoster,
+}
+
+/// A write's answer and the waker of whoever waits for it.
+type WriteSlot = Arc<
+    std::sync::Mutex<(
+        Option<Result<flui_platform::StoredVersion, flui_platform::StorageError>>,
+        Option<std::task::Waker>,
+    )>,
+>;
+
+struct PostedWrite(WriteSlot);
+
+impl std::future::Future for PostedWrite {
+    type Output = Result<flui_platform::StoredVersion, flui_platform::StorageError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        ctx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut slot = self
+            .0
+            .lock()
+            .expect("BUG: the slot is never held across a panic");
+        match slot.0.take() {
+            Some(answer) => std::task::Poll::Ready(answer),
+            None => {
+                slot.1 = Some(ctx.waker().clone());
+                std::task::Poll::Pending
+            }
+        }
+    }
+}
+
+impl Storage for PostedStore {
+    fn read(
+        &self,
+        name: &StorageName,
+        limit: u64,
+    ) -> flui_platform::StorageFuture<flui_platform::Stored> {
+        self.inner.read(name, limit)
+    }
+
+    fn publish(
+        &self,
+        name: &StorageName,
+        bytes: Vec<u8>,
+        _mode: flui_platform::WriteMode,
+    ) -> flui_platform::StorageFuture<flui_platform::StoredVersion> {
+        let slot: WriteSlot = Arc::default();
+        let mut job = Some((self.inner.clone(), *name, bytes, Arc::clone(&slot)));
+        let poster = self.poster.clone();
+        std::thread::spawn(move || {
+            let _ = poster.post(move || {
+                let Some((inner, name, bytes, answer)) = job.take() else {
+                    return;
+                };
+                let version = flui_platform::StoredVersion::of_bytes(&bytes);
+                inner.put(&name, bytes);
+                let waker = {
+                    let mut slot = answer
+                        .lock()
+                        .expect("BUG: the slot is never held across a panic");
+                    slot.0 = Some(Ok(version));
+                    slot.1.take()
+                };
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            });
+        });
+        Box::pin(PostedWrite(slot))
+    }
+
+    fn copy_aside(
+        &self,
+        name: &StorageName,
+    ) -> flui_platform::StorageFuture<flui_platform::CopiedAside> {
+        self.inner.copy_aside(name)
+    }
+}
+
+/// The last writes at the end of the loop take the answers a provider posts
+/// back to the owner: the wait runs the host's posted jobs, so a store that
+/// answers that way is written within its time, not reported lost at the
+/// deadline.
+#[test]
+fn the_final_flush_takes_answers_posted_to_the_owner() {
+    let inner = MemoryStorage::new();
+    let provided = inner.clone();
+    let application = Application::new()
+        .config(AppConfig::new().restore_placement(NAME))
+        .capability::<StorageCapability>(move |ctx: &ProviderContext<'_>| {
+            Ok(StorageHandle::new(Arc::new(PostedStore {
+                inner: provided.clone(),
+                poster: ctx.owner().clone(),
+            }) as Arc<dyn Storage>))
+        });
+    let (run, _clock) = start_on_manual_clock(application);
+    run.open_windows()[0].simulate_move(Point::new(321.0, 123.0));
+
+    let started = std::time::Instant::now();
+    super::flush_all_by(started + std::time::Duration::from_secs(3));
+    let spent = started.elapsed();
+    let stored = inner
+        .contents(&NAME)
+        .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok());
+    assert!(stored.is_some(), "the posted answer was taken");
+    assert!(
+        spent < std::time::Duration::from_secs(2),
+        "within its time, not at the deadline: {spent:?}"
+    );
+    run.join().expect("the run ends");
+}
+
+/// The window root of a session-end test: says whether it heard the
+/// session end.
+#[derive(Clone)]
+struct HearsSessionEnd(Rc<Cell<bool>>);
+
+struct HearsSessionEndState {
+    heard: Rc<Cell<bool>>,
+    notices: Option<flui_view::HostNoticeSubscription>,
+}
+
+impl flui_view::StatefulView for HearsSessionEnd {
+    type State = HearsSessionEndState;
+
+    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        HearsSessionEndState {
+            heard: Rc::clone(&self.0),
+            notices: None,
+        }
+    }
+}
+
+impl flui_view::ViewState<HearsSessionEnd> for HearsSessionEndState {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
+        let heard = Rc::clone(&self.heard);
+        self.notices = Some(
+            ctx.lifecycle_handle()
+                .expect("a bound lifecycle")
+                .subscribe_notices(move |notice| {
+                    if matches!(notice, flui_platform::HostNotice::SessionEnded) {
+                        heard.set(true);
+                    }
+                })
+                .expect("the lifecycle is open"),
+        );
+    }
+
+    fn build(
+        &self,
+        _view: &HearsSessionEnd,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for HearsSessionEnd {
+    fn create_element(self: Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// A store that never answers costs the session's end no more than the
+/// placements' own bound, after the application's work: the application
+/// still hears the session end with its budget.
+#[test]
+fn a_store_that_never_answers_leaves_the_session_end_its_budget() {
+    let storage = MemoryStorage::new();
+    let barrier = storage.hold_commits();
+    let heard = Rc::new(Cell::new(false));
+    let provided = storage.clone();
+    let application = Application::new()
+        .config(AppConfig::new().restore_placement(NAME))
+        .capability::<StorageCapability>(move |_: &ProviderContext<'_>| {
+            Ok(StorageHandle::new(
+                Arc::new(provided.clone()) as Arc<dyn Storage>
+            ))
+        });
+    let run = HeadlessRun::start(application, HearsSessionEnd(Rc::clone(&heard)));
+    run.run_owner_turn();
+    assert_eq!(run.open_windows().len(), 1, "the window opened");
+    run.open_windows()[0].simulate_move(Point::new(222.0, 111.0));
+
+    let started = std::time::Instant::now();
+    run.end_session(flui_platform::SessionEndPhase::Ending);
+    let spent = started.elapsed();
+    assert!(heard.get(), "the application heard the session end");
+    assert!(
+        spent < super::SESSION_END_PLACEMENT_BOUND + std::time::Duration::from_secs(1),
+        "the placements took their own bound, not the budget: {spent:?}"
+    );
+    drop(barrier);
     run.join().expect("the run ends");
 }

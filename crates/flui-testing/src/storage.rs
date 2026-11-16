@@ -88,8 +88,11 @@ struct State {
     commit_holds: usize,
     copy_holds: usize,
     read_holds: usize,
-    /// Reads asked for while a [`ReadHold`] is alive, waiting to answer.
-    held_reads: Vec<Waker>,
+    /// Reads asked for while a [`ReadHold`] is alive, waiting to answer: the
+    /// latest waker of each, by the read's id.
+    held_reads: Vec<(u64, Waker)>,
+    /// The id of the next read asked while a [`ReadHold`] is alive.
+    next_held_read: u64,
     /// Copies asked for while a [`CopyHold`] is alive, waiting to run.
     held_copies: Vec<Waker>,
     /// Errors the next publishes fail with, in order.
@@ -437,9 +440,14 @@ impl Storage for MemoryStorage {
         state.live += 1;
         state.reads += 1;
         if state.read_holds > 0 {
+            let id = state.next_held_read;
+            state.next_held_read = id
+                .checked_add(1)
+                .expect("BUG: a test asks fewer than u64::MAX held reads");
             drop(state);
             return Box::pin(HeldRead {
                 state: Arc::clone(&self.state),
+                id,
                 name: *name,
                 limit,
                 answered: false,
@@ -717,6 +725,9 @@ impl Drop for CopyRequest {
 /// stored when it is first polled with no hold alive.
 struct HeldRead {
     state: Arc<Mutex<State>>,
+    /// What names this read in [`State::held_reads`]: a later pending poll
+    /// replaces its waker there instead of adding one.
+    id: u64,
     name: StorageName,
     limit: u64,
     answered: bool,
@@ -734,7 +745,18 @@ impl Future for HeldRead {
         let waker = ctx.waker().clone();
         let mut state = self.state.lock();
         if state.read_holds > 0 {
-            state.held_reads.push(waker);
+            // The latest waker only: the one it replaces is dropped after the
+            // lock is released.
+            let id = self.id;
+            let replaced = match state.held_reads.iter_mut().find(|(held, _)| *held == id) {
+                Some((_, held)) => Some(std::mem::replace(held, waker)),
+                None => {
+                    state.held_reads.push((id, waker));
+                    None
+                }
+            };
+            drop(state);
+            drop(replaced);
             return Poll::Pending;
         }
         let answer = state.read_answer(&self.name, self.limit);
@@ -767,8 +789,11 @@ impl Drop for ReadHold {
     fn drop(&mut self) {
         let mut state = self.state.lock();
         state.read_holds -= 1;
-        let wakers = if state.read_holds == 0 {
+        let wakers: Vec<Waker> = if state.read_holds == 0 {
             std::mem::take(&mut state.held_reads)
+                .into_iter()
+                .map(|(_, waker)| waker)
+                .collect()
         } else {
             Vec::new()
         };

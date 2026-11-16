@@ -103,13 +103,83 @@ impl WakeDeadline {
     }
 }
 
+/// The owner's turn deadline as a loop arms and delivers it
+/// (`AppHandler::turn_deadline`): a due instant gives the owner one turn
+/// (`OwnerSignal::wake`) and asks no window for a frame, so it holds with no
+/// window open. An instant is delivered once: the turn it brought is the
+/// handler's chance to move it, and an answer that stays on it is not waited
+/// for again, so a handler that does not move it cannot spin the loop.
+#[cfg_attr(
+    not(any(windows, target_os = "macos", linux_host, test)),
+    expect(
+        dead_code,
+        reason = "UIKit, Android, the web and headless do not serve turn deadlines"
+    )
+)]
+#[derive(Debug, Default)]
+pub(crate) struct TurnDeadline {
+    armed: Option<web_time::Instant>,
+    delivered: Option<web_time::Instant>,
+}
+
+#[cfg_attr(
+    not(any(windows, target_os = "macos", linux_host, test)),
+    expect(
+        dead_code,
+        reason = "UIKit, Android, the web and headless do not serve turn deadlines"
+    )
+)]
+impl TurnDeadline {
+    /// The handler answered `answer`: arm it unless it is the instant last
+    /// delivered. The instant to wait until, if any.
+    pub(crate) fn arm(&mut self, answer: Option<web_time::Instant>) -> Option<web_time::Instant> {
+        if answer.is_none() {
+            self.delivered = None;
+        }
+        self.armed = answer.filter(|at| self.delivered != Some(*at));
+        self.armed
+    }
+
+    /// Whether the armed instant is due at `now`; a due one is delivered and
+    /// disarmed, and the caller gives the owner its turn.
+    pub(crate) fn take_due(&mut self, now: web_time::Instant) -> bool {
+        let Some(at) = self.armed.take_if(|at| *at <= now) else {
+            return false;
+        };
+        self.delivered = Some(at);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use web_time::Instant;
 
-    use super::WakeDeadline;
+    use super::{TurnDeadline, WakeDeadline};
+
+    /// A turn deadline is delivered once at its instant, never before, and
+    /// an answer that stays on the delivered instant is not armed again.
+    #[test]
+    fn a_turn_deadline_is_delivered_once_at_its_instant() {
+        let start = Instant::now();
+        let at = start + Duration::from_millis(5);
+        let mut deadline = TurnDeadline::default();
+        assert_eq!(deadline.arm(Some(at)), Some(at));
+        assert!(!deadline.take_due(start), "not before its instant");
+        assert!(deadline.take_due(at), "due at its instant");
+        assert!(!deadline.take_due(at), "delivered once");
+        assert_eq!(deadline.arm(Some(at)), None, "the same instant again");
+        let later = at + Duration::from_millis(5);
+        assert_eq!(deadline.arm(Some(later)), Some(later), "a new instant");
+        assert_eq!(deadline.arm(None), None);
+        assert_eq!(
+            deadline.arm(Some(at)),
+            Some(at),
+            "after a quiet answer, the old instant is new again"
+        );
+    }
 
     /// A deadline is armed when asked for, delivered once when due, and armed
     /// again for the same instant only after a frame ran: a deadline no frame

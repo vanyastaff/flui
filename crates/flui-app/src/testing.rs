@@ -30,7 +30,8 @@ use flui_view::View;
 
 use crate::app::application::{DesktopRun, StartupWindow};
 use crate::app::runner::{
-    RasterFactory, StandInRenderers, StartedLoop, loop_wake_deadline, start_loop,
+    RasterFactory, StandInRenderers, StartedLoop, loop_turn_deadline, loop_wake_deadline,
+    start_loop,
 };
 use crate::app::{AppHandle, Application, LaunchError};
 
@@ -192,6 +193,16 @@ impl HeadlessRunHandle {
     #[must_use]
     pub fn wake_deadline(&self) -> Option<std::time::Instant> {
         loop_wake_deadline()
+    }
+
+    /// The instant the application asks its loop to give the owner a turn
+    /// at, with or without a window open and with no frame: `None` when it
+    /// asks for none. A desktop loop gives that turn at the instant; the
+    /// test gives it with [`run_owner_turn`](Self::run_owner_turn) after a
+    /// wake of the owner.
+    #[must_use]
+    pub fn turn_deadline(&self) -> Option<std::time::Instant> {
+        loop_turn_deadline()
     }
 
     /// Every window the application holds open, in the order it opened: a

@@ -605,12 +605,12 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui-view`, `flui-painting` and `flui-engine` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-native`, `flui-widgets` and `flui-interaction` the most.
 - A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
 
-### The host acquires capabilities outside ADR-0152's seam
+### UIKit, Android and the web give no owner turn at a turn deadline
 
-> **Environments:** desktop · **Who it hurts:** Contributors and capability crates that read ADR-0152 as the whole rule for who acquires a capability · **Parity:** none (capability seam)
+> **Environments:** iOS, Android, Web, headless · **Who it hurts:** A future host-side client of `AppHandler::turn_deadline` on those hosts · **Parity:** none (owner core)
 
-- [ADR-0152](adr/ADR-0152-capability-seam-revised.md) §2 has providers live per UI runtime and handles acquired in a widget's lifecycle hooks. The desktop host now also acquires the application's `StorageCapability` for itself, before any UI runtime exists, to keep window placements there: through `flui_runtime::capability::HostCapabilities` over the launch registry, with an owner-job queue of its own and no window. The rule is written in `crates/flui-app/ARCHITECTURE.md` ("The host keeps window placements in the application's storage"); no ADR states it, so a provider author learns from no decision record that `ProviderContext::window()` is `None` for the host as well as for a widget before its first window.
-- The entry closes when an ADR states the host's acquisition (who may acquire outside a UI runtime, which context it gets, when its completions retire) and supersedes the sentence of ADR-0152 §2 it extends.
+- `AppHandler::turn_deadline` promises the owner a turn at its instant with or without a window open (`crates/flui-native/ARCHITECTURE.md`). The Win32 loop and its modal loops, the X11 and Wayland loops and the AppKit host serve it; the UIKit loop, the Android looper and the web host never ask it, and the headless host has no idle wait. Their only client today, window placement, is desktop-only, so nothing waits on it there yet.
+- The entry closes when each of those hosts asks the turn deadline and gives the turn (UIKit through its run-loop timer, Android through the looper's timeout, the web through a timer of the page), each with the `app_handler` row's test where it runs.
 
 ### Window placement restores neither a scale change on the same display nor an OS's tiled state
 

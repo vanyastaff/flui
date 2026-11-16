@@ -328,7 +328,7 @@ impl Drop for OwnerJobs {
 
 /// What the composition root acquires capabilities through for itself, outside
 /// every UI runtime: the run's registry, an owner-job queue of its own and no
-/// window.
+/// window (ADR-0336).
 ///
 /// The host keeps state of its own in an application's capabilities (a window's
 /// remembered placement in its storage), so it acquires them from the same
@@ -368,17 +368,16 @@ impl HostCapabilities {
     /// provides it, otherwise what the provider answers. A provider's panic
     /// is not caught here; the caller decides what it costs.
     pub fn acquire<C: Capability>(&self) -> Result<C::Handle, Unsupported> {
-        let ctx = ProviderContext::new(
-            self.jobs.completions().poster(),
+        let handle = acquire_with(
+            &self.registry,
             self.jobs.completions(),
             self.jobs.locals(),
             None,
-        );
-        let handle = self
-            .registry
-            .acquire(std::any::TypeId::of::<C>(), C::NAME, &ctx)?
-            .downcast::<C::Handle>()
-            .expect("BUG: the registry keys a provider by the capability whose handle it makes");
+            TypeId::of::<C>(),
+            C::NAME,
+        )?
+        .downcast::<C::Handle>()
+        .expect("BUG: the registry keys a provider by the capability whose handle it makes");
         Ok(*handle)
     }
 
@@ -437,10 +436,31 @@ impl CapabilitySource for PresentationCapabilities {
                 .map_or(1.0, |metrics| metrics.scale().get());
             WindowRef::new(window.id(), scale, window.surface_target())
         });
-        let poster = self.completions.poster();
-        let ctx = ProviderContext::new(poster, &self.completions, &self.locals, window);
-        self.registry.acquire(capability, name, &ctx)
+        acquire_with(
+            &self.registry,
+            &self.completions,
+            &self.locals,
+            window,
+            capability,
+            name,
+        )
     }
+}
+
+/// Ask `registry`'s provider of `capability` in the context one owner gives
+/// its providers: its completions, what providers keep for it, and the window
+/// it acquires for, if any. The one acquisition a UI runtime's presentation
+/// and the host's own scope share.
+fn acquire_with(
+    registry: &CapabilityRegistry,
+    completions: &CompletionSource,
+    locals: &flui_platform::capability::RuntimeLocals,
+    window: Option<WindowRef>,
+    capability: TypeId,
+    name: &'static str,
+) -> Result<Box<dyn Any>, Unsupported> {
+    let ctx = ProviderContext::new(completions.poster(), completions, locals, window);
+    registry.acquire(capability, name, &ctx)
 }
 
 #[cfg(test)]

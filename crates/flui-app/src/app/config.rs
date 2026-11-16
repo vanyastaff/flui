@@ -708,12 +708,14 @@ impl AppConfig {
     /// moves (a change inside the interval is written when it is over), when
     /// the displays change, and at once when the window closes and when the
     /// session ends; the application's exit waits for those last writes within
-    /// its deadline. A window that could not read its placement in time does
-    /// not overwrite it until the user moves the window. One open window holds
-    /// `name`: a second window asking for the same name opens from its
-    /// configuration and is not remembered until the first one closes, so give
-    /// each window a name of its own. Desktop only: Android, iOS and the Web
-    /// size the window themselves.
+    /// its deadline, and a store that keeps refusing is tried a few times and
+    /// then not again until the placement changes. A window that could not
+    /// read its placement in time leaves what is stored alone until the user
+    /// moves, resizes or changes the mode of the window. One open window holds
+    /// `name`: a second window opened with the same name while the first is
+    /// open opens from its configuration and is never remembered, so give each
+    /// window a name of its own. Desktop only: Android, iOS and the Web size
+    /// the window themselves.
     ///
     /// Where it is applied: Win32 opens the window at the remembered position,
     /// size and mode, and matches the display it was on. A backend that does

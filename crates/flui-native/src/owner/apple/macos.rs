@@ -373,8 +373,10 @@ impl host::Loop for MacOSLoop {
         self.app_delivery
             .ready(OwnerPlatform::new(Rc::clone(&platform), Rc::clone(&hooks)))
             .map_err(PlatformError::bootstrap)?;
-        // The handler is bound: the pump may ask it for its deadline.
+        // The handler is bound: the pump may ask it for its deadline, and the
+        // loop for the owner turn its bootstrap may have asked for.
         self.wake_pump.arm();
+        self.loop_control.schedule_turn_deadline();
         // The sources start listening once the application has bootstrapped;
         // a notice that arrived earlier waited for it.
         let notice_watch = self.notice_sources.listen();

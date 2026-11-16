@@ -33,6 +33,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::panic_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry},
     owner::signal::OwnerTurnSlot,
+    owner::wake_deadline::TurnDeadline,
 };
 
 /// Whether finishing a session end also answers a waiting
@@ -80,6 +81,11 @@ pub(crate) struct LoopControl {
     /// state, made there the first time the owner needs it, since the owner
     /// turn the signal posts reaches it through this shared control.
     turn: OnceLock<NativeOwner<Rc<OwnerTurnSlot>>>,
+    /// The application's turn deadline and the generation of the timer
+    /// scheduled for it: AppKit's loop has no idle wait of its own to bound,
+    /// so each answer schedules a timer on the main queue and supersedes the
+    /// last ([`Self::schedule_turn_deadline`]).
+    turn_deadline: Mutex<(TurnDeadline, u64)>,
 }
 
 impl LoopControl {
@@ -110,10 +116,12 @@ impl LoopControl {
                     cleanup_step(|| {
                         let main = MainThreadMarker::new()
                             .expect("BUG: the owner queue is the AppKit main queue");
-                        if let Some(control) = weak.upgrade()
-                            && control.owner_signal.drive_in(&control.turn(main))
-                        {
-                            control.quit();
+                        if let Some(control) = weak.upgrade() {
+                            if control.owner_signal.drive_in(&control.turn(main)) {
+                                control.quit();
+                            } else {
+                                control.schedule_turn_deadline();
+                            }
                         }
                     });
                 });
@@ -135,6 +143,7 @@ impl LoopControl {
                 app,
                 terminate_gate: Mutex::new(TerminateGate::new()),
                 turn: OnceLock::new(),
+                turn_deadline: Mutex::new((TurnDeadline::default(), 0)),
             }
         })
     }
@@ -214,6 +223,42 @@ impl LoopControl {
                 NSApplicationTerminateReply::TerminateLater
             }
         }
+    }
+
+    /// Ask the application's turn deadline, with no lock held, and schedule
+    /// the owner turn it asks for on the main queue: at that instant the
+    /// owner gets a turn whether or not a window is open, and no window is
+    /// asked for a frame. Called after each owner turn and once the run's
+    /// handler has bootstrapped; an answer supersedes the timer an earlier one
+    /// scheduled, and an instant delivered once is not scheduled again.
+    pub(crate) fn schedule_turn_deadline(self: &Arc<Self>) {
+        let answer = if self.owner_signal.accepting() {
+            self.app.turn_deadline().or_resume(None)
+        } else {
+            None
+        };
+        let (armed, generation) = {
+            let mut slot = self.turn_deadline.lock();
+            let armed = slot.0.arm(answer);
+            slot.1 = slot
+                .1
+                .checked_add(1)
+                .expect("BUG: a turn-deadline generation per owner turn fits in u64");
+            (armed, slot.1)
+        };
+        let Some(at) = armed else {
+            return;
+        };
+        let delay = at.saturating_duration_since(web_time::Instant::now());
+        self.run_after(delay, move |control| {
+            let due = {
+                let mut slot = control.turn_deadline.lock();
+                slot.1 == generation && slot.0.take_due(web_time::Instant::now())
+            };
+            if due {
+                let _ = control.owner_signal.wake();
+            }
+        });
     }
 
     /// Run `body` on the owner lane after `delay`, if the control is still

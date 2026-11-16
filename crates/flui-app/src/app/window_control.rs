@@ -47,6 +47,10 @@ pub(crate) struct WindowQueue {
     router: Rc<CloseRequestRouter>,
     /// Asks the owner for a turn; `false` when it cannot be woken.
     wake: Rc<dyn Fn() -> bool>,
+    /// How many of the application's commands were handed to the window, so
+    /// a change the window reports after one is told from a change the user
+    /// made (`runner::placement`).
+    applied: Cell<u64>,
 }
 
 impl WindowQueue {
@@ -93,6 +97,9 @@ impl WindowQueue {
         while let Some(work) = batch.rest.pop_front() {
             match work {
                 Queued::Command(admitted) => {
+                    // Counted before it applies: what the window reports
+                    // from here on may be the command's doing.
+                    self.applied.set(self.applied.get().saturating_add(1));
                     if let Err(refusal) = apply_admitted(&*window, admitted) {
                         report(&*window, &refusal);
                     }
@@ -244,6 +251,20 @@ impl WindowCommandQueues {
         })
     }
 
+    /// How many of the application's commands were handed to the window
+    /// presented at `address`; `None` once it is gone.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(crate) fn applied_commands(&self, address: PresentationAddress) -> Option<u64> {
+        self.queues.borrow().iter().find_map(|(queue, _)| {
+            let queue = queue.upgrade()?;
+            (queue.address == address).then(|| queue.applied.get())
+        })
+    }
+
     /// The window presented at `address`, while it is open.
     #[cfg(feature = "native")]
     pub(crate) fn window_for(
@@ -376,6 +397,7 @@ pub(crate) fn window_source(
         address,
         router,
         wake,
+        applied: Cell::new(0),
     });
     let source = WindowSource::new(HostWindowControl {
         last_state: RefCell::new(window.state()),

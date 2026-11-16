@@ -125,31 +125,59 @@ impl Recalled {
     }
 
     /// What this says storage holds, for the recorder that follows the window.
-    pub(crate) fn baseline(&self) -> Baseline {
+    pub(crate) fn stored(&self) -> StoredPlacement {
         match self {
-            Self::Placement(placement) => Baseline::Holds(placement.to_bytes()),
+            Self::Placement(placement) => StoredPlacement::Holds(placement.to_bytes()),
             // Nothing worth keeping: the window's first placement replaces it.
-            Self::Absent | Self::Unreadable => Baseline::Nothing,
-            // Storage may hold a placement this run never saw: the window's
-            // first placement does not overwrite it, a change the user makes
-            // does.
-            Self::Refused(_) | Self::TimedOut | Self::Panicked => Baseline::Unknown,
+            Self::Absent | Self::Unreadable => StoredPlacement::Nothing,
+            // Storage may hold a placement this run never saw.
+            Self::Refused(_) | Self::TimedOut | Self::Panicked => StoredPlacement::Unknown {
+                user_changed: false,
+            },
         }
     }
 }
 
-/// What a recorder starts from: what storage holds under its name, as far as
-/// the run knows.
+/// What storage holds under a recorder's name, as far as the run knows: what
+/// decides whether a placement the window reports is owed to storage.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Baseline {
+pub(crate) enum StoredPlacement {
     /// Storage holds these bytes: a placement equal to them is not written.
     Holds(Vec<u8>),
-    /// Storage holds nothing worth keeping: the window's first placement is
-    /// written at once.
+    /// Storage holds nothing worth keeping: the window's placement is owed.
     Nothing,
-    /// The run could not read what storage holds: the window's first placement
-    /// is taken as what storage holds, and only a change to it is written.
-    Unknown,
+    /// The run could not read what storage holds, so it may hold a placement
+    /// the user kept. Nothing the host or the application did to the window
+    /// (where it opened, a display change, a scale change, a command) is
+    /// owed: only a change the user made to the window, after which
+    /// `user_changed` is `true` and the window's placement is owed.
+    Unknown {
+        /// Whether the user changed the window since.
+        user_changed: bool,
+    },
+}
+
+impl StoredPlacement {
+    /// Whether `latest`, the window's newest placement, is owed to storage.
+    fn owes(&self, latest: &[u8]) -> bool {
+        match self {
+            Self::Holds(held) => held != latest,
+            Self::Nothing => true,
+            Self::Unknown { user_changed } => *user_changed,
+        }
+    }
+}
+
+/// Who changed a window between two of its reports, as far as the recorder
+/// can tell. A change is the user's only when nothing else explains it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChangeOrigin {
+    /// The user moved, resized or changed the mode of the window.
+    User,
+    /// The host or the application: where the window opened, the displays or
+    /// the window's scale changing under it, a command the application
+    /// applied, or a change the recorder could not attribute.
+    Other,
 }
 
 /// A read of one window's stored placement, from its start before the window
@@ -356,7 +384,19 @@ pub(crate) fn restore_into(
     }
 }
 
+/// How many times a refused write of one placement is attempted before the
+/// recorder gives up on it until the window's placement changes again.
+pub(crate) const WRITE_ATTEMPTS: u32 = 3;
+
 /// Follows one window's published state and writes its placement to storage.
+///
+/// Storage is the application's code when it provides its own: its
+/// `publish`, its future's `poll` and that future's drop run with none of the
+/// recorder's state borrowed, so storage may call back into the recorder from
+/// any of them. A write taken out to be started or polled leaves a mark in
+/// the state ([`Write::Starting`], [`Write::Polling`]), so a call that comes
+/// back in meanwhile finds the write busy and starts no second one; the call
+/// that took it out finishes it. A panic in any of them is a refused write.
 pub(crate) struct PlacementRecorder {
     storage: StorageHandle,
     name: StorageName,
@@ -366,122 +406,177 @@ pub(crate) struct PlacementRecorder {
     /// Set by [`Self::answer`]'s waker: storage has an answer to take.
     answered: Arc<AtomicBool>,
     record: RefCell<WriteRecord>,
-    /// The window's last published state, so a change of the displays alone
-    /// is measured again ([`Self::redisplay`]).
-    last_state: RefCell<Option<WindowState>>,
     /// The window-state subscription that feeds [`Self::observe`], held for as
-    /// long as the recorder lives.
+    /// long as the recorder follows the window.
     subscription: RefCell<Option<flui_view::WindowSubscription>>,
 }
 
-/// What the recorder has captured, what storage has taken, and what is in
-/// flight between the two.
-#[derive(Default)]
+/// What the recorder has captured, what storage holds, and the write
+/// between the two.
 struct WriteRecord {
     /// The placement last captured; `None` until the window reports one.
     latest: Option<Vec<u8>>,
-    /// The bytes storage last answered `Ok` for, or that it already held.
-    written: Option<Vec<u8>>,
-    /// Whether the first placement captured is taken as what storage holds
-    /// instead of being written ([`Baseline::Unknown`]).
-    adopt_first: bool,
-    /// A write handed to storage whose answer is not in yet.
-    in_flight: Option<InFlight>,
+    /// What storage holds, as far as the recorder knows.
+    stored: StoredPlacement,
+    write: Write,
     /// When a write was last handed to storage.
     last_attempt: Option<Instant>,
+    /// Refused attempts at writing [`Self::latest`] since it last changed.
+    failures: u32,
+    /// The placement the recorder gave up writing after
+    /// [`WRITE_ATTEMPTS`]: not attempted again until the window's placement
+    /// changes, or a flush asks for it.
+    given_up: Option<Vec<u8>>,
     /// Whether storage refused a write since the last flush began.
-    refused: bool,
+    refused_in_flush: bool,
     /// Whether the window was maximized before it was last minimized, so a
     /// minimized window comes back maximized.
     maximized_before: bool,
+    /// The window's last report and what it was measured against, so the
+    /// next one can be attributed ([`ChangeOrigin`]) and a change of the
+    /// displays alone measured again ([`PlacementRecorder::redisplay`]).
+    seen: Option<Seen>,
 }
 
-struct InFlight {
+/// One report of the window, as the recorder measured it.
+struct Seen {
+    state: WindowState,
     bytes: Vec<u8>,
-    answer: StorageFuture<StoredVersion>,
+    /// The window's scale, as bits, so a scale change is told apart exactly.
+    scale: Option<u64>,
+    displays: flui_platform::DisplayRevision,
+    /// How many commands the application had applied to the window; `None`
+    /// when that could not be read.
+    commands: Option<u64>,
+}
+
+/// The write between the recorder and storage.
+enum Write {
+    /// No write is out.
+    Idle,
+    /// A write is being handed to storage: its `publish` runs.
+    Starting,
+    /// Storage took a write and has not answered it.
+    Out {
+        bytes: Vec<u8>,
+        answer: StorageFuture<StoredVersion>,
+    },
+    /// Storage's answer is being polled.
+    Polling,
+}
+
+impl Write {
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
 }
 
 impl WriteRecord {
-    /// Whether the newest placement is not the one storage holds.
+    fn new(stored: StoredPlacement) -> Self {
+        Self {
+            latest: None,
+            stored,
+            write: Write::Idle,
+            last_attempt: None,
+            failures: 0,
+            given_up: None,
+            refused_in_flush: false,
+            maximized_before: false,
+            seen: None,
+        }
+    }
+
+    /// Whether the newest placement is owed to storage outside a flush: not
+    /// stored, and not given up on.
     fn owes_write(&self) -> bool {
-        self.latest.is_some() && self.latest != self.written
+        self.latest
+            .as_deref()
+            .is_some_and(|latest| self.given_up.as_deref() != Some(latest))
+            && self.owes_flush()
+    }
+
+    /// Whether the newest placement is owed to storage at a flush, which
+    /// tries a given-up placement once more.
+    fn owes_flush(&self) -> bool {
+        self.latest
+            .as_deref()
+            .is_some_and(|latest| self.stored.owes(latest))
+    }
+
+    /// The wait after the last attempt before the next: [`WRITE_INTERVAL`],
+    /// doubled for each refused attempt.
+    fn interval(&self) -> Duration {
+        WRITE_INTERVAL.saturating_mul(1 << self.failures.min(WRITE_ATTEMPTS))
     }
 
     fn due(&self, now: Instant) -> bool {
         self.last_attempt
-            .is_none_or(|at| now.saturating_duration_since(at) >= WRITE_INTERVAL)
+            .is_none_or(|at| now.saturating_duration_since(at) >= self.interval())
     }
 
-    /// Take in `bytes` as the newest placement.
-    fn capture(&mut self, bytes: Vec<u8>) {
-        if std::mem::take(&mut self.adopt_first) {
-            self.written = Some(bytes.clone());
+    /// Take in `bytes` as the newest placement, changed by `origin`.
+    fn capture(&mut self, bytes: Vec<u8>, origin: ChangeOrigin) {
+        if self.latest.as_deref() == Some(bytes.as_slice()) {
+            return;
         }
+        if origin == ChangeOrigin::User
+            && let StoredPlacement::Unknown { user_changed } = &mut self.stored
+        {
+            *user_changed = true;
+        }
+        self.failures = 0;
+        self.given_up = None;
         self.latest = Some(bytes);
     }
 
-    /// Take storage's answer to the write in flight, if it has one. An answer
-    /// that panics is a refused write.
-    fn poll_in_flight(&mut self, name: &StorageName, ctx: &mut Context<'_>) {
-        let Some(in_flight) = &mut self.in_flight else {
-            return;
-        };
-        let mut first = FirstPanic::new();
-        let answer = first.contain(|| in_flight.answer.as_mut().poll(ctx));
-        report_panic(first, name, "writing");
-        match answer {
-            Some(Poll::Pending) => {}
-            Some(Poll::Ready(Ok(_))) => {
-                self.written = self.in_flight.take().map(|sent| sent.bytes);
-            }
-            Some(Poll::Ready(Err(error))) => {
-                // Not stored: the newest placement is still owed and is tried
-                // again at the next due time.
-                tracing::warn!(%error, storage = name.as_str(), "the window placement was not stored");
-                self.refuse();
-            }
-            None => self.refuse(),
+    /// A write was refused, or panicked. `true` when this refusal is the
+    /// last attempt at this placement, which the caller reports once.
+    fn refuse(&mut self) -> bool {
+        self.refused_in_flush = true;
+        self.failures = self.failures.saturating_add(1);
+        if self.failures >= WRITE_ATTEMPTS && self.given_up.is_none() {
+            self.given_up.clone_from(&self.latest);
+            return true;
         }
+        false
     }
 
-    fn refuse(&mut self) {
-        self.refused = true;
-        if let Some(in_flight) = self.in_flight.take() {
-            drop_contained(in_flight.answer);
+    /// Who changed the window from its last report to one measured as
+    /// `bytes` at `scale`, against `displays`, with `commands` applied.
+    fn origin_of(
+        &self,
+        bytes: &[u8],
+        scale: Option<u64>,
+        displays: flui_platform::DisplayRevision,
+        commands: Option<u64>,
+    ) -> ChangeOrigin {
+        let Some(seen) = &self.seen else {
+            // The first report is where the window opened.
+            return ChangeOrigin::Other;
+        };
+        let explained = seen.scale != scale
+            || seen.displays != displays
+            || commands.is_none()
+            || seen.commands != commands;
+        if seen.bytes.as_slice() != bytes && !explained {
+            ChangeOrigin::User
+        } else {
+            ChangeOrigin::Other
         }
     }
+}
 
-    /// Hand the newest placement to storage, unless one write is already out.
-    /// A `publish` that panics is a refused write.
-    fn start_write(
-        &mut self,
-        storage: &StorageHandle,
-        name: &StorageName,
-        now: Instant,
-        ctx: &mut Context<'_>,
-    ) {
-        if self.in_flight.is_some() || !self.owes_write() {
-            return;
-        }
-        let Some(bytes) = self.latest.clone() else {
-            return;
-        };
-        self.last_attempt = Some(now);
-        let mut first = FirstPanic::new();
-        let answer = first.contain(|| storage.publish(name, bytes.clone(), WriteMode::Replace));
-        report_panic(first, name, "writing");
-        let Some(answer) = answer else {
-            self.refuse();
-            return;
-        };
-        self.in_flight = Some(InFlight { bytes, answer });
-        self.poll_in_flight(name, ctx);
-    }
+/// What came of polling storage's answer to a write.
+enum Answer {
+    Pending(StorageFuture<StoredVersion>),
+    Stored,
+    Refused(StorageError),
+    Panicked,
 }
 
 impl PlacementRecorder {
     /// A recorder writing to `storage` under `name`, which holds what
-    /// `baseline` says.
+    /// `stored` says.
     ///
     /// `wake_owner` runs, on any thread, when storage answers a write in
     /// flight: the owner then takes the answer at its next turn instead of
@@ -489,15 +584,10 @@ impl PlacementRecorder {
     pub(crate) fn new(
         storage: StorageHandle,
         name: StorageName,
-        baseline: Baseline,
+        stored: StoredPlacement,
         wake_owner: Arc<dyn Fn() + Send + Sync>,
     ) -> Self {
         let answered = Arc::new(AtomicBool::new(false));
-        let (written, adopt_first) = match baseline {
-            Baseline::Holds(bytes) => (Some(bytes), false),
-            Baseline::Nothing => (None, false),
-            Baseline::Unknown => (None, true),
-        };
         Self {
             storage,
             name,
@@ -506,12 +596,7 @@ impl PlacementRecorder {
                 wake_owner,
             })),
             answered,
-            record: RefCell::new(WriteRecord {
-                written,
-                adopt_first,
-                ..WriteRecord::default()
-            }),
-            last_state: RefCell::new(None),
+            record: RefCell::new(WriteRecord::new(stored)),
             subscription: RefCell::new(None),
         }
     }
@@ -521,17 +606,30 @@ impl PlacementRecorder {
         self.name
     }
 
-    /// The newest placement the window reported, as stored; `None` until it
-    /// reports one. The freshest placement the run knows: a window reopened
-    /// under the same name opens from it rather than from a read that may
-    /// race this recorder's last write.
-    pub(crate) fn latest(&self) -> Option<Vec<u8>> {
-        self.record.borrow().latest.clone()
+    /// The window's newest placement and what storage holds as far as the
+    /// recorder knows, for a window reopened under the same name: it opens
+    /// from that placement, which no read racing this recorder's last write
+    /// could give, and takes over what this recorder still owes. `None` until
+    /// the window reported a placement.
+    pub(crate) fn hand_over(&self) -> Option<(Vec<u8>, StoredPlacement)> {
+        let record = self.record.borrow();
+        let latest = record.latest.clone()?;
+        let stored = match &record.stored {
+            // A write in flight may still land: until it answers, what
+            // storage holds is not known, and the placement stays owed.
+            stored if !record.write.is_idle() => match stored {
+                StoredPlacement::Holds(held) if *held == latest => stored.clone(),
+                _ => StoredPlacement::Nothing,
+            },
+            stored => stored.clone(),
+        };
+        Some((latest, stored))
     }
 
-    /// Keep `subscription` alive as long as the recorder.
+    /// Keep `subscription` alive as long as the recorder follows the window.
     pub(crate) fn hold(&self, subscription: flui_view::WindowSubscription) {
-        *self.subscription.borrow_mut() = Some(subscription);
+        let replaced = self.subscription.borrow_mut().replace(subscription);
+        drop_contained(replaced);
     }
 
     /// Stop following the window: its subscription ends, the placement it
@@ -541,25 +639,47 @@ impl PlacementRecorder {
         drop_contained(subscription);
     }
 
-    /// Take in the window's newest state at `now`, writing it when
-    /// [`WRITE_INTERVAL`] has passed since the last write was handed to storage.
-    pub(crate) fn observe(&self, state: &WindowState, displays: &DisplaySnapshot, now: Instant) {
-        *self.last_state.borrow_mut() = Some(state.clone());
-        self.measure(state, displays, now);
+    /// Take in the window's newest state at `now`, measured against
+    /// `displays`, with `commands` the count of commands the application has
+    /// applied to the window (`None` when it could not be read), and write it
+    /// when it is owed and [`WRITE_INTERVAL`] has passed since the last write.
+    pub(crate) fn observe(
+        &self,
+        state: &WindowState,
+        displays: &DisplaySnapshot,
+        commands: Option<u64>,
+        now: Instant,
+    ) {
+        self.measure(state, displays, commands, false);
+        self.pump(now, false);
     }
 
     /// The displays changed while the window did not: measure its last state
     /// against `displays`, so a placement kept relative to a display's usable
-    /// area follows a moved taskbar or a rearranged desktop. Nothing before the
-    /// window reported a state.
+    /// area follows a moved taskbar or a rearranged desktop. Such a change is
+    /// never the user's. Nothing before the window reported a state.
     pub(crate) fn redisplay(&self, displays: &DisplaySnapshot, now: Instant) {
-        let state = self.last_state.borrow().clone();
-        if let Some(state) = state {
-            self.measure(&state, displays, now);
+        let last = self
+            .record
+            .borrow()
+            .seen
+            .as_ref()
+            .map(|seen| (seen.state.clone(), seen.commands));
+        if let Some((state, commands)) = last {
+            self.measure(&state, displays, commands, true);
+            self.pump(now, false);
         }
     }
 
-    fn measure(&self, state: &WindowState, displays: &DisplaySnapshot, now: Instant) {
+    /// Record the window's `state`; `redisplay` marks a measure no change of
+    /// the window caused.
+    fn measure(
+        &self,
+        state: &WindowState,
+        displays: &DisplaySnapshot,
+        commands: Option<u64>,
+        redisplay: bool,
+    ) {
         let mut record = self.record.borrow_mut();
         match state.mode {
             WindowMode::Maximized => record.maximized_before = true,
@@ -570,102 +690,218 @@ impl PlacementRecorder {
         else {
             return;
         };
-        record.capture(placement.to_bytes());
-        self.poll_answer(&mut record);
-        if record.due(now) {
-            record.start_write(
-                &self.storage,
-                &self.name,
-                now,
-                &mut Context::from_waker(&self.answer),
-            );
-        }
+        let bytes = placement.to_bytes();
+        let scale = state.metrics.map(|metrics| metrics.scale().get().to_bits());
+        let origin = if redisplay {
+            ChangeOrigin::Other
+        } else {
+            record.origin_of(&bytes, scale, displays.revision(), commands)
+        };
+        record.seen = Some(Seen {
+            state: state.clone(),
+            bytes: bytes.clone(),
+            scale,
+            displays: displays.revision(),
+            commands,
+        });
+        record.capture(bytes, origin);
     }
 
     /// When the owner should wake to [`tick`](Self::tick) this recorder, seen
     /// from `now`: when a held change may be written, or now once storage has
     /// answered a write in flight. A write still out has no deadline: storage's
-    /// answer wakes the owner itself. `None` when storage holds the newest
-    /// placement.
+    /// answer wakes the owner itself. `None` when nothing is owed, or the
+    /// recorder gave up on the placement it owes.
     pub(crate) fn next_due(&self, now: Instant) -> Option<Instant> {
         let record = self.record.borrow();
-        if record.in_flight.is_some() {
+        if !record.write.is_idle() {
             return self.answered.load(Ordering::Acquire).then_some(now);
         }
         if !record.owes_write() {
             return None;
         }
-        record.last_attempt.map(|at| at + WRITE_INTERVAL)
+        record.last_attempt.map(|at| at + record.interval())
     }
 
-    /// Write a held change if its interval is over at `now`, and take storage's
-    /// answer to a write in flight. Call it when the owner wakes at
+    /// Take storage's answer to a write in flight, and write a held change
+    /// whose interval is over at `now`. Call it when the owner wakes at
     /// [`next_due`](Self::next_due).
     pub(crate) fn tick(&self, now: Instant) {
-        let mut record = self.record.borrow_mut();
-        self.poll_answer(&mut record);
-        if record.due(now) {
-            record.start_write(
-                &self.storage,
-                &self.name,
-                now,
-                &mut Context::from_waker(&self.answer),
-            );
-        }
+        self.pump(now, false);
     }
 
-    /// Take storage's answer to the write in flight, registering the owner's
-    /// wake with the answer if it is not in yet.
-    fn poll_answer(&self, record: &mut WriteRecord) {
-        // Cleared first: an answer arriving after this poll sets it again.
-        self.answered.store(false, Ordering::Release);
-        record.poll_in_flight(&self.name, &mut Context::from_waker(&self.answer));
-    }
-
-    /// Hand the newest placement to storage now, whatever the interval says.
+    /// Hand the newest placement to storage now, whatever the interval says,
+    /// a placement given up on included.
     /// [`continue_flush`](Self::continue_flush) and
     /// [`poll_flush`](Self::poll_flush) say when storage has answered.
     pub(crate) fn begin_flush(&self, now: Instant) {
-        let mut record = self.record.borrow_mut();
-        record.refused = false;
-        self.poll_answer(&mut record);
-        record.start_write(
-            &self.storage,
-            &self.name,
-            now,
-            &mut Context::from_waker(&self.answer),
-        );
+        self.record.borrow_mut().refused_in_flush = false;
+        self.pump(now, true);
     }
 
     /// [`poll_flush`](Self::poll_flush) at an owner turn, without waiting:
     /// storage's answer wakes the owner, which calls this again.
     pub(crate) fn continue_flush(&self, now: Instant) -> FlushState {
-        // Cleared first: an answer arriving after this poll sets it again.
-        self.answered.store(false, Ordering::Release);
         let answer = self.answer.clone();
-        self.poll_flush(&mut Context::from_waker(&answer), now)
+        self.poll_flush(&answer, now)
     }
 
-    /// Where the flush is, taking storage's answers with `ctx`'s waker.
+    /// Where the flush is, taking storage's answers with `waker`.
     ///
     /// A write that was already in flight when the flush began may answer for
     /// an older placement than the newest: then the newest is handed to storage
     /// in turn, so the flush is over only when storage holds what the window
     /// last reported. A write storage refuses ends the flush with that
     /// placement unstored: a closing window has no later time to retry at.
-    pub(crate) fn poll_flush(&self, ctx: &mut Context<'_>, now: Instant) -> FlushState {
-        let mut record = self.record.borrow_mut();
-        record.poll_in_flight(&self.name, ctx);
-        if record.in_flight.is_none() && record.owes_write() && !record.refused {
-            record.start_write(&self.storage, &self.name, now, ctx);
-            // Register `ctx`'s waker with the answer the start did not.
-            record.poll_in_flight(&self.name, ctx);
+    pub(crate) fn poll_flush(&self, waker: &Waker, now: Instant) -> FlushState {
+        self.answered.store(false, Ordering::Release);
+        self.take_answer(waker);
+        let start = {
+            let record = self.record.borrow();
+            record.write.is_idle() && record.owes_flush() && !record.refused_in_flush
+        };
+        if start {
+            self.start_write(waker, now);
         }
-        match (&record.in_flight, record.owes_write()) {
-            (None, false) => FlushState::Stored,
-            (None, true) if record.refused => FlushState::Refused,
-            // A write owed and not refused was just started above.
-            (Some(_), _) | (None, true) => FlushState::Waiting,
+        let record = self.record.borrow();
+        match (record.write.is_idle(), record.owes_flush()) {
+            (true, false) => FlushState::Stored,
+            (true, true) if record.refused_in_flush => FlushState::Refused,
+            // A write is out, or one owed and not refused was just started.
+            (false, _) | (true, true) => FlushState::Waiting,
+        }
+    }
+
+    /// Take storage's answer, then start the owed write when it is due at
+    /// `now` (always when `flush`).
+    fn pump(&self, now: Instant, flush: bool) {
+        // Cleared first: an answer arriving after this poll sets it again.
+        self.answered.store(false, Ordering::Release);
+        let answer = self.answer.clone();
+        self.take_answer(&answer);
+        let start = {
+            let record = self.record.borrow();
+            record.write.is_idle()
+                && if flush {
+                    record.owes_flush()
+                } else {
+                    record.owes_write() && record.due(now)
+                }
+        };
+        if start {
+            self.start_write(&answer, now);
+        }
+    }
+
+    /// Hand the newest placement to storage, then poll its answer once with
+    /// `waker`. Storage's `publish` runs with nothing borrowed.
+    fn start_write(&self, waker: &Waker, now: Instant) {
+        let bytes = {
+            let mut record = self.record.borrow_mut();
+            if !record.write.is_idle() {
+                return;
+            }
+            let Some(bytes) = record.latest.clone() else {
+                return;
+            };
+            record.write = Write::Starting;
+            record.last_attempt = Some(now);
+            bytes
+        };
+        let mut first = FirstPanic::new();
+        let published = first.contain(|| {
+            self.storage
+                .publish(&self.name, bytes.clone(), WriteMode::Replace)
+        });
+        report_panic(first, &self.name, "writing");
+        let gave_up = {
+            let mut record = self.record.borrow_mut();
+            match published {
+                Some(answer) => {
+                    record.write = Write::Out { bytes, answer };
+                    false
+                }
+                None => {
+                    record.write = Write::Idle;
+                    record.refuse()
+                }
+            }
+        };
+        self.report_given_up(gave_up);
+        self.take_answer(waker);
+    }
+
+    /// Take storage's answer to the write in flight, if it has one,
+    /// registering `waker` with it otherwise. The poll and the drop of a
+    /// settled answer run with nothing borrowed.
+    fn take_answer(&self, waker: &Waker) {
+        let (bytes, mut answer) = {
+            let mut record = self.record.borrow_mut();
+            match std::mem::replace(&mut record.write, Write::Polling) {
+                Write::Out { bytes, answer } => (bytes, answer),
+                other => {
+                    record.write = other;
+                    return;
+                }
+            }
+        };
+        let mut first = FirstPanic::new();
+        let polled = first.contain(|| answer.as_mut().poll(&mut Context::from_waker(waker)));
+        report_panic(first, &self.name, "writing");
+        let outcome = match polled {
+            Some(Poll::Pending) => Answer::Pending(answer),
+            Some(Poll::Ready(Ok(_))) => {
+                drop_contained(answer);
+                Answer::Stored
+            }
+            Some(Poll::Ready(Err(error))) => {
+                drop_contained(answer);
+                Answer::Refused(error)
+            }
+            None => {
+                drop_contained(answer);
+                Answer::Panicked
+            }
+        };
+        let (refused, gave_up) = {
+            let mut record = self.record.borrow_mut();
+            match outcome {
+                Answer::Pending(answer) => {
+                    record.write = Write::Out { bytes, answer };
+                    (None, false)
+                }
+                Answer::Stored => {
+                    record.write = Write::Idle;
+                    record.failures = 0;
+                    record.stored = StoredPlacement::Holds(bytes);
+                    (None, false)
+                }
+                Answer::Refused(error) => {
+                    record.write = Write::Idle;
+                    (Some(error), record.refuse())
+                }
+                Answer::Panicked => {
+                    record.write = Write::Idle;
+                    (None, record.refuse())
+                }
+            }
+        };
+        if let Some(error) = refused {
+            tracing::warn!(%error, storage = self.name.as_str(), "the window placement was not stored");
+        }
+        self.report_given_up(gave_up);
+    }
+
+    /// Say once, when the recorder gives up on a placement, that it will not
+    /// try again until the window's placement changes.
+    fn report_given_up(&self, gave_up: bool) {
+        if gave_up {
+            tracing::warn!(
+                storage = self.name.as_str(),
+                attempts = WRITE_ATTEMPTS,
+                "storage keeps refusing the window placement; it is tried again when the \
+                 window's placement changes, or when the window closes"
+            );
         }
     }
 }
@@ -675,7 +911,7 @@ impl PlacementRecorder {
 pub(crate) enum FlushState {
     /// A write is out and storage has not answered it yet.
     Waiting,
-    /// Storage holds the window's newest placement.
+    /// Storage holds the window's newest placement, or nothing is owed.
     Stored,
     /// Storage refused the newest placement; it is lost.
     Refused,
@@ -694,30 +930,34 @@ pub(crate) fn earliest_due<'a>(
 
 /// Write every recorder's newest placement now and wait for storage to answer
 /// all of them, for at most `budget` in all: one deadline for the lot, so an
-/// ending session spends its few seconds once and not once per window.
+/// ending session spends its time once and not once per window.
 ///
 /// Blocks the calling thread: only the end of the loop or of the session,
-/// with nothing after it to wait at, calls it. Returns the names whose newest
+/// with nothing after it to wait at, calls it. `between` runs before each
+/// look at the answers: the host runs there what providers posted back to the
+/// owner, since a provider may answer through the owner's queue, and the
+/// owner thread is unparked when they post. Returns the names whose newest
 /// placement storage did not take, refused or not answered by the deadline,
 /// each reported here.
 pub(crate) fn settle(
     recorders: &[Rc<PlacementRecorder>],
     now: Instant,
     budget: Duration,
+    mut between: impl FnMut(),
 ) -> Vec<StorageName> {
     for recorder in recorders {
         recorder.begin_flush(now);
     }
     let deadline = Instant::now() + budget;
     let waker = Waker::from(Arc::new(Unpark(thread::current())));
-    let mut ctx = Context::from_waker(&waker);
     loop {
+        between();
         // Poll every recorder, not just until one is pending: each registers
         // the waker with its own answer.
         let mut waiting = false;
         let mut lost = Vec::new();
         for recorder in recorders {
-            match recorder.poll_flush(&mut ctx, now) {
+            match recorder.poll_flush(&waker, now) {
                 FlushState::Stored => {}
                 FlushState::Waiting => {
                     waiting = true;
