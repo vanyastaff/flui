@@ -15,6 +15,10 @@
   the core host's `ProjectedInputRegions` and the testing host both use; `KeyText` keeps a
   character key's text non-empty by type. The rest of the list moved as written; the typed
   `UriList` and `Image` payloads went with `TransferUri` and `TransferImage` (ADR-0038).
+- **Revised:** 2026-11-15 — sections 10 and 16 name the journal's feature as built,
+  `native-capture` (it was `driver`), and say where the code differs from section 16; section 16
+  names Android's presentation time as `VK_GOOGLE_display_timing`, not its frame timelines, which
+  give a deadline.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -701,7 +705,10 @@ secrets in diagnostics) are decided by the records the table cites.
 - **One monotonic timeline** for input, frames and presentation: `EventTime` carries all three.
 - **Presentation feedback reaches the frame clock**, from the source each OS has: DXGI frame
   statistics on Windows, `addPresentedHandler` on Apple platforms, `wp_presentation_time` on
-  Wayland and frame timelines on Android. The Web has no presentation time
+  Wayland; Android shows a frame through the Vulkan swap chain, whose time is `VK_GOOGLE_display_timing`
+  (its frame timelines name when a frame is due, not that it was shown). A host whose report the
+  code cannot read yet answers `NotYetOnThisHost` ([No presentation feedback](../gaps.md#no-presentation-feedback)).
+  The Web has no presentation time
   (`requestAnimationFrame` timestamps mark the start of the frame, not its display), so its cell
   says so rather than claiming one.
 - **Colour is in the contract's vocabulary:** HDR, wide gamut and the display's colour profile (a
@@ -717,10 +724,11 @@ secrets in diagnostics) are decided by the records the table cites.
   preferences and displays, not only the pointer. The native journal that produces them is a
   module of the core host (the crate-level `journal/`: `owner/` names no feature, and the journal
   names the input model), written at run time under `flui-native`'s `native-capture` feature, not
-  a test-only codec. `flui-app` enables the feature and compiles the journal under
-  `cfg(native_journal)`, the debug build of a native host, so a release build links none;
-  `flui-protocol` declares the schema, so a reader (`flui record` in `flui-cli`) reads a
-  recording without linking the core host.
+  a test-only codec; `flui-protocol` declares its schema so `flui-driver` reads a recording
+  without linking the core host. As built, the reader is `flui record` in `flui-cli`, through
+  `flui-protocol`, and `flui-driver`'s reader is not written; and every build of `flui-app`
+  carries the codec, not only the builds that ask for the journal
+  ([Accepted ADR sections not built yet](../gaps.md#accepted-adr-sections-not-built-yet)).
 - **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
   scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and
   through the driver's `os` lane on a device (each device check is a scenario on the

@@ -161,7 +161,8 @@ graph LR
   LY30 & LY32 & LY50 & LY78 --> LY80
   LY29 & LY82 --> LY83
   LY30 & LY32 & LY50 & LY82 --> LY84
-  LY79 & LY80 & LY81 & LY83 & LY84 --> LY85 --> LY86 --> LY87
+  LY79 & LY80 & LY81 & LY83 & LY84 --> LY85 & LY86
+  LY86 --> LY87
 
   LY32 & LY34 --> LY88
   SP8 --> LY89
@@ -297,7 +298,7 @@ graph LR
 | **LY83** | **X11: ввод** (D20). XInput2 (касание, перо, плавная прокрутка), XKB, указатель, курсор | LY29, LY82 | `crates/flui-native/src/input/linux/x11.rs` | `module-dag`, `file-length` | `assert_backend_conforms` (ввод); записи нативных трасс X11 | L; Dev: Linux (X11) |
 | **LY84** | **X11: IME, clipboard, drag and drop** (D20, D8). XIM/IBus для IME и text-store host; провайдер clipboard и primary (селекции, INCR); XDND как цель и источник | LY30, LY32, LY50, LY82 | `crates/flui-native/src/{text,clipboard,drag}/linux/x11.rs` | `module-dag`, `file-length` | conformance clipboard и DnD | L; Dev: Linux (X11) |
 | **LY85** | **Conformance на обоих и parity** (D20, R7.1). `assert_backend_conforms` и записи нативных трасс на Wayland и X11; `docs/platform-parity.md` и `docs/gaps.md` (запись 5) обновлены по исполненным прогонам; ✅ только после них | LY79, LY80, LY81, LY83, LY84 | `crates/flui-native/tests/*`, `docs/platform-parity.md`, `docs/gaps.md` | `platform-test`, `docs-paths` | вся conformance-таблица на двух хостах | L; Dev: Linux (Wayland и X11) |
-| **LY86** | **CI на нативном Linux** (D20, R7.2). Job CI исполняет нативный хост (Wayland и X11) вместо winit | LY85 | `tools/xtask/src/tasks.rs`, `.github/workflows/*` | `ci-verify` | job CI зелёный на нативном хосте | L |
+| **LY86** | **CI на нативном Linux** (D20, R7.2). Job CI исполняет нативный хост (Wayland и X11) вместо winit | LY79, LY80, LY81, LY83, LY84 | `tools/xtask/src/tasks.rs`, `.github/workflows/*` | `ci-verify` | job CI зелёный на нативном хосте | L |
 | **LY87** | **Удаление winit** (D20, R7.3). Удалить файлы `winit` в фичах (`owner`, `window`, `input`, `display`, `clipboard`, `drag`) и блоки `cfg(feature = "winit-backend")` в файлах платформ фич (в `display/windows.rs` и `display/apple/macos.rs` это реализации `owner::winit::HostDisplays`), таблицу `hosts/winit.rs`, фичу `winit-backend` и зависимости (`winit`, `arboard`, `ui-events-winit`, `crossbeam-channel`, `zbus` и `futures-util`, если больше никому не нужны), `[[test]]` и `[[example]]` с `required-features = ["winit-backend"]`, `WinitPlatform` в xtask, пропуски в `deny.toml`, разделы документов; общие модули, которыми пользовался только winit, упрощаются; `preferences/linux.rs` и `lifecycle/linux.rs` остаются: ими пользуются нативные хосты | LY86 | `crates/flui-native/{Cargo.toml,src/{owner,window,input,display,clipboard,drag}/winit.rs,src/hosts/winit.rs,examples/*,tests/*}`, `crates/flui-app/Cargo.toml`, `tools/xtask/*`, `deny.toml`, `docs/*` | `deps`, `workspace`, `globals`, `checks`, `docs-links` | существующие наборы; `rg winit` пуст вне архивных корней и ADR | L |
 
 ### Планка качества
@@ -310,7 +311,7 @@ graph LR
 | **LY88** [P] | **Доступность всегда включена** (D24, R11.1). Удалить фичу `a11y` из `flui-native` (`a11y = [dep:accesskit_unix, dep:accesskit_windows, dep:accesskit_macos]`), `flui-app` (`a11y = ["flui-native/a11y"]`) и фасада: адаптеры AccessKit становятся безусловными зависимостями своих ОС; AT-SPI на Linux идёт по D-Bus, который нативному хосту нужен и так (logind, порталы). Мобильные адаптеры (LY65, LY70) и ARIA DOM (LY76) фичи не имеют с самого начала. Убрать `a11y` из `feature-matrix`, `facade-combos`, README и документов. Отступление (решение координатора 2026-10-22, ADR-0151 `Amended`): адаптер AT-SPI приходит с хостом Linux — пока это winit, `accesskit_unix` включает `winit-backend` (его `flui-app` включает на Linux всегда), условие `accessibility::{bridge, linux}` — `all(target_os = "linux", feature = "winit-backend")`, и тест моста AT-SPI идёт с `winit-backend` (в CI — `--all-features`); безусловной зависимостью Linux вместе с `zbus` его делает LY78 | LY32, LY34 | `crates/flui-native/Cargo.toml`, `crates/flui-app/Cargo.toml`, корневой `Cargo.toml`, `crates/flui-native/src/accessibility/*`, `docs/*` | `feature-matrix`, `facade-combos`, `deps`, `workspace`, `cross-typecheck` | `rg` по `feature = "a11y"` пуст; тесты моста доступности идут без `--features`; адаптеры собираются на каждой ОС | L + T |
 | **LY89** | **Ноль CPU в простое: предпочтения без опроса** (D25, R11.2). Предпочтения macOS и Android приходят уведомлениями вместо таймера в 500 мс: macOS — `NSWorkspace` и `NSNotificationCenter` (параметры отображения доступности, локаль), Android — `ContentObserver` и `ComponentCallbacks2`/`ConfigChanged` через `FluiView` и очередь LY62; цикл Android после Home не просыпается без события (ADR-0249). Счётчик пробуждений цикла — тест на headless в виртуальном времени и измерение на устройстве | LY8, LY9, LY33, LY62 | `crates/flui-native/src/preferences/{apple,android}*`, `crates/flui-native/android/java/*` | `cross-typecheck`, `android-dex`, `globals` | простой N секунд в виртуальном времени — ноль пробуждений; смена предпочтения — ровно одно; тест падает при возврате таймера | L + T; Dev: macOS и Android (пробуждения за минуту после Home) |
 | **LY90** [P] | **Гейт границы паники** (D25, R11.3). Новая задача xtask: по AST каждая `extern "C"` и `extern "system"` функция и каждый OS-колбэк в FFI-модулях файлов платформ проходит `owner::panic_boundary`; текущие 210 мест сверяются, пропущенные исправляются; allowlist пуст | LY26, LY34 | `tools/xtask/src/panic_boundary*` (новый), `crates/flui-native/src/{owner,window,input,text,display,clipboard,drag,accessibility,haptics,preferences,lifecycle}/*` | сама задача: `panic-boundary` (+ `--self-test`), `markers` | самотест: посаженная `extern "C"` без границы не проходит; существующие тесты границы | L |
-| **LY91** | **Один таймлайн и обратная связь о показе кадра** (D25, R11.4, R11.5). `EventTime` — единственная шкала ввода, кадров и показа. Контракт получает обратную связь «кадр показан в момент T» на этой шкале (форму называет PR); источники: Windows — DXGI frame statistics, macOS — `addPresentedHandler` на drawable своего `CAMetalLayer`, Wayland — `wp_presentation_time` (LY81); где ОС не даёт (Web: метки `requestAnimationFrame` — начало кадра, не показ; X11) — `Unsupported` с причиной. iOS отвечает `NotYetOnThisHost`: вид со своим `CAMetalLayer` на Simulator ничего не показал, `addPresentedHandler` на UIKit ждёт прогона на устройстве. Android отвечает `NotYetOnThisHost`, пока wgpu не читает `VK_GOOGLE_display_timing`: время показа есть только у swap chain Vulkan, а frame timelines называют срок показа (`target_present`), не отчёт о нём. Frame clock (`flui-scheduler`, `flui-runtime`) использует её для планирования кадра; headless-инъекция | LY46, LY81 | `crates/flui-platform/src/*` (значение обратной связи), `crates/flui-native/src/{window,display}/*`, `crates/flui-scheduler`, `crates/flui-runtime` | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | headless-инъекция: метка показа доходит до frame clock и сравнима с меткой ввода; conformance-строка на каждой ОС | L + W + T; Dev: macOS, iOS, Android, Linux (Wayland), Web |
+| **LY91** | **Один таймлайн и обратная связь о показе кадра** (D25, R11.4, R11.5). `EventTime` — единственная шкала ввода, кадров и показа. Контракт получает обратную связь «кадр показан в момент T» на этой шкале (форму называет PR); источники: Windows — DXGI frame statistics, macOS — `addPresentedHandler` на drawable своего `CAMetalLayer`, Wayland — `wp_presentation_time` (LY81); где ОС не даёт (Web: метки `requestAnimationFrame` — начало кадра, не показ; X11) — `Unsupported` с причиной. UIKit и Android отвечают типизированным `NotYetOnThisHost` (`window::capabilities::PRESENTATION`), и это пробелы в `docs/gaps.md` («No presentation feedback»), а не прогоны: обработчика показа на UIKit нет, его пишут, когда прогон на устройстве решит, работает ли там класс слоя `CAMetalLayer` (на Simulator вид с ним ничего не показал); Android ждёт, пока wgpu прочтёт `VK_GOOGLE_display_timing` (время показа есть только у swap chain Vulkan; ожидаемое время показа frame timeline — срок, `target_present`, а не отчёт). Frame clock (`flui-scheduler`, `flui-runtime`) использует её для планирования кадра; headless-инъекция | LY46, LY81 | `crates/flui-platform/src/*` (значение обратной связи), `crates/flui-native/src/{window,display}/*`, `crates/flui-scheduler`, `crates/flui-runtime` | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | headless-инъекция: метка показа доходит до frame clock и сравнима с меткой ввода; conformance-строка на каждой ОС | L + W + T; Dev: macOS, Linux (Wayland), Web |
 | **LY92** | **HDR, широкий охват, профиль дисплея** (D25, R11.6). Контракт получает `SurfaceColorSpace`, запрос headroom и событие смены профиля дисплея (в снимке дисплеев); поверхность `flui-engine` читает их при настройке. Источники по возможностям ОС: Windows — цветовое пространство DXGI, macOS — `CAMetalLayer` с EDR, Android — HDR-возможности дисплея и `ColorMode`, Wayland — протокол управления цветом, Web — `matchMedia` по `dynamic-range` и `color-gamut`; где ОС не даёт — `Unsupported` | LY41, LY46 | `crates/flui-platform/src/display*`, `crates/flui-native/src/display/*`, `crates/flui-engine/src/*` (настройка поверхности) | `workspace`, `reach`, гейт API-замыкания, `cross-typecheck` | headless-инъекция смены профиля; conformance; `Unsupported` с причиной | L + W + T; Dev: Windows (HDR-монитор), macOS, Android |
 | **LY93** | **Файловый доступ с учётом песочницы** (D25, R11.7). Выбор файла возвращает доступ, которым процесс сможет пользоваться и после перезапуска: security-scoped bookmarks (macOS, iOS), URI Storage Access Framework (Android), портал документов (Flatpak), пути с учётом AppContainer и MSIX (Windows); `data_dirs` знает контейнер. Слой не отдаёт путь, который процесс не может открыть | LY57, LY58, LY59, LY67, LY73 | `crates/flui-system/*`, `crates/flui-native/src/storage/*` | `workspace`, `reach` | таблица `flui-system` на симулируемой песочнице: путь вне песочницы не отдаётся; доступ переживает перезапуск | L + T; Dev: Flatpak, macOS в песочнице, Android |
 | **LY94** | **Защищённый ввод и скрытые записи буфера** (D25, R11.8). Назначение поля «пароль» включает `EnableSecureEventInput` (macOS), `isSecureTextEntry` (iOS), `IME_FLAG_NO_PERSONALIZED_LEARNING` (Android); `ClipboardHandle` получает способ записать скрытую запись: Windows — `ExcludeClipboardContentFromMonitorProcessing` и `CanIncludeInClipboardHistory`, macOS — `org.nspasteboard.ConcealedType`, Android — `ClipDescription.EXTRA_IS_SENSITIVE`. `EditableText` со скрытым вводом не копирует и не вырезает, как поля паролей самих ОС (`NSSecureTextField`, `isSecureTextEntry`, поле пароля Android); скрытая запись — API приложения (`ClipboardWrite::concealed` через `ClipboardHandle::write`, например кнопка «скопировать код») | LY30, LY32, LY50, LY69 | `crates/flui-interaction/src/clipboard.rs`, `crates/flui-widgets/src/text/editable_text.rs`, `crates/flui-native/src/{text,clipboard}/*` | `workspace`, `reach`, `cross-typecheck` | таблицы «назначение поля → флаги ОС» на хосте; скрытая запись в headless-провайдере; копирование и вырезание в скрытом поле не трогают буфер | L + T; Dev: macOS, iOS, Android, Windows |
@@ -451,7 +452,7 @@ GPU-память простаивающего или невидимого окн
   реализаций) с экспортами из `lib.rs` и `platforms/mod.rs`, а с ним и `bitflags` из Linux-зависимостей
   ядра (первый прогон CI: `cargo shear`). Живой слой `platforms/linux` (`display`, `host_notices`,
   `lifecycle_model`, `x11_window_probe`, `accessibility`) остался; его модуль описывает, что в нём и
-  кто им пользуется. `is_wayland` стал `Protocol::current()` в `linux/display/protocol.rs` (с #1858 — `display/linux/protocol.rs`), им
+  кто им пользуется. `is_wayland` стал `Protocol::current()` в `linux/display/protocol.rs`, им
   пользуется `winit/display_linux.rs`; `is_x11` не звал никто. Строка про `LinuxPlatform` ушла из
   незавершённого фрагмента changelog дисплеев Linux. Проверки: `rg 'unimplemented!'` по
   `platforms/` — ноль; `xtask checks`, `workspace`, `deps` — зелёные; clippy `-p flui-native -p
@@ -583,7 +584,7 @@ GPU-память простаивающего или невидимого окн
   `Mutex`/`RefCell` (трейт `Guarded`), `restoring_while` — macOS (`accepts_windows`) и сцена iOS
   (`signal.accepting`); `SharedField` — хук `Arc` (wake deadline) вызывается клоном и остаётся
   установлен; `Once` — одноразовый вызов (quit); `Mutex<Option<H>>` — слот окна; в
-  `owner/handlers.rs` (удалён в #2650, его работу делают `owner/call_point.rs` и `owner/window_delivery.rs`) — `Latched` (защёлки окна `cleared`/`lifecycle_closed` читаются под локом
+  `owner/handlers.rs` — `Latched` (защёлки окна `cleared`/`lifecycle_closed` читаются под локом
   слота), `InputSlot` (слот владельца) и `Closing` (`FnOnce` `on_close` в конверте). Удалены:
   `RunningSessionEndHook`, `CallbackLease`, `InputLease`, `WindowEventLease`,
   `WindowEventHandlerLease`, `ExitPolicyHookLease`, а также `TakenSessionHook` (headless),
@@ -669,7 +670,7 @@ GPU-память простаивающего или невидимого окн
   `owner_control.rs` и `owner_control/wake.rs` → `owner/windows/control.rs`, `control/wake.rs`;
   `preferences/receiver.rs` → `owner/windows/broadcast.rs`; `util.rs` удалён: класс и курсор — в
   `owner/windows.rs`, `get_x/y_lparam` — в `events.rs`, `hiword` — в `platform.rs`, пересчёт в
-  device-пиксели и `USER_DEFAULT_SCREEN_DPI` — в `window_placement.rs` (с #1864 — `window/windows/`), `SIZE_*` читаются из
+  device-пиксели и `USER_DEFAULT_SCREEN_DPI` — в `window_placement.rs`, `SIZE_*` читаются из
   `shared::visibility`, шесть мёртвых функций удалены. Apple: `owner/apple.rs` (корень),
   `macos/platform.rs` → `owner/apple/macos.rs` (454) и `macos/{loop_control,owner_lane,wake_pump}.rs`
   → `owner/apple/macos/`, `ios/platform.rs` → `owner/apple/ios.rs` (1 307) и
@@ -759,7 +760,7 @@ GPU-память простаивающего или невидимого окн
   (первый `Some` выигрывает, `None` передаёт, без ответа — `DefWindowProcW`, каждый хук узнаёт о
   созданном окне), `a_second_host_is_refused_the_window_class`,
   `broadcast_subscribers_hear_a_message_in_order` (порядок и ответ при панике), строка
-  `trampoline_limits` с трамплином в `owner/apple.rs`, `a_backend_that_embeds_another_dex_fails` (удалён в #2277);
+  `trampoline_limits` с трамплином в `owner/apple.rs`, `a_backend_that_embeds_another_dex_fails`;
   каждый падает со сломанным правилом (мутации: возврат последнего ответа хука — «left: (0,
   ["first", "second"])», принятие чужого хоста — тест отказа падает, ответ при панике всегда 0 —
   «left: (0, ["first"])», модуль группы как слот — нет находки `owner::apple::APPLE`,
@@ -1008,7 +1009,7 @@ GPU-память простаивающего или невидимого окн
   импорты, `crate::table_test::run_table`; `ole_drag_and_drop_on_real_windows`
   (`drag/windows/tests.rs`) — смысл тот же, случаи, которые ведут транспорт сами, строят
   платформу над своей ручкой (`platform_over` через `WindowsLoop::with_drag`), окно владельца —
-  через `OwnerPost::hwnd`; `a_replaced_wake_hook_gets_its_modal_frame` (удалён в #1926 с заменой хуков) — те же три доставки через
+  через `OwnerPost::hwnd`; `a_replaced_wake_hook_gets_its_modal_frame` — те же три доставки через
   `ModalFrames::deliver`; `the_modal_loop_waits_for_the_next_deadline_within_a_frame` — в
   `owner::modal_pace`; `headless_drag` и тест AT-SPI — без правок. Новые:
   `every_owner_hook_hears_the_window_go_after_one_panics` (без раздельных границ второй хук не
@@ -1150,7 +1151,7 @@ GPU-память простаивающего или невидимого окн
   `x11/tests.rs`, тесты `DisplaySource`); `tests/displays.rs`, `wasm-test` и `web_browser` не
   тронуты. Новые: `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached` (и что
   подписчик не отвечает), `the_displays_and_the_preferences_hear_every_change_in_either_order`
-  (приёмник в обоих порядках), `a_display_change_reaches_the_displays_when_the_preferences_cannot_open` (тест winit, удалён в #2276)
+  (приёмник в обоих порядках), `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`
   (winit на Windows). Мутации: предпочтения отвечают на `WM_SETTINGCHANGE` — падает тест порядка
   («preferences first: the displays did not hear the work-area change»); дисплеи отвечают на
   рабочую область — падают он («displays first: the preferences did not hear the work-area
@@ -1202,10 +1203,10 @@ GPU-память простаивающего или невидимого окн
   перенесены `git mv`, где файл переезжает целиком; правки — пути, `use`, видимость, разрезы и
   хуки, названные ниже. Ветку пришлось сложить в один коммит кода и один коммит спецификации:
   LY30, LY31, LY32 и LY33 влились посреди ревью, и перенос по коммитам давал по 31 конфликту на каждом шаге.
-  Модель: `shared/window_state` → `window/state.rs`, `shared/visibility` → `window/visibility.rs` (удалён в #1912: правило — `WindowState::is_seen`)
-  (у правил не было тестов — добавлены четыре, три из них удалены вместе с правилами в #1912: `a_win32_show_message_reports_unless_the_window_is_minimized`,
+  Модель: `shared/window_state` → `window/state.rs`, `shared/visibility` → `window/visibility.rs`
+  (у правил не было тестов — добавлены четыре: `a_win32_show_message_reports_unless_the_window_is_minimized`,
   `a_win32_size_message_reports_only_the_minimize_edges`, `a_win32_window_starts_as_visible_as_its_style`,
-  `appkit_occlusion_reports_the_visible_bit` (так с #1873); `SIZE_MAXSHOW`/`SIZE_MAXHIDE` остались
+  `appkit_occlusion_reports_the_visible_bit_once`; `SIZE_MAXSHOW`/`SIZE_MAXHIDE` остались
   константами теста, который проверяет, что эти значения ничего не сообщают), `config.rs` →
   `window/config.rs` (`flui_native::config` — `pub use window::config`),
   `shared/window_installation` → `window/installation.rs`; имена установки публичны от корня крейта
@@ -1229,7 +1230,7 @@ GPU-память простаивающего или невидимого окн
   регистрация canvas внутри), winit — `window/winit.rs` (2 068, `mod plan`), Linux —
   `window/linux/x11.rs` (чистый `mode` под `cfg(any(all(linux, winit-backend), test))`: тесты
   `x11_window_state_parse`, `net_wm_state_reads_only_known_atoms`, `wm_state_property_words` идут на
-  любом хосте) и `x11/probe.rs` (FFI, тесты в `probe/tests.rs`; оба удалены с winit в #2276), headless — `window/headless.rs`.
+  любом хосте) и `x11/probe.rs` (FFI, тесты в `probe/tests.rs`), headless — `window/headless.rs`.
   `shared/hwnd_affinity` — машинерия владельца: `owner/hwnd_affinity.rs` под
   `cfg(any(windows, test))` (`refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`).
   Шов: позиция окна называет общее окон платформы, `host::Window::Shared` (`WindowSet`,
@@ -1241,7 +1242,7 @@ GPU-память простаивающего или невидимого окн
   `LoopWindow`, `LoopWindows` (цикл выделяет номер, регистрирует и доводит окно; `build` только
   строит его из `WindowSeed`), `TrackedWindows`; `callbacks()` и `is_empty` — по одному разу в
   `CallbackWindow`/`OpenWindows`. R4.3 и в тестах: тесты `owner/` держат свои заглушки (`NoWindows`,
-  `EmptyHost`, `NoNotices` в `owner::headless`); таблица X11 окна — `window/linux/x11/tests.rs` (удалена с окном X11 под winit в #2276)
+  `EmptyHost`, `NoNotices` в `owner::headless`); таблица X11 окна — `window/linux/x11/tests.rs`
   (R4.11: в `hosts/` только таблица и конструктор) со своей таблицей `X11Windows` над циклом
   winit с `owner::winit::testing::QuietHost`, чьи хуки ничего не сообщают (`NoDisplays`,
   `NoNotices`, `NoPreferences`, `NoHostNotices`, `NoFileDrops`, `InMemoryClipboard`); прогон окна
@@ -1289,7 +1290,7 @@ GPU-память простаивающего или невидимого окн
   LY33 и LY38 называют, чем каждое уходит. Не сделано здесь: сигнальная половина правила Activity (`ActivitySignal`, оконные ветки
   `ActivityTarget`, `publish_activity_fact`), которую строка LY28 после LY33 относит к окну, осталась
   у lifecycle и лупера — её переезд меняет путь событий Activity и требует своего прогона на
-  устройстве. Отступления: (1) `x11_window_without_a_probe_does_not_claim_to_observe_minimizing` (удалён в #2276)
+  устройстве. Отступления: (1) `x11_window_without_a_probe_does_not_claim_to_observe_minimizing`
   — правка только в том, где лежит ячейка, помнящая неудавшийся probe
   (`window_shared().window_manager` вместо поля цикла); утверждения те же; (2) публичный
   `MacOSWindow::new` стал `pub(crate)` (брал внутреннюю карту окон). `globals`: 4 записи окна
@@ -1391,7 +1392,7 @@ GPU-память простаивающего или невидимого окн
   `hosted_receiver` в приёмнике один подписчик `HostEvents`: тесты шлют `LOW_MEMORY` и `WM_NULL`,
   подписчик предпочтений на них не отвечает; тест LY31
   `the_displays_and_the_preferences_hear_every_change_in_either_order` берёт источник по новому
-  пути); новый — `winit_lifecycle_registrations_drop_their_captures_without_a_source` (удалён в #1926). Проверки
+  пути); новый — `winit_lifecycle_registrations_drop_their_captures_without_a_source`. Проверки
   (2026-10-22, после rebase): `cargo fmt`; clippy `-D warnings` на Windows (`-p flui-native -p
   flui-app --all-targets`; `-p flui-native --all-targets --features winit-backend`), Android
   (`--all-targets`), macOS (`--all-targets`, и с `winit-backend`), iOS lib (`DOCS_RS=1`), wasm32
@@ -1492,9 +1493,9 @@ GPU-память простаивающего или невидимого окн
   `input::{android,web}::keys::key_composition` (`text::android::keys` ушёл, `text::web::ime`
   стал приватным; `editor_action_keys` — в модуле `input` у `text::android`). Тесты: перенесённые
   меняют только пути и импорты, кроме разрезов: вход `keyboard_tests` звал и контракт указателя
-  winit — тот стал отдельным `#[test]` `translated_events_meet_the_pointer_field_contract` (удалён с winit в #2276) в
+  winit — тот стал отдельным `#[test]` `translated_events_meet_the_pointer_field_contract` в
   `input/winit.rs`; сам `keyboard_tests` разделён, файл Apple не называет winit: проверка кодов
-  winit `every_winit_keycode_maps_to_a_canonical_code` — в `input/winit.rs` (оба удалены в #2276), сверка трёх таблиц
+  winit `every_winit_keycode_maps_to_a_canonical_code` — в `input/winit.rs`, сверка трёх таблиц
   `physical_keys_agree_across_backends` — в `tests/backend_conformance.rs` (обёртка
   `winit_events_translate_to_the_cross_backend_contract` ушла); `web_text_table` распался на
   `the_purpose_picks_the_input_mode` (`text::web::ime::tests`) и
@@ -1618,7 +1619,7 @@ GPU-память простаивающего или невидимого окн
   по умолчанию `NoHooks`, `NoPreferences`, `NoLifecycle`, `NoDisplays`, `NoDrag`, `NoInputs`,
   `NoWindows`), хост тестов диспетчеризации — `QuietHost<FirstThenSecond>` с двумя своими хуками;
   `NoNotices` один на все циклы — `owner::notices::testing` (его берут headless, Win32 и winit); `every_owner_hook_hears_the_window_go_after_one_panics`
-  — `NoDisplays` вместо `WindowsDisplays`; `a_replaced_wake_hook_gets_its_modal_frame` (удалён в #1926) — считает кадры,
+  — `NoDisplays` вместо `WindowsDisplays`; `a_replaced_wake_hook_gets_its_modal_frame` — считает кадры,
   которые доставка просит у заглушки `ClassWindows`, вместо окна `WindowsPlatform` (те же три
   доставки, тело изменено); `a_second_host_is_refused_the_window_class` остаётся в
   `owner::windows::tests` на двух хостах-заглушках: класс регистрирует `QuietHost`, а
@@ -1630,7 +1631,7 @@ GPU-память простаивающего или невидимого окн
   `session_end` и `a_wake_while_the_loop_reads_gets_a_turn_that_reads_again`. Тесты реального цикла,
   открывающие окна, — к фичам: `winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone`,
   `programmatic_close_runs_the_full_teardown_and_exits_the_loop` и
-  `wayland_window_refuses_what_a_compositor_does_not_let_a_client_do` → `window/winit/real_loop_tests.rs` (все три удалены с winit в #2276),
+  `wayland_window_refuses_what_a_compositor_does_not_let_a_client_do` → `window/winit/real_loop_tests.rs`,
   `windows_winit_wheels_preserve_raw_units_and_observe_system_policy` и
   `windows_winit_cold_preferences_recover_on_an_idle_owner_turn` → `preferences/windows/winit_tests.rs`;
   их правка — `testing::install_control_lane` (полоса управления, которая будит цикл через прокси, и
@@ -1644,11 +1645,11 @@ GPU-память простаивающего или невидимого окн
   проходят: `a_replaced_wake_hook_gets_its_modal_frame` не идёт через `WindowSet::redraw_for_deadline`
   (`window/windows/set.rs`) — его держат `test_window_lifecycle_contract` (случаи сроков),
   `deadlines_are_delivered_while_the_window_is_moved` и `a_second_window_repaints_while_the_modal_loop_rests`,
-  и с пустым телом `redraw_for_deadline` падают все три. `a_display_change_reaches_the_displays_when_the_preferences_cannot_open` (удалён в #2276)
+  и с пустым телом `redraw_for_deadline` падают все три. `a_display_change_reaches_the_displays_when_the_preferences_cannot_open`
   на `ChangingDisplays` проверяет половину цикла (приёмник стоит с одним подписчиком дисплеев, когда
   источник предпочтений не открылся, и доставляет ему `WM_DISPLAYCHANGE`), но не доходит до хука
   `broadcasts` дисплеев Win32 под winit, который на `main` проходил через `WinitPlatform`; его держит
-  новый `the_winit_loop_s_displays_hear_a_display_change` (удалён в #2276) (`display::windows::broadcasts`): хук,
+  новый `the_winit_loop_s_displays_hear_a_display_change` (`display::windows::broadcasts`): хук,
   отдающий подписчика на чужом сигнале, роняет его, а тест `owner/` проходит. Самого подписчика
   держат `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached` и
   `the_displays_and_the_preferences_hear_every_change_in_either_order`. «21 файл `tests/`» строки: на
@@ -1762,12 +1763,12 @@ GPU-память простаивающего или невидимого окн
   «No public path names an OS type»), строка материала фона в `docs/platform-parity.md`;
   `changelog.d/platform-os-types.md`, а из фрагмента LY34 убраны имена, которых больше нет.
   Исключения `module-dag` не менялись: 33. Тесты: строка
-  `the_windows_extension_answers_only_for_a_win32_window` в `native_window_commands` (на `main` — `the_windows_extension_has_no_view_of_another_hosts_window` в `tests/os_extensions.rs`) (headless —
+  `the_windows_extension_answers_only_for_a_win32_window` в `native_window_commands` (headless —
   `None` у `backdrop`, `set_backdrop`, `set_corner_preference`, `is_dark_mode`, `dpi`,
   `convert_point_to_device`, `set_taskbar_progress`; Win32 — `dpi() > 0`, `Some(())`, `Some(_)`):
   без исправления не компилируется, с `expect` в приведении (как `unwrap` winit) падает —
   «failing cases: ["the_windows_extension_answers_only_for_a_win32_window"]»; xtask —
-  `a_method_of_a_workspace_trait_is_that_traits_signature_under_a_deny_list` (под этим именем в истории `tools/` теста нет),
+  `a_method_of_a_workspace_trait_is_that_traits_signature_under_a_deny_list`,
   `an_entry_admits_its_item_and_crate_until_no_build_needs_it`,
   `an_entry_one_build_needs_is_needed_and_each_build_reports_its_own` (без пропуска метода трейта
   workspace падает первый, без поиска записи — два других), самотест — 6 случаев (+2). Гейт до
@@ -1790,7 +1791,7 @@ GPU-память простаивающего или невидимого окн
   и `XDG_SESSION_TYPE` сняты): clippy `-p flui-platform -p flui-native -p flui-app --all-targets` и с
   `winit-backend,a11y` (первый прогон нашёл `BackgroundExecutor::handle` у источников Linux — отсюда
   `pub(crate)` выше); nextest `FLUI_HEADLESS=1` `-p flui-native -p flui-app -p flui-platform` — 360:
-  358, два теста X11 (удалены в #2276; `x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`,
+  358, два теста X11 (`x11_window_asked_for_a_mode_before_its_first_frame_opens_in_that_mode`,
   `x11_window_takes_commands_and_publishes_what_the_server_holds`) падают на X-сервере WSLg, как в
   LY29 и LY34; `--all-features` под xvfb (команда CI) — 278 из 278; rustdoc `-D warnings
   --document-private-items` без фич и с `winit-backend,a11y`; `api-closure` трёх Stable-пакетов и
@@ -2161,7 +2162,7 @@ GPU-память простаивающего или невидимого окн
   … x: -0.0»; AppKit, не поворачивающий ось, — «AppKit: two notches right»; правило без `+ 0.0` — «DOM: a
   still axis reported as negative zero»; адаптер, не читающий место, — «winit and Android: the left
   Shift». Мутация `size_visibility`, отвечающая на каждое восстановление, таблицу не роняет: сообщения
-  те же, повтор снимает правило (её держал `a_win32_size_message_reports_only_the_minimize_edges`, удалённый с правилом в #1912).
+  те же, повтор снимает правило (её держит `a_win32_size_message_reports_only_the_minimize_edges`).
   Потребители, чей путь — только FFI (чтение CoreGraphics, клавиатура и колесо Web, ответ видимости
   winit и Web), зовут правило или конструктор напрямую. Записи нативных трасс и conformance не тронуты
   и проходят.
@@ -2254,7 +2255,7 @@ GPU-память простаивающего или невидимого окн
   `changelog.d/platform-escape-hatch.md` (`### Added`, `### Changed`). Исключения `module-dag` не
   менялись: 33.
   Тесты: `tests/os_extensions.rs` ядра — новый случай
-  `a_win32_window_opens_with_its_options` (с отказом чужому хосту — `the_windows_extension_has_no_view_of_another_hosts_window`) (окна headless и winit с
+  `a_win32_window_opens_with_its_options_and_another_host_without_them` (окна headless и winit с
   опциями Win32 открываются, вида Win32 нет; окна Win32 с `DoNotRound`/`Dark` и
   `RoundSmall`/`Light` читают углы и тему из DWM): без чтения опций хостом падает на `left: Round,
   right: DoNotRound`, без темы из опций — на `left: Dark, right: Light`;
@@ -2263,7 +2264,7 @@ GPU-память простаивающего или невидимого окн
   пути фасада, `native_extensions_answer_none_on_a_foreign_host` (имя из подтверждения ADR-0254)
   и `a_win32_window_narrows_through_the_facade` — настоящее окно Win32, суженное через
   `flui::native::windows`, читает опции создания и меняет углы, тему и Mica Alt.
-  `flui-app` — строка `every_systems_options_are_kept` в `config_to_options_keeps_every_field`: без
+  `flui-app` — строка `one_systems_options_are_kept` в `config_to_options_keeps_every_field`: без
   переноса слота падает «failing cases: ["one_systems_options_are_kept"]». Doctest'ы:
   `WindowsWindowExt`, `MacOSWindowExt` (на окне headless — `None`), `OsWindowOptions`.
   Гейт API-замыкания: фасад не получил таблицы `targets` — гейт не идёт за реэкспортом элемента
@@ -2276,7 +2277,7 @@ GPU-память простаивающего или невидимого окн
   `winit-backend`, `-p flui --features native`; nextest `-p flui-platform -p flui-native -p
   flui-app` — 363 (2 пропущены): 362 и `trybuild_ui::ui_tests`, с `winit-backend` — 359: 358 и он
   же; его единственное расхождение — фикстура только для Windows
-  `tests/ui/windows/owner_thread_token_has_no_default.rs` (удалён в #1933), `.stderr` которой ждёт
+  `tests/ui/windows/owner_thread_token_has_no_default.rs`, `.stderr` которой ждёт
   `std::default::Default`, а rustc 1.99 печатает `Default` (файлов этой строки не касается, на
   `main` так же; CI её не собирает); `os_extensions` — 2; фасад с `native` — 9; doctest'ы
   `flui-native` (4 + 3), `flui-platform` (40 + 9), фасада без `native` (3 + 5, `compile_fail`) и с
@@ -2348,7 +2349,7 @@ GPU-память простаивающего или невидимого окн
   (`DWMWCP_*`, `DWMSBT_*`), читаемой в обе стороны; модуль `dwm_attributes` и ручные числа ушли.
   `WindowsBackdrop` — `#[non_exhaustive]`, `Auto` добавлен, `Tabbed` (тот же `DWMSBT_TABBEDWINDOW`,
   что `MicaAlt`) удалён. (9) Тесты: `os_extensions` — `a_win32_window_opens_with_its_options`
-  (повтор «чужого хоста» удалён), новый `a_win32_view_refuses_a_closed_window` (половина о чужом потоке снята в #1927)
+  (повтор «чужого хоста» удалён), новый `a_win32_view_refuses_another_thread_and_a_closed_window`
   (с обходом проверки HWND падает на `left: Ok(()), right: Err(NotOnTheOwnerThread)`),
   `an_appkit_backdrop_goes_behind_the_content_and_comes_away` проверяет класс содержимого,
   материал (`material`), стиль стекла и `contentView`, что вид FLUI — подвид эффекта и первый
@@ -2502,7 +2503,7 @@ GPU-память простаивающего или невидимого окн
   `a_rescaled_window_answers_layout_at_its_new_scale` (до общего масштаба роняли пустой
   `rescale_target` и пропуск `services.rescale`),
   `a_move_to_a_display_the_platform_does_not_hold_is_refused`,
-  `a_window_that_claims_what_it_cannot_do_is_caught` (так с #1914) (без новой ветки проверки роняет;
+  `a_window_that_refuses_for_now_what_it_never_takes_is_caught` (без новой ветки проверки роняет;
   с #1914 — `a_window_that_claims_what_it_cannot_do_is_caught`),
   `activity_window_identities_never_repeat_or_wrap` (с #2292 —
   `activity_window_identities_never_repeat`); по ревью — таблица `absent_positions_say_not_here`
@@ -2654,11 +2655,11 @@ GPU-память простаивающего или невидимого окн
   `on_state_changed` и колбэк факта в одно событие очереди `Published { changed, facts }`, каждый
   в своей изоляции; первая ошибка всплывает после обоих (`resurface_first`). Для фактов вне
   очереди окна (safe area, немедленный lifecycle и resize iOS) — `publish_then`, то же правило.
-  Тест `a_panicking_state_callback_still_delivers_the_resize` (`window_state_contract`; удалён в #1912 вместе с колбэком состояния): без
+  Тест `a_panicking_state_callback_still_delivers_the_resize` (`window_state_contract`): без
   изоляции объявления падает. (2) Win32: пока окно держит публикацию (`WM_DPICHANGED`, переход в
   полноэкранный режим), издатель отвечает `Held`, факт ждёт в `WindowCallbacks::held` и уходит за
   публикацией, снимающей удержание (`announce` в `window_state`); `on_resize` больше не обгоняет
-  `on_state_changed`. Тест `a_dpi_change_announces_one_whole_snapshot` (так с #1912): с `Unchanged`
+  `on_state_changed`. Тест `a_dpi_change_announces_the_snapshot_before_the_resize`: с `Unchanged`
   вместо `Held` падает (как и `a_state_read_inside_a_callback_never_sees_a_half_made_change`,
   которая теперь ждёт, что колбэк внутри удержанного изменения читает целое новое окно, а не
   прежнее). Вне owner-потока факт на Win32 не доставляется: все факты идут из оконной процедуры;
@@ -2678,7 +2679,7 @@ GPU-память простаивающего или невидимого окн
   `read_state`. (7) Факты сверх геометрии — один тип `window::state::ReportedFacts` с `onto`; его
   строит каждый хост (у Android — `Kept`, что окно хранит из прежних отчётов; у winit —
   `reported_facts`). (8) Doc Android на месте, тест переименован в
-  `window_facts_arrive_only_in_the_snapshot` (так с #1912) (ADR-0254 называет
+  `each_window_fact_reaches_the_snapshot_before_its_callback` (ADR-0254 называет
   `window_facts_arrive_only_in_the_snapshot` для состояния после LY41, когда колбэков фактов не
   станет), `dispatch_hover_status_change` закрыт по `lifecycle_closed`, комментарии «`false`» →
   `Unavailable`. Сверх строки ещё раз: порядок образцовых команд conformance (рамка, затем
@@ -2736,14 +2737,14 @@ GPU-память простаивающего или невидимого окн
   Тесты (откат проверен): `window_facts_arrive_only_in_the_snapshot` (`window_state_contract`,
   имя, которое цитирует ADR-0254) — каждый факт даёт одну ревизию и ровно одно `on_state_changed`,
   услышанное до любого чтения `state()`; без публикации в `report_hover` падает «hover: heard
-  []»; `a_state_change_survives_a_failed_callback` (юнит в `owner::handlers`, удалён в #1915) — без доставки
+  []»; `a_state_change_survives_a_failed_callback` (юнит в `owner::handlers`) — без доставки
   `StateChanged` при восстановлении падает «the state notice was lost» (снят в #1915, где окно
   открывается со своим обработчиком и восстановления колбэка не стало; что паника одного метода
   не теряет следующее обязательство, держит `window_handler_obligation_table`); `compile_fail` doctest на
   `PlatformWindow` (`window.is_focused()`, E0599). Переписаны на снимок: `displays.rs`,
   `contract.rs` (`a_dpi_change_publishes_the_new_scale_once`,
   `moves_within_one_monitor_keep_the_display`), `windows_window_commands.rs`
-  (`a_dpi_change_announces_one_whole_snapshot`), `real_loop_tests.rs` (удалён с winit в #2276; программное закрытие не
+  (`a_dpi_change_announces_one_whole_snapshot`), `real_loop_tests.rs` (программное закрытие не
   спрашивает `on_should_close`), X11 (`is_seen` вместо отчётов видимости), wasm32 и браузерные.
   `module-dag`: 1 исключение, без изменений; `globals` — 56; запись `platform_window.rs` в
   `markers.toml` удалена (маркеров не осталось). Документы: ARCHITECTURE.md ядра (пункт «снимок —
@@ -2975,7 +2976,7 @@ GPU-память простаивающего или невидимого окн
   хвоста после паники, без отложенного ответа вложенному вводу, с `true` на вложенный вопрос
   закрытия, без проверки `closed` падает; `input_capabilities_contracts` —
   `the_first_event_after_open_reaches_the_handler` (без снимка при открытии падают он и ещё пять
-  строк), `a_panic_on_the_snapshot_is_resumed` (снимок через `or_resume` вместо сдерживания),
+  строк), `a_panic_on_the_snapshot_loses_no_input` (снимок через `or_resume` вместо сдерживания),
   `a_native_event_during_a_callback_is_queued_not_dropped` (ответ по умолчанию вместо `DEFERRED`),
   `input_raised_from_input_is_delivered_after_it`; `handler_reentry` — каждый из шести методов
   открывает окно, меняет своё и завершает приложение изнутри вызова (headless; Win32 — пять, без
@@ -3108,10 +3109,10 @@ GPU-память простаивающего или невидимого окн
   `data_transfer_transport`, `flui-platform` `drag_plan`/`transfer_request`) чеканят id сами
   (`DataTransferId::new_gen`, счётчик без повторов) и завершают запросы через `claim_slot`.
   Пересечение с LY42: одна строка документации `PlatformWindow::set_input_regions`
-  (`platform_window.rs`). **Тесты** (`drag::offers::tests`): `a_path_is_written_as_its_file_uri`,
-  `a_served_file_uri_reads_as_its_path`, `a_retired_offer_never_aliases_the_next`.
+  (`platform_window.rs`). **Тесты** (`drag::offers::tests`): `a_uri_list_is_delivered_as_file_uris`,
+  `a_served_uri_list_reads_as_paths_and_uris`, `a_retired_offer_never_aliases_the_next`.
   Откат проверен: с `file://{path.display()}` вместо кодирования падают первые два; без разбора
-  `file:` в `list_of` — `a_served_file_uri_reads_as_its_path`,
+  `file:` в `list_of` — `a_served_uri_list_reads_as_paths_and_uris`,
   `drag::windows::crossing::tests::ole_drag_drop_contracts` и `ole_drag_and_drop_on_real_windows`;
   без сдвига поколения — `a_retired_offer_never_aliases_the_next`. Существующие drag-тесты
   (headless, OLE, HTML, Android, winit) зелёные, утверждения о типизированных `UriList`/`Image`
@@ -3219,7 +3220,7 @@ GPU-память простаивающего или невидимого окн
   набор читает настоящую сборку), `from_the_gate_on_each_material_reaches_the_desktop_window_manager`
   (открыто на `DWMSBT_MAINWINDOW`, затем `Opaque`→`NONE`, `System`→`MAINWINDOW`, `Opaque`→`NONE`,
   после закрытия `NoWindow`; падает, если глагол отвечает `Ok` без вызова DWM),
-  `a_refusal_of_the_desktop_window_manager_is_a_platform_failure` (падает с прежним проглатыванием
+  `a_refusal_of_the_desktop_window_manager_is_not_on_this_device` (падает с прежним проглатыванием
   отказа); `flui-testing` — `a_window_whose_verbs_ignore_their_capabilities_is_caught` (без новой
   проверки падает), а с прежним инертным headless падает
   `the_headless_window_conforms_under_every_capability_set`. `.stderr`
@@ -3607,7 +3608,7 @@ GPU-память простаивающего или невидимого окн
   для каждого): `a_value_dropped_elsewhere_is_released_in_a_main_turn` (с release на месте
   падает), `a_value_whose_slot_dropped_elsewhere_is_dropped_at_the_owners_next_use` (без записи
   в кладбище падает), `an_owner_map_belongs_to_the_thread_that_made_it`,
-  `a_winit_surface_target_answers_until_its_window_closes` (удалён с winit в #2276; без проверки отставки в цели winit
+  `a_winit_surface_target_answers_until_its_window_closes` (без проверки отставки в цели winit
   падает), `a_surface_target_that_blocks_or_withholds_is_caught` (ловит цель, которая блокирует
   или не отдаёт описатель), переписанный Win32 `a_surface_target_is_unavailable_once_its_window_closed`
   (проверки при удерживаемом окне, последний шаг проверяет исчезновение слабой ссылки).
@@ -3823,7 +3824,7 @@ GPU-память простаивающего или невидимого окн
   свой, первый после возврата фокуса читает текст второго; с чтением, не спрашивающим offer,
   падает), `a_reader_asks_for_utf8_first`, `text_round_trips_through_each_form`,
   `a_transfer_crosses_the_pipe_whole_up_to_its_limit` (до #2208 —
-  `a_transfer_crosses_the_pipe_whole_up_to_its_limit`: чтение и запись pipe переехали в
+  `a_selection_crosses_the_pipe_whole`: чтение и запись pipe переехали в
   `transfer::linux::wayland::pipe`, общий с перетаскиванием),
   `a_transfer_ends_at_its_deadline_or_its_peer`.
   `docs/platform-parity.md` (заметка, колонка Wayland остаётся winit) и `docs/gaps.md`
@@ -4020,7 +4021,7 @@ GPU-память простаивающего или невидимого окн
   отданный устройству другой роли, — новое устройство. Время — по приходу
   (`event_timestamp_ns`). **XKB** — общий модуль обоих хостов `input::linux::xkb` (для LY79):
   чистые `keys::{named_key, key, code, ActiveModifiers}` (keysym → `NamedKey` или символ,
-  который он пишет сам; код ядра → `Code`) и живой `Keyboard` (с `KeymapSource`; при слиянии — `KeyboardSource`) над
+  который он пишет сам; код ядра → `Code`) и живой `Keyboard`/`KeyboardSource` над
   `xkbcommon-dl` (libxkbcommon и libxkbcommon-x11 грузятся при запуске, как у winit; новых
   крейтов в дереве нет): keymap ядровой клавиатуры, состояние из `StateNotify` сервера, compose
   из таблицы локали (мёртвая клавиша — `NamedKey::Dead`, завершающая — текст). Раскладка —
@@ -4137,7 +4138,7 @@ GPU-память простаивающего или невидимого окн
   дойдёт до крейта возможностей только через `WindowRef` (LY50), который по ADR-0152 несёт лишь
   raw-handles, а ADR-0154 §9 для Linux говорит «ничего» — нужен метод или поле; пока ручка
   доступна приложению через `os::wayland`. **Тесты** (откат проверен):
-  `a_window_has_the_frame_its_compositor_leaves_it` (с `decorated` по просьбе падает),
+  `a_window_has_the_frame_its_compositor_draws` (с `decorated` по просьбе падает),
   `a_buffer_is_drawn_at_the_scale_the_compositor_prefers` (без дробного масштаба падает),
   `an_occluded_window_holds_its_frame_until_it_is_shown` (без `suspended` в `Pacing::due`
   падает), `a_portal_names_a_window_by_its_export`; `the_capabilities_follow_the_compositor`
@@ -4154,7 +4155,7 @@ GPU-память простаивающего или невидимого окн
   (одобрено владельцем: `apt install sway`, sway 1.9, wlroots headless, `WLR_LIBINPUT_NO_DEVICES=1`,
   `output HEADLESS-1 scale 1.5`, окно «a floating frame» плавающее; в CI не добавлен). Три теста
   идут на любом композиторе и сверяют ответ протокола, а не расшифровку окна:
-  `a_window_has_the_frame_its_compositor_leaves_it` (режим `zxdg_toplevel_decoration_v1` из
+  `a_window_has_the_frame_its_compositor_answers` (режим `zxdg_toplevel_decoration_v1` из
   `CompositorReport::frame_mode`; под sway плавающее окно получило `SetDecorated(false)` и
   `(true)`, у мозаичного sway рамку оставил, и команда больше не предлагается; под Weston —
   ветка без протокола), `a_window_draws_at_the_compositors_fractional_scale` (масштаб 180/120 =
@@ -4531,7 +4532,7 @@ GPU-память простаивающего или невидимого окн
   Тесты (откат проверен для каждого bash-скриптом: строковая подстановка, тест, `git checkout`
   файла): `a_high_range_display_without_headroom_over_white_gets_no_hdr`,
   `wide_gamut_follows_the_display_gamut`, `a_recreation_after_the_display_changes_resolves_its_new_range`
-  (`flui-engine`, GPU), `a_display_colour_change_reaches_the_renderer_before_the_frame` (удалён в #2578, когда окна Android и iOS перешли на слоты растеризатора)
+  (`flui-engine`, GPU), `a_display_colour_change_reaches_the_renderer_before_the_frame`
   (`surface_lifecycle_matrix`), `display_delivery_contract` (цвет в `WindowDisplay`),
   `wayland_output_model` (PQ без цели), `os_display_classification` (яркость выше пика),
   `an_activity_asks_for_the_colour_mode_of_its_surface`,
@@ -4751,11 +4752,14 @@ GPU-память простаивающего или невидимого окн
   средствами удалённого управления не удалось), действие AccessKit (нажатие XCUITest — касание, а
   не `accessibilityActivate`), объявления.
 
-- [x] **LY91** — решено: Android отвечает `NotYetOnThisHost`, пока wgpu не читает
-  `VK_GOOGLE_display_timing` (frame timelines дают срок показа, не отчёт), iOS — прогон на
-  устройстве; строка переписана под это, frame timelines из её источников убраны. Оба остатка
-  называет строка «Presentation feedback» `crates/flui-native/platform-parity.toml` (ячейки iOS и
-  Android ❌, примечание) и `docs/gaps.md` «No presentation feedback». #1943 (`d27ad62b0`), AppKit — #1951 (`2231762ba`); ветка `platform/present-feedback` от
+- [x] **LY91** — решено: строка описывает построенное — одну шкалу и отчёты о показе там, где ОС
+  даёт их и код умеет их читать (Win32, Wayland, AppKit, headless; X11 и Web отвечают
+  `NotOnThisPlatform`). UIKit и Android отвечают `NotYetOnThisHost`: обработчика показа на UIKit
+  нет (его пишут, когда прогон на устройстве решит, работает ли там класс слоя `CAMetalLayer`),
+  Android ждёт, пока wgpu прочтёт `VK_GOOGLE_display_timing` (ожидаемое время показа frame
+  timeline — срок, а не отчёт). Это пробелы, а не прогоны: `docs/gaps.md` «No presentation
+  feedback» и примечание строки «Presentation feedback» `crates/flui-native/platform-parity.toml`
+  (ячейки iOS и Android ❌). #1943 (`d27ad62b0`), AppKit — #1951 (`2231762ba`); ветка `platform/present-feedback` от
   `main` @ `8aee131f6`. После них на `main`: окно на виртуальном дисплее отвечает
   `NotOnThisDevice` (#2398: раннер Hyper-V с Basic Render Driver, гость гипервизора на macOS);
   запрос кадра iOS несёт vsync и `target_present` display link (#2067), на Android API 33 —
@@ -4861,7 +4865,7 @@ GPU-память простаивающего или невидимого окн
   нажатий, интервалы кратны 9,999 мс, обработчик через 0,34–0,49 мс после показа; Main Thread
   Checker — 0. UIKit — остаётся `NotYetOnThisHost`: с `CAMetalLayer` корневым слоем вида (и своим,
   и простым) симулятор iOS не показал ничего, без него показывает; на симуляторе у drawable нет
-  `addPresentedHandler:`. iOS ждёт прогона на устройстве (gaps «No presentation feedback»). Проверки
+  `addPresentedHandler:`; обработчика на UIKit нет (gaps «No presentation feedback»). Проверки
   после
   исправлений и слияния LY95: Windows clippy рабочего пространства, nextest семи крейтов — 680 из 680; clippy
   macOS, Android, iOS lib; `checks`, `doc-strict`, `wasm-check`, гейты; WSL clippy шести
@@ -4954,7 +4958,7 @@ GPU-память простаивающего или невидимого окн
   `Backend`, `PointerKind`, `CancelReason`, `Modifier`, `GestureComponent`, `GesturePhase`,
   `ViewportStatus`, `WheelAxis`, `ScrollPhase`, `ScrollUnit` (`vocabulary!`, строки в
   `every_vocabulary_enum_is_spelled_as_it_is_named`). Ребро `flui-native → flui-protocol`
-  необязательное. **Журнал** — `flui-native/src/journal/`, а не `owner/journal/`, как в D28:
+  необязательное. **Журнал** — `flui-native/src/journal/` (D28), а не внутри `owner/`:
   `owner` — base-модуль и по `module-dag` не называет фич, а журнал называет модель ввода и
   Win32-сборщик тачпада, который гоняет replay; поэтому `journal` — crate-level модуль. В нём
   `capture` (хук реестра, перенесён из `input::assembly::capture`, запись `globals` переименована),
@@ -4982,10 +4986,13 @@ GPU-память простаивающего или невидимого окн
   нет. Запись без ребра к ядру читает и пишет `flui-cli` через `flui-protocol`; крейта
   `flui-driver` на `main` нет. **Фича.** Решено, что журнал остаётся за фичей `native-capture`
   (название говорит, что она делает), а не сливается с `driver`: ADR-0151 §10 и §16 и строка
-  переписаны под то, что построено (`flui-app` включает фичу и собирает журнал под
-  `cfg(native_journal)`, отладочной сборкой нативного хоста; читает запись `flui record`), запись
-  о расхождении в `docs/gaps.md` удалена. **Остаётся:** чтение записи крейтом `flui-driver`, когда
-  он появится (спека flui-driver); строить сейчас нечего.
+  называют эту фичу. Где код расходится с §16, сказано в `docs/gaps.md` («Accepted ADR sections
+  not built yet», ADR-0151 §16): запись читает `flui record`, а не `flui-driver`; `flui-app`
+  включает фичу в каждой сборке, так что `journal::codec` с `flui-protocol`, `serde` и
+  `serde_json` есть и в release-сборке, а захват, строки и записывающий собираются только с
+  `debug_assertions`, и `flui-app` ставит журнал под `cfg(native_journal)`. **Остаётся:** чтение
+  записи крейтом `flui-driver`, когда он появится (спека flui-driver); и codec в release-сборке —
+  строимое расхождение с ADR-0151 §16.
 
 - [ ] **LY97** (не закрыта: четыре PR — потоки #1981, предпочтения #1989, дисплеи #1996 и
   состояние окна #2017; дальше строки `close_request`/`closed`, которые ждали T8 спеки teardown
@@ -5420,11 +5427,10 @@ GPU-память простаивающего или невидимого окн
   гонит `cargo xtask test --fast`: `platform_suite` на Linux — набор X11 под `xvfb-run`
   (`platform_suite_linux_filtered`) и набор Wayland (`wayland_suite_linux`); ночной прогон —
   `nightly-platforms.yml`. Job `test` зелёный на `main` @ `46786da8e` (прогон 43701971256,
-  2026-11-15). Строка отмечена, хотя LY85, от которой она зависит по графу, открыта: работа LY86
-  (job CI гонит нативные хосты вместо winit) от остатка LY85 не зависит, и ребро LY85 → LY86 в
-  записи больше не держится. Строимый остаток LY85 — настоящее окно X11 в
-  `assert_backend_conforms` — остаётся строкой LY85; когда он сольётся, тот же job будет гонять и
-  его. Что часть тестов `wayland_window` под Weston
+  2026-11-15). LY86 зависит от хостов (LY79, LY80, LY81, LY83, LY84), а не от LY85: job гонит
+  нативные хосты вместо winit, а полнота conformance-таблицы на них — работа LY85, чей строимый
+  остаток (настоящее окно X11 в `assert_backend_conforms`) тот же job будет гонять, когда он
+  сольётся. Строка и граф говорят то же. Что часть тестов `wayland_window` под Weston
   выходит рано, потому что он не даёт `xdg-decoration`, `wp_fractional_scale_v1` и `xdg-foreign`,
   — находка LY106.
 - [ ] **LY87** (не закрыта: код и зависимости удалены; остаются пропуск в `deny.toml` и тест
@@ -5487,8 +5493,8 @@ GPU-память простаивающего или невидимого окн
   LY64, LY67, LY73, LY96, LY99 и LY100 записи нет, потому что на `main` их работы нет. Из строк,
   получивших запись в LY113, отмечена одна, LY86. ADR-0254, ADR-0151 и ADR-0256 называют тесты и
   хосты, которые есть; где код расходится с решением ADR, решение не тронуто, а расхождение
-  стоит в `docs/gaps.md` («Accepted ADR sections not built yet»: ADR-0254 §2). Расхождение
-  ADR-0151 §10 и §16 с фичей журнала снято решением о LY98: эти разделы описывают
+  стоит в `docs/gaps.md` («Accepted ADR sections not built yet»: ADR-0254 §2, ADR-0151 §16). Расхождение
+  ADR-0151 §10 и §16 в имени фичи журнала снято решением о LY98: эти разделы описывают
   `native-capture`. **Как проверено.** Каждый пункт строки искался в дереве `main` (`rg`); PR — по `git log`
   и `gh pr view`, по тому, что он трогал, а не по заголовку. Имена тестов из записей сверены со
   списком функций дерева; идентификаторы новых записей и записей неотмеченных строк — со
@@ -5500,15 +5506,13 @@ GPU-память простаивающего или невидимого окн
   `native_host_suites_only_build_their_packages` существует (`tools/xtask/src/tasks.rs`).
   **Записи отмеченных строк** (`main` @ `ab45cd94c`): каждый путь, имя теста и имя типа в
   обратных кавычках сверены с деревом (`git ls-files`, слова `.rs`, `.toml`, `.jsonl`), судьба
-  каждого отсутствующего найдена по `git log -S`. Переименованный тест назван именем на `main`
-  (среди них `a_dpi_change_announces_one_whole_snapshot`, `window_facts_arrive_only_in_the_snapshot`,
-  `a_window_that_claims_what_it_cannot_do_is_caught`,
-  `a_window_has_the_frame_its_compositor_leaves_it`,
-  `a_transfer_crosses_the_pipe_whole_up_to_its_limit`, `every_systems_options_are_kept`),
-  удалённый тест или файл, показанный как текущий, помечен PR удаления (#1912, #1915, #1926,
-  #1933, #2276, #2277, #2578, #2650), переехавший файл — новым путём. Пути и типы по левую
-  сторону переноса («A → B») и в списках удалённого — запись того, что сделал PR, и остались.
-  Имена в записях неотмеченных строк сверены тем же способом: отсутствующих нет. ADR-0247 называл
+  каждого отсутствующего найдена по `git log -S`. Записи говорят, что было при слиянии, и не
+  переписываются; что стало с каждым именем, которого нет на `main`, — тест, который держит
+  правило сегодня, или что правило больше не проверяется, — говорит одна таблица «Имена из
+  записей, которых нет на `main`» в конце файла, дополненная этой сверкой. Пути и типы по левую
+  сторону переноса («A → B») и в списках удалённого в таблицу не входят: это запись того, что
+  сделал PR. Имена в записях неотмеченных строк сверены тем же способом: отсутствующих нет.
+  ADR-0247 называл
   `tests/android_drag.rs`, который с #1860 — `src/drag/android/clip/tests.rs`; путь исправлен.
 - [x] **LY104** — PR #2647, ветка `platform/snapshot-integrity` от `main` @ `3f4aea639`: снимок окна
   держит только верные и конечные факты. Шесть находок проверки сделанных задач, все
@@ -6439,7 +6443,7 @@ LY104–LY113 и задачи второго прохода LY114–LY154 сво
 ## Имена из записей, которых нет на `main`
 
 Запись называет тесты и файлы так, как они звались при слиянии задачи. Ниже — имена из записей,
-которых в дереве `main` @ `46786da8e` нет и которые не исправлены в самой записи: что с ними
+которых в дереве `main` @ `ab45cd94c` нет и которые не исправлены в самой записи: что с ними
 стало. `rg <имя>` по этому файлу находит и запись, и строку таблицы.
 
 | Имя в записи | Записи | На `main` |
@@ -6450,7 +6454,7 @@ LY104–LY113 и задачи второго прохода LY114–LY154 сво
 | `winit_events_translate_to_the_cross_backend_contract` | LY29 | снят самой LY29 (#1865), как запись и говорит |
 | `a_replaced_wake_hook_gets_its_modal_frame` | LY32, LY34 | с #1926 — `a_due_deadline_gets_one_modal_frame_per_generation` (`owner/windows/modal_frame_tests.rs`) |
 | `a_win32_show_message_reports_unless_the_window_is_minimized`, `a_win32_size_message_reports_only_the_minimize_edges`, `a_win32_window_starts_as_visible_as_its_style` | LY28, LY35 | сняты в #1912: видимость приходит только в снимке окна (`window_facts_arrive_only_in_the_snapshot`) |
-| `appkit_occlusion_reports_the_visible_bit_once` | LY28 | в #1873 переименован в `every_change_is_reported_once`, которого на `main` тоже нет: отдельного теста у правила нет |
+| `appkit_occlusion_reports_the_visible_bit_once` | LY28 | с #1873 — `appkit_occlusion_reports_the_visible_bit` (`window/apple/geometry.rs`) |
 | `each_window_fact_reaches_the_snapshot_before_its_callback` | LY40 | с #1912 — `window_facts_arrive_only_in_the_snapshot` (`tests/window_state.rs`) |
 | `a_dpi_change_announces_the_snapshot_before_the_resize` | LY40 | с #1912 — `a_dpi_change_announces_one_whole_snapshot` (`tests/windows_window_commands.rs`) |
 | `a_panicking_state_callback_still_delivers_the_resize` | LY40 | снят в #1912 вместе с колбэком состояния |
@@ -6468,3 +6472,12 @@ LY104–LY113 и задачи второго прохода LY114–LY154 сво
 | `a_method_of_a_workspace_trait_is_that_traits_signature_under_a_deny_list` | LY36 | под этим именем не был; ближайший — `an_admitted_trait_lets_its_implementations_methods_name_its_crate` (`tools/xtask/src/api_closure/tests.rs`) |
 | `submit_reports_a_refusal_and_a_closed_window` | LY42 | под этим именем не был; `a_refused_command_is_never_queued`, `a_closed_window_answers_closed` (`crates/flui-app/src/app/window_control_tests.rs`) |
 | `a_window_step_and_its_destruction_reach_every_hook_in_order` | LY29 | снят самой LY29, как запись и говорит |
+| `a_state_change_survives_a_failed_callback` | LY41 | снят в #1915 вместе с `owner::handlers`; паника при доставке фактов окна — `a_panicking_delivery_keeps_the_later_facts` (`flui-app`, `owner_dispatch/state_follow_tests.rs`) |
+| `KeyboardSource` | LY83 | под этим именем в коде не был; источник раскладки — `KeymapSource` (`input/linux/xkb.rs`) |
+| `owner/handlers.rs` | LY26 | удалён в #2650; точка вызова — `owner/call_point.rs`, доставка окна — `owner/window_delivery.rs` |
+| `window_placement.rs` | LY27 | с #1864 — `window/windows/` (`window.rs`, `set.rs`, `proc.rs`) |
+| `window/visibility.rs` | LY28 | удалён в #1912; правило — `WindowState::is_seen`, его держат `a_minimize_and_restore_are_seen_and_unseen` (`flui-app`) и `a_window_first_shown_minimized_is_never_reported_visible` (`tests/windows_window_commands.rs`) |
+| `x11/probe.rs`, `probe/tests.rs`, `window/linux/x11/tests.rs` | LY28 | окно X11 под winit, удалены с хостом winit (#2276); окно нативного хоста X11 — `the_x11_window_conforms` |
+| `tests/ui/windows/owner_thread_token_has_no_default.rs` | LY37 | удалён в #1933; этого правила trybuild больше не проверяет |
+| `real_loop_tests.rs` | LY41 | тесты реального цикла winit, удалены с хостом winit (#2276) |
+| `linux/display/protocol.rs` | LY24 | с #1858 — `display/linux/protocol.rs` |
