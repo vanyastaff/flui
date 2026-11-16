@@ -47,7 +47,7 @@ mod opened;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-mod placement;
+pub(in crate::app) mod placement;
 mod window_install;
 pub(in crate::app) mod window_routes;
 
@@ -552,7 +552,7 @@ pub(crate) use stand_in_renderer::StandInRenderers;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub(crate) use {host::loop_wake_deadline, raster_host::RasterFactory};
+pub(crate) use {host::loop_turn_deadline, host::loop_wake_deadline, raster_host::RasterFactory};
 
 /// Install the native journal of `backend` before the loop starts its platform, in a build that
 /// records it (ADR-0288 §11): see `native_journal`.

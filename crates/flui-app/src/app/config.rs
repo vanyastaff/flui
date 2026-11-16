@@ -688,22 +688,33 @@ impl AppConfig {
 
     /// Remember where this window was and open the next run there.
     ///
-    /// The window's position, size and mode are kept in the host storage
-    /// ([`Self::storage_dir`]) under `name`, and the next run reads them
-    /// before the window is first shown. They are fitted to the displays of that
-    /// run first: a window whose display is gone opens on the primary one, and a
-    /// window that would lie off the screen is moved back onto it
-    /// ([`WindowPlacement::resolve`]). What it restores replaces the
-    /// configuration's [`size`](Self::size),
-    /// [`position`](Self::position) and [`mode`](Self::mode);
-    /// they apply the first time, when nothing is stored yet, and whenever the
-    /// stored value cannot be read.
+    /// The window's position, size and mode are kept under `name` in the
+    /// application's storage: the `StorageCapability` its widgets acquire, the
+    /// application's own provider when it registers one
+    /// ([`Application::capability`](crate::Application::capability)), else the
+    /// host's store in [`Self::storage_dir`]. The next run reads them before the
+    /// window is first shown, waiting a fraction of a second at most: a store
+    /// that answers later, refuses, or holds something that is no placement
+    /// leaves the window opening from its configuration. What was read is
+    /// fitted to the displays of that run first: a window whose display is gone
+    /// opens on the primary one, and a window that would lie off the screen is
+    /// moved back onto it ([`WindowPlacement::resolve`]). What it restores
+    /// replaces the configuration's [`size`](Self::size),
+    /// [`position`](Self::position) and [`mode`](Self::mode); they apply the
+    /// first time, when nothing is stored yet, and whenever the stored value
+    /// cannot be read in time.
     ///
     /// The placement is written at most once every two seconds while the window
-    /// moves (a change inside the interval is written when it is over), and at
-    /// once when the window closes and when the session ends. Windows that share
-    /// one `name` overwrite each other's placement, so give each window it should
-    /// remember a name of its own. Desktop only: Android, iOS and the Web size
+    /// moves (a change inside the interval is written when it is over), when
+    /// the displays change, and at once when the window closes and when the
+    /// session ends; the application's exit waits for those last writes within
+    /// its deadline, and a store that keeps refusing is tried a few times and
+    /// then not again until the placement changes. A window that could not
+    /// read its placement in time leaves what is stored alone until the user
+    /// moves, resizes or changes the mode of the window. One open window holds
+    /// `name`: a second window opened with the same name while the first is
+    /// open opens from its configuration and is never remembered, so give each
+    /// window a name of its own. Desktop only: Android, iOS and the Web size
     /// the window themselves.
     ///
     /// Where it is applied: Win32 opens the window at the remembered position,

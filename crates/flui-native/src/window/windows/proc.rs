@@ -273,6 +273,16 @@ pub(crate) struct WindowContext {
     /// Set between `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE`: a live resize,
     /// whose `WM_SIZE` renders at once.
     pub in_size_move: std::cell::Cell<bool>,
+    /// Set while the default procedure carries out a placement system command
+    /// (`SC_MAXIMIZE`, `SC_MINIMIZE`, `SC_RESTORE`) the user worked: a caption
+    /// button, the system menu or a double click on the title bar. A system
+    /// command this window sends itself is marked by
+    /// [`Self::in_app_command`] and never sets it.
+    pub in_system_command: std::cell::Cell<bool>,
+    /// Set while this window sends itself a system command for an
+    /// application's command (the restore before fullscreen): the sender marks
+    /// it, so the command is not the user's.
+    pub in_app_command: std::cell::Cell<bool>,
     /// The client size, in device pixels, and the scale the last resize
     /// callback delivered.
     pub last_resize: std::cell::Cell<Option<(Size<i32>, f64)>>,
@@ -407,6 +417,11 @@ impl WindowContext {
             hovered: self.delivery.hovered(),
             capabilities: self.capabilities,
             frame: self.frame.get(),
+            interaction: if self.in_size_move.get() || self.in_system_command.get() {
+                flui_platform::WindowInteraction::UserPlacing
+            } else {
+                flui_platform::WindowInteraction::None
+            },
         }
     }
 
@@ -703,7 +718,9 @@ impl WindowMessages for WindowProc {
             | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE
             | WM_NCHITTEST => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
-            WM_SYSCOMMAND => (wparam.0 & 0xFFF0) == SC_KEYMENU as usize,
+            WM_SYSCOMMAND => {
+                (wparam.0 & 0xFFF0) == SC_KEYMENU as usize || is_user_placement_command(wparam)
+            }
             _ => false,
         }
     }
@@ -910,6 +927,10 @@ impl WindowProc {
                         ctx.exit_modal_loop(hwnd);
                         ctx.in_size_move.set(false);
                         ctx.step(hwnd, WindowStep::SizeMoveEnded);
+                        // The snapshot ends the user's placement here: the next
+                        // report that changes the placement is not the user's
+                        // unless it says so itself (ADR-0343 §2).
+                        ctx.publish_window_state(hwnd);
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1430,6 +1451,27 @@ impl WindowProc {
                     LRESULT(0)
                 }
 
+                // A placement command the user worked (a caption button, the
+                // system menu, a double click on the title bar): the window's
+                // reports while the default procedure carries it out are the
+                // user's (ADR-0343 §2). One this window sent itself for an
+                // application's command is marked by its sender and is not.
+                // The size-move commands enter the size-move loop, which says
+                // so itself.
+                WM_SYSCOMMAND if is_user_placement_command(wparam) => {
+                    let ctx = ctx?;
+                    if ctx.in_app_command.get() {
+                        return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
+                    }
+                    let was = ctx.in_system_command.replace(true);
+                    let answer = DefWindowProcW(hwnd, msg, wparam, lparam);
+                    ctx.in_system_command.set(was);
+                    // The snapshot ends the interaction: the reports the
+                    // command made said the user's, this one does not.
+                    ctx.publish_window_state(hwnd);
+                    answer
+                }
+
                 // A message `answers` lists that no arm takes after all (the
                 // system menu opened by Alt+Space): the default procedure's.
                 _ => return None,
@@ -1495,10 +1537,21 @@ pub(crate) struct OwnerTracking {
     /// The frame the app asked for: a window with a caption reports it, so an
     /// application title bar reads back as itself.
     pub(crate) frame: flui_platform::WindowFrame,
+    /// Whether the user is placing the window: inside the size-move loop, or
+    /// inside a system command the user worked (ADR-0343).
+    pub(crate) interaction: flui_platform::WindowInteraction,
 }
 
 /// Whether the window's style has a caption: a fullscreen window has been
 /// stripped of it, and keeps no frame of the application's either.
+fn is_user_placement_command(wparam: WPARAM) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{SC_MAXIMIZE, SC_MINIMIZE};
+    let command = wparam.0 & 0xFFF0;
+    command == SC_MAXIMIZE as usize
+        || command == SC_MINIMIZE as usize
+        || command == SC_RESTORE as usize
+}
+
 fn has_caption(hwnd: HWND) -> bool {
     // SAFETY: a plain style query; a stale handle reads as no style.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 };
@@ -1567,6 +1620,7 @@ pub(crate) fn sample_state(
         hovered,
         capabilities,
         frame,
+        interaction,
     } = tracking;
     let (scale, visible, focused, cached) = {
         let record = record.lock();
@@ -1682,6 +1736,7 @@ pub(crate) fn sample_state(
             hovered,
             active,
             capabilities,
+            interaction,
         }
         .onto(state)
     })
@@ -1853,14 +1908,17 @@ impl WindowsWindow {
                         MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
                     };
                     // Fullscreen starts from the normal state: a visible maximized
-                    // or minimized window is restored first.
+                    // or minimized window is restored first. The restore is the
+                    // application's command, so its sender marks it as such.
                     if (iconic || IsZoomed(hwnd).as_bool()) && IsWindowVisible(hwnd).as_bool() {
+                        let was = ctx.in_app_command.replace(true);
                         SendMessageW(
                             hwnd,
                             WM_SYSCOMMAND,
                             Some(WPARAM(SC_RESTORE as usize)),
                             Some(LPARAM(0)),
                         );
+                        ctx.in_app_command.set(was);
                     }
                     let mut monitor_info = MONITORINFO {
                         cbSize: std::mem::size_of::<MONITORINFO>() as u32,

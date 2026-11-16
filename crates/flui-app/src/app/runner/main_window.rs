@@ -54,6 +54,8 @@ pub(in crate::app) struct MainController {
     pending: Option<PendingWindow>,
     /// What the window being opened carries, until it is installed.
     opening: Option<OpeningWindow>,
+    /// The window waiting for the read of its placement before it opens.
+    recalling: Option<OpeningWindow>,
     pending_wake: Option<Arc<OpenWake>>,
     closing: bool,
     initial: bool,
@@ -224,6 +226,18 @@ impl MainController {
             }
             return;
         }
+        // A window waiting for its placement read opens once the read
+        // settles: the turn storage's answer wakes, or the one at its bound.
+        if let Some(recalling) = self.recalling.as_mut() {
+            if recalling.recall_settled() {
+                let opening = self
+                    .recalling
+                    .take()
+                    .expect("BUG: the window waiting for its placement was just polled");
+                self.open_window(opening);
+            }
+            return;
+        }
         if !self.ingress.begin() {
             return;
         }
@@ -269,9 +283,25 @@ impl MainController {
             }
             return;
         }
+        // The placement read starts before the window opens; until it settles
+        // the window waits, and the owner wakes for the answer or the bound.
+        let mut opening = OpeningWindow::new(&self.config);
+        if !opening.recall_settled() {
+            self.recalling = Some(opening);
+            return;
+        }
+        self.open_window(opening);
+    }
+    /// When the main window stops waiting for its placement read, for the
+    /// loop's wake; `None` when no window waits.
+    pub(in crate::app) fn recall_deadline(&self) -> Option<std::time::Instant> {
+        self.recalling
+            .as_ref()
+            .and_then(OpeningWindow::recall_deadline)
+    }
+    fn open_window(&mut self, opening: OpeningWindow) {
         // Deferred reveal: this window is installed through
         // `install_desktop_window`, which performs the reveal.
-        let opening = OpeningWindow::new(&self.config);
         let opened = with_owner_platform(|owner| opening.open(&self.config, owner));
         self.opening = Some(opening);
         if !self.is_current() {
@@ -452,6 +482,11 @@ impl MainController {
         // and the storage its placement was read from go with it.
         if let Some(opening) = self.opening.take() {
             contain(|| drop(opening));
+        }
+        // A window still waiting for its placement read opens no more: the
+        // read is dropped unanswered and its name is free.
+        if let Some(recalling) = self.recalling.take() {
+            contain(|| drop(recalling));
         }
     }
     fn take_pending_failure(&mut self) -> Option<AppWindowError> {
@@ -1069,6 +1104,11 @@ where
                     runtime.ensure_execution();
                 });
                 super::host::install_host_storage(&config);
+                // Window placements are kept in the storage the run's registry
+                // provides, the application's override included.
+                super::placement::install(
+                    APP_RUNTIME.with(|slot| slot.borrow().capability_registry()),
+                );
                 install_exit_policy_hook(config.exit_policy);
                 install_platform_quit_hook();
                 let reopen = Arc::downgrade(&ingress);
@@ -1144,6 +1184,7 @@ where
                         installing: None,
                         pending: None,
                         opening: None,
+                        recalling: None,
                         pending_wake: None,
                         closing: false,
                         initial: startup == StartupWindow::Open,
@@ -1240,6 +1281,7 @@ mod tests {
                 installing: None,
                 pending: None,
                 opening: None,
+                recalling: None,
                 pending_wake: None,
                 closing: false,
                 initial: false,

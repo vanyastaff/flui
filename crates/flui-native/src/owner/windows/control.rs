@@ -421,7 +421,10 @@ impl OwnerControl {
                 })
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
-        let app_hooks = Rc::new(RefCell::new(super::AppHooks::new(Arc::clone(&app))));
+        let app_hooks = Rc::new(RefCell::new(super::AppHooks::new(
+            Arc::clone(&app),
+            Arc::downgrade(&signal),
+        )));
         let seeds = OwnerSeeds {
             signal: &signal,
             app: &app,
@@ -461,7 +464,12 @@ impl OwnerControl {
             windows: windows.clone(),
             exit_policy_pending: Arc::clone(&exit_policy_pending),
             owner_hooks: Rc::clone(&owner_hooks),
-            modal_frames: Rc::new(ModalFrames::new(app, windows, frames)),
+            modal_frames: Rc::new(ModalFrames::new(
+                app,
+                windows,
+                frames,
+                Arc::downgrade(&signal),
+            )),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.

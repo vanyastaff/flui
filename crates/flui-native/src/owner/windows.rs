@@ -91,7 +91,7 @@ use crate::owner::app_delivery::AppDelivery;
 use crate::owner::notices::{NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::{self, AfterPanic};
 pub(crate) use crate::owner::wake_deadline::FrameCount;
-use crate::owner::wake_deadline::WakeDeadline;
+use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
 use crate::{
     error::PlatformError, host, owner::OpenWindows, owner::OwnerHooks, owner::OwnerPlatform,
     owner::hwnd_affinity::UserDataRefusal, owner::window_delivery::WindowDelivery,
@@ -512,15 +512,22 @@ pub(crate) trait WindowMessages {
 pub(crate) struct AppHooks {
     /// The loop's delivery to the application's handler.
     pub(crate) app: Arc<AppDelivery>,
+    /// The owner a due turn deadline gives its turn to.
+    pub(crate) signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
     /// Called when the keyboard layout changes.
     pub(crate) keyboard_layout_changed: Rc<crate::owner::layout_callback::LayoutCallback>,
 }
 
 impl AppHooks {
-    /// The hooks over `app`, with no keyboard layout callback.
-    pub(crate) fn new(app: Arc<AppDelivery>) -> Self {
+    /// The hooks over `app` and the owner behind `signal`, with no keyboard
+    /// layout callback.
+    pub(crate) fn new(
+        app: Arc<AppDelivery>,
+        signal: std::sync::Weak<crate::owner::signal::OwnerSignal>,
+    ) -> Self {
         Self {
             app,
+            signal,
             keyboard_layout_changed: Rc::default(),
         }
     }
@@ -1163,6 +1170,7 @@ impl WindowsLoop {
         tracing::info!("Starting Windows message loop");
 
         let mut deadline = WakeDeadline::default();
+        let mut turn_deadline = TurnDeadline::default();
         // Shared with every window this platform opens; without an owner
         // there are no windows, so the count never moves.
         let shares = self.owner_control.shares("run message loop").ok();
@@ -1206,6 +1214,13 @@ impl WindowsLoop {
                 {
                     self.windows.redraw_for_deadline();
                 }
+                // A due turn deadline is the owner's turn, window or not,
+                // and asks no window for a frame.
+                if turn_deadline.take_due(web_time::Instant::now())
+                    && self.owner_control.signal.accepting()
+                {
+                    let _ = self.owner_control.signal.wake();
+                }
 
                 // Drain native input/paint/quit before another idle query.
                 // Peek also services sent messages, so never follow a timed
@@ -1222,9 +1237,11 @@ impl WindowsLoop {
                 // The handler is asked with no borrow of `msg` and no lock
                 // held: it may close windows or quit before it answers.
                 let armed = deadline.arm(self.query_wake_deadline(), frame_count());
+                let turn_armed = turn_deadline.arm(self.query_turn_deadline());
 
                 let next_deadline = armed
                     .into_iter()
+                    .chain(turn_armed)
                     .chain(
                         preferences
                             .as_ref()
@@ -1277,6 +1294,21 @@ impl WindowsLoop {
     /// The wake deadline `app`'s handler asks for, through the call point.
     fn ask_wake_deadline(app: &AppDelivery) -> Option<web_time::Instant> {
         app.wake_deadline().or_resume(None)
+    }
+
+    /// Ask the application's handler for its turn deadline, as
+    /// [`query_wake_deadline`](Self::query_wake_deadline) asks for its wake
+    /// deadline.
+    fn query_turn_deadline(&self) -> Option<web_time::Instant> {
+        if !self.owner_control.signal.accepting() {
+            return None;
+        }
+        Self::ask_turn_deadline(&self.app)
+    }
+
+    /// The turn deadline `app`'s handler asks for, through the call point.
+    fn ask_turn_deadline(app: &AppDelivery) -> Option<web_time::Instant> {
+        app.turn_deadline().or_resume(None)
     }
 
     /// Registers the keyboard layout callback in the owner-thread hooks.

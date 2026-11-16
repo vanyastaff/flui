@@ -35,6 +35,8 @@
   slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
   its display from the platform's `DisplayConnection`, never from a window's target, because wgpu
   reads the instance's display at every surface it makes. The target's obligations are unchanged.
+- **Revised:** 2026-11-16 — decision 4: `AppHandler` also answers `turn_deadline`, required like
+  the other queries, by [ADR-0343](ADR-0343-the-owner-promises-turn-deadlines-and-the-window-states-user-placement.md).
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves

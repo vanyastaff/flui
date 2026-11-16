@@ -20,8 +20,8 @@ use flui_platform::{
     AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
     PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
     UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
-    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowMaterial, WindowMode,
-    WindowOptions, WindowState,
+    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction, WindowMaterial,
+    WindowMode, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -624,6 +624,8 @@ struct HeadlessHostWindowState {
     /// A snapshot the simulated window system reported in place of what the
     /// model says ([`HeadlessHostWindow::simulate_state`]), until the model changes.
     reported: Option<WindowState>,
+    /// What [`HeadlessHostWindow::simulate_interaction`] last said.
+    interaction: WindowInteraction,
 }
 
 /// A rectangle as the simulated window system holds it: the numbers a test
@@ -790,6 +792,7 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
             hovered,
             active: model.focused,
             capabilities: *capabilities,
+            interaction: model.interaction,
         }
         .onto(state)
     })
@@ -868,6 +871,7 @@ impl HeadlessHostWindow {
             display,
             capabilities,
             reported: None,
+            interaction: WindowInteraction::None,
         };
         model.size = model.clamp_size(opening.content.get(), &limits);
         if capabilities.permits(&WindowCommand::SetMode(options.mode)) {
@@ -1095,6 +1099,16 @@ impl HeadlessHostWindow {
     /// from it. Fires the handler's `state_changed` when the snapshot differs.
     pub fn simulate_move(&self, position: Point<f64>) {
         self.state.borrow_mut().position = position;
+        self.publish_state();
+    }
+
+    /// Simulate the user starting or ending a placement of the window through
+    /// the window system (dragging its frame, a caption button): the snapshot
+    /// reports `interaction` until it is ended, so the moves made meanwhile are
+    /// the user's. Fires the handler's `state_changed` when the snapshot
+    /// differs.
+    pub fn simulate_interaction(&self, interaction: WindowInteraction) {
+        self.state.borrow_mut().interaction = interaction;
         self.publish_state();
     }
 

@@ -509,6 +509,87 @@ set the route gives the answer (`WindowRoutes::route_frame_requested` takes
 queued frame that runs once and the one a shut host drops, and
 `window_routes_contract` that the window passes the route's answer on.
 
+### The host keeps window placements in the application's storage
+
+A window that remembers its placement (`AppConfig::restore_placement`) keeps
+it in the storage the run's capability registry provides: the application's
+override of `StorageCapability` when it registers one, otherwise the host's
+own store. The host acquires it through `flui_runtime::capability::HostCapabilities`
+over the launch registry, once per window that opens ([ADR-0338](../../docs/adr/ADR-0338-the-host-acquires-capabilities-from-the-launch-registry.md)).
+The state is one `runner::placement::PlacementShared`, held by the
+application runtime and by each remembered window's close handle; each list is
+a cell of its own, borrowed only for a step that runs none of the
+application's code. Storage, a provider and a window's subscription always
+run with nothing borrowed.
+
+- **The owner's turns come from the turn deadline (ADR-0343 §1).**
+  `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
+  placements' next due instant and the main window's read bound; every host
+  gives the owner a turn at it, with or without a window open, and asks no
+  window for a frame. The answer may be past: a held write's
+  `last_attempt + interval` is, when the change arrives after the interval
+  ended. That change, made outside a turn, asked for one turn
+  (`announce_turn_deadline`), and that turn serves the past answer; the seam
+  never arms an instant not later than the last turn it served. Work ready now
+  is no deadline: a storage answer wakes the owner itself, and a close carried
+  over asks for a turn (`PlacementShared::ask_turn`).
+  Placement adds nothing to the frame deadline. A change made outside an owner
+  turn (a window's report, a close, a display change, a window queued for its
+  read) that moves the deadline asks for a turn
+  (`PlacementShared::announce_turn_deadline`), after which every host reads the
+  deadline again.
+- **The read never blocks the owner.** `PlacementRecall` starts the read
+  before the window opens and settles with a typed outcome (`Recalled`). The
+  window waits at most `RECALL_BOUND`, measured on the placement clock
+  (`SystemClock`, a `ManualClock` in tests), and then opens from its
+  configuration. The main window waits in `MainController::recalling`; a
+  content window opened with `open_window` waits in `PlacementShared::awaiting`,
+  its failures then reaching its `WindowRequest`.
+- **A late answer is never applied.** The read belongs to the window that
+  started it and is dropped when the window opens, so an answer after the bound
+  has nothing to arrive at.
+- **Failure costs the placement, not the launch.** A provider that refuses or
+  panics, a storage whose read or future panics, and bytes that are no
+  placement (`WindowPlacement::from_bytes`, then `resolve` against this run's
+  displays, which moves a window back onto a live display) each open the
+  window from its configuration. A panic is reported and its payload
+  discarded.
+- **Only the user overwrites a placement the run could not read.** After a
+  read that timed out, was refused or panicked, the recorder holds
+  `StoredPlacement::Unknown`, which owes nothing until a change the host
+  states was the user's (`ChangeOrigin::User`): the report that carries the
+  change says `WindowState::interaction` is `UserPlacing` (ADR-0343 §2).
+  Nothing is inferred from what did not change nor from the report before:
+  where the window opened, a display or scale change, a window manager's
+  adjustment, an application's command and a change after the user's
+  placement ended never write, and on a host that says `Unknown` nothing does
+  until the read succeeds another run.
+- **Writes are bounded.** At most one every `WRITE_INTERVAL` while the window
+  changes. A refused write is tried again after twice the wait of the attempt
+  before, `WRITE_ATTEMPTS` times in all, and then not until the window's
+  placement changes or the window closes; giving up is reported once, and an
+  idle application asks for no more turns.
+- **Closing and ending.** A closing window hands its last placement to storage
+  and the owner turns on. A close that finds the state busy answers
+  `Closing::Deferred` and is carried out at the next turn. The loop's teardown
+  waits for every write still out within the exit deadline's services part,
+  before the pools close, running what providers post back meanwhile, and
+  names each placement storage did not take. A session end does the same after
+  the application's own work and the documents, within what the budget has
+  left and at most `SESSION_END_PLACEMENT_BOUND`.
+- **One window, and one writer, per name.** An open window holds its
+  placement's `StorageName`; a second window asking for it opens from its
+  configuration and is not remembered. A window reopened under a name whose
+  closed window still has a recorder takes that recorder's placement, its
+  knowledge of what storage holds and its write in flight
+  (`PlacementRecorder::hand_over`, `HandOver::Taken`): the new recorder takes
+  storage's answer to that write before it starts one, and the closed one owes
+  and writes nothing more. While storage's code is running that write
+  (`HandOver::Busy`), nothing moves and the reopened window is not remembered.
+
+`placement_recorder` (the model's table) and the runner's `placement::tests`
+hold each rule.
+
 ### Native execution caps remain presentation-local
 
 ADR-0072 adds a window execution observation to the existing presentation facts.
