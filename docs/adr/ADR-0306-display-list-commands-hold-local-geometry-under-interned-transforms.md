@@ -1,6 +1,6 @@
 # ADR-0306: Display-list commands hold local geometry under interned transforms
 
-- **Status:** Accepted (2026-11-03)
+- **Status:** Implemented (2026-11-16)
 - **Date:** 2026-11-03
 - **Superseded-by:** [ADR-0333](ADR-0333-a-display-list-keeps-large-payloads-beside-its-commands.md) for
   how §3's large payloads are held (beside the op, not boxed, and `Path` not one pointer); §3 below
@@ -194,10 +194,12 @@ impl DisplayList {
 impl<'a> IntoIterator for &'a DisplayList { type Item = DrawCommand<'a>; /* … */ }
 ```
 
-The commands under one entry yield the same reference, so the engine installs a CTM once per entry
-and tests "same as before" with `std::ptr::eq` before `==` (`layer_dispatcher.rs:148` compares
-values per command). The identity yields `&Matrix4::IDENTITY`, a promoted constant, not a
-`static`. `DisplayList::commands()`, `AsRef<[DrawCommand]>`, `Index<usize>` and
+The commands under one entry yield the same reference, so the engine installs a CTM once per run of
+commands under one entry and tests "same as before" with `std::ptr::eq` before `==`
+(`LayerDispatcher::with_transform`, which compares the address only while the list it points into
+is borrowed). The identity yields
+`&Matrix4::IDENTITY`, a promoted constant, not a `static`. `DisplayList::commands()`,
+`AsRef<[DrawCommand]>`, `Index<usize>` and
 `DrawCommand::untransformed` are deleted, since a slice of stored commands would expose the private
 id. Field access keeps its spelling (`command.transform`, `command.op`), and the snapshot line's
 `xf=[…]` suffix (`crates/flui-rendering/src/testing/snapshot.rs:176`) prints the same values.
@@ -254,7 +256,7 @@ code, after the list is complete.
 - The compiler: the two `const` assertions of §3; `TransformId` and `RecordedOp` are private to
   `flui_painting::display_list`; `DrawOp::is_finite` and the kind match of §4 have no wildcard, so
   a new variant states its check.
-- `recording_contract` (`crates/flui-painting/tests/main.rs:511`), with rows to be added in
+- `recording_contract` (`crates/flui-painting/tests/main.rs`), rows of
   `tests/recording.rs`: `ops_under_one_transform_share_its_entry` (two draws under one CTM yield
   `ptr::eq` transforms, a translation yields another, and the values are the CTMs),
   `appended_commands_keep_their_transforms`, `a_non_finite_op_is_refused_by_kind` (one row per
@@ -264,8 +266,11 @@ code, after the list is complete.
   `a_destructor_that_panics_during_clear_leaves_the_list_empty`.
 - In `flui-engine`: `inline_picture_replay_owns_its_root_clips`
   (`crates/flui-engine/src/clip_layer_readback_tests.rs:726`) is rewritten over `append_isolated`
-  with its name and assertions; `a_non_finite_op_is_omitted_and_the_frame_draws` (to be added)
-  renders a list holding a NaN rectangle beside a finite one and reads the finite one back.
+  with its name and assertions; `a_non_finite_op_is_omitted_and_the_frame_draws`
+  renders a list holding a NaN rectangle beside a finite one and reads the finite one back;
+  `commands_under_one_entry_reuse_the_installed_transform_by_address`
+  (`crates/flui-engine/src/painter/tests/command_transform.rs`) dispatches three draws under one
+  entry and one under another and counts one comparison by value.
 - The paint snapshot suites (`crates/flui-rendering/tests/paint_fragment_snapshot.rs` among them)
   pass without a regenerated snapshot.
 - `cargo xtask panic-messages`: the one new `expect` names its invariant.
