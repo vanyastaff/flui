@@ -13,7 +13,7 @@ use flui_interaction::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
-use flui_platform::capability::scripted::Answer;
+use flui_platform::capability::scripted::{Answer, ScenarioFailure};
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
     ProviderContext, Resolver,
@@ -97,10 +97,19 @@ fn acquire_in(
     host: &mut HeadlessHost,
     window: flui_testing::HeadlessWindowId,
 ) -> Result<ClipboardHandle, Unsupported> {
-    let acquired = Acquired::<ClipboardCapability>::default();
+    acquire_capability_in::<ClipboardCapability>(host, window)
+}
+
+/// Mount an [`Acquirer`] of `C` as the root of `window` on `host` and return
+/// what it was answered.
+pub(crate) fn acquire_capability_in<C: Capability>(
+    host: &mut HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+) -> Result<C::Handle, Unsupported> {
+    let acquired = Acquired::<C>::default();
     host.attach_to(
         window,
-        &Acquirer::<ClipboardCapability> {
+        &Acquirer::<C> {
             acquired: Rc::clone(&acquired),
         },
     )
@@ -570,6 +579,7 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
     use std::task::{Context, Poll};
 
     let mut host = HeadlessHost::new(window());
+    let scenario = host.scenario().clone();
     host.clipboard().hold_reads();
     let clipboard = acquire(&mut host).expect("provided");
     let capture = PanicOnDrop;
@@ -598,6 +608,11 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
     assert_eq!(
         later.as_mut().poll(&mut Context::from_waker(&waker)),
         Poll::Ready(Err(Abandoned::OwnerRetired))
+    );
+    let owed = scenario.verify().expect_err("the read was held to the end");
+    assert!(
+        matches!(owed.failures(), [ScenarioFailure::Unanswered { .. }]),
+        "{owed}"
     );
 }
 

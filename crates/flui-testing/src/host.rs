@@ -44,7 +44,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
-use flui_platform::capability::scripted::Scenario;
+use flui_platform::capability::scripted::{Scenario, ScenarioDriver};
 use flui_platform::data_transfer::{RepresentationDescriptor, TransferActions};
 use flui_platform::drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
@@ -774,10 +774,10 @@ pub use flui_view::__runtime::SESSION_END_BUDGET;
 
 /// The capabilities a headless host provides when it is given no registry:
 /// the clipboard, the primary selection and HTTP, each scripted by the test,
-/// so no test reaches the network. The clipboard and the primary selection
-/// are on the host's scenario.
+/// so no test reaches the network. All of them are on the host's scenario,
+/// whose clock the host alone drives: HTTP reports an unscripted URL there.
 struct ScriptedBuiltIns {
-    scenario: Scenario,
+    driver: ScenarioDriver,
     clipboard: crate::ScriptedClipboard,
     primary_selection: crate::ScriptedPrimarySelection,
     background: HeadlessBackground,
@@ -785,14 +785,19 @@ struct ScriptedBuiltIns {
 }
 
 impl ScriptedBuiltIns {
-    /// The built-ins on `scenario`, whose clock the host frames on.
-    fn on(scenario: &Scenario) -> Self {
+    /// The built-ins on the scenario `driver` moves.
+    fn on(driver: ScenarioDriver) -> Self {
+        let scenario = driver.scenario();
+        let http = crate::ScriptedHttp::default();
+        http.report_to(scenario.failure_report());
+        let clipboard = crate::ScriptedClipboard::on(scenario);
+        let primary_selection = crate::ScriptedPrimarySelection::on(scenario);
         Self {
-            scenario: scenario.clone(),
-            clipboard: crate::ScriptedClipboard::on(scenario),
-            primary_selection: crate::ScriptedPrimarySelection::on(scenario),
+            driver,
+            clipboard,
+            primary_selection,
             background: HeadlessBackground::default(),
-            http: crate::ScriptedHttp::default(),
+            http,
         }
     }
 
@@ -958,22 +963,27 @@ impl HeadlessHost {
         Self::with_scenario(window, &Scenario::new(), plugin)
     }
 
-    /// [`Self::with_plugin`] on `scenario`: the host frames on the
-    /// scenario's clock and applies its due changes at each pump, and its
-    /// clipboard and primary selection are on it, so a plugin whose doubles
-    /// are on `scenario` answers on the same timeline as everything else
-    /// (ADR-0154 §10).
+    /// [`Self::with_plugin`] on `scenario`: the host drives the scenario's
+    /// clock (frames, deadlines and scheduled changes on one timeline), and
+    /// its clipboard, primary selection and HTTP client are on it, so a
+    /// plugin whose doubles are on `scenario` answers on the same timeline as
+    /// everything else (ADR-0154 §10). A scenario drives one host at a time:
+    /// time moves only through that host.
     ///
     /// # Panics
     ///
-    /// As [`Self::with_plugin`].
+    /// When another live host already drives `scenario`; and as
+    /// [`Self::with_plugin`].
     #[must_use]
     pub fn with_scenario(
         window: HeadlessWindow,
         scenario: &Scenario,
         plugin: &dyn flui_platform::capability::Plugin,
     ) -> Self {
-        let scripted = ScriptedBuiltIns::on(scenario);
+        let driver = scenario
+            .drive()
+            .unwrap_or_else(|refused| panic!("with_scenario: {refused}: one host per scenario"));
+        let scripted = ScriptedBuiltIns::on(driver);
         let registry = flui_runtime::capability::CapabilityRegistry::builder()
             .built_ins(scripted.registrar())
             .plugin(plugin)
@@ -1009,8 +1019,14 @@ impl HeadlessHost {
             .expect("BUG: a fresh mint issues the primary window's id");
         let window = Rc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
-        let scripted = scripted.unwrap_or_else(|| ScriptedBuiltIns::on(&Scenario::new()));
-        let clock = scripted.scenario.clock().clone();
+        let scripted = scripted.unwrap_or_else(|| {
+            ScriptedBuiltIns::on(
+                Scenario::new()
+                    .drive()
+                    .expect("BUG: a scenario made here has no other driver"),
+            )
+        });
+        let clock = scripted.driver.scenario().clock().clone();
         // A collection of its own: the ui_runtime owns a `TextContext` over it
         // (ADR-0092 §3), exactly as a hosted ui_runtime does. Deliberately
         // bundled-only, unlike the app's host-fed one
@@ -1203,10 +1219,9 @@ impl HeadlessHost {
         if let Some(failure) = pending.into_iter().next() {
             panic!("{failure}");
         }
-        self.clock.advance(dt);
         // The scenario's changes due at the new instant apply before the
         // turn, so their answers settle in this pump.
-        self.scripted.scenario.run_due();
+        self.advance(dt);
         self.settle_lifecycle();
         // Background work runs before the frame, so an answer it posts
         // settles in this pump.
@@ -1469,11 +1484,21 @@ impl HeadlessHost {
         self.enter(|runtime| runtime.set_motion_override(preference));
     }
 
-    /// The clock the UI runtime reads. Advancing it moves the frame time, the
-    /// gesture-arena deadlines and the produce gate together.
+    /// The clock the UI runtime reads: the frame time, the gesture-arena
+    /// deadlines and the produce gate. Move it with [`advance`](Self::advance)
+    /// or [`pump`](Self::pump), which apply the scenario's changes that fall
+    /// due; advancing it directly skips them until the next of those.
     #[must_use]
     pub fn clock(&self) -> &ManualClock {
         &self.clock
+    }
+
+    /// Move the clock forward by `dt` without a frame, and apply every
+    /// change of the host's [scenario](Self::scenario) due at the new
+    /// instant, as time passing between two input events does. Every path of
+    /// the host that moves time goes through it.
+    pub fn advance(&self, dt: Duration) {
+        let _applied = self.scripted.driver.advance(dt);
     }
 
     /// The sink frames are submitted through.
@@ -1499,7 +1524,7 @@ impl HeadlessHost {
     /// each pump applies.
     #[must_use]
     pub fn scenario(&self) -> &Scenario {
-        &self.scripted.scenario
+        self.scripted.driver.scenario()
     }
 
     /// The clipboard the UI runtime hands its widgets.
@@ -2224,7 +2249,8 @@ impl HeadlessHost {
     /// How long a host's loop waits before its next frame: none while a frame
     /// is asked for or work is pending, unless a dropped frame waits for its
     /// retry; otherwise until the earliest deadline the UI runtime armed, such
-    /// as a gesture's or a dropped frame's retry. `None` when the loop would
+    /// as a gesture's or a dropped frame's retry, or the next change the
+    /// host's scenario scheduled. `None` when the loop would
     /// wait for input alone.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
@@ -2244,8 +2270,23 @@ impl HeadlessHost {
         {
             return Some(Duration::ZERO);
         }
-        let wake = runtime.next_wake()?;
-        Some(wake.saturating_duration_since(now))
+        let runtime_wait = runtime
+            .next_wake()
+            .map(|wake| wake.saturating_duration_since(now));
+        // A change the scenario has scheduled is a deadline like any other.
+        let scenario_wait = self.scenario_wait();
+        match (runtime_wait, scenario_wait) {
+            (Some(runtime), Some(scenario)) => Some(runtime.min(scenario)),
+            (wait, None) | (None, wait) => wait,
+        }
+    }
+
+    /// How long until the scenario's next scheduled change, if one is.
+    fn scenario_wait(&self) -> Option<Duration> {
+        let scenario = self.scripted.driver.scenario();
+        scenario
+            .next_due()
+            .map(|due| due.saturating_sub(scenario.now()))
     }
 
     /// Stop [`pump`](Self::pump) running background work, so a test sees a
@@ -2308,7 +2349,8 @@ impl HeadlessHost {
 
     /// Pump frames of `frame` until nothing is left to do — no redraw or
     /// frame asked for (a running animation asks for each next one), no
-    /// pending work, no armed deadline — at most `max_frames` of
+    /// pending work, no armed deadline, no change the scenario scheduled — at
+    /// most `max_frames` of
     /// them. Returns how many frames it took.
     ///
     /// # Errors
@@ -2328,6 +2370,7 @@ impl HeadlessHost {
                 && self.pending_background() == 0
                 && !self.observations_pending()
                 && runtime.next_wake().is_none()
+                && self.scenario_wait().is_none()
             {
                 return Ok(frames);
             }
@@ -2408,7 +2451,7 @@ impl HeadlessHost {
     /// Advance the clock to `time` on the event timeline, if it is ahead.
     fn advance_to(&self, time: flui_platform::EventTime) {
         let now = self.event_now();
-        self.clock.advance(time.saturating_duration_since(now));
+        self.advance(time.saturating_duration_since(now));
     }
 
     /// The clock's reading on the event timeline.

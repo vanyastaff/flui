@@ -6,6 +6,8 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::panic::FirstPanic;
+
 use super::Scenario;
 use crate::Unsupported;
 use crate::capability::{Completion, CompletionSource, Resolver};
@@ -44,7 +46,7 @@ impl<T> Clone for Track<T> {
 
 impl<T> Track<T>
 where
-    T: Clone + PartialEq + fmt::Debug + Send + 'static,
+    T: Clone + PartialEq + fmt::Debug + 'static,
 {
     pub(super) fn on(scenario: &Scenario, name: &'static str, initial: T) -> Self {
         Self {
@@ -77,6 +79,13 @@ where
     /// every handle waiting on [`changed`](Self::changed) is answered with
     /// it, at its next owner turn; setting the value it already has changes
     /// nothing and answers nobody.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of the value type's `PartialEq`, `Clone` or
+    /// `Drop`, once the value is changed and every other watcher answered; a
+    /// watcher whose answer could not be cloned keeps waiting for the next
+    /// change.
     pub fn set(&self, value: T) {
         let current = Rc::clone(&self.cell.state.borrow().value);
         // Compared, and the old value dropped, with no borrow held:
@@ -93,11 +102,18 @@ where
                 std::mem::take(&mut state.watchers),
             )
         };
-        drop(replaced);
+        let mut first = FirstPanic::new();
+        first.contain(|| drop(replaced));
         for watcher in watchers {
-            // A retired owner has nobody left to tell.
-            let _ = watcher.resolve((*value).clone());
+            match first.contain(|| (*value).clone()) {
+                // A retired owner has nobody left to tell.
+                Some(answer) => {
+                    let _ = watcher.resolve(answer);
+                }
+                None => self.cell.state.borrow_mut().watchers.push(watcher),
+            }
         }
+        first.resume();
     }
 
     /// Change the value to `value` at `at` on the scenario's clock: at the

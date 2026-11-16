@@ -74,6 +74,25 @@ impl Drop for DropFlag {
 }
 
 #[test]
+fn an_owner_local_answer_settles_through_its_resolver() {
+    let owner = Owner::new();
+    // `Rc` is not `Send`: its resolver stays on the owner, and needs no more.
+    let (completion, resolver) = owner.source.pending::<Rc<u32>>();
+    let seen = Rc::new(RefCell::new(None));
+    let sink = Rc::clone(&seen);
+    completion.on_complete(move |outcome| *sink.borrow_mut() = Some(outcome));
+
+    resolver.resolve(Rc::new(7)).expect("owner live");
+    assert_eq!(
+        *seen.borrow(),
+        None,
+        "resolve never runs the closure inline"
+    );
+    owner.turn();
+    assert_eq!(*seen.borrow(), Some(Ok(Rc::new(7))));
+}
+
+#[test]
 fn a_resolved_completion_settles_at_the_next_owner_turn() {
     let owner = Owner::new();
     let (completion, resolver) = owner.source.pending::<u32>();

@@ -5177,20 +5177,34 @@ graph LR
   дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
   Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:
   `Scenario` (один `ManualClock` и журнал отказов), `Script<R, A>` (шаги `Expect` + `Answer`:
-  `value`, `computed`, `hold`, `abandon`, `after(delay)`; запрос берёт самый ранний шаг, который
-  его принимает, затем постоянный ответ `otherwise`), `Track<T>` и `ServiceState` (разрешение,
-  служба вкл/выкл), `Events<E>` с `StreamEnd`. Каждый ответ идёт через `Resolver`, то есть
-  оседает на ходу владельца; запрос без ответа — `ScenarioFailure::Unexpected`, его completion
-  кончается `ProviderDropped`, тихого ответа по умолчанию нет. `Scenario::verify` перечисляет
-  ещё удержанные без ответа запросы, неиспользованные шаги, недостигнутые изменения и события
-  после конца потока. `HeadlessHost::with_scenario` ведёт кадры на часах сценария и в начале
-  каждого `pump` применяет созревшие изменения (`run_due`). На примитив переведены
-  `ScriptedLauncher`, `ScriptedFileDialogs` (`ScriptedSystem::on`), `ScriptedClipboard` и
-  `ScriptedPrimarySelection`; у лаунчера и диалогов больше нет неявных `Ok(())` и отмены.
-  Не переведены, с причиной в `crates/flui-platform/ARCHITECTURE.md` («A capability's double is
-  built from one scenario primitive»): `FakeHaptics` (синхронный ответ через trait окна, нечего
-  разрешать на ходу) и `ScriptedHttp` (клиент `Send + Sync`, его futures живут вне
-  owner-потока, ADR-0280). Подключение примитива к `flui-app[driver]` и двойники ядра — LY100.
+  `value`, `computed`, `abandon`, `after(delay)`, и `expect_held` для удержания; запрос берёт
+  самый ранний шаг, который его принимает, затем постоянный ответ `otherwise`), `Track<T>` и
+  `ServiceState` (разрешение, служба вкл/выкл), `Events<E>` с `StreamEnd`. Всё owner-local,
+  `Send` не требуется: `CompletionSource::pending` и `Resolver::resolve` больше не требуют `Send`
+  от ответа (резолвер `Send` ровно тогда, когда ответ `Send`), две позиции ушли из
+  `send-positions.toml`. Каждый ответ идёт через `Resolver`, то есть оседает на ходу владельца;
+  запрос без ответа — `ScenarioFailure::Unexpected`, его completion кончается `ProviderDropped`,
+  тихого ответа по умолчанию нет. `Scenario::verify` перечисляет удержанные без ответа запросы,
+  неиспользованные шаги, недостигнутые изменения и события после конца потока; скрипт, брошенный
+  с долгами, передаёт их сценарию, а сценарий, уничтоженный с непроверенными отказами, паникует
+  (если поток уже не разматывается). Код теста (матчер, вычисляемый ответ, `Clone`/`Debug`
+  значений) идёт без заимствований и под `FirstPanic`: обслуживаемый запрос остаётся удержанным,
+  остальные получают ответ, первая паника поднимается. Часами двигает один `ScenarioDriver`
+  (второй хост на том же сценарии отказан); у `HeadlessHost` `pump`, `advance`, `run_script` и
+  повтор записи двигают время только через него, а `time_to_next_frame` и `pump_until_settled`
+  ждут запланированных изменений как любой дедлайн. На примитив переведены `ScriptedLauncher`,
+  `ScriptedFileDialogs` (`ScriptedSystem::on`), `ScriptedClipboard` и
+  `ScriptedPrimarySelection` (у двух последних `service()`); у лаунчера и диалогов больше нет
+  неявных `Ok(())` и отмены. Не переведены, с причиной в `crates/flui-platform/ARCHITECTURE.md`
+  («A capability's double is built from one scenario primitive»): `FakeHaptics` (синхронный
+  ответ через trait окна), `ScriptedHttp` (клиент `Send + Sync`, его futures вне owner-потока,
+  ADR-0280; непрописанный URL он сообщает в сценарий через `FailureReport`, у хоста это включено)
+  и `flui_testing::storage::MemoryStorage` (хранилище, а не скрипт: неожиданному запросу не с
+  чем расходиться). Тесты runtime и app, которые держал `InMemoryClipboard`, перевёл #2033
+  (`5b4ece201`): он удалил `InMemoryClipboard` (`rg InMemoryClipboard crates` пуст), тесты
+  clipboard стали таблицей `capability_seam` во `flui-testing`, тесты app —
+  `crates/flui-app/tests/capability_registration.rs`. Подключение примитива к `flui-app[driver]`
+  и двойники ядра — LY100.
   Тесты (`crates/flui-testing/tests/scenario.rs`): `deny_then_allow_then_revoke_at_three_seconds`
   (сценарий колонки «Тесты»), `a_request_nothing_answers_ends_its_completion_and_fails_the_run`,
   `a_step_answers_the_request_it_matches_not_the_next_one_in_line`,
@@ -5215,8 +5229,8 @@ graph LR
   `flui::services::system` за фичей `system`, выключенной по умолчанию. Возможности: файловые
   диалоги (`FileDialogCapability`, `FileDialogs`, модальны окну виджета, один на окно) и запуск
   (`LauncherCapability`, `Launcher` в контракте, `flui_platform::launch`: URI, открыть путь,
-  reveal, trash). Двойники — по одному на возможность (`ScriptedSystem` над `ScriptedLauncher` и
-  `ScriptedFileDialogs`), не на примитиве LY54, которого на `main` нет. Вне Linux плагин
+  reveal, trash). Двойники `ScriptedLauncher` и `ScriptedFileDialogs` (их плагин `ScriptedSystem`,
+  `ScriptedSystem::on`) построены на сценарном примитиве LY54. Вне Linux плагин
   регистрирует отказ `NotYetOnThisHost`. Тесты (`crates/flui-system/tests/`):
   `the_declared_plugin_is_the_crates_default_plugin`;
   `a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn`,

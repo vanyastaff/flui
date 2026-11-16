@@ -7,7 +7,9 @@ use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
-use super::{Scenario, ScenarioFailure};
+use flui_foundation::panic::FirstPanic;
+
+use super::{Scenario, ScenarioFailure, describe};
 use crate::Unsupported;
 use crate::capability::{Completion, CompletionSource, Resolver};
 
@@ -89,7 +91,7 @@ impl<E> Clone for Events<E> {
 
 impl<E> Events<E>
 where
-    E: Clone + fmt::Debug + Send + 'static,
+    E: Clone + fmt::Debug + 'static,
 {
     pub(super) fn on(scenario: &Scenario, name: &'static str) -> Self {
         Self {
@@ -128,14 +130,22 @@ where
     }
 
     /// Send `event` to every subscriber now.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of the event type's `Clone` or `Debug`, once
+    /// every subscriber whose copy could be made has it.
     pub fn emit(&self, event: E) {
-        let Some(subscribers) = self.open(|| format!("{event:?}")) else {
-            return;
-        };
-        for subscriber in subscribers {
-            // Cloned with no borrow held: `Clone` is the event type's code.
-            subscriber.deliver(StreamItem::Event(event.clone()));
+        let mut first = FirstPanic::new();
+        if let Some(subscribers) = self.open(|first| describe(&event, first), &mut first) {
+            for subscriber in subscribers {
+                // Cloned with no borrow held: `Clone` is the event type's code.
+                if let Some(copy) = first.contain(|| event.clone()) {
+                    subscriber.deliver(StreamItem::Event(copy));
+                }
+            }
         }
+        first.resume();
     }
 
     /// Send `event` at `at` on the scenario's clock: at the first
@@ -147,7 +157,8 @@ where
 
     /// End the stream now with `end`.
     pub fn end(&self, end: StreamEnd) {
-        let Some(subscribers) = self.open(|| format!("the end {end:?}")) else {
+        let Some(subscribers) = self.open(|_| format!("the end {end:?}"), &mut FirstPanic::new())
+        else {
             return;
         };
         self.cell.state.borrow_mut().end = Some(end);
@@ -164,7 +175,11 @@ where
 
     /// The live subscribers while the stream is open; `None`, with the
     /// failure recorded, once it has ended.
-    fn open(&self, sent: impl FnOnce() -> String) -> Option<Vec<Rc<Subscriber<E>>>> {
+    fn open(
+        &self,
+        sent: impl FnOnce(&mut FirstPanic) -> String,
+        first: &mut FirstPanic,
+    ) -> Option<Vec<Rc<Subscriber<E>>>> {
         let open = {
             let mut state = self.cell.state.borrow_mut();
             state.end.is_none().then(|| {
@@ -179,7 +194,7 @@ where
         if open.is_none() {
             self.cell.scenario.fail(ScenarioFailure::AfterEnd {
                 stream: self.cell.name,
-                sent: sent(),
+                sent: sent(first),
             });
         }
         open
@@ -199,7 +214,7 @@ where
     }
 }
 
-impl<E: Send + 'static> Subscriber<E> {
+impl<E: 'static> Subscriber<E> {
     /// Hand `item` to the oldest waiting completion, or queue it.
     fn deliver(&self, item: StreamItem<E>) {
         let waiting = {
@@ -231,7 +246,7 @@ impl<E: Send + 'static> Subscriber<E> {
     }
 }
 
-impl<E: Send + 'static> EventSubscription<E> {
+impl<E: 'static> EventSubscription<E> {
     /// The next item, settled at an owner turn: the oldest one queued, the
     /// end once the queue is drained and the stream has ended, else the next
     /// one sent.

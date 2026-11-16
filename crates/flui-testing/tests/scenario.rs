@@ -18,7 +18,7 @@ use flui_platform::capability::{
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_testing::{HeadlessHost, HeadlessWindow};
 
-use crate::capability_seam::acquire_capability;
+use crate::capability_seam::{acquire_capability, acquire_capability_in};
 
 /// What the user let the application do with the camera.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,10 +298,233 @@ fn a_service_turned_off_refuses_acquisition_until_it_is_back() {
 
     let _ = host.pump(Duration::from_secs(1));
     assert_eq!(camera.service.get(), ServiceState::On, "back on at 1 s");
-    // A widget mounted after 1 s, in a host on the same timeline.
+    // A widget mounted after 1 s, in the next host to drive the scenario.
+    drop(host);
     let mut later = HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera);
     assert!(acquire_capability::<Camera>(&mut later).is_ok());
     scenario.verify().expect("the service came back");
+}
+
+#[test]
+fn a_scenario_drives_one_host_at_a_time() {
+    let scenario = Scenario::new();
+    let camera = SimulatedCamera::on(&scenario);
+    let first = HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera);
+    let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera)
+    }));
+    assert!(second.is_err(), "a second host would move the first's time");
+    drop(first);
+    let _third = HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera);
+}
+
+#[test]
+fn a_script_dropped_with_debts_hands_them_to_the_scenario() {
+    let scenario = Scenario::new();
+    let (_host, _camera, handle) = camera_on(&scenario);
+    let script: Script<u32, u32> = scenario.script("dropped");
+    script.expect(Expect::exactly(7), Answer::value(1));
+    script.expect_held(Expect::any());
+    let (held, resolver) = handle.completions.pending::<u32>();
+    script.receive(3, resolver);
+    drop(script);
+
+    let failures = scenario
+        .verify()
+        .expect_err("the dropped script still owes");
+    assert_eq!(
+        failures.failures(),
+        [
+            ScenarioFailure::Unanswered {
+                script: "dropped",
+                request: "3".to_owned(),
+            },
+            ScenarioFailure::Unconsumed {
+                script: "dropped",
+                step: "7".into(),
+            },
+        ]
+    );
+    drop(held);
+}
+
+#[test]
+fn a_scenario_dropped_unverified_with_debts_fails_the_test() {
+    let ended = std::panic::catch_unwind(|| {
+        let scenario = Scenario::new();
+        let script: Script<u32, u32> = scenario.script("forgotten");
+        script.answer_next(Answer::value(1));
+    });
+    let payload = ended.expect_err("an unverified debt panics as the scenario drops");
+    let text = flui_foundation::panic::payload_text(&*payload).unwrap_or_default();
+    assert!(text.contains("forgotten"), "{text}");
+
+    // Verified, the same debt is acknowledged and the drop is quiet.
+    let scenario = Scenario::new();
+    let script: Script<u32, u32> = scenario.script("acknowledged");
+    script.answer_next(Answer::value(1));
+    assert!(scenario.verify().is_err());
+}
+
+#[test]
+fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera.captures.hold();
+    let first = land(handle.capture(1));
+    let poisoned = land(handle.capture(2));
+    let third = land(handle.capture(3));
+
+    let released = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        camera.captures.release_held(|request| match request {
+            CameraRequest::Capture { width: 2 } => panic!("the test's answer failed"),
+            _ => Ok(vec![]),
+        })
+    }));
+    assert!(released.is_err(), "the answer's panic is resumed");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&first), Some(Ok(Ok(vec![]))));
+    assert_eq!(
+        taken(&third),
+        Some(Ok(Ok(vec![]))),
+        "not dropped with the panic"
+    );
+    assert_eq!(taken(&poisoned), None);
+    assert_eq!(camera.captures.held(), 1, "the failed one stays held");
+
+    assert!(camera.captures.release_oldest(Err(CaptureError::Busy)));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&poisoned), Some(Ok(Err(CaptureError::Busy))));
+    scenario.verify().expect("every request was answered");
+}
+
+#[test]
+fn a_panicking_matcher_keeps_its_request_held() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera.captures.expect(
+        Expect::when("a matcher that fails", |_: &CameraRequest| {
+            panic!("the test's matcher failed")
+        }),
+        Answer::value(Ok(vec![])),
+    );
+
+    let asked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle.capture(5)));
+    assert!(asked.is_err(), "the matcher's panic is resumed");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(camera.captures.held(), 1, "the request is held, not lost");
+    let failures = scenario.verify().expect_err("held and unused");
+    assert!(
+        failures.failures().contains(&ScenarioFailure::Unanswered {
+            script: "camera captures",
+            request: "Capture { width: 5 }".to_owned(),
+        }),
+        "{failures}"
+    );
+}
+
+#[test]
+fn the_host_waits_for_a_scheduled_change_as_for_any_deadline() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera
+        .captures
+        .answer_next(Answer::value(Ok(vec![4])).after(Duration::from_millis(100)));
+    let capture = land(handle.capture(4));
+
+    assert_eq!(
+        host.time_to_next_frame(),
+        Some(Duration::from_millis(100)),
+        "the scheduled answer is the next deadline"
+    );
+    host.pump_until_settled(Duration::from_millis(16), 20)
+        .expect("settles once the answer arrives");
+    assert_eq!(taken(&capture), Some(Ok(Ok(vec![4]))));
+    assert_eq!(host.time_to_next_frame(), None);
+    scenario.verify().expect("the answer was given");
+}
+
+#[test]
+fn time_moved_between_inputs_applies_what_falls_due() {
+    let scenario = Scenario::new();
+    let (mut host, camera, _handle) = camera_on(&scenario);
+    camera
+        .access
+        .set_at(Duration::from_secs(3), Access::Revoked);
+    camera
+        .access
+        .set_at(Duration::from_secs(7), Access::Granted);
+
+    // A pointer script with no frame step: time moves only between inputs.
+    let point = flui_foundation::geometry::Offset::new(5.0, 5.0);
+    let script = flui_testing::replay::TouchScript::new("a press held 5 s")
+        .down(1, point)
+        .wait(Duration::from_secs(5))
+        .up(1)
+        .build()
+        .expect("a paired press");
+    host.run_script(&script);
+    assert_eq!(
+        camera.access.get(),
+        Access::Revoked,
+        "the input at 5 s sees the revocation at 3 s"
+    );
+
+    host.advance(Duration::from_secs(2));
+    assert_eq!(camera.access.get(), Access::Granted, "granted again at 7 s");
+    scenario.verify().expect("both changes applied");
+}
+
+#[test]
+fn an_unscripted_http_request_fails_the_hosts_scenario() {
+    let scenario = Scenario::new();
+    let (host, _camera, _handle) = camera_on(&scenario);
+    let mut sent = host
+        .http()
+        .handle()
+        .send(flui_platform::http::HttpRequest::get(
+            "https://example.com/missing",
+        ));
+    let answer = sent
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+    assert!(
+        matches!(
+            answer,
+            std::task::Poll::Ready(Err(flui_platform::http::HttpError::Connect { .. }))
+        ),
+        "the caller sees the connection fail"
+    );
+    let failures = scenario.verify().expect_err("the scenario sees it too");
+    assert_eq!(
+        failures.failures(),
+        [ScenarioFailure::Unexpected {
+            script: "http",
+            request: "https://example.com/missing".to_owned(),
+        }]
+    );
+}
+
+#[test]
+fn the_clipboard_service_turns_off_and_back_on() {
+    let scenario = Scenario::new();
+    let (mut host, _camera, _handle) = camera_on(&scenario);
+    let clipboard = host.clipboard();
+    let refusal = Unsupported::new(UnsupportedReason::Unavailable);
+    clipboard.service().set(ServiceState::Off(refusal));
+    clipboard
+        .service()
+        .set_at(Duration::from_secs(2), ServiceState::On);
+
+    let window = host.open_window(HeadlessWindow::new(10, 10));
+    let off = acquire_capability_in::<flui_interaction::ClipboardCapability>(&mut host, window);
+    assert_eq!(off.err(), Some(refusal));
+
+    let _ = host.pump(Duration::from_secs(2));
+    let second = host.open_window(HeadlessWindow::new(10, 10));
+    let on = acquire_capability_in::<flui_interaction::ClipboardCapability>(&mut host, second);
+    assert!(on.is_ok(), "the host's own clipboard is back at 2 s");
+    scenario.verify().expect("the clipboard came back");
 }
 
 #[test]

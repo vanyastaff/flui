@@ -88,6 +88,15 @@ impl ScriptedPrimarySelection {
         &self.reads
     }
 
+    /// Whether the primary selection is there: turned off (now, or at an
+    /// instant with [`Track::set_at`]), the provider refuses every
+    /// acquisition with the refusal it was turned off with; turned on again,
+    /// it provides.
+    #[must_use]
+    pub fn service(&self) -> &Track<ServiceState> {
+        &self.service
+    }
+
     /// The selection's text: the current claim's, asked now, or another
     /// application's.
     #[must_use]
@@ -178,10 +187,18 @@ impl CapabilityProvider<PrimarySelectionCapability> for ScriptedPrimarySelection
 
 impl fmt::Debug for ScriptedPrimarySelection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let selection = self.selection.borrow();
+        // Copied out and the borrow released before writing: the formatter
+        // is the caller's code.
+        let (claimed, foreign) = {
+            let selection = self.selection.borrow();
+            (
+                selection.claims.current().is_some(),
+                selection.foreign.clone(),
+            )
+        };
         f.debug_struct("ScriptedPrimarySelection")
-            .field("claims", &selection.claims)
-            .field("foreign", &selection.foreign)
+            .field("claimed", &claimed)
+            .field("foreign", &foreign)
             .field("reads", &self.reads)
             .field("service", &self.service.get())
             .finish()

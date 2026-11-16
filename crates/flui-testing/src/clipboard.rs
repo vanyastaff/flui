@@ -102,6 +102,14 @@ impl ScriptedClipboard {
         &self.reads
     }
 
+    /// Whether the clipboard is there: turned off (now, or at an instant
+    /// with [`Track::set_at`]), the provider refuses every acquisition with
+    /// the refusal it was turned off with; turned on again, it provides.
+    #[must_use]
+    pub fn service(&self) -> &Track<ServiceState> {
+        &self.service
+    }
+
     /// The clipboard's text: what the application last wrote, or what the
     /// test put there.
     #[must_use]
@@ -204,11 +212,16 @@ impl CapabilityProvider<ClipboardCapability> for ScriptedClipboard {
 
 impl fmt::Debug for ScriptedClipboard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let contents = self.contents.borrow();
+        // Copied out and the borrow released before writing: the formatter
+        // is the caller's code.
+        let (text, concealed, failure) = {
+            let contents = self.contents.borrow();
+            (contents.text.clone(), contents.concealed, contents.failure)
+        };
         f.debug_struct("ScriptedClipboard")
-            .field("text", &contents.text)
-            .field("concealed", &contents.concealed)
-            .field("failure", &contents.failure)
+            .field("text", &text)
+            .field("concealed", &concealed)
+            .field("failure", &failure)
             .field("reads", &self.reads)
             .field("service", &self.service.get())
             .finish()

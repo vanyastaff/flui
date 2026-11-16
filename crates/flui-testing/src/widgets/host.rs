@@ -208,6 +208,12 @@ impl WidgetHost {
         self.ui_runtime.clock()
     }
 
+    /// Move the clock between two input events, applying what the host's
+    /// scenario has due ([`HeadlessHost::advance`]).
+    pub(super) fn advance(&self, dt: std::time::Duration) {
+        self.ui_runtime.advance(dt);
+    }
+
     /// Whether the last pump submitted a scene.
     pub(super) fn did_paint_last_frame(&self) -> bool {
         self.ui_runtime.sink().submits() > self.submits_before_last_pump

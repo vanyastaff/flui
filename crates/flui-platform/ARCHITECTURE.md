@@ -309,37 +309,61 @@ not depend on `flui-testing`. A `Scenario` is one `ManualClock` and one ledger o
 it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the platform changes
 (a permission, a `ServiceState`), and `Events<E>` per event stream.
 
+- **Owner-thread state.** Nothing in the primitive is `Send`: the answer of a script, a
+  track's value and a stream's event need not be, because `CompletionSource::pending` and
+  `Resolver::resolve` ask `Send` of nothing, and a resolver is `Send` exactly when its answer
+  is. The one value that crosses a thread is `FailureReport`, through which a `Send + Sync`
+  double reports into the ledger.
 - **A request is matched by its value.** A step is an `Expect<R>` (`any`, `exactly`, `when`)
-  and an `Answer` (`value`, `computed`, `hold`, `abandon`, each optionally `after` a delay); the
-  earliest step that accepts a request answers it and is used up. A request type fixes its
-  answer type, so an open dialog cannot be answered with a save result.
+  with an `Answer` (`value`, `computed`, `abandon`, each optionally `after` a delay) or, with
+  `expect_held`, no answer until the test releases the request; a held step has no delay to
+  ignore. The earliest step that accepts a request answers it and is used up. A request type
+  fixes its answer type, so an open dialog cannot be answered with a save result.
 - **No answer nobody wrote.** A request no step and no standing answer (`otherwise`) takes is
   `ScenarioFailure::Unexpected` and its resolver is dropped, so the caller's completion ends
   `ProviderDropped`; a held request never answered, a step never used, a change the clock never
   reached and an event after its stream's end are the other failures `Scenario::verify` lists.
   A double keeps a standing answer only where it models the service's state (the clipboard's
   text), never as a default.
-- **Time is the scenario's clock.** A scheduled change applies at the first
-  `Scenario::run_due` on or after its instant; `HeadlessHost` frames on the scenario's clock and
-  calls `run_due` at the start of each pump, before the turn.
+- **Debts outlive handles, and an unverified run fails.** A script dropped with a held request
+  or an unused step hands them to the scenario's ledger. The scenario panics as its last clone
+  drops when a failure is left that no `verify` returned, unless the thread is already
+  unwinding (ADR-0281), so a test that never calls `verify` cannot pass with work undone.
+- **One driver moves the clock.** `Scenario::drive` hands out the one `ScenarioDriver`; a
+  second is refused (`AlreadyDriven`), so two hosts never move each other's time.
+  `ScenarioDriver::advance` moves the clock and applies what fell due in one call, and every
+  path of `HeadlessHost` that moves time (`pump`, `advance`, a replayed recording or pointer
+  script) goes through it. `Scenario::next_due` is a deadline of the host's loop like a
+  gesture's: `time_to_next_frame` and `pump_until_settled` wait for it.
 - **Every answer is a `Completion`.** A script, a track's `changed` and a stream's `next`
   answer through a `Resolver`, so an answer settles at an owner turn and never inside the call
   that asked; no borrow is held while a matcher, a computed answer or a value's `Clone`,
   `PartialEq`, `Debug` or `Drop` runs, so a caller that asks again from its answer finds the
-  script idle. A stream ends once, with a `StreamEnd`, and an ended stream answers its end to
-  every later `next`.
+  script idle. When that code panics, the request it served stays held, every other request
+  is still answered and the first panic is resumed (`FirstPanic`). A stream ends once, with a
+  `StreamEnd`, and an ended stream answers its end to every later `next`.
 
-The launcher, file dialog, clipboard and primary selection doubles are built on it.
-`testing::FakeHaptics` is not: it answers synchronously through a window's trait object, with
-no completion to settle. `testing::ScriptedHttp` is not either: its client is `Send + Sync`
-and its futures run off the owner thread (ADR-0280), where an owner-local scenario cannot
-reach, and a URL nobody scripted fails with `HttpError::Connect` naming it.
+The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
+doubles are not, each for its contract's sake. `testing::FakeHaptics` answers synchronously
+through a window's trait object, with no completion to settle. `testing::ScriptedHttp` serves a
+`Send + Sync` client whose futures run off the owner thread (ADR-0280); a URL nobody scripted
+fails with `HttpError::Connect` naming it and, once `report_to` attaches the client to a
+scenario's `FailureReport` (the headless host's own client is attached), is that scenario's
+`Unexpected` failure too. `flui_testing::storage::MemoryStorage` is a store behind the
+`Send + Sync` storage contract: it keeps what was written and answers reads from it, so there
+is no request it could find unexpected.
 **Tests:** `deny_then_allow_then_revoke_at_three_seconds`,
 `a_request_nothing_answers_ends_its_completion_and_fails_the_run`,
 `a_step_answers_the_request_it_matches_not_the_next_one_in_line`,
 `a_delayed_answer_settles_at_the_first_turn_at_or_after_its_instant`,
-`an_event_stream_delivers_on_virtual_time_and_ends_once`
-(`crates/flui-testing/tests/scenario.rs`).
+`an_event_stream_delivers_on_virtual_time_and_ends_once`,
+`a_script_dropped_with_debts_hands_them_to_the_scenario`,
+`a_scenario_dropped_unverified_with_debts_fails_the_test`,
+`a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest`,
+`a_scenario_drives_one_host_at_a_time`,
+`the_host_waits_for_a_scheduled_change_as_for_any_deadline`
+(`crates/flui-testing/tests/scenario.rs`);
+`an_owner_local_answer_settles_through_its_resolver` (`crates/flui-platform/tests/capability.rs`).
 
 ### A TSF-shaped pull store carries text input
 
