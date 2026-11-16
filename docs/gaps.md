@@ -28,7 +28,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **Missing on iOS:** `selectionRectsForRange:` (answered with no rects), a run of the store host on the Simulator and a device, `UITextInteraction`'s selection UI, input hints, keyboard insets on a device (type-checked, unrun), hiding the keyboard checked on screen and a run on a device. The field draws kana and kanji as missing-glyph boxes on the Simulator: its font fallback has no CJK face there.
 - **Missing on every host:** a multiline field. Return reaches a field as the Enter key (UIKit's lone `"\n"`, AppKit's `insertNewline:`, a hardware key), which a single-line field answers with submit; a multiline field has to insert its line break through its store on Enter, on every host.
 - **Runs on Android:** it serves fields through `FluiView`'s `InputConnection` (ADR-0247), run with Samsung Keyboard on a Galaxy S21 (composition, commit, Escape, the action key, the keyboard shown and hidden, and through a manual Android run a field submitted by Done while the keyboard still composed).
-- **Missing on Android:** never run with Gboard, `CursorAnchorInfo` placement (the caret and composing character boxes, type-checked), the keyboard's insets and their animation (type-checked, unrun on a device), paste through `OnReceiveContentListener` or stylus handwriting.
+- **Missing on Android:** never run with Gboard, `CursorAnchorInfo` placement (the caret and composing character boxes, type-checked), the keyboard's insets below API 30 and their animation (the insets ran on a Galaxy S21, Android 15, 2026-11-16), a tap that reopens the keyboard on a focused field ([entry](#a-focused-android-field-does-not-reopen-the-keyboard-on-a-tap)), paste through `OnReceiveContentListener` or stylus handwriting.
 - **Runs on the Web:** it now serves fields through `EditContext` or a hidden textarea, run only through Chrome's own input-method path in headless Chrome.
 - **Missing on the Web:** no soft keyboard or input hints; the keyboard insets have run only against a fake page on Node, not in a mobile browser.
 - **Missing everywhere:** client queries (selected range, surrounding text, first rect) for dictation, reconversion and handwriting, and a session that survives a window move, resize, DPI change and focus loss, are rows of their own under [Text input](platform-parity.md#text-input). Other frameworks show the failures: macOS dictation silently drops text when `selectedRange` returns `NSNotFound` ([rust-windowing/winit#4666](https://github.com/rust-windowing/winit/issues/4666), [#3617](https://github.com/rust-windowing/winit/issues/3617)), a Korean input method stops editing inline after the window moves ([DioxusLabs/dioxus#5246](https://github.com/DioxusLabs/dioxus/issues/5246)), and the input-method output of egui carries a position only ([emilk/egui#7941](https://github.com/emilk/egui/issues/7941)).
@@ -675,3 +675,25 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The Win32 loop and its modal loops, the X11, Wayland and UIKit loops arm and take the application's wake deadline through `WakeDeadline::{arm, take_due}` (`crates/flui-native/src/owner/wake_deadline.rs`): an instant delivered once is armed again only after a frame ran. The AppKit pump (`owner/apple/macos/wake_pump.rs`, `TickPlan`) asks for a frame at a due instant and looks again every `FOLLOW_UP` with no frame count, and the Android loop (`owner/android/poll.rs`, `DueDeadline`, with `owner/redraw_poll.rs`) offers a past instant once but keeps polling with no timeout while it stays due and the Activity is resumed.
 - Neither host counts its frames: their windows build their `WindowDelivery` without the loop's `FrameCount`, so moving them to the rule means wiring the count through the AppKit and Android windows, which this host cannot compile, and a run on a Mac and an Android device.
 - The entry closes when both loops drive their deadline through `WakeDeadline`, `TickPlan` and `DueDeadline` are gone, and a run on each device shows a declined frame does not keep the loop awake.
+
+### A paused Android Activity runs no owner jobs
+
+> **Environments:** Android · **Who it hurts:** Applications whose work must run while another activity is on top: a request's ticket dropped while the activity it started is showing, a completion's closure, a timer · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle) (Activity results for capability providers)
+
+- The Android loop serves its own turn while the Activity is paused: it drains `FluiHost`'s queue and routes answers, and the result bridge's sweep ends a request whose ticket was dropped and asks Java to cancel its activity (`ResultBridge::answer`, every turn, resumed or not). What does not run is the application's: the UI runtime's posted owner jobs and commands run in turns the window's redraw drives (`AppRuntime::owner_turn_window_poke` asks the window for one and declines while the window is not `Running`), and a paused Activity draws no frame, so a provider's code that would drop a ticket while the started activity is on top does not run until the user returns.
+- Seen in a device run on a Galaxy S21 (Android 15, 2026-11-16); dropping the ticket right after the launch, before the Activity paused, cancelled the picker.
+- The entry closes when a paused Activity serves owner turns that carry no frame (posted jobs, completions, wakes) and only drawing waits for resume, with a device run of a ticket dropped while the started activity is on top.
+
+### A focused Android field does not reopen the keyboard on a tap
+
+> **Environments:** Android · **Who it hurts:** Every app with a text field · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics) (Soft-keyboard insets)
+
+- After Back closes the soft keyboard, tapping the field that still has focus does not show it again. Seen on a Galaxy S21 (Android 15, Samsung Keyboard, 2026-11-16).
+- The entry closes when a tap on the focused field shows the keyboard, with that run on a device.
+
+### android-activity logs a spurious looper callback sixty times a second
+
+> **Environments:** Android · **Who it hurts:** Developers reading logcat, whose buffer the lines wrap · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle) (Event loop, startup and wake-ups)
+
+- `android-activity` 0.6.1 (`native_activity/mod.rs:225`) logs "Spurious ALOOPER_POLL_CALLBACK" about sixty times a second on a Galaxy S21 (Android 15, 2026-11-16), enough to wrap the logcat buffer; nothing else was seen to go wrong.
+- The entry closes when the loop no longer leaves a callback the looper reports as spurious, or the crate no longer logs it at that rate, checked in logcat on a device.

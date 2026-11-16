@@ -6240,8 +6240,12 @@ GPU-память простаивающего или невидимого окн
   запроса, ответ после «Don't keep activities» и после `am kill`, ответ до `android_main`),
   «Memory pressure», «Soft-keyboard insets» (счёт `WindowResized`), «IME composition» (ввод с dex из
   APK на Galaxy S21 и образе API 23–25). Потребитель — выбор файла `flui-system` (LY67).
-  Не запущено: Android-код и Java компилирует только CI (`cross-typecheck`, `android-dex`), на
-  устройстве ничего не запускалось.
+  Запущено на Galaxy S21 (SM-G991U, Android 15, 2026-11-16, коммит `dcd3b2f1e`): ответ выбора
+  мелодии и его URI через `take_data`, переприсоединение после пересоздания (смена языка
+  приложения) и после `am kill`, выброшенный сразу после запуска билет (`Cancelled`), мягкий ввод
+  по ADR-0340 §3 и набор текста; записи — в `platform-parity.toml`. Не запущено: «Don't keep
+  activities», отменённый код результата, выброс билета, пока запущенная activity сверху
+  (приостановленная Activity не выполняет задания owner — `docs/gaps.md`), образ API 23–25.
 
 - [x] **LY114** — ветка `platform/admission-integrity`, решение — ADR-0341 (заменяет связку токена
   из ADR-0254 §2). Подтверждено на `main` @ `ab45cd94c` тестом через публичный API: три подделки
