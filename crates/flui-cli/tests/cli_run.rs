@@ -122,7 +122,7 @@ fn main() {
         std::fs::create_dir_all(target_libs.join(target)).expect("target libraries");
     }
     let real_rustc = which::which("rustc").expect("real rustc executable");
-    // Two NDKs under the SDK and no ANDROID_NDK_HOME: the build resolves the
+    // Two NDK versions under the SDK and no ANDROID_NDK_HOME: the build resolves the
     // newer by number (29 above 9, which sorts after it as text) and hands it
     // to cargo-ndk, which would otherwise pick one itself.
     let sdk = root.join("sdk");
