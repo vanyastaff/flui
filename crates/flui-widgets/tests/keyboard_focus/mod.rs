@@ -10,23 +10,23 @@ pub(crate) mod routes;
 
 use flui_interaction::FocusManager;
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 
 /// One key event, as a platform delivers it.
-pub(crate) fn key(state: KeyState, key: Key, repeat: KeyRepeat) -> KeyEvent {
-    KeyEvent::new(state, key, Code::Unidentified, EventTime::from_nanos(0)).with_repeat(repeat)
+pub(crate) fn key(state: KeyState, key: Key) -> KeyEvent {
+    KeyEvent::new(state, key, Code::Unidentified, EventTime::from_nanos(0))
 }
 
 /// `key`'s key-down; whether the focus walk consumed it.
 pub(crate) fn down(manager: &FocusManager, pressed: &Key) -> bool {
     manager
-        .dispatch_key_event(&key(KeyState::Down, pressed.clone(), KeyRepeat::First))
+        .dispatch_key_event(&key(KeyState::Down(KeyPress::First), pressed.clone()))
         .is_handled()
 }
 
 /// `key`'s release.
 pub(crate) fn up(manager: &FocusManager, released: &Key) {
-    let _ = manager.dispatch_key_event(&key(KeyState::Up, released.clone(), KeyRepeat::First));
+    let _ = manager.dispatch_key_event(&key(KeyState::Up, released.clone()));
 }
 
 /// `key` pressed and released; whether its key-down was consumed.
@@ -38,9 +38,9 @@ pub(crate) fn press(manager: &FocusManager, pressed: &Key) -> bool {
 
 /// `key` pressed with `modifiers` held, and released.
 pub(crate) fn chord(manager: &FocusManager, pressed: &Key, modifiers: Modifiers) -> bool {
-    let event = key(KeyState::Down, pressed.clone(), KeyRepeat::First).with_modifiers(modifiers);
+    let event = key(KeyState::Down(KeyPress::First), pressed.clone()).with_modifiers(modifiers);
     let consumed = manager.dispatch_key_event(&event).is_handled();
-    let release = key(KeyState::Up, pressed.clone(), KeyRepeat::First).with_modifiers(modifiers);
+    let release = key(KeyState::Up, pressed.clone()).with_modifiers(modifiers);
     let _ = manager.dispatch_key_event(&release);
     consumed
 }

@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use common::{lay_out, tight};
 use flui_interaction::KeyEventResult;
-use flui_interaction::events::{Code, Key, KeyState};
+use flui_interaction::events::{Code, Key, KeyPress, KeyState};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{InputDecoration, TextFormField, Theme, ThemeData};
 use flui_sdk::interaction::FocusNode;
@@ -51,7 +51,7 @@ pub fn validator_error_reaches_the_input_decorator_error_line() {
     let _ = node.request_focus();
     let event = KeyEventBuilder::new(Code::KeyA)
         .key(Key::character("a"))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .build();
     assert_eq!(
         laid.focus_manager().dispatch_key_event(&event),

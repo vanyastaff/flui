@@ -14,7 +14,7 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::{GestureSettingsSource, RemainderHandoff};
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, TreeId};
 use flui_testing::{
     AlternativesSubject, GestureAlternativesCheck, MouseScript, PointerScript, TouchScript,
@@ -834,7 +834,7 @@ fn invoke_refresh_action(laid: &mut LaidOut) {
 
 fn press(laid: &LaidOut, activator: &SingleActivator) {
     let manager = laid.focus_manager();
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let event = KeyEvent::new(
             state,
             activator.trigger().clone(),

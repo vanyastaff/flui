@@ -174,11 +174,14 @@ pub use flui_platform::EventTime;
 pub use flui_platform::pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    PointerRole, PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase,
+    ScrollPrecision, ScrollUnit,
 };
 
 pub use flui_interaction::events::KeyEvent;
-pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
+pub use flui_interaction::events::keyboard::{
+    Code, Key, KeyPress, KeyState, Location, Modifiers, NamedKey,
+};
 pub use flui_interaction::focus::{
     EntryTarget, FocusAttachment, FocusCause, FocusChangeCallback, FocusDetachOutcome,
     FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,

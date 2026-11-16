@@ -6600,6 +6600,59 @@ GPU-память простаивающего или невидимого окн
   `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,
   `tests/wasm32/web_page_lifecycle.rs`.
 
+- [x] **LY117** — ветка `platform/input-vocabulary`, решение — ADR-0346 (заменяет в ADR-0143
+  §1 приватные `state`/`repeat` события клавиши, в §2 и §3 — `KeyRepeat` и мёртвую клавишу как
+  именованную). Состояние клавиши — `KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})` или
+  `Up`, поле `KeyEvent::state` открыто; `KeyRepeat`, `KeyRelease`, `repeat()`, `release()`,
+  `with_repeat`, `with_release` удалены, отпускание с повтором не строится (`compile_fail`-доктест
+  `KeyState`). Мёртвая клавиша — `Key::Dead(Option<char>)` с акцентом, как он напечатан на клавише;
+  генератор `key-vocabulary` не выпускает `Dead` в `NamedKey` (`carried_by_key`) и падает, если
+  keyboard-types его переименует (самотест). Акцент читают Windows (`WM_DEADCHAR`), XKB (мёртвый
+  keysym, `dead_key`) и Android (карта клавиш); DOM акцента не называет (`Key::Dead(None)`), AppKit
+  и UIKit составляют мёртвые клавиши размеченным текстом. Отпускание называет то, что назвало
+  нажатие, на каждом хосте: один реестр `PressedAs` (бывший `UnplacedKeys`) держит клавишу без
+  кода и мёртвую клавишу до отпускания, что бы ни сделали с ней Shift, раскладка или compose;
+  повторное нажатие заменяет запись (Windows, XKB, AppKit, веб, Android;
+  `a_held_key_is_released_as_it_was_pressed`, без реестра отпускание мёртвой с Shift называет
+  другой акцент). Android составляет аппаратную мёртвую клавишу со следующей:
+  `keys::DeadKeyComposer` (чистый, собирается для тестов на любом хосте) через
+  `KeyCharacterMap.getDeadChar`; несоставимая пара печатает акцент и букву, модификатор акцент
+  держит, клавиша без текста, аккорд Control или Meta (ярлык срабатывает), композиция IME и потеря
+  фокуса сбрасывают.
+  Прокрутка несёт `ScrollEvent::inversion: ScrollInversion` (`Unknown`, `FromDevice`,
+  `InvertedFromDevice`): macOS (`isDirectionInvertedFromDevice`), WebKit
+  (`webkitDirectionInvertedFromDevice`) и Wayland (`wl_pointer.axis_relative_direction`, seat 9;
+  кадр, только останавливающий прокрутку, сохраняет её направление; журнал несёт инверсию
+  строки прокрутки). `PointerEvent::Revise`, `PointerRevision`,
+  `PointerEvent::PenSqueeze`, `PenSqueeze`, `PenSqueezePhase` и `Listener::on_pointer_revise`
+  удалены: производителя не было ни у одного хоста; форма возврата (билет оценки, выданный хостом
+  с чтением) — в `docs/gaps.md` («Input latency modes…»). Запись — формат 4 (`down`, `repeat`,
+  `unpaired`, `up`, ключ `dead`, `inversion` прокрутки); протокол 0.16 — разрыв (ADR-0342),
+  `Break` получил список `removed` полных путей схемы (`a_removal_breaking_lists_may_go`).
+  Имя `ScrollInversion` не совпадает с `ScrollDirection` вьюпорта; виджета-читателя пока нет
+  (первый — колесо слайдера, `docs/gaps.md`).
+  Тесты, в скобках результат без исправления: `a_hardware_dead_key_composes_with_the_next_key`
+  (без составителя нет типа — не собирается; со старым отображением `´`, `e` даёт `e`);
+  `a_repeat_and_a_missing_release_are_kinds_of_key_down` и
+  `a_dead_key_carries_its_accent_and_no_named_key_spells_it` (`NamedKey::from_w3c("Dead")` давал
+  `Some`); `compile_fail`-доктест `KeyState` держит форму (отпускание с повтором не строится);
+  строки `KeyPress`, `ScrollInversion`, `Key::Dead` в
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`; мёртвые строки Windows в
+  `tests/contract.rs` теперь ждут акцент; строки XKB `key_of` (мёртвый циркумфлекс, мёртвая точка
+  снизу без отдельного знака); `a_scroll_carries_the_direction_the_compositor_reports` (до правки
+  событие `axis_relative_direction` отбрасывалось, направление — `Unknown`).
+  Проверки: на Windows clippy рабочего пространства `--all-targets -D warnings`, nextest
+  `flui-platform`, `flui-interaction`, `flui-runtime`, `flui-testing`, `flui-protocol`, `flui-widgets`,
+  `flui-native` (падают и на базе: Android intent, `owner_code_is_contained_at_every_point`, trybuild),
+  мёртвые строки Windows в `test_window_lifecycle_contract`, `doc-strict`, `checks`, `expectations`;
+  в WSL clippy `flui-native --all-targets` и тесты xkb, провода Wayland, клавиш Android; откат
+  чтения `axis_relative_direction` валит `a_scroll_carries_the_direction_the_compositor_reports`;
+  `cargo +nightly check` для Android, macOS и wasm32.
+  Не запущено: Android и Apple не компилировались здесь иначе как `cargo +nightly check` в WSL
+  (iOS — только CI); прогон аппаратной клавиатуры на Android и естественной прокрутки на Mac не
+  делался (`docs/gaps.md`, «Pointer and keyboard gaps»). Windows, X11, Android и iOS флага
+  направления не дают — `Unknown` (там же).
+
 - [ ] **LY112** — ветка `platform/one-rule-once`, PR #2651 (ждёт независимого чтения).
   **Частично:** масштаб каждой записи ввода (`NativeReading::scale`), зум преобразования
   DirectManipulation и измеренные отношения боксов хоста Web сохраняют свою проверку; почему —

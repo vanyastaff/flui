@@ -195,7 +195,7 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
     use flui_interaction::{KeyEventResult, TraversalEdgeBehavior};
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
     use flui_widgets::interaction::FocusTraversalGroup;
     let origin = FocusNode::new();
@@ -214,13 +214,13 @@ pub(crate) fn arrow_traversal_prefers_the_beam_and_respects_group_edges() {
     ]));
     let manager = harness.focus_manager();
     let right = KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::Named(NamedKey::ArrowRight),
         Code::ArrowRight,
         EventTime::from_nanos(0),
     );
     let left = KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::Named(NamedKey::ArrowLeft),
         Code::ArrowLeft,
         EventTime::from_nanos(0),
@@ -693,10 +693,10 @@ fn reading_order_tree(
 fn tab_event(backward: bool) -> flui_platform::keyboard::KeyEvent {
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
     };
     KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::Named(NamedKey::Tab),
         Code::Tab,
         EventTime::from_nanos(0),

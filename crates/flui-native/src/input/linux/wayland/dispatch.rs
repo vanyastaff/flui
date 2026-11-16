@@ -26,7 +26,7 @@ use cursor_icon::CursorIcon;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::sequence::IdMint;
 use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::keyboard::{KeyEvent, KeyState};
+use flui_platform::keyboard::{KeyEvent, KeyPress, KeyState};
 use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
 use flui_platform::{
     CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason, WindowId,
@@ -737,7 +737,12 @@ impl SeatInput {
                 let due = delivering.keyboards.take_due(Instant::now());
                 due.into_iter()
                     .filter_map(|(seat, code, focus)| {
-                        let event = delivering.key_event(seat, code, KeyState::Down, true, time)?;
+                        let event = delivering.key_event(
+                            seat,
+                            code,
+                            KeyState::Down(KeyPress::AutoRepeat),
+                            time,
+                        )?;
                         Some((Target::Surface(focus), PlatformInput::Keyboard(event)))
                     })
                     .collect()
@@ -808,11 +813,10 @@ impl Delivering {
         seat: SeatKey,
         code: u32,
         state: KeyState,
-        repeat: bool,
         time: EventTime,
     ) -> Option<KeyEvent> {
         let keyboard = &mut self.keymap_mut(seat)?.keyboard;
-        keyboard.key(code.saturating_add(EVDEV_OFFSET), state, repeat, time)
+        keyboard.key(code.saturating_add(EVDEV_OFFSET), state, time)
     }
 
     /// The input's answer to a pointer, touch, tool or pinch event, or to a
@@ -916,13 +920,13 @@ impl Delivering {
             } => {
                 let stamp = self.assembly.stamp(time);
                 let state = if pressed {
-                    KeyState::Down
+                    KeyState::Down(KeyPress::First)
                 } else {
                     KeyState::Up
                 };
                 // The keyboard reads every key, so a key pressed outside a
                 // window is not left held in it.
-                let event = self.key_event(seat, code, state, false, stamp);
+                let event = self.key_event(seat, code, state, stamp);
                 let focus = if !pressed {
                     self.keyboards.release(seat, code)
                 } else if event.is_some() {
@@ -2182,6 +2186,26 @@ impl Dispatch<WlPointer, PointerData> for WaylandState {
                     },
                 )
             }
+            wl_pointer::Event::AxisRelativeDirection {
+                axis: which,
+                direction,
+            } => {
+                let Some(which) = axis(which) else {
+                    return;
+                };
+                let inverted = match direction {
+                    WEnum::Value(wl_pointer::AxisRelativeDirection::Inverted) => true,
+                    WEnum::Value(wl_pointer::AxisRelativeDirection::Identical) => false,
+                    _ => return,
+                };
+                (
+                    arrival(None),
+                    PointerWire::AxisRelativeDirection {
+                        axis: which,
+                        inverted,
+                    },
+                )
+            }
             _ => return,
         };
         let framed = pointer.version() >= POINTER_FRAMES;
@@ -2710,7 +2734,7 @@ mod tests {
     use std::os::fd::OwnedFd;
 
     use flui_platform::PlatformInput;
-    use flui_platform::keyboard::KeyState;
+    use flui_platform::keyboard::{KeyPress, KeyState};
 
     use super::{
         Delivering, NativeClock, NativeSurface, SeatEvent, SeatKey, SeatWire, Target, Wire,
@@ -2858,7 +2882,7 @@ mod tests {
                 .into_iter()
                 .filter_map(|(target, input)| match (target, input) {
                     (Target::Surface(surface), PlatformInput::Keyboard(event)) => {
-                        Some((surface, event.state()))
+                        Some((surface, event.state))
                     }
                     _ => None,
                 })
@@ -2870,7 +2894,7 @@ mod tests {
             code: 2,
             pressed: true,
         });
-        assert_eq!(keys(pressed), [(window, KeyState::Down)]);
+        assert_eq!(keys(pressed), [(window, KeyState::Down(KeyPress::First))]);
 
         let gone = delivering.seat_wire(SeatWire {
             time: arrival(None),

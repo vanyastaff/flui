@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::sync::Weak;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::text_store::TextStoreStatus;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::{EventTime, PlatformInput};
@@ -556,7 +556,7 @@ impl TextInputView {
         let Some(delivery) = self.ivars().delivery.upgrade() else {
             return;
         };
-        for state in [KeyState::Down, KeyState::Up] {
+        for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             delivery.dispatch_input(PlatformInput::Keyboard(KeyEvent::new(
                 state,
                 Key::Named(key),

@@ -29,8 +29,13 @@ pub enum Key {
     /// produce several characters for one key). Built through [`Key::character`], which reports
     /// a key that produces no text as [`NamedKey::Unidentified`].
     Character(KeyText),
-    /// A key the W3C names, such as Enter, an arrow or a dead key.
+    /// A key the W3C names, such as Enter or an arrow.
     Named(NamedKey),
+    /// A dead key: it types nothing itself and changes what the next key types (the W3C
+    /// `"Dead"` value). It carries the accent it leaves pending, as the layout prints it on the
+    /// key (`´`, `^`, `¨`, not the combining mark), or `None` where the platform does not say.
+    /// Its release reports the same value as its press.
+    Dead(Option<char>),
 }
 
 impl Key {
@@ -86,14 +91,42 @@ impl From<NamedKey> for Key {
     }
 }
 
-/// Whether the key went down or came up.
+/// Whether the key went down or came up, and what kind of key-down it was.
+///
+/// Only a key-down repeats or lacks a release, so a release carries neither: an auto-repeated
+/// release cannot be built.
+///
+/// ```compile_fail
+/// use flui_platform::keyboard::{KeyPress, KeyState};
+///
+/// let _ = KeyState::Up(KeyPress::AutoRepeat);
+/// ```
+///
+/// A consumer that asks only whether the key is down matches `KeyState::Down(_)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(clippy::exhaustive_enums, reason = "a key goes down or comes up")]
 pub enum KeyState {
-    /// The key was pressed, or auto-repeated while held ([`KeyEvent::repeat`]).
-    Down,
+    /// The key went down: pressed, auto-repeated while held, or typed with no key to release.
+    Down(KeyPress),
     /// The key was released.
     Up,
+}
+
+/// What kind of key-down a [`KeyState::Down`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a key-down is the first press, a repeat of it, or a press with no key behind it"
+)]
+pub enum KeyPress {
+    /// The key was just pressed; its repeats, if any, and its release follow.
+    First,
+    /// The platform repeated a key that is still held; its release follows.
+    AutoRepeat,
+    /// A key-down no repeat or release follows. A host that has a character but no key for it
+    /// (Windows' Alt+numpad entry, which posts the character alone) reports one: nothing holds
+    /// that key, so nothing waits for its release.
+    Unpaired,
 }
 
 /// Which of several keys with the same meaning was used: the W3C `location` value.
@@ -112,36 +145,6 @@ pub enum Location {
     Right,
     /// A key on the numeric keypad.
     Numpad,
-}
-
-/// Whether a key-down is the first press or an auto-repeat of a held key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a key-down is the first press or a repeat"
-)]
-pub enum KeyRepeat {
-    /// The key was just pressed, or released.
-    #[default]
-    First,
-    /// The platform repeated a key that is still held.
-    AutoRepeat,
-}
-
-/// Whether a key-down's release will arrive.
-///
-/// A key a host reports has a release unless it says otherwise. A host that has a character but
-/// no key for it (Windows' Alt+numpad entry, which posts the character alone) reports a key-down
-/// whose release never comes: nothing holds that key, so nothing waits for its repeats or its
-/// release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub enum KeyRelease {
-    /// A release follows this key-down, or this is the release.
-    #[default]
-    Follows,
-    /// No release or repeat follows this key-down.
-    Never,
 }
 
 /// Whether an input method was composing text when a key changed.
@@ -168,32 +171,32 @@ pub enum ImeComposition {
 /// A key a host can't place physically has [`Code::Unidentified`] and is known by its
 /// [`key`](Self::key) alone, so a host gives such a key's repeats and release the `key` it
 /// reported at the key-down, even when a modifier changed the key's meaning while it was held.
-/// A host that has no release to report marks the key-down [`KeyRelease::Never`].
+/// A host that has no release to report marks the key-down [`KeyPress::Unpaired`].
 ///
 /// # Examples
 ///
 /// ```
 /// use flui_platform::EventTime;
 /// use flui_platform::keyboard::{
-///     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
+///     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 /// };
 ///
-/// let enter = KeyEvent::new(KeyState::Down, Key::Named(NamedKey::Enter), Code::NumpadEnter, EventTime::from_nanos(7))
-///     .with_location(Location::Numpad)
-///     .with_modifiers(Modifiers::CONTROL)
-///     .with_repeat(KeyRepeat::AutoRepeat);
-/// assert_eq!(enter.repeat(), KeyRepeat::AutoRepeat);
+/// let enter = KeyEvent::new(
+///     KeyState::Down(KeyPress::AutoRepeat),
+///     Key::Named(NamedKey::Enter),
+///     Code::NumpadEnter,
+///     EventTime::from_nanos(7),
+/// )
+/// .with_location(Location::Numpad)
+/// .with_modifiers(Modifiers::CONTROL);
+/// assert!(matches!(enter.state, KeyState::Down(_)));
 /// assert_eq!(enter.composition, ImeComposition::Inactive);
-///
-/// // A release is never a repeat.
-/// let release = KeyEvent::new(KeyState::Up, Key::character("a"), Code::KeyA, EventTime::from_nanos(8))
-///     .with_repeat(KeyRepeat::AutoRepeat);
-/// assert_eq!(release.repeat(), KeyRepeat::First);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub struct KeyEvent {
-    state: KeyState,
+    /// Pressed, repeated or released.
+    pub state: KeyState,
     /// What the key means under the active layout.
     pub key: Key,
     /// The physical key.
@@ -203,8 +206,6 @@ pub struct KeyEvent {
     /// Modifier/toggle states reported active when the key changed, including
     /// a modifier key's own change. Source facts are not command interpretation.
     pub modifiers: Modifiers,
-    repeat: KeyRepeat,
-    release: KeyRelease,
     /// Whether an input method was composing when the key changed.
     pub composition: ImeComposition,
     /// When the platform observed the change.
@@ -212,27 +213,7 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
-    /// Pressed or released.
-    #[must_use]
-    pub const fn state(&self) -> KeyState {
-        self.state
-    }
-
-    /// Whether this is an auto-repeat of a held key; always [`KeyRepeat::First`] on a
-    /// release. Private with [`state`](Self::state), so the two cannot be set apart.
-    #[must_use]
-    pub const fn repeat(&self) -> KeyRepeat {
-        self.repeat
-    }
-
-    /// Whether this key-down's release will arrive; always [`KeyRelease::Follows`] on a
-    /// release.
-    #[must_use]
-    pub const fn release(&self) -> KeyRelease {
-        self.release
-    }
-
-    /// A first press or a release with no modifiers, at the standard location, outside any
+    /// A `state` change of `key` with no modifiers, at the standard location, outside any
     /// composition.
     #[must_use]
     pub const fn new(state: KeyState, key: Key, code: Code, time: EventTime) -> Self {
@@ -242,8 +223,6 @@ impl KeyEvent {
             code,
             location: Location::Standard,
             modifiers: Modifiers::NONE,
-            repeat: KeyRepeat::First,
-            release: KeyRelease::Follows,
             composition: ImeComposition::Inactive,
             time,
         }
@@ -259,28 +238,6 @@ impl KeyEvent {
     #[must_use]
     pub fn with_modifiers(self, modifiers: Modifiers) -> Self {
         Self { modifiers, ..self }
-    }
-
-    /// This event as `repeat`. A release is never a repeat, so a [`KeyState::Up`] event stays
-    /// [`KeyRepeat::First`].
-    #[must_use]
-    pub fn with_repeat(self, repeat: KeyRepeat) -> Self {
-        let repeat = match self.state {
-            KeyState::Down => repeat,
-            KeyState::Up => KeyRepeat::First,
-        };
-        Self { repeat, ..self }
-    }
-
-    /// This event as `release`. A release is the key's own, so a [`KeyState::Up`] event stays
-    /// [`KeyRelease::Follows`].
-    #[must_use]
-    pub fn with_release(self, release: KeyRelease) -> Self {
-        let release = match self.state {
-            KeyState::Down => release,
-            KeyState::Up => KeyRelease::Follows,
-        };
-        Self { release, ..self }
     }
 
     /// This event arriving during or outside an input method's `composition`.
