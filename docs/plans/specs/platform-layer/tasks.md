@@ -5268,22 +5268,28 @@ GPU-память простаивающего или невидимого окн
   `(Opened, OpenedOverflow)`; публичного поля `Opened::overflow` нет. Хост сообщает переполнение
   там, где ограничивает (`owner::opened::bounded`): аргументы запуска (и второй экземпляр до
   пересылки), `file:`-URI, приём пересланного запуска, адрес страницы, интент Android (в том
-  числе пустой и документы сверх места). Склейка запуска в `take_launch` берёт cold-отчёты, пока
+  числе пустой и документы сверх места; место считается после ссылок, которые останутся, так
+  что слишком длинная ссылка документ не вытесняет). Склейка запуска в `take_launch` берёт cold-отчёты, пока
   их не больше `MAX_OPENED_ITEMS`, остальные доходят до `AppHandler::opened` после `ready`.
   Манифест: `tracing` удалён и стоит в `reach-forbid`; единственный путь к нему — собственная
   инструментация `flui-foundation` (`reach-exceptions`, grant ADR-0151 §7). `Platform` и
   `OwnerPlatform` без `active_window` (вместе с позицией `host::Window::active` на восьми хостах,
   полем `active` у headless и Wayland, `IOSLoop::active`, macOS-только `OwnerMap::get` и id окна
   в `WebState::window`) и без `keyboard_layout`/`on_keyboard_layout_change`: раскладка осталась
-  позицией `host::Input` ядра, тесты хостов читают её через `testing::keyboard_layout`; ADR-0151
-  §9 и ADR-0254 переписаны под это (`Revised`), ADR-0039 получил `Superseded-by`. Удалены
+  позицией ввода ядра, запечатанной (публичный трейт в закрытом модуле `host`, как
+  `host_window::sealed`), так что вне крейта её не вызвать, как и решил ADR-0151 §9; тесты в
+  `tests/` входят через единственную дверь `testing::keyboard_layout` за фичей `testing`.
+  ADR-0039 получил `Superseded-by`. Удалены
   непрочитанные `TargetPlatform::{is_mobile, is_desktop, is_touch_primary}` и
   `PlatformInput::as_drag_drop`.
   Тесты, в скобках результат без исправления: `a_refused_edit_reaches_the_caller_or_its_late_reporter`
   (сначала `Ok(Granted)` вместо `Err(Protected)`, затем поздний отказ не доходит);
-  `a_refused_commit_in_place_is_reported_once` и `a_field_refusing_the_commit_on_blur_is_reported_once`
-  (ни одного сообщения); `a_launch_reports_what_bounding_its_arguments_dropped`,
-  `an_intent_reports_what_bounding_dropped_even_when_nothing_is_left` (ни одного сообщения);
+  `a_refused_commit_in_place_is_reported_once`, `a_field_refusing_the_commit_on_blur_is_reported_once`
+  (AppKit/UIKit и текстовый ввод Wayland) и строка «termination and commit refused» TSF (ни
+  одного сообщения); сайты зеркал Web и Android собираются только для своих целей, их сообщение
+  проверяет только CI-компиляция; `a_launch_reports_what_bounding_its_arguments_dropped`,
+  `an_intent_reports_what_bounding_dropped_even_when_nothing_is_left` (ни одного сообщения; с
+  прежним расчётом места документ рядом с длинной ссылкой отброшен);
   `a_forwarded_launch_reports_its_drop_where_it_happens` (только в WSL); строка «a launch too
   large to join keeps the rest queued» в `app_delivery_contracts` (хвост отброшен). В
   `handler_reentry.rs` деструктор обработчика теперь открывает окно, то есть берёт таблицу окон
