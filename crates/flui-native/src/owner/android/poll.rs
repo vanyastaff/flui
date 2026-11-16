@@ -24,6 +24,9 @@ pub(crate) struct LoopTurn {
     /// When preferences, scroll factors and insets are read next; `None` while
     /// their changes are reported instead.
     pub(crate) next_preference_sample: Option<Instant>,
+    /// When the oldest request for a result the Java main thread has not
+    /// taken is due to end, resumed or not.
+    pub(crate) hand_off_deadline: Option<Instant>,
 }
 
 /// The longest wait `ALooper_pollOnce` takes: its timeout is `i32` milliseconds,
@@ -58,7 +61,11 @@ pub(crate) fn poll_timeout(turn: LoopTurn, now: Instant) -> Option<Duration> {
         turn.wake_deadline.filter(|deadline| *deadline > now)
     };
     let sample = turn.next_preference_sample.filter(|_| turn.resumed);
-    [deadline, sample].into_iter().flatten().min().map(until)
+    [deadline, sample, turn.hand_off_deadline]
+        .into_iter()
+        .flatten()
+        .min()
+        .map(until)
 }
 
 /// Which past deadline the owner was last offered.
@@ -102,6 +109,7 @@ mod tests {
             resumed,
             wake_deadline,
             next_preference_sample: Some(now + ms(500)),
+            hand_off_deadline: None,
         };
         let awaiting = |wake_deadline| LoopTurn {
             awaiting_vsync: true,
@@ -113,6 +121,7 @@ mod tests {
             resumed: true,
             wake_deadline,
             next_preference_sample: None,
+            hand_off_deadline: None,
         };
         for (case, turn, expected) in [
             (
@@ -152,6 +161,14 @@ mod tests {
                 Some(ms(500)),
             ),
             ("paused and idle", turn(false, false, None), None),
+            (
+                "paused, a request for a result due to end",
+                LoopTurn {
+                    hand_off_deadline: Some(now + ms(700)),
+                    ..turn(false, false, None)
+                },
+                Some(ms(700)),
+            ),
             (
                 "paused, a deadline that needs a frame is already behind",
                 turn(false, false, now.checked_sub(ms(40))),

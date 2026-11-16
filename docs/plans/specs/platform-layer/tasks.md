@@ -270,11 +270,11 @@ graph LR
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY62** | **Android: `FluiActivity`** (D14, R6.1, ADR-0255). `dev.flui.platform.FluiActivity extends NativeActivity`, `hasCode="true"`, готовый dex в APK. Java-очередь пересылает только записи, у которых есть потребитель в серии: `onActivityResult` (потребитель — `launch_for_result` из LY64 для выбора файла в `flui-system`), `onTrimMemory` (host notice), `onMultiWindowModeChanged`, `onTopResumedActivityChanged`, `onUserLeaveHint` (факты состояния окна); Rust разбирает очередь на owner-потоке и будит его (ADR-0249); очередь буферизует до `android_main`. `onNewIntent` и `onRequestPermissionsResult` не пересылаются: их потребители — фича активации и первая возможность с разрешением ОС (см. «Чего нет в этой серии»). Dex грузит загрузчик Activity: `InMemoryDexClassLoader`, `DexClassLoader` и `code_cache_dex` удалены, библиотека больше не встраивает dex (`include_bytes!` уходит), класс ищется `loadClass`, не `FindClass`; `FluiHost.PROTOCOL` сверяется с константой Rust до `RegisterNatives`, несовпадение называет оба значения. `flui build` кладёт `classes.dex` в APK из каталога крейта той версии, которую разрешает lockfile приложения (`cargo_metadata`, без `javac` и `d8`); база манифеста: `hasCode`, имя Activity, `enableOnBackInvokedCallback`, `configChanges`, `launchMode="singleTop"` (новый intent не запускает вторую Activity и второй runtime), `<queries>`, тема. `onTrimMemory` доходит до приложения как host notice (`AppHandler`). Заменяет ADR-0247 п. 1, 2, 9 | LY28, LY33, LY45, LY46, LY56 | `crates/flui-native/android/java/*`, `classes.dex(.toml)`, `crates/flui-native/src/{owner,window,lifecycle}/android.rs` (`java_view.rs` — в `owner/android.rs`), `crates/flui-cli/src/build/android_package.rs`, `crates/flui-cli/templates/platforms/android/*` | `android-dex`, `cross-typecheck`, `workspace` | рукопожатие (несовпадение — ошибка запуска с причиной, не `UnsatisfiedLinkError`); очередь буферизует до `android_main`; golden базы манифеста | L + T; Dev: Android (ручной прогон на Galaxy S21 и на образе API 23–25; записи очереди, пришедшие до `android_main`) |
-| **LY63** | **Android: упаковка и версия** (D14, D23, R6.2). `targetSdk` закреплён в `platform-support.toml`, `android_package.rs` берёт его оттуда (не «последний установленный»); путь Gradle: исходники хоста пишутся в генерируемый каталог с заголовком или `sourceSets` указывает на крейт, правила R8 `dev.flui.**`, недостающий `proguard-rules.pro`; список `configChanges` проверен прогоном (смена темы, масштаба шрифта, локали не пересоздаёт Activity); `windowSoftInputMode` выбран по прогону | LY62 | `platform-support.toml`, `crates/flui-cli/src/build/android_package.rs`, `crates/flui-cli/templates/platforms/android/*`, `tools/xtask/src/platform_floor.rs` | `platform-floor`, `workspace`, `checks` | упаковщик берёт закреплённый `targetSdk`; golden манифеста и `build.gradle.kts` | L; Dev: Android (`adb shell cmd uimode night yes`, `settings put system font_scale 1.3`: один `android_main`) |
-| **LY64** | **Android: мост результатов activity** (D19, R5.6). `launch_for_result(intent)` возвращает `Completion` и маршрутизируется токеном на вызов, не целым числом, общим для всех крейтов; результат приходит из записи `onActivityResult` очереди LY62; `JavaVM` и текущая Activity — обёртки сырых указателей в контексте провайдера, не `static` (каждый крейт выбирает свою версию `jni`); мост сообщает о замене Activity (Android пересоздаёт её). Потребитель — выбор файла через Storage Access Framework в `flui-system` (LY67). `request_permissions`, `PermissionState`, `Grant`, `Denial` и `Scope` в серию не входят: их форму фиксирует ADR-0152 п. 2.8, а типы приходят с первой возможностью, которой они нужны (уведомления или геолокация) | LY50, LY62 | `crates/flui-platform/src/capability.rs`, `crates/flui-native/android/java/*`, `crates/flui-native/src/owner/android.rs` | `workspace`, `globals`, `android-dex` | токен результата; отказ, отмена пользователем, повторное присоединение после пересоздания Activity | L + T; Dev: Android |
+| **LY62** | **Android: `FluiActivity`** (D14, R6.1, ADR-0255). `dev.flui.platform.FluiActivity extends NativeActivity`, `hasCode="true"`, готовый dex в APK. Java-очередь пересылает только записи, у которых есть потребитель: `onTrimMemory` (host notice), `onNewIntent` и интент `onCreate` (фича активации), `onActivityResult` (`launch_for_result`, LY64); Rust разбирает очередь на owner-потоке и будит его (ADR-0249); очередь буферизует до `android_main`. `onMultiWindowModeChanged`, `onTopResumedActivityChanged`, `onUserLeaveHint`, тема запуска и `<queries>` в серию не входят, `onRequestPermissionsResult` приходит с первой возможностью с разрешением ОС (см. «Чего нет в этой серии»). Dex грузит загрузчик Activity: `InMemoryDexClassLoader`, `DexClassLoader` и `code_cache_dex` удалены, библиотека больше не встраивает dex (`include_bytes!` уходит), класс ищется `loadClass`, не `FindClass`; `FluiHost.PROTOCOL` сверяется с константой Rust до `RegisterNatives`, несовпадение называет оба значения. `flui build` кладёт `classes.dex` в APK из каталога крейта той версии, которую разрешает lockfile приложения (`cargo_metadata`, без `javac` и `d8`); база манифеста: `hasCode`, имя Activity, `enableOnBackInvokedCallback`, `configChanges`, `launchMode="singleTop"` (новый intent не запускает вторую Activity и второй runtime). `onTrimMemory` доходит до приложения как host notice (`AppHandler`). Заменяет ADR-0247 п. 1, 2, 9 | LY28, LY33, LY45, LY46, LY56 | `crates/flui-native/android/java/*`, `classes.dex(.toml)`, `crates/flui-native/src/{owner,window,lifecycle}/android.rs` (`java_view.rs` — в `owner/android.rs`), `crates/flui-cli/src/build/android_package.rs`, `crates/flui-cli/templates/platforms/android/*` | `android-dex`, `cross-typecheck`, `workspace` | рукопожатие (несовпадение — ошибка запуска с причиной, не `UnsatisfiedLinkError`); очередь буферизует до `android_main`; golden базы манифеста | L + T; Dev: Android (ручной прогон на Galaxy S21 и на образе API 23–25; записи очереди, пришедшие до `android_main`) |
+| **LY63** | **Android: упаковка и версия** (D14, D23, R6.2). `targetSdk` закреплён в `platform-support.toml`, `android_package.rs` берёт его оттуда (не «последний установленный»); путь Gradle: исходники хоста пишутся в генерируемый каталог с заголовком или `sourceSets` указывает на крейт, правила R8 `dev.flui.**`, недостающий `proguard-rules.pro`; список `configChanges` проверен прогоном (смена темы, масштаба шрифта, локали не пересоздаёт Activity); `windowSoftInputMode`: `adjustResize` на всех уровнях с окном от края до края (`setDecorFitsSystemWindows(false)` с API 30, флаги `SYSTEM_UI_FLAG_LAYOUT_*` ниже), ставит хост на старте (ADR-0340 §3); счёт `WindowResized` на устройстве — в `platform-parity.toml` | LY62 | `platform-support.toml`, `crates/flui-cli/src/build/android_package.rs`, `crates/flui-cli/templates/platforms/android/*`, `tools/xtask/src/platform_floor.rs` | `platform-floor`, `workspace`, `checks` | упаковщик берёт закреплённый `targetSdk`; golden манифеста и `build.gradle.kts` | L; Dev: Android (`adb shell cmd uimode night yes`, `settings put system font_scale 1.3`: один `android_main`) |
+| **LY64** | **Android: мост результатов activity** (D19, R5.6). `ProviderContext::activity` даёт провайдеру `Activity`; `launch_for_result` возвращает `Completion` и маршрутизируется токеном на вызов (`ResultToken`, `IdMint`) и эпохой Activity, не целым числом, общим для всех крейтов; результат приходит из записи `onActivityResult` очереди LY62; `JavaVM`, `JNIEnv` и объекты одалживаются провайдеру сырыми указателями на один вызов, не `static` (каждый крейт выбирает свою версию `jni`); при замене Activity открытые запросы кончаются `ActivityEnded`, а ответ, пришедший новой Activity (и процессу после смерти, через сохранённое состояние), ждёт `reattach` по ключу запроса. Потребитель — выбор файла через Storage Access Framework в `flui-system` (LY67). `request_permissions`, `PermissionState`, `Grant`, `Denial` и `Scope` в серию не входят: их форму фиксирует ADR-0152 п. 2.8, а типы приходят с первой возможностью, которой они нужны (уведомления или геолокация) | LY50, LY62 | `crates/flui-platform/src/capability.rs`, `crates/flui-native/android/java/*`, `crates/flui-native/src/owner/android.rs` | `workspace`, `globals`, `android-dex` | токен результата; отказ, отмена пользователем, повторное присоединение после пересоздания Activity | L + T; Dev: Android |
 | **LY65** [P] | **Android: доступность** (D14, R6.3). Низкоуровневый `accesskit_android::Adapter` вместо `InjectingAdapter`: около 70 строк Java в `FluiView` (делегат и провайдер узлов); hover из нативной очереди через `Adapter::on_hover_event`; запрос дерева будит owner, ответ не позже следующего обновления дисплея; реализация `PlatformAccessibility`; идентификатор ADR-0240 → `viewIdResourceName` | LY32, LY62 | `crates/flui-native/android/java/*`, `crates/flui-native/src/accessibility/android.rs`, `crates/flui-semantics` | `android-dex`, `cross-typecheck`, `workspace` | юнит-тесты моста (потоки, пробуждение); Android 6 и 15 | L + T; Dev: Android (TalkBack) |
-| **LY66** [P] | **Android: insets и inset клавиатуры** (D14, R6.4). `setOnApplyWindowInsetsListener` и `WindowInsetsAnimation.Callback` (API 30) вместо опроса `getRootWindowInsets` (сегодня `safe_area.rs`, после LY28 — в `window/android.rs`), каждое изменение постится на owner; уровень API выше нижней границы — гейт `Since<F>` (ADR-0244 п. 4). Safe area и inset клавиатуры доходят через снимок окна до `MediaQuery` (padding и view insets — потребитель); поле inset клавиатуры вносит эта задача, iOS и Web пишут то же поле (LY72, LY74). Регистрация «назад» (`OnBackInvokedCallback`) в серию не входит: производитель бита «можно ли вернуться» — навигатор, вне серии, а регистрация хоста без производителя — неподключённая поверхность (см. «Чего нет в этой серии») | LY62, LY41 | `crates/flui-native/android/java/*`, `crates/flui-native/src/window/android.rs`, `crates/flui-platform/src/window_state.rs`, `crates/flui-runtime` (`MediaQuery`) | `android-dex`, `workspace`, `cross-typecheck` | юнит-тесты на правилах insets; счётчик `WindowResized` при анимации клавиатуры | L + T; Dev: Android |
+| **LY66** [P] | **Android: insets и inset клавиатуры** (D14, R6.4). `setOnApplyWindowInsetsListener` и `WindowInsetsAnimation.Callback` (API 30) вместо опроса `getRootWindowInsets` (сегодня `safe_area.rs`, после LY28 — в `window/android.rs`), каждое изменение постится на owner; уровень API выше нижней границы — гейт `Since<F>` (ADR-0244 п. 4). Safe area и inset клавиатуры доходят через снимок окна до `MediaQuery` (padding и view insets — потребитель); поле inset клавиатуры вносит эта задача, iOS и Web пишут то же поле (LY72, LY74). Регистрация «назад» (`OnBackInvokedCallback`) в серию не входит: производитель бита «можно ли вернуться» — навигатор, вне серии, а регистрация хоста без производителя — неподключённая поверхность (см. «Чего нет в этой серии») | LY62, LY41 | `crates/flui-native/android/java/*`, `crates/flui-native/src/window/android.rs`, `crates/flui-platform/src/window_state.rs`, `crates/flui-runtime` (`MediaQuery`) | `android-dex`, `workspace`, `cross-typecheck` | юнит-тесты на правилах insets; счёт `WindowResized` при анимации клавиатуры — прогон на устройстве (parity «Soft-keyboard insets») | L + T; Dev: Android |
 | **LY67** | **`flui-system`: Android** (D18). Выбор файла через `launch_for_result` (`ACTION_OPEN_DOCUMENT`, `ACTION_CREATE_DOCUMENT`), URL (`ACTION_VIEW`), share (`ACTION_SEND`), message box (`AlertDialog` на главном потоке Java), пути; reveal, trash, автозапуск, глобальные сочетания, прогресс, jump list — `Unsupported` | LY57, LY64 | `crates/flui-system/src/android/*` | `workspace`, `cross-typecheck` | таблица против симулятора; Android — T | L + T; Dev: Android |
 | **LY68** | **iOS: доказательство `UITextInput`** (D15, R6.5). Минимальный невидимый responder-view на `define_class!` с `UITextInput` (около тридцати методов, токенизатор, input delegate), составление текста через CJK-клавиатуру (японская, китайская) на Simulator; результат и вывод прогона — в PR. Если не складывается, меняется ADR-0255, а не задача | LY30, LY46 | `crates/flui-native/src/text/apple/ios.rs` (спайк), `crates/flui-native/Cargo.toml` (признаки `objc2-ui-kit`) | `cross-typecheck` | прогон составления текста с CJK на Simulator | T; Dev: iOS (Simulator) |
 | **LY69** | **iOS: ввод текста** (D15). `UITextInput` и `UITextInteraction` в отдельном невидимом responder-view, backed тем же text-store host, что на других ОС; соответствие `TextInputPurpose` клавиатуре; кандидат-панель CJK; размещение каретки; на смену заглушкам LY68 — `firstRectForRange:`/`caretRectForPosition:` по диапазону (сейчас область каретки поля), `selectionRectsForRange:` (сейчас пусто), правки вдали от каретки (сейчас только документ); CJK-начертание в шрифтовой подмене iOS | LY68 | `crates/flui-native/src/text/apple/ios.rs` | `cross-typecheck`, `module-dag` | правила соответствия — на Linux; составление текста — Simulator | T; Dev: iOS |
@@ -3439,7 +3439,7 @@ GPU-память простаивающего или невидимого окн
   `applicationShouldTerminate:` на выход из сеанса не изменился — `TerminateGate` отвечает
   `Now` или `Later` после объявления, `Cancel` только обычному выходу
   (`loop_control.rs` `terminate_requested`, `terminate_gate.rs` `terminate_requested`).
-- [ ] **LY62**, часть доставки — #2277 (`2ab1fef3a`), ветка `claude/project-thread-op0kt3`, от
+- [x] **LY62**, часть доставки — #2277 (`2ab1fef3a`), ветка `claude/project-thread-op0kt3`, от
   `main` @ `8c02394ed`.
   Сделано: `FluiActivity extends NativeActivity` и `FluiHost.PROTOCOL` в dex (пересобран,
   `--rebuild` воспроизводит побайтно: javac 21.0.12.1, build-tools 35.0.0, android-36). Dex и
@@ -3453,10 +3453,9 @@ GPU-память простаивающего или невидимого окн
   `Init` с найденным. База манифеста: `FluiActivity`, `hasCode="true"`, `singleTop`,
   `enableOnBackInvokedCallback`; `aapt2 link` против android-36 её принимает. `flui run`
   запускает `FluiActivity`. Тема запуска и `<queries>` не добавлены: у них нет потребителя в этой
-  серии (тема — с экраном запуска, `<queries>` — с первой возможностью). Остаток LY62: очередь
-  `FluiActivity` (`onActivityResult`, `onTrimMemory` как host notice, `onMultiWindowModeChanged`,
-  `onTopResumedActivityChanged`, `onUserLeaveHint`), буфер до `android_main`, пробуждение owner.
-- [ ] **LY62**, очередь — #2282 (`b451147dd`), ветка `claude/project-thread-op0kt3` поверх части
+  серии (тема — с экраном запуска, `<queries>` — с первой возможностью). Очередь — в следующей
+  записи, `onActivityResult` и мост результатов — в записи LY64.
+- [x] **LY62**, очередь — #2282 (`b451147dd`), ветка `claude/project-thread-op0kt3` поверх части
   доставки. Сделано:
   `FluiActivity.onTrimMemory` кладёт уровень в очередь `FluiHost` (Java static, буферизует до
   `android_main` и между двумя платформами процесса, не больше одной записи на уровень).
@@ -3475,13 +3474,14 @@ GPU-память простаивающего или невидимого окн
   `onTopResumedActivityChanged`, `onUserLeaveHint` (у снимка окна нет поля, которое они бы
   наполняли; приходят вместе с ним). Прогон на устройстве: `am send-trim-memory` на переднем
   плане и в фоне, запись до `android_main`.
-  **Что остаётся за LY62.** `onNewIntent` пересылается: его потребитель, фича активации, пришёл
-  в #2610 (запись `Intent` очереди `FluiHost`, `PROTOCOL` = 3). Не пересылаются `onActivityResult`
-  (ждёт `launch_for_result`, LY64, которого на `main` нет), `onMultiWindowModeChanged`,
-  `onTopResumedActivityChanged` и `onUserLeaveHint`; темы запуска и `<queries>` в базе манифеста
-  нет; прогона на устройстве (`am send-trim-memory`, запись до `android_main`, образ API 23–25)
-  не было, и `docs/platform-parity.md` его не называет.
-- [ ] **LY63** (не закрыта: остаётся `windowSoftInputMode`, см. конец записи; `configChanges` —
+  **Состояние LY62.** Пересылаются `onTrimMemory`, интенты `onCreate` и `onNewIntent` (#2610) и
+  `onActivityResult` (запись LY64); `onMultiWindowModeChanged`, `onTopResumedActivityChanged`,
+  `onUserLeaveHint`, тема запуска и `<queries>` — в «Чего нет в этой серии» со своими
+  потребителями (ADR-0340 §1). Прогоны на устройстве (`am send-trim-memory` на переднем плане и в
+  фоне, запись до `android_main`, образ API 23–25, ввод с dex из APK) записаны в
+  `platform-parity.toml` («Memory pressure», «Activity results for capability providers», «IME
+  composition»).
+- [ ] **LY63** (не закрыта: `locale` и `layoutDirection` не входят в `configChanges`, поэтому смена языка пересоздаёт Activity; `windowSoftInputMode` решён, ADR-0340 §3; `configChanges` —
   #1845, `targetSdk` — #2231, правила R8 и golden — #2287), часть `configChanges` — ветка
   `android/config-changes`. Шаблон `flui create`
   объявляет все изменения, которые хост читает на `ConfigChanged`:
@@ -3501,10 +3501,13 @@ GPU-память простаивающего или невидимого окн
   (`-keep class dev.flui.** { *; }`), Gradle получает `flui.proguardFiles` в release, скрипт без
   чтения свойства отклоняется (`a_minified_release_keeps_what_the_crates_rules_keep`); `flui create`
   кладёт свой `app/proguard-rules.pro`. Golden: `the_generated_manifest_matches_its_golden`,
-  `the_scaffolded_gradle_script_matches_its_golden` (insta). Остаток LY63: `windowSoftInputMode`.
-  `NativeActivity.onCreate` сам ставит окну `stateUnspecified|adjustResize`, поэтому атрибут
-  манифеста ничего не меняет; выбор `adjustNothing` потребует установки в `FluiActivity` после
-  `super.onCreate` и ждёт прогона ADR-0255 (счёт `WindowResized` во время анимации клавиатуры).
+  `the_scaffolded_gradle_script_matches_its_golden` (insta). `windowSoftInputMode` решён в ветке
+  `native/android-activity-results` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края
+  до края, ставит `FluiActivity.onCreate` (таблица — `owner::android::window_setup`), счёт `WindowResized` — прогон
+  в parity «Soft-keyboard insets». Остаток LY63: `locale|layoutDirection` в `configChanges`
+  шаблона и доставка смены языка хостом (сегодня он не читает языки, а цепочка резервных шрифтов
+  выбирается по локали один раз при скане шрифтов среды), с тестом сгенерированного манифеста и
+  доставки.
 - [x] **LY46** — ветка `platform/surface-target`, от `main` @ `136947eff` (LY43, LY44), слит `main`
   @ `e617f109a` (#1923, #1924, #1925). **Контракт.** `PlatformWindow` без `Send + Sync`; окна
   отдаются как `Rc<dyn HostWindow>`/`Rc<dyn PlatformWindow>`, слабые ссылки — `std::rc::Weak`.
@@ -5503,8 +5506,8 @@ GPU-память простаивающего или невидимого окн
   `an_activation_whose_listener_panicked_leaves_the_bridge_inactive`,
   `each_native_adapter_says_whether_it_reports_the_assistive_cursor`. Остаётся:
   `viewIdResourceName`, тесты моста, прогон TalkBack на Android 6 и 15.
-- [ ] **LY66** (не закрыта: insets и движение клавиатуры на `main`; счётчика `WindowResized` во
-  время анимации и прогона клавиатуры на устройстве нет) — #1847 (`9f03db7da`), снимок с insets
+- [x] **LY66** (закрыта веткой `native/android-activity-results`: режим клавиатуры решён, прогоны
+  записаны в parity) — #1847 (`9f03db7da`), снимок с insets
   #2106, клавиатура и жесты #2112, движение #2117. `FluiView.onApplyWindowInsets` зовёт
   `nativeInsetsChanged` (переопределение метода, а не listener, как в строке);
   `FluiKeyboardMotion` — `WindowInsetsAnimation.Callback` с API 30; каждое изменение приходит
@@ -5513,8 +5516,9 @@ GPU-память простаивающего или невидимого окн
   `DisplayCutout`); снимок окна несёт `WindowInsets::keyboard()`, значения доходят до
   `MediaQuery`. Тесты: `android_insets_native_metrics`,
   `the_keyboard_covers_the_bottom_it_overlaps`, `a_change_moves_the_keyboard_while_it_lasts`.
-  Остаётся: тест счёта `WindowResized` и прогон («Soft-keyboard insets», Android — «type-checked,
-  no device run»).
+  Режим клавиатуры — `adjustResize` с окном от края до края на всех уровнях (ADR-0340 §3,
+  `the_window_resizes_its_insets_not_its_surface_on_every_level`); счёт `WindowResized` во время
+  анимации клавиатуры и прогон клавиатуры — на устройстве, в parity «Soft-keyboard insets».
 - [ ] **LY69** (не закрыта: `UITextInput` над общим store host на `main`; `UITextInteraction`,
   `selectionRectsForRange:`, CJK-начертания и прогона на новом пути нет) — #1939 (`817fb6bbd`),
   статус поля и secure entry #2162, store host и запросы диапазонов #2167 (`aac87bc62`).
@@ -6266,6 +6270,100 @@ GPU-память простаивающего или невидимого окн
   `os_extensions`, пример собран и запущен.
   Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
   (`docs/gaps.md`); кнопки примера не нажимались.
+- [x] **LY64**, с частями LY62, LY63 и LY66 — ветка `native/android-activity-results` (#2654);
+  решения записаны в ADR-0340, который замещает части решений 2, 6 и 8 ADR-0255.
+  Построено: провайдер возможности получает Activity из контекста (`ProviderContext::activity`;
+  `HostBridge` реестра наполняет Android-раннер `flui-app` на время цикла, на других хостах —
+  `None`). Activity — только Android-хоста: это не позиция таблицы хоста и не метод `Platform`,
+  `android_platform` отдаёт `AndroidStart` — платформу и мост Activity; мост есть у каждой
+  Android-платформы (эпоха читается до старта, и без неё старт отказывает). Activity привязана к
+  `CapabilityId`, который регистратор чеканит при регистрации провайдера (сравнение по адресу:
+  чужую возможность строкой не назвать); `HostBridge` держит только корень композиции, и
+  установка моста отдаёт ему `ResultMint` — только им делаются билеты, данные, результаты и
+  запросы. Реестр проверяет `NAME` по правилу `ResultKey`
+  (`CapabilityConflict::InvalidName`). `RequestKey` — две части, `NAME` возможности и ключ
+  провайдера, которые хранятся и сравниваются раздельно в Rust, Java и сохранённом состоянии, так
+  что две возможности не получают ответы друг друга. `Activity::launch_for_result` одалживает провайдеру
+  пустой `Intent`, сделанный хостом (`IntentFrame`), так что ссылка из JNI-кода провайдера в хост
+  не попадает; JNI-типов и `unsafe` в контракте нет. Запрос — `ResultToken` (`ResultTokenMint` над
+  `IdMint`) и эпоха Activity (`FluiHost.nextEpoch`); код запроса Android — из диапазона хоста
+  `0xFF00..=0xFFFF`, свои коды приложения проходят мимо. Ответ — `Completion`, кончается ровно
+  один раз: результат, `TooManyOpen` (в том числе предел Java), `TokensExhausted`,
+  `IntentNotMade`, `NotLaunched`, `HandOffFailed`, `Cancelled`, `NothingPending`,
+  `ActivityEnded`. Каждое замыкание на Java main thread идёт через
+  `owner::android::main_thread::post`: тело внутри `os_entry`, отчёт о каждом выходе, кроме
+  успеха (ошибка JNI, паника, замыкание выброшено); `xtask panic-boundary` отказывает
+  идентификатору `run_on_java_main_thread` вне `fn post` этого модуля, токены макросов и тела
+  `macro_rules!` включительно. Неудачная передача кончает запрос `HandOffFailed`
+  сразу, а не взятая Java main thread за `HAND_OFF_LIMIT` — к этому сроку, которого ждёт poll
+  цикла. Ответный `Intent` не покидает хост и owner-поток: провайдер читает его один раз, отдав
+  `ResultData` ответа в `Activity::take_data` (чужой возможности — отказ
+  `DataRefused::OtherCapability`); `ResultData`, выброшенный непрочитанным, отпускает `Intent`.
+  Запрос живёт, пока провайдер держит его `ResultTicket`; выброс билета — единственная отмена:
+  он отмечает и будит owner, а ход owner кончает запрос `Cancelled` и просит Java отменить
+  начатую activity, что сразу снимает её с открытых запросов Java. Возраст — поле: токен
+  (`ResultTokenMint`) у переприсоединения, порядковый номер прибытия у раннего ответа; ответ
+  получает старейшее живое переприсоединение по ключу, от места в списке ничего не зависит. У
+  каждого счёта один владелец: `FluiHost` считает то, что держит (ждущие старта, начатые,
+  отвеченные и не выбранные), против `MAX_OPEN` и `MAX_OPEN_PER_CAPABILITY` по всему процессу;
+  Rust — только то, чего у Java уже нет (выбранные и не взятые `Intent`, ждущие ранние ответы,
+  запуски, не взятые Java main thread). Сколько ответов ещё придёт под ключом — одно
+  определение (`FluiHost.stillToCome`, `WAITING` включительно); переприсоединения ждут, только
+  пока оно считает ответ на каждое, и каждый ход мост держит их в этой границе
+  (`ResultRouter::reconcile`); любая ранняя запись под ключом (отказ Java и нечитаемая
+  включительно) кончает ждущее переприсоединение с типизированным исходом. Очереди Java (записи, интенты,
+  ответы) читаются до того, как `FluiHost` их отпускает (`peek…`/`commit…`), каждая запись
+  отдельно, исключение неудачного чтения сбрасывается до следующего вызова JNI: неудачное чтение
+  ничего не теряет, нечитаемая запись пропускается и очередь не держит; ответ неизвестного вида
+  или с кодом вне `int` кончает запрос `AnswerUnreadable`, `Intent`, который не удалось
+  удержать, — `DataLost` с кодом, и каждый пишется в журнал. Коды и части ключей начатых
+  запросов сохраняются с состоянием Activity и восстанавливаются до `NativeActivity.onCreate`.
+  Ответ прежней Activity (эпоха 0 — процесс после смерти) ждёт `reattach` по ключу; без
+  ожидаемого ответа `reattach` отвечает `NothingPending` и места не держит
+  (`FluiHost.stillToCome`). `flui-sdk` переэкспортирует всё, что пишет провайдер.
+  `windowSoftInputMode` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края до края,
+  ставит `FluiActivity.onCreate`; решение как данные — чистая функция уровня API
+  (`owner::android::window_setup`), и тест сверяет с ней константы `FluiActivity`. Записи без
+  потребителя — в «Чего нет в этой серии» со своими функциями.
+  Тесты: `an_answer_settles_the_request_its_token_names_once`,
+  `each_launch_that_is_not_answered_ends_with_its_reason`,
+  `the_untaken_intents_and_unhanded_launches_are_bounded`, `an_intent_nobody_receives_is_released`,
+  `an_earlier_activitys_answer_waits_for_its_key` (с маршрутизацией без сравнения эпохи падает:
+  ответ прежней Activity закрывает свой запрос с тем же числом токена; ключи `("a", "b/c")` и
+  `("a/b", "c")` не совпадают), `a_reattachment_with_nothing_pending_holds_nothing`,
+  `the_earlier_answers_that_wait_are_bounded`, `the_end_refuses_every_open_request`,
+  `an_answered_intent_is_taken_once_by_its_capability`,
+  `answers_are_read_as_the_java_classes_lay_them_out` (нечитаемые записи в начале, середине и
+  конце), `a_reattachment_let_go_leaves_the_answer_to_the_one_still_waiting`,
+  `a_ticket_let_go_wakes_the_owner_and_cancels_its_launch`,
+  `the_oldest_reattachment_receives_the_answer_whatever_ended_before`,
+  `every_earlier_record_ends_a_waiting_reattachment`,
+  `every_answer_taken_off_the_queue_ends_its_request`,
+  `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`,
+  `posted_work_reports_every_exit_but_success`, `a_report_that_panics_is_contained`,
+  `the_window_resizes_its_insets_not_its_surface_on_every_level`,
+  `fluiactivity_applies_this_table`, `os_version_gate_table` (ворота `DecorFitsSystemWindows`),
+  самопроверка `xtask panic-boundary`; в `flui-platform` —
+  `a_provider_reaches_the_activity_the_host_offers`, `result_keys_and_codes_hold_their_rules`; в
+  `flui-testing` — `a_provider_sees_the_activity_the_host_offers`,
+  `conflicting_registrations_fail_when_the_registry_is_built` (`InvalidName`); в `flui-sdk` —
+  `a_package_provides_activity_results_against_the_sdk_alone`.
+  Dex собирает workflow `Android dex` и берётся из его артефакта без правок.
+  Дальше: тесты маршрутизатора держат свой владелец (очередь заданий, `turn`, `retire`) и время
+  через `Instant`; сценарный примитив `flui_platform::capability::scripted` (`Scenario`,
+  `ManualClock`) может их заменить отдельным изменением.
+  LY63 не закрыта: `locale|layoutDirection` в `configChanges` и доставка смены языка хостом
+  остаются (запись LY63). Прогоны на устройстве записаны в `platform-parity.toml`: «Activity
+  results for capability providers» (выбор через SAF, старт при остановленной Activity, два
+  запроса, ответ после «Don't keep activities» и после `am kill`, ответ до `android_main`),
+  «Memory pressure», «Soft-keyboard insets» (счёт `WindowResized`), «IME composition» (ввод с dex из
+  APK на Galaxy S21 и образе API 23–25). Потребитель — выбор файла `flui-system` (LY67).
+  Запущено на Galaxy S21 (SM-G991U, Android 15, 2026-11-16, коммит `dcd3b2f1e`): ответ выбора
+  мелодии и его URI через `take_data`, переприсоединение после пересоздания (смена языка
+  приложения) и после `am kill`, выброшенный сразу после запуска билет (`Cancelled`), мягкий ввод
+  по ADR-0340 §3 и набор текста; записи — в `platform-parity.toml`. Не запущено: «Don't keep
+  activities», отменённый код результата, выброс билета, пока запущенная activity сверху
+  (приостановленная Activity не выполняет задания owner — `docs/gaps.md`), образ API 23–25.
 
 - [x] **LY141** — ветка `app/opened-url-routing`.
   Правило — ADR-0339 (заменяет абзац ADR-0330 §5 о раннере и оговорку ADR-0254 §4 о reopen
@@ -6992,8 +7090,9 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
 | Клавиатура в раскладке: избегание клавиатуры, прокрутка к полю | 1, 16 | хосты публикуют inset клавиатуры в снимке окна (LY66, LY72, LY74) | поведение виджетов, прокрутка, прогоны |
 | Перетаскивание наружу и приём от других приложений | 8 | словарь `drag` и `data_transfer` остаётся в контракте (design §5); таблицы предложений переехали в ядро (LY49) | нативные источники и цели (в т. ч. `NSDraggingDestination`), прогоны с другими приложениями |
 | Богатый clipboard: HTML, изображения, файлы | 6 | `ClipboardHandle` на шве, текст на каждой ОС, где она его даёт (LY50, LY80, LY84) | форматы, согласование представлений |
-| Активация (спека «activation»): URL-схемы, ассоциации файлов, единственный экземпляр, тёплые ссылки | 13 | место — `AppHandler` (LY45), очередь Activity LY62, манифест с `launchMode="singleTop"`; `AppHandler` не получает пустого обязательства `opened` | обязательство `opened(urls, files)` в `AppHandler` и маршрутизатор, `onNewIntent` Android, колбэки сцены iOS (`scene:willConnectToSession:options:`, `scene:openURLContexts:`, `scene:continueUserActivity:`, `windowScene:performActionForShortcutItem:`), регистрация схем и ассоциаций в упаковке, передача аргументов единственному экземпляру, источники на десктопе и Web |
-| Разрешения ОС: запрос, состояние, объём | — (крейты возможностей: уведомления, геолокация) | `launch_for_result` и очередь результатов Activity (LY62, LY64); `onRequestPermissionsResult` не пересылается | `request_permissions`, `PermissionState`, `Grant`, `Denial` и `Scope` в форме ADR-0152 п. 2.8 приходят с первой возможностью, которой они нужны |
+| Активация (спека «activation»): URL-схемы, ассоциации файлов, единственный экземпляр, тёплые ссылки | 13 | место — `AppHandler` (LY45), очередь Activity LY62, манифест с `launchMode="singleTop"`; `AppHandler` не получает пустого обязательства `opened` | обязательство `opened(urls, files)` в `AppHandler` и маршрутизатор (`onNewIntent` Android уже пересылается, #2610), колбэки сцены iOS (`scene:willConnectToSession:options:`, `scene:openURLContexts:`, `scene:continueUserActivity:`, `windowScene:performActionForShortcutItem:`), регистрация схем и ассоциаций в упаковке, передача аргументов единственному экземпляру, источники на десктопе и Web |
+| Разрешения ОС: запрос, состояние, объём | — (крейты возможностей: уведомления, геолокация) | `launch_for_result` и очередь результатов Activity (LY62, LY64); `onRequestPermissionsResult` не пересылается, но идёт тем же маршрутизатором: код запроса, токен, эпоха и ключ, один ответ | метод `FluiHost` и вид ответа для `onRequestPermissionsResult`; `request_permissions`, `PermissionState`, `Grant`, `Denial` и `Scope` в форме ADR-0152 п. 2.8 приходят с первой возможностью, которой они нужны |
+| Факты окна и оформление запуска Android | — | очередь `FluiActivity` (LY62), в которую встанет запись | `onMultiWindowModeChanged` — с адаптивной раскладкой, которая читает, делит ли окно экран; `onTopResumedActivityChanged` — с фактами фокуса окна при нескольких возобновлённых Activity; `onUserLeaveHint` — с входом в картинку-в-картинке; тема запуска — с экраном запуска; `<queries>` в базе манифеста — с первой возможностью, которая спрашивает пакеты |
 | Текстовые сервисы: орфография, системное edit-меню, автозаполнение | 18 | IME и text store (D2); `UITextInput` с `UITextInteraction` на iOS (LY68, LY69); textarea Web (LY75) | сами сервисы |
 | Внешний вид окна: набор материалов, прозрачность, значок, исключение из захвата | 20 | команда материала фона с `Availability` (LY43) | набор материалов на каждой ОС, прозрачность, значок, захват |
 | Нативные виды внутри UI: web view, карта, видео | 19 | ничего (решение владельца; триггеры ухода с `NativeActivity` — в ADR-0255) | всё |

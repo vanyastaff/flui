@@ -13,8 +13,12 @@ use std::{
 use flui_platform::{
     Unsupported, UnsupportedReason,
     capability::{
-        Abandoned, Capability, CapabilityProvider, CompletionSource, OwnerJob, OwnerPoster,
-        OwnerRetired, OwnerScope, PendingCompletions,
+        Abandoned, Activity, ActivityBridge, Capability, CapabilityId, CapabilityProvider,
+        CapabilityRegistrar, CompletionSource, DataRefused, HostBridge, IntentFrame,
+        InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN, OwnerJob, OwnerPoster, OwnerRetired,
+        OwnerScope, PendingCompletions, ProviderContext, RequestKey, Resolver, ResultCode,
+        ResultData, ResultKey, ResultMint, ResultOutcome, ResultRefused, ResultRequest,
+        ResultTicketHold, ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -294,10 +298,12 @@ fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
         assert_eq!(entries[0].name(), Vibration::NAME);
         assert_eq!(entries[0].capability(), std::any::TypeId::of::<Vibration>());
         let locals = flui_platform::capability::RuntimeLocals::new();
+        let host = flui_platform::capability::HostBridge::new();
         let ctx = flui_platform::capability::ProviderContext::new(
             owner.source.poster(),
             &owner.source,
             &locals,
+            &host,
             None,
         );
         entries[0].provide(&ctx).map(|handle| {
@@ -604,4 +610,196 @@ fn runtime_locals_keep_one_value_per_type_until_retirement() {
         !Rc::ptr_eq(&after, &locals.get_or_default::<Slot<DropFlag>>()),
         "a retired runtime keeps nothing"
     );
+}
+
+/// A host's side of the Activity that records what a provider asked of it
+/// and answers each launch with a pending request, made with the mint the
+/// composition root handed it.
+#[derive(Default)]
+struct BridgeCalls {
+    tokens: ResultTokenMint,
+    mint: RefCell<Option<ResultMint>>,
+    launched: RefCell<Vec<(RequestKey, ResultToken)>>,
+    resolvers: RefCell<Vec<Resolver<ResultOutcome>>>,
+    tickets: RefCell<Vec<ResultTicketHold>>,
+}
+
+impl BridgeCalls {
+    fn mint(&self) -> ResultMint {
+        self.mint.borrow().clone().expect("installed")
+    }
+}
+
+impl ActivityBridge for BridgeCalls {
+    fn bind(&self, mint: ResultMint) {
+        self.mint.replace(Some(mint));
+    }
+
+    fn launch_for_result(
+        &self,
+        completions: &CompletionSource,
+        _capability: &CapabilityId,
+        key: RequestKey,
+        _intent: &mut dyn FnMut(IntentFrame) -> bool,
+    ) -> Result<ResultRequest, ResultRefused> {
+        let token = self
+            .tokens
+            .next()
+            .map_err(|_| ResultRefused::TokensExhausted)?;
+        let (completion, resolver) = completions.pending();
+        self.launched.borrow_mut().push((key, token));
+        self.resolvers.borrow_mut().push(resolver);
+        let (ticket, hold) = self.mint().ticket(token, Rc::new(|| {}));
+        self.tickets.borrow_mut().push(hold);
+        Ok(self.mint().request(ticket, completion))
+    }
+
+    fn reattach(
+        &self,
+        _completions: &CompletionSource,
+        _capability: &CapabilityId,
+        _key: RequestKey,
+    ) -> Result<ResultRequest, ResultRefused> {
+        Err(ResultRefused::ActivityEnded)
+    }
+
+    fn take_data(
+        &self,
+        _capability: &CapabilityId,
+        _data: ResultData,
+        _f: &mut dyn FnMut(JniFrame),
+    ) -> Result<(), DataRefused> {
+        Err(DataRefused::NotHeld)
+    }
+
+    fn lend(&self, _f: &mut dyn FnMut(JniFrame)) -> bool {
+        false
+    }
+}
+
+/// A capability whose handle is the Activity its provider reached.
+enum Files {}
+
+impl Capability for Files {
+    type Handle = Option<Activity>;
+    const NAME: &'static str = "files";
+}
+
+/// The same, under a name that could not key requests.
+enum Spaced {}
+
+impl Capability for Spaced {
+    type Handle = Option<Activity>;
+    const NAME: &'static str = "not a key";
+}
+
+/// A provider reaches the Activity the host offers through its context,
+/// scoped by the identity the registrar minted for it, and none once the host
+/// takes it back; a context not handed through a registration reaches none,
+/// so no caller names another capability by its string. A launch through it
+/// is answered by the completion of the token it was minted, at an owner
+/// turn, and its ticket's drop tells the host.
+#[test]
+fn a_provider_reaches_the_activity_the_host_offers() {
+    const PICK: ResultKey = match ResultKey::try_new("flui-test.pick") {
+        Ok(key) => key,
+        Err(_) => panic!("BUG: a printable key"),
+    };
+    let owner = Owner::new();
+    let locals = RuntimeLocals::new();
+    let host = HostBridge::new();
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<Files>(|ctx: &ProviderContext<'_>| Ok(ctx.activity()));
+    registrar.provide::<Spaced>(|ctx: &ProviderContext<'_>| Ok(ctx.activity()));
+    let entries = registrar.into_entries();
+    let context = ProviderContext::new(owner.source.poster(), &owner.source, &locals, &host, None);
+    let reach = |entry: usize| -> Option<Activity> {
+        *entries[entry]
+            .provide(&context)
+            .expect("provided")
+            .downcast::<Option<Activity>>()
+            .expect("the handle")
+    };
+    assert!(reach(0).is_none(), "no host offers one yet");
+
+    let bridge = Rc::new(BridgeCalls::default());
+    let offered: Rc<dyn ActivityBridge> = Rc::clone(&bridge) as Rc<dyn ActivityBridge>;
+    assert!(host.install_activity(Some(offered)).is_none());
+    assert!(
+        context.activity().is_none(),
+        "a context no registration scoped reaches nothing"
+    );
+    assert!(
+        reach(1).is_none(),
+        "a name with a space cannot key requests"
+    );
+    let activity = reach(0).expect("the host offers its Activity");
+    let request = activity
+        .launch_for_result(&owner.source, PICK, |_| true)
+        .expect("taken");
+    let (ticket, mut completion) = request.into_parts();
+    let token = ticket.token();
+    let files = ResultKey::try_new("files").expect("a key");
+    assert_eq!(
+        *bridge.launched.borrow(),
+        [(RequestKey::new(files, PICK), token)]
+    );
+    assert!(
+        activity.with_java(|_| ()).is_none(),
+        "this host lends nothing"
+    );
+
+    let resolver = bridge.resolvers.borrow_mut().pop().expect("one open");
+    let answer = bridge.mint().result(ResultCode::from_raw(-1), None);
+    assert!(resolver.resolve(Ok(answer)).is_ok());
+    assert!(completion.poll().is_none(), "settles at the owner's turn");
+    owner.turn();
+    match completion.poll() {
+        Some(Ok(Ok(result))) => assert_eq!(result.code(), ResultCode::Ok),
+        other => panic!("the answer: {other:?}"),
+    }
+    assert!(
+        !bridge.tickets.borrow()[0].is_released(),
+        "the provider holds its ticket"
+    );
+    drop(ticket);
+    assert!(
+        bridge.tickets.borrow()[0].is_released(),
+        "dropping the ticket tells the host"
+    );
+
+    assert!(
+        host.install_activity(None).is_some(),
+        "the host takes it back"
+    );
+    assert!(reach(0).is_none());
+}
+
+/// A result key is a short printable name, checked where it is written; a
+/// result code reads Android's two named values and keeps every other.
+#[test]
+fn result_keys_and_codes_hold_their_rules() {
+    let long: &'static str = "k".repeat(MAX_RESULT_KEY_LEN + 1).leak();
+    for (name, expected) in [
+        ("flui-system.open-document", Ok("flui-system.open-document")),
+        ("", Err(InvalidResultKey::Empty)),
+        (long, Err(InvalidResultKey::TooLong)),
+        ("with space", Err(InvalidResultKey::NotPrintable)),
+        ("\u{e9}t\u{e9}", Err(InvalidResultKey::NotPrintable)),
+    ] {
+        assert_eq!(
+            ResultKey::try_new(name).map(ResultKey::as_str),
+            expected,
+            "{name:?}"
+        );
+    }
+    for (raw, code) in [
+        (-1, ResultCode::Ok),
+        (0, ResultCode::Canceled),
+        (1, ResultCode::Other(1)),
+        (-7, ResultCode::Other(-7)),
+    ] {
+        assert_eq!(ResultCode::from_raw(raw), code);
+        assert_eq!(code.raw(), raw);
+    }
 }

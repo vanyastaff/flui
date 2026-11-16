@@ -105,6 +105,15 @@ const GCD_METHODS: [&str; 6] = [
     "barrier_sync",
 ];
 
+/// android-activity's method that runs a closure on Android's Java main
+/// thread under its own guard, which aborts the process on a panic. Only the
+/// posting module calls it: everything else posts through its `post`, which
+/// runs the closure inside the boundary and owes a report on each exit.
+const JAVA_MAIN_THREAD: &str = "run_on_java_main_thread";
+
+/// The one file that may call [`JAVA_MAIN_THREAD`].
+const JAVA_MAIN_THREAD_POSTER: &str = "owner/android/main_thread.rs";
+
 /// AccessKit's handler traits: an adapter calls them from inside its own UIA,
 /// NSAccessibility or AT-SPI entry.
 const HANDLER_TRAITS: [&str; 3] = ["ActionHandler", "ActivationHandler", "DeactivationHandler"];
@@ -564,7 +573,97 @@ pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
     };
     collector.visit_file(&file.ast);
     collector.destructors();
+    let mut posts = MainThreadPosts {
+        rel: &file.rel,
+        item: String::new(),
+        findings: Vec::new(),
+    };
+    posts.visit_file(&file.ast);
+    collector.out.findings.extend(posts.findings);
     collector.out
+}
+
+/// Every [`JAVA_MAIN_THREAD`] identifier in a build that is not a test,
+/// wherever it is written: a method or path call, a function value, an
+/// import, or the tokens of a macro call or a `macro_rules!` body, which syn
+/// leaves unparsed. Only the posting module's `fn post` may name it.
+struct MainThreadPosts<'f> {
+    rel: &'f str,
+    /// The top-level item being read, which a finding names.
+    item: String,
+    findings: Vec<Finding>,
+}
+
+impl MainThreadPosts<'_> {
+    fn found(&mut self, at: Span) {
+        self.findings.push(Finding {
+            file: self.rel.to_owned(),
+            line: line(at),
+            what: format!("{JAVA_MAIN_THREAD} in {}", self.item),
+            kind: Problem::Unguarded,
+            detail: format!(
+                "a closure posted to Android's Java main thread outside `fn post` of \
+                 `{JAVA_MAIN_THREAD_POSTER}`, which runs it inside the boundary and reports \
+                 every exit but success"
+            ),
+        });
+    }
+
+    fn tokens(&mut self, tokens: TokenStream) {
+        for token in tokens {
+            match token {
+                TokenTree::Ident(ident) if ident == JAVA_MAIN_THREAD => {
+                    self.found(ident.span());
+                }
+                TokenTree::Group(group) => self.tokens(group.stream()),
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for MainThreadPosts<'_> {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        for item in &file.items {
+            if !built(item_attrs(item)) {
+                continue;
+            }
+            let (name, is_post) = match item {
+                Item::Fn(function) => {
+                    let name = function.sig.ident.unraw().to_string();
+                    let is_post = name == "post";
+                    (format!("fn {name}"), is_post)
+                }
+                Item::Macro(mac) => (
+                    mac.ident.as_ref().map_or_else(
+                        || "a macro call".to_owned(),
+                        |name| format!("macro_rules! {name}"),
+                    ),
+                    false,
+                ),
+                Item::Mod(module) => (format!("mod {}", module.ident), false),
+                Item::Impl(_) => ("an impl".to_owned(), false),
+                Item::Use(_) => ("a use".to_owned(), false),
+                _ => ("an item".to_owned(), false),
+            };
+            if is_post && self.rel.ends_with(JAVA_MAIN_THREAD_POSTER) {
+                continue;
+            }
+            self.item = name;
+            self.visit_item(item);
+        }
+    }
+
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        if ident == JAVA_MAIN_THREAD {
+            self.found(ident.span());
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.tokens(mac.tokens.clone());
+        visit::visit_macro(self, mac);
+    }
 }
 
 /// The first pass: what the file's `use` items bind, and whether a binding
