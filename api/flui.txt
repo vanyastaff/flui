@@ -13899,27 +13899,30 @@ variant flui::platform::capability::Abandoned::ProviderDropped // at 0
 pub struct flui::platform::capability::Activity { .. }
 impl Clone for flui::platform::capability::Activity
 impl core::fmt::Debug for flui::platform::capability::Activity
-pub fn flui::platform::capability::Activity::cancel(&self, token: flui::platform::capability::ResultToken)
 pub fn flui::platform::capability::Activity::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey, intent: impl FnOnce(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-pub fn flui::platform::capability::Activity::new(bridge: alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>, capability: flui::platform::capability::ResultKey) -> Self
 pub fn flui::platform::capability::Activity::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultData, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
+pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultData, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Result<R, flui::platform::capability::DataRefused>
 pub fn flui::platform::capability::Activity::with_java<R>(&self, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
 pub trait flui::platform::capability::ActivityBridge: 'static
-fn flui::platform::capability::ActivityBridge::cancel(&self, token: flui::platform::capability::ResultToken)
-fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+fn flui::platform::capability::ActivityBridge::bind(&self, mint: flui::platform::capability::ResultMint)
+fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::lend(&self, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
-fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-fn flui::platform::capability::ActivityBridge::take_data(&self, data: flui::platform::capability::ResultData, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
+fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+fn flui::platform::capability::ActivityBridge::take_data(&self, capability: &flui::platform::capability::CapabilityId, data: flui::platform::capability::ResultData, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> Result<(), flui::platform::capability::DataRefused>
 pub struct flui::platform::capability::ActivityResult { .. }
 impl core::fmt::Debug for flui::platform::capability::ActivityResult
 pub fn flui::platform::capability::ActivityResult::code(&self) -> flui::platform::capability::ResultCode
 pub fn flui::platform::capability::ActivityResult::has_data(&self) -> bool
-pub fn flui::platform::capability::ActivityResult::new(code: flui::platform::capability::ResultCode, data: Option<flui::platform::capability::ResultData>) -> Self
 pub fn flui::platform::capability::ActivityResult::take_data(&mut self) -> Option<flui::platform::capability::ResultData>
 pub trait flui::platform::capability::Capability: 'static
 const flui::platform::capability::Capability::NAME: &'static str
 type flui::platform::capability::Capability::Handle: Clone + 'static
+pub struct flui::platform::capability::CapabilityId(_)
+impl Clone for flui::platform::capability::CapabilityId
+impl Eq for flui::platform::capability::CapabilityId
+impl PartialEq for flui::platform::capability::CapabilityId
+impl core::fmt::Debug for flui::platform::capability::CapabilityId
+pub fn flui::platform::capability::CapabilityId::name(&self) -> &'static str
 pub trait flui::platform::capability::CapabilityProvider<C: flui::platform::capability::Capability>: 'static
 fn flui::platform::capability::CapabilityProvider::provide(&self, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<<C as flui::platform::capability::Capability>::Handle, flui::platform::Unsupported>
 impl<C, F> flui::platform::capability::CapabilityProvider<C> for F where C: flui::platform::capability::Capability, F: Fn(&flui::platform::capability::ProviderContext<'_>) -> Result<<C as flui::platform::capability::Capability>::Handle, flui::platform::Unsupported> + 'static
@@ -13941,11 +13944,23 @@ impl core::fmt::Debug for flui::platform::capability::CompletionSource
 pub fn flui::platform::capability::CompletionSource::new(poster: flui::platform::capability::OwnerPoster, pending: flui::platform::capability::PendingCompletions) -> Self
 pub fn flui::platform::capability::CompletionSource::pending<T: 'static>(&self) -> (flui::platform::capability::Completion<T>, flui::platform::capability::Resolver<T>)
 pub fn flui::platform::capability::CompletionSource::poster(&self) -> &flui::platform::capability::OwnerPoster
+#[non_exhaustive] pub enum flui::platform::capability::DataRefused
+impl Clone for flui::platform::capability::DataRefused
+impl Copy for flui::platform::capability::DataRefused
+impl Eq for flui::platform::capability::DataRefused
+impl PartialEq for flui::platform::capability::DataRefused
+impl core::error::Error for flui::platform::capability::DataRefused
+impl core::fmt::Debug for flui::platform::capability::DataRefused
+impl core::fmt::Display for flui::platform::capability::DataRefused
+impl core::hash::Hash for flui::platform::capability::DataRefused
+impl core::marker::StructuralPartialEq for flui::platform::capability::DataRefused
+variant flui::platform::capability::DataRefused::NotHeld // at 1
+variant flui::platform::capability::DataRefused::NotLent // at 2
+variant flui::platform::capability::DataRefused::OtherCapability // at 0
 pub struct flui::platform::capability::HostBridge { .. }
 impl Clone for flui::platform::capability::HostBridge
 impl Default for flui::platform::capability::HostBridge
 impl core::fmt::Debug for flui::platform::capability::HostBridge
-pub fn flui::platform::capability::HostBridge::activity(&self, capability: &'static str) -> Option<flui::platform::capability::Activity>
 pub fn flui::platform::capability::HostBridge::install_activity(&self, activity: Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>
 pub fn flui::platform::capability::HostBridge::new() -> Self
 pub struct flui::platform::capability::IntentFrame { .. }
@@ -14014,7 +14029,7 @@ fn flui::platform::capability::Plugin::register(&self, registrar: &mut flui::pla
 impl core::fmt::Debug for flui::platform::capability::ProviderContext<'_>
 pub fn flui::platform::capability::ProviderContext::activity(&self) -> Option<flui::platform::capability::Activity> // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::completions(&self) -> &flui::platform::capability::CompletionSource // impl<'a> flui::platform::capability::ProviderContext<'a>
-pub fn flui::platform::capability::ProviderContext::new(owner: &'a flui::platform::capability::OwnerPoster, completions: &'a flui::platform::capability::CompletionSource, locals: &'a flui::platform::capability::RuntimeLocals, host: &'a flui::platform::capability::HostBridge, capability: &'static str, window: Option<flui::platform::capability::WindowRef>) -> Self // impl<'a> flui::platform::capability::ProviderContext<'a>
+pub fn flui::platform::capability::ProviderContext::new(owner: &'a flui::platform::capability::OwnerPoster, completions: &'a flui::platform::capability::CompletionSource, locals: &'a flui::platform::capability::RuntimeLocals, host: &'a flui::platform::capability::HostBridge, window: Option<flui::platform::capability::WindowRef>) -> Self // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::owner(&self) -> &flui::platform::capability::OwnerPoster // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::runtime_local<T: Default + 'static>(&self) -> alloc::rcs::rc::Rc<T> // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::window(&self) -> Option<flui::platform::capability::WindowRef> // impl<'a> flui::platform::capability::ProviderContext<'a>
@@ -14022,8 +14037,8 @@ pub struct flui::platform::capability::RegisteredProvider { .. }
 impl Clone for flui::platform::capability::RegisteredProvider
 impl core::fmt::Debug for flui::platform::capability::RegisteredProvider
 pub fn flui::platform::capability::RegisteredProvider::capability(&self) -> core::any::TypeId
+pub fn flui::platform::capability::RegisteredProvider::id(&self) -> &flui::platform::capability::CapabilityId
 pub fn flui::platform::capability::RegisteredProvider::name(&self) -> &'static str
-pub fn flui::platform::capability::RegisteredProvider::new<C: flui::platform::capability::Capability>(provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub fn flui::platform::capability::RegisteredProvider::provide(&self, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Box<dyn core::any::Any>, flui::platform::Unsupported>
 pub struct flui::platform::capability::RequestKey { .. }
 impl Clone for flui::platform::capability::RequestKey
@@ -14056,7 +14071,6 @@ variant flui::platform::capability::ResultCode::Ok // at 0
 variant flui::platform::capability::ResultCode::Other(i32) // at 2
 pub struct flui::platform::capability::ResultData(_)
 impl core::fmt::Debug for flui::platform::capability::ResultData
-pub fn flui::platform::capability::ResultData::new(token: flui::platform::capability::ResultToken) -> (Self, flui::platform::capability::ResultDataHold)
 pub fn flui::platform::capability::ResultData::token(&self) -> flui::platform::capability::ResultToken
 pub struct flui::platform::capability::ResultDataHold(_)
 impl core::fmt::Debug for flui::platform::capability::ResultDataHold
@@ -14072,6 +14086,14 @@ impl core::marker::StructuralPartialEq for flui::platform::capability::ResultKey
 pub const fn flui::platform::capability::ResultKey::as_str(self) -> &'static str
 pub const fn flui::platform::capability::ResultKey::check(name: &str) -> Result<(), flui::platform::capability::InvalidResultKey>
 pub const fn flui::platform::capability::ResultKey::try_new(name: &'static str) -> Result<Self, flui::platform::capability::InvalidResultKey>
+pub struct flui::platform::capability::ResultMint { .. }
+impl Clone for flui::platform::capability::ResultMint
+impl core::fmt::Debug for flui::platform::capability::ResultMint
+pub fn flui::platform::capability::ResultMint::data(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultData, flui::platform::capability::ResultDataHold)
+pub fn flui::platform::capability::ResultMint::made(&self, data: &flui::platform::capability::ResultData) -> bool
+pub fn flui::platform::capability::ResultMint::request(&self, ticket: flui::platform::capability::ResultTicket, completion: flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>) -> flui::platform::capability::ResultRequest
+pub fn flui::platform::capability::ResultMint::result(&self, code: flui::platform::capability::ResultCode, data: Option<flui::platform::capability::ResultData>) -> flui::platform::capability::ActivityResult
+pub fn flui::platform::capability::ResultMint::ticket(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultTicket, flui::platform::capability::ResultTicketHold)
 pub type flui::platform::capability::ResultOutcome = Result<flui::platform::capability::ActivityResult, flui::platform::capability::ResultRefused>
 #[non_exhaustive] pub enum flui::platform::capability::ResultRefused
 impl Clone for flui::platform::capability::ResultRefused
@@ -14096,11 +14118,9 @@ variant flui::platform::capability::ResultRefused::TooManyOpen // at 0
 pub struct flui::platform::capability::ResultRequest { .. }
 impl core::fmt::Debug for flui::platform::capability::ResultRequest
 pub fn flui::platform::capability::ResultRequest::into_parts(self) -> (flui::platform::capability::ResultTicket, flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>)
-pub fn flui::platform::capability::ResultRequest::new(ticket: flui::platform::capability::ResultTicket, completion: flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>) -> Self
 pub fn flui::platform::capability::ResultRequest::token(&self) -> flui::platform::capability::ResultToken
 pub struct flui::platform::capability::ResultTicket(_)
 impl core::fmt::Debug for flui::platform::capability::ResultTicket
-pub fn flui::platform::capability::ResultTicket::new(token: flui::platform::capability::ResultToken) -> (Self, flui::platform::capability::ResultTicketHold)
 pub fn flui::platform::capability::ResultTicket::token(&self) -> flui::platform::capability::ResultToken
 pub struct flui::platform::capability::ResultTicketHold(_)
 impl core::fmt::Debug for flui::platform::capability::ResultTicketHold
@@ -35724,7 +35744,6 @@ impl core::fmt::Debug for flui_runtime::capability::CapabilityRegistry
 pub fn flui_runtime::capability::CapabilityRegistry::acquire(&self, capability: core::any::TypeId, name: &'static str, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Box<dyn core::any::Any>, flui::platform::Unsupported>
 pub fn flui_runtime::capability::CapabilityRegistry::builder() -> flui_runtime::capability::CapabilityRegistryBuilder
 pub fn flui_runtime::capability::CapabilityRegistry::empty() -> Self
-pub fn flui_runtime::capability::CapabilityRegistry::host(&self) -> &flui::platform::capability::HostBridge
 pub struct flui_runtime::capability::CapabilityRegistryBuilder { .. }
 impl Default for flui_runtime::capability::CapabilityRegistryBuilder
 impl core::fmt::Debug for flui_runtime::capability::CapabilityRegistryBuilder

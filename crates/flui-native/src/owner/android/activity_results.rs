@@ -14,9 +14,9 @@
 //!   whatever its key reads as; an answer for a token that is not open
 //!   (cancelled, already answered) is stale and dropped;
 //! - an answer of another epoch belongs to an earlier Activity, whose runtime
-//!   ended with it: whatever it says, it ends the oldest
-//!   [`reattach`](ResultRouter::open_reattach)ment still waiting under its
-//!   key (oldest by token, the [`ResultTokenMint`] sequence), or waits for
+//!   ended with it: whatever it says, it ends the oldest reattachment
+//!   ([`ResultRouter::open_reattach`]) still waiting under its key (oldest
+//!   by token, the [`ResultTokenMint`] sequence), or waits for
 //!   one, the oldest first by its arrival sequence, at most [`MAX_EARLIER`] at
 //!   once. Epoch 0 names a request Java restored from the saved state of a
 //!   process that died. How many answers are still to come under a key is
