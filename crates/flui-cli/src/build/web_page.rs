@@ -120,16 +120,172 @@ pub(crate) const BOOTSTRAP: &str = "flui.js";
 /// The stylesheet the page links.
 pub(crate) const STYLESHEET: &str = "flui.css";
 
+/// The CSS named colours (CSS Color Module Level 4, §6.1), sorted.
+const CSS_COLOUR_NAMES: [&str; 148] = [
+    "aliceblue",
+    "antiquewhite",
+    "aqua",
+    "aquamarine",
+    "azure",
+    "beige",
+    "bisque",
+    "black",
+    "blanchedalmond",
+    "blue",
+    "blueviolet",
+    "brown",
+    "burlywood",
+    "cadetblue",
+    "chartreuse",
+    "chocolate",
+    "coral",
+    "cornflowerblue",
+    "cornsilk",
+    "crimson",
+    "cyan",
+    "darkblue",
+    "darkcyan",
+    "darkgoldenrod",
+    "darkgray",
+    "darkgreen",
+    "darkgrey",
+    "darkkhaki",
+    "darkmagenta",
+    "darkolivegreen",
+    "darkorange",
+    "darkorchid",
+    "darkred",
+    "darksalmon",
+    "darkseagreen",
+    "darkslateblue",
+    "darkslategray",
+    "darkslategrey",
+    "darkturquoise",
+    "darkviolet",
+    "deeppink",
+    "deepskyblue",
+    "dimgray",
+    "dimgrey",
+    "dodgerblue",
+    "firebrick",
+    "floralwhite",
+    "forestgreen",
+    "fuchsia",
+    "gainsboro",
+    "ghostwhite",
+    "gold",
+    "goldenrod",
+    "gray",
+    "green",
+    "greenyellow",
+    "grey",
+    "honeydew",
+    "hotpink",
+    "indianred",
+    "indigo",
+    "ivory",
+    "khaki",
+    "lavender",
+    "lavenderblush",
+    "lawngreen",
+    "lemonchiffon",
+    "lightblue",
+    "lightcoral",
+    "lightcyan",
+    "lightgoldenrodyellow",
+    "lightgray",
+    "lightgreen",
+    "lightgrey",
+    "lightpink",
+    "lightsalmon",
+    "lightseagreen",
+    "lightskyblue",
+    "lightslategray",
+    "lightslategrey",
+    "lightsteelblue",
+    "lightyellow",
+    "lime",
+    "limegreen",
+    "linen",
+    "magenta",
+    "maroon",
+    "mediumaquamarine",
+    "mediumblue",
+    "mediumorchid",
+    "mediumpurple",
+    "mediumseagreen",
+    "mediumslateblue",
+    "mediumspringgreen",
+    "mediumturquoise",
+    "mediumvioletred",
+    "midnightblue",
+    "mintcream",
+    "mistyrose",
+    "moccasin",
+    "navajowhite",
+    "navy",
+    "oldlace",
+    "olive",
+    "olivedrab",
+    "orange",
+    "orangered",
+    "orchid",
+    "palegoldenrod",
+    "palegreen",
+    "paleturquoise",
+    "palevioletred",
+    "papayawhip",
+    "peachpuff",
+    "peru",
+    "pink",
+    "plum",
+    "powderblue",
+    "purple",
+    "rebeccapurple",
+    "red",
+    "rosybrown",
+    "royalblue",
+    "saddlebrown",
+    "salmon",
+    "sandybrown",
+    "seagreen",
+    "seashell",
+    "sienna",
+    "silver",
+    "skyblue",
+    "slateblue",
+    "slategray",
+    "slategrey",
+    "snow",
+    "springgreen",
+    "steelblue",
+    "tan",
+    "teal",
+    "thistle",
+    "tomato",
+    "turquoise",
+    "violet",
+    "wheat",
+    "white",
+    "whitesmoke",
+    "yellow",
+    "yellowgreen",
+];
+
 /// A colour for the browser's chrome (`theme-color`, the manifest's
 /// `theme_color`): a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`)
-/// or a CSS named colour (letters only), checked when `flui.toml` loads.
+/// or a CSS named colour ([`CSS_COLOUR_NAMES`]), checked when `flui.toml`
+/// loads; functional notations (`rgb()`, `hsl()`) are refused, which a
+/// manifest's consumers do not all read.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub(crate) struct ThemeColor(String);
 
 /// Why a theme colour was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("`{0}` is not a hex colour (`#1a73e8`) or a CSS colour name (`teal`)")]
+#[error(
+    "`[web] theme_color = \"{0}\"` is not a hex colour (`#1a73e8`) or a CSS colour name (`teal`)"
+)]
 pub(crate) struct InvalidThemeColor(String);
 
 impl ThemeColor {
@@ -142,8 +298,9 @@ impl ThemeColor {
         let hex = colour.strip_prefix('#').is_some_and(|digits| {
             matches!(digits.len(), 3 | 4 | 6 | 8) && digits.bytes().all(|b| b.is_ascii_hexdigit())
         });
-        let named =
-            (1..=32).contains(&colour.len()) && colour.bytes().all(|b| b.is_ascii_alphabetic());
+        let named = CSS_COLOUR_NAMES
+            .binary_search(&colour.to_ascii_lowercase().as_str())
+            .is_ok();
         if hex || named {
             Ok(Self(colour))
         } else {
@@ -527,9 +684,16 @@ mod tests {
             "rgb(1,2,3)",
             "#123\">",
             "a b",
+            "javascript",
+            "hsl(1,1%,1%)",
+            "notacolour",
         ] {
             assert!(ThemeColor::try_new(refused).is_err(), "{refused:?}");
         }
+        assert!(
+            CSS_COLOUR_NAMES.windows(2).all(|pair| pair[0] < pair[1]),
+            "the names are sorted, as the search needs"
+        );
     }
 
     #[test]

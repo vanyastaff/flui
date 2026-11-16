@@ -398,15 +398,11 @@ impl DeviceSize {
 }
 
 /// Size the canvas's backing store so the surface renders one texel per
-/// device pixel. Skipped when unchanged: assigning `width`/`height` clears a
-/// canvas even to the same value.
-fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
-    if canvas.width() != size.width {
-        canvas.set_width(size.width);
-    }
-    if canvas.height() != size.height {
-        canvas.set_height(size.height);
-    }
+/// device pixel, through the canvas's one writer (`CanvasWrites`), which
+/// skips an unchanged side: assigning `width`/`height` clears a canvas even to
+/// the same value.
+fn apply_backing_size(writes: &crate::owner::web::CanvasWrites, size: DeviceSize) {
+    writes.set_store_size(size.width, size.height);
 }
 
 /// Pin, as its inline CSS size, each side of a page canvas's box that is the
@@ -424,7 +420,11 @@ fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
 /// is set once, when the window opens, before any surface draws into the
 /// store the probe clears, and as an inline style it outranks a page rule
 /// that applies later: a page that restyles the canvas gives it a CSS size.
-fn pin_store_sized_box(window: &web_sys::Window, canvas: &web_sys::HtmlCanvasElement) {
+fn pin_store_sized_box(
+    window: &web_sys::Window,
+    canvas: &web_sys::HtmlCanvasElement,
+    writes: &crate::owner::web::CanvasWrites,
+) {
     let store = (canvas.width(), canvas.height());
     let before = (canvas.client_width(), canvas.client_height());
     // One whole factor for both sides keeps the store's aspect ratio.
@@ -435,11 +435,9 @@ fn pin_store_sized_box(window: &web_sys::Window, canvas: &web_sys::HtmlCanvasEle
         .div_ceil(width)
         .max(before.1.unsigned_abs().div_ceil(height))
         .saturating_add(1);
-    canvas.set_width(width.saturating_mul(factor));
-    canvas.set_height(height.saturating_mul(factor));
+    writes.set_store_size(width.saturating_mul(factor), height.saturating_mul(factor));
     let after = (canvas.client_width(), canvas.client_height());
-    canvas.set_width(store.0);
-    canvas.set_height(store.1);
+    writes.set_store_size(store.0, store.1);
     if after == before {
         return;
     }
@@ -533,7 +531,7 @@ impl WebWindow {
         let slots = root.slots().clone();
 
         if root.is_page_canvas() {
-            pin_store_sized_box(&window, &canvas);
+            pin_store_sized_box(&window, &canvas, &slots.canvas_writes);
         }
 
         // The layout's box is the size; the requested size is the fallback
@@ -549,10 +547,12 @@ impl WebWindow {
             (width, height, window.device_pixel_ratio())
         });
         let backing = DeviceSize::estimate(width, height, scale_factor);
-        apply_backing_size(&canvas, backing);
+        apply_backing_size(&slots.canvas_writes, backing);
 
         // Make canvas focusable for keyboard events
-        canvas.set_tab_index(0);
+        if let Err(error) = slots.canvas_writes.set("tabindex", "0") {
+            tracing::debug!(?error, "the canvas takes no focus from the keyboard");
+        }
 
         // Every touch on the canvas is the application's: with the default
         // `touch-action`, the browser claims a touch that moves past its
@@ -1205,7 +1205,7 @@ impl LayoutSync {
         if !changed {
             return;
         }
-        apply_backing_size(&self.canvas, backing);
+        apply_backing_size(&self.publisher.slots.canvas_writes, backing);
         self.publisher.publish();
         self.delivery.dispatch_request_frame();
     }

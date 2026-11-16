@@ -265,6 +265,12 @@ export function fakeVirtualKeyboard(present) {
     });
 }
 export function restoreVirtualKeyboard() { delete navigator.virtualKeyboard; }
+// The browser's undo in the focused textarea; its value afterwards.
+export function undoInEditor() {
+    editor().focus();
+    document.execCommand('undo');
+    return editor().value;
+}
 export function keyboardShows() { return shows; }
 // Count the focus events the textarea gets from now on.
 let editorFocuses = 0;
@@ -403,6 +409,8 @@ extern "C" {
     fn fake_virtual_keyboard(present: bool);
     #[wasm_bindgen(js_name = restoreVirtualKeyboard)]
     fn restore_virtual_keyboard();
+    #[wasm_bindgen(js_name = undoInEditor)]
+    fn undo_in_editor() -> String;
     #[wasm_bindgen(js_name = keyboardShows)]
     fn keyboard_shows() -> u32;
     #[wasm_bindgen(js_name = countEditorFocus)]
@@ -1635,9 +1643,11 @@ fn moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus() {
 }
 
 /// A keyboard hidden with the editor keeping its focus (Android's Back)
-/// opens again on a tap on the field: through `navigator.virtualKeyboard`
-/// where the browser has it, else by giving the focus to the canvas and
-/// taking it back inside the tap's handler.
+/// opens again on a tap on the field: the editor gives its focus to the
+/// canvas and takes it back inside the tap's handler, whether or not the
+/// browser has `navigator.virtualKeyboard`, whose `show()` (which shows
+/// nothing for an element without `virtualkeyboardpolicy="manual"`) the
+/// host never relies on.
 #[wasm_bindgen_test]
 fn a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again() {
     struct Keyboard;
@@ -1653,17 +1663,82 @@ fn a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again() {
     canvas.host.focus_store(Some(as_store(&store)));
     assert_eq!(page_focus(), "editor");
     let _keyboard = Keyboard;
-    fake_virtual_keyboard(true);
-    touch_stroke(5.0, 5.0, 5.0, 5.0);
-    assert_eq!(keyboard_shows(), 1, "asked to show the keyboard");
-    assert_eq!(page_focus(), "editor");
-    fake_virtual_keyboard(false);
-    count_editor_focus();
-    touch_stroke(5.0, 5.0, 5.0, 5.0);
-    assert_eq!(editor_focus_count(), 1, "focused again inside the tap");
-    assert_eq!(page_focus(), "editor");
+    for present in [true, false] {
+        fake_virtual_keyboard(present);
+        count_editor_focus();
+        touch_stroke(5.0, 5.0, 5.0, 5.0);
+        assert_eq!(
+            editor_focus_count(),
+            1,
+            "focused again inside the tap (virtualKeyboard: {present})"
+        );
+        assert_eq!(page_focus(), "editor");
+        assert_eq!(keyboard_shows(), 0, "show() is never relied on");
+    }
     touch_stroke(200.0, 100.0, 200.0, 100.0);
     assert_eq!(editor_focus_count(), 1, "a tap off the field does nothing");
+    canvas.host.focus_store(None);
+}
+
+/// The window's editor's attributes follow its state on every change: a
+/// served field's hints with no `aria-hidden`; between fields `aria-hidden`,
+/// `inputmode="none"`, `autocomplete="off"` and no value, so a password
+/// field's text and hints do not linger, and the browser's undo cannot bring
+/// the password back into the next field.
+#[wasm_bindgen_test]
+fn the_hidden_editor_s_attributes_follow_its_state() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    canvas.host.focus_store(Some(as_store(&password)));
+    assert_eq!(editor_hints(), r#"["text","new-password",null]"#);
+    assert_eq!(editor_aria_hidden(), None);
+    type_into_editor("secret", 6, false);
+    canvas.host.focus_store(None);
+    let idle = editor().expect("the window's editor");
+    assert_eq!(idle.value, "", "no value between fields");
+    assert_eq!(editor_hints(), r#"["none","off",null]"#);
+    assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
+    let plain = InMemoryTextStore::new("ab");
+    plain.set_purpose(flui_platform::text_store::TextInputPurpose::Search);
+    canvas.host.focus_store(Some(as_store(&plain)));
+    assert_eq!(editor_hints(), r#"["search","off","search"]"#);
+    assert_eq!(editor_aria_hidden(), None);
+    assert_ne!(
+        undo_in_editor(),
+        "secret",
+        "the browser's undo does not bring the password back"
+    );
+    canvas.host.focus_store(None);
+}
+
+/// A composition still live in one field when another takes the editor is
+/// committed in place to the first, and the browser's late composition
+/// events land in no store: the second field keeps its text.
+#[wasm_bindgen_test]
+fn a_composition_left_in_one_field_lands_in_no_other() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let first = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&first)));
+    editor_composition("compositionstart");
+    type_into_editor("abに", 3, true);
+    assert!(first.composition().is_some(), "the first field composes");
+    let second = InMemoryTextStore::new("xyz");
+    canvas.host.focus_store(Some(as_store(&second)));
+    assert_eq!(first.composition(), None, "committed in place");
+    assert_eq!(first.text(), "abに");
+    editor_composition("compositionend");
+    let state = editor().expect("the editor");
+    type_into_editor(&state.value, 3, false);
+    assert_eq!(
+        second.text(),
+        "xyz",
+        "nothing of the first field's composition"
+    );
     canvas.host.focus_store(None);
 }
 

@@ -19,11 +19,14 @@
 //! is a request whose `Sec-Fetch-Mode` is `navigate`; from a browser that
 //! sends no `Sec-Fetch-Mode`, one whose `Accept` names HTML. A path names a
 //! file only as the file's name is spelled, whatever case the file system
-//! ignores. Only a `Host` of this machine's loopback (`localhost`,
-//! `127.0.0.1`, `[::1]`) is answered, so a page of another site whose name
-//! is rebound to 127.0.0.1 gets a 421; at most `MAX_CONNECTIONS` are served
-//! at once, and a request's head must arrive within `REQUEST_HEAD`. Every
-//! response is `nosniff`.
+//! ignores. The `Host` check runs on a whole head: one that reaches
+//! `MAX_HEAD` without its end is answered 431, one with no `Host` or with
+//! two is answered 400, and only a `Host` of this machine's loopback
+//! (`localhost`, `127.0.0.1`, `[::1]`) is served, so a page of another site
+//! whose name is rebound to 127.0.0.1 gets a 421. At most `MAX_CONNECTIONS`
+//! are served at once and at most `MAX_POLLS` of them may be reload long
+//! polls; one past either bound is answered 503. A request's head must arrive
+//! within `REQUEST_HEAD`. Every response is `nosniff`.
 //!
 //! Standard library only: a thread accepts, a thread per connection serves,
 //! and every response closes its connection. A browser fetching a dozen
@@ -82,6 +85,8 @@ struct Shared {
     stop: AtomicBool,
     /// The connections being served now, at most `MAX_CONNECTIONS`.
     connections: AtomicUsize,
+    /// The reload long polls being held now, at most `MAX_POLLS`.
+    polls: AtomicUsize,
 }
 
 impl DevServer {
@@ -97,6 +102,7 @@ impl DevServer {
             lock: Mutex::new(()),
             stop: AtomicBool::new(false),
             connections: AtomicUsize::new(0),
+            polls: AtomicUsize::new(0),
         });
         let accept = {
             let shared = Arc::clone(&shared);
@@ -180,11 +186,19 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
         if shared.stop.load(Ordering::SeqCst) {
             return;
         }
-        let Ok(stream) = stream else { continue };
-        // Past the bound the connection is closed unanswered: a client that
-        // opens connections without end gets no thread for each.
+        let Ok(mut stream) = stream else { continue };
+        // Past the bound the connection is answered 503 from here and closed:
+        // a client that opens connections without end gets no thread for
+        // each, and a short write timeout keeps it from holding this loop.
         if shared.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             shared.connections.fetch_sub(1, Ordering::SeqCst);
+            let busy = Response::text("503 Service Unavailable", "too many connections\n");
+            if stream
+                .set_write_timeout(Some(Duration::from_millis(250)))
+                .is_ok()
+            {
+                let _ = write_response(&mut stream, &busy, false);
+            }
             continue;
         }
         let shared = Arc::clone(shared);
@@ -213,8 +227,30 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
 /// One HTTP/1.x exchange, then the connection closes.
 fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
-    let Some(request) = read_request(&mut stream)? else {
-        return Ok(());
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let request = match read_request(&mut stream)? {
+        Head::Request(request) => request,
+        Head::Closed => return Ok(()),
+        Head::TooLarge => {
+            let refused = Response::text("431 Request Header Fields Too Large", "too large\n");
+            return write_response(&mut stream, &refused, false);
+        }
+        Head::NoHost => {
+            let refused = Response::text("400 Bad Request", "exactly one Host header\n");
+            return write_response(&mut stream, &refused, false);
+        }
+    };
+    // A long poll holds its connection for up to `LONG_POLL`: past its own
+    // smaller bound it is answered at once, so polls never take the slots
+    // that requests need.
+    let _poll = if request.path == RELOAD_PATH {
+        let Some(slot) = Slot::take(&shared.polls, MAX_POLLS) else {
+            let busy = Response::text("503 Service Unavailable", "too many reload polls\n");
+            return write_response(&mut stream, &busy, false);
+        };
+        Some(slot)
+    } else {
+        None
     };
     let response = respond(&request, shared);
     if request.path != RELOAD_PATH {
@@ -226,7 +262,6 @@ fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
             response.body.len()
         ));
     }
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     write_response(&mut stream, &response, request.method == "HEAD")
 }
 
@@ -239,8 +274,8 @@ struct Request {
     /// `Sec-Fetch-Mode` is `navigate`, or, from a browser that sends no
     /// `Sec-Fetch-Mode`, its `Accept` names HTML.
     navigation: bool,
-    /// The `Host` header, when the request has one.
-    host: Option<String>,
+    /// The request's one `Host` header.
+    host: String,
 }
 
 struct Response {
@@ -261,26 +296,42 @@ impl Response {
 
 /// Parse the request line and the headers that tell a navigation from an
 /// asset fetch. `None` for an empty read.
-fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
+fn read_request(stream: &mut TcpStream) -> io::Result<Head> {
     let deadline = Deadline {
         stream: stream.try_clone()?,
         until: Instant::now() + REQUEST_HEAD,
     };
     let mut reader = BufReader::new(deadline).take(MAX_HEAD as u64);
+    // A line that ends without its line feed ends the head unfinished: cut
+    // at the cap (`limit() == 0`) it is too large, at the stream's end it is
+    // a client that went away.
+    let unfinished = |reader: &io::Take<BufReader<Deadline>>| {
+        if reader.limit() == 0 {
+            Head::TooLarge
+        } else {
+            Head::Closed
+        }
+    };
     let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
-        return Ok(None);
+    reader.read_line(&mut line)?;
+    if !line.ends_with('\n') {
+        return Ok(unfinished(&reader));
     }
     let mut parts = line.split_whitespace();
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
-        return Ok(None);
+        return Ok(Head::Closed);
     };
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let (mut fetch_mode, mut accepts_html, mut host) = (None, false, None);
+    let (mut fetch_mode, mut accepts_html) = (None, false);
+    let mut hosts = Vec::new();
     let mut header = String::new();
     loop {
         header.clear();
-        if reader.read_line(&mut header)? == 0 || header == "\r\n" || header == "\n" {
+        reader.read_line(&mut header)?;
+        if !header.ends_with('\n') {
+            return Ok(unfinished(&reader));
+        }
+        if header == "\r\n" || header == "\n" {
             break;
         }
         if let Some((name, value)) = header.split_once(':') {
@@ -292,11 +343,16 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
                     .split(',')
                     .any(|kind| kind.trim().starts_with("text/html"));
             } else if name.eq_ignore_ascii_case("host") {
-                host = Some(value.to_owned());
+                hosts.push(value.to_owned());
             }
         }
     }
-    Ok(Some(Request {
+    // The `Host` check needs exactly one `Host`: none (HTTP/1.0) or two
+    // leave the name the request is for unknown.
+    let Ok([host]) = <[String; 1]>::try_from(hosts) else {
+        return Ok(Head::NoHost);
+    };
+    Ok(Head::Request(Request {
         method: method.to_string(),
         path: path.to_string(),
         query: query.to_string(),
@@ -307,11 +363,46 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
     }))
 }
 
+/// A request's head as read.
+enum Head {
+    /// The client went away before a request line.
+    Closed,
+    /// A whole head with exactly one `Host`.
+    Request(Request),
+    /// The head reached `MAX_HEAD` without its end: answered 431.
+    TooLarge,
+    /// No `Host`, or more than one: answered 400.
+    NoHost,
+}
+
 /// How long a client has to send a request's head, all of it: a client
 /// that sends a byte at a time does not hold its connection for longer.
 const REQUEST_HEAD: Duration = Duration::from_secs(10);
-/// How many connections are served at once; one past them is closed.
+/// How many connections are served at once; one past them is answered 503.
 const MAX_CONNECTIONS: usize = 64;
+/// How many of those may be reload long polls, each held for up to
+/// `LONG_POLL`; one past them is answered 503 at once.
+const MAX_POLLS: usize = 8;
+
+/// One of `count`'s places, given back when dropped.
+struct Slot<'a>(&'a AtomicUsize);
+
+impl<'a> Slot<'a> {
+    /// A place of `count`, or `None` when `max` are taken.
+    fn take(count: &'a AtomicUsize, max: usize) -> Option<Self> {
+        if count.fetch_add(1, Ordering::SeqCst) >= max {
+            count.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(count))
+    }
+}
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// A stream whose reads end at `until`, however the bytes trickle in.
 struct Deadline {
@@ -354,11 +445,7 @@ fn respond(request: &Request, shared: &Shared) -> Response {
     if request.method != "GET" && request.method != "HEAD" {
         return Response::text("405 Method Not Allowed", "GET or HEAD only\n");
     }
-    if request
-        .host
-        .as_deref()
-        .is_some_and(|host| !is_loopback_host(host))
-    {
+    if !is_loopback_host(&request.host) {
         return Response::text(
             "421 Misdirected Request",
             "this server answers localhost only\n",
@@ -813,6 +900,75 @@ mod tests {
         }
     }
 
+    /// The response head to `request`, written whole as it stands.
+    fn raw(addr: SocketAddr, request: &str) -> String {
+        let mut stream = TcpStream::connect(addr).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("a timeout");
+        // A server that answers before reading the whole request may reset
+        // the rest of the write: the answer is what counts.
+        let _ = stream.write_all(request.as_bytes());
+        let mut answer = Vec::new();
+        let _ = stream.read_to_end(&mut answer);
+        String::from_utf8_lossy(&answer).into_owned()
+    }
+
+    /// The `Host` check runs on a whole head with exactly one `Host`: a
+    /// head cut at the cap is 431, none or two `Host`s 400, so a long URL
+    /// cannot push `Host: evil.example` past what is read.
+    fn the_host_check_runs_on_a_whole_head_with_one_host() {
+        let (_dir, server) = fixture();
+        let long = format!(
+            "GET /index.html?{} HTTP/1.1\r\nHost: evil.example\r\n\r\n",
+            "A".repeat(MAX_HEAD + 1000)
+        );
+        let local = server.addr.to_string();
+        for (request, status, case) in [
+            (long, "HTTP/1.1 431", "a head past the cap"),
+            (
+                "GET /pkg/app.js HTTP/1.0\r\n\r\n".to_owned(),
+                "HTTP/1.1 400",
+                "no Host",
+            ),
+            (
+                format!("GET /pkg/app.js HTTP/1.1\r\nHost: {local}\r\nHost: evil.example\r\n\r\n"),
+                "HTTP/1.1 400",
+                "two Hosts",
+            ),
+            (
+                format!("GET /pkg/app.js HTTP/1.1\r\nHost: {local}\r\n\r\n"),
+                "HTTP/1.1 200",
+                "one loopback Host",
+            ),
+        ] {
+            let answer = raw(server.addr, &request);
+            assert!(answer.starts_with(status), "{case}: {answer:.80}");
+        }
+    }
+
+    /// Reload long polls past their own bound are answered 503 at once, and
+    /// a request still finds a slot while they wait.
+    fn long_polls_cannot_take_every_slot() {
+        let (_dir, server) = fixture();
+        let local = server.addr.to_string();
+        let poll = format!("GET {RELOAD_PATH}?since=1 HTTP/1.1\r\nHost: {local}\r\n\r\n");
+        let held: Vec<TcpStream> = (0..MAX_POLLS)
+            .map(|_| {
+                let mut stream = TcpStream::connect(server.addr).expect("connect");
+                stream.write_all(poll.as_bytes()).expect("a poll");
+                stream
+            })
+            .collect();
+        // The held polls are read and waiting before the next one comes.
+        std::thread::sleep(Duration::from_millis(500));
+        let answer = raw(server.addr, &poll);
+        assert!(answer.starts_with("HTTP/1.1 503"), "{answer:.80}");
+        let (head, _) = get(server.addr, "GET", "/pkg/app.js");
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        drop(held);
+    }
+
     fn a_request_for_another_host_is_refused() {
         let (_dir, server) = fixture();
         for host in [
@@ -966,6 +1122,14 @@ mod tests {
             (
                 "a build served under its base path is reached only there",
                 a_build_served_under_its_base_path_is_reached_only_there,
+            ),
+            (
+                "the host check runs on a whole head with one host",
+                the_host_check_runs_on_a_whole_head_with_one_host,
+            ),
+            (
+                "long polls cannot take every slot",
+                long_polls_cannot_take_every_slot,
             ),
             (
                 "a request for another host is refused",

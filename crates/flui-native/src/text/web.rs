@@ -402,15 +402,28 @@ mod input {
     //!
     //! - a field served and the tap on its box: the keyboard opens. iOS hides
     //!   it by blurring, so the editor takes the focus again; Chromium on
-    //!   Android hides it with Back and keeps the focus, so the host asks
-    //!   `navigator.virtualKeyboard.show()`, or else gives the focus to the
-    //!   canvas and takes it back. A tap elsewhere or a drag leaves it;
+    //!   Android hides it with Back and keeps the focus, so the editor gives
+    //!   its focus to the canvas and takes it back. A focus inside a tap's
+    //!   handler opens the keyboard in Safari on iOS and in Chromium and
+    //!   Firefox on Android, and a desktop browser shows none either way.
+    //!   `navigator.virtualKeyboard.show()` is not used: it shows nothing for
+    //!   an element without `virtualkeyboardpolicy="manual"`, a policy under
+    //!   which no focus opens the keyboard by itself any more. A tap elsewhere
+    //!   or a drag leaves the keyboard as it is;
     //! - nothing served (and no `EditContext`): whether the tap lands on a
-    //!   field is the application's to say, after the handler. The editor is
-    //!   focused with `inputmode="none"` and `aria-hidden`, which opens no
-    //!   keyboard and announces nothing; the field that attaches writes its
-    //!   own hints, and two animation frames without one (counted from that
-    //!   tap, a later tap holding its own ticket) give the focus back.
+    //!   field is the application's to say, after the handler (the window has
+    //!   no tree of the fields unless a screen reader runs: the runtime turns
+    //!   semantics on only then). The editor is focused in its idle state,
+    //!   which opens no keyboard and announces nothing; the field that
+    //!   attaches writes its own hints, and two animation frames without one
+    //!   (counted from that tap, a later tap holding its own ticket) give the
+    //!   focus back.
+    //!
+    //! The editor's attributes follow its state, set in one place
+    //! (`set_hidden_state`) on every change: a served field's hints, or, idle,
+    //! `aria-hidden`, `inputmode="none"`, `autocomplete="off"` and no value. A
+    //! composition still live when a field gives the editor up is committed in
+    //! place to that field and ended in the browser before the next one binds.
     //!
     //! A field attached outside a tap focuses the editor only when the canvas
     //! holds the page's focus (a desktop click focused it). Every focus the
@@ -685,30 +698,33 @@ mod input {
     /// still be a tap: farther, it scrolled or dragged, and opens no keyboard.
     const TAP_SLOP: f64 = 10.0;
 
-    /// What the hidden editor holds while a tap focused it for a field that
-    /// has not attached: no keyboard (`inputmode="none"`), and nothing for a
-    /// screen reader to announce. A field that attaches writes its own hints
-    /// over them ([`set_editor_hints`]) and takes `aria-hidden` away.
-    const PROVISIONAL: [(&str, &str); 2] = [("inputmode", "none"), ("aria-hidden", "true")];
-
-    /// Ask the browser to show its virtual keyboard for the focused element
-    /// (`navigator.virtualKeyboard.show()`, Chromium); `false` where it has
-    /// no such call.
-    fn show_virtual_keyboard() -> bool {
-        let Some(window) = web_sys::window() else {
-            return false;
+    /// Bring the window's hidden editor to its state, every attribute of it
+    /// set here on every transition: serving a field of `status`, that
+    /// field's hints ([`set_editor_hints`]) and no `aria-hidden`; serving none,
+    /// `aria-hidden="true"`, `inputmode="none"` (no keyboard while a tap waits
+    /// for its field), `autocomplete="off"`, no `enterkeyhint` and no value.
+    /// The value is replaced from script, which clears the element's undo
+    /// history in Chromium, Gecko and WebKit, so the browser's undo cannot
+    /// bring a field's text back into the next one. `tabindex="-1"` is set
+    /// once, when the editor is made.
+    fn set_hidden_state(element: &web_sys::HtmlTextAreaElement, status: Option<&TextStoreStatus>) {
+        let result = if let Some(status) = status {
+            set_editor_hints(element.as_ref(), status, false)
+                .and_then(|()| element.remove_attribute("aria-hidden"))
+        } else {
+            element.set_value("");
+            [
+                ("aria-hidden", "true"),
+                ("inputmode", "none"),
+                ("autocomplete", "off"),
+            ]
+            .into_iter()
+            .try_for_each(|(name, value)| element.set_attribute(name, value))
+            .and_then(|()| element.remove_attribute("enterkeyhint"))
         };
-        let keyboard =
-            js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("virtualKeyboard"))
-                .ok()
-                .filter(JsValue::is_object);
-        let Some(keyboard) = keyboard else {
-            return false;
-        };
-        let show = js_sys::Reflect::get(&keyboard, &JsValue::from_str("show"))
-            .ok()
-            .and_then(|show| show.dyn_into::<js_sys::Function>().ok());
-        show.is_some_and(|show| show.call0(&keyboard).is_ok())
+        if let Err(error) = result {
+            tracing::debug!(?error, "the hidden editor kept an attribute");
+        }
     }
 
     /// Focus `element` without scrolling the page to it: the host places its
@@ -905,19 +921,18 @@ mod input {
 
         /// Open the keyboard for the served `editor`, inside a tap's handler.
         /// An editor that lost its focus takes it. One that kept it (the
-        /// keyboard hidden with Android's Back) asks the browser to show the
-        /// keyboard where it can (`navigator.virtualKeyboard.show()`), and
-        /// otherwise gives its focus to the canvas and takes it back, a focus
-        /// move inside the canvas's focus area that the window does not see.
+        /// keyboard hidden with Android's Back) gives its focus to the canvas
+        /// and takes it back, a focus move inside the canvas's focus area that
+        /// the window does not see: a focus inside a tap's handler opens the
+        /// keyboard in every browser, where `navigator.virtualKeyboard.show()`
+        /// would do nothing without `virtualkeyboardpolicy="manual"`, a policy
+        /// that would make the host open and close the keyboard on every
+        /// focus itself.
         fn reopen(&self, editor: &web_sys::HtmlElement) {
             if self.page_focus_is(editor.as_ref()) {
-                if !show_virtual_keyboard() {
-                    focus_unscrolled(self.canvas.as_ref());
-                    focus_unscrolled(editor);
-                }
-            } else {
-                focus_unscrolled(editor);
+                focus_unscrolled(self.canvas.as_ref());
             }
+            focus_unscrolled(editor);
         }
 
         /// Whether `at`, in the canvas's CSS pixels, lies on the served
@@ -948,6 +963,7 @@ mod input {
                 return Ok(hidden.clone());
             }
             let element = self.hidden_editor()?;
+            set_hidden_state(&element, None);
             self.text_host.append_child(&element)?;
             self.editor.set(Some(element.as_ref()));
             *self.hidden.borrow_mut() = Some(element.clone());
@@ -968,9 +984,8 @@ mod input {
                     return;
                 }
             };
-            for (name, value) in PROVISIONAL {
-                let _ = element.set_attribute(name, value);
-            }
+            // Nothing is served, so the editor is in its idle state already:
+            // no keyboard, nothing for a screen reader.
             focus_unscrolled(element.as_ref());
             self.provisional.set(Some(tap));
             // The application's frame that follows the tap may be the one
@@ -1154,6 +1169,7 @@ mod input {
             else {
                 return;
             };
+            let composing = self.keys.composing();
             self.keys.set_composing(false);
             // Listeners go first, so nothing the surface does while it is torn
             // down reaches the store.
@@ -1171,13 +1187,30 @@ mod input {
                 }
                 // The window's hidden editor stays, with its focus: the next
                 // field takes it over, keyboard and all (`refocus` gives the
-                // focus to the canvas when no field follows). Only the
-                // field's text goes.
+                // focus to the canvas when no field follows). A composition
+                // the browser still holds is committed in place to this
+                // field, as the host commits one whenever its surface goes,
+                // and ended in the browser by a focus round trip, whose
+                // `compositionend` reaches no listener, so none of it lands
+                // in the next field. Then the editor goes back to its idle
+                // state.
                 Surface::Editor {
                     element,
                     hidden: true,
                     ..
-                } => element.set_shown(&FieldValue::default()),
+                } => {
+                    if composing {
+                        crate::text::refusal::commit_in_place(&*store);
+                        if self.page_focus_is(element.html().as_ref()) {
+                            focus_unscrolled(self.canvas.as_ref());
+                            focus_unscrolled(element.html());
+                        }
+                    }
+                    let hidden = self.hidden.borrow().clone();
+                    if let Some(hidden) = hidden {
+                        set_hidden_state(&hidden, None);
+                    }
+                }
                 // The field is the host's, its focus too: only the hints go.
                 Surface::Editor { element, .. } => {
                     self.field.serve(None);
@@ -1245,7 +1278,7 @@ mod input {
                 Some(field) => self.attach_editor(&store, &text, selection, field, false),
                 None if self.edit_context => self.attach_context(&store, &text, selection),
                 None => self.hidden_element().and_then(|element| {
-                    let _ = element.remove_attribute("aria-hidden");
+                    set_hidden_state(&element, Some(&store.status()));
                     let element = EditorElement::Area(element);
                     self.attach_editor(&store, &text, selection, element, true)
                 }),

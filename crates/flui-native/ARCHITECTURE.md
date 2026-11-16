@@ -2049,8 +2049,17 @@ focus back to the canvas. In the `pointerup` handler of a touch or pen tap (a
 contact that travelled at most `TAP_SLOP`), after the canvas's input
 dispatched it: a tap on the served field's box opens the keyboard, the editor
 taking the focus again where iOS's hiding blurred it, and, where it kept the
-focus (Android's Back), through `navigator.virtualKeyboard.show()` or else a
-focus given to the canvas and taken back; a tap elsewhere or a drag leaves it.
+focus (Android's Back), by a focus given to the canvas and taken back inside
+the handler (`navigator.virtualKeyboard.show()` shows nothing without
+`virtualkeyboardpolicy="manual"`, a policy under which no focus opens the
+keyboard by itself, so it is not used); a tap elsewhere or a drag leaves it.
+The editor's attributes follow its state, set in one place on every change:
+a served field's hints, or, idle, `aria-hidden`, `inputmode="none"`,
+`autocomplete="off"` and no value. A composition still live when a field
+gives the editor up is committed in place to it and ended in the browser by
+the same focus round trip before the next field binds
+(`the_hidden_editor_s_attributes_follow_its_state`,
+`a_composition_left_in_one_field_lands_in_no_other`).
 With nothing served (and no `EditContext`) the editor is focused with
 `inputmode="none"` and `aria-hidden`, which opens no keyboard and announces
 nothing; the field that attaches writes its hints, and two animation frames

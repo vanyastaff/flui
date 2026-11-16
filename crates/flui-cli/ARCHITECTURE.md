@@ -477,9 +477,11 @@ outside a comment), and may hold `{{flui_base}}`, `{{flui_manifest}}`,
 `{{flui_stylesheet}}`, `{{flui_title}}`, `{{flui_description}}` and
 `{{flui_theme_color}}`. Placeholders are replaced in one pass, left to right,
 never inside a value the build put in, and values are escaped for HTML text
-and attribute values, so a description that holds a placeholder's text stays
+and quoted attribute values only (not for a script, a style or an unquoted
+attribute), so a description that holds a placeholder's text stays
 text (`a_value_holding_a_placeholder_stays_text`). `[web] theme_color` is a
-`ThemeColor`, a hex colour or a CSS name, checked when `flui.toml` loads.
+`ThemeColor`, a hex colour or a CSS named colour from the list of CSS Color 4,
+checked when `flui.toml` loads.
 
 `flui run`'s server (`serve.rs`) serves the build under the same base path
 and answers a navigation to a path whose last segment has no extension (a
@@ -491,10 +493,13 @@ build directory: the path is percent-decoded, a component that is not a plain
 name or that holds a backslash, a colon or a NUL is refused, and a file is
 opened only when its canonical path is still inside the directory and is
 spelled as the request spells it (so no type is decided on another case of a
-name). It answers only a `Host` of the loopback (`localhost`, `127.0.0.1`,
-`[::1]`) and refuses another with 421, against a page whose name is rebound
-to 127.0.0.1; it serves at most `MAX_CONNECTIONS` connections at once, cuts
-a request head off at `REQUEST_HEAD` however slowly it arrives, and sends
+name). The `Host` check runs on a whole head with exactly one `Host`: a head
+that reaches `MAX_HEAD` without its end is 431, none or two `Host`s 400, and
+a `Host` other than the loopback (`localhost`, `127.0.0.1`, `[::1]`) 421,
+against a page whose name is rebound to 127.0.0.1. It serves at most
+`MAX_CONNECTIONS` connections at once, of which at most `MAX_POLLS` reload
+long polls, answering one past either bound 503; it cuts a request head off
+at `REQUEST_HEAD` however slowly it arrives, and sends
 `X-Content-Type-Options: nosniff`. A missing asset and a request that is not
 a navigation get a 404 (`dev_server_contract`).
 

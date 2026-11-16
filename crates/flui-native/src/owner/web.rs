@@ -285,6 +285,22 @@ impl CanvasWrites {
         self.canvas.set_attribute(name, value)
     }
 
+    /// Size the canvas's backing store (`width`, `height`) to `width` by
+    /// `height` device pixels, each written only when it changes: writing a
+    /// canvas's size clears it, even to the same value.
+    pub(crate) fn set_store_size(&self, width: u32, height: u32) {
+        for (name, value, now) in [
+            ("width", width, self.canvas.width()),
+            ("height", height, self.canvas.height()),
+        ] {
+            if value != now
+                && let Err(error) = self.set(name, &value.to_string())
+            {
+                tracing::debug!(?error, name, "the canvas kept its backing size");
+            }
+        }
+    }
+
     /// Put `name` back as the canvas held it.
     pub(crate) fn restore(&self, name: &str) {
         let found = CANVAS_ATTRIBUTES

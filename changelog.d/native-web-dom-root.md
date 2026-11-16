@@ -4,7 +4,7 @@
 - `flui.toml`'s `[web]` table: `base_href`, the path a web build is served from (an absolute path of plain segments; the page's `<base href>`), `description` and `theme_color`, which the page and the manifest state, and `page`, which names a project's own page template.
 - `flui run`'s dev server serves the build under that base path and answers a browser navigating to a path that is no file (a deep link into the app's routes) with the page; a missing asset, a request that is not a navigation, a percent-encoded `..` and a symbolic link out of the build directory get a 404.
 - Page templates: a template holds `{{flui_module}}` where the app starts and may hold `{{flui_base}}`, `{{flui_manifest}}`, `{{flui_stylesheet}}`, `{{flui_title}}`, `{{flui_description}}` and `{{flui_theme_color}}`; values are escaped and never read as placeholders. `theme_color` must be a hex colour or a CSS colour name, and paths under `[web]` are relative to `flui.toml`.
-- `flui run`'s dev server answers only `localhost`, `127.0.0.1` and `[::1]` (another `Host` gets a 421), bounds its connections and the time a request head may take, and sends `X-Content-Type-Options: nosniff`.
+- `flui run`'s dev server answers only a request with exactly one `Host`, of `localhost`, `127.0.0.1` or `[::1]` (another gets a 421, none or two a 400, a head too large to read whole a 431), bounds its connections and its reload long polls (one past either bound gets a 503) and the time a request head may take, and sends `X-Content-Type-Options: nosniff`.
 - `InMemoryTextStore::set_single_line`, so a test can serve a field of many lines.
 
 ### Changed

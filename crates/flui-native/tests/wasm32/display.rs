@@ -97,7 +97,11 @@ class FakeCanvas extends EventTarget {
     }
     getRootNode() { return document; }
     contains(node) { return node === this; }
-    setAttribute(name, value) { this.attrs[name] = String(value); }
+    // A canvas's `width` and `height` attributes are its backing store's size.
+    setAttribute(name, value) {
+        this.attrs[name] = String(value);
+        if (name === 'width' || name === 'height') this[name] = Number(value);
+    }
     getAttribute(name) { return this.attrs[name] ?? null; }
     removeAttribute(name) { delete this.attrs[name]; }
     get parentElement() { return this.parentNode instanceof FakeCanvas ? this.parentNode : null; }
