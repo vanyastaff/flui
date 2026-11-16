@@ -1,4 +1,4 @@
-# ADR-0336: The Android Activity forwards what has a consumer, routes results by token and epoch, and keeps one soft-input mode
+# ADR-0340: The Android Activity forwards what has a consumer, routes results by token and epoch, and keeps one soft-input mode
 
 - **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16

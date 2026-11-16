@@ -5039,7 +5039,7 @@ on the Java main thread, the only thread that passes it to `nativeWake`. The Jav
 and wakes and never waits for the owner; the lock guards the deques alone.
 
 A capability provider reaches the Activity through its context (`ProviderContext::activity`,
-ADR-0154 §9, ADR-0336 §2). It is the Android host's alone, so it is no position of the host table
+ADR-0154 §9, ADR-0340 §2). It is the Android host's alone, so it is no position of the host table
 and no method of `Platform`: `android_platform` hands the bridge of the Android loop's
 `owner::android::result_bridge::ResultBridge` out beside the platform, and `flui-app`'s Android
 runner installs it in the registry's `HostBridge` for the loop's life; on every other host the
@@ -5080,7 +5080,7 @@ function's (`posted_work_reports_every_exit_but_success`). A permission request
 more `FluiHost` method and answer kind on this router with the first capability that needs a
 permission (ADR-0152 §2, item 8).
 
-The window keeps one soft input mode on every level (ADR-0336 §3): `adjustResize`, with the window
+The window keeps one soft input mode on every level (ADR-0340 §3): `adjustResize`, with the window
 edge to edge, `Window.setDecorFitsSystemWindows(false)` from API 30 and the decor view's
 `SYSTEM_UI_FLAG_LAYOUT_STABLE | _LAYOUT_HIDE_NAVIGATION | _LAYOUT_FULLSCREEN` below it.
 `owner::android::window_setup` decides it as a pure function of the API level
