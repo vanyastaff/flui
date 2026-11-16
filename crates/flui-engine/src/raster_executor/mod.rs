@@ -468,6 +468,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
             return 0;
         };
         let cause = cause(&failure);
+        let panicked = matches!(failure, SlotFailure::Panicked(_));
         // A frame sent before the refusal was visible settles here; later
         // ones are refused at send.
         let (frame, extra) = {
@@ -476,7 +477,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
             let extra = state.hold_failure(failure);
             let frame = state.frame.take();
             if let Some(frame) = frame.as_ref() {
-                state.settle(frame, RasterVerdict::Failed);
+                state.settle(frame, RasterVerdict::Failed, panicked);
             }
             (frame, extra)
         };
@@ -963,7 +964,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 state.surface = state.surface.on(answer);
             }
             surface_lost(&mut state, &mut slot.applied, surface_loss);
-            state.settle(&frame, verdict);
+            let panicked = matches!(failure, Some(SlotFailure::Panicked(_)));
+            state.settle(&frame, verdict, panicked);
             failure.and_then(|failure| state.hold_failure(failure))
         };
         retire(Some(frame), extra, first);
@@ -1248,7 +1250,7 @@ fn close(inbox: &SlotInbox, first: &mut FirstPanic) -> usize {
         state.phase = SlotPhase::Detached;
         let frame = state.frame.take();
         if let Some(frame) = frame.as_ref() {
-            state.settle(frame, RasterVerdict::Failed);
+            state.settle(frame, RasterVerdict::Failed, false);
         }
         state.in_flight = 0;
         frame

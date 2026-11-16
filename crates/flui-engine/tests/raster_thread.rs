@@ -841,3 +841,106 @@ fn a_wake_whose_destructor_blocks_does_not_hold_the_stop_past_its_deadline() {
     );
     gate.store(true, Ordering::SeqCst);
 }
+
+/// The owner waits for the thread's answer to an attach: an attach the
+/// backend takes leaves the slot attached, one it refuses leaves it refused
+/// with the reason to take, each before the wait returns.
+///
+/// Red-check: answer `ExecutorHandle::await_attach` at once and the record
+/// is still `Attaching` when it returns.
+#[test]
+fn the_owner_waits_for_the_threads_answer_to_an_attach() {
+    for refused in [false, true] {
+        let thread = spawn();
+        // Held, so the attach cannot be answered before the wait begins.
+        let held = thread.backend.hold_next_render();
+        let first = attach(&thread.sender);
+        thread
+            .sender
+            .send(frame(first, 1))
+            .expect("the frame is accepted");
+        assert!(held.began_within(PATIENCE), "the thread renders");
+        if refused {
+            thread
+                .backend
+                .script_attach(ScriptedAnswer::Fail(EngineError::surface_creation(
+                    std::io::Error::other("scripted refusal"),
+                )));
+        }
+        let slot = thread.sender.mint_slot().expect("a slot id is left");
+        thread
+            .sender
+            .send(RasterCommand::Attach {
+                slot,
+                address: PresentationAddress {
+                    ui_runtime_id: UiRuntimeId::new(1),
+                    presentation_id: PresentationId::new(2),
+                },
+                target: SlotTarget::Offscreen {
+                    size: DeviceSize::new(8, 8),
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                },
+                config: SlotConfig::new(),
+            })
+            .expect("the attach is accepted");
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            held.release();
+        });
+        thread
+            .handle
+            .await_attach(&thread.sender, slot, DETACH_DEADLINE)
+            .expect("the thread answers");
+        let phase = thread.sender.record(slot).expect("held").phase;
+        assert_eq!(
+            phase,
+            if refused {
+                SlotPhase::Refused
+            } else {
+                SlotPhase::Attached
+            },
+            "refused: {refused}"
+        );
+        assert_eq!(
+            thread.sender.take_failure(slot).is_some(),
+            refused,
+            "refused: {refused}"
+        );
+        release.join().expect("the release thread ends");
+    }
+}
+
+/// A frame whose render panicked settles marked so, and the frame after it
+/// does not: the owner tells which frame a slot's panic came with however
+/// late it drains.
+///
+/// Red-check: settle every frame unmarked and the panicked frame reads as
+/// an ordinary retry.
+#[test]
+fn a_frame_that_panicked_settles_marked_so() {
+    let thread = spawn();
+    let at = attach(&thread.sender);
+    thread.backend.script_render(ScriptedAnswer::Panic);
+    thread
+        .sender
+        .send(frame(at, 1))
+        .expect("the frame is accepted");
+    let first = settled(&thread, at.slot);
+    thread
+        .sender
+        .send(frame(at, 2))
+        .expect("the frame is accepted");
+    let second = settled(&thread, at.slot);
+    let marks: Vec<_> = first
+        .iter()
+        .chain(&second)
+        .map(|settlement| (settlement.verdict, settlement.panicked))
+        .collect();
+    assert_eq!(
+        marks,
+        vec![
+            (RasterVerdict::Retry, true),
+            (RasterVerdict::Presented, false)
+        ]
+    );
+}

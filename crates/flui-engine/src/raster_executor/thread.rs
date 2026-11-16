@@ -274,6 +274,46 @@ impl ExecutorHandle {
         }
     }
 
+    /// Wait until the thread answered `slot`'s attach, at most `timeout`, so
+    /// the owner refuses a window the thread refused as an inline owner
+    /// does, before the window is shown: the slot's record is then
+    /// [`SlotPhase::Attached`] or [`SlotPhase::Refused`], and
+    /// [`RasterSender::take_failure`] says why it was refused. Answers at
+    /// once for a slot the sender does not hold.
+    ///
+    /// # Errors
+    /// [`ExecutorFailure::Wedged`] when the thread did not answer in time:
+    /// the executor is then [`ExecutorHealth::Died`]. The cause the executor
+    /// died of, when it was dead already.
+    pub fn await_attach(
+        &self,
+        sender: &RasterSender,
+        slot: SlotId,
+        timeout: Duration,
+    ) -> Result<(), ExecutorFailure> {
+        let started = std::time::Instant::now();
+        loop {
+            // Read before the record, so a turn that ends between the check
+            // and the wait is not missed.
+            let seen = self.shared.turns();
+            let answered = sender
+                .record(slot)
+                .is_none_or(|record| record.phase != SlotPhase::Attaching);
+            if answered {
+                return Ok(());
+            }
+            if let Some(death) = self.shared.death() {
+                return Err(death);
+            }
+            let waited = started.elapsed();
+            if waited >= timeout {
+                return Err(self.die(timeout));
+            }
+            self.shared
+                .wait_for_turn(seen, timeout.saturating_sub(waited));
+        }
+    }
+
     /// Stop the thread and wait for it, at most `timeout`. Every send answers
     /// [`RasterSendError::Gone`] from the
     /// call on; the thread settles every pending frame and takes every slot

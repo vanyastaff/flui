@@ -208,13 +208,14 @@ impl Drop for InboxState {
 
 impl InboxState {
     /// Settle `frame` (the one the executor took): one fewer in flight.
-    pub(crate) fn settle(&mut self, frame: &SceneSnapshot, verdict: RasterVerdict) {
+    pub(crate) fn settle(&mut self, frame: &SceneSnapshot, verdict: RasterVerdict, panicked: bool) {
         debug_assert!(self.in_flight > 0, "BUG: a settled frame was in flight");
         self.in_flight = self.in_flight.saturating_sub(1);
         self.settlements.push_back(SlotSettlement {
             address: frame.stamp.address,
             epoch: frame.stamp.epoch,
             verdict,
+            panicked,
         });
     }
 

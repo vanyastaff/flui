@@ -671,7 +671,7 @@ impl RasterSender {
                     continue;
                 }
                 if let Some(frame) = state.frame.take() {
-                    state.settle(&frame, super::RasterVerdict::Failed);
+                    state.settle(&frame, super::RasterVerdict::Failed, false);
                     failed.push(frame);
                 }
             }

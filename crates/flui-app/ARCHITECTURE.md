@@ -240,7 +240,7 @@ the dispatch layer moves there too.
   later window mints a slot on it. Inline, a frame is sent and the executor
   turns at once, so its settlement is in hand before the pump returns; a frame
   that finds the host already turning is answered `Retry`. Threaded (a debug
-  build on Linux or Windows started with `FLUI_RASTER_PLACEMENT=threaded`,
+  build on Linux started with `FLUI_RASTER_PLACEMENT=threaded`,
   ADR-0305 §10), a frame is answered `Queued` or `QueuedReplacing`, two may be
   in flight, the raster thread's wake asks every window for a frame, and each
   window's wake hands its slot's settlements to `UiRuntime::settle_frame`

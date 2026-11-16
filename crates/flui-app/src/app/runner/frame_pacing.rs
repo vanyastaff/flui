@@ -163,6 +163,46 @@ pub(super) fn keeps_frame_gate_open(
     needs_redraw || frame_scheduled || has_pending_work
 }
 
+/// What a desktop window's pacing does after its pump.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AfterPump {
+    /// The frame presented: the first reveals the window, and the fallback
+    /// stands down.
+    Presented,
+    /// A raster thread holds the frame: its settlement wakes the window and
+    /// paces it, so neither the first reveal's fallback nor the pacing
+    /// fallback arms, and a slow first render reveals nothing blank.
+    Held,
+    /// Nothing presented: the first reveal counts the frame toward its
+    /// fallback, and the pacing fallback arms when `defer`, the gate staying
+    /// open.
+    NotPresented { defer: bool },
+}
+
+/// The pacing after a pump that `presented`, with a raster thread `holding`
+/// the window's frames and the gate kept open (`keeps_gate_open`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn after_pump(presented: bool, holding: bool, keeps_gate_open: bool) -> AfterPump {
+    if presented {
+        AfterPump::Presented
+    } else if holding {
+        AfterPump::Held
+    } else {
+        AfterPump::NotPresented {
+            defer: keeps_gate_open,
+        }
+    }
+}
+
 /// The pace a BACKGROUNDED pump (frames disabled) is bounded to on Android,
 /// armed as a deadline ([`BackgroundPace`]). iOS needs none: its display link
 /// runs the pump at most once per refresh and not at all while held
@@ -610,6 +650,34 @@ mod desktop_pacing_tests {
         );
     }
 
+    /// A frame a raster thread holds is paced by its settlement: no fallback
+    /// of either kind arms for it, whatever the gate, while a frame that
+    /// presented or presented nothing paces as before.
+    ///
+    /// Red-check: answer `NotPresented` while held and the first reveal arms
+    /// its one-second fallback under a render still on the thread.
+    fn a_held_frame_arms_no_fallback() {
+        use super::{AfterPump, after_pump};
+        for (presented, holding, open, expected) in [
+            (true, false, true, AfterPump::Presented),
+            (true, true, true, AfterPump::Presented),
+            (false, true, true, AfterPump::Held),
+            (false, true, false, AfterPump::Held),
+            (false, false, true, AfterPump::NotPresented { defer: true }),
+            (
+                false,
+                false,
+                false,
+                AfterPump::NotPresented { defer: false },
+            ),
+        ] {
+            assert_eq!(
+                after_pump(presented, holding, open),
+                expected,
+                "presented {presented}, holding {holding}, open {open}"
+            );
+        }
+    }
     #[test]
     fn desktop_pacing_matrix() {
         crate::table_test::run_table(
@@ -635,6 +703,10 @@ mod desktop_pacing_tests {
                     "a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work",
                     a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work
                         as fn(),
+                ),
+                (
+                    "a_held_frame_arms_no_fallback",
+                    a_held_frame_arms_no_fallback as fn(),
                 ),
             ],
         );
