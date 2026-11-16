@@ -1,6 +1,6 @@
 # ADR-0342: A variant or value added to a closed union breaks the agent protocol, and 0.13 is such a break
 
-- **Status:** Proposed (2026-11-16)
+- **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16
 - **Related:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (what an additive change
   is), [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §1 (the protocol version and its
