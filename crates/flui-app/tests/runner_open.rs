@@ -1,15 +1,17 @@
 //! What the operating system opens an application with reaches it through
 //! the runner: a URL the application declared opens in the `Router` of the
-//! window it addresses, the window focused last when it addresses the
-//! application as a whole, and opened files reach `on_open_files`.
+//! window it addresses, the main window when it addresses the application as
+//! a whole, and opened files reach `on_open_files`.
 //!
 //! # Scenarios
 //!
 //! A link that launched the application, reported before its first window
-//! exists, opens the first window's Router on its page; with two windows a
-//! link goes to the one focused last; an undeclared scheme opens nothing;
-//! files reach the callback in order; a panic while the first of two URLs
-//! navigates does not lose the second.
+//! exists, opens the first window's Router on its page; a link for the
+//! application goes to the main window, whichever window has the focus, opened
+//! first or opened for a file; an undeclared scheme opens nothing; files reach
+//! the callback in order; a panic in a Router hook is held by the window's
+//! runtime, in an open window and in one the link reopens, and does not lose
+//! the next link.
 //!
 //! With no window: a link the application declares reopens its main window,
 //! whose Router opens on it, after the last window closed, in a resident run,
@@ -17,7 +19,8 @@
 //! does not declare opens none. A link for a window still to open never takes
 //! the place of the application's, one for a window that closed is refused
 //! as it arrives, and one that arrives as the application quits opens no
-//! window and is refused when the run ends.
+//! window and is refused when the run ends. A link causes one opening of the
+//! main window, or rides the one under way, and is refused when it fails.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -229,6 +232,10 @@ pub(crate) fn a_panic_in_the_first_urls_navigation_does_not_lose_the_second() {
         built_page(&built, "main", &Page::Note { id: 2 }),
         "the second link opened: {:?}",
         built.borrow()
+    );
+    assert!(
+        run.is_running(),
+        "the open window's runtime held the hook's panic (ADR-0339 §6)"
     );
     drop(run);
 }
@@ -1008,5 +1015,105 @@ pub(crate) fn a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahea
     });
     assert!(!run.is_running(), "the quit went ahead");
     assert!(built.borrow().is_empty(), "no main window was built");
+    drop(run);
+}
+
+pub(crate) fn a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let fail = Rc::new(std::cell::Cell::new(false));
+    let attempts = Rc::new(std::cell::Cell::new(0_u32));
+    let handle = Rc::new(RefCell::new(None));
+    let (failing, counted, factory_built, ready) = (
+        Rc::clone(&fail),
+        Rc::clone(&attempts),
+        Rc::clone(&built),
+        Rc::clone(&handle),
+    );
+    let run = HeadlessRun::start_resident(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit))
+            .on_ready(move |app: &AppHandle| {
+                *ready.borrow_mut() = Some(app.clone());
+            }),
+        move |_: &AppHandle| {
+            counted.set(counted.get() + 1);
+            assert!(!failing.get(), "the main window cannot be built");
+            router("main", &factory_built)
+        },
+    );
+    turns(&run, 2);
+    fail.set(true);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let ((), log) = flui_testing::capture(|| {
+        // The application asks for its main window, and the link arrives
+        // while that opening is under way: the link is bound to it.
+        drop(
+            app.request_show_main_window()
+                .expect("the run accepts the show"),
+        );
+        run.open(link("myapp:///note/3", Launch::Running));
+        turns(&run, 30);
+    });
+    assert_eq!(
+        attempts.get(),
+        1,
+        "the link found an opening under way and caused none of its own: {log}"
+    );
+    assert_eq!(
+        log.count_containing("its window could not be opened"),
+        1,
+        "the link is refused once the opening it found failed: {log}"
+    );
+    assert!(run.open_windows().is_empty(), "no window is open");
+    drop(run);
+}
+
+pub(crate) fn a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime()
+ {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let factory_built = Rc::clone(&built);
+    let run = HeadlessRun::start_resident(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        move |_: &AppHandle| {
+            router("main", &factory_built).on_unknown(|_| panic!("the unknown-route hook panics"))
+        },
+    );
+    turns(&run, 2);
+    // The link reopens the main window, whose Router finds no route for it
+    // and whose hook panics: user code in the window's navigation, held by
+    // that window's UI runtime as in a window already open.
+    let ((), log) = flui_testing::capture(|| {
+        run.open(link("myapp:///nowhere", Launch::Running));
+        turns(&run, 6);
+    });
+    assert_eq!(
+        log.count_containing("application callback panic contained"),
+        1,
+        "the window's runtime holds the hook's panic: {log}"
+    );
+    assert!(run.is_running(), "the run goes on: {log}");
+    assert_eq!(
+        run.open_windows().len(),
+        1,
+        "the window the link reopened stays: {log}"
+    );
+    assert!(
+        built_page(&built, "main", &INITIAL),
+        "its Router left its stack as it was: {:?}",
+        built.borrow()
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 3);
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the next link reaches the window: {:?}",
+        built.borrow()
+    );
     drop(run);
 }

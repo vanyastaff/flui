@@ -323,6 +323,16 @@ fn runner_open() {
                 runner_open::a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead
                     as fn(),
             ),
+            (
+                "runner_open::a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails",
+                runner_open::a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails
+                    as fn(),
+            ),
+            (
+                "runner_open::a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime",
+                runner_open::a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime
+                    as fn(),
+            ),
         ],
     );
 }

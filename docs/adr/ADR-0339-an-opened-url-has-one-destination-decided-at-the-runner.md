@@ -71,9 +71,10 @@ struct HeldUrls {
 
 // flui-app (crate-private): URLs opened into a window whose installation has not
 // committed; the installation owns it, `commit` keeps them, `window_closed` and
-// `Drop` return them, and the owner's next turn routes what came back
+// `Drop` return them (as a failed installation, or as the panic of their navigation), and the
+// owner's next turn routes what came back
 #[must_use]
-struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: target, url, order
+struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl>, dropped_as: LoanEnd }  // HeldUrl: target, url, order, bound
 ```
 
 - **§1. Admission first.** The runner admits each URL by `OpenDeclarations::admit`, the rule the UI
@@ -88,7 +89,8 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: 
   The main window is open, being opened or closed (`MainWindow`), on every runner: open, the URL
   goes in; being opened, the URL is bound to that opening, delivered when it commits and refused
   when it fails; closed, the desktop opens it for the URL (§4) and the other runners wait for the
-  window their host opens. The one function that answers this (`destination`) is what the routing
+  window their host opens; while the loop's state is borrowed it is not known (`Busy`), and the URL
+  waits a turn. The one function that answers this (`destination`) is what the routing
   step, the loans of §5 and the reopen ask: a window being built takes the application's URL only
   when it is the main window being opened. URLs held for that target open first, so
   the order is the platform's. The window a URL reaches is made visible to the user, on every host:
@@ -106,7 +108,9 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: 
   runner takes the reopen route a Dock click takes, which shows the main window that `run` or
   `run_resident`'s factory builds, and that window's first Router opens on the URL. A reopen asked
   while a quit is asked, consulted or deferred waits for the quit: it is shown if the quit is
-  abandoned and dropped if it commits. iOS, Android and the web route no reopen: an iOS URL
+  abandoned and dropped if it commits. The route answers whether it took the reopen
+  (`ReopenAnswer`): a URL whose reopen it did not take (the application quits, its owner is gone) is
+  refused, never bound to an opening that will not start. iOS, Android and the web route no reopen: an iOS URL
   addresses its scene, whose installation is under way when the URL is reported; an Android URL
   waits for the activity's window the host opens; the web's page is its window, and its address is
   the cold link the first window opens on.
@@ -116,7 +120,8 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: 
   the URL leaves the hold. The installation's commit keeps them; every other end of it (a failure
   before or after it is submitted, a cancel, a window closed before it commits) drops the guard.
   The guard's drop only returns the URLs to the router and asks the owner for a turn through the
-  owner's signal (`PlatformProxy::wake`, which every runner serves and which needs no window), so
+  owner's proxy the router keeps from the run's start (`PlatformProxy::wake`, which every runner
+  serves, which needs no window and which no borrow of the loop's state can refuse), so
   the next turn runs the routing step whether a window exists or not: it runs no code it does not
   own, so it may run in any destructor, an unwind included. The owner's next turn
   routes what came back once: a URL whose window was closed before it committed is refused (its
@@ -129,11 +134,21 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: 
   window's failed openings are counted, and a URL bound before the count grew is the one refused).
   A failed opening is never retried for it; the user's next action (a Dock click, a later launch)
   starts a new attempt. A loan is
-  never inferred from what the registry holds, so a URL never opens in two windows.
-- **§6. Every other end is reported.** What is held is refused in the log, by reason and never with
-  the URL, when the bootstrap fails or panics (with the launch's files, which the application then
-  never hears) and when the run ends. A panic in `on_open_files` or in a URL's navigation ends the
-  run (ADR-0258 §4), which refuses what is held.
+  never inferred from what the registry holds, so a URL never opens in two windows. An installation
+  opens only the URLs `destination` gives its own presentation and navigates no other window: what
+  waits for another goes on the owner's turn.
+- **§6. Every other end is reported, and a panic follows the rule of where it runs.** What is held is
+  refused in the log, by reason and never with the URL, when the bootstrap fails or panics (with the
+  launch's files, which the application then never hears) and when the run ends. A panic in
+  `on_open_files` ends the run (ADR-0258 §4), which refuses what is held. A URL's navigation runs in
+  the UI runtime of the window it opens in, and user code there (a Router hook, a page's build) is
+  held by that runtime's containment, whether the window is open or being opened by the URL: the
+  window stays and the run goes on. A panic that escapes that containment follows the window's
+  state. User code that panics while a window is being installed fails that installation: the URL
+  is refused for it ("its navigation panicked as its window opened") and the run goes on, as for any
+  other panic in an installation. User code that panics in a window already open follows the rule
+  that window's navigation already has: the routing step resumes it once every URL had its turn,
+  and it ends the run (ADR-0258 §4).
 - **§7. A later launch of a single-instance application.** A launch that opens nothing is the user
   starting the application again: once answered, it asks the application to reopen while no window
   shows, as relaunching it does on macOS. A launch that opens URLs or files asks the host for no
@@ -167,19 +182,27 @@ bound, the window opens on the ninth),
 `a_link_goes_to_the_main_window_not_a_window_its_files_open`,
 `a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt` (§5: the attempt
 belongs to the URL),
+`a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails` (§5: a URL bound to
+an opening under way causes none of its own),
 `a_link_goes_to_the_main_window_never_a_hidden_helper` and
 `a_link_restores_the_minimized_window_it_opens_in` (§2),
 `a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused` (§5: every window refused
 its GPU slot, one attempt in thirty turns, then the refusal), the in-crate
 `a_link_into_a_window_closed_before_it_commits_is_refused` (§5: a window closed after its
-installation was submitted is not reopened), with `a_loan_is_committed_or_returns_its_urls_without_routing`
-and `a_loan_dropped_during_an_unwind_only_returns_its_urls` for the guard itself (the exits no test
+installation was submitted is not reopened), with `a_loan_is_committed_or_returns_its_urls_without_routing`,
+`a_loan_dropped_during_an_unwind_only_returns_its_urls` and
+`a_loan_dropped_while_the_loops_state_is_borrowed_asks_for_its_turn` for the guard itself (the exits no test
 reaches are in
 [gaps](../gaps.md#some-exits-of-a-windows-installation-have-no-test)),
 `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end`,
 `a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned` and
 `a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead` (§4),
-`a_panic_in_on_open_files_ends_the_run_and_refuses_the_link` (§6); the failed-bootstrap rows of
+`a_panic_in_on_open_files_ends_the_run_and_refuses_the_link`,
+`a_panic_in_the_first_urls_navigation_does_not_lose_the_second` and
+`a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime` (§6:
+a Router hook's panic is held by the window's runtime, open or reopened by the URL), the in-crate
+`a_loan_whose_navigation_panics_is_refused_for_the_panic` (§6: a panic that escapes it while the
+window is installed refuses the URL for it); the failed-bootstrap rows of
 `app_handler_routes` (§6); in `flui-native`, `only_a_launch_that_opens_nothing_asks_for_a_reopen`
 (§7); in `flui-widgets`, `declarations_admit_by_scheme_and_by_domain` and
 `a_page_opens_the_urls_of_its_own_origin` (§1).

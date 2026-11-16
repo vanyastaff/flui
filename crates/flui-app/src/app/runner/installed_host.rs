@@ -381,31 +381,51 @@ impl OwnerEffects for HostState {
             initializing.remove(index)
         };
         let mut first = FirstPanic::new();
+        // A panic in a lent URL's navigation fails this installation.
+        let mut navigation_panicked = false;
         if outcome == InitializationOutcome::Ready {
             // URLs that arrived before this presentation existed are queued
             // ahead of its first frame, so its first Router opens on them:
             // on loan to the installation until it commits, like those its
-            // runtime took as it was built. The rest go where they go now.
+            // runtime took as it was built. Only this presentation's: what
+            // waits for another goes on the owner's turn, so no other
+            // window's navigation runs inside this installation.
             if self.is_current()
                 && recovery == RecoveryState::Healthy
                 && let Some(routing) = super::host::current_open_routing()
             {
-                if let Some(loan) = first.contain(|| routing.lend_to_installing(address)) {
+                // The URLs' navigation is user code. Its panic fails this
+                // installation, its loan refuses the URLs for it, and the run
+                // goes on, as for a panic in a main window's installer
+                // (ADR-0339 §6): the payload is discarded, not resumed.
+                let mut lending = FirstPanic::new();
+                if let Some(loan) = lending.contain(|| routing.lend_to_installing(address)) {
                     entry.window.lend(loan);
                 }
-                first.contain(|| routing.route_held());
+                if let Some(payload) = lending.into_payload() {
+                    navigation_panicked = true;
+                    first.contain(|| {
+                        tracing::error!(
+                            ?address,
+                            "a URL's navigation panicked while its window was installed; the \
+                             installation fails"
+                        );
+                    });
+                    flui_foundation::panic::discard_payload(payload);
+                }
+                routing.request_turn_if_owed();
             }
             first.contain(|| entry.window.native().request_redraw());
-            if !first.is_held() && self.installation_is_live(&entry) {
+            if !navigation_panicked && !first.is_held() && self.installation_is_live(&entry) {
                 first.contain(|| self.native.installed(address));
             }
             // Native activation can close the window or tear down its host.
             // The development hook sees only a still-live installation and
             // may itself close it before the readiness receipt is settled.
-            if !first.is_held() && self.installation_is_live(&entry) {
+            if !navigation_panicked && !first.is_held() && self.installation_is_live(&entry) {
                 first.contain(|| entry.window.notify_opened());
             }
-            if !first.is_held() && self.installation_is_live(&entry) {
+            if !navigation_panicked && !first.is_held() && self.installation_is_live(&entry) {
                 entry.window.publish();
                 entry.result.set(Some(Ok(())));
                 return;

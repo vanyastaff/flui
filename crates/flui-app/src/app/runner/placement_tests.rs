@@ -42,7 +42,10 @@ fn a_remembered_placement_is_read_once_before_the_window_opens() {
     let ingress = APP_RUNTIME
         .with(|slot| slot.borrow().main_ingress.clone())
         .expect("a running loop has its main window's ingress");
-    ingress.request_native_show();
+    assert!(
+        ingress.request_native_show(),
+        "the running loop takes the reopen"
+    );
     run.run_owner_turn();
 
     assert_eq!(run.open_windows().len(), 1, "the main window opened");

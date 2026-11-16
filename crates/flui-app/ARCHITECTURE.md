@@ -546,23 +546,29 @@ here is where the code keeps it.
   (`lend_to_installing`). `InstallationWindow::publish` commits it; any other end drops the
   `InstallationWindow` (`OpenedLoan::window_closed` when the window was closed) or the guard,
   before the installation is prepared. The drop only moves the URLs into `OpenRouting::returned`
-  and calls `host::request_owner_turn`, which wakes the owner's signal through its proxy on every
-  runner (no window needed): no log line, no route, no navigation, so it is safe in an unwinding
-  destructor. Nothing infers a loan from the registry.
+  and wakes the owner through the `PlatformProxy` `OpenRouting` keeps (`bind_owner`, set in
+  `ready`), on every runner, from any borrow of the loop's state (no window needed): no log line,
+  no route, no navigation, so it is safe in an unwinding destructor. A loan whose navigation
+  panicked (`OpenedLoan::open_each`) ends as that panic, and its URLs are refused for it. Nothing
+  infers a loan from the registry; `finish_install` lends only its own presentation's URLs and
+  navigates no other window.
 - `destination` is the one authority: the routing step, the loans (`open_held_in`,
   `lend_to_installing`) and the reopen ask it. A URL for the application goes to the main window
-  alone (`host::main_window`: `Open`, `Opening`, `Closed` on every runner; the desktop reads its
+  alone (`host::main_window`: `Open`, `Opening`, `Closed` on every runner, `Busy` while the loop's
+  state is borrowed, when the URL waits a turn; the desktop reads its
   `Ingress`, the other runners their one window), never a focused or first-opened other window;
   a window being built takes it only as the main window being opened (`is_main_window`, which each runner states).
 - Each owner turn calls `host::route_owed_opened_urls` (desktop and web in the owner-turn hook,
   iOS in `drive_owner`, Android in its wake) while anything waits. What a loan returned is routed
   once; the URL held for the application is bound to the main window's opening (`HeldUrl::bound`,
   by `host::main_window_failures`) and refused when that opening fails, before or after its
-  runtime was built. `Ingress::settle` and `fail_pending` ask for that turn. Never a second
+  runtime was built. `Ingress::settle` and `fail_pending` ask for that turn through the ingress's
+  own proxy, from any thread. Never a second
   opening for one URL.
 - `OpenRouting::route_held` is the one step for "a URL is in the hold": into an open presentation
   (made visible by `reveal`: shown, restored, brought forward), kept, bound, refused, or the main
-  window reopened through `host::reopen_current_run`.
+  window reopened through `host::reopen_current_run`, whose `ReopenAnswer` says whether the
+  controller took it; a URL whose reopen was not taken is refused (`Refusal::ReopenNotTaken`).
 - `Ingress::request_native_show` keeps a reopen asked during a quit and shows it only if the quit
   is abandoned.
 - Every refusal is one `tracing` warning with the count and `Refusal::reason`, never the URL.

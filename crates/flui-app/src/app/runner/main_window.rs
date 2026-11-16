@@ -1073,9 +1073,9 @@ where
                 install_platform_quit_hook();
                 let reopen = Arc::downgrade(&ingress);
                 super::host::route_reopen(move || {
-                    if let Some(ingress) = reopen.upgrade() {
-                        ingress.request_native_show();
-                    }
+                    reopen
+                        .upgrade()
+                        .is_some_and(|ingress| ingress.request_native_show())
                 });
                 // The driver agent (ADR-0239), beside the application's own hooks,
                 // when launched with an endpoint; a driver that goes under
@@ -1488,6 +1488,7 @@ mod tests {
                         if opened_once.get() > 0 {
                             reopened.set(reopened.get() + 1);
                         }
+                        true
                     });
                     let outer = install_platform_ui_runtime(
                         UiRuntime::for_test(),

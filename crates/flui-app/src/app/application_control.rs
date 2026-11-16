@@ -366,29 +366,37 @@ impl Ingress {
     /// or deferred (a close guard waiting on the user) waits for the quit:
     /// it is shown if the quit is abandoned and dropped if it commits, as
     /// AppKit ignores a reopen once it terminates.
-    pub(crate) fn request_native_show(&self) {
+    ///
+    /// Answers whether it took the reopen: `false` once the application no
+    /// longer accepts windows or its owner cannot be woken.
+    #[must_use = "a reopen not taken opens no window"]
+    pub(crate) fn request_native_show(&self) -> bool {
         let mut state = self.state.lock();
         if state.phase != Phase::Accepting {
-            return;
+            return false;
         }
         if !matches!(state.quit, QuitAsk::None) {
             state.reopen_after_quit = true;
-            return;
+            return true;
         }
-        Self::show_for_reopen(state, &self.proxy);
+        Self::show_for_reopen(state, &self.proxy)
     }
 
     /// Ask the owner to show the main window for a reopen, unless one is
-    /// shown and stays.
-    fn show_for_reopen(mut state: parking_lot::MutexGuard<'_, State>, proxy: &PlatformProxy) {
+    /// shown and stays; whether the owner was asked.
+    fn show_for_reopen(
+        mut state: parking_lot::MutexGuard<'_, State>,
+        proxy: &PlatformProxy,
+    ) -> bool {
         if let Err(error) = proxy.wake() {
             drop(state);
             tracing::error!(%error, "native reopen could not notify application owner");
-            return;
+            return false;
         }
         if !state.active || state.superseded || state.closing.is_some() {
             state.intent = true;
         }
+        true
     }
 
     /// The main window's address while it is open.
@@ -416,6 +424,14 @@ impl Ingress {
         if std::mem::take(&mut state.reopen_after_quit) {
             Self::show_for_reopen(state, proxy);
         }
+    }
+    /// Ask the owner for a turn through this ingress's proxy, from any
+    /// thread (a pending window's waker settles the opening off the owner):
+    /// the next turn routes the opened URLs bound to the opening. A refused
+    /// wake means the owner is ending, whose end refuses what waits; it is
+    /// not logged, so a waker runs no subscriber.
+    fn request_turn(&self) {
+        let _ = self.proxy.wake();
     }
     pub(crate) fn wake_owner(&self) {
         if let Err(error) = self.proxy.wake() {
@@ -485,7 +501,7 @@ impl Ingress {
         Self::deliver(replies, result);
         // The main window opened or failed to: opened URLs bound to this
         // opening are delivered or refused on the next owner turn.
-        crate::app::runner::request_owner_turn();
+        self.request_turn();
         // A close/dispose callback may have reserved the next generation.
         let pending = {
             let state = self.state.lock();
@@ -525,7 +541,7 @@ impl Ingress {
         };
         Self::deliver(replies, Err(error));
         // Opened URLs bound to this opening are refused on the next turn.
-        crate::app::runner::request_owner_turn();
+        self.request_turn();
         true
     }
     fn deliver(replies: Vec<Reply>, result: Result<PresentationAddress, AppWindowError>) {

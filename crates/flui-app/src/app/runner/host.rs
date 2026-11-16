@@ -1072,7 +1072,8 @@ type Bootstrap =
 #[derive(Default)]
 pub(crate) struct AppRoutes {
     quit: Option<Rc<dyn Fn()>>,
-    reopen: Option<Rc<dyn Fn()>>,
+    /// Answers whether the main window's controller took the reopen.
+    reopen: Option<Rc<dyn Fn() -> bool>>,
     exit_policy: Option<Rc<dyn Fn() -> bool>>,
     wake_deadline: Option<Rc<dyn Fn() -> Option<web_time::Instant>>>,
     /// Where what the operating system opens goes; set when the handler is
@@ -1119,7 +1120,8 @@ pub(crate) fn route_quit(route: impl Fn() + 'static) {
     set_route(|routes| &mut routes.quit, Rc::new(route) as Rc<dyn Fn()>);
 }
 
-/// Send the user's reopen (AppKit's Dock click) to `route`.
+/// Send the user's reopen (AppKit's Dock click) to `route`, which answers
+/// whether it took it: `false` once the application opens no window.
 #[cfg_attr(
     any(
         target_arch = "wasm32",
@@ -1127,8 +1129,11 @@ pub(crate) fn route_quit(route: impl Fn() + 'static) {
     ),
     expect(dead_code, reason = "only the desktop main window reopens")
 )]
-pub(super) fn route_reopen(route: impl Fn() + 'static) {
-    set_route(|routes| &mut routes.reopen, Rc::new(route) as Rc<dyn Fn()>);
+pub(super) fn route_reopen(route: impl Fn() -> bool + 'static) {
+    set_route(
+        |routes| &mut routes.reopen,
+        Rc::new(route) as Rc<dyn Fn() -> bool>,
+    );
 }
 
 /// Answer the platform's exit question with `route`.
@@ -1227,7 +1232,7 @@ impl RunnerHandler {
 /// run with no main window (iOS, Android, the web) routes no reopen: there
 /// the host opens the window they wait for. Asked again while the window is
 /// coming, the route only keeps the intent it set.
-pub(super) fn reopen_current_run() -> bool {
+pub(super) fn reopen_current_run() -> ReopenAnswer {
     let routes = APP_RUNTIME
         .try_with(|slot| {
             let state = slot.try_borrow().ok()?;
@@ -1245,7 +1250,25 @@ pub(super) fn reopen_current_run() -> bool {
             .ok()
             .and_then(|routes| routes.reopen.clone())
     });
-    reopen.map(|reopen| reopen()).is_some()
+    match reopen.map(|reopen| reopen()) {
+        Some(true) => ReopenAnswer::Taken,
+        Some(false) => ReopenAnswer::NotTaken,
+        None => ReopenAnswer::NoRoute,
+    }
+}
+
+/// What the run answered a URL's reopen of its main window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReopenAnswer {
+    /// The main window's controller took it: an opening starts, or waits for
+    /// a pending quit to be abandoned.
+    Taken,
+    /// The controller did not take it: the application opens no window now
+    /// (it quits, or its owner is gone).
+    NotTaken,
+    /// The run routes no reopen (iOS, Android, the web): its host opens the
+    /// window the URL waits for.
+    NoRoute,
 }
 
 /// The run's main window, the one window an opened URL for the application
@@ -1263,9 +1286,13 @@ pub(super) enum MainWindow {
     /// Not open and not being opened: the desktop reopens it for a URL; the
     /// other runners wait for the window their host opens.
     Closed,
+    /// Not known now: the loop's state is borrowed. A URL waits for a later
+    /// turn.
+    Busy,
 }
 
-/// The run's main window on this thread.
+/// The run's main window on this thread. With the loop's state gone (the
+/// thread ends) there is no window: `Closed`.
 pub(super) fn main_window() -> MainWindow {
     #[cfg(all(
         not(target_os = "android"),
@@ -1273,29 +1300,37 @@ pub(super) fn main_window() -> MainWindow {
         not(target_arch = "wasm32")
     ))]
     {
-        let ingress = APP_RUNTIME
-            .try_with(|slot| slot.try_borrow().ok()?.main_ingress.clone())
-            .ok()
-            .flatten();
-        if let Some(ingress) = ingress {
-            return match ingress.open_address() {
-                Some(address) => MainWindow::Open(address),
-                None if ingress.is_opening() => MainWindow::Opening,
-                None => MainWindow::Closed,
-            };
+        let ingress = APP_RUNTIME.try_with(|slot| {
+            slot.try_borrow()
+                .ok()
+                .map(|state| state.main_ingress.clone())
+        });
+        match ingress {
+            Ok(Some(Some(ingress))) => {
+                return match ingress.open_address() {
+                    Some(address) => MainWindow::Open(address),
+                    None if ingress.is_opening() => MainWindow::Opening,
+                    None => MainWindow::Closed,
+                };
+            }
+            Ok(Some(None)) => {}
+            Ok(None) => return MainWindow::Busy,
+            Err(_) => return MainWindow::Closed,
         }
     }
-    let host = APP_RUNTIME
-        .try_with(|slot| Some(slot.try_borrow().ok()?.installed_host.clone()))
-        .ok()
-        .flatten();
+    let host = APP_RUNTIME.try_with(|slot| {
+        slot.try_borrow()
+            .ok()
+            .map(|state| state.installed_host.clone())
+    });
     match host {
-        Some(host) => match host.native().first_address() {
+        Ok(Some(host)) => match host.native().first_address() {
             Some(address) => MainWindow::Open(address),
             None if host.has_pending_installs() => MainWindow::Opening,
             None => MainWindow::Closed,
         },
-        None => MainWindow::Closed,
+        Ok(None) => MainWindow::Busy,
+        Err(_) => MainWindow::Closed,
     }
 }
 
@@ -1325,24 +1360,6 @@ pub(super) fn main_window_failures() -> u64 {
     #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
     {
         0
-    }
-}
-
-/// Ask the owner for a coalesced turn through its signal, on every runner
-/// (`PlatformProxy::wake`, which needs no window): the next turn runs the
-/// owner-turn callback, and with it [`route_owed_opened_urls`]. Runs no code
-/// it does not own, so it is safe from a destructor; with no owner on this
-/// thread there is no turn to ask for.
-pub(crate) fn request_owner_turn() {
-    let owner = APP_RUNTIME
-        .try_with(|slot| slot.try_borrow().ok()?.owner_platform.clone())
-        .ok()
-        .flatten();
-    // A refused wake means the owner is ending, and the run's end refuses
-    // what is still waiting; it is not logged here, where a destructor may
-    // be running.
-    if let Some(owner) = owner {
-        let _ = owner.proxy().wake();
     }
 }
 
@@ -1379,6 +1396,9 @@ impl flui_native::AppHandler for RunnerHandler {
             // the link (Flutter's initial route) instead of navigating to it
             // after its initial page was built.
             let routing = self.route(|routes| routes.opened.clone());
+            if let Some(routing) = &routing {
+                routing.bind_owner(owner.proxy());
+            }
             if let (Some(routing), Some(origin)) = (&routing, owner.page_origin()) {
                 routing.set_page_origin(origin);
             }
@@ -1411,8 +1431,10 @@ impl flui_native::AppHandler for RunnerHandler {
 
     fn reopen(&self, _: &flui_native::OwnerPlatform) {
         contained((), "application reopen", || {
+            // The user's reopen asks for nothing back: a reopen the
+            // controller does not take shows nothing, as on a quitting app.
             if let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
-                reopen();
+                let _taken: bool = reopen();
             }
         });
     }
