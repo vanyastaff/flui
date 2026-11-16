@@ -1,5 +1,7 @@
-//! The order a native recording's rows come in, which its reader checks from
-//! the rows alone (ADR-0215 §4).
+//! The order and the bounds of a native recording's rows: the order its reader checks from
+//! the rows alone, and where its writer cuts it (ADR-0215 §4).
+
+use flui_protocol::native_recording as wire;
 
 use super::codec::{CloseAnswer, CloseCause, Row};
 use super::store::RecordedStore;
@@ -138,4 +140,29 @@ impl RowOrder {
         }
         Ok(())
     }
+}
+
+/// How many bytes a writer keeps free for the [`wire::Row::Cut`] line it may
+/// end a recording with: the longest such line and its newline, with room.
+const CUT_LINE_ROOM: usize = 64;
+
+/// How many of `lines` a writer writes after a header of `header` bytes, and
+/// why it cuts the rest: every row while they all fit, otherwise the rows that
+/// fit with room after the last for the `cut` row that replaces the next.
+pub(super) fn cut_point(header: usize, lines: &[Vec<u8>]) -> (usize, Option<wire::CutReason>) {
+    let mut written = header;
+    for (index, line) in lines.iter().enumerate() {
+        let follows = index + 1 < lines.len();
+        // The rows this one makes, and the cut a row after it would need.
+        let rows = index + 1 + usize::from(follows);
+        if rows > wire::MAX_ROWS {
+            return (index, Some(wire::CutReason::Rows));
+        }
+        let room = if follows { CUT_LINE_ROOM } else { 0 };
+        if written + line.len() + room > wire::MAX_RECORDING_BYTES {
+            return (index, Some(wire::CutReason::Bytes));
+        }
+        written += line.len();
+    }
+    (lines.len(), None)
 }
