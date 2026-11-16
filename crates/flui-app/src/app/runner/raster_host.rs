@@ -1255,14 +1255,18 @@ impl RasterHost {
         };
         let failure = placed.sender.take_failure(slot.slot);
         // The turn's own panic (a retired scene's `Drop`, a trim, a device
-        // rebuild) goes to the window that turned it, for its report, after
-        // the slot's own panic, which its commands raised first.
+        // rebuild) goes to the window that turned it, for its report. The
+        // slot's own panic takes precedence over it, as before this host
+        // took a thread's failures with their settlements: it is this
+        // window's, while the turn's may be another window's work, and the
+        // executor records no order between the two.
         Self::hold_slot_failure(slot, failure, caught)
     }
 
     /// Settle `failure`, taken from `slot`'s executor slot, with `turned`,
     /// the panic of the turn that left it: a panic of the slot's commands is
-    /// held first for the window's report, then the turn's, and a refusal
+    /// held for the window's report in precedence over the turn's (not by time:
+    /// the executor records no order between them), and a refusal
     /// is logged last. The log and the refusal's drop run contained, their
     /// panic held with the slot's (a subscriber is user code), so a caller
     /// that drained settlements with the failure still hands them on.
