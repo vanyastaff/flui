@@ -599,7 +599,7 @@ impl FrameClock {
     // ------------------------------------------------------------------
     // Presentation feedback — when the platform says this presentation's
     // frames reached the screen (DXGI frame statistics, Metal's presented
-    // handler, `wp_presentation_time`, Android's frame timelines), fed in by
+    // handler, `wp_presentation_time`), fed in by
     // the caller that receives the host's frame requests. It marks no demand
     // and moves no frame time: the frame tick stays the vsync instant
     // (ADR-0257 decision 2), never a presentation time.
