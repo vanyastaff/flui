@@ -106,22 +106,25 @@ struct Script {
     /// The clock each rebuild advances, and by how much.
     rebuild_takes: Option<(ManualClock, Duration)>,
     /// What the next render waits on before it answers.
-    render_hold: Option<CallHold>,
+    render_hold: Option<HeldCall>,
     /// What the next resize waits on before it answers.
-    resize_hold: Option<CallHold>,
+    resize_hold: Option<HeldCall>,
 }
 
 /// The two ends a held call waits on: it tells the test it began, then
 /// waits for the release.
-type CallHold = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+struct HeldCall {
+    began: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
 
 /// Wait out `hold`, if the call was held.
-fn wait_out(hold: Option<CallHold>) {
-    if let Some((began, hold)) = hold {
+fn wait_out(hold: Option<HeldCall>) {
+    if let Some(HeldCall { began, release }) = hold {
         // A test that stopped watching does not hold the call up.
         let _told = began.send(());
         // Released or dropped: either way the call goes on.
-        let _released = hold.recv();
+        let _released = release.recv();
     }
 }
 
@@ -129,19 +132,19 @@ fn wait_out(hold: Option<CallHold>) {
 /// answers once this is released or dropped, so a raster thread stands for
 /// one that does not answer.
 #[derive(Debug)]
-pub struct RenderHold {
+pub struct CallHold {
     _release: std::sync::mpsc::Sender<()>,
     started: std::sync::mpsc::Receiver<()>,
 }
 
-impl RenderHold {
-    /// Whether the held render began within `timeout`.
+impl CallHold {
+    /// Whether the held call began within `timeout`.
     #[must_use]
     pub fn began_within(&self, timeout: Duration) -> bool {
         self.started.recv_timeout(timeout).is_ok()
     }
 
-    /// Let the held render answer.
+    /// Let the held call answer.
     pub fn release(self) {}
 }
 
@@ -172,11 +175,14 @@ impl ScriptedSlots {
 
     /// Hold the next resize until the answer is released or dropped.
     #[must_use = "dropping the hold releases the resize at once"]
-    pub fn hold_next_resize(&self) -> RenderHold {
+    pub fn hold_next_resize(&self) -> CallHold {
         let (release, held) = std::sync::mpsc::channel();
         let (began, started) = std::sync::mpsc::channel();
-        self.script.lock().resize_hold = Some((began, held));
-        RenderHold {
+        self.script.lock().resize_hold = Some(HeldCall {
+            began,
+            release: held,
+        });
+        CallHold {
             _release: release,
             started,
         }
@@ -184,11 +190,14 @@ impl ScriptedSlots {
 
     /// Hold the next render until the answer is released or dropped.
     #[must_use = "dropping the hold releases the render at once"]
-    pub fn hold_next_render(&self) -> RenderHold {
+    pub fn hold_next_render(&self) -> CallHold {
         let (release, held) = std::sync::mpsc::channel();
         let (began, started) = std::sync::mpsc::channel();
-        self.script.lock().render_hold = Some((began, held));
-        RenderHold {
+        self.script.lock().render_hold = Some(HeldCall {
+            began,
+            release: held,
+        });
+        CallHold {
             _release: release,
             started,
         }

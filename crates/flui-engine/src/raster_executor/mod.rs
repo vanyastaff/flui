@@ -333,7 +333,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
         }
         // A loss this turn's own frames met is published now, so the owner
         // knows a rebuild is due without waiting for another turn to see it.
-        device_moved |= self.note_loss(&mut first);
+        if self.shared.health() != ExecutorHealth::Died {
+            device_moved |= self.note_loss(&mut first);
+        }
         if outcome.settled > 0 || device_moved {
             first.contain(|| (self.wake)());
         }
@@ -762,6 +764,10 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let Some(slot) = slots.get_mut(index).and_then(Option::as_mut) else {
             return 0;
         };
+        // Once the executor died (a call below wedged past the owner's
+        // deadline, then returned) no further backend call of this service
+        // runs: the owner gave its windows up (ADR-0305 §9).
+        let died = || shared.health() == ExecutorHealth::Died;
         let (size, generation, visibility, color, latency, frame) = {
             let mut state = slot.inbox.lock();
             // A full ring holds the next frame where it is.
@@ -785,7 +791,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
             }
             slot.visibility = visibility;
         }
-        if let Some(latency) = latency {
+        if let Some(latency) = latency
+            && !died()
+        {
             let mut caught = FirstPanic::new();
             if caught
                 .contain(|| backend.set_latency(slot.id, latency))
@@ -794,7 +802,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 hold_panic(&slot.inbox, caught, first);
             }
         }
-        if let Some(color) = color {
+        if let Some(color) = color
+            && !died()
+        {
             let mut caught = FirstPanic::new();
             match caught.contain(|| backend.set_display_color(slot.id, color)) {
                 Some(Ok(())) => slot.owe_full(FullReason::SurfaceChanged),
@@ -813,7 +823,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
         // owner sends another size or the device is rebuilt.
         let mut answer = None;
         let mut resize_report = None;
-        if let Some(size) = size {
+        if let Some(size) = size
+            && !died()
+        {
             let mut caught = FirstPanic::new();
             match caught.contain(|| backend.resize(slot.id, size)) {
                 Some(Ok(())) => {
@@ -852,7 +864,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let mut discarded = None;
         let textures_report = frame.as_mut().and_then(|frame| {
             let updates = std::mem::take(&mut frame.textures);
-            if updates.is_empty() {
+            if updates.is_empty() || died() {
                 return None;
             }
             let mut caught = FirstPanic::new();
@@ -893,12 +905,11 @@ impl<B: RasterBackend> RasterExecutor<B> {
         // A call before the render that the executor died during (a resize or a
         // texture upload that wedged) does not reach the window the owner gave
         // up: the frame settles failed, in its slot's order (ADR-0305 §9).
-        let (verdict, render_failure, surface_loss, render_report) =
-            if shared.health() == ExecutorHealth::Died {
-                (RasterVerdict::Failed, None, SurfaceLoss::Kept, None)
-            } else {
-                render(backend, slot, &frame)
-            };
+        let (verdict, render_failure, surface_loss, render_report) = if died() {
+            (RasterVerdict::Failed, None, SurfaceLoss::Kept, None)
+        } else {
+            render(backend, slot, &frame)
+        };
         let discarded_render = if failure.is_none() {
             failure = render_failure;
             None
