@@ -1807,7 +1807,7 @@ mod native_windows {
                 (WM_KEYUP, 0x41, a | KEY_RELEASE),
             ]),
             [
-                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Down(First) Character(KeyText("a")) KeyA"#,
                 r#"Up Character(KeyText("a")) KeyA"#
             ],
             "only the application's own key is delivered"
@@ -1832,7 +1832,7 @@ mod native_windows {
                 (WM_KEYUP, 0x41, a | KEY_RELEASE),
             ]),
             [
-                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Down(First) Character(KeyText("a")) KeyA"#,
                 r#"Up Character(KeyText("a")) KeyA"#
             ],
             "only the application's own key is delivered"
@@ -1853,9 +1853,9 @@ mod native_windows {
                 (WM_SYSKEYUP, VK_PROCESSKEY, b | KEY_RELEASE),
             ]),
             [
-                r#"Down Character(KeyText("a")) KeyA"#,
+                r#"Down(First) Character(KeyText("a")) KeyA"#,
                 "Up Named(Unidentified) KeyA",
-                r#"Down Character(KeyText("b")) KeyB"#,
+                r#"Down(First) Character(KeyText("b")) KeyB"#,
                 "Up Named(Unidentified) KeyB"
             ],
             "each delivered press is released"
