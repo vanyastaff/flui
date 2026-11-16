@@ -728,9 +728,12 @@ trait depends on `flui-platform` instead.
   toplevel's configured states and the Win32
   window's tracked mode each read their report into the flags and nothing
   else), the one rule that turns a logical window extent into device pixels
-  (`window::state::device_extent`: snapped, at least one pixel, clamped at
-  `flui_platform::MAX_SURFACE_EXTENT`, which every host that hands its window
-  system an extent or draws a surface of its own reads), the desktop window configuration
+  (`window::state::device_extent`: `flui_foundation::geometry::device_extent`, the
+  conversion the runtime's scene surface uses too, clamped at
+  `flui_platform::MAX_SURFACE_EXTENT`; and `window::state::device_limits` for size
+  limits, a minimum up and a maximum down and never below it, which Win32 and X11 both
+  call; every host that hands its window system an extent or draws a surface of
+  its own reads them), the desktop window configuration
   (`window::config`, crate-private: its windows open with F11 as the
   fullscreen key) and the acknowledgement
   a host waits for before it publishes a window it attached
