@@ -71,10 +71,11 @@ pub(crate) struct WindowRegistry {
 }
 
 /// How many closed windows the registry remembers. A report addressed to a
-/// window is made while the window is open; it reaches the runner after its
-/// close only from the queue of reports the platform delivers in order, which
-/// holds [`MAX_OPENED_ITEMS`](flui_platform::MAX_OPENED_ITEMS) opened reports
-/// at most.
+/// window is made while the window is open; it reaches the runner after the
+/// close only from the platform's queue of opened reports waiting for the
+/// handler (`AppHandler::opened`), which holds fewer than this. An older id
+/// forgotten here is held as a window still to come, within the hold's bound,
+/// and refused when the run ends.
 const RETIRED_WINDOWS_KEPT: usize = flui_platform::MAX_OPENED_ITEMS;
 
 /// Where what the operating system opened for an [`OpenTarget`] goes now.
