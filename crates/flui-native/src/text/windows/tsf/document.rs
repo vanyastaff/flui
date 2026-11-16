@@ -21,8 +21,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform::text_store::{
-    OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreError, TextStoreObserver,
-    TextStoreStatus, Utf16Range,
+    OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreObserver, TextStoreStatus,
+    Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
