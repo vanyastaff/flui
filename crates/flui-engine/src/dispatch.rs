@@ -32,10 +32,7 @@ use crate::command_renderer::CommandRenderer;
 /// The match statement compiles to a jump table, making dispatch O(1).
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]
-pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
-    command: DrawCommand<'_>,
-    renderer: &mut R,
-) {
+fn dispatch_command<R: CommandRenderer + ?Sized>(command: DrawCommand<'_>, renderer: &mut R) {
     let transform = command.transform;
     match command.op {
         // === Drawing Commands ===
@@ -272,9 +269,10 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
 
 /// Dispatch one display list in its own transform and clip scope.
 ///
-/// This is a convenience function for rendering entire display lists.
-/// It's more efficient than calling dispatch_command in a loop due to
-/// better optimization opportunities for the compiler.
+/// Dispatches every command of one display list inside one state scope, the
+/// only way commands reach a renderer: the scope's save and restore flush the
+/// renderer's installed command transform, so the address it keeps of the
+/// entry it was read from never outlives the list (ADR-0306 §5).
 ///
 /// Uses static dispatch via generics for zero-overhead renderer calls.
 #[inline]

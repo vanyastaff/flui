@@ -194,9 +194,10 @@ impl DisplayList {
 impl<'a> IntoIterator for &'a DisplayList { type Item = DrawCommand<'a>; /* … */ }
 ```
 
-The commands under one entry yield the same reference, so the engine installs a CTM once per entry
-and tests "same as before" with `std::ptr::eq` before `==` (`LayerDispatcher::with_transform`,
-which compares the address only while the list it points into is borrowed). The identity yields
+The commands under one entry yield the same reference, so the engine installs a CTM once per run of
+commands under one entry and tests "same as before" with `std::ptr::eq` before `==`
+(`LayerDispatcher::with_transform`, which compares the address only while the list it points into
+is borrowed). The identity yields
 `&Matrix4::IDENTITY`, a promoted constant, not a `static`. `DisplayList::commands()`,
 `AsRef<[DrawCommand]>`, `Index<usize>` and
 `DrawCommand::untransformed` are deleted, since a slice of stored commands would expose the private

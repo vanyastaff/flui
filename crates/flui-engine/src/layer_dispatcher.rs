@@ -189,7 +189,10 @@ impl<'frame> LayerDispatcher<'frame> {
     /// a command under another entry that holds the same matrix.
     #[cfg_attr(
         not(test),
-        expect(clippy::unused_self, reason = "only a test build counts the comparisons on self")
+        expect(
+            clippy::unused_self,
+            reason = "only a test build counts the comparisons on self"
+        )
     )]
     fn same_value(&self, installed: &Matrix4, transform: &Matrix4) -> bool {
         #[cfg(test)]
