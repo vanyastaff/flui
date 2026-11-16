@@ -652,8 +652,7 @@ pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
         key(
             Code::Enter,
             Key::Named(NamedKey::Enter),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
         ),
     );
     ui_runtime
@@ -721,8 +720,7 @@ pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
         key(
             Code::Enter,
             Key::Named(NamedKey::Enter),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
         ),
     );
     let _cancel = node.register_on_key_cancel(Rc::new(|_| panic!("key cancel handler")));
@@ -777,8 +775,7 @@ pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
         key(
             Code::Enter,
             Key::Named(NamedKey::Enter),
-            KeyState::Down,
-            false,
+            KeyState::Down(KeyPress::First),
         ),
     );
     reports.borrow_mut().clear();

@@ -851,7 +851,7 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
 #[test]
 fn opening_a_window_cancels_the_keys_the_focused_one_held() {
     use flui_interaction::focus::{FocusNode, KeyEventResult};
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, PlatformInput};
 
     let node = FocusNode::with_debug_label("held");
@@ -871,7 +871,7 @@ fn opening_a_window_cancels_the_keys_the_focused_one_held() {
     let _ = node.request_focus();
     let _ = host.pump(Duration::ZERO);
     host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::character("a"),
         Code::KeyA,
         EventTime::from_nanos(0),
@@ -899,7 +899,7 @@ fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another()
     use flui_interaction::PointerId;
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
     use flui_interaction::focus::{FocusNode, KeyEventResult};
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, PlatformInput};
 
     let node = FocusNode::with_debug_label("held");
@@ -930,7 +930,7 @@ fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another()
     let _ = node.request_focus();
     let _ = host.pump(Duration::ZERO);
     host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::character("a"),
         Code::KeyA,
         EventTime::from_nanos(0),
