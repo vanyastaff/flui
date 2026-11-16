@@ -26,7 +26,7 @@ pub(crate) const ANDROID_BACKGROUND_WINDOW: std::time::Duration = std::time::Dur
 /// One trip to the background and the platform task `T` held for it.
 #[derive(Debug)]
 #[cfg_attr(
-    target_os = "android",
+    all(target_os = "android", not(test)),
     expect(dead_code, reason = "only UIKit holds a background task")
 )]
 pub(crate) enum BackgroundWindow<T> {
@@ -40,7 +40,7 @@ pub(crate) enum BackgroundWindow<T> {
 }
 
 #[cfg_attr(
-    target_os = "android",
+    all(target_os = "android", not(test)),
     expect(dead_code, reason = "only UIKit holds a background task")
 )]
 impl<T> BackgroundWindow<T> {
