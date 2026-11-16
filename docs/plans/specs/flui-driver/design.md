@@ -383,7 +383,7 @@ virtual time has no latency.
 ### Recording
 
 `record.start{layers}` installs the ADR-0215 recording tap (input layer) and, where the build
-carries `flui-platform`'s `native-capture`, the native capture hook (native layer). Rows stream to
+carries `flui-native`'s `native-capture`, the native capture hook (native layer). Rows stream to
 the driver as `record` events. `record.stop` ends the recording with its `End` row. Privacy
 follows ADR-0215 §5: text is redacted unless `keep_text` is set.
 
