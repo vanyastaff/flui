@@ -522,7 +522,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   not taken it (`SlotSettlement::panicked`), which is how an owner that drains later
   than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
   refusal held before it, since the owner reports the one and only logs the other; a frame the
-  owner held when it took a panic, or one that replaced it, has its base forgotten. The thread's
+  owner held when it took a panic, or one that replaced it, has its base forgotten, and a frame that
+  replaces the one retry a panicked resize or upload asked for on the same surface is that retry. The thread's
   wake asks every attached window for a frame through its
   `RedrawRequester`, each one contained; each window's wake drains its own slot's settlements
   into `UiRuntime::settle_frame` first, before its frame gate and whatever the wake goes on to do,

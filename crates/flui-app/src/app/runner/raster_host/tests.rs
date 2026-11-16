@@ -1355,7 +1355,8 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
 /// replaces a tainted one inherits the taint and the retry it owed, as it
 /// inherits its damage.
 ///
-/// Red-check: move the base for a tainted frame, or drop the taint with the
+/// Red-check: move the base for a tainted frame, or drop the taint or the
+/// retry with the
 /// replaced frame, and the base shows the last frame.
 #[test]
 fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {

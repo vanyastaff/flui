@@ -570,7 +570,8 @@ struct PendingFrame {
     shown: flui_layer::SceneVersionId,
     /// The surface it was measured on.
     key: SurfaceKey,
-    /// Whether it is the retry of a frame whose resize or upload panicked.
+    /// Whether it is the retry of a frame whose resize or upload panicked. A
+    /// frame that replaces it on the same surface inherits it.
     retrying: bool,
     /// Whether the owner took a panic of the slot while the frame was held:
     /// its settlement may have lost the mark that pairs it with the panic,
@@ -838,15 +839,15 @@ impl RasterHost {
         let _turned = caught.contain(|| placed.executor.turn());
         // A raster thread attaches on its own turn: the owner waits for its
         // answer, so a window the thread refuses is refused here as it is
-        // inline. A thread that does not answer within the deadline is
-        // wedged (ADR-0305 §9), and the executor is dead. The window is not
+        // inline. A thread that dies or does not answer within the deadline
+        // (wedged, ADR-0305 §9) leaves the executor dead. The window is not
         // refused: its surface may still be in the thread's hands or in its
         // lifecycle queue, which lives as long as the host, and the native
         // window must outlive it. The answer decides, not a second read of
         // the record, which a thread that answers just after the deadline
         // changes.
         #[cfg(not(target_arch = "wasm32"))]
-        let wedged = match &placed.executor {
+        let unanswered = match &placed.executor {
             Executor::Threaded(handle) => {
                 match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
                     Ok(()) => false,
@@ -859,9 +860,9 @@ impl RasterHost {
             Executor::Inline(_) => false,
         };
         #[cfg(target_arch = "wasm32")]
-        let wedged = false;
+        let unanswered = false;
         let refusal = match placed.sender.record(slot).map(|record| record.phase) {
-            _ if wedged => None,
+            _ if unanswered => None,
             // A panic of the turn alone (not of the slot's attach) leaves the
             // slot attached; the window reports it after its first frame.
             Some(flui_engine::SlotPhase::Attached) => None,
@@ -1892,11 +1893,12 @@ impl RasterHost {
         let verdict = match receipt {
             SendReceipt::Replaced(replaced) => {
                 // The replacement inherits what the replaced frame owed, as
-                // it inherits its damage: its taint, and that it is the one
-                // retry a panicked resize or upload asked for.
+                // it inherits its damage: its taint, and, on the same surface,
+                // that it is the one retry a panicked resize or upload asked for.
                 if let Some(held) = slot.pending.iter().find(|held| held.epoch == replaced) {
                     frame.tainted |= held.tainted;
-                    frame.retrying |= held.retrying;
+                    // The retry is owed for the surface it was measured on.
+                    frame.retrying |= held.retrying && held.key == frame.key;
                 }
                 slot.pending.retain(|held| held.epoch != replaced);
                 SubmitVerdict::QueuedReplacing(replaced)
