@@ -448,8 +448,6 @@ struct OwnerSlot {
 struct OwnerSlots {
     mint: SlotMint,
     entries: Vec<Option<OwnerSlot>>,
-    /// The frames pending when the executor died were settled.
-    settled_after_death: bool,
 }
 
 impl OwnerSlots {
@@ -638,36 +636,36 @@ impl RasterSender {
         inbox.lock().failure.take()
     }
 
-    /// The executor died: settle every frame still pending in an inbox
+    /// The executor died: settle each frame still pending in an inbox
     /// [`RasterVerdict::Failed`](super::RasterVerdict::Failed), since the
-    /// thread no longer can (ADR-0305 §9). Once; the frames are dropped with
-    /// no lock held. A slot keeps its phase: the wedged thread may still hold
-    /// its surface, so the owner keeps the window. A frame the wedged render
-    /// holds settles only if that render returns.
+    /// thread no longer can (ADR-0305 §9). A slot keeps its phase: the wedged
+    /// thread may still hold its surface, so the owner keeps the window.
+    ///
+    /// A slot settles its frames in order, so a frame queued behind a render
+    /// the wedged thread still holds waits for that render's settlement: it
+    /// settles here on the first drain after that render returned, and never
+    /// if it does not. Settled first, it would fold the render's record and
+    /// leave the render's own answer stale. The frames are dropped with no
+    /// borrow or lock held: a scene's destructor can be user code.
     fn settle_after_death(&self) {
-        let inboxes: Vec<Arc<SlotInbox>> = {
-            let mut slots = self.slots.borrow_mut();
-            if std::mem::replace(&mut slots.settled_after_death, true) {
-                return;
-            }
-            slots
-                .entries
-                .iter()
-                .flatten()
-                .map(|owned| Arc::clone(&owned.inbox))
-                .collect()
-        };
-        let mut first = FirstPanic::new();
-        for inbox in inboxes {
-            let frame = {
-                let mut state = inbox.lock();
-                let frame = state.frame.take();
-                if let Some(frame) = frame.as_ref() {
-                    state.settle(frame, super::RasterVerdict::Failed);
+        let mut failed: Vec<flui_layer::SceneSnapshot> = Vec::new();
+        {
+            let slots = self.slots.borrow();
+            for owned in slots.entries.iter().flatten() {
+                let mut state = owned.inbox.lock();
+                // In flight beyond the inbox's own frame: a render holds one.
+                let behind_a_render = state.in_flight > 1;
+                if behind_a_render {
+                    continue;
                 }
-                frame
-            };
-            // A scene's destructor can be user code.
+                if let Some(frame) = state.frame.take() {
+                    state.settle(&frame, super::RasterVerdict::Failed);
+                    failed.push(frame);
+                }
+            }
+        }
+        let mut first = FirstPanic::new();
+        for frame in failed {
             first.contain(move || drop(frame));
         }
         first.resume();

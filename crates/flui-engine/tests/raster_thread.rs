@@ -109,11 +109,13 @@ fn attach(sender: &RasterSender) -> Attached {
     }
 }
 
+/// The `n`th epoch after zero.
+fn epoch(n: u64) -> FrameEpoch {
+    (0..n).fold(FrameEpoch::ZERO, |epoch, _| epoch.next())
+}
+
 fn frame(at: Attached, epoch: u64) -> RasterCommand {
-    let mut frame_epoch = FrameEpoch::ZERO;
-    for _ in 0..epoch {
-        frame_epoch = frame_epoch.next();
-    }
+    let frame_epoch = self::epoch(epoch);
     RasterCommand::Frame {
         slot: at.slot,
         snapshot: SceneSnapshot::new(
@@ -268,14 +270,16 @@ fn a_raster_thread_rebuilds_a_lost_device_when_its_backoff_ends() {
 }
 
 /// A detach the thread does not answer in time marks the executor died:
-/// every send comes back, the frames still pending settle failed, the owner
-/// can take why, as it takes a device's failure, and dropping the handle no
-/// longer waits for the wedged thread (ADR-0305 §9).
+/// every send comes back, the owner can take why, as it takes a device's
+/// failure, and dropping the handle no longer waits for the wedged thread
+/// (ADR-0305 §9). The frame queued behind the wedged render settles failed
+/// only after that render settled, so the slot's settlements stay in order
+/// and the render's answer folds no record.
 ///
 /// Red-check: without `ExecutorHandle::die` the executor still reads
-/// `Running`; without the owner's settlement after the death the pending
-/// frame never settles; with the handle's drop waiting again it takes
-/// another `DETACH_DEADLINE`.
+/// `Running`; with the owner settling the queued frame while the render
+/// holds the slot, the queued frame settles first; with the handle's drop
+/// waiting again it takes another `DETACH_DEADLINE`.
 #[test]
 fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
     let thread = spawn();
@@ -299,12 +303,9 @@ fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
     let mut settled = Vec::new();
     thread.sender.drain_settlements(at.slot, &mut settled);
     assert_eq!(
-        settled
-            .iter()
-            .map(|settlement| settlement.verdict)
-            .collect::<Vec<_>>(),
-        vec![RasterVerdict::Failed],
-        "the pending frame settles failed, since the thread no longer can"
+        settled,
+        Vec::new(),
+        "the queued frame waits for the render the wedged thread holds"
     );
     assert_eq!(
         thread.sender.take_executor_failure(),
@@ -322,15 +323,92 @@ fn a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline() {
         asked.elapsed() < DETACH_DEADLINE / 2,
         "a dead executor answers at once"
     );
-    let Thread { handle, .. } = thread;
+    let Thread { handle, sender, .. } = thread;
     let dropped = Instant::now();
     drop(handle);
     assert!(
         dropped.elapsed() < DETACH_DEADLINE / 2,
         "a dead executor's handle does not wait for its thread again"
     );
-    // The thread stops once its render answers.
+    // The render answers late and settles; the queued frame left with the
+    // slot's detach, which needs no settlement (its presentation went).
     hold.release();
+    eventually("settled the render", || {
+        sender.drain_settlements(at.slot, &mut settled);
+        sender
+            .record(at.slot)
+            .is_none_or(|record| record.in_flight == 0)
+    });
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| (settlement.epoch, settlement.verdict))
+            .collect::<Vec<_>>(),
+        vec![(epoch(1), RasterVerdict::Presented)],
+        "the render's answer is the slot's only settlement"
+    );
+}
+
+/// When the executor dies of another slot's detach while a render holds
+/// this slot, this slot's queued frame settles failed only after that
+/// render's own settlement: the slot's settlements stay in order, so the
+/// render's answer folds no record and is not stale (ADR-0305 §9). A frame
+/// pending in a slot no render holds settles failed at once.
+///
+/// Red-check: with the owner settling every pending inbox frame at the
+/// death, the queued frame settles while the render still holds the slot,
+/// ahead of it.
+#[test]
+fn a_frame_queued_behind_a_wedged_render_settles_after_it() {
+    let thread = spawn();
+    let wedged = attach(&thread.sender);
+    let other = attach(&thread.sender);
+    let idle = attach(&thread.sender);
+    let hold = thread.backend.hold_next_render();
+    thread.sender.send(frame(wedged, 1)).expect("accepted");
+    assert!(hold.began_within(PATIENCE), "the thread starts the render");
+    thread.sender.send(frame(wedged, 2)).expect("accepted");
+    thread.sender.send(frame(idle, 1)).expect("accepted");
+    let waited = Duration::from_millis(50);
+    assert_eq!(
+        thread.handle.detach(&thread.sender, other.slot, waited),
+        Err(ExecutorFailure::Wedged { waited })
+    );
+    let mut settled = Vec::new();
+    thread.sender.drain_settlements(wedged.slot, &mut settled);
+    assert_eq!(
+        settled,
+        Vec::new(),
+        "the queued frame waits for the render the wedged thread holds"
+    );
+    let mut idle_settled = Vec::new();
+    thread
+        .sender
+        .drain_settlements(idle.slot, &mut idle_settled);
+    assert_eq!(
+        idle_settled
+            .iter()
+            .map(|settlement| (settlement.epoch, settlement.verdict))
+            .collect::<Vec<_>>(),
+        vec![(epoch(1), RasterVerdict::Failed)],
+        "a frame no render holds settles failed at the death"
+    );
+    hold.release();
+    eventually("settled both frames", || {
+        thread.sender.drain_settlements(wedged.slot, &mut settled);
+        settled.len() >= 2
+    });
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| (settlement.epoch, settlement.verdict))
+            .collect::<Vec<_>>(),
+        vec![
+            (epoch(1), RasterVerdict::Presented),
+            (epoch(2), RasterVerdict::Failed),
+        ],
+        "the slot's frames settle in the order they were sent"
+    );
 }
 
 /// A turn's panic outside a slot's command (here the host's wake) is
