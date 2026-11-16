@@ -531,8 +531,8 @@ crates/flui-native/
                             call point for user code;
                             windows.rs apple.rs android.rs web.rs linux/{wayland,x11}.rs headless.rs
     journal/                the native journal, a crate-level module: owner/ names no feature, and
-                            the journal names the input model (ADR-0215 §4, built under the driver
-                            feature; its schema is declared in flui-protocol)
+                            the journal names the input model (ADR-0215 §4, built under the
+                            native-capture feature; its schema is declared in flui-protocol)
     window/                 mod.rs state.rs visibility.rs installation.rs config.rs (system chrome,
                             the Chrome position, is a facet of the window and lives here);
                             windows/{mod,proc,limits,backdrop}.rs;
@@ -716,9 +716,11 @@ secrets in diagnostics) are decided by the records the table cites.
 - **Native recordings replay on the headless host** deterministically and cover IME, lifecycle,
   preferences and displays, not only the pointer. The native journal that produces them is a
   module of the core host (the crate-level `journal/`: `owner/` names no feature, and the journal
-  names the input model), written at run time under the `driver` feature, not a test-only codec;
-  `flui-protocol` declares its schema so `flui-driver` reads a recording without linking the core
-  host.
+  names the input model), written at run time under `flui-native`'s `native-capture` feature, not
+  a test-only codec. `flui-app` enables the feature and compiles the journal under
+  `cfg(native_journal)`, the debug build of a native host, so a release build links none;
+  `flui-protocol` declares the schema, so a reader (`flui record` in `flui-cli`) reads a
+  recording without linking the core host.
 - **One way to drive an app.** A host's conformance rows that need the OS are `flui-driver`
   scenarios (ADR-0238): the same scenario runs on the headless host in CI, in process, and
   through the driver's `os` lane on a device (each device check is a scenario on the
