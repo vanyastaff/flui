@@ -2100,7 +2100,7 @@ mod tests {
     /// directory, so the run's default storage directory never refuses one.
     #[test]
     fn every_app_id_names_a_data_dir() {
-        let long = format!("com.{}", "a".repeat(251));
+        let long = format!("com.{}", "a".repeat(flui_log::APP_ID_MAX_LEN - 4));
         for id in [
             "com.example.notes",
             "com.aux.notes",
