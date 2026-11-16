@@ -5070,15 +5070,22 @@ and key parts, and a recreated Activity restores them, with epoch 0 when its pro
 a provider reattaches. `onActivityResult` queues the answer with its epoch, token and key parts.
 Every Java queue is read before `FluiHost` lets go of what was read (`peekEntries`/`commitEntries`,
 `peekOpened`/`commitOpened`, `peekAnswers`/`commitAnswers`), each record on its own: a record that
-cannot be read is skipped and logged, and taken off with the rest, so it never holds its queue;
-an answer whose key cannot be read still settles this Activity's request by its token. The result
-`Intent` never leaves the owner thread or the host: the router holds it by a global reference under
-its request's token, and the provider reads it once by handing the answer's `ResultData` to
-`Activity::take_data`. A `ResultData` dropped unread (a completion nobody receives, a retired
-runtime, a provider that went) releases it, which the router sweeps; held `Intent`s count against
-`MAX_OPEN_REQUESTS` and, per capability, `MAX_OPEN_REQUESTS_PER_CAPABILITY`, so one provider that
-never reads its data cannot keep the others from asking, and none accepted is ever let go to make
-room.
+cannot be read is skipped and logged, and taken off with the rest, so it never holds its queue,
+and the exception a failed JNI read leaves is cleared before the next call. An answer whose key
+cannot be read still settles this Activity's request by its token; one of a kind or with a code
+the library does not know settles it as `AnswerUnreadable`, and one whose `Intent` the host could
+not keep as `DataLost` with its code, each logged: every record taken off the queue ends a request
+or is reported. The result `Intent` never leaves the owner thread or the host: the router holds it
+by a global reference under its request's token, and the provider reads it once by handing the
+answer's `ResultData` to `Activity::take_data`. A `ResultData` dropped unread (a completion nobody
+receives, a retired runtime, a provider that went) releases it, which the router sweeps. A request
+lives while its provider holds its `ResultTicket`; dropped, the router's sweep ends it as
+`Cancelled` and hands a started activity's token back to be finished, so an answer goes to the
+oldest reattachment whose provider still waits. Open requests, held `Intent`s and, for a launch,
+what earlier Activities left (the requests `FluiHost.earlierOpen` counts and the answers waiting
+here) count against `MAX_OPEN_REQUESTS` and, per capability, `MAX_OPEN_REQUESTS_PER_CAPABILITY`,
+which `FluiHost.MAX_OPEN_PER_CAPABILITY` holds across the process too, so one provider cannot keep
+the others from asking across a recreation, and none accepted is ever let go to make room.
 
 The pure model, `owner::android::activity_results::ResultRouter`, routes each drained `Answer`:
 one of this epoch settles the open request with its token once, and one for a token that is not

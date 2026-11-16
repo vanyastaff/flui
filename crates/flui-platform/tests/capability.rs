@@ -17,7 +17,7 @@ use flui_platform::{
         CompletionSource, HostBridge, IntentFrame, InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN,
         OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions, ProviderContext,
         RequestKey, Resolver, ResultCode, ResultData, ResultKey, ResultOutcome, ResultRefused,
-        ResultRequest, ResultToken, ResultTokenMint, RuntimeLocals,
+        ResultRequest, ResultTicket, ResultTicketHold, ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -618,6 +618,7 @@ struct BridgeCalls {
     mint: ResultTokenMint,
     launched: RefCell<Vec<(RequestKey, ResultToken)>>,
     resolvers: RefCell<Vec<Resolver<ResultOutcome>>>,
+    tickets: RefCell<Vec<ResultTicketHold>>,
 }
 
 impl ActivityBridge for BridgeCalls {
@@ -634,7 +635,9 @@ impl ActivityBridge for BridgeCalls {
         let (completion, resolver) = completions.pending();
         self.launched.borrow_mut().push((key, token));
         self.resolvers.borrow_mut().push(resolver);
-        Ok(ResultRequest::new(token, completion))
+        let (ticket, hold) = ResultTicket::new(token);
+        self.tickets.borrow_mut().push(hold);
+        Ok(ResultRequest::new(ticket, completion))
     }
 
     fn reattach(
@@ -689,6 +692,7 @@ fn a_provider_reaches_the_activity_the_host_offers() {
         mint: ResultTokenMint::new(),
         launched: RefCell::default(),
         resolvers: RefCell::default(),
+        tickets: RefCell::default(),
     });
     let offered: Rc<dyn ActivityBridge> = Rc::clone(&bridge) as Rc<dyn ActivityBridge>;
     assert!(host.install_activity(Some(offered)).is_none());
@@ -702,7 +706,8 @@ fn a_provider_reaches_the_activity_the_host_offers() {
     let request = activity
         .launch_for_result(&owner.source, PICK, |_| true)
         .expect("taken");
-    let (token, mut completion) = request.into_parts();
+    let (ticket, mut completion) = request.into_parts();
+    let token = ticket.token();
     let files = ResultKey::try_new("files").expect("a key");
     assert_eq!(
         *bridge.launched.borrow(),
@@ -722,6 +727,15 @@ fn a_provider_reaches_the_activity_the_host_offers() {
         Some(Ok(Ok(result))) => assert_eq!(result.code(), ResultCode::Ok),
         other => panic!("the answer: {other:?}"),
     }
+    assert!(
+        !bridge.tickets.borrow()[0].is_released(),
+        "the provider holds its ticket"
+    );
+    drop(ticket);
+    assert!(
+        bridge.tickets.borrow()[0].is_released(),
+        "dropping the ticket tells the host"
+    );
 
     assert!(
         host.install_activity(None).is_some(),

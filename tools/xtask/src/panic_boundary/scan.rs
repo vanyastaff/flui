@@ -691,6 +691,24 @@ struct Collector<'f> {
 }
 
 impl Collector<'_> {
+    /// A post to Android's Java main thread, named `what` at `line`: a
+    /// finding anywhere but the posting module.
+    fn java_main_thread(&mut self, line: usize, what: String) {
+        if self.rel.ends_with(JAVA_MAIN_THREAD_POSTER) {
+            return;
+        }
+        self.finding(
+            line,
+            what,
+            Problem::Unguarded,
+            format!(
+                "a closure posted to Android's Java main thread outside \
+                 `{JAVA_MAIN_THREAD_POSTER}`, which runs it inside the boundary and reports \
+                 every exit but success"
+            ),
+        );
+    }
+
     fn finding(&mut self, line: usize, what: String, kind: Problem, detail: String) {
         self.out.findings.push(Finding {
             file: self.rel.to_owned(),
@@ -1176,6 +1194,32 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         }
     }
 
+    /// `AndroidApp::run_on_java_main_thread` named as a path: called in the
+    /// path form, or taken as a function value.
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        if let Some(last) = path.path.segments.last()
+            && last.ident == JAVA_MAIN_THREAD
+        {
+            self.java_main_thread(line(last.ident.span()), segments(&path.path).join("::"));
+        }
+        visit::visit_expr_path(self, path);
+    }
+
+    /// A `use` that names it, renamed or not.
+    fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
+        let named = match tree {
+            syn::UseTree::Name(name) => Some(&name.ident),
+            syn::UseTree::Rename(rename) => Some(&rename.ident),
+            _ => None,
+        };
+        if let Some(ident) = named
+            && ident == JAVA_MAIN_THREAD
+        {
+            self.java_main_thread(line(ident.span()), format!("use {JAVA_MAIN_THREAD}"));
+        }
+        visit::visit_use_tree(self, tree);
+    }
+
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = strip(&call.func) {
             let callee = segments(&path.path);
@@ -1202,18 +1246,8 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == JAVA_MAIN_THREAD && !self.rel.ends_with(JAVA_MAIN_THREAD_POSTER) {
-            self.out.findings.push(Finding {
-                file: self.rel.to_owned(),
-                line: line(call.method.span()),
-                what: format!(".{JAVA_MAIN_THREAD}"),
-                kind: Problem::Unguarded,
-                detail: format!(
-                    "a closure posted to Android's Java main thread outside \
-                     `{JAVA_MAIN_THREAD_POSTER}`, which runs it inside the boundary and reports \
-                     every exit but success"
-                ),
-            });
+        if call.method == JAVA_MAIN_THREAD {
+            self.java_main_thread(line(call.method.span()), format!(".{JAVA_MAIN_THREAD}"));
         }
         if GCD_METHODS.iter().any(|gcd| call.method == gcd) {
             self.closure_entry(

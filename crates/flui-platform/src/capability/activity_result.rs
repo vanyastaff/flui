@@ -308,45 +308,65 @@ impl ActivityResult {
     }
 }
 
-/// The `Intent` one answer carried, held by the host until this value is
-/// handed to [`Activity::take_data`] or dropped.
+/// The provider's side of something the host keeps for it under a token:
+/// dropping it tells the host, which reads [`Released`]. Owner thread.
 #[derive(Debug)]
-pub struct ResultData {
+struct Holder {
     token: ResultToken,
     held: Rc<Cell<bool>>,
 }
 
-/// The host's side of a [`ResultData`]: whether the provider still holds it.
+/// The host's side of a [`Holder`].
 #[derive(Debug)]
-pub struct ResultDataHold {
-    held: Rc<Cell<bool>>,
-}
+struct Released(Rc<Cell<bool>>);
 
-impl ResultData {
-    /// The `Intent` the host holds for the request `token`, and the side the
-    /// host keeps to learn when the provider lets it go.
-    #[must_use]
-    pub fn new(token: ResultToken) -> (Self, ResultDataHold) {
+impl Holder {
+    fn new(token: ResultToken) -> (Self, Released) {
         let held = Rc::new(Cell::new(true));
         (
             Self {
                 token,
                 held: Rc::clone(&held),
             },
-            ResultDataHold { held },
+            Released(held),
         )
+    }
+}
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        self.held.set(false);
+    }
+}
+
+impl Released {
+    fn get(&self) -> bool {
+        !self.0.get()
+    }
+}
+
+/// The `Intent` one answer carried, held by the host until this value is
+/// handed to [`Activity::take_data`] or dropped.
+#[derive(Debug)]
+pub struct ResultData(Holder);
+
+/// The host's side of a [`ResultData`]: whether the provider still holds it.
+#[derive(Debug)]
+pub struct ResultDataHold(Released);
+
+impl ResultData {
+    /// The `Intent` the host holds for the request `token`, and the side the
+    /// host keeps to learn when the provider lets it go.
+    #[must_use]
+    pub fn new(token: ResultToken) -> (Self, ResultDataHold) {
+        let (holder, released) = Holder::new(token);
+        (Self(holder), ResultDataHold(released))
     }
 
     /// The request whose answer carried it.
     #[must_use]
     pub fn token(&self) -> ResultToken {
-        self.token
-    }
-}
-
-impl Drop for ResultData {
-    fn drop(&mut self) {
-        self.held.set(false);
+        self.0.token
     }
 }
 
@@ -355,7 +375,47 @@ impl ResultDataHold {
     /// releases the `Intent`.
     #[must_use]
     pub fn is_released(&self) -> bool {
-        !self.held.get()
+        self.0.get()
+    }
+}
+
+/// A provider's claim on one open request: while it lives, the request waits
+/// for its answer; dropped, the request ends as a cancel does
+/// ([`Activity::cancel`]): an activity it started is finished, a
+/// reattachment stops waiting, and its place counts against the bounds no
+/// more. A provider that wants the answer keeps it, in its state or in the
+/// closure its completion calls; whatever a retired runtime or provider
+/// owned goes with it.
+#[derive(Debug)]
+#[must_use = "dropping the ticket ends its request"]
+pub struct ResultTicket(Holder);
+
+/// The host's side of a [`ResultTicket`]: whether the provider still holds
+/// it.
+#[derive(Debug)]
+pub struct ResultTicketHold(Released);
+
+impl ResultTicket {
+    /// The claim on the request `token`, and the side the host keeps to
+    /// learn when the provider lets it go.
+    pub fn new(token: ResultToken) -> (Self, ResultTicketHold) {
+        let (holder, released) = Holder::new(token);
+        (Self(holder), ResultTicketHold(released))
+    }
+
+    /// The request it claims, for [`Activity::cancel`].
+    #[must_use]
+    pub fn token(&self) -> ResultToken {
+        self.0.token
+    }
+}
+
+impl ResultTicketHold {
+    /// Whether the provider let the [`ResultTicket`] go, so the host ends
+    /// its request.
+    #[must_use]
+    pub fn is_released(&self) -> bool {
+        self.0.get()
     }
 }
 
@@ -397,6 +457,19 @@ pub enum ResultRefused {
     /// request's key receives it.
     #[error("the Activity ended before the answer arrived")]
     ActivityEnded,
+    /// The activity answered `code` with an `Intent` the host could not keep
+    /// (Java ran out of memory as it took it), so the answer is not
+    /// delivered as one that carried no `Intent`.
+    #[error("the activity answered {code:?} with an Intent the host could not keep")]
+    DataLost {
+        /// The code the activity finished with.
+        code: ResultCode,
+    },
+    /// The host could not read the answer `FluiHost` queued for the request
+    /// (a kind or a code it does not know: the Java classes and the library
+    /// disagree).
+    #[error("the host could not read the request's answer")]
+    AnswerUnreadable,
 }
 
 /// The most requests one [`Activity`] holds open at once across every
@@ -449,31 +522,31 @@ impl RequestKey {
     }
 }
 
-/// A request the [`Activity`] took: its token, and the completion its answer
-/// settles.
+/// A request the [`Activity`] took: its [`ResultTicket`], and the completion
+/// its answer settles. Dropping it, or its ticket, ends the request.
 #[derive(Debug)]
-#[must_use = "a request whose completion is dropped is still open until it is answered or cancelled"]
+#[must_use = "dropping the request ends it"]
 pub struct ResultRequest {
-    token: ResultToken,
+    ticket: ResultTicket,
     completion: Completion<ResultOutcome>,
 }
 
 impl ResultRequest {
-    /// The request `token`, answered through `completion`.
-    pub fn new(token: ResultToken, completion: Completion<ResultOutcome>) -> Self {
-        Self { token, completion }
+    /// The request `ticket` claims, answered through `completion`.
+    pub fn new(ticket: ResultTicket, completion: Completion<ResultOutcome>) -> Self {
+        Self { ticket, completion }
     }
 
-    /// The request's token, for [`Activity::take_data`] and
-    /// [`Activity::cancel`].
+    /// The request's token, for [`Activity::cancel`].
     #[must_use]
     pub fn token(&self) -> ResultToken {
-        self.token
+        self.ticket.token()
     }
 
-    /// The token and the completion.
-    pub fn into_parts(self) -> (ResultToken, Completion<ResultOutcome>) {
-        (self.token, self.completion)
+    /// The ticket, which the provider keeps while it wants the answer, and
+    /// the completion.
+    pub fn into_parts(self) -> (ResultTicket, Completion<ResultOutcome>) {
+        (self.ticket, self.completion)
     }
 }
 

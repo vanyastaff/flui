@@ -310,7 +310,9 @@ type: a request is identified by a `ResultToken` the host mints per call and
 named by a `RequestKey`, the acquiring capability's `NAME` and the
 provider's `ResultKey` kept apart, which outlives an Activity Android
 replaces; it ends exactly once, with an `ActivityResult` or a typed
-`ResultRefused`; an answer's `Intent` stays with the host until the provider
+`ResultRefused`, and lasts while the provider holds its `ResultTicket`, whose
+`Drop` the host reads as a cancel (the `Resolver` answers no liveness query);
+an answer's `Intent` stays with the host until the provider
 hands its `ResultData` back, and a `ResultData` dropped unread releases it;
 and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host

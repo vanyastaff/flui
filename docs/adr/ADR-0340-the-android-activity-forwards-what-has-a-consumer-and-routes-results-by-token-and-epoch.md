@@ -82,15 +82,25 @@ application's own codes pass through untouched. The started requests' codes and 
 saved with the Activity's state and restored before `NativeActivity.onCreate` starts the library.
 An answer of the Activity's own epoch settles its token's request once; an answer of another
 epoch (epoch 0 for a process restored after death) waits for `Activity::reattach` under its key,
-which answers `NothingPending` when nothing waits and nothing is still to come. Every request ends
-exactly once: the answer, `NotLaunched`, `TooManyOpen`, `HandOffFailed` (a failed or panicked
-hand-off to Android's main thread, or one the main thread has not taken within a deadline the loop
-waits for), `Cancelled`, `ActivityEnded`. The answered `Intent` stays with the host on the owner
-thread until the provider hands the answer's `ResultData` to `Activity::take_data`; a `ResultData`
-dropped unread releases it, so a result nobody receives holds nothing, and held `Intent`s count
-against `MAX_OPEN_REQUESTS` and, per capability, `MAX_OPEN_REQUESTS_PER_CAPABILITY`, so nothing
-accepted is ever let go to make room and one provider cannot keep the others from asking. Java's
-queues are read before Java lets go of what was read, record by record, so a failed drain loses
+which answers `NothingPending` when nothing waits and nothing is still to come; of two
+reattachments under one key the older live one receives the older answer. A request lasts while
+its provider holds its `ResultTicket`: dropping the ticket ends it as a cancel does (a started
+activity is finished, a reattachment stops waiting, its place is free), so whatever a retired
+runtime or provider owned stops waiting with it, and the contract's `Resolver` answers no liveness
+query. Every request ends exactly once: the answer, `NotLaunched`, `TooManyOpen`, `HandOffFailed`
+(a failed or panicked hand-off to Android's main thread, or one the main thread has not taken
+within a deadline the loop waits for), `Cancelled`, `ActivityEnded`, `DataLost` (an `Intent` the
+host could not keep, with the answer's code) or `AnswerUnreadable` (a record the library cannot
+read); every record the host takes off Java's queue settles a request or is reported. The answered
+`Intent` stays with the host on the owner thread until the provider hands the answer's
+`ResultData` to `Activity::take_data`; a `ResultData` dropped unread releases it, so a result
+nobody receives holds nothing. One bound is counted the same way on both sides: open requests,
+held `Intent`s and, for a launch, the requests earlier Activities left (those Java still holds and
+the answers that wait for a reattachment) count against `MAX_OPEN_REQUESTS` and, per capability,
+`MAX_OPEN_REQUESTS_PER_CAPABILITY`, which `FluiHost` holds too across the process, so nothing
+accepted is ever let go to make room and one provider cannot keep the others from asking, before
+or after a recreation. Java's queues are read before Java lets go of what was read, record by
+record, each failed JNI read's exception cleared before the next call, so a failed drain loses
 nothing and a record that cannot be read never holds its queue. Every closure the host posts to
 Android's main thread goes through one function that runs it inside the panic boundary and reports
 every exit but success, which `cargo xtask panic-boundary` holds.
@@ -128,6 +138,10 @@ input method's inset to the views and leaves the content, and so the surface, at
   `the_open_requests_and_untaken_intents_are_bounded`, `an_intent_nobody_receives_is_released`,
   `an_earlier_activitys_answer_waits_for_its_key`,
   `a_reattachment_with_nothing_pending_holds_nothing`, `the_end_refuses_every_open_request`,
+  `a_reattachment_let_go_leaves_the_answer_to_the_one_still_waiting`,
+  `a_ticket_let_go_frees_its_place_and_finishes_its_launch`,
+  `an_earlier_activitys_requests_count_for_their_capability`,
+  `every_answer_taken_off_the_queue_ends_its_request`,
   `answers_are_read_as_the_java_classes_lay_them_out`; the drains record by record,
   `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`; the posting function's exits,
   `posted_work_reports_every_exit_but_success`; the soft-input table,

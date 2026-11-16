@@ -31,7 +31,9 @@ use parking_lot::Mutex;
 use web_time::Instant;
 
 use super::activity::with_activity;
-use super::activity_results::{ANSWER_NUMBERS, Answer, Purpose, ResultRouter, Routed};
+use super::activity_results::{
+    ANSWER_NUMBERS, Answer, Carried, EarlierOpen, Purpose, ResultRouter, Routed,
+};
 use super::java_host::host_class;
 use super::main_thread::{self, PostFailure};
 use crate::PlatformError;
@@ -175,7 +177,61 @@ impl ResultBridge {
                 ),
             }
         }
-        self.router.borrow_mut().sweep();
+        self.release();
+    }
+
+    /// End the requests whose tickets their providers let go, as a cancel
+    /// does, finishing the activities they started.
+    fn release(&self) {
+        let (finish, delivery) = {
+            let mut router = self.router.borrow_mut();
+            router.sweep();
+            router.take_released()
+        };
+        delivery.deliver();
+        for token in finish {
+            self.post_cancel(token);
+        }
+    }
+
+    /// How many requests of earlier Activities `FluiHost` still holds, under
+    /// `key`'s capability and in all, for a launch's bounds. A read that
+    /// fails counts none: the Java side holds its own bound, and answers a
+    /// launch past it as too many.
+    fn earlier_open(&self, key: RequestKey) -> EarlierOpen {
+        let epoch = self.epoch();
+        let counted = with_activity(&self.app, |env, activity| {
+            env.with_local_frame(4, |env| {
+                let class = host_class(env, activity)?;
+                let capability = env.new_string(key.capability().as_str())?;
+                let counts = env
+                    .call_static_method(
+                        &class,
+                        jni_str!("earlierOpen"),
+                        jni_sig!("(JLjava/lang/String;)[I"),
+                        &[JValue::Long(epoch), JValue::Object(&capability)],
+                    )?
+                    .l()?;
+                let counts = jni::objects::JIntArray::cast_local(env, counts)?;
+                let mut read = [0; 2];
+                counts.get_region(env, 0, &mut read)?;
+                Ok(read)
+            })
+        });
+        match counted {
+            Ok([capability, total]) => EarlierOpen {
+                capability: usize::try_from(capability).unwrap_or(0),
+                total: usize::try_from(total).unwrap_or(0),
+            },
+            Err(error) => {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    %error,
+                    "FluiHost's earlier requests could not be counted"
+                );
+                EarlierOpen::default()
+            }
+        }
     }
 
     /// The Activity ended: every open request ends, and later ones are
@@ -261,7 +317,10 @@ impl ActivityBridge for ResultBridge {
         key: RequestKey,
         intent: &mut dyn FnMut(IntentFrame) -> bool,
     ) -> Result<ResultRequest, ResultRefused> {
-        self.router.borrow_mut().admits(key.capability())?;
+        let earlier = self.earlier_open(key);
+        self.router
+            .borrow_mut()
+            .admits(key.capability(), Some(earlier))?;
         // The provider fills the Intent with no borrow held: its closure may
         // reach this bridge again.
         let made = with_activity(&self.app, |env, activity| {
@@ -300,10 +359,10 @@ impl ActivityBridge for ResultBridge {
             }
         };
         // Admitted again: the provider's closure may have taken requests.
-        let request = self
-            .router
-            .borrow_mut()
-            .open_launch(completions, key, Instant::now())?;
+        let request =
+            self.router
+                .borrow_mut()
+                .open_launch(completions, key, earlier, Instant::now())?;
         let token = request.token();
         let (app, epoch) = (self.app.clone(), self.epoch());
         let (taken, failed) = (Arc::clone(&self.hand_offs), Arc::clone(&self.hand_offs));
@@ -332,7 +391,7 @@ impl ActivityBridge for ResultBridge {
         completions: &CompletionSource,
         key: RequestKey,
     ) -> Result<ResultRequest, ResultRefused> {
-        self.router.borrow_mut().admits(key.capability())?;
+        self.router.borrow_mut().admits(key.capability(), None)?;
         let still_to_come = self.still_to_come(key);
         let (request, delivery) =
             self.router
@@ -457,6 +516,14 @@ fn cancel_on_main_thread(app: &AndroidApp, epoch: i64, token: ResultToken) -> Re
 /// drain wakes for.
 const MAX_DRAINED: usize = 2 * flui_platform::capability::MAX_OPEN_REQUESTS;
 
+/// Clear the Java exception a failed read left pending, so the next JNI call
+/// runs with none.
+fn clear_pending(env: &mut Env<'_>) {
+    if env.exception_check() {
+        env.exception_clear();
+    }
+}
+
 /// One string part of an answer's key: `None` when it cannot be read or is
 /// longer than a key, which is checked before it is copied.
 fn key_part<'local>(
@@ -480,9 +547,11 @@ fn key_part<'local>(
 }
 
 /// The oldest answers `FluiHost` queued, at most [`MAX_DRAINED`], each read
-/// on its own: a key part longer than a key is not copied, and a part or an
-/// `Intent` that cannot be read is `None`, so one record never holds the
-/// others back. Each `Intent` is held as it is, never read. `FluiHost` then
+/// on its own, the exception a failed read leaves cleared before the next:
+/// a key part longer than a key is not copied, a part that cannot be read is
+/// `None`, and an `Intent` that cannot be kept is [`Carried::Lost`], so one
+/// record never holds the others back. Each `Intent` is held as it is, never
+/// read. `FluiHost` then
 /// lets go of exactly the answers read; where its arrays disagree in length,
 /// the answers all of them hold are read and let go, and the rest wait.
 /// Answers how many are still queued.
@@ -527,14 +596,18 @@ pub(crate) fn drain_answers(
     let mut read_keys = Vec::with_capacity(count);
     let mut read_data = Vec::with_capacity(count);
     for index in 0..count {
+        // Each read that can throw is cleared before the next JNI call: a
+        // call with an exception pending is undefined.
         let capability = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
             let part = capabilities.get_element(env, index)?;
             key_part(env, part)
         });
+        clear_pending(env);
         let key = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
             let part = keys.get_element(env, index)?;
             key_part(env, part)
         });
+        clear_pending(env);
         let held = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
             let item = data.get_element(env, index)?;
             if item.is_null() {
@@ -543,12 +616,22 @@ pub(crate) fn drain_answers(
                 env.new_global_ref(&item).map(Some)
             }
         });
-        if capability.is_err() || key.is_err() || held.is_err() {
-            env.exception_clear();
-        }
+        clear_pending(env);
+        let carried = match held {
+            Ok(Some(held)) => Carried::Held(held),
+            Ok(None) => Carried::Nothing,
+            Err(error) => {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    %error,
+                    "an answer's Intent could not be kept; its request ends as data lost"
+                );
+                Carried::Lost
+            }
+        };
         read_capabilities.push(capability.ok().flatten());
         read_keys.push(key.ok().flatten());
-        read_data.push(held.ok().flatten());
+        read_data.push(carried);
     }
     let committed = i32::try_from(count).expect("BUG: at most MAX_DRAINED answers");
     let remaining = env

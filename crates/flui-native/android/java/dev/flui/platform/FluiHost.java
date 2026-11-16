@@ -101,6 +101,13 @@ public final class FluiHost {
     static final int MAX_OPEN = 16;
 
     /**
+     * The most of {@link #MAX_OPEN} one capability holds across the platforms of the process,
+     * its earlier Activities' requests that are still to come included, so one capability cannot
+     * keep the others from asking; the library's {@code MAX_OPEN_REQUESTS_PER_CAPABILITY}.
+     */
+    static final int MAX_OPEN_PER_CAPABILITY = 8;
+
+    /**
      * The first of the request codes the host keeps for itself (see {@link FluiActivity}):
      * within the 16 bits {@code FragmentActivity} allows, so an application's own codes below
      * it never meet the host's.
@@ -365,14 +372,16 @@ public final class FluiHost {
      * Start {@code intent} for a result from {@code activity}; Java main thread. The request is
      * the library's {@code token} under {@code capability}'s {@code key}, of the platform whose
      * epoch is {@code epoch}. While {@code activity} is stopped it waits for {@link #started}.
-     * Past {@link #MAX_OPEN} open requests it is answered with {@link #ANSWER_TOO_MANY}, and
-     * when Android refuses with {@link #ANSWER_NOT_LAUNCHED}.
+     * Past {@link #MAX_OPEN} open requests, or {@link #MAX_OPEN_PER_CAPABILITY} of {@code
+     * capability}'s, it is answered with {@link #ANSWER_TOO_MANY}, and when Android refuses with
+     * {@link #ANSWER_NOT_LAUNCHED}.
      */
     static void launch(
             Activity activity, Intent intent, long epoch, long token, String capability, String key) {
         Request request = new Request(epoch, token, capability, key);
         synchronized (LOCK) {
-            if (STARTED.size() + WAITING.size() + ANSWERS.size() >= MAX_OPEN) {
+            if (STARTED.size() + WAITING.size() + ANSWERS.size() >= MAX_OPEN
+                    || openUnder(capability, 0, false) >= MAX_OPEN_PER_CAPABILITY) {
                 Log.w(TAG, "as many activity requests are open as FLUI holds; this one is refused");
                 ANSWERS.add(new Answer(request, ANSWER_TOO_MANY, 0, null));
                 request = null;
@@ -501,6 +510,42 @@ public final class FluiHost {
             }
             return false;
         }
+    }
+
+    /**
+     * How many requests of platforms other than {@code epoch} are open, waiting to start, started
+     * or answered but not drained: under {@code capability} first, then in all; any thread. The
+     * library counts them against its bounds with its own Activity's, so an earlier Activity's
+     * requests still count for their capability after a recreation.
+     */
+    static int[] earlierOpen(long epoch, String capability) {
+        synchronized (LOCK) {
+            return new int[] {openUnder(capability, epoch, true), openUnder(null, epoch, true)};
+        }
+    }
+
+    /**
+     * How many requests are open under {@code capability}, or under any when it is {@code null};
+     * of platforms other than {@code epoch} only when {@code earlierOnly}. Under {@link #LOCK}.
+     */
+    private static int openUnder(String capability, long epoch, boolean earlierOnly) {
+        int count = 0;
+        for (Request request : STARTED.values()) {
+            count += counts(request, capability, epoch, earlierOnly) ? 1 : 0;
+        }
+        for (Waiting waiting : WAITING) {
+            count += counts(waiting.request, capability, epoch, earlierOnly) ? 1 : 0;
+        }
+        for (Answer answer : ANSWERS) {
+            count += counts(answer.request, capability, epoch, earlierOnly) ? 1 : 0;
+        }
+        return count;
+    }
+
+    private static boolean counts(
+            Request request, String capability, long epoch, boolean earlierOnly) {
+        return (capability == null || request.capability.equals(capability))
+                && (!earlierOnly || request.epoch != epoch);
     }
 
     /** {@link FluiActivity#onStart}: the requests waiting for {@code activity} start. */

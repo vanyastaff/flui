@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 36] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 39] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -43,6 +43,13 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 36] = [
     (APPLE, "Finalized::drop", Unguarded),
     (ANDROID, "Java_dev_flui_Planted_run", Unguarded),
     (ANDROID, ".run_on_java_main_thread", Unguarded),
+    (ANDROID, "AndroidApp::run_on_java_main_thread", Unguarded),
+    (
+        ANDROID,
+        "android_activity::AndroidApp::run_on_java_main_thread",
+        Unguarded,
+    ),
+    (ANDROID, "use run_on_java_main_thread", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
     (IDENTITY_FILE, "struct ContainedIvars", Identity),
@@ -470,6 +477,20 @@ extern "system" fn Java_dev_flui_Planted_run(_env: JNIEnv, _class: JClass, handl
 fn post_bare(app: &AndroidApp) {
     app.run_on_java_main_thread(Box::new(|| {}));
 }
+
+// planted: the same post in the path form
+fn post_by_path(app: &AndroidApp) {
+    AndroidApp::run_on_java_main_thread(app, Box::new(|| {}));
+}
+
+// planted: the post taken as a function value
+fn post_by_value(app: &AndroidApp) {
+    let post = android_activity::AndroidApp::run_on_java_main_thread;
+    post(app, Box::new(|| {}));
+}
+
+// planted: an import that renames it
+use android_activity::AndroidApp::run_on_java_main_thread as post_later;
 "#;
 
 const POSTER_FILE: &str = r#"
@@ -479,6 +500,13 @@ use crate::owner::panic_boundary::{AfterPanic, os_entry};
 pub(crate) fn post(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
     app.run_on_java_main_thread(Box::new(move || {
         os_entry("posted", (), AfterPanic::Answer(|()| ()), body)
+    }));
+}
+
+// silent: the path form, in the posting module
+pub(crate) fn run(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
+    AndroidApp::run_on_java_main_thread(app, Box::new(move || {
+        os_entry("run", (), AfterPanic::Answer(|()| ()), body)
     }));
 }
 "#;

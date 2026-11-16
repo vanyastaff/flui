@@ -6072,11 +6072,19 @@ GPU-память простаивающего или невидимого окн
   сразу, а не взятая Java main thread за `HAND_OFF_LIMIT` — к этому сроку, которого ждёт poll
   цикла. Ответный `Intent` не покидает хост и owner-поток: провайдер читает его один раз, отдав
   `ResultData` ответа в `Activity::take_data`; `ResultData`, выброшенный непрочитанным, отпускает
-  `Intent`. Удерживаемые `Intent` считаются в `MAX_OPEN_REQUESTS` и, на возможность, в
-  `MAX_OPEN_REQUESTS_PER_CAPABILITY`, поэтому ничего принятого не вытесняется и один провайдер не
-  закрывает запросы остальным. Очереди Java (записи, интенты, ответы) читаются до того, как
-  `FluiHost` их отпускает (`peek…`/`commit…`), каждая запись отдельно: неудачное чтение ничего не
-  теряет, нечитаемая запись пропускается и очередь не держит. Коды и части ключей начатых
+  `Intent`. Запрос живёт, пока провайдер держит его `ResultTicket`; выброшенный билет кончает
+  запрос как отмена (начатая activity завершается, переприсоединение перестаёт ждать, место
+  освобождается), и ответ получает старейшее живое переприсоединение по ключу. Открытые
+  запросы, удерживаемые `Intent` и, для запуска, оставленное прежними Activity
+  (`FluiHost.earlierOpen` и ответы, ждущие здесь) считаются в `MAX_OPEN_REQUESTS` и, на
+  возможность, в `MAX_OPEN_REQUESTS_PER_CAPABILITY`; Java держит ту же границу на возможность
+  (`MAX_OPEN_PER_CAPABILITY`) по всему процессу, поэтому ничего принятого не вытесняется и один
+  провайдер не закрывает запросы остальным и после пересоздания. Очереди Java (записи, интенты,
+  ответы) читаются до того, как `FluiHost` их отпускает (`peek…`/`commit…`), каждая запись
+  отдельно, исключение неудачного чтения сбрасывается до следующего вызова JNI: неудачное чтение
+  ничего не теряет, нечитаемая запись пропускается и очередь не держит; ответ неизвестного вида
+  или с кодом вне `int` кончает запрос `AnswerUnreadable`, `Intent`, который не удалось
+  удержать, — `DataLost` с кодом, и каждый пишется в журнал. Коды и части ключей начатых
   запросов сохраняются с состоянием Activity и восстанавливаются до `NativeActivity.onCreate`.
   Ответ прежней Activity (эпоха 0 — процесс после смерти) ждёт `reattach` по ключу; без
   ожидаемого ответа `reattach` отвечает `NothingPending` и места не держит
@@ -6094,7 +6102,11 @@ GPU-память простаивающего или невидимого окн
   `the_earlier_answers_that_wait_are_bounded`, `the_end_refuses_every_open_request`,
   `an_answered_intent_is_taken_once_under_its_request`,
   `answers_are_read_as_the_java_classes_lay_them_out` (нечитаемые записи в начале, середине и
-  конце), `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`,
+  конце), `a_reattachment_let_go_leaves_the_answer_to_the_one_still_waiting`,
+  `a_ticket_let_go_frees_its_place_and_finishes_its_launch`,
+  `an_earlier_activitys_requests_count_for_their_capability`,
+  `every_answer_taken_off_the_queue_ends_its_request`,
+  `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`,
   `posted_work_reports_every_exit_but_success`, `a_report_that_panics_is_contained`,
   `the_window_resizes_its_insets_not_its_surface_on_every_level`,
   `fluiactivity_applies_this_table`, `os_version_gate_table` (ворота `DecorFitsSystemWindows`),

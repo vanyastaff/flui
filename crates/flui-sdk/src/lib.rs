@@ -126,6 +126,7 @@ pub mod platform {
         pub use flui_platform::capability::ResultOutcome;
         pub use flui_platform::capability::ResultRefused;
         pub use flui_platform::capability::ResultRequest;
+        pub use flui_platform::capability::ResultTicket;
         pub use flui_platform::capability::ResultToken;
         pub use flui_platform::capability::WindowRef;
     }

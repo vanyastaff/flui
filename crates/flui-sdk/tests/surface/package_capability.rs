@@ -92,7 +92,7 @@ mod picker {
     use flui_sdk::platform::capability::{
         Activity, ActivityResult, Capability, CompletionSource, IntentFrame, InvalidResultKey,
         JniFrame, ProviderContext, ResultCode, ResultData, ResultKey, ResultOutcome, ResultRefused,
-        ResultRequest, ResultToken,
+        ResultRequest, ResultTicket, ResultToken,
     };
     use flui_sdk::platform::{Unsupported, UnsupportedReason};
 
@@ -149,9 +149,13 @@ mod picker {
                     !frame.intent().is_null()
                 },
             )?;
-            let (token, completion) = request.into_parts();
+            let (ticket, completion): (ResultTicket, _) = request.into_parts();
+            let token: ResultToken = ticket.token();
             let (activity, picked) = (self.activity.clone(), Rc::clone(&self.picked));
+            // The ticket lives with the closure: the pick waits while the
+            // completion does, and ends when the widget's runtime drops it.
             completion.on_complete(move |outcome| {
+                let _waiting = &ticket;
                 let outcome: ResultOutcome = outcome.unwrap_or(Err(ResultRefused::ActivityEnded));
                 picked.borrow_mut().push(match outcome {
                     Ok(answer) => {

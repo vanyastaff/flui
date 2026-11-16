@@ -36,7 +36,7 @@ pub use activity_result::{
     Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey, JniFrame,
     MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY, MAX_RESULT_KEY_LEN, RequestKey,
     ResultCode, ResultData, ResultDataHold, ResultKey, ResultOutcome, ResultRefused, ResultRequest,
-    ResultToken, ResultTokenMint,
+    ResultTicket, ResultTicketHold, ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};

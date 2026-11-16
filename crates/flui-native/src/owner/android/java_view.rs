@@ -457,31 +457,33 @@ impl JavaView {
     }
 
     /// [`Self::post`] for a call that answers whether it worked: `failed`
-    /// runs on the Java main thread when the view is not installed, the call
-    /// fails or panics, or it answers `false`, so an obligation the call
-    /// carried is still discharged.
+    /// runs when the view is not installed, the call fails or panics, it
+    /// answers `false`, or the work is dropped unrun, so an obligation the
+    /// call carried is still discharged ([`main_thread::post`]).
     pub(crate) fn post_or(
         self: &Arc<Self>,
         call: impl FnOnce(&mut Env<'_>, &JObject<'_>) -> jni::errors::Result<bool> + Send + 'static,
         failed: impl FnOnce(&Self) + Send + 'static,
     ) {
-        let this = Arc::clone(self);
-        main_thread::run(&self.app, "a FluiView call", move || {
-            // Contained here, not by the boundary around this closure, which
-            // would end the work before `failed` ran.
-            let worked = jni_native("a FluiView call", || {
-                this.view().is_some_and(|view| {
-                    this.attached(|env| call(env, view.as_ref()))
-                        .inspect_err(|error| {
-                            tracing::warn!(target: "flui_native::android", %error, "a FluiView call failed");
-                        })
-                        .unwrap_or(false)
-                })
-            });
-            if !worked {
-                failed(&this);
-            }
-        });
+        let (this, owed) = (Arc::clone(self), Arc::clone(self));
+        main_thread::post(
+            &self.app,
+            "a FluiView call",
+            move || {
+                let view = this
+                    .view()
+                    .ok_or_else(|| "the view is not installed".to_owned())?;
+                match this.attached(|env| call(env, view.as_ref())) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err("the call answered that it did not work".to_owned()),
+                    Err(error) => Err(error.to_string()),
+                }
+            },
+            move |failure: main_thread::PostFailure| {
+                tracing::warn!(target: "flui_native::android", ?failure, "a FluiView call failed");
+                failed(&owed);
+            },
+        );
     }
 
     /// The installed view, cloned out of the lock so no JNI call runs under it.

@@ -98,30 +98,109 @@ mod tests {
         }
     }
 
-    /// `FluiActivity` applies this table: its soft input mode, the level
-    /// from which it stops the decor fitting the system windows, and the
-    /// layout flags it adds below that level are what [`window_setup`]
-    /// answers on each side of the boundary.
+    /// The value of `FluiActivity`'s `static final int name`.
+    fn constant(source: &str, name: &str) -> i32 {
+        let stated = format!("static final int {name} = ");
+        let at = source
+            .find(&stated)
+            .unwrap_or_else(|| panic!("{name} in FluiActivity"));
+        let rest = &source[at + stated.len()..];
+        rest[..rest.find(';').expect("a constant ends its line")]
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} is a number"))
+    }
+
+    /// The text between `start` and the first `end` after it.
+    fn between<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
+        let at = source
+            .find(start)
+            .unwrap_or_else(|| panic!("{start:?} in FluiActivity"));
+        let rest = &source[at + start.len()..];
+        &rest[..rest
+            .find(end)
+            .unwrap_or_else(|| panic!("{end:?} after {start:?}"))]
+    }
+
+    /// `FluiActivity` applies this table: after `NativeActivity.onCreate` it
+    /// sets the table's soft input mode, and from the table's boundary level
+    /// on it takes the branch that stops the decor fitting the system
+    /// windows, below it the branch that adds the table's layout flags. Each
+    /// branch is read for what it applies, so swapped branches, another
+    /// boundary or other flags fail.
     #[test]
     fn fluiactivity_applies_this_table() {
         let activity = crate::owner::android::java_host::java_source(
             crate::owner::android::java_host::ACTIVITY_CLASS,
         );
-        let below = window_setup(AndroidApi::from_level(29));
-        let from = window_setup(AndroidApi::from_level(30));
-        let EdgeToEdge::LayoutFlags(flags) = below.edge_to_edge else {
-            panic!("below API 30 the window lays out through the flags");
+        let on_create = between(
+            &activity,
+            "protected void onCreate(Bundle savedInstanceState) {",
+            "\n    }\n",
+        );
+        let boundary = constant(&activity, "DECOR_DOES_NOT_FIT_FROM_API");
+        let below = window_setup(AndroidApi::from_level(
+            u32::try_from(boundary - 1).expect("a level"),
+        ));
+        let from = window_setup(AndroidApi::from_level(
+            u32::try_from(boundary).expect("a level"),
+        ));
+        assert_ne!(
+            below.edge_to_edge, from.edge_to_edge,
+            "FluiActivity's boundary is the table's"
+        );
+
+        let soft_input = constant(&activity, "SOFT_INPUT_MODE");
+        assert_eq!(
+            (soft_input, soft_input),
+            (below.soft_input, from.soft_input)
+        );
+        let order = [
+            "super.onCreate(savedInstanceState);",
+            "getWindow().setSoftInputMode(SOFT_INPUT_MODE);",
+            "if (Build.VERSION.SDK_INT >= DECOR_DOES_NOT_FIT_FROM_API) {",
+        ]
+        .map(|step| {
+            on_create
+                .find(step)
+                .unwrap_or_else(|| panic!("{step:?} in onCreate"))
+        });
+        assert!(
+            order.is_sorted(),
+            "the mode is set after NativeActivity's own"
+        );
+
+        // What each branch applies, read from the method it calls.
+        let flags = constant(&activity, "EDGE_TO_EDGE_LAYOUT_FLAGS");
+        let decor = between(&activity, "static void edgeToEdge(Window window) {", "}");
+        let layout = between(
+            &activity,
+            "private static void layoutEdgeToEdge(Window window) {",
+            "\n    }",
+        );
+        assert!(decor.contains("window.setDecorFitsSystemWindows(false);"));
+        assert!(layout.contains("| EDGE_TO_EDGE_LAYOUT_FLAGS"));
+        let applies = |branch: &str| {
+            let branch = branch.trim();
+            if branch == "Api30.edgeToEdge(getWindow());" {
+                EdgeToEdge::DecorDoesNotFit
+            } else if branch == "layoutEdgeToEdge(getWindow());" {
+                EdgeToEdge::LayoutFlags(flags)
+            } else {
+                panic!("a branch FluiActivity's table does not know: {branch:?}")
+            }
         };
-        assert_eq!(from.edge_to_edge, EdgeToEdge::DecorDoesNotFit);
-        assert_eq!(below.soft_input, from.soft_input, "one mode on every level");
-        for stated in [
-            format!("static final int SOFT_INPUT_MODE = {};", from.soft_input),
-            "static final int DECOR_DOES_NOT_FIT_FROM_API = 30;".to_owned(),
-            format!("static final int EDGE_TO_EDGE_LAYOUT_FLAGS = {flags};"),
-            "if (Build.VERSION.SDK_INT >= DECOR_DOES_NOT_FIT_FROM_API) {".to_owned(),
-            "getWindow().setSoftInputMode(SOFT_INPUT_MODE);".to_owned(),
-        ] {
-            assert!(activity.contains(&stated), "{stated:?} in FluiActivity");
-        }
+        let then = between(
+            on_create,
+            "if (Build.VERSION.SDK_INT >= DECOR_DOES_NOT_FIT_FROM_API) {",
+            "} else {",
+        );
+        let otherwise = between(on_create, "} else {", "}");
+        assert_eq!(applies(then), from.edge_to_edge, "from API {boundary}");
+        assert_eq!(
+            applies(otherwise),
+            below.edge_to_edge,
+            "below API {boundary}"
+        );
     }
 }

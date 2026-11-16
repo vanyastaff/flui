@@ -14043,12 +14043,11 @@ pub const fn flui::platform::capability::ResultCode::raw(self) -> i32
 variant flui::platform::capability::ResultCode::Canceled // at 1
 variant flui::platform::capability::ResultCode::Ok // at 0
 variant flui::platform::capability::ResultCode::Other(i32) // at 2
-pub struct flui::platform::capability::ResultData { .. }
-impl Drop for flui::platform::capability::ResultData
+pub struct flui::platform::capability::ResultData(_)
 impl core::fmt::Debug for flui::platform::capability::ResultData
 pub fn flui::platform::capability::ResultData::new(token: flui::platform::capability::ResultToken) -> (Self, flui::platform::capability::ResultDataHold)
 pub fn flui::platform::capability::ResultData::token(&self) -> flui::platform::capability::ResultToken
-pub struct flui::platform::capability::ResultDataHold { .. }
+pub struct flui::platform::capability::ResultDataHold(_)
 impl core::fmt::Debug for flui::platform::capability::ResultDataHold
 pub fn flui::platform::capability::ResultDataHold::is_released(&self) -> bool
 pub struct flui::platform::capability::ResultKey(_)
@@ -14074,7 +14073,9 @@ impl core::fmt::Display for flui::platform::capability::ResultRefused
 impl core::hash::Hash for flui::platform::capability::ResultRefused
 impl core::marker::StructuralPartialEq for flui::platform::capability::ResultRefused
 variant flui::platform::capability::ResultRefused::ActivityEnded // at 7
+variant flui::platform::capability::ResultRefused::AnswerUnreadable // at 9
 variant flui::platform::capability::ResultRefused::Cancelled // at 5
+variant flui::platform::capability::ResultRefused::DataLost { code: flui::platform::capability::ResultCode } // at 8
 variant flui::platform::capability::ResultRefused::HandOffFailed // at 4
 variant flui::platform::capability::ResultRefused::IntentNotMade // at 2
 variant flui::platform::capability::ResultRefused::NotLaunched // at 3
@@ -14083,9 +14084,16 @@ variant flui::platform::capability::ResultRefused::TokensExhausted // at 1
 variant flui::platform::capability::ResultRefused::TooManyOpen // at 0
 pub struct flui::platform::capability::ResultRequest { .. }
 impl core::fmt::Debug for flui::platform::capability::ResultRequest
-pub fn flui::platform::capability::ResultRequest::into_parts(self) -> (flui::platform::capability::ResultToken, flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>)
-pub fn flui::platform::capability::ResultRequest::new(token: flui::platform::capability::ResultToken, completion: flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>) -> Self
+pub fn flui::platform::capability::ResultRequest::into_parts(self) -> (flui::platform::capability::ResultTicket, flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>)
+pub fn flui::platform::capability::ResultRequest::new(ticket: flui::platform::capability::ResultTicket, completion: flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>) -> Self
 pub fn flui::platform::capability::ResultRequest::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultTicket(_)
+impl core::fmt::Debug for flui::platform::capability::ResultTicket
+pub fn flui::platform::capability::ResultTicket::new(token: flui::platform::capability::ResultToken) -> (Self, flui::platform::capability::ResultTicketHold)
+pub fn flui::platform::capability::ResultTicket::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultTicketHold(_)
+impl core::fmt::Debug for flui::platform::capability::ResultTicketHold
+pub fn flui::platform::capability::ResultTicketHold::is_released(&self) -> bool
 pub struct flui::platform::capability::ResultToken(_)
 impl Clone for flui::platform::capability::ResultToken
 impl Copy for flui::platform::capability::ResultToken

@@ -152,7 +152,7 @@ mod measured {
     use flui_sdk::platform::capability::{
         Activity as _, ActivityResult as _, IntentFrame as _, InvalidResultKey as _, JniFrame as _,
         ResultCode as _, ResultData as _, ResultKey as _, ResultOutcome as _, ResultRefused as _,
-        ResultRequest as _, ResultToken as _,
+        ResultRequest as _, ResultTicket as _, ResultToken as _,
     };
     use flui_sdk::platform::{
         AdmissionError as _, Brightness as _, ClipboardError as _, DurationScale as _,
@@ -687,6 +687,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::capability::ResultOutcome;",
         "pub use flui_platform::capability::ResultRefused;",
         "pub use flui_platform::capability::ResultRequest;",
+        "pub use flui_platform::capability::ResultTicket;",
         "pub use flui_platform::capability::ResultToken;",
         "pub use flui_platform::capability::WindowRef;",
         "pub use flui_platform::data_transfer::TransferActions;",
