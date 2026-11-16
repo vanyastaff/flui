@@ -6600,6 +6600,59 @@ GPU-память простаивающего или невидимого окн
   `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,
   `tests/wasm32/web_page_lifecycle.rs`.
 
+- [x] **LY117** — ветка `platform/input-vocabulary`, решение — ADR-0346 (заменяет в ADR-0143
+  §1 приватные `state`/`repeat` события клавиши, в §2 и §3 — `KeyRepeat` и мёртвую клавишу как
+  именованную). Состояние клавиши — `KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})` или
+  `Up`, поле `KeyEvent::state` открыто; `KeyRepeat`, `KeyRelease`, `repeat()`, `release()`,
+  `with_repeat`, `with_release` удалены, отпускание с повтором не строится (`compile_fail`-доктест
+  `KeyState`). Мёртвая клавиша — `Key::Dead(Option<char>)` с акцентом, как он напечатан на клавише;
+  генератор `key-vocabulary` не выпускает `Dead` в `NamedKey` (`carried_by_key`) и падает, если
+  keyboard-types его переименует (самотест). Акцент читают Windows (`WM_DEADCHAR`), XKB (мёртвый
+  keysym, `dead_key`) и Android (карта клавиш); DOM акцента не называет (`Key::Dead(None)`), AppKit
+  и UIKit составляют мёртвые клавиши размеченным текстом. Отпускание называет то, что назвало
+  нажатие, на каждом хосте: один реестр `PressedAs` (бывший `UnplacedKeys`) держит клавишу без
+  кода и мёртвую клавишу до отпускания, что бы ни сделали с ней Shift, раскладка или compose;
+  повторное нажатие заменяет запись (Windows, XKB, AppKit, веб, Android;
+  `a_held_key_is_released_as_it_was_pressed`, без реестра отпускание мёртвой с Shift называет
+  другой акцент). Android составляет аппаратную мёртвую клавишу со следующей:
+  `keys::DeadKeyComposer` (чистый, собирается для тестов на любом хосте) через
+  `KeyCharacterMap.getDeadChar`; несоставимая пара печатает акцент и букву, модификатор акцент
+  держит, клавиша без текста, аккорд Control или Meta (ярлык срабатывает), композиция IME и потеря
+  фокуса сбрасывают.
+  Прокрутка несёт `ScrollEvent::inversion: ScrollInversion` (`Unknown`, `FromDevice`,
+  `InvertedFromDevice`): macOS (`isDirectionInvertedFromDevice`), WebKit
+  (`webkitDirectionInvertedFromDevice`) и Wayland (`wl_pointer.axis_relative_direction`, seat 9;
+  кадр, только останавливающий прокрутку, сохраняет её направление; журнал несёт инверсию
+  строки прокрутки). `PointerEvent::Revise`, `PointerRevision`,
+  `PointerEvent::PenSqueeze`, `PenSqueeze`, `PenSqueezePhase` и `Listener::on_pointer_revise`
+  удалены: производителя не было ни у одного хоста; форма возврата (билет оценки, выданный хостом
+  с чтением) — в `docs/gaps.md` («Input latency modes…»). Запись — формат 4 (`down`, `repeat`,
+  `unpaired`, `up`, ключ `dead`, `inversion` прокрутки); протокол 0.16 — разрыв (ADR-0342),
+  `Break` получил список `removed` полных путей схемы (`a_removal_breaking_lists_may_go`).
+  Имя `ScrollInversion` не совпадает с `ScrollDirection` вьюпорта; виджета-читателя пока нет
+  (первый — колесо слайдера, `docs/gaps.md`).
+  Тесты, в скобках результат без исправления: `a_hardware_dead_key_composes_with_the_next_key`
+  (без составителя нет типа — не собирается; со старым отображением `´`, `e` даёт `e`);
+  `a_repeat_and_a_missing_release_are_kinds_of_key_down` и
+  `a_dead_key_carries_its_accent_and_no_named_key_spells_it` (`NamedKey::from_w3c("Dead")` давал
+  `Some`); `compile_fail`-доктест `KeyState` держит форму (отпускание с повтором не строится);
+  строки `KeyPress`, `ScrollInversion`, `Key::Dead` в
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`; мёртвые строки Windows в
+  `tests/contract.rs` теперь ждут акцент; строки XKB `key_of` (мёртвый циркумфлекс, мёртвая точка
+  снизу без отдельного знака); `a_scroll_carries_the_direction_the_compositor_reports` (до правки
+  событие `axis_relative_direction` отбрасывалось, направление — `Unknown`).
+  Проверки: на Windows clippy рабочего пространства `--all-targets -D warnings`, nextest
+  `flui-platform`, `flui-interaction`, `flui-runtime`, `flui-testing`, `flui-protocol`, `flui-widgets`,
+  `flui-native` (падают и на базе: Android intent, `owner_code_is_contained_at_every_point`, trybuild),
+  мёртвые строки Windows в `test_window_lifecycle_contract`, `doc-strict`, `checks`, `expectations`;
+  в WSL clippy `flui-native --all-targets` и тесты xkb, провода Wayland, клавиш Android; откат
+  чтения `axis_relative_direction` валит `a_scroll_carries_the_direction_the_compositor_reports`;
+  `cargo +nightly check` для Android, macOS и wasm32.
+  Не запущено: Android и Apple не компилировались здесь иначе как `cargo +nightly check` в WSL
+  (iOS — только CI); прогон аппаратной клавиатуры на Android и естественной прокрутки на Mac не
+  делался (`docs/gaps.md`, «Pointer and keyboard gaps»). Windows, X11, Android и iOS флага
+  направления не дают — `Unknown` (там же).
+
 - [ ] **LY112** — ветка `platform/one-rule-once`, PR #2651 (ждёт независимого чтения).
   **Частично:** масштаб каждой записи ввода (`NativeReading::scale`), зум преобразования
   DirectManipulation и измеренные отношения боксов хоста Web сохраняют свою проверку; почему —
@@ -6877,6 +6930,43 @@ GPU-память простаивающего или невидимого окн
   (строка `Image`); `an_os_session_names_its_press_and_offers_only_what_it_can` (два элемента с
   текстом: без отбора — `Refused(DuplicateFormat)`); `a_request_from_a_press_the_window_does_not_hold_is_refused`
   в `headless_drag_contracts` (без проверки — сессия закончившегося нажатия принята).
+
+- [ ] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
+  `e166cabd3` запуском на Windows: F11, которое обработчик пропустил, переводило окно в
+  полноэкранный режим; `SetMode(Maximized)` полноэкранного окна, развёрнутого до этого,
+  публиковало `[Fullscreen, Normal, Normal, Maximized]`. Переключатель, терявший «развёрнуто»,
+  достижим был только через F11: без клавиши у него нет вызывающего. Построено: клавиши у
+  хоста нет — удалены `WindowConfiguration` (`window/config.rs`), шаг `KeyLetThrough`,
+  сообщение `TOGGLE_FULLSCREEN` и `toggle_fullscreen`; полноэкранность — только `SetMode`.
+  Вместо переключателя — `enter_fullscreen_for_hwnd` и `leave_fullscreen_for_hwnd(FullscreenExit)`:
+  у окна без рамки нет своего выхода, и каждый выход называет, куда идёт. `Normal` возвращает
+  стиль и прямоугольник до полноэкранного режима, `Maximized` разворачивает одним
+  `SetWindowPlacement` с этим прямоугольником как нормальным, не показывая его по пути; каждый
+  выход — один снимок, без системной команды, так что ни один отчёт круга не говорит
+  `UserPlacing` и размещение не пишется как пользовательское (ADR-0343 §2). Явный
+  `SetMode(Normal)` по-прежнему кончает в `Normal` (`fullscreen_entered_from_maximized_returns_to_normal`).
+  «Режим помнит, во что вернуться» не построено как отдельное поле: без клавиши хоста
+  безымянного выхода не осталось ни у одного хоста, и запоминать нечего; решение и причина — в
+  `## Review` PR. Тесты, в скобках результат на `main`:
+  `a_key_the_application_lets_through_leaves_the_mode_alone` (окно стало `Fullscreen`),
+  `a_fullscreen_window_maximized_again_never_reads_normal` (два снимка `Normal` между
+  `Fullscreen` и `Maximized`) — таблица `native_window_commands`;
+  `leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless, таблица
+  `window_state_contract`) держит то же правило у headless, где оно уже выполнялось.
+  Доведение после чтения: свёрнутое полноэкранное окно выходит прямо из свёрнутого одним
+  `SetWindowPlacement` под удержанием публикации (`a_minimized_fullscreen_window_leaves_in_one_step`;
+  с откатом — `[Minimized, Minimized, Fullscreen, Maximized]`); прямоугольник возврата, чей
+  монитор отключён, вписывается в рабочую область ближайшего (`mode::fit_within`, модельная
+  таблица `a_rectangle_comes_back_inside_a_monitor_that_is_there`: у хоста Windows нет двойника
+  дисплеев); документы говорят правило как есть — ни один хост не переключает полноэкранный
+  режим своим решением, смена системой (зелёная кнопка macOS, Escape браузера) сообщается и не
+  оспаривается; устаревшие фрагменты changelog о F11 переписаны.
+  Остаётся строимое, поэтому строка открыта: X11, Wayland и AppKit исполняют выход несколькими
+  ответами системы окон и публикуют режим между (openbox на Xvfb в WSL: `Normal` трижды до
+  `Maximized`, и при развороте до снятия полноэкранного). Нужно: хост держит режим снимка, пока
+  запрошенная им смена режима в пути, с ограничением по времени и ходом владельца по его
+  истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
+  AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
 
 ## Отступление от порядка, решённое владельцем
 

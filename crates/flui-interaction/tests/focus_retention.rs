@@ -12,7 +12,7 @@ use flui_interaction::focus::{
 };
 use flui_platform::{
     EventTime,
-    keyboard::{Code, Key, KeyEvent, KeyState},
+    keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
 };
 
 fn geometric_focus_navigation_pins_ranking_and_admission() {
@@ -890,7 +890,7 @@ fn key_dispatch_preserves_propagation_outcomes() {
 
 fn key_event() -> KeyEvent {
     KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::character("a"),
         Code::KeyA,
         EventTime::from_nanos(0),

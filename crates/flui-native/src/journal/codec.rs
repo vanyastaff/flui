@@ -14,6 +14,10 @@
 //! header, unknown fields skipped and an unknown variant a typed error, never
 //! a skipped row.
 
+mod scroll;
+
+use scroll::{scroll_from_wire, scroll_to_wire};
+
 use std::io::{BufRead, Write};
 use std::num::{NonZeroU8, NonZeroU64};
 use std::rc::Rc;
@@ -23,10 +27,7 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::EventTime;
 use flui_platform::keyboard::Modifiers;
-use flui_platform::pointer::{
-    PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
-    ScrollPrecision, ScrollUnit,
-};
+use flui_platform::pointer::{PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind};
 use flui_platform::text_store::TextStore;
 use flui_platform::{
     AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, CloseDecision, ColorGamut,
@@ -1635,93 +1636,6 @@ fn wheel_from_wire(wheel: wire::Wheel) -> DtoResult<WheelReading> {
         scale: wheel.scale,
         time: EventTime::from_nanos(wheel.time_ns),
         modifiers: modifiers_from_wire(&wheel.modifiers)?,
-    })
-}
-
-fn scroll_to_wire(reading: &ContactScroll) -> DtoResult<wire::Scroll> {
-    let phase = reading
-        .phase
-        .map(|phase| {
-            Ok(match phase {
-                ScrollPhase::Began => wire::ScrollPhase::Began,
-                ScrollPhase::Changed => wire::ScrollPhase::Changed,
-                ScrollPhase::Ended => wire::ScrollPhase::Ended,
-                ScrollPhase::Cancelled => wire::ScrollPhase::Cancelled,
-                ScrollPhase::MomentumBegan => wire::ScrollPhase::MomentumBegan,
-                ScrollPhase::MomentumChanged => wire::ScrollPhase::MomentumChanged,
-                ScrollPhase::MomentumEnded => wire::ScrollPhase::MomentumEnded,
-                _ => return Err(DtoError::Unmirrored("ScrollPhase")),
-            })
-        })
-        .transpose()?;
-    let (precise, notched) = match reading.precision {
-        ScrollPrecision::Precise => (true, false),
-        ScrollPrecision::Notched => (false, true),
-        ScrollPrecision::Unknown => (false, false),
-        _ => return Err(DtoError::Unmirrored("ScrollPrecision")),
-    };
-    Ok(wire::Scroll {
-        surface: reading.surface.0,
-        device: reading.device.map(|device| device.0),
-        contact: reading.contact.0,
-        phase,
-        unit: match reading.delta.unit() {
-            ScrollUnit::Lines => wire::ScrollUnit::Lines,
-            ScrollUnit::Pixels => wire::ScrollUnit::Pixels,
-            ScrollUnit::Pages => wire::ScrollUnit::Pages,
-            ScrollUnit::Detents => wire::ScrollUnit::Detents,
-            _ => return Err(DtoError::Unmirrored("ScrollUnit")),
-        },
-        delta: [reading.delta.x(), reading.delta.y()],
-        precise,
-        notched,
-        time_ns: nanos(reading.time),
-        modifiers: modifiers_to_wire(reading.modifiers)?,
-    })
-}
-
-fn scroll_from_wire(scroll: wire::Scroll) -> DtoResult<ContactScroll> {
-    let unit = match scroll.unit {
-        wire::ScrollUnit::Lines => ScrollUnit::Lines,
-        wire::ScrollUnit::Pixels => ScrollUnit::Pixels,
-        wire::ScrollUnit::Pages => ScrollUnit::Pages,
-        wire::ScrollUnit::Detents => ScrollUnit::Detents,
-        other => return Err(unread(other.name())),
-    };
-    let phase = scroll
-        .phase
-        .map(|phase| {
-            Ok(match phase {
-                wire::ScrollPhase::Began => ScrollPhase::Began,
-                wire::ScrollPhase::Changed => ScrollPhase::Changed,
-                wire::ScrollPhase::Ended => ScrollPhase::Ended,
-                wire::ScrollPhase::Cancelled => ScrollPhase::Cancelled,
-                wire::ScrollPhase::MomentumBegan => ScrollPhase::MomentumBegan,
-                wire::ScrollPhase::MomentumChanged => ScrollPhase::MomentumChanged,
-                wire::ScrollPhase::MomentumEnded => ScrollPhase::MomentumEnded,
-                other => return Err(unread(other.name())),
-            })
-        })
-        .transpose()?;
-    Ok(ContactScroll {
-        surface: NativeSurface(scroll.surface),
-        device: scroll.device.map(NativeDevice),
-        contact: NativeContact(scroll.contact),
-        phase,
-        delta: ScrollDelta::try_new(unit, scroll.delta[0], scroll.delta[1])
-            .map_err(|error| DtoError::Invalid(format!("scroll delta: {error}")))?,
-        precision: match (scroll.precise, scroll.notched) {
-            (true, false) => ScrollPrecision::Precise,
-            (false, true) => ScrollPrecision::Notched,
-            (false, false) => ScrollPrecision::Unknown,
-            (true, true) => {
-                return Err(DtoError::Invalid(
-                    "a scroll is precise or notched, not both".into(),
-                ));
-            }
-        },
-        time: EventTime::from_nanos(scroll.time_ns),
-        modifiers: modifiers_from_wire(&scroll.modifiers)?,
     })
 }
 

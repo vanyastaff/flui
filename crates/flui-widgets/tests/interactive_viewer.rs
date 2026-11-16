@@ -10,7 +10,7 @@ use flui_animation::Vsync;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::{
     DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollUnit,
@@ -533,11 +533,11 @@ pub(crate) fn plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list() {
 fn press_key(laid: &LaidOut, key: Key, code: Code, modifiers: Modifiers) -> bool {
     let manager = laid.focus_manager();
     let mut handled = false;
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let event = KeyEvent::new(state, key.clone(), code, EventTime::from_nanos(0))
             .with_modifiers(modifiers);
         let result = manager.dispatch_key_event(&event);
-        if state == KeyState::Down {
+        if matches!(state, KeyState::Down(_)) {
             handled = result == flui_interaction::focus::KeyEventResult::Handled;
         }
     }
@@ -651,7 +651,7 @@ pub(crate) fn keys_typed_in_a_field_inside_the_viewer_stay_in_the_field() {
             Modifiers::NONE,
         ),
     ] {
-        for state in [KeyState::Down, KeyState::Up] {
+        for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             let event = KeyEvent::new(state, key.clone(), code, EventTime::from_nanos(0))
                 .with_modifiers(modifiers);
             let _ = manager.dispatch_key_event(&event);
@@ -1207,7 +1207,7 @@ pub(crate) fn viewer_key_sequence_ends_when_focus_moves_before_the_release() {
     };
     assert!(
         manager
-            .dispatch_key_event(&right(KeyState::Down))
+            .dispatch_key_event(&right(KeyState::Down(KeyPress::First)))
             .is_handled(),
         "the arrow pans the focused viewer"
     );

@@ -514,7 +514,7 @@ fn a_truncated_recording_dispatches_nothing() {
 
 /// Rows carrying text in each place a recording redacts it.
 fn text_rows() -> Vec<InputRecord> {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, ImeEvent, WindowId};
 
     let at = EventTime::from_nanos(1_000);
@@ -526,7 +526,7 @@ fn text_rows() -> Vec<InputRecord> {
     };
     [
         HostInput::Platform(PlatformInput::Keyboard(KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("q"),
             Code::KeyQ,
             at,

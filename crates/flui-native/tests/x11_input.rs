@@ -11,7 +11,7 @@ use std::time::Duration;
 use cursor_icon::CursorIcon;
 use flui_native::testing::keyboard_layout;
 use flui_native::testing::x11::run_for;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{ButtonChange, PointerEvent};
 use flui_platform::{PlatformInput, UnsupportedReason, WindowCommand};
 use flui_testing::window_commands::AdmitAndApply as _;
@@ -133,7 +133,7 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
             .inputs()
             .into_iter()
             .filter_map(|input| match input {
-                PlatformInput::Keyboard(key) => Some(key.state()),
+                PlatformInput::Keyboard(key) => Some(key.state),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -150,7 +150,7 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
     assert_eq!(keyboard_layout::current(&fixture.platform), "German");
     assert_eq!(
         keys(),
-        [KeyState::Down, KeyState::Up],
+        [KeyState::Down(KeyPress::First), KeyState::Up],
         "a key of the layout change's turn was lost to the callback's panic"
     );
     assert_eq!(raised, 1, "the callback's panic left the loop once");
@@ -436,12 +436,12 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
     xtest.tap(KEYCODE_E);
     let composed: Vec<Key> = key_downs(&handler)
         .into_iter()
-        .filter(|key| key.state() == KeyState::Down)
+        .filter(|key| matches!(key.state, KeyState::Down(_)))
         .map(|key| key.key)
         .collect();
     assert_eq!(
         composed,
-        [Key::Named(NamedKey::Dead), Key::character("é")],
+        [Key::Dead(Some('\u{b4}')), Key::character("é")],
         "the dead key composes with e"
     );
     handler.take_calls();
@@ -453,7 +453,7 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
     xtest.key(keycode::SHIFT_L, false);
     let released: Vec<(KeyState, Key)> = key_downs(&handler)
         .into_iter()
-        .map(|key| (key.state(), key.key))
+        .map(|key| (key.state, key.key))
         .collect();
     assert_eq!(
         released.last(),
@@ -466,7 +466,7 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
     xtest.tap(KEYCODE_E);
     let after: Vec<Key> = key_downs(&handler)
         .into_iter()
-        .filter(|key| key.state() == KeyState::Down)
+        .filter(|key| matches!(key.state, KeyState::Down(_)))
         .map(|key| key.key)
         .collect();
     assert_eq!(
@@ -484,7 +484,7 @@ struct PanicsAtTheRelease(Rc<RecordingWindowHandler>);
 impl flui_platform::WindowHandler for PanicsAtTheRelease {
     fn input(&self, event: PlatformInput) -> flui_platform::DispatchEventResult {
         if let PlatformInput::Keyboard(key) = &event
-            && key.state() == KeyState::Up
+            && key.state == KeyState::Up
         {
             panic!("the handler panics at the release");
         }
@@ -811,7 +811,7 @@ fn xtest_keys_reach_the_focused_window() {
         .collect();
     let downs: Vec<(Key, Code, bool)> = keys
         .iter()
-        .filter(|key| key.state() == KeyState::Down)
+        .filter(|key| matches!(key.state, KeyState::Down(_)))
         .map(|key| {
             (
                 key.key.clone(),
@@ -833,9 +833,7 @@ fn xtest_keys_reach_the_focused_window() {
         "{keys:#?}"
     );
     assert_eq!(
-        keys.iter()
-            .filter(|key| key.state() == KeyState::Up)
-            .count(),
+        keys.iter().filter(|key| key.state == KeyState::Up).count(),
         downs.len(),
         "every key is released"
     );

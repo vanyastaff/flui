@@ -77,6 +77,121 @@ pub mod keys {
         meta_state & !(META_CTRL_MASK | META_META_MASK)
     }
 
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) use dead::{DeadChars, DeadKeyComposer, MappedChar};
+
+    #[cfg(any(target_os = "android", test))]
+    mod dead {
+        use flui_platform::keyboard::{Key, NamedKey};
+
+        /// What a character key's map entry gives under the event's meta
+        /// state: `KeyCharacterMap.get`'s answer, without the JNI type.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(crate) enum MappedChar {
+            /// The key types this character.
+            Text(char),
+            /// The key is a dead key for this spacing accent (`´`, `^`, `¨`):
+            /// `COMBINING_ACCENT` set, the accent in the low bits.
+            Accent(char),
+            /// The map gives the key no character.
+            Nothing,
+        }
+
+        /// The device's key map composing an accent with a base character:
+        /// `KeyCharacterMap.getDeadChar`, which answers the accent itself
+        /// for a space or the same accent again.
+        pub(crate) trait DeadChars {
+            /// The character `accent` composes with `base`, or `None` when
+            /// the pair composes nothing.
+            fn dead_char(&self, accent: char, base: char) -> Option<char>;
+        }
+
+        /// The accent a hardware dead key leaves pending, and what the next
+        /// key types with it.
+        ///
+        /// Android hands a native activity the raw key events: the
+        /// composition `TextView`'s key listener does for a hardware dead
+        /// key is the application's to do, so without this a dead key typed
+        /// nothing and the letter after it arrived bare. A dead key reports
+        /// [`Key::Dead`] with its accent and leaves it pending; the next
+        /// character key types the composed character, or the accent
+        /// followed by the character when the pair composes nothing (as
+        /// Windows and macOS type it), so no keystroke is lost. A second
+        /// dead key replaces the pending accent unless the two compose. A
+        /// key that types nothing (an arrow, Enter, Escape) drops the
+        /// accent, and so do a Control or Meta chord (the shortcut fires as on
+        /// every other host) and an input method's composition; a modifier
+        /// keeps it, so Shift can choose the base letter.
+        #[derive(Debug, Default)]
+        pub(crate) struct DeadKeyComposer {
+            pending: Option<char>,
+        }
+
+        impl DeadKeyComposer {
+            /// The key a character key's first press reports, given what it
+            /// maps to; the pending accent is taken or replaced.
+            pub(crate) fn press(&mut self, mapped: MappedChar, map: &impl DeadChars) -> Key {
+                match (self.pending.take(), mapped) {
+                    (None, MappedChar::Text(character)) => Key::character(character.to_string()),
+                    (_, MappedChar::Nothing) => Key::Named(NamedKey::Unidentified),
+                    (None, MappedChar::Accent(accent)) => {
+                        self.pending = Some(accent);
+                        Key::Dead(Some(accent))
+                    }
+                    (Some(pending), MappedChar::Text(base)) => match map.dead_char(pending, base) {
+                        Some(composed) => Key::character(composed.to_string()),
+                        None => Key::character(String::from_iter([pending, base])),
+                    },
+                    (Some(pending), MappedChar::Accent(accent)) => {
+                        if let Some(composed) = map.dead_char(pending, accent) {
+                            Key::character(composed.to_string())
+                        } else {
+                            self.pending = Some(accent);
+                            Key::Dead(Some(accent))
+                        }
+                    }
+                }
+            }
+
+            /// The key a repeat or a release reports: what it maps to, with
+            /// the pending accent left as it is.
+            pub(crate) fn unchanged(mapped: MappedChar) -> Key {
+                match mapped {
+                    MappedChar::Text(character) => Key::character(character.to_string()),
+                    MappedChar::Accent(accent) => Key::Dead(Some(accent)),
+                    MappedChar::Nothing => Key::Named(NamedKey::Unidentified),
+                }
+            }
+
+            /// Something that is not typing ends the pending accent: a
+            /// Control or Meta chord (a shortcut, which the accent must not
+            /// turn into text), or an input method's composition.
+            pub(crate) fn interrupt(&mut self) {
+                self.pending = None;
+            }
+
+            /// A named key went down: one that types nothing drops the
+            /// pending accent, a modifier keeps it.
+            pub(crate) fn named(&mut self, key: NamedKey) {
+                let modifier = matches!(
+                    key,
+                    NamedKey::Shift
+                        | NamedKey::Control
+                        | NamedKey::Alt
+                        | NamedKey::AltGraph
+                        | NamedKey::Meta
+                        | NamedKey::CapsLock
+                        | NamedKey::NumLock
+                        | NamedKey::Fn
+                        | NamedKey::Symbol
+                );
+                if !modifier {
+                    self.pending = None;
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     mod tests;
 }
@@ -128,7 +243,7 @@ pub(crate) mod motion {
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
         PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta,
-        ScrollPhase, ScrollPrecision, ScrollUnit,
+        ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
     };
     use web_time::Instant;
 
@@ -778,6 +893,7 @@ pub(crate) mod motion {
                             phase: None,
                             delta,
                             precision: ScrollPrecision::Unknown,
+                            inversion: ScrollInversion::Unknown,
                             time: event.time,
                             modifiers: motion.modifiers,
                         }));
@@ -900,6 +1016,7 @@ pub(crate) mod motion {
                         phase: Some(owned),
                         delta,
                         precision: ScrollPrecision::Precise,
+                        inversion: ScrollInversion::Unknown,
                         time: event.time,
                         modifiers: motion.modifiers,
                     }));
@@ -1235,18 +1352,18 @@ use std::{
 #[cfg(target_os = "android")]
 use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolType};
 #[cfg(target_os = "android")]
+use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState};
+#[cfg(target_os = "android")]
 use flui_platform::{EventTime, keyboard::Modifiers as OwnedModifiers};
 #[cfg(target_os = "android")]
-use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
+use keyboard_types::{Modifiers, NamedKey as UpstreamNamedKey};
 #[cfg(target_os = "android")]
 use parking_lot::Mutex;
-#[cfg(target_os = "android")]
-use ui_events::keyboard::KeyboardEvent;
 
 #[cfg(target_os = "android")]
 use crate::{
     input::assembly::NativeCancel,
-    input::keys::adapter::keyboard_input,
+    input::keys::adapter,
     owner::android::{ActivityInput, AndroidLoop},
     version::gate::android::AndroidApi,
 };
@@ -1391,13 +1508,17 @@ fn motion_device(
 
 /// The Android host's input, as the loop holds it ([`ActivityInput`]): the
 /// translation of the Activity's queue with the Java device objects its
-/// capability cache compares by identity, and the scroll factors. No user
+/// capability cache compares by identity, the scroll factors and the pending
+/// dead-key accent. No user
 /// callback lives here.
 #[derive(Default)]
 #[cfg(target_os = "android")]
 pub(crate) struct AndroidInput {
     state: Mutex<AndroidInputState>,
     scroll_factors: Mutex<scroll::FactorCache>,
+    /// The accent a hardware dead key left pending, and the key each held key
+    /// was pressed as. A `Mutex` because `ActivityInput` is `Send + Sync`.
+    held_keys: Mutex<HeldKeys>,
 }
 
 #[cfg(target_os = "android")]
@@ -1475,7 +1596,7 @@ impl ActivityInput for AndroidInput {
         event: &android_activity::input::KeyEvent<'_>,
         composing: bool,
     ) -> Option<PlatformInput> {
-        convert_key_event(app, event, composing)
+        convert_key_event(app, event, composing, &mut self.held_keys.lock())
     }
 
     fn finish_drain(&self) -> Vec<PlatformInput> {
@@ -1483,6 +1604,9 @@ impl ActivityInput for AndroidInput {
     }
 
     fn focus_lost(&self) -> Vec<PlatformInput> {
+        // An accent pending when the window lost focus does not wait for the
+        // first key after it comes back.
+        self.held_keys.lock().dead_keys.interrupt();
         self.state.lock().cancel_contacts(NativeCancel::FocusLost)
     }
 
@@ -1674,79 +1798,116 @@ fn owned_modifiers(meta: android_activity::input::MetaState) -> OwnedModifiers {
 
 /// Convert an Android `KeyEvent` to a `PlatformInput`. `composing` is whether
 /// the input method composes now: a key it passed on during a composition is
-/// still its own ([`keys::key_composition`]).
+/// still its own ([`keys::key_composition`]) and feeds no dead-key
+/// composition; `held` holds the accent a hardware dead key left pending and
+/// the key each held key was pressed as.
 #[cfg(target_os = "android")]
 fn convert_key_event(
     app: &android_activity::AndroidApp,
     event: &android_activity::input::KeyEvent<'_>,
     composing: bool,
+    held: &mut HeldKeys,
 ) -> Option<PlatformInput> {
-    let action = event.action();
-    let state = match action {
+    let HeldKeys {
+        dead_keys,
+        pressed_as,
+    } = held;
+    let state = match event.action() {
         KeyAction::Up => KeyState::Up,
-        // Multiple = auto-repeat; treat as Down
-        KeyAction::Down | KeyAction::Multiple => KeyState::Down,
+        // `ACTION_MULTIPLE` is the deprecated auto-repeat spelling.
+        KeyAction::Down | KeyAction::Multiple if event.repeat_count() > 0 => {
+            KeyState::Down(KeyPress::AutoRepeat)
+        }
+        KeyAction::Down | KeyAction::Multiple => KeyState::Down(KeyPress::First),
         _ => return None,
     };
+    let typing = state == KeyState::Down(KeyPress::First) && !composing;
 
     // Keycode implements Into<u32> via num_enum::IntoPrimitive
     let keycode_i32 = i32::try_from(u32::from(event.key_code())).ok()?;
     let code = ui_events::keyboard::android::keycode_to_code(keycode_i32);
     let named_key = match ui_events::keyboard::android::keycode_to_named_key(keycode_i32) {
-        NamedKey::Unidentified => keys::unnamed_key(keycode_i32)
+        UpstreamNamedKey::Unidentified => keys::unnamed_key(keycode_i32)
             .and_then(|named| named.as_str().parse().ok())
-            .unwrap_or(NamedKey::Unidentified),
+            .unwrap_or(UpstreamNamedKey::Unidentified),
         named => named,
     };
     let location = ui_events::keyboard::android::keycode_to_location(keycode_i32);
+    let modifiers = convert_meta_state(event.meta_state());
+    let chord = modifiers.intersects(Modifiers::CONTROL | Modifiers::META);
+    if composing || (typing && chord) {
+        dead_keys.interrupt();
+    }
+    let typing = typing && !chord;
 
-    let mapped = if named_key == NamedKey::Unidentified {
+    let key = if named_key == UpstreamNamedKey::Unidentified {
+        let map = app.device_key_character_map(event.device_id()).ok();
         let lookup =
             android_activity::input::MetaState(keys::character_meta_state(event.meta_state().0));
-        app.device_key_character_map(event.device_id())
-            .and_then(|map| map.get(event.key_code(), lookup))
-            .ok()
-    } else {
-        None
-    };
-    let modifiers = convert_meta_state(event.meta_state());
-    let key = mapped_key(named_key, mapped, keycode_i32, modifiers);
-    let repeat = event.repeat_count() > 0;
-
-    Some(keyboard_input(
-        KeyboardEvent {
-            state,
-            key,
-            code,
-            location,
+        let mapped = mapped_char(
+            map.as_ref()
+                .and_then(|map| map.get(event.key_code(), lookup).ok()),
+            keycode_i32,
             modifiers,
-            repeat,
-            is_composing: keys::key_composition(composing)
-                == flui_platform::keyboard::ImeComposition::Active,
-        },
-        u64::try_from(event.event_time()).ok()?,
+        );
+        match &map {
+            Some(map) if typing => dead_keys.press(mapped, &DeviceDeadChars(map)),
+            _ => keys::DeadKeyComposer::unchanged(mapped),
+        }
+    } else {
+        let named = adapter::named_key(named_key);
+        if typing {
+            dead_keys.named(named);
+        }
+        Key::Named(named)
+    };
+
+    let time = EventTime::from_nanos(u64::try_from(event.event_time()).ok()?);
+    let event = KeyEvent::new(state, key, adapter::code(code), time)
+        .with_location(adapter::location(location))
+        .with_modifiers(adapter::modifiers(modifiers))
+        .with_composition(keys::key_composition(composing));
+    Some(PlatformInput::Keyboard(
+        pressed_as.settle(Some(keycode_i32), event),
     ))
 }
 
+/// What the host keeps of the keys held now: the accent a hardware dead key
+/// left pending, and the key each held key was pressed as.
+#[derive(Default)]
 #[cfg(target_os = "android")]
-fn mapped_key(
-    named: NamedKey,
+struct HeldKeys {
+    dead_keys: keys::DeadKeyComposer,
+    pressed_as: crate::input::keys::PressedAs<i32>,
+}
+
+/// The device key map's dead-character table.
+#[cfg(target_os = "android")]
+struct DeviceDeadChars<'map>(&'map android_activity::input::KeyCharacterMap);
+
+#[cfg(target_os = "android")]
+impl keys::DeadChars for DeviceDeadChars<'_> {
+    fn dead_char(&self, accent: char, base: char) -> Option<char> {
+        // A JNI failure composes nothing: the accent and the letter are both typed.
+        self.0.get_dead_char(accent, base).ok().flatten()
+    }
+}
+
+/// What a character key maps to: the device map's answer, or the legacy US
+/// fallback when the map could not be read.
+#[cfg(target_os = "android")]
+fn mapped_char(
     mapped: Option<android_activity::input::KeyMapChar>,
     keycode: i32,
     modifiers: Modifiers,
-) -> Key {
+) -> keys::MappedChar {
     use android_activity::input::KeyMapChar;
-    if named != NamedKey::Unidentified {
-        return Key::Named(named);
-    }
     match mapped {
-        Some(KeyMapChar::Unicode(character)) => Key::Character(character.to_string()),
-        Some(KeyMapChar::CombiningAccent(_)) => Key::Named(NamedKey::Dead),
-        Some(KeyMapChar::None) => Key::Named(NamedKey::Unidentified),
+        Some(KeyMapChar::Unicode(character)) => keys::MappedChar::Text(character),
+        Some(KeyMapChar::CombiningAccent(accent)) => keys::MappedChar::Accent(accent),
+        Some(KeyMapChar::None) => keys::MappedChar::Nothing,
         None => fallback_character(keycode, modifiers)
-            .map_or(Key::Named(NamedKey::Unidentified), |character| {
-                Key::Character(character.to_string())
-            }),
+            .map_or(keys::MappedChar::Nothing, keys::MappedChar::Text),
     }
 }
 
@@ -1964,38 +2125,20 @@ mod tests {
     #[test]
     fn android_native_key_map_preserves_logical_keys() {
         use android_activity::input::KeyMapChar;
-        for (named, mapped, expected) in [
+        use keys::MappedChar;
+        for (mapped, expected) in [
+            (Some(KeyMapChar::Unicode('A')), MappedChar::Text('A')),
+            (Some(KeyMapChar::Unicode('Я')), MappedChar::Text('Я')),
+            (Some(KeyMapChar::Unicode('!')), MappedChar::Text('!')),
             (
-                NamedKey::Unidentified,
-                Some(KeyMapChar::Unicode('A')),
-                Key::Character("A".into()),
-            ),
-            (
-                NamedKey::Unidentified,
-                Some(KeyMapChar::Unicode('Я')),
-                Key::Character("Я".into()),
-            ),
-            (
-                NamedKey::Unidentified,
-                Some(KeyMapChar::Unicode('!')),
-                Key::Character("!".into()),
-            ),
-            (
-                NamedKey::Unidentified,
                 Some(KeyMapChar::CombiningAccent('´')),
-                Key::Named(NamedKey::Dead),
+                MappedChar::Accent('´'),
             ),
-            (
-                NamedKey::Unidentified,
-                Some(KeyMapChar::None),
-                Key::Named(NamedKey::Unidentified),
-            ),
-            (NamedKey::Unidentified, None, Key::Character("a".into())),
-            (NamedKey::Enter, None, Key::Named(NamedKey::Enter)),
+            (Some(KeyMapChar::None), MappedChar::Nothing),
+            (None, MappedChar::Text('a')),
         ] {
             assert_eq!(
-                mapped_key(
-                    named,
+                mapped_char(
                     mapped,
                     ui_events::keyboard::android::KEYCODE_A,
                     Modifiers::empty()
@@ -2004,16 +2147,16 @@ mod tests {
             );
         }
         for (code, modifiers, expected) in [
-            (29, Modifiers::SHIFT, "A"),
-            (54, Modifiers::CAPS_LOCK, "Z"),
-            (29, Modifiers::SHIFT | Modifiers::CAPS_LOCK, "a"),
-            (8, Modifiers::SHIFT, "!"),
-            (11, Modifiers::empty(), "4"),
-            (76, Modifiers::SHIFT, "?"),
+            (29, Modifiers::SHIFT, 'A'),
+            (54, Modifiers::CAPS_LOCK, 'Z'),
+            (29, Modifiers::SHIFT | Modifiers::CAPS_LOCK, 'a'),
+            (8, Modifiers::SHIFT, '!'),
+            (11, Modifiers::empty(), '4'),
+            (76, Modifiers::SHIFT, '?'),
         ] {
             assert_eq!(
-                mapped_key(NamedKey::Unidentified, None, code, modifiers),
-                Key::Character(expected.into())
+                mapped_char(None, code, modifiers),
+                MappedChar::Text(expected)
             );
         }
     }

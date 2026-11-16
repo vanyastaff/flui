@@ -123,8 +123,8 @@ fn steps_of(input: &PlatformInput, now: impl Fn() -> EventTime) -> Vec<Step> {
 }
 
 fn key_step(key: &KeyEvent) -> Step {
-    let kind = match key.state() {
-        KeyState::Down => InputKind::KeyDown,
+    let kind = match key.state {
+        KeyState::Down(_) => InputKind::KeyDown,
         KeyState::Up => InputKind::KeyUp,
     };
     Step::new(DeviceClass::Keyboard, kind, key.time)

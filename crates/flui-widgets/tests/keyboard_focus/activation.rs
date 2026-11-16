@@ -9,7 +9,7 @@ use std::rc::Rc;
 use flui_interaction::FocusManager;
 use flui_interaction::focus::FocusNode;
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_view::EventContext;
 use flui_widgets::interaction::{
     Action, ActionOutcome, Actions, ActivateIntent, BackIntent, CallbackAction, DismissIntent,
@@ -71,11 +71,8 @@ fn mount_control(control: Control) -> (Harness, Rc<Cell<u32>>) {
 fn hold(manager: &FocusManager, pressed: &Key, count: impl Fn() -> u32) -> (bool, u32) {
     let consumed = down(manager, pressed);
     for _ in 0..5 {
-        let _ = manager.dispatch_key_event(&key(
-            KeyState::Down,
-            pressed.clone(),
-            KeyRepeat::AutoRepeat,
-        ));
+        let _ =
+            manager.dispatch_key_event(&key(KeyState::Down(KeyPress::AutoRepeat), pressed.clone()));
     }
     let held = count();
     up(manager, pressed);

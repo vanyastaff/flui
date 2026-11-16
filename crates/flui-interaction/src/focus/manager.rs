@@ -1475,11 +1475,11 @@ mod tests {
     fn key_event() -> KeyEvent {
         use flui_platform::{
             EventTime,
-            keyboard::{Code, Key, KeyState},
+            keyboard::{Code, Key, KeyPress, KeyState},
         };
 
         KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("a"),
             Code::KeyA,
             EventTime::from_nanos(0),

@@ -12,9 +12,8 @@
 //! contacts and revokes the drop target, and the close callbacks having run
 //! deactivates the text services. The window tells the class's hooks of each
 //! step where the message needs it (`owner::windows::window_step`,
-//! `window_destroyed`), and follows the steps of other hooks in turn: a key
-//! the application let through, which the window's own keys answer, and the
-//! session's lock, which hides it.
+//! `window_destroyed`), and follows one step of another hook in turn: the
+//! session's lock, which hides it. The window has no keys of its own.
 
 use std::{
     cell::Cell,
@@ -72,7 +71,6 @@ use crate::owner::windows::{
     WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed, window_step,
 };
 use crate::owner::windows::{get_x_lparam, get_y_lparam};
-use crate::window::config::WindowConfiguration;
 use crate::window::state::{
     ReportedFacts, Sample, SampledGeometry, WindowStateCell, mode_of, reported_frame,
 };
@@ -80,10 +78,6 @@ use crate::window::state::{
 /// Posted to a window nothing paints, so its frame still runs: a hidden window
 /// never receives `WM_PAINT`. It names the window's identity ([`FramePost`]).
 pub(crate) const REQUEST_FRAME: u32 = WM_APP + 1;
-
-/// Posted by the fullscreen hotkey once the app let its key through
-/// ([`WindowContext::apply_window_hotkey`]).
-pub(crate) const TOGGLE_FULLSCREEN: u32 = WM_APP + 3;
 
 /// Posted by a close the handler granted behind a running method, and by a
 /// `WindowCommand::Close` applied off the owner thread, where `DestroyWindow`
@@ -286,7 +280,7 @@ pub(crate) struct WindowContext {
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: crate::owner::windows::control::ExitPolicyRequest,
     /// The owner thread's queue the window posts its own work to: a close
-    /// granted behind a running method, the fullscreen hotkey's toggle.
+    /// granted behind a running method.
     pub(crate) queue: OwnerQueue,
     /// The window's frame requests, shared with its wrappers' surfaces.
     pub(crate) frame_post: FramePost,
@@ -322,8 +316,6 @@ pub(crate) struct WindowContext {
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
     pub last_size: std::cell::Cell<Size<i32>>,
-    /// Window configuration (hotkeys, debouncing, etc.)
-    pub config: WindowConfiguration,
     /// The user's app theme as last sampled, which the window reports in
     /// the snapshot; the chrome is drawn in it while
     /// `chrome_follows_system`.
@@ -778,19 +770,10 @@ pub(crate) unsafe fn with_message_context<R>(
 pub(crate) struct WindowProc;
 
 impl WindowMessages for WindowProc {
-    /// The window's own keys (the fullscreen hotkey) follow a key the
-    /// application let through, and a locked session hides it; every other
-    /// step is the window's own.
+    /// A locked session hides the window; every other step is the window's
+    /// own.
     fn step(&self, window: WindowRef, step: WindowStep) {
         match step {
-            WindowStep::KeyLetThrough {
-                virtual_key,
-                repeat,
-            } => {
-                window.with_context("window keys", |ctx| {
-                    ctx.apply_window_hotkey(window.hwnd(), virtual_key, repeat);
-                });
-            }
             WindowStep::SessionLocked(locked) => {
                 window.with_context("session lock", |ctx| ctx.set_session_locked(locked));
             }
@@ -810,8 +793,8 @@ impl WindowMessages for WindowProc {
     /// The window's own messages: its creation, closing and destruction, its
     /// size, place, limits, DPI, focus, paint, cursor and title, the modal
     /// size-move and menu loops with their deadline timer, the session and
-    /// setting changes it follows, the frame and fullscreen requests posted to
-    /// it, and the keyboard's system-menu command.
+    /// setting changes it follows, the frame, close and delivery requests
+    /// posted to it, and the keyboard's system-menu command.
     fn answers(&self, msg: u32, wparam: WPARAM) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::{
             WM_ENTERMENULOOP, WM_ENTERSIZEMOVE, WM_EXITMENULOOP, WM_EXITSIZEMOVE, WM_TIMER,
@@ -820,10 +803,9 @@ impl WindowMessages for WindowProc {
             WM_CREATE | WM_CLOSE | WM_DESTROY | WM_ERASEBKGND | WM_ENTERSIZEMOVE
             | WM_EXITSIZEMOVE | WM_ENTERMENULOOP | WM_EXITMENULOOP | WM_PAINT | WM_SIZE
             | WM_SHOWWINDOW | WM_MOVE | WM_DPICHANGED | WM_WINDOWPOSCHANGING
-            | WM_WINDOWPOSCHANGED | TOGGLE_FULLSCREEN | CLOSE_WINDOW | DELIVER_QUEUED
-            | WM_SETTEXT | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR
-            | WM_SETFOCUS | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE
-            | WM_NCHITTEST => true,
+            | WM_WINDOWPOSCHANGED | CLOSE_WINDOW | DELIVER_QUEUED | WM_SETTEXT
+            | WM_STYLECHANGED | WM_GETMINMAXINFO | REQUEST_FRAME | WM_SETCURSOR | WM_SETFOCUS
+            | WM_KILLFOCUS | WM_ACTIVATE | WM_SETTINGCHANGE | WM_NCCALCSIZE | WM_NCHITTEST => true,
             WM_TIMER => wparam.0 == MODAL_DEADLINE_TIMER,
             WM_SYSCOMMAND => {
                 (wparam.0 & 0xFFF0) == SC_KEYMENU as usize || is_user_placement_command(wparam)
@@ -1325,17 +1307,6 @@ impl WindowProc {
                         ctx.refresh_cloaked(hwnd);
                     }
                     result
-                }
-
-                // Toggled after the key's dispatch, on a turn of its own (see
-                // `WM_KEYDOWN`).
-                // A handle the window's close let another window reuse is not
-                // the window whose key asked for it.
-                TOGGLE_FULLSCREEN => {
-                    if ctx.is_some_and(|ctx| ctx.identity.halves() == (wparam.0, lparam.0)) {
-                        WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
-                    }
-                    LRESULT(0)
                 }
 
                 // Deliveries another thread raised for this window wait in
@@ -1854,38 +1825,188 @@ pub(crate) fn sample_state(
     })
 }
 
+/// The rectangle a window leaving fullscreen returns to, in screen device
+/// pixels, and how far the work area of the monitor it lands on starts from
+/// that monitor's origin (what `WINDOWPLACEMENT` measures from). `saved`
+/// stands where it reaches a monitor that is there; when none is (the monitor
+/// it entered fullscreen on was disconnected), it is fitted to the work area
+/// of the nearest one (`mode::fit_within`), so the window never comes back
+/// off every screen.
+fn returning_rectangle(saved: Bounds<i32>) -> (RECT, (i32, i32)) {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFO,
+        MonitorFromRect,
+    };
+
+    let as_rect = |bounds: Bounds<i32>| RECT {
+        left: bounds.origin.x,
+        top: bounds.origin.y,
+        right: bounds.origin.x.saturating_add(bounds.size.width),
+        bottom: bounds.origin.y.saturating_add(bounds.size.height),
+    };
+    let rect = as_rect(saved);
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `rect` and `info` are stack locals, `info` with `cbSize` set;
+    // the calls read the one and fill the other and keep neither.
+    let (on_a_monitor, found) = unsafe {
+        let on_a_monitor = !MonitorFromRect(&raw const rect, MONITOR_DEFAULTTONULL).is_invalid();
+        let nearest = MonitorFromRect(&raw const rect, MONITOR_DEFAULTTONEAREST);
+        (
+            on_a_monitor,
+            GetMonitorInfoW(nearest, &raw mut info).as_bool(),
+        )
+    };
+    if !found {
+        return (rect, (0, 0));
+    }
+    let origin = (
+        info.rcWork.left - info.rcMonitor.left,
+        info.rcWork.top - info.rcMonitor.top,
+    );
+    if on_a_monitor {
+        return (rect, origin);
+    }
+    let work = Bounds {
+        origin: Point::new(info.rcWork.left, info.rcWork.top),
+        size: Size::new(
+            info.rcWork.right - info.rcWork.left,
+            info.rcWork.bottom - info.rcWork.top,
+        ),
+    };
+    (as_rect(super::mode::fit_within(saved, work)), origin)
+}
+
+/// The mode a window leaving fullscreen ends in: the one the application's
+/// command names. A borderless fullscreen window has no way out of its own
+/// (no frame, no key of the host's), so every exit is a command that names
+/// where it goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FullscreenExit {
+    /// Back at the rectangle it had before fullscreen, with its frame.
+    Normal,
+    /// Maximized, with the rectangle it had before fullscreen as the one it
+    /// is restored to.
+    Maximized,
+}
+
 impl WindowsWindow {
-    /// Toggle fullscreen mode for a window by HWND (static method for use from
-    /// window_proc)
+    /// Take the fullscreen window `hwnd` out of fullscreen into `exit`, from
+    /// fullscreen or from minimized out of fullscreen: its style comes back
+    /// (keeping whether it is shown now), and the rectangle it had before
+    /// fullscreen is the one it shows (`Normal`) or the one it is restored
+    /// to (`Maximized`). That rectangle is first fitted to a monitor that is
+    /// there: the one it was on may have been disconnected meanwhile.
     ///
-    /// This method implements borderless fullscreen by:
-    /// 1. **Entering fullscreen**: Saves current window style and bounds,
-    ///    removes window borders (WS_POPUP), and resizes to cover the entire
-    ///    monitor
-    /// 2. **Exiting fullscreen**: Restores saved window style and bounds
+    /// The window publishes once, in the mode it ends in: a subscriber never
+    /// sees it normal on its way to maximized, nor a minimized window back in
+    /// fullscreen on its way out, and no report says the user placed it (no
+    /// system command is sent). A window that holds no fullscreen is left
+    /// alone.
     ///
-    /// # Implementation Details
-    /// - Uses borderless fullscreen (WS_POPUP) rather than exclusive fullscreen
-    ///   for better compatibility
-    /// - Automatically detects the monitor containing the window and fills it
-    ///   completely
-    /// - Preserves window state (position, size, style) for proper restoration
-    /// - Publishes the new window state (`WindowHandler::state_changed`) once the window
-    ///   has moved
+    /// Only effective on the window's own thread: elsewhere the context gate
+    /// refuses it with a warning.
+    pub(crate) fn leave_fullscreen_for_hwnd(hwnd: HWND, exit: FullscreenExit) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GWL_STYLE, GetWindowLongPtrW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
+            SetWindowPlacement, SetWindowPos, WS_VISIBLE,
+        };
+
+        let left = with_window_context(hwnd, "leave_fullscreen", |ctx| {
+            let Some(restore_bounds) = ctx.mode.get().fullscreen_bounds() else {
+                return;
+            };
+            let hold = ctx.hold_publishing();
+            let (normal, work_origin) = returning_rectangle(restore_bounds);
+            // SAFETY: `IsIconic`/`GetWindowLongPtrW`/`SetWindowLongPtrW`/
+            // `SetWindowPos`/`SetWindowPlacement` take `hwnd` and plain values
+            // or a pointer to the fully initialized stack local `placement`;
+            // against a dead `hwnd` each fails with an error return. The
+            // window can die inside them (`SetWindowPos` re-enters
+            // `window_proc`, whose callbacks may close it), and `ctx` stays
+            // valid regardless: the gate's `ContextGuard` defers the context's
+            // free past this closure (`ContextLedger`).
+            unsafe {
+                let iconic = IsIconic(hwnd).as_bool();
+                // Restore the style the window had, but not its visibility:
+                // a window entered hidden and shown since must stay shown. A
+                // minimized window keeps its minimized bit until the placement
+                // below takes it out.
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                let kept = style & (WS_VISIBLE.0 | WS_MINIMIZE.0);
+                let restore_style = (ctx.restore_style.get() & !WS_VISIBLE.0) | kept;
+                SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
+
+                // The window is normal from here on, so the size limits the
+                // app set (also while it was fullscreen) apply to the rectangle
+                // it returns to, and the `WM_SIZE` the placement below sends
+                // reads a normal window: one restored from minimized is no
+                // longer the fullscreen window it would come back as.
+                ctx.mode.set(NativeMode::Normal);
+                if exit == FullscreenExit::Normal && !iconic {
+                    if let Err(error) = SetWindowPos(
+                        hwnd,
+                        None,
+                        normal.left,
+                        normal.top,
+                        normal.right - normal.left,
+                        normal.bottom - normal.top,
+                        SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
+                    ) {
+                        tracing::warn!(?hwnd, ?error, "the window left fullscreen in place");
+                    }
+                } else {
+                    // The frame is measured again for the restored style, then
+                    // one placement shows the window in the mode it ends in,
+                    // with the rectangle it had before fullscreen as its normal
+                    // one: it shows neither that rectangle on the way to
+                    // maximized nor fullscreen on the way out of minimized.
+                    if let Err(error) = SetWindowPos(
+                        hwnd,
+                        None,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    ) {
+                        tracing::warn!(?hwnd, ?error, "the restored frame was not measured");
+                    }
+                    let show = match exit {
+                        FullscreenExit::Normal => SW_SHOWNORMAL,
+                        FullscreenExit::Maximized => SW_SHOWMAXIMIZED,
+                    };
+                    let placed = super::set::placement_of(hwnd).and_then(|mut placement| {
+                        placement.showCmd = show.0 as u32;
+                        placement.rcNormalPosition = to_workspace(normal, work_origin);
+                        SetWindowPlacement(hwnd, &raw const placement)
+                    });
+                    if let Err(error) = placed {
+                        tracing::warn!(?hwnd, ?error, ?exit, "the window left fullscreen in place");
+                    }
+                }
+            }
+            drop(hold);
+            ctx.publish_window_state(hwnd);
+        });
+        if left.is_none() {
+            tracing::warn!(?hwnd, "cannot leave fullscreen: no usable window context");
+        }
+    }
+
+    /// Make `hwnd` borderless over its whole monitor. The style and the normal
+    /// rectangle it returns to are kept first; a visible maximized or
+    /// minimized window is restored on the way in, by a system command the
+    /// window marks as the application's (ADR-0343 §2). The size limits do
+    /// not apply while it is fullscreen. Publishes once, fullscreen. A window
+    /// already fullscreen is left alone.
     ///
-    /// # Thread Safety
-    /// Callable from any thread, but only effective on the window's owning
-    /// thread (where `window_proc`'s hotkey arm calls it): the context gate
-    /// (`with_window_context`, see `platform.rs`) refuses the toggle with a
-    /// warning on any other thread instead of racing the owner's
-    /// `WM_DESTROY` free of the window context.
-    ///
-    /// # Example
-    /// ```ignore
-    /// // Toggle fullscreen on F11 key press (from WM_KEYDOWN handler)
-    /// WindowsWindow::toggle_fullscreen_for_hwnd(hwnd);
-    /// ```
-    pub(crate) fn toggle_fullscreen_for_hwnd(hwnd: HWND) {
+    /// Only effective on the window's own thread: elsewhere the context gate
+    /// refuses it with a warning.
+    pub(crate) fn enter_fullscreen_for_hwnd(hwnd: HWND) {
         use windows::Win32::{
             Graphics::Gdi::{
                 GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
@@ -1893,190 +2014,127 @@ impl WindowsWindow {
             },
             UI::WindowsAndMessaging::{
                 GWL_STYLE, GetWindowLongPtrW, GetWindowRect, HWND_TOP, SWP_FRAMECHANGED,
-                SWP_NOACTIVATE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos, WS_POPUP,
-                WS_VISIBLE,
+                SWP_NOACTIVATE, SetWindowLongPtrW, SetWindowPos, WS_POPUP, WS_VISIBLE,
             },
         };
 
-        let toggled = with_window_context(hwnd, "toggle_fullscreen", |ctx| {
+        let entered = with_window_context(hwnd, "enter_fullscreen", |ctx| {
             let current_mode = ctx.mode.get();
+            if current_mode.is_fullscreen() {
+                return;
+            }
             let hold = ctx.hold_publishing();
 
             // SAFETY: `GetWindowRect`/`GetWindowLongPtrW`/`SetWindowLongPtrW`/
             // `SetWindowPos`/`MonitorFromWindow`/`GetMonitorInfoW` below all
             // take `hwnd` or a `&raw mut` to a stack-local out-parameter
-            // whose size matches what each call expects, and are otherwise
-            // ordinary Win32 calls whose failure mode against a dead `hwnd`
-            // is an error return, not UB. The window CAN die mid-closure:
-            // `SetWindowPos` synchronously re-enters `window_proc`
-            // (`WM_SIZE`/`WM_MOVE`), whose arms dispatch framework
-            // callbacks —
-            // a callback may close this window, running a nested
-            // `WM_DESTROY` right here. What stays valid regardless is
-            // `ctx` itself: the gate's `ContextGuard` defers the context
-            // free past this closure (`WM_DESTROY` only retires it — see
-            // `ContextLedger`), so post-destruction the remaining `Cell`
-            // reads/writes and dead-`hwnd` Win32 calls are sound no-ops,
-            // never dangling.
+            // whose size matches what each call expects; against a dead
+            // `hwnd` each fails with an error return. The window can die
+            // inside them (`SetWindowPos` and the restore re-enter
+            // `window_proc`, whose callbacks may close it), and `ctx` stays
+            // valid regardless: the gate's `ContextGuard` defers the context's
+            // free past this closure (`ContextLedger`).
             unsafe {
-                if let NativeMode::Fullscreen { restore_bounds } = current_mode {
-                    // Exit fullscreen - restore previous style and bounds
-                    tracing::info!("Exiting fullscreen mode");
-
-                    // Validate transition
-                    let candidate = NativeMode::Normal;
-                    if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!("Cannot exit fullscreen: invalid state transition");
-                        return;
-                    }
-
-                    // Restore the style the window had, but not its visibility:
-                    // a window entered hidden and shown since must stay shown.
-                    let shown = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0;
-                    let restore_style = (ctx.restore_style.get() & !WS_VISIBLE.0) | shown;
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, restore_style as isize);
-
-                    // The window is normal from here on, so the size limits the app set
-                    // (also while it was fullscreen) apply to the rectangle it returns to.
-                    ctx.mode.set(NativeMode::Normal);
-
-                    // Restore window position and size
-                    if let Err(error) = SetWindowPos(
-                        hwnd,
-                        None,
-                        restore_bounds.origin.x,
-                        restore_bounds.origin.y,
-                        restore_bounds.size.width,
-                        restore_bounds.size.height,
-                        SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
-                    ) {
-                        tracing::warn!(
-                            ?hwnd,
-                            ?error,
-                            "SetWindowPos (exit fullscreen restore) failed"
-                        );
-                    }
-
-                    drop(hold);
-                    ctx.publish_window_state(hwnd);
-                } else {
-                    // Enter fullscreen - save current state and go borderless on monitor
-                    tracing::info!("Entering fullscreen mode");
-
-                    // Get current window rect
-                    let mut rect = RECT::default();
-                    if let Err(error) = GetWindowRect(hwnd, &raw mut rect) {
-                        tracing::warn!(
-                            ?hwnd,
-                            ?error,
-                            "GetWindowRect failed entering fullscreen; restore bounds will be zeroed"
-                        );
-                    }
-
-                    // Save the style the window returns to. Whether it is
-                    // maximized or minimized is its state, not its style: that
-                    // is restored below, so it never comes back from fullscreen
-                    // flagged as something it no longer is.
-                    let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
-                    ctx.restore_style
-                        .set(current_style & !(WS_MAXIMIZE.0 | WS_MINIMIZE.0));
-
-                    // Save the bounds the window returns to: its normal
-                    // rectangle, which is not its current one when it was
-                    // maximized (or minimized) on the way in.
-                    let restore_bounds = restore_rectangle(hwnd).unwrap_or(Bounds {
-                        origin: Point::new(rect.left, rect.top),
-                        size: Size::new(rect.right - rect.left, rect.bottom - rect.top),
-                    });
-
-                    // Validate transition
-                    let candidate = NativeMode::Fullscreen { restore_bounds };
-                    if !current_mode.can_transition_to(&candidate) {
-                        tracing::warn!(
-                            "Cannot enter fullscreen: invalid state transition from {:?}",
-                            current_mode
-                        );
-                        return;
-                    }
-
-                    // The monitor the window is on. A minimized window is parked
-                    // off-screen, so it goes to the monitor of its normal rectangle.
-                    let iconic = IsIconic(hwnd).as_bool();
-                    let monitor = if iconic {
-                        let normal = RECT {
-                            left: restore_bounds.origin.x,
-                            top: restore_bounds.origin.y,
-                            right: restore_bounds
-                                .origin
-                                .x
-                                .saturating_add(restore_bounds.size.width),
-                            bottom: restore_bounds
-                                .origin
-                                .y
-                                .saturating_add(restore_bounds.size.height),
-                        };
-                        MonitorFromRect(&raw const normal, MONITOR_DEFAULTTONEAREST)
-                    } else {
-                        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
-                    };
-                    // Fullscreen starts from the normal state: a visible maximized
-                    // or minimized window is restored first. The restore is the
-                    // application's command, so its sender marks it as such.
-                    if (iconic || IsZoomed(hwnd).as_bool()) && IsWindowVisible(hwnd).as_bool() {
-                        let was = ctx.in_app_command.replace(true);
-                        SendMessageW(
-                            hwnd,
-                            WM_SYSCOMMAND,
-                            Some(WPARAM(SC_RESTORE as usize)),
-                            Some(LPARAM(0)),
-                        );
-                        ctx.in_app_command.set(was);
-                    }
-                    let mut monitor_info = MONITORINFO {
-                        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                        ..Default::default()
-                    };
-                    if let Err(error) = GetMonitorInfoW(monitor, &raw mut monitor_info).ok() {
-                        tracing::warn!(
-                            ?hwnd,
-                            ?error,
-                            "GetMonitorInfoW failed entering fullscreen; monitor rect will be zeroed"
-                        );
-                    }
-
-                    let monitor_rect = monitor_info.rcMonitor;
-
-                    // Set borderless style, shown only if the window is.
-                    let shown = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0;
-                    let fullscreen_style = WS_POPUP.0 | shown;
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style as isize);
-
-                    // Position window to cover entire monitor. The size limits do not
-                    // apply: a fullscreen window covers its monitor whatever they say.
-                    ctx.limits_waived.set(true);
-                    if let Err(error) = SetWindowPos(
-                        hwnd,
-                        Some(HWND_TOP),
-                        monitor_rect.left,
-                        monitor_rect.top,
-                        monitor_rect.right - monitor_rect.left,
-                        monitor_rect.bottom - monitor_rect.top,
-                        SWP_FRAMECHANGED | SWP_NOACTIVATE,
-                    ) {
-                        tracing::warn!(?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
-                    }
-                    ctx.limits_waived.set(false);
-
-                    // Update state
-                    ctx.mode.set(candidate);
-
-                    drop(hold);
-                    ctx.publish_window_state(hwnd);
+                // Get current window rect
+                let mut rect = RECT::default();
+                if let Err(error) = GetWindowRect(hwnd, &raw mut rect) {
+                    tracing::warn!(
+                        ?hwnd,
+                        ?error,
+                        "GetWindowRect failed entering fullscreen; restore bounds will be zeroed"
+                    );
                 }
+
+                // Save the style the window returns to. Whether it is
+                // maximized or minimized is its state, not its style: that
+                // is restored below, so it never comes back from fullscreen
+                // flagged as something it no longer is.
+                let current_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+                ctx.restore_style
+                    .set(current_style & !(WS_MAXIMIZE.0 | WS_MINIMIZE.0));
+
+                // Save the bounds the window returns to: its normal
+                // rectangle, which is not its current one when it was
+                // maximized (or minimized) on the way in.
+                let restore_bounds = restore_rectangle(hwnd).unwrap_or(Bounds {
+                    origin: Point::new(rect.left, rect.top),
+                    size: Size::new(rect.right - rect.left, rect.bottom - rect.top),
+                });
+
+                // The monitor the window is on. A minimized window is parked
+                // off-screen, so it goes to the monitor of its normal rectangle.
+                let iconic = IsIconic(hwnd).as_bool();
+                let monitor = if iconic {
+                    let normal = RECT {
+                        left: restore_bounds.origin.x,
+                        top: restore_bounds.origin.y,
+                        right: restore_bounds
+                            .origin
+                            .x
+                            .saturating_add(restore_bounds.size.width),
+                        bottom: restore_bounds
+                            .origin
+                            .y
+                            .saturating_add(restore_bounds.size.height),
+                    };
+                    MonitorFromRect(&raw const normal, MONITOR_DEFAULTTONEAREST)
+                } else {
+                    MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+                };
+                // Fullscreen starts from the normal state: a visible maximized
+                // or minimized window is restored first. The restore is the
+                // application's command, so its sender marks it as such.
+                if (iconic || IsZoomed(hwnd).as_bool()) && IsWindowVisible(hwnd).as_bool() {
+                    let was = ctx.in_app_command.replace(true);
+                    SendMessageW(
+                        hwnd,
+                        WM_SYSCOMMAND,
+                        Some(WPARAM(SC_RESTORE as usize)),
+                        Some(LPARAM(0)),
+                    );
+                    ctx.in_app_command.set(was);
+                }
+                let mut monitor_info = MONITORINFO {
+                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                    ..Default::default()
+                };
+                if let Err(error) = GetMonitorInfoW(monitor, &raw mut monitor_info).ok() {
+                    tracing::warn!(
+                        ?hwnd,
+                        ?error,
+                        "GetMonitorInfoW failed entering fullscreen; monitor rect will be zeroed"
+                    );
+                }
+
+                let monitor_rect = monitor_info.rcMonitor;
+
+                // Set borderless style, shown only if the window is.
+                let shown = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32 & WS_VISIBLE.0;
+                let fullscreen_style = WS_POPUP.0 | shown;
+                SetWindowLongPtrW(hwnd, GWL_STYLE, fullscreen_style as isize);
+
+                // Position window to cover entire monitor. The size limits do not
+                // apply: a fullscreen window covers its monitor whatever they say.
+                ctx.limits_waived.set(true);
+                if let Err(error) = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    monitor_rect.left,
+                    monitor_rect.top,
+                    monitor_rect.right - monitor_rect.left,
+                    monitor_rect.bottom - monitor_rect.top,
+                    SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                ) {
+                    tracing::warn!(?hwnd, ?error, "SetWindowPos (enter fullscreen) failed");
+                }
+                ctx.limits_waived.set(false);
+                ctx.mode.set(NativeMode::Fullscreen { restore_bounds });
             }
+            drop(hold);
+            ctx.publish_window_state(hwnd);
         });
-        if toggled.is_none() {
-            tracing::warn!(?hwnd, "cannot toggle fullscreen: no usable window context");
+        if entered.is_none() {
+            tracing::warn!(?hwnd, "cannot enter fullscreen: no usable window context");
         }
     }
 }
@@ -2722,19 +2780,6 @@ impl WindowContext {
             pos.cx = pos.cx.min(max.width);
             pos.cy = pos.cy.min(max.height);
         }
-    }
-
-    /// The window's own keys, for a keydown the application let through: the
-    /// fullscreen hotkey (configurable, default F11) toggles on a turn of its
-    /// own, as a window command does, not inside the keydown, because the
-    /// resize it causes renders. The request names this window, not just its
-    /// handle.
-    pub(crate) fn apply_window_hotkey(&self, hwnd: HWND, virtual_key: u16, is_repeat: bool) {
-        if is_repeat || self.config.fullscreen_hotkey != Some(virtual_key) {
-            return;
-        }
-        // A window that closed meanwhile toggles nothing.
-        let _: Result<(), PostRefusal> = self.queue.post(hwnd, TOGGLE_FULLSCREEN, self.identity);
     }
 }
 

@@ -12,7 +12,7 @@ use windows::Win32::{
 
 /// The owner thread's message queue, as the windows that thread created post
 /// their work to it from any thread: a frame of a window nothing paints, the
-/// deliveries another thread raised, a close, the fullscreen toggle, the exit
+/// deliveries another thread raised, a close, the exit
 /// policy, a system notice a pool thread heard.
 ///
 /// The queue refuses a post once it holds the thread's posted-message quota

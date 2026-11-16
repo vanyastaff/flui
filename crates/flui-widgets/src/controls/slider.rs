@@ -351,7 +351,7 @@ impl ViewState<Slider> for SliderState {
                 }
             })
             .on_key_event(move |ctx, event| {
-                if event.state() != KeyState::Down
+                if !matches!(event.state, KeyState::Down(_))
                     || event.composition == ImeComposition::Active
                     || !key.usable()
                     || !key.admits_context(ctx)

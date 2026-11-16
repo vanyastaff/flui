@@ -9,7 +9,7 @@ use std::time::Duration;
 use flui_foundation::geometry::Offset;
 use flui_painting::display_list::DrawOp;
 use flui_painting::styling::Color;
-use flui_platform::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Key, KeyState, NamedKey};
 use flui_testing::{Action, ActionRequest, MouseScript, TreeId};
 use flui_widgets::{DefaultFocusRingStyle, Focus, FocusRingStyle, RawButton, Text};
 
@@ -158,7 +158,7 @@ fn a_stray_modifier_does_not_show_the_ring() {
     click(&mut app, 390.0, 390.0);
     let alt = Key::Named(NamedKey::Alt);
     app.enter_owner_scope(|| {
-        let _ = manager.dispatch_key_event(&key(KeyState::Up, alt.clone(), KeyRepeat::First));
+        let _ = manager.dispatch_key_event(&key(KeyState::Up, alt.clone()));
         let _ = press(&manager, &alt);
     });
     app.pump();

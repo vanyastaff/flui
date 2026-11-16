@@ -22,7 +22,7 @@ use flui_interaction::events::{
 use flui_painting::typography::TextDirection;
 use flui_platform::data_transfer::{TransferActions, TransferFormat};
 use flui_platform::drag::OsDragEnd;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::{CursorIcon, EventTime, HapticFeedback, TargetPlatform};
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
 use flui_testing::widgets::SharedSignal;
@@ -351,7 +351,7 @@ fn chord(letter: &str) -> SingleActivator {
 }
 
 fn press(laid: &LaidOut, activator: &SingleActivator) {
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         laid.dispatch_key(
             KeyEvent::new(
                 state,

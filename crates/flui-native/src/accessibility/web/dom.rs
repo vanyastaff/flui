@@ -30,7 +30,7 @@ use std::sync::Arc;
 use accesskit::{
     Action, ActionData, ActionRequest, NodeId, TextPosition, TextSelection, TreeId, TreeUpdate,
 };
-use flui_platform::keyboard::KeyState;
+use flui_platform::keyboard::{KeyPress, KeyState};
 use flui_semantics::AssistiveFocusSupport;
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -407,7 +407,10 @@ impl Page {
         }
         // A key pressed on an element of the host is the window's, as on the
         // canvas.
-        for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
+        for (kind, state) in [
+            ("keydown", KeyState::Down(KeyPress::First)),
+            ("keyup", KeyState::Up),
+        ] {
             let keys = Rc::clone(&self.keys);
             listeners.push(self.listen(target, kind, move |event| {
                 keys.deliver(&event, state);

@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Offset, Point};
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::TextStyle;
@@ -179,7 +179,7 @@ impl Scene {
     fn key(&mut self, code: Code, key: Key) {
         let event: KeyEvent = KeyEventBuilder::new(code)
             .key(key)
-            .state(KeyState::Down)
+            .state(KeyState::Down(KeyPress::First))
             .modifiers(Modifiers::NONE)
             .build();
         let _handled = self.laid.focus_manager().dispatch_key_event(&event);

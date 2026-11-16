@@ -47,7 +47,7 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::GestureSettings;
-use flui_platform::keyboard::{Code, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_platform::{DeviceId, EventTime, MotionPreference, SystemPreferences, TargetPlatform};
 use flui_rendering::constraints::BoxConstraints;
@@ -870,7 +870,7 @@ fn request(action: Action, target: crate::a11y::NodeId, data: Option<ActionData>
 /// activators match the release.
 fn press<M>(mounted: &Mounted<M>, activator: &SingleActivator) {
     let manager = mounted.laid.focus_manager();
-    for state in [KeyState::Down, KeyState::Up] {
+    for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
         let event = KeyEvent::new(
             state,
             activator.trigger().clone(),
