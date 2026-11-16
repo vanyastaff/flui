@@ -179,6 +179,25 @@ mod lifecycle_derivation_tests {
         );
     }
 
+    /// Every ladder between two live states, and every ladder into `Detached`,
+    /// walks each state in between and passes none more active than both
+    /// ends.
+    fn every_ladder_walks_each_state_between_its_ends() {
+        use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
+        let cases: [(AppLifecycleState, AppLifecycleState, &[AppLifecycleState]); 7] = [
+            (Hidden, Resumed, &[Inactive, Resumed]),
+            (Paused, Resumed, &[Hidden, Inactive, Resumed]),
+            (Paused, Inactive, &[Hidden, Inactive]),
+            (Resumed, Hidden, &[Inactive, Hidden]),
+            (Resumed, Detached, &[Inactive, Hidden, Paused, Detached]),
+            (Inactive, Detached, &[Hidden, Paused, Detached]),
+            (Hidden, Detached, &[Paused, Detached]),
+        ];
+        for (old, new, expected) in cases {
+            assert_eq!(lifecycle_ladder(old, new), expected, "{old:?} -> {new:?}");
+        }
+    }
+
     /// Leaving `Detached` climbs from the `Paused` side: no step is more active
     /// than the state entered, so a window that comes up unfocused or hidden
     /// never reports `Resumed`.
@@ -307,6 +326,10 @@ mod lifecycle_derivation_tests {
                 (
                     "ladder_steps_forward_through_every_intermediate_state_in_order",
                     ladder_steps_forward_through_every_intermediate_state_in_order as fn(),
+                ),
+                (
+                    "every_ladder_walks_each_state_between_its_ends",
+                    every_ladder_walks_each_state_between_its_ends as fn(),
                 ),
                 (
                     "leaving_detached_never_passes_a_state_more_active_than_the_target",

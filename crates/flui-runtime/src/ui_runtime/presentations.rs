@@ -194,12 +194,7 @@ impl UiRuntime {
                 .map_or(&unknown, |snapshot| &snapshot.values),
             flui_foundation::MonotonicClock::now(&self.clock),
         );
-        if presentation.window_focused.get() && presentation.window_visible.get() {
-            for previous in self.presentations.iter() {
-                previous.window_focused.set(false);
-            }
-            self.focus_coordinator.note_focus_gained(presentation_id);
-        }
+        let takes_focus = presentation.window_focused.get() && presentation.window_visible.get();
         self.drag.attach_presentation(
             presentation_id,
             presentation.window_id(),
@@ -207,6 +202,14 @@ impl UiRuntime {
         );
         self.seed_presentation_lifecycle(&presentation);
         self.presentations.install(presentation);
+        // The new window changes the aggregate, and a focused one takes the
+        // focus from its siblings: both are delivered as any window change
+        // is, siblings forgetting their held keys and pointer sequences.
+        if takes_focus {
+            self.update_window_focus(presentation_id, true);
+        } else {
+            self.synchronize_window_lifecycle();
+        }
         presentation_id
     }
 

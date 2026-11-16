@@ -1,12 +1,15 @@
 # ADR-0345: The lifecycle starts where its window is, and every change walks the ladder
 
-- **Status:** Accepted (2026-11-16)
+- **Status:** Implemented (2026-11-16)
 - **Date:** 2026-11-16
 - **Supersedes:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) §4 (lifecycle
   facts per presentation, the ladder, the aggregate), and
   [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md) whole (the ladder out of `Detached`)
 - **Related:** [ADR-0237](ADR-0237-window-state-and-host-notices.md) (Android's three signals),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) (terminal close)
+- **Sources:** `flutter/flutter@d8bd864cdbca3d0d2cafdb1e6165198858ea3b2b`
+  `packages/flutter/lib/src/services/binding.dart:296-342` (the initial state and the generated
+  transitions)
 
 ## Context and problem statement
 
@@ -14,8 +17,10 @@ A presentation's lifecycle source held no state until the UI runtime's first rec
 the rule then in force sent a first change from that empty state straight to its target. A test
 host that mounts a window and never reconciles before hiding it delivered `[Hidden]` to the
 window's subscribers, with no `Inactive`. The state was known all along: a presentation is built
-from its window's snapshot, and a UI runtime starts with the host `Resumed`. Flutter starts the
-same way, from `PlatformDispatcher.initialLifecycleState`.
+from its window's snapshot, and a UI runtime starts with the host `Resumed`. Flutter reads
+`PlatformDispatcher.initialLifecycleState` at start-up (`binding.dart:296`) and from then on hands
+`handleAppLifecycleStateChanged`, which its scheduler and observers share, each state of
+`_generateStateTransitions` (`binding.dart:303-342`); only that first read jumps.
 
 The scheduler's lifecycle listeners (`UpdateScheduler::add_lifecycle_state_listener`, public in the
 facade) had the same skip in another form: the aggregate jumped to its target, so a window shown
@@ -43,9 +48,8 @@ see on the way to a new one?
 
 ## Decision
 
-Chosen option: 1. Option 2 leaves the defect for the next host that forgets the reconcile, and the
-test host was such a host. Option 3 reports `Paused` and `Hidden` for a window that opens
-`Resumed`, which no window was.
+Chosen option: 1, because the state is known when the presentation is built, so no host has to
+remember a step for the first change to ladder, and no listener hears a state no window was in.
 
 ### §1 Lifecycle facts are per presentation; the UI runtime aggregates
 
@@ -62,8 +66,11 @@ execution state and `onWindowFocusChanged` focus, and the state comes from
 `UiRuntime::seed_presentation_lifecycle` commits a presentation's state from its snapshot and the
 host's lifecycle when the presentation enters the forest: in `UiRuntime::construct` for the primary
 one and in `install_presentation` for every later one, before a root mounts and anything can
-subscribe. `UiRuntime::seed_runtime_lifecycle` then sets the scheduler to the aggregate of that
-state. Neither runs user code. The reconcile pass therefore always has a previous state; an empty
+subscribe; it runs no user code. `UiRuntime::seed_runtime_lifecycle` then sets the scheduler to
+the aggregate of the primary at construction, before anything subscribes. A later presentation
+changes the aggregate like any window change: `install_presentation` delivers it through a
+reconcile pass, and a focused new window takes the focus from its siblings as
+`update_window_focus` does. The reconcile pass therefore always has a previous state; an empty
 source is a broken invariant (`expect("BUG: …")`), not a branch.
 
 ### §3 Every change walks the ladder
@@ -102,9 +109,41 @@ panic cannot skip removal.
 
 ### Confirmation
 
-- `lifecycle_derivation_matrix` pins every ladder, the `Detached` entries included.
+- flui-runtime's `lifecycle_derivation_matrix` pins the derivation truth table, the ladders up,
+  down and into `Detached` (`every_ladder_walks_each_state_between_its_ends`) and the four ladders
+  out of `Detached`.
 - flui-testing's `tester::hiding_the_window_hides_the_application_and_showing_it_resumes` pins
   `[Inactive, Hidden]` for a subscriber of a mounted window.
 - flui-runtime's `owner_input` table: `a_runtime_starts_in_its_window_lifecycle` pins the seeded
-  scheduler, and `window_observations_update_only_the_target_runtime_lifecycle` pins the
-  scheduler's climb from `Paused` through `Hidden` and `Inactive`.
+  scheduler and a second window installed hidden or focused, and
+  `window_observations_update_only_the_target_runtime_lifecycle` pins the scheduler's climb from
+  `Paused` through `Hidden` and `Inactive`.
+
+## Pros and cons of the options
+
+### 1. Seed from the state known at creation; every change walks the ladder
+
+- Good, because every host, the test host included, gets the ladder without a step to remember.
+- Good, because the scheduler starts in a state some window is in.
+- Bad, because a scheduler listener hears three notifications for `Paused → Resumed` instead of
+  one.
+
+### 2. Keep an empty start, and make every host reconcile once at mount
+
+- Good, because the reconcile pass keeps one rule for a first change.
+- Bad, because a host that forgets the reconcile ships the skip, as the test host did.
+- Bad, because the scheduler still starts at `Resumed` and reports a change no window made.
+
+### 3. Keep an empty start and treat it as `Detached`
+
+- Good, because a first change ladders with no new state to seed.
+- Bad, because a window that opens `Resumed` reports `Paused`, `Hidden` and `Inactive` first,
+  states it was never in, and an observer that starts work on `Resumed` and stops it on `Inactive`
+  runs for nothing.
+
+## More information
+
+Flutter jumps only once, when its binding reads the platform's initial state, and its observers
+are usually registered after that; FLUI's seed is that read, done before any subscriber exists.
+Revisit when a host can report a window's state only after the presentation is built: the seed
+would then have to wait for that report instead of the snapshot.

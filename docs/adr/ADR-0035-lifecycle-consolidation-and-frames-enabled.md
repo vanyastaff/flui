@@ -62,9 +62,29 @@ The private action name describes that complete background owner operation.
 
 ### 4. Lifecycle facts are per presentation; the UI runtime aggregates
 
-[ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md)
-states the rule: lifecycle facts per presentation, the state a lifecycle starts in, the ladder
-every change walks and the aggregate the scheduler sees.
+Each presentation owns its native visibility/focus snapshot and its last delivered local
+state. A UI runtime derives the scheduler state from its live presentations: any visible and focused
+→ `Resumed`; otherwise any visible → `Inactive`; otherwise `Hidden`; an empty forest →
+`Detached`. Keyboard routing history does not manufacture native focus.
+
+- Local steps follow `lifecycle_ladder(old, new)`, a port of Flutter's
+  `ServicesBinding._generateStateTransitions` walking `dart:ui`'s declaration order (`detached,
+  resumed, inactive, hidden, paused`). Leaving `Detached` enters from the `Paused` side instead
+  (**Amended by** [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md)).
+  An unobserved presentation is `None`, and its first notification goes straight to the target,
+  as in Flutter's nullable-previous-state branch.
+- Scheduler listeners see the UI runtime aggregate, not the local ladder. A paused or hidden host
+  cannot transiently enable frames or attach resources while a presentation synchronizes.
+- Local facts and the next ladder step commit before user callbacks; input cancellation
+  precedes lifecycle callbacks; binding observers see committed local and aggregate state.
+  Restoring a presentation re-dirties its own root and wakes a frame. Focus transfer cancels
+  the former presentation's active pointer sequences at once.
+- Observed `Detached` is reversible and only rejects input. Explicit stopping is a separate
+  terminal intent. Closing a presentation removes it from the aggregate, delivers `Detached`
+  while its tree is alive, then disposes it; an observer panic cannot skip removal.
+- Android feeds the same three signals as every other backend: `onStart`/`onStop` give visibility,
+  `onResume`/`onPause` the execution state and `onWindowFocusChanged` focus, and the ladder comes
+  from `derive_lifecycle_state`. Focus alone never walks to `Paused` (ADR-0237).
 
 ### 5. Platform quit reaches every UI runtime
 

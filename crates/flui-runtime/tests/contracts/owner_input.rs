@@ -546,6 +546,26 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     );
     runtime.synchronize_window_snapshot(id, WindowExecutionState::Running, true, true);
     assert_eq!(*observed.borrow(), [Inactive, Resumed]);
+
+    // A second window that opens hidden changes nothing; one that opens
+    // focused takes the focus, and the first window steps down to Inactive.
+    let mut runtime = runtime;
+    let hidden: Rc<dyn flui_platform::PlatformWindow> =
+        Rc::new(flui_runtime::testing::TestWindow::new().visible(false));
+    let hidden = runtime.assemble_presentation(hidden);
+    runtime.install_presentation(hidden);
+    assert_eq!(*observed.borrow(), [Inactive, Resumed]);
+    runtime.update_window_visibility(id, false);
+    assert_eq!(*observed.borrow(), [Inactive, Resumed, Inactive, Hidden]);
+    let focused: Rc<dyn flui_platform::PlatformWindow> =
+        Rc::new(flui_runtime::testing::TestWindow::new().focused(true));
+    let focused = runtime.assemble_presentation(focused);
+    runtime.install_presentation(focused);
+    assert_eq!(
+        *observed.borrow(),
+        [Inactive, Resumed, Inactive, Hidden, Inactive, Resumed],
+        "a focused window installed beside hidden ones resumes the application"
+    );
 }
 
 fn window_observations_update_only_the_target_runtime_lifecycle() {
