@@ -79,7 +79,7 @@ relative `ANDROID_HOME` or `ANDROID_NDK_HOME` is made absolute once, against the
 tool started in, so `cargo ndk` and Gradle get the same directory.
 
 Invariant: a build never writes this machine's or this build's values into the committed
-`platforms/android/gradle.properties`. That file holds the project's facts (floor, target,
+`gradle.properties` of the project's Android platform. That file holds the project's facts (floor, target,
 package, version), the same on every machine; the NDK, the Java sources and R8 rules of the linked
 crates (paths into this machine's cargo registry) and the release key go on the `gradlew` command
 line as `-Pflui.…`, and the scaffolded script reads each with a fallback, so a plain `./gradlew`
