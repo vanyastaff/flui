@@ -523,7 +523,9 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
   refusal held before it, since the owner reports the one and only logs the other; a frame the
   owner held unsettled when it took a panic, one that replaced it, and one drawn after a panicked
-  one of the same drain have their base forgotten, and the owner forgets it when it takes the panic,
+  one of the same drain have their base forgotten; the owner takes a slot's panic with its
+  settlements under one lock (`RasterSender::drain_settlements_and_failure`) and forgets the base
+  after a drain that took one,
   so the window's next frame draws in full. A surface whose
   resize or upload panicked gets one retry, counted by surface (size and generation) rather than by
   frame: the first frame that settles stale on it with the slot's panic (marked, or held unsettled

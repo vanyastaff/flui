@@ -829,6 +829,52 @@ fn a_panic_marks_the_next_settlement_until_the_owner_takes_it() {
         );
     }
 }
+
+/// Draining a slot with its failure answers both from one moment: the
+/// settlements written before a panic was held, unmarked, with the panic,
+/// and the panic's mark ended, so a frame settled after carries none.
+///
+/// Red-check: leave the mark set in `drain_settlements_and_failure` and the
+/// later frame settles marked.
+#[test]
+fn a_slot_drains_with_its_failure_in_one_take() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    rig.backend.script_resize(ScriptedAnswer::Panic);
+    let SendReceipt::Configured(generation) = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(16, 16)),
+        })
+        .expect("accepted")
+    else {
+        panic!("a positive size mints a generation");
+    };
+    let _ = rig.executor.turn();
+    let mut settled = Vec::new();
+    let failure = rig
+        .sender
+        .drain_settlements_and_failure(at.slot, &mut settled);
+    assert!(
+        matches!(failure, Some(SlotFailure::Panicked(_))),
+        "the resize's panic is taken: {failure:?}"
+    );
+    assert!(
+        settled.len() == 1 && !settled[0].panicked,
+        "the frame settled before the panic is unmarked: {settled:?}"
+    );
+    let resized = Attached { generation, ..at };
+    let _ = rig.sender.send(frame(resized, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    let later = drain(&rig.sender, at.slot);
+    assert!(
+        !later.is_empty() && later.iter().all(|settlement| !settlement.panicked),
+        "a panic the owner took marks no later frame: {later:?}"
+    );
+}
 /// A frame renders only against the generation the slot's configuration
 /// has: one stamped zero, or before a resize the executor applied, settles
 /// `SurfaceStale` without reaching the backend.

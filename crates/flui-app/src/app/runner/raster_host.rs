@@ -1266,7 +1266,14 @@ impl RasterHost {
         let Some(slot) = placed.slots.get_mut(&address) else {
             return SlotTurn::Clean;
         };
-        match placed.sender.take_failure(slot.slot) {
+        let failure = placed.sender.take_failure(slot.slot);
+        Self::hold_slot_failure(slot, failure)
+    }
+
+    /// Settle `failure`, taken from `slot`'s executor slot: a refusal is
+    /// logged, a panic held for the window's report.
+    fn hold_slot_failure(slot: &mut HostSlot, failure: Option<SlotFailure>) -> SlotTurn {
+        match failure {
             Some(SlotFailure::Panicked(payload)) => {
                 slot.panic.record(payload);
                 SlotTurn::Panicked
@@ -2016,20 +2023,22 @@ impl RasterHost {
         };
         let mut settlements = std::mem::take(&mut placed.settlements);
         settlements.clear();
-        // The slot's failure is taken for its payload, which the window
-        // reports, before its settlements are drained: a turn holds its panic
-        // and settles its frame under one lock, so a panic taken now came
-        // with a settlement this drain holds, marked, or with none at all.
-        // Which frame it came with is each settlement's own mark. Taking it
-        // ends the mark, so a frame held now and not settled in this drain may
-        // settle unmarked though the panic came with its turn: it is tainted,
-        // its settlement does not move the base, and settled stale it counts
-        // toward the surface's retry. The base is forgotten too, so a frame
-        // the window asks for next draws in full.
-        let panicked = Self::take_slot_failure(placed, address) == SlotTurn::Panicked;
-        placed.sender.drain_settlements(id, &mut settlements);
-        if panicked && let Some(slot) = placed.slots.get_mut(&address) {
-            slot.base.forget();
+        // The slot's failure is taken with its settlements, under one lock,
+        // for its payload, which the window reports. Which frame a panic came
+        // with is each settlement's own mark; taking the panic ends the mark,
+        // so a frame held now and not settled in this drain may settle
+        // unmarked though the panic came with its turn (or with a command
+        // before it): it is tainted, its settlement does not move the base,
+        // and settled stale it counts toward the surface's retry.
+        let failure = placed
+            .sender
+            .drain_settlements_and_failure(id, &mut settlements);
+        let slot = placed
+            .slots
+            .get_mut(&address)
+            .expect("BUG: the window whose slot drained still holds it");
+        let panicked = Self::hold_slot_failure(slot, failure) == SlotTurn::Panicked;
+        if panicked {
             for held in &mut slot.pending {
                 held.tainted |= !settlements
                     .iter()
@@ -2079,6 +2088,11 @@ impl RasterHost {
                 settlement.epoch,
                 verdict,
             ));
+        }
+        // After a panic the next frame the window asks for draws in full,
+        // whatever settled clean in this drain.
+        if panicked && let Some(slot) = placed.slots.get_mut(&address) {
+            slot.base.forget();
         }
         placed.settlements = settlements;
     }

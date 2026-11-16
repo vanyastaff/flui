@@ -629,6 +629,35 @@ impl RasterSender {
         drained
     }
 
+    /// [`drain_settlements`](Self::drain_settlements) and
+    /// [`take_failure`](Self::take_failure) under one lock: a panic taken
+    /// here came with a settlement moved into `into`, marked, or with a frame
+    /// the slot has not settled yet, never with one an earlier drain took. An
+    /// owner that drains a raster thread's slot while the thread runs uses
+    /// this, so it can tell which frames may have lost their mark.
+    #[must_use]
+    pub fn drain_settlements_and_failure(
+        &self,
+        slot: SlotId,
+        into: &mut Vec<SlotSettlement>,
+    ) -> Option<SlotFailure> {
+        if self.shared.health() == ExecutorHealth::Died {
+            self.settle_after_death();
+        }
+        let inbox = self.inbox(slot)?;
+        let mut state = inbox.lock();
+        let drained = state.settlements.len();
+        into.extend(state.settlements.drain(..));
+        state.panicked = false;
+        let failure = state.failure.take();
+        drop(state);
+        if drained > 0 {
+            // A full ring held the slot's next frame: a raster thread may start it.
+            self.shared.ring();
+        }
+        failure
+    }
+
     /// The failure `slot` holds since the last take: the first, or the first
     /// panic in place of a refusal held before it, since the owner reports a
     /// panic and only logs a refusal. Taking it ends the slot's panic mark:
