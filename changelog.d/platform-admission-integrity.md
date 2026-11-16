@@ -4,14 +4,13 @@
   publication (built by hand, taken apart and edited, or withdrawn). Admitting again never helps;
   admit against the window's snapshot.
 - `WindowCapabilities::withdraw` and `is_withdrawn`: what a window publishes once it can publish
-  no more of what it honours. A frozen window (its revisions used up) and a window whose
-  capabilities change after the process ran out of publications publish withdrawn capabilities:
-  they honour nothing, so readers see the change and `state_changed` fires once; the window admits
-  no command and opens no token, instead of carrying out what it may have lost. A window opened
-  when the process has no publication left opens with them, and its other facts publish as usual.
-
-- Agent protocol 0.13: a recorded window capability can be absent as `withdrawn`
-  (`UnsupportedReason::Withdrawn`, `CapabilityAbsence::WITHDRAWN`).
+  no more of what it honours. Every command is absent as withdrawn (`CapabilityAbsence::WITHDRAWN`,
+  the normal mode included); the reports and per-frame verbs no command reads keep their values.
+  The snapshot that takes a window's last revision, and a window whose capabilities change after
+  the process ran out of publications, publish withdrawn capabilities, so readers see the change;
+  the window admits no command and opens no token, instead of carrying out what it may have lost.
+  A window opened when the process has no publication left opens with them, and its other facts
+  publish as usual.
 
 ### Changed
 

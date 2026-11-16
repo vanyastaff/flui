@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
     InvalidGeometry, PublicationMint, WindowAppearance, WindowCapabilities, WindowExecutionState,
-    WindowExtent, WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowRevision, WindowState,
+    WindowExtent, WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowRevision,
+    WindowState,
 };
 use parking_lot::Mutex;
 
