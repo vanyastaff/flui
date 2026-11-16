@@ -7,6 +7,8 @@
 //! not-shown handling (ADR-0068). The host implements the trait; this crate
 //! names no backend, surface or GPU type.
 
+use std::num::NonZeroUsize;
+
 use flui_foundation::{FrameEpoch, PresentationAddress};
 use flui_layer::ScenePublication;
 
@@ -177,6 +179,16 @@ pub enum Settled {
 pub trait FrameSink {
     /// Physical surface size in pixels, as layout's root constraints input.
     fn surface_size(&mut self) -> (u32, u32);
+
+    /// How many frames of one presentation this sink may hold unsettled: those it answered
+    /// [`SubmitVerdict::Queued`] or [`SubmitVerdict::QueuedReplacing`] and has not settled yet.
+    /// While a presentation has this many pending, the runtime produces no frame for it and keeps
+    /// its demand until a settlement frees a place (ADR-0305 §5). A sink that settles every frame
+    /// in `submit` holds none, so the default of one gates nothing; a threaded raster side holds
+    /// two, one rendering and one waiting in its inbox.
+    fn in_flight_limit(&mut self) -> NonZeroUsize {
+        NonZeroUsize::MIN
+    }
 
     /// Submit one composited scene for rasterization and classify what
     /// happened.

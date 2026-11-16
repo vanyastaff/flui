@@ -96,6 +96,7 @@
 //! is failing.
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroUsize;
 
 use crate::frame::FrameId;
 use crate::frame_telemetry::{
@@ -178,10 +179,43 @@ pub enum SkipReason {
     /// This presentation is hidden ([`FrameClock::set_hidden`]); demand is
     /// retained so an unhide with a nonzero mask produces immediately.
     Hidden,
-    /// The caller-configured minimum produce interval
+    /// The sink holds as many frames as it may ([`FramesInFlight::is_saturated`]), or the
+    /// caller-configured minimum produce interval
     /// ([`FrameClock::set_min_produce_interval`]) has not yet elapsed since
     /// the last produce. Demand is retained.
     Backpressure,
+}
+
+/// The frames a presentation's sink holds unsettled when its clock is polled, against how many
+/// it may hold: the in-flight gate [`FrameClock::poll`] paces production by (ADR-0305 §5).
+///
+/// A sink that answers each frame inline never holds one, so its presentations are never gated.
+/// A sink that queues frames for a raster thread holds at most its depth (two: one rendering,
+/// one waiting); a frame produced past that would only replace the waiting one unrendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FramesInFlight {
+    pending: usize,
+    limit: NonZeroUsize,
+}
+
+impl FramesInFlight {
+    /// Nothing in flight: the gate is open.
+    pub const NONE: Self = Self {
+        pending: 0,
+        limit: NonZeroUsize::MIN,
+    };
+
+    /// `pending` frames unsettled out of the `limit` the sink may hold.
+    #[must_use]
+    pub const fn new(pending: usize, limit: NonZeroUsize) -> Self {
+        Self { pending, limit }
+    }
+
+    /// The sink holds as many frames as it may: production waits for a settlement.
+    #[must_use]
+    pub const fn is_saturated(self) -> bool {
+        self.pending >= self.limit.get()
+    }
 }
 
 /// [`FrameClock::poll`]'s produce/skip decision.
@@ -526,9 +560,11 @@ impl FrameClock {
     /// `Skip(Hidden)` today is bounded: it un-strands at the next unhide,
     /// not "whenever something else happens to wake the loop".
     ///
-    /// **`Backpressure` comes only from the throttle**
-    /// ([`set_min_produce_interval`](Self::set_min_produce_interval)), which
-    /// a later pump past the interval clears. A caller that settles its OWN
+    /// **`Backpressure` comes from the frames in flight or the throttle.** The
+    /// settlement that frees a frame's place wakes the loop when demand is
+    /// retained (`UiRuntime::settle_frame`), and the throttle
+    /// ([`set_min_produce_interval`](Self::set_min_produce_interval)) clears
+    /// at a later pump past the interval. A caller that settles its OWN
     /// demand away without ever reaching a produce (rather than being
     /// blocked by hidden/backpressure) is a different, already-handled
     /// case: see [`clear_demand`](Self::clear_demand)'s doc.
@@ -602,7 +638,7 @@ impl FrameClock {
     // handler, `wp_presentation_time`), fed in by
     // the caller that receives the host's frame requests. It marks no demand
     // and moves no frame time: the frame tick stays the vsync instant
-    // (ADR-0257 decision 2), never a presentation time.
+    // (ADR-0347 decision 2), never a presentation time.
     // ------------------------------------------------------------------
 
     /// Record that the platform reported a frame of this presentation shown
@@ -747,8 +783,8 @@ impl FrameClock {
 
     // ------------------------------------------------------------------
     // Produce throttle — a self-imposed minimum interval between produces.
-    // GPU in-flight capacity is bounded by the surface's configured frame
-    // latency, not by this clock.
+    // The frames a sink holds unsettled gate production too, through the
+    // `FramesInFlight` each poll is handed (ADR-0305 §5).
     // ------------------------------------------------------------------
 
     /// Configure a minimum interval between produces (a self-imposed
@@ -781,7 +817,8 @@ impl FrameClock {
 
     /// The produce/skip decision for physical instant `now`.
     ///
-    /// Checked in this order: the demand mask FIRST, then hidden, then
+    /// Checked in this order: the demand mask FIRST, then hidden, then the
+    /// frames in flight (`in_flight`, the sink's unsettled frames, ADR-0305 §5), then
     /// the throttle. An empty mask is ALWAYS
     /// `Skip(NoDemand)`, regardless of whether hidden or a throttle
     /// happens to be configured — hidden and capacity are
@@ -810,7 +847,7 @@ impl FrameClock {
     /// together this same pump) — `poll` itself never reads a clock source,
     /// which is what makes a [`ClockSource::Manual`] clock's decisions
     /// exactly replayable.
-    pub fn poll(&self, now: Instant) -> PollDecision {
+    pub fn poll(&self, now: Instant, in_flight: FramesInFlight) -> PollDecision {
         if self.demand.get().is_empty() {
             return PollDecision::Skip(SkipReason::NoDemand);
         }
@@ -818,7 +855,7 @@ impl FrameClock {
             self.deferred_hidden.set(self.deferred_hidden.get() + 1);
             return PollDecision::Skip(SkipReason::Hidden);
         }
-        if !self.has_capacity(now) {
+        if in_flight.is_saturated() || !self.has_capacity(now) {
             self.deferred_backpressure
                 .set(self.deferred_backpressure.get() + 1);
             return PollDecision::Skip(SkipReason::Backpressure);
@@ -1069,14 +1106,14 @@ mod tests {
 
         clock.mark_demand(DemandKind::Dirty);
         assert_eq!(
-            clock.poll(manual.now()),
+            clock.poll(manual.now(), FramesInFlight::NONE),
             PollDecision::ProduceWithheld,
             "deferred must still run the segment, just withhold the result"
         );
         manual.advance(Duration::from_millis(16));
         clock.mark_demand(DemandKind::Host);
         assert_eq!(
-            clock.poll(manual.now()),
+            clock.poll(manual.now(), FramesInFlight::NONE),
             PollDecision::ProduceWithheld,
             "still deferred: the segment keeps running on new demand, still withheld"
         );
@@ -1084,12 +1121,12 @@ mod tests {
         clock.lift();
         clock.mark_demand(DemandKind::Dirty);
         assert_eq!(
-            clock.poll(manual.now()),
+            clock.poll(manual.now(), FramesInFlight::NONE),
             PollDecision::Produce,
             "lifted: the next poll with demand produces unwithheld"
         );
         assert_eq!(
-            clock.poll(manual.now()),
+            clock.poll(manual.now(), FramesInFlight::NONE),
             PollDecision::Skip(SkipReason::NoDemand),
             "and exactly once -- the produce already cleared the mask"
         );
@@ -1138,8 +1175,9 @@ mod tests {
                         }
                     }
 
-                    let platform_decision = platform.poll(platform.now());
-                    let manual_decision = manual_clock.poll(manual_source.now());
+                    let platform_decision = platform.poll(platform.now(), FramesInFlight::NONE);
+                    let manual_decision =
+                        manual_clock.poll(manual_source.now(), FramesInFlight::NONE);
 
                     assert_eq!(
                         platform_decision, manual_decision,
@@ -1203,7 +1241,10 @@ mod tests {
             elapsed += step_60;
             clock_60.record_compositor_tick(manual_60.now());
             clock_60.mark_demand(DemandKind::Dirty);
-            assert_eq!(clock_60.poll(manual_60.now()), PollDecision::Produce);
+            assert_eq!(
+                clock_60.poll(manual_60.now(), FramesInFlight::NONE),
+                PollDecision::Produce
+            );
             ticks_60 += 1;
         }
 
@@ -1214,7 +1255,10 @@ mod tests {
             elapsed += step_144;
             clock_144.record_compositor_tick(manual_144.now());
             clock_144.mark_demand(DemandKind::Dirty);
-            assert_eq!(clock_144.poll(manual_144.now()), PollDecision::Produce);
+            assert_eq!(
+                clock_144.poll(manual_144.now(), FramesInFlight::NONE),
+                PollDecision::Produce
+            );
             ticks_144 += 1;
         }
 

@@ -291,13 +291,16 @@ type SubmitScript = Box<dyn FnMut(u32, &ScenePublication) -> SubmitVerdict + Sen
 /// Construct through [`always_presents`], [`single_shot`],
 /// [`fails_once_then_presents`], or — for a behavior none of those name —
 /// the general [`new`] with an explicit script. The surface is `(800, 600)`
-/// unless overridden with [`with_size`].
+/// unless overridden with [`with_size`]. A script answers every frame it is handed: the sink
+/// holds any number unsettled unless [`holding`] names its depth, as a test of the in-flight
+/// gate does (ADR-0305 §5).
 ///
 /// [`always_presents`]: ScriptedSink::always_presents
 /// [`single_shot`]: ScriptedSink::single_shot
 /// [`fails_once_then_presents`]: ScriptedSink::fails_once_then_presents
 /// [`new`]: ScriptedSink::new
 /// [`with_size`]: ScriptedSink::with_size
+/// [`holding`]: ScriptedSink::holding
 pub struct ScriptedSink {
     /// Invoked with the zero-based index of the current call (the counter's
     /// value before this call), so a script can vary by call without keeping
@@ -310,6 +313,8 @@ pub struct ScriptedSink {
     pub epochs: Vec<flui_foundation::FrameEpoch>,
     /// What `surface_size` reports.
     size: (u32, u32),
+    /// What `in_flight_limit` reports.
+    limit: std::num::NonZeroUsize,
 }
 
 impl std::fmt::Debug for ScriptedSink {
@@ -318,6 +323,7 @@ impl std::fmt::Debug for ScriptedSink {
             .field("submit_calls", &self.submit_calls)
             .field("epochs", &self.epochs)
             .field("size", &self.size)
+            .field("limit", &self.limit)
             .finish_non_exhaustive()
     }
 }
@@ -333,6 +339,7 @@ impl ScriptedSink {
             submit_calls: 0,
             epochs: Vec::new(),
             size: (800, 600),
+            limit: std::num::NonZeroUsize::MAX,
         }
     }
 
@@ -371,11 +378,23 @@ impl ScriptedSink {
         self.size = (width, height);
         self
     }
+
+    /// Hold at most `limit` frames of a presentation unsettled, as a threaded raster side holds
+    /// two: the runtime produces no frame for a presentation that has this many pending.
+    #[must_use]
+    pub fn holding(mut self, limit: std::num::NonZeroUsize) -> Self {
+        self.limit = limit;
+        self
+    }
 }
 
 impl FrameSink for ScriptedSink {
     fn surface_size(&mut self) -> (u32, u32) {
         self.size
+    }
+
+    fn in_flight_limit(&mut self) -> std::num::NonZeroUsize {
+        self.limit
     }
 
     fn submit(

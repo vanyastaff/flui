@@ -183,6 +183,33 @@ fn an_undriven_turn_posts_the_next_one() {
     signal.close_in(&slot);
 }
 
+/// Work that reaches code the owner does not own runs once the turn released
+/// its state, as a message taken from the queue would: a modal loop it opens
+/// (a turn it drives) still runs the owner's work.
+fn work_outside_the_turn_runs_after_it_released_its_state() {
+    let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+    signal.start().expect("start");
+    let nested = Arc::new(AtomicUsize::new(0));
+    let (weak, seen) = (Arc::downgrade(&signal), Arc::clone(&nested));
+    signal.run_outside_turn(Arc::new(move || {
+        let Some(signal) = weak.upgrade() else {
+            return;
+        };
+        let counted = Arc::clone(&seen);
+        signal.run_for_window(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        // The modal loop's own turn.
+        let _quit = signal.drive_in(&OwnerTurnSlot::default());
+    }));
+    assert!(!signal.drive_in(&OwnerTurnSlot::default()));
+    assert_eq!(
+        nested.load(Ordering::SeqCst),
+        1,
+        "a turn nested in the work ran the owner's work"
+    );
+}
+
 /// The owner signal's contracts: an orphan dropped while the owner reads its
 /// platform may ask the signal again; a burst coalesces and a re-entrant wake
 /// gets a later turn; a wake that lands while the loop reads gets a turn that
@@ -205,6 +232,10 @@ fn the_owner_signal_honours_its_contracts() {
                 a_wake_while_the_loop_reads_gets_a_turn_that_reads_again,
             ),
             ("an undriven turn", an_undriven_turn_posts_the_next_one),
+            (
+                "work outside the turn",
+                work_outside_the_turn_runs_after_it_released_its_state,
+            ),
         ],
     );
 }

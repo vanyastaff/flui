@@ -19,7 +19,7 @@
 use flui_foundation::geometry::Offset;
 use flui_platform::EventTime;
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{InputValueError, PointerEvent, PointerKind};
 
@@ -164,10 +164,10 @@ impl ModifiersBuilder {
 ///
 /// ```rust
 /// use flui_interaction::testing::input::KeyEventBuilder;
-/// use flui_platform::keyboard::{Code, KeyState, Modifiers};
+/// use flui_platform::keyboard::{Code, KeyPress, KeyState, Modifiers};
 ///
 /// let event = KeyEventBuilder::new(Code::KeyA)
-///     .state(KeyState::Down)
+///     .state(KeyState::Down(KeyPress::First))
 ///     .modifiers(Modifiers::CONTROL)
 ///     .build();
 /// ```
@@ -178,7 +178,6 @@ pub struct KeyEventBuilder {
     state: KeyState,
     modifiers: Modifiers,
     location: Location,
-    repeat: bool,
     is_composing: bool,
 }
 
@@ -188,10 +187,9 @@ impl KeyEventBuilder {
         Self {
             code,
             key: Key::Named(NamedKey::Unidentified),
-            state: KeyState::Down,
+            state: KeyState::Down(KeyPress::First),
             modifiers: Modifiers::NONE,
             location: Location::Standard,
-            repeat: false,
             is_composing: false,
         }
     }
@@ -220,12 +218,6 @@ impl KeyEventBuilder {
         self
     }
 
-    /// Sets whether this is a repeat event.
-    pub fn repeat(mut self, repeat: bool) -> Self {
-        self.repeat = repeat;
-        self
-    }
-
     /// Sets whether this is a composing event.
     pub fn composing(mut self, is_composing: bool) -> Self {
         self.is_composing = is_composing;
@@ -237,11 +229,6 @@ impl KeyEventBuilder {
         KeyEvent::new(self.state, self.key, self.code, EventTime::from_nanos(0))
             .with_location(self.location)
             .with_modifiers(self.modifiers)
-            .with_repeat(if self.repeat {
-                KeyRepeat::AutoRepeat
-            } else {
-                KeyRepeat::First
-            })
             .with_composition(if self.is_composing {
                 ImeComposition::Active
             } else {

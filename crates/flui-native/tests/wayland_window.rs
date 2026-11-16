@@ -96,7 +96,7 @@ impl WaylandFixture {
             self.drawn.set(asked);
             self.window
                 .surface_target()
-                .pre_present_notify(flui_platform::SwapChainStatistics::None);
+                .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
             let _ = present(self.window.as_ref());
         }
     }
@@ -246,9 +246,10 @@ impl WindowFixture for WaylandFixture {
         // A report of a frame shown before this one may still wait for a
         // request: the one wanted is this frame's.
         let presented_since = flui_platform::EventTime::now();
-        window
-            .surface_target()
-            .pre_present_notify(flui_platform::SwapChainStatistics::None);
+        window.surface_target().pre_present_notify(
+            Some(flui_testing::window_conformance::fixture_frame(1)),
+            flui_platform::SwapChainStatistics::None,
+        );
         let _ = present(window.as_ref());
         handler.take_calls();
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -363,7 +364,7 @@ fn an_occluded_window_is_given_its_frame_once_shown() {
     fixture
         .window
         .surface_target()
-        .pre_present_notify(flui_platform::SwapChainStatistics::None);
+        .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
     fixture.window.request_redraw();
     run_for(&fixture.platform, Duration::from_millis(2500)).expect("the loop turns");
     assert_eq!(
@@ -466,7 +467,7 @@ fn a_frame_callback_no_commit_carried_is_given_up() {
     fixture
         .window
         .surface_target()
-        .pre_present_notify(flui_platform::SwapChainStatistics::None);
+        .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
     fixture.window.request_redraw();
     run_for(&fixture.platform, Duration::from_millis(300)).expect("the loop turns");
     assert_eq!(
@@ -987,7 +988,7 @@ mod optional {
             run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
             second
                 .surface_target()
-                .pre_present_notify(flui_platform::SwapChainStatistics::None);
+                .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
             let _ = present(second.as_ref());
             if activated(second.as_ref()) && !activated(first) {
                 break;
@@ -1059,7 +1060,7 @@ mod optional {
             run_for(&fixture.platform, Duration::from_millis(50)).expect("the loop turns");
             cover
                 .surface_target()
-                .pre_present_notify(flui_platform::SwapChainStatistics::None);
+                .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
             let _ = present(cover.as_ref());
         }
         fixture.settle();

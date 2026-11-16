@@ -1449,7 +1449,7 @@ impl Clone for flui::app::HostInput
 impl core::fmt::Debug for flui::app::HostInput
 variant flui::app::HostInput::Accessibility(accesskit::ActionRequest) // at 3
 variant flui::app::HostInput::AssistiveFocus(Option<accesskit::NodeId>) // at 4
-variant flui::app::HostInput::Frame { vsync: flui::interaction::EventTime, target_present: Option<flui::interaction::EventTime>, presented: Option<flui::platform::FramePresented> } // at 2
+variant flui::app::HostInput::Frame { vsync: flui::interaction::EventTime, target_present: Option<flui::interaction::EventTime>, presented: Option<flui::app::ShownFrame> } // at 2
 variant flui::app::HostInput::Platform(flui::platform::PlatformInput) // at 0
 variant flui::app::HostInput::Window(flui::app::WindowObservation) // at 1
 pub trait flui::app::HostIoPool: Send + Sync
@@ -1678,6 +1678,21 @@ impl core::marker::StructuralPartialEq for flui::app::SpawnError
 variant flui::app::SpawnError::Saturated // at 0
 variant flui::app::SpawnError::ShuttingDown // at 1
 variant flui::app::SpawnError::Unavailable // at 2
+#[non_exhaustive] pub struct flui::app::ShownFrame
+field flui::app::ShownFrame::at: flui::interaction::EventTime // at 2
+field flui::app::ShownFrame::epoch: flui::foundation::FrameEpoch // at 0
+field flui::app::ShownFrame::refresh: Option<flui::platform::RefreshPeriod> // at 3
+field flui::app::ShownFrame::surface_generation: flui::foundation::SurfaceGeneration // at 1
+impl Clone for flui::app::ShownFrame
+impl Copy for flui::app::ShownFrame
+impl Eq for flui::app::ShownFrame
+impl From<flui::platform::FramePresented> for flui::app::ShownFrame
+impl PartialEq for flui::app::ShownFrame
+impl core::fmt::Debug for flui::app::ShownFrame
+impl core::marker::StructuralPartialEq for flui::app::ShownFrame
+pub const fn flui::app::ShownFrame::new(epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration, at: flui::interaction::EventTime) -> Self
+pub const fn flui::app::ShownFrame::refresh(self, refresh: flui::platform::RefreshPeriod) -> Self
+pub fn flui::app::ShownFrame::of_presentation(self, address: flui::foundation::PresentationAddress) -> flui::platform::FramePresented
 pub struct flui::app::TaskContext { .. }
 impl Clone for flui::app::TaskContext
 impl core::fmt::Debug for flui::app::TaskContext
@@ -2627,6 +2642,7 @@ impl core::fmt::Display for flui::foundation::FrameEpoch
 impl core::hash::Hash for flui::foundation::FrameEpoch
 impl core::marker::StructuralPartialEq for flui::foundation::FrameEpoch
 pub const flui::foundation::FrameEpoch::ZERO: Self = _
+pub const fn flui::foundation::FrameEpoch::from_raw(value: u64) -> Self
 pub const fn flui::foundation::FrameEpoch::get(self) -> u64
 pub const fn flui::foundation::FrameEpoch::next(self) -> Self
 #[non_exhaustive] pub struct flui::foundation::FrameStamp
@@ -3061,6 +3077,7 @@ impl core::fmt::Display for flui::foundation::SurfaceGeneration
 impl core::hash::Hash for flui::foundation::SurfaceGeneration
 impl core::marker::StructuralPartialEq for flui::foundation::SurfaceGeneration
 pub const flui::foundation::SurfaceGeneration::ZERO: Self = _
+pub const fn flui::foundation::SurfaceGeneration::from_raw(value: u64) -> Self
 pub const fn flui::foundation::SurfaceGeneration::get(self) -> u64
 pub const fn flui::foundation::SurfaceGeneration::next(self) -> Self
 pub struct flui::foundation::SystemClock;
@@ -6358,15 +6375,17 @@ impl core::hash::Hash for flui::interaction::Key
 impl core::marker::StructuralPartialEq for flui::interaction::Key
 pub fn flui::interaction::Key::character(text: impl Into<String>) -> Self
 variant flui::interaction::Key::Character(flui::platform::keyboard::KeyText) // at 0
+variant flui::interaction::Key::Dead(Option<char>) // at 2
 variant flui::interaction::Key::Named(flui::interaction::NamedKey) // at 1
 pub type flui::interaction::KeyCancelHandler = alloc::rcs::rc::Rc<dyn Fn(&flui::interaction::KeyEvent)>
-#[non_exhaustive] pub struct flui::interaction::KeyEvent { .. }
+#[non_exhaustive] pub struct flui::interaction::KeyEvent
 field flui::interaction::KeyEvent::code: flui::interaction::Code // at 2
-field flui::interaction::KeyEvent::composition: flui::platform::keyboard::ImeComposition // at 7
+field flui::interaction::KeyEvent::composition: flui::platform::keyboard::ImeComposition // at 5
 field flui::interaction::KeyEvent::key: flui::interaction::Key // at 1
 field flui::interaction::KeyEvent::location: flui::interaction::Location // at 3
 field flui::interaction::KeyEvent::modifiers: flui::interaction::Modifiers // at 4
-field flui::interaction::KeyEvent::time: flui::interaction::EventTime // at 8
+field flui::interaction::KeyEvent::state: flui::interaction::KeyState // at 0
+field flui::interaction::KeyEvent::time: flui::interaction::EventTime // at 6
 impl Clone for flui::interaction::KeyEvent
 impl Eq for flui::interaction::KeyEvent
 impl PartialEq for flui::interaction::KeyEvent
@@ -6374,14 +6393,9 @@ impl core::fmt::Debug for flui::interaction::KeyEvent
 impl core::hash::Hash for flui::interaction::KeyEvent
 impl core::marker::StructuralPartialEq for flui::interaction::KeyEvent
 pub const fn flui::interaction::KeyEvent::new(state: flui::interaction::KeyState, key: flui::interaction::Key, code: flui::interaction::Code, time: flui::interaction::EventTime) -> Self
-pub const fn flui::interaction::KeyEvent::release(&self) -> flui::platform::keyboard::KeyRelease
-pub const fn flui::interaction::KeyEvent::repeat(&self) -> flui::platform::keyboard::KeyRepeat
-pub const fn flui::interaction::KeyEvent::state(&self) -> flui::interaction::KeyState
 pub fn flui::interaction::KeyEvent::with_composition(self, composition: flui::platform::keyboard::ImeComposition) -> Self
 pub fn flui::interaction::KeyEvent::with_location(self, location: flui::interaction::Location) -> Self
 pub fn flui::interaction::KeyEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
-pub fn flui::interaction::KeyEvent::with_release(self, release: flui::platform::keyboard::KeyRelease) -> Self
-pub fn flui::interaction::KeyEvent::with_repeat(self, repeat: flui::platform::keyboard::KeyRepeat) -> Self
 pub type flui::interaction::KeyEventHandler = alloc::rcs::rc::Rc<dyn Fn(&flui::interaction::KeyEvent) -> flui::interaction::KeyEventResult>
 pub enum flui::interaction::KeyEventResult
 impl Clone for flui::interaction::KeyEventResult
@@ -6395,6 +6409,17 @@ pub fn flui::interaction::KeyEventResult::combine(self, other: Self) -> Self
 variant flui::interaction::KeyEventResult::Handled // at 0
 variant flui::interaction::KeyEventResult::Ignored // at 1
 variant flui::interaction::KeyEventResult::SkipRemainingHandlers // at 2
+pub enum flui::interaction::KeyPress
+impl Clone for flui::interaction::KeyPress
+impl Copy for flui::interaction::KeyPress
+impl Eq for flui::interaction::KeyPress
+impl PartialEq for flui::interaction::KeyPress
+impl core::fmt::Debug for flui::interaction::KeyPress
+impl core::hash::Hash for flui::interaction::KeyPress
+impl core::marker::StructuralPartialEq for flui::interaction::KeyPress
+variant flui::interaction::KeyPress::AutoRepeat // at 1
+variant flui::interaction::KeyPress::First // at 0
+variant flui::interaction::KeyPress::Unpaired // at 2
 pub enum flui::interaction::KeyState
 impl Clone for flui::interaction::KeyState
 impl Copy for flui::interaction::KeyState
@@ -6403,7 +6428,7 @@ impl PartialEq for flui::interaction::KeyState
 impl core::fmt::Debug for flui::interaction::KeyState
 impl core::hash::Hash for flui::interaction::KeyState
 impl core::marker::StructuralPartialEq for flui::interaction::KeyState
-variant flui::interaction::KeyState::Down // at 0
+variant flui::interaction::KeyState::Down(flui::interaction::KeyPress) // at 0
 variant flui::interaction::KeyState::Up // at 1
 pub enum flui::interaction::Location
 impl Clone for flui::interaction::Location
@@ -6616,60 +6641,60 @@ impl core::marker::StructuralPartialEq for flui::interaction::NamedKey
 pub const flui::interaction::NamedKey::ALL: &[Self] = _
 pub const fn flui::interaction::NamedKey::as_str(self) -> &'static str
 pub fn flui::interaction::NamedKey::from_w3c(name: &str) -> Option<Self>
-variant flui::interaction::NamedKey::AVRInput // at 198
-variant flui::interaction::NamedKey::AVRPower // at 199
+variant flui::interaction::NamedKey::AVRInput // at 197
+variant flui::interaction::NamedKey::AVRPower // at 198
 variant flui::interaction::NamedKey::Accept // at 35
 variant flui::interaction::NamedKey::Again // at 36
 variant flui::interaction::NamedKey::AllCandidates // at 60
 variant flui::interaction::NamedKey::Alphanumeric // at 61
 variant flui::interaction::NamedKey::Alt // at 1
 variant flui::interaction::NamedKey::AltGraph // at 2
-variant flui::interaction::NamedKey::AppSwitch // at 156
+variant flui::interaction::NamedKey::AppSwitch // at 155
 variant flui::interaction::NamedKey::ArrowDown // at 15
 variant flui::interaction::NamedKey::ArrowLeft // at 16
 variant flui::interaction::NamedKey::ArrowRight // at 17
 variant flui::interaction::NamedKey::ArrowUp // at 18
 variant flui::interaction::NamedKey::Attn // at 37
-variant flui::interaction::NamedKey::AudioBalanceLeft // at 117
-variant flui::interaction::NamedKey::AudioBalanceRight // at 118
-variant flui::interaction::NamedKey::AudioBassBoostDown // at 119
-variant flui::interaction::NamedKey::AudioBassBoostToggle // at 120
-variant flui::interaction::NamedKey::AudioBassBoostUp // at 121
-variant flui::interaction::NamedKey::AudioFaderFront // at 122
-variant flui::interaction::NamedKey::AudioFaderRear // at 123
-variant flui::interaction::NamedKey::AudioSurroundModeNext // at 124
-variant flui::interaction::NamedKey::AudioTrebleDown // at 125
-variant flui::interaction::NamedKey::AudioTrebleUp // at 126
-variant flui::interaction::NamedKey::AudioVolumeDown // at 127
-variant flui::interaction::NamedKey::AudioVolumeMute // at 129
-variant flui::interaction::NamedKey::AudioVolumeUp // at 128
+variant flui::interaction::NamedKey::AudioBalanceLeft // at 116
+variant flui::interaction::NamedKey::AudioBalanceRight // at 117
+variant flui::interaction::NamedKey::AudioBassBoostDown // at 118
+variant flui::interaction::NamedKey::AudioBassBoostToggle // at 119
+variant flui::interaction::NamedKey::AudioBassBoostUp // at 120
+variant flui::interaction::NamedKey::AudioFaderFront // at 121
+variant flui::interaction::NamedKey::AudioFaderRear // at 122
+variant flui::interaction::NamedKey::AudioSurroundModeNext // at 123
+variant flui::interaction::NamedKey::AudioTrebleDown // at 124
+variant flui::interaction::NamedKey::AudioTrebleUp // at 125
+variant flui::interaction::NamedKey::AudioVolumeDown // at 126
+variant flui::interaction::NamedKey::AudioVolumeMute // at 128
+variant flui::interaction::NamedKey::AudioVolumeUp // at 127
 variant flui::interaction::NamedKey::Backspace // at 23
 variant flui::interaction::NamedKey::BrightnessDown // at 50
 variant flui::interaction::NamedKey::BrightnessUp // at 51
-variant flui::interaction::NamedKey::BrowserBack // at 149
-variant flui::interaction::NamedKey::BrowserFavorites // at 150
-variant flui::interaction::NamedKey::BrowserForward // at 151
-variant flui::interaction::NamedKey::BrowserHome // at 152
-variant flui::interaction::NamedKey::BrowserRefresh // at 153
-variant flui::interaction::NamedKey::BrowserSearch // at 154
-variant flui::interaction::NamedKey::BrowserStop // at 155
-variant flui::interaction::NamedKey::Call // at 157
-variant flui::interaction::NamedKey::Camera // at 158
-variant flui::interaction::NamedKey::CameraFocus // at 159
+variant flui::interaction::NamedKey::BrowserBack // at 148
+variant flui::interaction::NamedKey::BrowserFavorites // at 149
+variant flui::interaction::NamedKey::BrowserForward // at 150
+variant flui::interaction::NamedKey::BrowserHome // at 151
+variant flui::interaction::NamedKey::BrowserRefresh // at 152
+variant flui::interaction::NamedKey::BrowserSearch // at 153
+variant flui::interaction::NamedKey::BrowserStop // at 154
+variant flui::interaction::NamedKey::Call // at 156
+variant flui::interaction::NamedKey::Camera // at 157
+variant flui::interaction::NamedKey::CameraFocus // at 158
 variant flui::interaction::NamedKey::Cancel // at 38
 variant flui::interaction::NamedKey::CapsLock // at 3
-variant flui::interaction::NamedKey::ChannelDown // at 94
-variant flui::interaction::NamedKey::ChannelUp // at 95
+variant flui::interaction::NamedKey::ChannelDown // at 93
+variant flui::interaction::NamedKey::ChannelUp // at 94
 variant flui::interaction::NamedKey::Clear // at 24
-variant flui::interaction::NamedKey::Close // at 96
-variant flui::interaction::NamedKey::ClosedCaptionToggle // at 206
+variant flui::interaction::NamedKey::Close // at 95
+variant flui::interaction::NamedKey::ClosedCaptionToggle // at 205
 variant flui::interaction::NamedKey::CodeInput // at 62
-variant flui::interaction::NamedKey::ColorF0Red // at 200
-variant flui::interaction::NamedKey::ColorF1Green // at 201
-variant flui::interaction::NamedKey::ColorF2Yellow // at 202
-variant flui::interaction::NamedKey::ColorF3Blue // at 203
-variant flui::interaction::NamedKey::ColorF4Grey // at 204
-variant flui::interaction::NamedKey::ColorF5Brown // at 205
+variant flui::interaction::NamedKey::ColorF0Red // at 199
+variant flui::interaction::NamedKey::ColorF1Green // at 200
+variant flui::interaction::NamedKey::ColorF2Yellow // at 201
+variant flui::interaction::NamedKey::ColorF3Blue // at 202
+variant flui::interaction::NamedKey::ColorF4Grey // at 203
+variant flui::interaction::NamedKey::ColorF5Brown // at 204
 variant flui::interaction::NamedKey::Compose // at 63
 variant flui::interaction::NamedKey::ContextMenu // at 39
 variant flui::interaction::NamedKey::Control // at 4
@@ -6677,250 +6702,249 @@ variant flui::interaction::NamedKey::Convert // at 64
 variant flui::interaction::NamedKey::Copy // at 25
 variant flui::interaction::NamedKey::CrSel // at 26
 variant flui::interaction::NamedKey::Cut // at 27
-variant flui::interaction::NamedKey::DVR // at 209
-variant flui::interaction::NamedKey::Dead // at 65
+variant flui::interaction::NamedKey::DVR // at 208
 variant flui::interaction::NamedKey::Delete // at 28
-variant flui::interaction::NamedKey::Dimmer // at 207
-variant flui::interaction::NamedKey::DisplaySwap // at 208
-variant flui::interaction::NamedKey::Eisu // at 80
+variant flui::interaction::NamedKey::Dimmer // at 206
+variant flui::interaction::NamedKey::DisplaySwap // at 207
+variant flui::interaction::NamedKey::Eisu // at 79
 variant flui::interaction::NamedKey::Eject // at 52
 variant flui::interaction::NamedKey::End // at 19
-variant flui::interaction::NamedKey::EndCall // at 160
+variant flui::interaction::NamedKey::EndCall // at 159
 variant flui::interaction::NamedKey::Enter // at 13
 variant flui::interaction::NamedKey::EraseEof // at 29
 variant flui::interaction::NamedKey::Escape // at 40
 variant flui::interaction::NamedKey::ExSel // at 30
 variant flui::interaction::NamedKey::Execute // at 41
-variant flui::interaction::NamedKey::Exit // at 210
-variant flui::interaction::NamedKey::F1 // at 270
-variant flui::interaction::NamedKey::F10 // at 279
-variant flui::interaction::NamedKey::F11 // at 280
-variant flui::interaction::NamedKey::F12 // at 281
-variant flui::interaction::NamedKey::F13 // at 282
-variant flui::interaction::NamedKey::F14 // at 283
-variant flui::interaction::NamedKey::F15 // at 284
-variant flui::interaction::NamedKey::F16 // at 285
-variant flui::interaction::NamedKey::F17 // at 286
-variant flui::interaction::NamedKey::F18 // at 287
-variant flui::interaction::NamedKey::F19 // at 288
-variant flui::interaction::NamedKey::F2 // at 271
-variant flui::interaction::NamedKey::F20 // at 289
-variant flui::interaction::NamedKey::F21 // at 290
-variant flui::interaction::NamedKey::F22 // at 291
-variant flui::interaction::NamedKey::F23 // at 292
-variant flui::interaction::NamedKey::F24 // at 293
-variant flui::interaction::NamedKey::F25 // at 294
-variant flui::interaction::NamedKey::F26 // at 295
-variant flui::interaction::NamedKey::F27 // at 296
-variant flui::interaction::NamedKey::F28 // at 297
-variant flui::interaction::NamedKey::F29 // at 298
-variant flui::interaction::NamedKey::F3 // at 272
-variant flui::interaction::NamedKey::F30 // at 299
-variant flui::interaction::NamedKey::F31 // at 300
-variant flui::interaction::NamedKey::F32 // at 301
-variant flui::interaction::NamedKey::F33 // at 302
-variant flui::interaction::NamedKey::F34 // at 303
-variant flui::interaction::NamedKey::F35 // at 304
-variant flui::interaction::NamedKey::F4 // at 273
-variant flui::interaction::NamedKey::F5 // at 274
-variant flui::interaction::NamedKey::F6 // at 275
-variant flui::interaction::NamedKey::F7 // at 276
-variant flui::interaction::NamedKey::F8 // at 277
-variant flui::interaction::NamedKey::F9 // at 278
-variant flui::interaction::NamedKey::FavoriteClear0 // at 211
-variant flui::interaction::NamedKey::FavoriteClear1 // at 212
-variant flui::interaction::NamedKey::FavoriteClear2 // at 213
-variant flui::interaction::NamedKey::FavoriteClear3 // at 214
-variant flui::interaction::NamedKey::FavoriteRecall0 // at 215
-variant flui::interaction::NamedKey::FavoriteRecall1 // at 216
-variant flui::interaction::NamedKey::FavoriteRecall2 // at 217
-variant flui::interaction::NamedKey::FavoriteRecall3 // at 218
-variant flui::interaction::NamedKey::FavoriteStore0 // at 219
-variant flui::interaction::NamedKey::FavoriteStore1 // at 220
-variant flui::interaction::NamedKey::FavoriteStore2 // at 221
-variant flui::interaction::NamedKey::FavoriteStore3 // at 222
-variant flui::interaction::NamedKey::FinalMode // at 66
+variant flui::interaction::NamedKey::Exit // at 209
+variant flui::interaction::NamedKey::F1 // at 269
+variant flui::interaction::NamedKey::F10 // at 278
+variant flui::interaction::NamedKey::F11 // at 279
+variant flui::interaction::NamedKey::F12 // at 280
+variant flui::interaction::NamedKey::F13 // at 281
+variant flui::interaction::NamedKey::F14 // at 282
+variant flui::interaction::NamedKey::F15 // at 283
+variant flui::interaction::NamedKey::F16 // at 284
+variant flui::interaction::NamedKey::F17 // at 285
+variant flui::interaction::NamedKey::F18 // at 286
+variant flui::interaction::NamedKey::F19 // at 287
+variant flui::interaction::NamedKey::F2 // at 270
+variant flui::interaction::NamedKey::F20 // at 288
+variant flui::interaction::NamedKey::F21 // at 289
+variant flui::interaction::NamedKey::F22 // at 290
+variant flui::interaction::NamedKey::F23 // at 291
+variant flui::interaction::NamedKey::F24 // at 292
+variant flui::interaction::NamedKey::F25 // at 293
+variant flui::interaction::NamedKey::F26 // at 294
+variant flui::interaction::NamedKey::F27 // at 295
+variant flui::interaction::NamedKey::F28 // at 296
+variant flui::interaction::NamedKey::F29 // at 297
+variant flui::interaction::NamedKey::F3 // at 271
+variant flui::interaction::NamedKey::F30 // at 298
+variant flui::interaction::NamedKey::F31 // at 299
+variant flui::interaction::NamedKey::F32 // at 300
+variant flui::interaction::NamedKey::F33 // at 301
+variant flui::interaction::NamedKey::F34 // at 302
+variant flui::interaction::NamedKey::F35 // at 303
+variant flui::interaction::NamedKey::F4 // at 272
+variant flui::interaction::NamedKey::F5 // at 273
+variant flui::interaction::NamedKey::F6 // at 274
+variant flui::interaction::NamedKey::F7 // at 275
+variant flui::interaction::NamedKey::F8 // at 276
+variant flui::interaction::NamedKey::F9 // at 277
+variant flui::interaction::NamedKey::FavoriteClear0 // at 210
+variant flui::interaction::NamedKey::FavoriteClear1 // at 211
+variant flui::interaction::NamedKey::FavoriteClear2 // at 212
+variant flui::interaction::NamedKey::FavoriteClear3 // at 213
+variant flui::interaction::NamedKey::FavoriteRecall0 // at 214
+variant flui::interaction::NamedKey::FavoriteRecall1 // at 215
+variant flui::interaction::NamedKey::FavoriteRecall2 // at 216
+variant flui::interaction::NamedKey::FavoriteRecall3 // at 217
+variant flui::interaction::NamedKey::FavoriteStore0 // at 218
+variant flui::interaction::NamedKey::FavoriteStore1 // at 219
+variant flui::interaction::NamedKey::FavoriteStore2 // at 220
+variant flui::interaction::NamedKey::FavoriteStore3 // at 221
+variant flui::interaction::NamedKey::FinalMode // at 65
 variant flui::interaction::NamedKey::Find // at 42
 variant flui::interaction::NamedKey::Fn // at 5
 variant flui::interaction::NamedKey::FnLock // at 6
-variant flui::interaction::NamedKey::GoBack // at 161
-variant flui::interaction::NamedKey::GoHome // at 162
-variant flui::interaction::NamedKey::GroupFirst // at 67
-variant flui::interaction::NamedKey::GroupLast // at 68
-variant flui::interaction::NamedKey::GroupNext // at 69
-variant flui::interaction::NamedKey::GroupPrevious // at 70
-variant flui::interaction::NamedKey::Guide // at 223
-variant flui::interaction::NamedKey::GuideNextDay // at 224
-variant flui::interaction::NamedKey::GuidePreviousDay // at 225
-variant flui::interaction::NamedKey::HangulMode // at 77
-variant flui::interaction::NamedKey::HanjaMode // at 78
-variant flui::interaction::NamedKey::Hankaku // at 81
-variant flui::interaction::NamedKey::HeadsetHook // at 163
+variant flui::interaction::NamedKey::GoBack // at 160
+variant flui::interaction::NamedKey::GoHome // at 161
+variant flui::interaction::NamedKey::GroupFirst // at 66
+variant flui::interaction::NamedKey::GroupLast // at 67
+variant flui::interaction::NamedKey::GroupNext // at 68
+variant flui::interaction::NamedKey::GroupPrevious // at 69
+variant flui::interaction::NamedKey::Guide // at 222
+variant flui::interaction::NamedKey::GuideNextDay // at 223
+variant flui::interaction::NamedKey::GuidePreviousDay // at 224
+variant flui::interaction::NamedKey::HangulMode // at 76
+variant flui::interaction::NamedKey::HanjaMode // at 77
+variant flui::interaction::NamedKey::Hankaku // at 80
+variant flui::interaction::NamedKey::HeadsetHook // at 162
 variant flui::interaction::NamedKey::Help // at 43
 variant flui::interaction::NamedKey::Hibernate // at 57
-variant flui::interaction::NamedKey::Hiragana // at 82
-variant flui::interaction::NamedKey::HiraganaKatakana // at 83
+variant flui::interaction::NamedKey::Hiragana // at 81
+variant flui::interaction::NamedKey::HiraganaKatakana // at 82
 variant flui::interaction::NamedKey::Home // at 20
-variant flui::interaction::NamedKey::Info // at 226
+variant flui::interaction::NamedKey::Info // at 225
 variant flui::interaction::NamedKey::Insert // at 31
-variant flui::interaction::NamedKey::InstantReplay // at 227
-variant flui::interaction::NamedKey::JunjaMode // at 79
-variant flui::interaction::NamedKey::KanaMode // at 84
-variant flui::interaction::NamedKey::KanjiMode // at 85
-variant flui::interaction::NamedKey::Katakana // at 86
-variant flui::interaction::NamedKey::Key11 // at 115
-variant flui::interaction::NamedKey::Key12 // at 116
-variant flui::interaction::NamedKey::LastNumberRedial // at 164
-variant flui::interaction::NamedKey::LaunchApplication1 // at 136
-variant flui::interaction::NamedKey::LaunchApplication2 // at 137
-variant flui::interaction::NamedKey::LaunchCalendar // at 138
-variant flui::interaction::NamedKey::LaunchContacts // at 139
-variant flui::interaction::NamedKey::LaunchMail // at 140
-variant flui::interaction::NamedKey::LaunchMediaPlayer // at 141
-variant flui::interaction::NamedKey::LaunchMusicPlayer // at 142
-variant flui::interaction::NamedKey::LaunchPhone // at 143
-variant flui::interaction::NamedKey::LaunchScreenSaver // at 144
-variant flui::interaction::NamedKey::LaunchSpreadsheet // at 145
-variant flui::interaction::NamedKey::LaunchWebBrowser // at 146
-variant flui::interaction::NamedKey::LaunchWebCam // at 147
-variant flui::interaction::NamedKey::LaunchWordProcessor // at 148
-variant flui::interaction::NamedKey::Link // at 228
-variant flui::interaction::NamedKey::ListProgram // at 229
-variant flui::interaction::NamedKey::LiveContent // at 230
-variant flui::interaction::NamedKey::Lock // at 231
+variant flui::interaction::NamedKey::InstantReplay // at 226
+variant flui::interaction::NamedKey::JunjaMode // at 78
+variant flui::interaction::NamedKey::KanaMode // at 83
+variant flui::interaction::NamedKey::KanjiMode // at 84
+variant flui::interaction::NamedKey::Katakana // at 85
+variant flui::interaction::NamedKey::Key11 // at 114
+variant flui::interaction::NamedKey::Key12 // at 115
+variant flui::interaction::NamedKey::LastNumberRedial // at 163
+variant flui::interaction::NamedKey::LaunchApplication1 // at 135
+variant flui::interaction::NamedKey::LaunchApplication2 // at 136
+variant flui::interaction::NamedKey::LaunchCalendar // at 137
+variant flui::interaction::NamedKey::LaunchContacts // at 138
+variant flui::interaction::NamedKey::LaunchMail // at 139
+variant flui::interaction::NamedKey::LaunchMediaPlayer // at 140
+variant flui::interaction::NamedKey::LaunchMusicPlayer // at 141
+variant flui::interaction::NamedKey::LaunchPhone // at 142
+variant flui::interaction::NamedKey::LaunchScreenSaver // at 143
+variant flui::interaction::NamedKey::LaunchSpreadsheet // at 144
+variant flui::interaction::NamedKey::LaunchWebBrowser // at 145
+variant flui::interaction::NamedKey::LaunchWebCam // at 146
+variant flui::interaction::NamedKey::LaunchWordProcessor // at 147
+variant flui::interaction::NamedKey::Link // at 227
+variant flui::interaction::NamedKey::ListProgram // at 228
+variant flui::interaction::NamedKey::LiveContent // at 229
+variant flui::interaction::NamedKey::Lock // at 230
 variant flui::interaction::NamedKey::LogOff // at 53
-variant flui::interaction::NamedKey::MailForward // at 97
-variant flui::interaction::NamedKey::MailReply // at 98
-variant flui::interaction::NamedKey::MailSend // at 99
-variant flui::interaction::NamedKey::MannerMode // at 166
-variant flui::interaction::NamedKey::MediaApps // at 232
-variant flui::interaction::NamedKey::MediaAudioTrack // at 233
-variant flui::interaction::NamedKey::MediaClose // at 100
-variant flui::interaction::NamedKey::MediaFastForward // at 101
-variant flui::interaction::NamedKey::MediaLast // at 234
-variant flui::interaction::NamedKey::MediaPause // at 102
-variant flui::interaction::NamedKey::MediaPlay // at 103
-variant flui::interaction::NamedKey::MediaPlayPause // at 104
-variant flui::interaction::NamedKey::MediaRecord // at 105
-variant flui::interaction::NamedKey::MediaRewind // at 106
-variant flui::interaction::NamedKey::MediaSkipBackward // at 235
-variant flui::interaction::NamedKey::MediaSkipForward // at 236
-variant flui::interaction::NamedKey::MediaStepBackward // at 237
-variant flui::interaction::NamedKey::MediaStepForward // at 238
-variant flui::interaction::NamedKey::MediaStop // at 107
-variant flui::interaction::NamedKey::MediaTopMenu // at 239
-variant flui::interaction::NamedKey::MediaTrackNext // at 108
-variant flui::interaction::NamedKey::MediaTrackPrevious // at 109
+variant flui::interaction::NamedKey::MailForward // at 96
+variant flui::interaction::NamedKey::MailReply // at 97
+variant flui::interaction::NamedKey::MailSend // at 98
+variant flui::interaction::NamedKey::MannerMode // at 165
+variant flui::interaction::NamedKey::MediaApps // at 231
+variant flui::interaction::NamedKey::MediaAudioTrack // at 232
+variant flui::interaction::NamedKey::MediaClose // at 99
+variant flui::interaction::NamedKey::MediaFastForward // at 100
+variant flui::interaction::NamedKey::MediaLast // at 233
+variant flui::interaction::NamedKey::MediaPause // at 101
+variant flui::interaction::NamedKey::MediaPlay // at 102
+variant flui::interaction::NamedKey::MediaPlayPause // at 103
+variant flui::interaction::NamedKey::MediaRecord // at 104
+variant flui::interaction::NamedKey::MediaRewind // at 105
+variant flui::interaction::NamedKey::MediaSkipBackward // at 234
+variant flui::interaction::NamedKey::MediaSkipForward // at 235
+variant flui::interaction::NamedKey::MediaStepBackward // at 236
+variant flui::interaction::NamedKey::MediaStepForward // at 237
+variant flui::interaction::NamedKey::MediaStop // at 106
+variant flui::interaction::NamedKey::MediaTopMenu // at 238
+variant flui::interaction::NamedKey::MediaTrackNext // at 107
+variant flui::interaction::NamedKey::MediaTrackPrevious // at 108
 variant flui::interaction::NamedKey::Meta // at 7
-variant flui::interaction::NamedKey::MicrophoneToggle // at 130
-variant flui::interaction::NamedKey::MicrophoneVolumeDown // at 131
-variant flui::interaction::NamedKey::MicrophoneVolumeMute // at 133
-variant flui::interaction::NamedKey::MicrophoneVolumeUp // at 132
-variant flui::interaction::NamedKey::ModeChange // at 71
-variant flui::interaction::NamedKey::NavigateIn // at 240
-variant flui::interaction::NamedKey::NavigateNext // at 241
-variant flui::interaction::NamedKey::NavigateOut // at 242
-variant flui::interaction::NamedKey::NavigatePrevious // at 243
-variant flui::interaction::NamedKey::New // at 110
-variant flui::interaction::NamedKey::NextCandidate // at 72
-variant flui::interaction::NamedKey::NextFavoriteChannel // at 244
-variant flui::interaction::NamedKey::NextUserProfile // at 245
-variant flui::interaction::NamedKey::NonConvert // at 73
-variant flui::interaction::NamedKey::Notification // at 165
+variant flui::interaction::NamedKey::MicrophoneToggle // at 129
+variant flui::interaction::NamedKey::MicrophoneVolumeDown // at 130
+variant flui::interaction::NamedKey::MicrophoneVolumeMute // at 132
+variant flui::interaction::NamedKey::MicrophoneVolumeUp // at 131
+variant flui::interaction::NamedKey::ModeChange // at 70
+variant flui::interaction::NamedKey::NavigateIn // at 239
+variant flui::interaction::NamedKey::NavigateNext // at 240
+variant flui::interaction::NamedKey::NavigateOut // at 241
+variant flui::interaction::NamedKey::NavigatePrevious // at 242
+variant flui::interaction::NamedKey::New // at 109
+variant flui::interaction::NamedKey::NextCandidate // at 71
+variant flui::interaction::NamedKey::NextFavoriteChannel // at 243
+variant flui::interaction::NamedKey::NextUserProfile // at 244
+variant flui::interaction::NamedKey::NonConvert // at 72
+variant flui::interaction::NamedKey::Notification // at 164
 variant flui::interaction::NamedKey::NumLock // at 8
-variant flui::interaction::NamedKey::OnDemand // at 246
-variant flui::interaction::NamedKey::Open // at 111
+variant flui::interaction::NamedKey::OnDemand // at 245
+variant flui::interaction::NamedKey::Open // at 110
 variant flui::interaction::NamedKey::PageDown // at 21
 variant flui::interaction::NamedKey::PageUp // at 22
-variant flui::interaction::NamedKey::Pairing // at 247
+variant flui::interaction::NamedKey::Pairing // at 246
 variant flui::interaction::NamedKey::Paste // at 32
 variant flui::interaction::NamedKey::Pause // at 44
-variant flui::interaction::NamedKey::PinPDown // at 248
-variant flui::interaction::NamedKey::PinPMove // at 249
-variant flui::interaction::NamedKey::PinPToggle // at 250
-variant flui::interaction::NamedKey::PinPUp // at 251
+variant flui::interaction::NamedKey::PinPDown // at 247
+variant flui::interaction::NamedKey::PinPMove // at 248
+variant flui::interaction::NamedKey::PinPToggle // at 249
+variant flui::interaction::NamedKey::PinPUp // at 250
 variant flui::interaction::NamedKey::Play // at 45
-variant flui::interaction::NamedKey::PlaySpeedDown // at 252
-variant flui::interaction::NamedKey::PlaySpeedReset // at 253
-variant flui::interaction::NamedKey::PlaySpeedUp // at 254
+variant flui::interaction::NamedKey::PlaySpeedDown // at 251
+variant flui::interaction::NamedKey::PlaySpeedReset // at 252
+variant flui::interaction::NamedKey::PlaySpeedUp // at 253
 variant flui::interaction::NamedKey::Power // at 54
 variant flui::interaction::NamedKey::PowerOff // at 55
-variant flui::interaction::NamedKey::PreviousCandidate // at 74
-variant flui::interaction::NamedKey::Print // at 112
+variant flui::interaction::NamedKey::PreviousCandidate // at 73
+variant flui::interaction::NamedKey::Print // at 111
 variant flui::interaction::NamedKey::PrintScreen // at 56
-variant flui::interaction::NamedKey::Process // at 75
+variant flui::interaction::NamedKey::Process // at 74
 variant flui::interaction::NamedKey::Props // at 46
-variant flui::interaction::NamedKey::RandomToggle // at 255
-variant flui::interaction::NamedKey::RcLowBattery // at 256
-variant flui::interaction::NamedKey::RecordSpeedNext // at 257
+variant flui::interaction::NamedKey::RandomToggle // at 254
+variant flui::interaction::NamedKey::RcLowBattery // at 255
+variant flui::interaction::NamedKey::RecordSpeedNext // at 256
 variant flui::interaction::NamedKey::Redo // at 33
-variant flui::interaction::NamedKey::RfBypass // at 258
-variant flui::interaction::NamedKey::Romaji // at 87
-variant flui::interaction::NamedKey::STBInput // at 263
-variant flui::interaction::NamedKey::STBPower // at 264
-variant flui::interaction::NamedKey::Save // at 113
-variant flui::interaction::NamedKey::ScanChannelsToggle // at 259
-variant flui::interaction::NamedKey::ScreenModeNext // at 260
+variant flui::interaction::NamedKey::RfBypass // at 257
+variant flui::interaction::NamedKey::Romaji // at 86
+variant flui::interaction::NamedKey::STBInput // at 262
+variant flui::interaction::NamedKey::STBPower // at 263
+variant flui::interaction::NamedKey::Save // at 112
+variant flui::interaction::NamedKey::ScanChannelsToggle // at 258
+variant flui::interaction::NamedKey::ScreenModeNext // at 259
 variant flui::interaction::NamedKey::ScrollLock // at 9
 variant flui::interaction::NamedKey::Select // at 47
-variant flui::interaction::NamedKey::Settings // at 261
+variant flui::interaction::NamedKey::Settings // at 260
 variant flui::interaction::NamedKey::Shift // at 10
-variant flui::interaction::NamedKey::SingleCandidate // at 76
-variant flui::interaction::NamedKey::Soft1 // at 90
-variant flui::interaction::NamedKey::Soft2 // at 91
-variant flui::interaction::NamedKey::Soft3 // at 92
-variant flui::interaction::NamedKey::Soft4 // at 93
-variant flui::interaction::NamedKey::SpeechCorrectionList // at 134
-variant flui::interaction::NamedKey::SpeechInputToggle // at 135
-variant flui::interaction::NamedKey::SpellCheck // at 114
-variant flui::interaction::NamedKey::SplitScreenToggle // at 262
+variant flui::interaction::NamedKey::SingleCandidate // at 75
+variant flui::interaction::NamedKey::Soft1 // at 89
+variant flui::interaction::NamedKey::Soft2 // at 90
+variant flui::interaction::NamedKey::Soft3 // at 91
+variant flui::interaction::NamedKey::Soft4 // at 92
+variant flui::interaction::NamedKey::SpeechCorrectionList // at 133
+variant flui::interaction::NamedKey::SpeechInputToggle // at 134
+variant flui::interaction::NamedKey::SpellCheck // at 113
+variant flui::interaction::NamedKey::SplitScreenToggle // at 261
 variant flui::interaction::NamedKey::Standby // at 58
-variant flui::interaction::NamedKey::Subtitle // at 265
+variant flui::interaction::NamedKey::Subtitle // at 264
 variant flui::interaction::NamedKey::Symbol // at 11
 variant flui::interaction::NamedKey::SymbolLock // at 12
-variant flui::interaction::NamedKey::TV // at 168
-variant flui::interaction::NamedKey::TV3DMode // at 169
-variant flui::interaction::NamedKey::TVAntennaCable // at 170
-variant flui::interaction::NamedKey::TVAudioDescription // at 171
-variant flui::interaction::NamedKey::TVAudioDescriptionMixDown // at 172
-variant flui::interaction::NamedKey::TVAudioDescriptionMixUp // at 173
-variant flui::interaction::NamedKey::TVContentsMenu // at 174
-variant flui::interaction::NamedKey::TVDataService // at 175
-variant flui::interaction::NamedKey::TVInput // at 176
-variant flui::interaction::NamedKey::TVInputComponent1 // at 177
-variant flui::interaction::NamedKey::TVInputComponent2 // at 178
-variant flui::interaction::NamedKey::TVInputComposite1 // at 179
-variant flui::interaction::NamedKey::TVInputComposite2 // at 180
-variant flui::interaction::NamedKey::TVInputHDMI1 // at 181
-variant flui::interaction::NamedKey::TVInputHDMI2 // at 182
-variant flui::interaction::NamedKey::TVInputHDMI3 // at 183
-variant flui::interaction::NamedKey::TVInputHDMI4 // at 184
-variant flui::interaction::NamedKey::TVInputVGA1 // at 185
-variant flui::interaction::NamedKey::TVMediaContext // at 186
-variant flui::interaction::NamedKey::TVNetwork // at 187
-variant flui::interaction::NamedKey::TVNumberEntry // at 188
-variant flui::interaction::NamedKey::TVPower // at 189
-variant flui::interaction::NamedKey::TVRadioService // at 190
-variant flui::interaction::NamedKey::TVSatellite // at 191
-variant flui::interaction::NamedKey::TVSatelliteBS // at 192
-variant flui::interaction::NamedKey::TVSatelliteCS // at 193
-variant flui::interaction::NamedKey::TVSatelliteToggle // at 194
-variant flui::interaction::NamedKey::TVTerrestrialAnalog // at 195
-variant flui::interaction::NamedKey::TVTerrestrialDigital // at 196
-variant flui::interaction::NamedKey::TVTimer // at 197
+variant flui::interaction::NamedKey::TV // at 167
+variant flui::interaction::NamedKey::TV3DMode // at 168
+variant flui::interaction::NamedKey::TVAntennaCable // at 169
+variant flui::interaction::NamedKey::TVAudioDescription // at 170
+variant flui::interaction::NamedKey::TVAudioDescriptionMixDown // at 171
+variant flui::interaction::NamedKey::TVAudioDescriptionMixUp // at 172
+variant flui::interaction::NamedKey::TVContentsMenu // at 173
+variant flui::interaction::NamedKey::TVDataService // at 174
+variant flui::interaction::NamedKey::TVInput // at 175
+variant flui::interaction::NamedKey::TVInputComponent1 // at 176
+variant flui::interaction::NamedKey::TVInputComponent2 // at 177
+variant flui::interaction::NamedKey::TVInputComposite1 // at 178
+variant flui::interaction::NamedKey::TVInputComposite2 // at 179
+variant flui::interaction::NamedKey::TVInputHDMI1 // at 180
+variant flui::interaction::NamedKey::TVInputHDMI2 // at 181
+variant flui::interaction::NamedKey::TVInputHDMI3 // at 182
+variant flui::interaction::NamedKey::TVInputHDMI4 // at 183
+variant flui::interaction::NamedKey::TVInputVGA1 // at 184
+variant flui::interaction::NamedKey::TVMediaContext // at 185
+variant flui::interaction::NamedKey::TVNetwork // at 186
+variant flui::interaction::NamedKey::TVNumberEntry // at 187
+variant flui::interaction::NamedKey::TVPower // at 188
+variant flui::interaction::NamedKey::TVRadioService // at 189
+variant flui::interaction::NamedKey::TVSatellite // at 190
+variant flui::interaction::NamedKey::TVSatelliteBS // at 191
+variant flui::interaction::NamedKey::TVSatelliteCS // at 192
+variant flui::interaction::NamedKey::TVSatelliteToggle // at 193
+variant flui::interaction::NamedKey::TVTerrestrialAnalog // at 194
+variant flui::interaction::NamedKey::TVTerrestrialDigital // at 195
+variant flui::interaction::NamedKey::TVTimer // at 196
 variant flui::interaction::NamedKey::Tab // at 14
-variant flui::interaction::NamedKey::Teletext // at 266
+variant flui::interaction::NamedKey::Teletext // at 265
 variant flui::interaction::NamedKey::Undo // at 34
 variant flui::interaction::NamedKey::Unidentified // at 0
-variant flui::interaction::NamedKey::VideoModeNext // at 267
-variant flui::interaction::NamedKey::VoiceDial // at 167
+variant flui::interaction::NamedKey::VideoModeNext // at 266
+variant flui::interaction::NamedKey::VoiceDial // at 166
 variant flui::interaction::NamedKey::WakeUp // at 59
-variant flui::interaction::NamedKey::Wink // at 268
-variant flui::interaction::NamedKey::Zenkaku // at 88
-variant flui::interaction::NamedKey::ZenkakuHankaku // at 89
+variant flui::interaction::NamedKey::Wink // at 267
+variant flui::interaction::NamedKey::Zenkaku // at 87
+variant flui::interaction::NamedKey::ZenkakuHankaku // at 88
 variant flui::interaction::NamedKey::ZoomIn // at 48
 variant flui::interaction::NamedKey::ZoomOut // at 49
-variant flui::interaction::NamedKey::ZoomToggle // at 269
+variant flui::interaction::NamedKey::ZoomToggle // at 268
 pub struct flui::interaction::ObservedComposition { .. }
 impl Clone for flui::interaction::ObservedComposition
 impl Eq for flui::interaction::ObservedComposition
@@ -7086,15 +7110,13 @@ impl core::fmt::Debug for flui::interaction::PointerEvent
 impl core::marker::StructuralPartialEq for flui::interaction::PointerEvent
 variant flui::interaction::PointerEvent::ButtonChange(flui::interaction::ButtonChange) // at 1
 variant flui::interaction::PointerEvent::Cancel(flui::platform::PointerCancel) // at 4
-variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 13
-variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 14
+variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 11
+variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 12
 variant flui::interaction::PointerEvent::Down(flui::interaction::PointerPress) // at 0
 variant flui::interaction::PointerEvent::Enter(flui::platform::pointer::PointerSignal) // at 5
 variant flui::interaction::PointerEvent::Leave(flui::platform::pointer::PointerSignal) // at 6
 variant flui::interaction::PointerEvent::Move(flui::interaction::PointerMove) // at 3
 variant flui::interaction::PointerEvent::PanZoom(flui::interaction::PanZoomEvent) // at 9
-variant flui::interaction::PointerEvent::PenSqueeze(flui::platform::PenSqueeze) // at 12
-variant flui::interaction::PointerEvent::Revise(flui::platform::PointerRevision) // at 11
 variant flui::interaction::PointerEvent::Scroll(flui::interaction::ScrollEvent) // at 7
 variant flui::interaction::PointerEvent::ScrollInertiaCancel(flui::platform::pointer::PointerSignal) // at 8
 variant flui::interaction::PointerEvent::SmartZoom(flui::platform::SmartZoomEvent) // at 10
@@ -7393,7 +7415,8 @@ pub const fn flui::interaction::ScrollDelta::zero(unit: flui::interaction::Scrol
 pub fn flui::interaction::ScrollDelta::try_new(unit: flui::interaction::ScrollUnit, x: f64, y: f64) -> Result<Self, flui::platform::pointer::InputValueError>
 #[non_exhaustive] pub struct flui::interaction::ScrollEvent
 field flui::interaction::ScrollEvent::delta: flui::interaction::ScrollDelta // at 3
-field flui::interaction::ScrollEvent::modifiers: flui::interaction::Modifiers // at 6
+field flui::interaction::ScrollEvent::inversion: flui::interaction::ScrollInversion // at 6
+field flui::interaction::ScrollEvent::modifiers: flui::interaction::Modifiers // at 7
 field flui::interaction::ScrollEvent::phase: Option<flui::interaction::ScrollPhase> // at 5
 field flui::interaction::ScrollEvent::pointer: flui::interaction::PointerInfo // at 0
 field flui::interaction::ScrollEvent::position: flui::interaction::PointerPosition // at 2
@@ -7405,9 +7428,22 @@ impl PartialEq for flui::interaction::ScrollEvent
 impl core::fmt::Debug for flui::interaction::ScrollEvent
 impl core::marker::StructuralPartialEq for flui::interaction::ScrollEvent
 pub const fn flui::interaction::ScrollEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, delta: flui::interaction::ScrollDelta) -> Self
+pub const fn flui::interaction::ScrollEvent::with_inversion(self, inversion: flui::interaction::ScrollInversion) -> Self
 pub const fn flui::interaction::ScrollEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
 pub const fn flui::interaction::ScrollEvent::with_phase(self, phase: flui::interaction::ScrollPhase) -> Self
 pub const fn flui::interaction::ScrollEvent::with_precision(self, precision: flui::interaction::ScrollPrecision) -> Self
+#[non_exhaustive] pub enum flui::interaction::ScrollInversion
+impl Clone for flui::interaction::ScrollInversion
+impl Copy for flui::interaction::ScrollInversion
+impl Default for flui::interaction::ScrollInversion
+impl Eq for flui::interaction::ScrollInversion
+impl PartialEq for flui::interaction::ScrollInversion
+impl core::fmt::Debug for flui::interaction::ScrollInversion
+impl core::hash::Hash for flui::interaction::ScrollInversion
+impl core::marker::StructuralPartialEq for flui::interaction::ScrollInversion
+variant flui::interaction::ScrollInversion::FromDevice // at 1
+variant flui::interaction::ScrollInversion::InvertedFromDevice // at 2
+variant flui::interaction::ScrollInversion::Unknown // at 0
 #[non_exhaustive] pub enum flui::interaction::ScrollPhase
 impl Clone for flui::interaction::ScrollPhase
 impl Copy for flui::interaction::ScrollPhase
@@ -7610,6 +7646,7 @@ pub fn flui::interaction::TextInputHandle::complete_composition(&self, token: fl
 pub fn flui::interaction::TextInputHandle::detach(&self, token: flui::interaction::ClientToken) -> Result<flui::interaction::DetachOutcome, flui::interaction::TextInputError>
 pub fn flui::interaction::TextInputHandle::ensure_open(&self) -> Result<(), flui::interaction::TextInputError>
 pub fn flui::interaction::TextInputHandle::set_cursor_area(&self, area: flui::geometry::Bounds<f64>) -> Result<(), flui::interaction::TextInputError>
+pub fn flui::interaction::TextInputHandle::show_keyboard(&self, token: flui::interaction::ClientToken) -> Result<(), flui::interaction::TextInputError>
 #[non_exhaustive] pub enum flui::interaction::TransformLock
 impl Clone for flui::interaction::TransformLock
 impl Copy for flui::interaction::TransformLock
@@ -12288,6 +12325,26 @@ impl PartialEq for flui::platform::DxgiFrameStatistics
 impl core::fmt::Debug for flui::platform::DxgiFrameStatistics
 impl core::marker::StructuralPartialEq for flui::platform::DxgiFrameStatistics
 pub const fn flui::platform::DxgiFrameStatistics::new(present_count: u32, sync_refresh_count: u32, sync_qpc_time: i64) -> Self
+#[non_exhaustive] pub enum flui::platform::DxgiShown
+impl Clone for flui::platform::DxgiShown
+impl Copy for flui::platform::DxgiShown
+impl Eq for flui::platform::DxgiShown
+impl PartialEq for flui::platform::DxgiShown
+impl core::fmt::Debug for flui::platform::DxgiShown
+impl core::marker::StructuralPartialEq for flui::platform::DxgiShown
+variant flui::platform::DxgiShown::Disjoint // at 2
+variant flui::platform::DxgiShown::Nothing // at 0
+variant flui::platform::DxgiShown::Present(flui::platform::DxgiFrameStatistics) // at 1
+#[non_exhaustive] pub struct flui::platform::DxgiStatistics
+field flui::platform::DxgiStatistics::last_present_count: u32 // at 0
+field flui::platform::DxgiStatistics::shown: flui::platform::DxgiShown // at 1
+impl Clone for flui::platform::DxgiStatistics
+impl Copy for flui::platform::DxgiStatistics
+impl Eq for flui::platform::DxgiStatistics
+impl PartialEq for flui::platform::DxgiStatistics
+impl core::fmt::Debug for flui::platform::DxgiStatistics
+impl core::marker::StructuralPartialEq for flui::platform::DxgiStatistics
+pub const fn flui::platform::DxgiStatistics::new(last_present_count: u32, shown: flui::platform::DxgiShown) -> Self
 #[non_exhaustive] pub enum flui::platform::DynamicRange
 impl Clone for flui::platform::DynamicRange
 impl Copy for flui::platform::DynamicRange
@@ -12344,16 +12401,17 @@ variant flui::platform::FrameOutcome::Declined // at 1
 variant flui::platform::FrameOutcome::Failed // at 2
 variant flui::platform::FrameOutcome::Produced // at 0
 #[non_exhaustive] pub struct flui::platform::FramePresented
-field flui::platform::FramePresented::at: flui::interaction::EventTime // at 0
-field flui::platform::FramePresented::refresh: Option<core::time::Duration> // at 1
+field flui::platform::FramePresented::at: flui::interaction::EventTime // at 1
+field flui::platform::FramePresented::frame: flui::foundation::FrameStamp // at 0
+field flui::platform::FramePresented::refresh: Option<flui::platform::RefreshPeriod> // at 2
 impl Clone for flui::platform::FramePresented
 impl Copy for flui::platform::FramePresented
 impl Eq for flui::platform::FramePresented
 impl PartialEq for flui::platform::FramePresented
 impl core::fmt::Debug for flui::platform::FramePresented
 impl core::marker::StructuralPartialEq for flui::platform::FramePresented
-pub const fn flui::platform::FramePresented::new(at: flui::interaction::EventTime) -> Self
-pub const fn flui::platform::FramePresented::with_refresh(self, refresh: core::time::Duration) -> Self
+pub const fn flui::platform::FramePresented::new(frame: flui::foundation::FrameStamp, at: flui::interaction::EventTime) -> Self
+pub const fn flui::platform::FramePresented::refresh(self, refresh: flui::platform::RefreshPeriod) -> Self
 #[non_exhaustive] pub enum flui::platform::FrameRateHint
 impl Clone for flui::platform::FrameRateHint
 impl Copy for flui::platform::FrameRateHint
@@ -12646,6 +12704,7 @@ impl core::fmt::Display for flui::platform::InvalidWindowOption
 impl core::marker::StructuralPartialEq for flui::platform::InvalidWindowOption
 reexport flui::platform::Key => flui::interaction::Key
 reexport flui::platform::KeyEvent => flui::interaction::KeyEvent
+reexport flui::platform::KeyPress => flui::interaction::KeyPress
 reexport flui::platform::KeyState => flui::interaction::KeyState
 pub struct flui::platform::KeyboardInset { .. }
 impl Clone for flui::platform::KeyboardInset
@@ -12856,30 +12915,6 @@ pub const flui::platform::PAGE_LAUNCH_GLOBAL: &str = "__FLUI_LAUNCH__"
 reexport flui::platform::PanZoomEvent => flui::interaction::PanZoomEvent
 reexport flui::platform::PanZoomPhase => flui::interaction::PanZoomPhase
 reexport flui::platform::PanZoomTransform => flui::interaction::PanZoomTransform
-#[non_exhaustive] pub struct flui::platform::PenSqueeze
-field flui::platform::PenSqueeze::hover: Option<flui::interaction::PointerSample> // at 3
-field flui::platform::PenSqueeze::phase: flui::platform::PenSqueezePhase // at 2
-field flui::platform::PenSqueeze::pointer: flui::interaction::PointerInfo // at 0
-field flui::platform::PenSqueeze::time: flui::interaction::EventTime // at 1
-impl Clone for flui::platform::PenSqueeze
-impl Copy for flui::platform::PenSqueeze
-impl PartialEq for flui::platform::PenSqueeze
-impl core::fmt::Debug for flui::platform::PenSqueeze
-impl core::marker::StructuralPartialEq for flui::platform::PenSqueeze
-pub const fn flui::platform::PenSqueeze::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, phase: flui::platform::PenSqueezePhase) -> Self
-pub const fn flui::platform::PenSqueeze::with_hover(self, sample: flui::interaction::PointerSample) -> Self
-#[non_exhaustive] pub enum flui::platform::PenSqueezePhase
-impl Clone for flui::platform::PenSqueezePhase
-impl Copy for flui::platform::PenSqueezePhase
-impl Eq for flui::platform::PenSqueezePhase
-impl PartialEq for flui::platform::PenSqueezePhase
-impl core::fmt::Debug for flui::platform::PenSqueezePhase
-impl core::hash::Hash for flui::platform::PenSqueezePhase
-impl core::marker::StructuralPartialEq for flui::platform::PenSqueezePhase
-variant flui::platform::PenSqueezePhase::Began // at 0
-variant flui::platform::PenSqueezePhase::Cancelled // at 3
-variant flui::platform::PenSqueezePhase::Changed // at 1
-variant flui::platform::PenSqueezePhase::Ended // at 2
 reexport flui::platform::PenTool => flui::interaction::PenTool
 #[non_exhaustive] pub enum flui::platform::PlacementError
 impl Clone for flui::platform::PlacementError
@@ -12976,15 +13011,6 @@ reexport flui::platform::PointerMove => flui::interaction::PointerMove
 reexport flui::platform::PointerPosition => flui::interaction::PointerPosition
 reexport flui::platform::PointerPress => flui::interaction::PointerPress
 reexport flui::platform::PointerRelease => flui::interaction::PointerRelease
-#[non_exhaustive] pub struct flui::platform::PointerRevision
-field flui::platform::PointerRevision::pointer: flui::interaction::PointerInfo // at 0
-field flui::platform::PointerRevision::sample: flui::interaction::PointerSample // at 1
-impl Clone for flui::platform::PointerRevision
-impl Copy for flui::platform::PointerRevision
-impl PartialEq for flui::platform::PointerRevision
-impl core::fmt::Debug for flui::platform::PointerRevision
-impl core::marker::StructuralPartialEq for flui::platform::PointerRevision
-pub const fn flui::platform::PointerRevision::new(pointer: flui::interaction::PointerInfo, sample: flui::interaction::PointerSample) -> Self
 reexport flui::platform::PointerRole => flui::interaction::PointerRole
 reexport flui::platform::PointerSample => flui::interaction::PointerSample
 pub struct flui::platform::PreferenceParts
@@ -13101,6 +13127,7 @@ impl core::fmt::Debug for flui::platform::ResolvedPlacement
 impl core::marker::StructuralPartialEq for flui::platform::ResolvedPlacement
 reexport flui::platform::ScrollDelta => flui::interaction::ScrollDelta
 reexport flui::platform::ScrollEvent => flui::interaction::ScrollEvent
+reexport flui::platform::ScrollInversion => flui::interaction::ScrollInversion
 reexport flui::platform::ScrollPhase => flui::interaction::ScrollPhase
 reexport flui::platform::ScrollPrecision => flui::interaction::ScrollPrecision
 reexport flui::platform::ScrollUnit => flui::interaction::ScrollUnit
@@ -13275,7 +13302,7 @@ impl core::hash::Hash for flui::platform::SurfaceColorSpace
 impl core::marker::StructuralPartialEq for flui::platform::SurfaceColorSpace
 pub const fn flui::platform::SurfaceColorSpace::new(gamut: flui::platform::ColorGamut, dynamic_range: flui::platform::DynamicRange) -> Self
 pub trait flui::platform::SurfaceTarget: raw_window_handle::borrowed::HasWindowHandle + raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
-fn flui::platform::SurfaceTarget::pre_present_notify(&self, statistics: flui::platform::SwapChainStatistics)
+fn flui::platform::SurfaceTarget::pre_present_notify(&self, frame: Option<flui::foundation::FrameStamp>, statistics: flui::platform::SwapChainStatistics)
 #[non_exhaustive] pub enum flui::platform::SwapChainStatistics
 impl Clone for flui::platform::SwapChainStatistics
 impl Copy for flui::platform::SwapChainStatistics
@@ -13284,8 +13311,7 @@ impl Eq for flui::platform::SwapChainStatistics
 impl PartialEq for flui::platform::SwapChainStatistics
 impl core::fmt::Debug for flui::platform::SwapChainStatistics
 impl core::marker::StructuralPartialEq for flui::platform::SwapChainStatistics
-variant flui::platform::SwapChainStatistics::Dxgi(flui::platform::DxgiFrameStatistics) // at 1
-variant flui::platform::SwapChainStatistics::DxgiDisjoint // at 2
+variant flui::platform::SwapChainStatistics::Dxgi(flui::platform::DxgiStatistics) // at 1
 variant flui::platform::SwapChainStatistics::None // at 0
 #[non_exhaustive] pub enum flui::platform::SystemControls
 impl Clone for flui::platform::SystemControls
@@ -13311,6 +13337,21 @@ variant flui::platform::SystemNotice::SessionLocked // at 2
 variant flui::platform::SystemNotice::SessionUnlocked // at 3
 variant flui::platform::SystemNotice::Sleep // at 0
 variant flui::platform::SystemNotice::Wake // at 1
+#[non_exhaustive] pub enum flui::platform::SystemFailure
+impl Clone for flui::platform::SystemFailure
+impl Copy for flui::platform::SystemFailure
+impl Eq for flui::platform::SystemFailure
+impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
+impl PartialEq for flui::platform::SystemFailure
+impl core::error::Error for flui::platform::SystemFailure
+impl core::fmt::Debug for flui::platform::SystemFailure
+impl core::fmt::Display for flui::platform::SystemFailure
+impl core::hash::Hash for flui::platform::SystemFailure
+impl core::marker::StructuralPartialEq for flui::platform::SystemFailure
+variant flui::platform::SystemFailure::Bus // at 2
+variant flui::platform::SystemFailure::MalformedAnswer // at 3
+variant flui::platform::SystemFailure::Os(i32) // at 0
+variant flui::platform::SystemFailure::PortalResponse(u32) // at 1
 pub struct flui::platform::SystemPreferences { .. }
 impl Clone for flui::platform::SystemPreferences
 impl Default for flui::platform::SystemPreferences
@@ -13383,6 +13424,7 @@ fn flui::platform::TextStoreEdit::set_selection(&mut self, selection: flui::plat
 pub trait flui::platform::TextStoreHost
 fn flui::platform::TextStoreHost::complete_composition(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>) -> Result<flui::platform::text_store::CompositionEnd, flui::platform::text_store::TextStoreHostError>
 fn flui::platform::TextStoreHost::focus_store(&self, store: Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStore>>)
+fn flui::platform::TextStoreHost::show_keyboard(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>)
 pub trait flui::platform::TextStoreObserver
 fn flui::platform::TextStoreObserver::composition_changed(&self) { .. }
 fn flui::platform::TextStoreObserver::layout_changed(&self)
@@ -14188,13 +14230,26 @@ impl core::fmt::Debug for flui::platform::capability::RuntimeLocals
 pub fn flui::platform::capability::RuntimeLocals::get_or_default<T: Default + 'static>(&self) -> alloc::rcs::rc::Rc<T>
 pub fn flui::platform::capability::RuntimeLocals::new() -> Self
 pub fn flui::platform::capability::RuntimeLocals::retire(&self) -> Option<Box<dyn core::any::Any + Send>>
+pub struct flui::platform::capability::WindowCloseWatch(_)
+impl core::fmt::Debug for flui::platform::capability::WindowCloseWatch
+pub struct flui::platform::capability::WindowCloser(_)
+impl Drop for flui::platform::capability::WindowCloser
+impl core::fmt::Debug for flui::platform::capability::WindowCloser
+pub fn flui::platform::capability::WindowCloser::close(&self)
+pub fn flui::platform::capability::WindowCloser::new() -> (Self, flui::platform::capability::WindowLifetime)
+pub struct flui::platform::capability::WindowLifetime(_)
+impl Clone for flui::platform::capability::WindowLifetime
+impl core::fmt::Debug for flui::platform::capability::WindowLifetime
+pub fn flui::platform::capability::WindowLifetime::is_closed(&self) -> bool
+pub fn flui::platform::capability::WindowLifetime::on_close(&self, listener: impl Fn() + 'static) -> flui::platform::capability::WindowCloseWatch
 pub struct flui::platform::capability::WindowRef { .. }
 impl Clone for flui::platform::capability::WindowRef
 impl core::fmt::Debug for flui::platform::capability::WindowRef
 impl raw_window_handle::borrowed::HasDisplayHandle for flui::platform::capability::WindowRef
 impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::capability::WindowRef
 pub fn flui::platform::capability::WindowRef::id(&self) -> flui::platform::WindowId
-pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>) -> Self
+pub fn flui::platform::capability::WindowRef::lifetime(&self) -> &flui::platform::capability::WindowLifetime
+pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>, lifetime: flui::platform::capability::WindowLifetime) -> Self
 pub fn flui::platform::capability::WindowRef::scale(&self) -> f64
 pub mod flui::platform::capability::scripted
 pub struct flui::platform::capability::scripted::AlreadyDriven;
@@ -14237,6 +14292,9 @@ impl core::fmt::Debug for flui::platform::capability::scripted::FailureReport
 pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure) -> bool
 pub const flui::platform::capability::scripted::MAX_RECORDED_REQUESTS: usize = 4096
 pub const flui::platform::capability::scripted::MAX_REPORTS: usize = 256
+pub struct flui::platform::capability::scripted::RequestTicket { .. }
+impl Drop for flui::platform::capability::scripted::RequestTicket
+impl core::fmt::Debug for flui::platform::capability::scripted::RequestTicket
 pub struct flui::platform::capability::scripted::Scenario { .. }
 impl Clone for flui::platform::capability::scripted::Scenario
 impl Default for flui::platform::capability::scripted::Scenario
@@ -14293,12 +14351,14 @@ pub fn flui::platform::capability::scripted::Script::on_answer(&self, observe: i
 pub fn flui::platform::capability::scripted::Script::otherwise(&self, answer: impl Fn(&R) -> A + 'static) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::otherwise_value(&self, value: A) where A: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::receive(&self, request: R, resolver: flui::platform::capability::Resolver<A>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::receive_with_ticket(&self, request: R, resolver: flui::platform::capability::Resolver<A>) -> flui::platform::capability::scripted::RequestTicket // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::received(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::release_held(&self, answer: impl FnMut(&R) -> A) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::release_oldest(&self, value: A) -> bool // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::requests(&self) -> Vec<R> where R: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::resume(&self) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::scenario(&self) -> &flui::platform::capability::scripted::Scenario // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::withdrawn(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub enum flui::platform::capability::scripted::ServiceState
 impl Clone for flui::platform::capability::scripted::ServiceState
 impl Copy for flui::platform::capability::scripted::ServiceState
@@ -15013,28 +15073,7 @@ variant flui::platform::keyboard::ImeComposition::Active // at 1
 variant flui::platform::keyboard::ImeComposition::Inactive // at 0
 reexport flui::platform::keyboard::Key => flui::interaction::Key
 reexport flui::platform::keyboard::KeyEvent => flui::interaction::KeyEvent
-#[non_exhaustive] pub enum flui::platform::keyboard::KeyRelease
-impl Clone for flui::platform::keyboard::KeyRelease
-impl Copy for flui::platform::keyboard::KeyRelease
-impl Default for flui::platform::keyboard::KeyRelease
-impl Eq for flui::platform::keyboard::KeyRelease
-impl PartialEq for flui::platform::keyboard::KeyRelease
-impl core::fmt::Debug for flui::platform::keyboard::KeyRelease
-impl core::hash::Hash for flui::platform::keyboard::KeyRelease
-impl core::marker::StructuralPartialEq for flui::platform::keyboard::KeyRelease
-variant flui::platform::keyboard::KeyRelease::Follows // at 0
-variant flui::platform::keyboard::KeyRelease::Never // at 1
-pub enum flui::platform::keyboard::KeyRepeat
-impl Clone for flui::platform::keyboard::KeyRepeat
-impl Copy for flui::platform::keyboard::KeyRepeat
-impl Default for flui::platform::keyboard::KeyRepeat
-impl Eq for flui::platform::keyboard::KeyRepeat
-impl PartialEq for flui::platform::keyboard::KeyRepeat
-impl core::fmt::Debug for flui::platform::keyboard::KeyRepeat
-impl core::hash::Hash for flui::platform::keyboard::KeyRepeat
-impl core::marker::StructuralPartialEq for flui::platform::keyboard::KeyRepeat
-variant flui::platform::keyboard::KeyRepeat::AutoRepeat // at 1
-variant flui::platform::keyboard::KeyRepeat::First // at 0
+reexport flui::platform::keyboard::KeyPress => flui::interaction::KeyPress
 reexport flui::platform::keyboard::KeyState => flui::interaction::KeyState
 pub struct flui::platform::keyboard::KeyText(_)
 impl Clone for flui::platform::keyboard::KeyText
@@ -15084,7 +15123,8 @@ impl core::fmt::Display for flui::platform::launch::LaunchError
 impl core::marker::StructuralPartialEq for flui::platform::launch::LaunchError
 pub const fn flui::platform::launch::LaunchError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::platform::launch::LaunchError::Denied // at 3
-variant flui::platform::launch::LaunchError::Failed { code: i32 } // at 5
+impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
+variant flui::platform::launch::LaunchError::Failed(flui::platform::SystemFailure) // at 5
 variant flui::platform::launch::LaunchError::NoHandler // at 2
 variant flui::platform::launch::LaunchError::NotFound // at 1
 variant flui::platform::launch::LaunchError::RelativePath // at 0
@@ -15246,8 +15286,6 @@ pub const fn flui::platform::pointer::PenOrientation::azimuth(self) -> Option<f6
 pub fn flui::platform::pointer::PenOrientation::try_altitude(altitude: f64) -> Result<Self, flui::platform::pointer::InputValueError>
 pub fn flui::platform::pointer::PenOrientation::try_azimuth(azimuth: f64) -> Result<Self, flui::platform::pointer::InputValueError>
 pub fn flui::platform::pointer::PenOrientation::try_new(altitude: f64, azimuth: f64) -> Result<Self, flui::platform::pointer::InputValueError>
-reexport flui::platform::pointer::PenSqueeze => flui::platform::PenSqueeze
-reexport flui::platform::pointer::PenSqueezePhase => flui::platform::PenSqueezePhase
 reexport flui::platform::pointer::PenTool => flui::interaction::PenTool
 reexport flui::platform::pointer::PointerButton => flui::interaction::PointerButton
 #[non_exhaustive] pub struct flui::platform::pointer::PointerButtonEvent<D: flui::platform::pointer::ButtonDirection> { .. }
@@ -15289,7 +15327,6 @@ reexport flui::platform::pointer::PointerMove => flui::interaction::PointerMove
 reexport flui::platform::pointer::PointerPosition => flui::interaction::PointerPosition
 reexport flui::platform::pointer::PointerPress => flui::interaction::PointerPress
 reexport flui::platform::pointer::PointerRelease => flui::interaction::PointerRelease
-reexport flui::platform::pointer::PointerRevision => flui::platform::PointerRevision
 reexport flui::platform::pointer::PointerRole => flui::interaction::PointerRole
 reexport flui::platform::pointer::PointerSample => flui::interaction::PointerSample
 #[non_exhaustive] pub struct flui::platform::pointer::PointerSignal
@@ -15355,6 +15392,7 @@ impl flui::platform::pointer::ButtonDirection for flui::platform::pointer::Relea
 impl flui_platform::pointer::sealed::Sealed for flui::platform::pointer::Release
 reexport flui::platform::pointer::ScrollDelta => flui::interaction::ScrollDelta
 reexport flui::platform::pointer::ScrollEvent => flui::interaction::ScrollEvent
+reexport flui::platform::pointer::ScrollInversion => flui::interaction::ScrollInversion
 reexport flui::platform::pointer::ScrollPhase => flui::interaction::ScrollPhase
 reexport flui::platform::pointer::ScrollPrecision => flui::interaction::ScrollPrecision
 reexport flui::platform::pointer::ScrollUnit => flui::interaction::ScrollUnit
@@ -17414,7 +17452,6 @@ pub fn flui::prelude::Listener::on_pointer_hover<F, R>(self, callback: F) -> Sel
 pub fn flui::prelude::Listener::on_pointer_move<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerDispatch<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Listener::on_pointer_pan_zoom_claim(self, callback: impl Fn(flui_interaction::pointer::interaction_lane::PanZoomDispatch<'_>) -> flui::prelude::EventPropagation + 'static) -> Self
 pub fn flui::prelude::Listener::on_pointer_pan_zoom_update<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, &flui::interaction::PanZoomEvent) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::Listener::on_pointer_revise<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerDispatch<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Listener::on_pointer_signal<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerDispatch<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Listener::on_pointer_up<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerDispatch<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::Listener::on_scroll_claim(self, callback: impl Fn(&flui::interaction::ScrollEvent) -> flui::prelude::EventPropagation + 'static) -> Self
@@ -23096,11 +23133,17 @@ impl core::fmt::Debug for flui::services::system::SystemPlugin
 impl flui::platform::capability::Plugin for flui::services::system::SystemPlugin
 pub fn flui::services::system::SystemPlugin::new() -> Self
 pub mod flui::services::system::dialog
+pub struct flui::services::system::dialog::Dialog<T: 'static> { .. }
+impl<T: 'static> core::fmt::Debug for flui::services::system::dialog::Dialog<T>
+pub fn flui::services::system::dialog::Dialog::into_future(self) -> impl core::future::future::Future<Output = Result<T, flui::platform::capability::Abandoned>> // impl<T: 'static> flui::services::system::dialog::Dialog<T>
+pub fn flui::services::system::dialog::Dialog::on_complete(self, f: impl FnMut(Result<T, flui::platform::capability::Abandoned>) + 'static) // impl<T: 'static> flui::services::system::dialog::Dialog<T>
+pub fn flui::services::system::dialog::Dialog::poll(&mut self) -> Option<Result<T, flui::platform::capability::Abandoned>> // impl<T: 'static> flui::services::system::dialog::Dialog<T>
 #[non_exhaustive] pub enum flui::services::system::dialog::DialogError
 impl Clone for flui::services::system::dialog::DialogError
 impl Copy for flui::services::system::dialog::DialogError
 impl Eq for flui::services::system::dialog::DialogError
 impl From<flui::platform::Unsupported> for flui::services::system::dialog::DialogError
+impl From<flui::platform::SystemFailure> for flui::services::system::dialog::DialogError
 impl PartialEq for flui::services::system::dialog::DialogError
 impl core::error::Error for flui::services::system::dialog::DialogError
 impl core::fmt::Debug for flui::services::system::dialog::DialogError
@@ -23108,22 +23151,25 @@ impl core::fmt::Display for flui::services::system::dialog::DialogError
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::DialogError
 pub const fn flui::services::system::dialog::DialogError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::services::system::dialog::DialogError::Busy // at 0
-variant flui::services::system::dialog::DialogError::Failed { code: i32 } // at 5
+variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 5
 variant flui::services::system::dialog::DialogError::InvalidRequest // at 1
 variant flui::services::system::dialog::DialogError::NotAFile // at 4
 variant flui::services::system::dialog::DialogError::Unsupported(flui::platform::Unsupported) // at 2
 variant flui::services::system::dialog::DialogError::WindowClosed // at 3
+pub struct flui::services::system::dialog::DialogHold(_)
+impl core::fmt::Debug for flui::services::system::dialog::DialogHold
+pub fn flui::services::system::dialog::DialogHold::new(keep: impl core::any::Any) -> Self
 pub trait flui::services::system::dialog::FileDialogBackend: 'static
-fn flui::services::system::dialog::FileDialogBackend::open(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::OpenRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::OpenResult>)
-fn flui::services::system::dialog::FileDialogBackend::save(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::SaveRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::SaveResult>)
+fn flui::services::system::dialog::FileDialogBackend::open(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::OpenRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::OpenResult>) -> flui::services::system::dialog::DialogHold
+fn flui::services::system::dialog::FileDialogBackend::save(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::SaveRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::SaveResult>) -> flui::services::system::dialog::DialogHold
 pub enum flui::services::system::dialog::FileDialogCapability
 impl core::fmt::Debug for flui::services::system::dialog::FileDialogCapability
 impl flui::platform::capability::Capability for flui::services::system::dialog::FileDialogCapability { type Handle = flui::services::system::dialog::FileDialogs; }
 pub struct flui::services::system::dialog::FileDialogs { .. }
 impl Clone for flui::services::system::dialog::FileDialogs
 impl core::fmt::Debug for flui::services::system::dialog::FileDialogs
-pub fn flui::services::system::dialog::FileDialogs::open(&self, request: flui::services::system::dialog::OpenRequest) -> flui::platform::capability::Completion<flui::services::system::dialog::OpenResult>
-pub fn flui::services::system::dialog::FileDialogs::save(&self, request: flui::services::system::dialog::SaveRequest) -> flui::platform::capability::Completion<flui::services::system::dialog::SaveResult>
+pub fn flui::services::system::dialog::FileDialogs::open(&self, request: flui::services::system::dialog::OpenRequest) -> flui::services::system::dialog::Dialog<flui::services::system::dialog::OpenResult>
+pub fn flui::services::system::dialog::FileDialogs::save(&self, request: flui::services::system::dialog::SaveRequest) -> flui::services::system::dialog::Dialog<flui::services::system::dialog::SaveResult>
 pub fn flui::services::system::dialog::FileDialogs::try_new(backend: impl flui::services::system::dialog::FileDialogBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Self, flui::platform::Unsupported>
 #[non_exhaustive] pub struct flui::services::system::dialog::FileFilter { .. }
 impl Clone for flui::services::system::dialog::FileFilter
@@ -23156,15 +23202,28 @@ pub fn flui::services::system::dialog::OpenRequest::folders() -> Self
 pub fn flui::services::system::dialog::OpenRequest::is_multiple(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::picks_folders(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::title(self, title: impl Into<String>) -> Self
-pub type flui::services::system::dialog::OpenResult = Result<Option<Vec<flui::services::system::dialog::PickedFile>>, flui::services::system::dialog::DialogError>
+pub type flui::services::system::dialog::OpenResult = Result<Option<flui::services::system::dialog::Picks>, flui::services::system::dialog::DialogError>
 #[non_exhaustive] pub struct flui::services::system::dialog::PickedFile { .. }
 impl Clone for flui::services::system::dialog::PickedFile
 impl Eq for flui::services::system::dialog::PickedFile
 impl PartialEq for flui::services::system::dialog::PickedFile
 impl core::fmt::Debug for flui::services::system::dialog::PickedFile
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::PickedFile
-pub fn flui::services::system::dialog::PickedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::services::system::dialog::PickedFile::path(&self) -> &std::path::Path
+pub fn flui::services::system::dialog::PickedFile::try_new(path: impl Into<std::path::PathBuf>) -> Option<Self>
+pub struct flui::services::system::dialog::Picks { .. }
+impl Clone for flui::services::system::dialog::Picks
+impl Eq for flui::services::system::dialog::Picks
+impl IntoIterator for flui::services::system::dialog::Picks { type IntoIter = core::iter::adapters::chain::Chain<core::iter::sources::once::Once<flui::services::system::dialog::PickedFile>, alloc::vec::into_iter::IntoIter<flui::services::system::dialog::PickedFile>>; type Item = flui::services::system::dialog::PickedFile; }
+impl PartialEq for flui::services::system::dialog::Picks
+impl core::fmt::Debug for flui::services::system::dialog::Picks
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::Picks
+impl<'a> IntoIterator for &'a flui::services::system::dialog::Picks { type IntoIter = core::iter::adapters::chain::Chain<core::iter::sources::once::Once<&'a flui::services::system::dialog::PickedFile>, core::slice::iter::Iter<'a, flui::services::system::dialog::PickedFile>>; type Item = &'a flui::services::system::dialog::PickedFile; }
+pub fn flui::services::system::dialog::Picks::first(&self) -> &flui::services::system::dialog::PickedFile
+pub fn flui::services::system::dialog::Picks::is_empty(&self) -> bool
+pub fn flui::services::system::dialog::Picks::iter(&self) -> impl Iterator<Item = &flui::services::system::dialog::PickedFile>
+pub fn flui::services::system::dialog::Picks::len(&self) -> usize
+pub fn flui::services::system::dialog::Picks::try_new(picks: Vec<flui::services::system::dialog::PickedFile>) -> Option<Self>
 #[non_exhaustive] pub struct flui::services::system::dialog::SaveRequest
 field flui::services::system::dialog::SaveRequest::accept_label: Option<String> // at 4
 field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 1
@@ -23206,6 +23265,7 @@ impl core::fmt::Debug for flui::services::system::testing::ScriptedFileDialogs
 impl flui::services::system::dialog::FileDialogBackend for flui::services::system::testing::ScriptedFileDialogs
 pub fn flui::services::system::testing::ScriptedFileDialogs::answer_next_open(&self, result: flui::services::system::dialog::OpenResult)
 pub fn flui::services::system::testing::ScriptedFileDialogs::answer_next_save(&self, result: flui::services::system::dialog::SaveResult)
+pub fn flui::services::system::testing::ScriptedFileDialogs::dismissed(&self) -> usize
 pub fn flui::services::system::testing::ScriptedFileDialogs::hold(&self)
 pub fn flui::services::system::testing::ScriptedFileDialogs::new() -> Self
 pub fn flui::services::system::testing::ScriptedFileDialogs::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
@@ -32756,6 +32816,7 @@ variant flui_protocol::input_recording::Execution::Suspended // at 1
 pub struct flui_protocol::input_recording::FramePresented
 field flui_protocol::input_recording::FramePresented::at: u64 // at 0
 field flui_protocol::input_recording::FramePresented::refresh: Option<u64> // at 1
+field flui_protocol::input_recording::FramePresented::frame: Option<flui_protocol::input_recording::ShownFrameId> // at 2
 impl Clone for flui_protocol::input_recording::FramePresented
 impl Copy for flui_protocol::input_recording::FramePresented
 impl Eq for flui_protocol::input_recording::FramePresented
@@ -32860,17 +32921,16 @@ impl schemars::JsonSchema for flui_protocol::input_recording::Key
 impl serde_core::ser::Serialize for flui_protocol::input_recording::Key
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::Key
 variant flui_protocol::input_recording::Key::Character(String) // at 0
+variant flui_protocol::input_recording::Key::Dead(Option<char>) // at 2
 variant flui_protocol::input_recording::Key::Named(String) // at 1
 pub struct flui_protocol::input_recording::KeyEvent
 field flui_protocol::input_recording::KeyEvent::code: String // at 2
-field flui_protocol::input_recording::KeyEvent::composing: bool // at 6
+field flui_protocol::input_recording::KeyEvent::composing: bool // at 5
 field flui_protocol::input_recording::KeyEvent::key: flui_protocol::input_recording::Key // at 1
 field flui_protocol::input_recording::KeyEvent::location: flui_protocol::input_recording::Location // at 3
 field flui_protocol::input_recording::KeyEvent::modifiers: Vec<String> // at 4
-field flui_protocol::input_recording::KeyEvent::repeat: bool // at 5
 field flui_protocol::input_recording::KeyEvent::state: flui_protocol::input_recording::KeyState // at 0
-field flui_protocol::input_recording::KeyEvent::t: u64 // at 8
-field flui_protocol::input_recording::KeyEvent::unreleased: bool // at 7
+field flui_protocol::input_recording::KeyEvent::t: u64 // at 6
 impl Clone for flui_protocol::input_recording::KeyEvent
 impl Eq for flui_protocol::input_recording::KeyEvent
 impl PartialEq for flui_protocol::input_recording::KeyEvent
@@ -32890,7 +32950,9 @@ impl schemars::JsonSchema for flui_protocol::input_recording::KeyState
 impl serde_core::ser::Serialize for flui_protocol::input_recording::KeyState
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::KeyState
 variant flui_protocol::input_recording::KeyState::Down // at 0
-variant flui_protocol::input_recording::KeyState::Up // at 1
+variant flui_protocol::input_recording::KeyState::Repeat // at 1
+variant flui_protocol::input_recording::KeyState::Unpaired // at 2
+variant flui_protocol::input_recording::KeyState::Up // at 3
 pub enum flui_protocol::input_recording::Location
 impl Clone for flui_protocol::input_recording::Location
 impl Copy for flui_protocol::input_recording::Location
@@ -32969,15 +33031,13 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::P
 variant flui_protocol::input_recording::PointerEvent::ButtonPressed(flui_protocol::input_recording::ButtonEvent) // at 1
 variant flui_protocol::input_recording::PointerEvent::ButtonReleased(flui_protocol::input_recording::ButtonEvent) // at 2
 variant flui_protocol::input_recording::PointerEvent::Cancel { pointer: flui_protocol::input_recording::PointerInfo, t: u64, reason: flui_protocol::input_recording::CancelReason } // at 5
-variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 14
-variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 15
+variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 12
+variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 13
 variant flui_protocol::input_recording::PointerEvent::Down(flui_protocol::input_recording::ButtonEvent) // at 0
 variant flui_protocol::input_recording::PointerEvent::Enter(flui_protocol::input_recording::Signal) // at 6
 variant flui_protocol::input_recording::PointerEvent::Leave(flui_protocol::input_recording::Signal) // at 7
 variant flui_protocol::input_recording::PointerEvent::Move { pointer: flui_protocol::input_recording::PointerInfo, buttons: Vec<u8>, modifiers: Vec<String>, current: flui_protocol::input_recording::Sample, coalesced: Vec<flui_protocol::input_recording::Sample>, predicted: Vec<flui_protocol::input_recording::Sample> } // at 4
 variant flui_protocol::input_recording::PointerEvent::PanZoom(flui_protocol::input_recording::PanZoom) // at 10
-variant flui_protocol::input_recording::PointerEvent::PenSqueeze { pointer: flui_protocol::input_recording::PointerInfo, t: u64, phase: flui_protocol::input_recording::SqueezePhase, hover: Option<flui_protocol::input_recording::Sample> } // at 13
-variant flui_protocol::input_recording::PointerEvent::Revise { pointer: flui_protocol::input_recording::PointerInfo, sample: flui_protocol::input_recording::Sample } // at 12
 variant flui_protocol::input_recording::PointerEvent::Scroll(flui_protocol::input_recording::Scroll) // at 8
 variant flui_protocol::input_recording::PointerEvent::ScrollInertiaCancel(flui_protocol::input_recording::Signal) // at 9
 variant flui_protocol::input_recording::PointerEvent::SmartZoom(flui_protocol::input_recording::SmartZoom) // at 11
@@ -33095,7 +33155,8 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::S
 pub struct flui_protocol::input_recording::Scroll
 field flui_protocol::input_recording::Scroll::dx: f64 // at 5
 field flui_protocol::input_recording::Scroll::dy: f64 // at 6
-field flui_protocol::input_recording::Scroll::modifiers: Vec<String> // at 9
+field flui_protocol::input_recording::Scroll::inversion: Option<flui_protocol::input_recording::ScrollInversion> // at 9
+field flui_protocol::input_recording::Scroll::modifiers: Vec<String> // at 10
 field flui_protocol::input_recording::Scroll::phase: Option<flui_protocol::input_recording::ScrollPhase> // at 8
 field flui_protocol::input_recording::Scroll::pointer: flui_protocol::input_recording::PointerInfo // at 0
 field flui_protocol::input_recording::Scroll::precision: flui_protocol::input_recording::ScrollPrecision // at 7
@@ -33126,6 +33187,18 @@ variant flui_protocol::input_recording::ScrollHint::LeftEdge // at 4
 variant flui_protocol::input_recording::ScrollHint::RightEdge // at 5
 variant flui_protocol::input_recording::ScrollHint::TopEdge // at 2
 variant flui_protocol::input_recording::ScrollHint::TopLeft // at 0
+pub enum flui_protocol::input_recording::ScrollInversion
+impl Clone for flui_protocol::input_recording::ScrollInversion
+impl Copy for flui_protocol::input_recording::ScrollInversion
+impl Eq for flui_protocol::input_recording::ScrollInversion
+impl PartialEq for flui_protocol::input_recording::ScrollInversion
+impl core::fmt::Debug for flui_protocol::input_recording::ScrollInversion
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::ScrollInversion
+impl schemars::JsonSchema for flui_protocol::input_recording::ScrollInversion
+impl serde_core::ser::Serialize for flui_protocol::input_recording::ScrollInversion
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::ScrollInversion
+variant flui_protocol::input_recording::ScrollInversion::FromDevice // at 0
+variant flui_protocol::input_recording::ScrollInversion::InvertedFromDevice // at 1
 pub enum flui_protocol::input_recording::ScrollPhase
 impl Clone for flui_protocol::input_recording::ScrollPhase
 impl Copy for flui_protocol::input_recording::ScrollPhase
@@ -33170,6 +33243,18 @@ variant flui_protocol::input_recording::ScrollUnit::Detents // at 3
 variant flui_protocol::input_recording::ScrollUnit::Lines // at 0
 variant flui_protocol::input_recording::ScrollUnit::Pages // at 2
 variant flui_protocol::input_recording::ScrollUnit::Pixels // at 1
+pub struct flui_protocol::input_recording::ShownFrameId
+field flui_protocol::input_recording::ShownFrameId::epoch: u64 // at 0
+field flui_protocol::input_recording::ShownFrameId::surface: u64 // at 1
+impl Clone for flui_protocol::input_recording::ShownFrameId
+impl Copy for flui_protocol::input_recording::ShownFrameId
+impl Eq for flui_protocol::input_recording::ShownFrameId
+impl PartialEq for flui_protocol::input_recording::ShownFrameId
+impl core::fmt::Debug for flui_protocol::input_recording::ShownFrameId
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::ShownFrameId
+impl schemars::JsonSchema for flui_protocol::input_recording::ShownFrameId
+impl serde_core::ser::Serialize for flui_protocol::input_recording::ShownFrameId
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::ShownFrameId
 pub struct flui_protocol::input_recording::Signal
 field flui_protocol::input_recording::Signal::pointer: flui_protocol::input_recording::PointerInfo // at 0
 field flui_protocol::input_recording::Signal::position: Option<[f64; 2]> // at 2
@@ -33206,20 +33291,6 @@ impl core::marker::StructuralPartialEq for flui_protocol::input_recording::Smoot
 impl schemars::JsonSchema for flui_protocol::input_recording::Smoothing
 impl serde_core::ser::Serialize for flui_protocol::input_recording::Smoothing
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::Smoothing
-pub enum flui_protocol::input_recording::SqueezePhase
-impl Clone for flui_protocol::input_recording::SqueezePhase
-impl Copy for flui_protocol::input_recording::SqueezePhase
-impl Eq for flui_protocol::input_recording::SqueezePhase
-impl PartialEq for flui_protocol::input_recording::SqueezePhase
-impl core::fmt::Debug for flui_protocol::input_recording::SqueezePhase
-impl core::marker::StructuralPartialEq for flui_protocol::input_recording::SqueezePhase
-impl schemars::JsonSchema for flui_protocol::input_recording::SqueezePhase
-impl serde_core::ser::Serialize for flui_protocol::input_recording::SqueezePhase
-impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::SqueezePhase
-variant flui_protocol::input_recording::SqueezePhase::Began // at 0
-variant flui_protocol::input_recording::SqueezePhase::Cancelled // at 3
-variant flui_protocol::input_recording::SqueezePhase::Changed // at 1
-variant flui_protocol::input_recording::SqueezePhase::Ended // at 2
 pub struct flui_protocol::input_recording::TextPosition
 field flui_protocol::input_recording::TextPosition::character_index: usize // at 1
 field flui_protocol::input_recording::TextPosition::node: u64 // at 0
@@ -34247,12 +34318,13 @@ pub struct flui_protocol::native_recording::Scroll
 field flui_protocol::native_recording::Scroll::contact: u64 // at 2
 field flui_protocol::native_recording::Scroll::delta: [f64; 2] // at 5
 field flui_protocol::native_recording::Scroll::device: Option<u64> // at 1
-field flui_protocol::native_recording::Scroll::modifiers: Vec<flui_protocol::native_recording::Modifier> // at 9
+field flui_protocol::native_recording::Scroll::inversion: Option<flui_protocol::native_recording::ScrollInversion> // at 8
+field flui_protocol::native_recording::Scroll::modifiers: Vec<flui_protocol::native_recording::Modifier> // at 10
 field flui_protocol::native_recording::Scroll::notched: bool // at 7
 field flui_protocol::native_recording::Scroll::phase: Option<flui_protocol::native_recording::ScrollPhase> // at 3
 field flui_protocol::native_recording::Scroll::precise: bool // at 6
 field flui_protocol::native_recording::Scroll::surface: u64 // at 0
-field flui_protocol::native_recording::Scroll::time_ns: u64 // at 8
+field flui_protocol::native_recording::Scroll::time_ns: u64 // at 9
 field flui_protocol::native_recording::Scroll::unit: flui_protocol::native_recording::ScrollUnit // at 4
 impl Clone for flui_protocol::native_recording::Scroll
 impl PartialEq for flui_protocol::native_recording::Scroll
@@ -34261,6 +34333,21 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Scro
 impl schemars::JsonSchema for flui_protocol::native_recording::Scroll
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Scroll
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Scroll
+#[non_exhaustive] pub enum flui_protocol::native_recording::ScrollInversion
+impl Clone for flui_protocol::native_recording::ScrollInversion
+impl Copy for flui_protocol::native_recording::ScrollInversion
+impl Eq for flui_protocol::native_recording::ScrollInversion
+impl PartialEq for flui_protocol::native_recording::ScrollInversion
+impl core::fmt::Debug for flui_protocol::native_recording::ScrollInversion
+impl core::hash::Hash for flui_protocol::native_recording::ScrollInversion
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::ScrollInversion
+impl schemars::JsonSchema for flui_protocol::native_recording::ScrollInversion
+impl serde_core::ser::Serialize for flui_protocol::native_recording::ScrollInversion
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::ScrollInversion
+pub const flui_protocol::native_recording::ScrollInversion::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::ScrollInversion::name(self) -> &'static str
+variant flui_protocol::native_recording::ScrollInversion::FromDevice // at 0
+variant flui_protocol::native_recording::ScrollInversion::InvertedFromDevice // at 1
 #[non_exhaustive] pub enum flui_protocol::native_recording::ScrollPhase
 impl Clone for flui_protocol::native_recording::ScrollPhase
 impl Copy for flui_protocol::native_recording::ScrollPhase
@@ -36216,6 +36303,7 @@ impl core::fmt::Debug for flui_runtime::sink::FrameSettlement
 impl core::marker::StructuralPartialEq for flui_runtime::sink::FrameSettlement
 pub const fn flui_runtime::sink::FrameSettlement::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, verdict: flui_runtime::sink::SubmitVerdict) -> Self
 pub trait flui_runtime::sink::FrameSink
+fn flui_runtime::sink::FrameSink::in_flight_limit(&mut self) -> core::num::nonzero::NonZeroUsize { .. }
 fn flui_runtime::sink::FrameSink::submit(&mut self, epoch: flui::foundation::FrameEpoch, publication: flui_layer::scene::owner::ScenePublication) -> flui_runtime::sink::SubmitVerdict
 fn flui_runtime::sink::FrameSink::surface_size(&mut self) -> (u32, u32)
 pub enum flui_runtime::sink::Settled
@@ -37325,6 +37413,7 @@ impl core::fmt::Debug for flui_testing::text_store_host::StoreHostCall
 impl core::marker::StructuralPartialEq for flui_testing::text_store_host::StoreHostCall
 variant flui_testing::text_store_host::StoreHostCall::CompleteComposition // at 2
 variant flui_testing::text_store_host::StoreHostCall::Focus // at 0
+variant flui_testing::text_store_host::StoreHostCall::ShowKeyboard // at 3
 variant flui_testing::text_store_host::StoreHostCall::Unfocus // at 1
 pub struct flui_view::context::build_context::sealed::CrateToken(_)
 impl Clone for flui_view::context::build_context::sealed::CrateToken

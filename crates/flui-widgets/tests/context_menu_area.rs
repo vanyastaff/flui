@@ -15,7 +15,7 @@ use flui_interaction::drag::{DragItem, DragTrigger};
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_testing::a11y::{A11yRect, A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
@@ -252,7 +252,7 @@ impl Mounted {
 
     fn key(&mut self, key: NamedKey) {
         let manager = self.laid.focus_manager();
-        for state in [KeyState::Down, KeyState::Up] {
+        for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             let event = KeyEvent::new(
                 state,
                 Key::Named(key),

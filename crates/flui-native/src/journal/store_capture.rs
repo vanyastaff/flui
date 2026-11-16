@@ -167,6 +167,16 @@ impl TextStoreHost for JournaledHost {
         };
         self.inner.complete_composition(&served)
     }
+
+    fn show_keyboard(&self, store: &Rc<dyn TextStore>) {
+        let served: Rc<dyn TextStore> = match &*self.state.focused.borrow() {
+            Some(focused) if Rc::ptr_eq(&focused.presented, store) => {
+                Rc::clone(&focused.served) as Rc<dyn TextStore>
+            }
+            _ => Rc::clone(store),
+        };
+        self.inner.show_keyboard(&served);
+    }
 }
 
 /// What the recording holds of a journaled store's document.

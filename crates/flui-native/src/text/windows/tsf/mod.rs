@@ -880,6 +880,10 @@ impl TextStoreHost for TextServices {
         // no composition there.
         end.ok_or(TextStoreHostError::NotFocused)
     }
+
+    /// Windows shows its touch keyboard for the focused TSF document by
+    /// itself, and a desktop keyboard needs nothing shown.
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
 }
 
 impl Drop for TextServices {

@@ -27,7 +27,6 @@ use crate::preferences::windows::PreferenceSource;
 use crate::storage::UserDataDirs;
 use crate::text::windows::Tsf;
 use crate::version::gate::windows::WindowsBuild;
-use crate::window::config::WindowConfiguration;
 use crate::window::windows::proc::WindowProc;
 use crate::window::windows::{WindowSet, WindowsWindow};
 
@@ -95,6 +94,7 @@ impl WindowsHost for Windows {
         Rc::new(HostEvents::new(
             Arc::clone(owner.app),
             Arc::clone(owner.notices),
+            crate::owner::windows::control::OwnerQueue::new(Arc::downgrade(owner.signal)),
         ))
     }
 
@@ -157,7 +157,7 @@ impl HostPlatform<Windows> {
         instance: Option<FirstInstance>,
     ) -> Result<Self, PlatformError> {
         Self::try_from_parts(
-            |positions| WindowSet::new(WindowConfiguration::default(), positions, build),
+            |positions| WindowSet::new(positions, build),
             |windows| WindowsLoop::try_new::<Windows>(Arc::clone(windows) as _, instance),
         )
     }

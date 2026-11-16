@@ -9,7 +9,7 @@ use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform::keyboard::KeyState;
 use flui_platform::pointer::{ButtonChange, PointerButton};
-use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
+use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput, RefreshPeriod};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -196,10 +196,11 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
 /// Whether `event` is the press of Escape that cancels a drag: its first
 /// press, while no input method composes.
 fn is_escape_press(event: &flui_platform::keyboard::KeyEvent) -> bool {
-    use flui_platform::keyboard::{ImeComposition, Key, KeyRepeat, NamedKey};
-    event.state() == KeyState::Down
-        && event.repeat() == KeyRepeat::First
-        && event.composition == ImeComposition::Inactive
+    use flui_platform::keyboard::{ImeComposition, Key, KeyPress, NamedKey};
+    matches!(
+        event.state,
+        KeyState::Down(KeyPress::First | KeyPress::Unpaired)
+    ) && event.composition == ImeComposition::Inactive
         && event.key == Key::Named(NamedKey::Escape)
 }
 
@@ -216,10 +217,13 @@ fn pointer_pressed(event: &PointerEvent) -> bool {
 /// repeat) or a pointer button pressed. Only these try a dropped frame before
 /// its backoff ends.
 fn is_discrete_press(input: &PlatformInput) -> bool {
-    use flui_platform::keyboard::KeyRepeat;
+    use flui_platform::keyboard::KeyPress;
     match input {
         PlatformInput::Keyboard(event) => {
-            event.state() == KeyState::Down && event.repeat() == KeyRepeat::First
+            matches!(
+                event.state,
+                KeyState::Down(KeyPress::First | KeyPress::Unpaired)
+            )
         }
         PlatformInput::Pointer(event) => pointer_pressed(event),
         PlatformInput::PointerFrame(frame) => frame.events().iter().any(pointer_pressed),
@@ -232,9 +236,11 @@ fn is_discrete_press(input: &PlatformInput) -> bool {
 /// The back button (X1) going down or up in `event`, and when.
 fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
     let (state, button, time) = match event {
-        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
-            (KeyState::Down, press.button(), press.sample.time)
-        }
+        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => (
+            KeyState::Down(flui_platform::keyboard::KeyPress::First),
+            press.button(),
+            press.sample.time,
+        ),
         PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
             (KeyState::Up, release.button(), release.sample.time)
         }
@@ -1116,6 +1122,10 @@ impl UiRuntime {
     ///
     /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
     /// recorded; the verdicts the frame makes follow it when the pump ends.
+    /// A presentation report the request carries names the frame it describes
+    /// (ADR-0347): one naming another presentation's frame, an incarnation
+    /// the window no longer presents, is dropped, from the frame clock and the
+    /// recording alike.
     ///
     /// The command inbox is drained first. The frame applies what it holds
     /// (assistive requests among it) before it renders, so their rows precede
@@ -1128,6 +1138,19 @@ impl UiRuntime {
         )]
         let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
+        let mut request = request;
+        // A report names the frame it describes: one of another presentation (an incarnation
+        // this window no longer presents) is no report of this one's frames.
+        let address = flui_foundation::PresentationAddress {
+            ui_runtime_id: self.id,
+            presentation_id,
+        };
+        let foreign = request
+            .presented
+            .filter(|presented| presented.frame.address != address);
+        if foreign.is_some() {
+            request.presented = None;
+        }
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_request.set(Some(request));
             // The platform's report of an earlier frame shown: the
@@ -1137,7 +1160,7 @@ impl UiRuntime {
             {
                 presentation
                     .clock()
-                    .record_presentation(at, presented.refresh);
+                    .record_presentation(at, presented.refresh.map(RefreshPeriod::get));
             }
         }
         if recording {
@@ -1146,13 +1169,22 @@ impl UiRuntime {
                 crate::HostInput::Frame {
                     vsync: request.vsync,
                     target_present: request.target_present,
-                    presented: request.presented,
+                    presented: request.presented.map(crate::ShownFrame::from),
                 },
                 crate::owner::InputOutcome::Handled,
             );
         }
         if let Some(payload) = drained {
             resume_unwind(payload);
+        }
+        if let Some(foreign) = foreign {
+            // Last, with the presentation let go and the drain's failure resumed: a subscriber
+            // is user code.
+            tracing::debug!(
+                target: "flui.present",
+                epoch = foreign.frame.epoch.get(),
+                "a presentation report of another presentation's frame is dropped"
+            );
         }
     }
 

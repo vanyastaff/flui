@@ -415,7 +415,11 @@ fn a_late_frame_names_its_slowest_phase() {
     let clock = FrameClock::new();
     clock.mark_demand(DemandKind::Dirty);
     let start = Instant::now();
-    assert!(clock.poll(start).should_run_segment());
+    assert!(
+        clock
+            .poll(start, flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     let ms = Duration::from_millis;
     let snapshot = clock.record_frame(
         clock.telemetry_cut(),
@@ -457,7 +461,11 @@ fn frame_pace_ignores_idle_gaps() {
         .map(|at| {
             clock.mark_demand(DemandKind::Dirty);
             let begun = start + ms(at);
-            assert!(clock.poll(begun).should_run_segment());
+            assert!(
+                clock
+                    .poll(begun, flui_scheduler::FramesInFlight::NONE)
+                    .should_run_segment()
+            );
             clock.record_frame(
                 clock.telemetry_cut(),
                 address(),
@@ -492,11 +500,19 @@ fn a_frame_recorded_after_its_cut_keeps_its_id_and_its_inputs() {
     };
     let early = clock.stamp_input_epoch(start);
     clock.mark_demand(DemandKind::Dirty);
-    assert!(clock.poll(start).should_run_segment());
+    assert!(
+        clock
+            .poll(start, flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     let first = clock.telemetry_cut();
     let late = clock.stamp_input_epoch(start);
     clock.mark_demand(DemandKind::Dirty);
-    assert!(clock.poll(start).should_run_segment());
+    assert!(
+        clock
+            .poll(start, flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     let second = clock.telemetry_cut();
 
     let one = clock.record_frame(first, address(), times, PresentOutcome::Presented);
@@ -539,10 +555,18 @@ fn a_frame_recorded_out_of_order_reaches_a_consumer_past_the_later_one() {
         phases: FramePhaseDurations::default(),
     };
     clock.mark_demand(DemandKind::Dirty);
-    assert!(clock.poll(start).should_run_segment());
+    assert!(
+        clock
+            .poll(start, flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     let queued = clock.telemetry_cut();
     clock.mark_demand(DemandKind::Dirty);
-    assert!(clock.poll(start).should_run_segment());
+    assert!(
+        clock
+            .poll(start, flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     let failed = clock.telemetry_cut();
 
     let later = clock.record_frame(failed, address(), times, PresentOutcome::Errored);
@@ -582,7 +606,11 @@ fn an_evicted_cursor_resumes_in_recording_order_and_repeats_none() {
     };
     let cut = || {
         clock.mark_demand(DemandKind::Dirty);
-        assert!(clock.poll(start).should_run_segment());
+        assert!(
+            clock
+                .poll(start, flui_scheduler::FramesInFlight::NONE)
+                .should_run_segment()
+        );
         clock.telemetry_cut()
     };
     let first = cut();

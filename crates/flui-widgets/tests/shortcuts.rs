@@ -12,7 +12,7 @@ pub(crate) mod intent_tests {
     use flui_interaction::focus::FocusNode;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
@@ -26,7 +26,7 @@ pub(crate) mod intent_tests {
 
     fn ctrl_s() -> KeyEvent {
         KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("s"),
             Code::KeyS,
             EventTime::from_nanos(0),
@@ -118,22 +118,25 @@ pub(crate) mod intent_tests {
             };
             assert!(
                 manager
-                    .dispatch_key_event(&event(KeyState::Down, character))
+                    .dispatch_key_event(&event(KeyState::Down(KeyPress::First), character))
                     .is_handled(),
                 "{character:?}: the complete character invokes its action"
             );
             assert_eq!(saves.get(), 1, "{character:?}: the focused action ran");
 
             for (case, rejected) in [
-                ("truncated character", event(KeyState::Down, truncated)),
+                (
+                    "truncated character",
+                    event(KeyState::Down(KeyPress::First), truncated),
+                ),
                 ("release", event(KeyState::Up, character)),
                 (
                     "disallowed repeat",
-                    event(KeyState::Down, character).with_repeat(KeyRepeat::AutoRepeat),
+                    event(KeyState::Down(KeyPress::AutoRepeat), character),
                 ),
                 (
                     "extra modifier",
-                    event(KeyState::Down, character)
+                    event(KeyState::Down(KeyPress::First), character)
                         .with_modifiers(Modifiers::CONTROL | Modifiers::SHIFT),
                 ),
             ] {
@@ -150,7 +153,7 @@ pub(crate) mod intent_tests {
 
             assert!(
                 manager
-                    .dispatch_key_event(&event(KeyState::Down, character))
+                    .dispatch_key_event(&event(KeyState::Down(KeyPress::First), character))
                     .is_handled(),
                 "{character:?}: the next matching press still reaches the action"
             );
@@ -170,7 +173,7 @@ pub(crate) mod tab_tests {
     use flui_painting::typography::TextDirection;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
     };
     use flui_view::ViewExt;
     use flui_view::prelude::*;
@@ -181,7 +184,7 @@ pub(crate) mod tab_tests {
 
     fn tab(shift: bool) -> KeyEvent {
         KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::Named(NamedKey::Tab),
             Code::Tab,
             EventTime::from_nanos(0),
@@ -491,7 +494,7 @@ pub(crate) mod activation_tests {
     use flui_interaction::focus::FocusNode;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
@@ -500,7 +503,7 @@ pub(crate) mod activation_tests {
 
     fn key_down(key: Key) -> KeyEvent {
         KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             key,
             Code::Unidentified,
             EventTime::from_nanos(0),
@@ -566,7 +569,7 @@ pub(crate) mod event_context_tests {
     use flui_interaction::focus::FocusNode;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
@@ -582,7 +585,7 @@ pub(crate) mod event_context_tests {
 
     fn ctrl_s() -> KeyEvent {
         KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("s"),
             Code::KeyS,
             EventTime::from_nanos(0),
@@ -712,13 +715,13 @@ pub(crate) mod event_context_tests {
 pub(crate) mod activator_tests {
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_widgets::interaction::SingleActivator;
 
     fn down(character: &str, modifiers: Modifiers) -> KeyEvent {
         KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character(character),
             Code::Unidentified,
             EventTime::from_nanos(0),
@@ -765,7 +768,7 @@ pub(crate) mod activator_tests {
     pub(crate) fn a_command_chord_on_a_non_latin_layout_matches_by_its_physical_key() {
         let on = |produced: &str, code: Code, modifiers: Modifiers| {
             KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 Key::character(produced),
                 code,
                 EventTime::from_nanos(0),

@@ -27,7 +27,7 @@
   `SurfaceFactory`, and the instance's display is the platform's connection);
   [ADR-0267](ADR-0267-a-lost-gpu-device-is-rebuilt-on-a-backoff-and-given-up.md) (the rebuild is
   the context's, once per context); [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md) (one atlas
-  per context, aged by queue submission); [ADR-0257](ADR-0257-frame-timing-and-latency.md)
+  per context, aged by queue submission); [ADR-0347](ADR-0347-a-frame-request-carries-the-hosts-frame-times-and-reports-that-name-their-frame.md)
   decision 4 (the per-window frame latency is the slot's setting)
 - **Related:** [ADR-0304](ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md)
   (the scene state a frame carries, which a coalesced frame folds);
@@ -306,16 +306,24 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 
 §5. **Pacing, restated per slot.** ADR-0045 decision 3 and the rule of decision 5 stand, per slot:
 
-- `FrameClock`'s in-flight gate paces production, and the slot's record carries the count. The
-  depth is the placement's (§10): 1 inline, 2 threaded. wgpu's `desired_maximum_frame_latency`
-  stays the slot's `FrameLatency` (ADR-0257 decision 4), set at `Attach` and changed by
-  `Configure`, and stays decoupled from the depth; the GL backend ignores it as before.
+- `FrameClock`'s in-flight gate paces production: `FrameClock::poll` is handed the presentation's
+  `FramesInFlight`, the frames it has pending (queued and not settled) against the limit its last
+  frame's sink names,
+  `FrameSink::in_flight_limit`. A presentation at its limit skips with `Backpressure`, keeps its
+  demand and reports no pending work, and the settlement that frees a place wakes the loop. The
+  limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. wgpu's
+  `desired_maximum_frame_latency` stays the slot's `FrameLatency` (ADR-0347 decision 4), set at
+  `Attach` and changed by `Configure`, and stays decoupled from the depth; the GL backend ignores
+  it as before.
 - The slot calls its `SurfaceTarget::pre_present_notify` directly, immediately before
   `queue.present` and only for a frame that will present; `flui-engine` already reaches
   `flui-platform` (`crates/flui-engine/Cargo.toml:50-52`), so no hook closure is installed.
 - `FallbackWake`'s deadline applies only when the slot's in-flight count is zero and its last
-  settlement did not present. While a frame is in flight the owner keeps a `WaitUntil` floor, so a
-  lost wake costs at most one floor interval.
+  settlement did not present. While a frame is in flight `UiRuntime::next_wake` keeps a floor, the
+  next multiple of 50 ms since the oldest pending frame was handed to its sink, which the host
+  turns into its `WaitUntil`; the host drains the raster side's settlements on every wake, whatever
+  its frame gate decides, so a lost wake costs at most one floor interval and a frame that never
+  settles wakes the owner once per interval.
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's
@@ -440,8 +448,14 @@ executor and slot.
 
 - `ExecutorHealth { Running, ShutDown, Died }` rides the executor's record; the two non-running
   states log at `error`. Once it is not `Running`, every send answers `Gone` with its command, and
-  the owner settles every frame still pending in a slot's inbox `Failed`, since the executor no
-  longer can. The frame a wedged render holds settles only if that render returns.
+  the owner settles every frame still pending in the inbox of a slot it has not detached `Failed`,
+  since the executor no longer can; a detached slot's frame leaves with its presentation,
+  unsettled, as the executor's own detach drops it. A slot settles in order even then: the frame
+  a wedged render holds settles only if that render returns, and a frame queued behind it in that
+  slot settles `Failed` after it, so a late `Presented` never arrives for a frame whose record a
+  later settlement already folded. A dead executor makes no backend call once the call it died
+  during returns, except that its stop still takes each slot down in the backend:
+  that stop settles or drops what the inboxes hold.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no
@@ -592,7 +606,10 @@ the facade. Every production use of `with_backend` becomes:
   `a_frame_stamped_before_a_restore_is_refused_on_its_generation` (window surfaces from wgpu's
   no-op backend); compile-fail `surface_factory_is_owner_local` and
   `surface_factory_rejects_borrowed_window`; and in `flui-runtime`'s
-  `tests/main.rs`: `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`.
+  `tests/main.rs`: `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored` and
+  `a_sink_holding_its_depth_gets_no_frame_until_one_settles` (the in-flight gate of §5), with
+  the floor of §5 in its `frame_failure_containment_matrix` case
+  `a_frame_in_flight_bounds_the_owners_sleep`.
 - Conformance, to be added in `flui-native`: `a_surface_targets_display_equals_the_platforms_connection`,
   one row per host, in `flui-native`'s Linux suites: the Wayland row under a headless `weston`,
   the X11 row under `Xvfb`, the winit and headless rows without a display server.
@@ -604,7 +621,11 @@ the facade. Every production use of `with_backend` becomes:
   `a_stopped_executor_settles_every_pending_frame_failed`,
   `a_full_settlement_ring_holds_the_next_frame`,
   `a_full_lifecycle_queue_returns_the_command` and
-  `a_command_sent_during_the_stop_comes_back_gone`; ADR-0244's `gpu_backend_fallback_order`; and
+  `a_command_sent_during_the_stop_comes_back_gone`; on the raster thread, in
+  `crates/flui-engine/tests/raster_thread.rs`, `a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline`
+  `a_frame_queued_behind_a_wedged_render_settles_after_it` and
+  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9); ADR-0244's
+  `gpu_backend_fallback_order`; and
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,

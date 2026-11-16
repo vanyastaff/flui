@@ -58,7 +58,7 @@ mod script;
 mod track;
 
 pub use events::{EventSubscription, Events, StreamEnd, StreamItem};
-pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, Script};
+pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, RequestTicket, Script};
 pub use track::{ServiceState, Track};
 
 use std::borrow::Cow;
@@ -108,7 +108,7 @@ struct Core {
 #[derive(Default)]
 struct CoreState {
     /// Scheduled changes by instant, then by the order they were scheduled.
-    timeline: BTreeMap<(Duration, NonZeroU64), Timed>,
+    timeline: BTreeMap<TimelineKey, Timed>,
     /// Failures recorded on the owner thread as they happened.
     events: Vec<ScenarioFailure>,
     /// What dropped scripts still owed, each under its step's or request's
@@ -129,6 +129,10 @@ struct Acknowledged {
     debts: BTreeSet<NonZeroU64>,
     scheduled: BTreeSet<NonZeroU64>,
 }
+
+/// Where a change sits on the timeline: its instant, then the order it was
+/// scheduled in.
+type TimelineKey = (Duration, NonZeroU64);
 
 /// A change scheduled on the timeline.
 struct Timed {
@@ -341,13 +345,27 @@ impl Scenario {
 
     /// Schedule `apply` at `at`; `what` names it if the clock never gets
     /// there.
-    fn schedule(&self, at: Duration, what: Cow<'static, str>, apply: Box<dyn FnOnce()>) {
-        let seq = self.mint();
+    fn schedule(
+        &self,
+        at: Duration,
+        what: Cow<'static, str>,
+        apply: Box<dyn FnOnce()>,
+    ) -> TimelineKey {
+        let key = (at, self.mint());
         self.core
             .state
             .borrow_mut()
             .timeline
-            .insert((at, seq), Timed { what, apply });
+            .insert(key, Timed { what, apply });
+        key
+    }
+
+    /// Take the change scheduled under `key` off the timeline, unapplied, if
+    /// it is still there: what it would have changed is no longer owed.
+    fn unschedule(&self, key: TimelineKey) {
+        let removed = self.core.state.borrow_mut().timeline.remove(&key);
+        // Its closure's captures are dropped after the borrow.
+        drop(removed);
     }
 
     /// A fresh id for the timeline or a script.

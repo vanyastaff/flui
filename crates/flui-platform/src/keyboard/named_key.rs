@@ -12,7 +12,8 @@
 ///
 /// The variants are the [UI Events `key` values](https://w3c.github.io/uievents-key/).
 /// A value the specification adds before FLUI regenerates this table arrives as
-/// [`NamedKey::Unidentified`].
+/// [`NamedKey::Unidentified`]. A dead key is not one of them: it is
+/// [`Key::Dead`](super::Key::Dead), which carries its accent.
 ///
 /// # Examples
 ///
@@ -181,9 +182,6 @@ pub enum NamedKey {
     Compose,
     /// The Convert key, to convert the current input method sequence.
     Convert,
-    /// A dead key combining key. It may be any combining key from any keyboard layout. For example, on a
-    /// PC/AT French keyboard, using a French mapping and without any modifier activated, this is the key value <code class="unicode">U+0302</code> COMBINING CIRCUMFLEX ACCENT. In another layout this might be a different unicode combining key.<br/> For applications that need to differentiate between specific combining characters, the associated compositionupdate event’s data attribute provides the specific key value.
-    Dead,
     /// The Final Mode <kbd>Final</kbd> key used on some Asian keyboards, to enable the final mode for IMEs.
     FinalMode,
     /// Switch to the first character group. (ISO/IEC 9995)
@@ -740,7 +738,6 @@ impl NamedKey {
         Self::CodeInput,
         Self::Compose,
         Self::Convert,
-        Self::Dead,
         Self::FinalMode,
         Self::GroupFirst,
         Self::GroupLast,
@@ -1051,7 +1048,6 @@ impl NamedKey {
             Self::CodeInput => "CodeInput",
             Self::Compose => "Compose",
             Self::Convert => "Convert",
-            Self::Dead => "Dead",
             Self::FinalMode => "FinalMode",
             Self::GroupFirst => "GroupFirst",
             Self::GroupLast => "GroupLast",

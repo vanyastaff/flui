@@ -31,12 +31,11 @@ use crate::owner::OpenWindows;
 use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
-use crate::window::config::WindowConfiguration;
 use crate::window::state::device_extent;
 
-/// The windows of FLUI's class the platform tracks, keyed by HWND, and the
-/// configuration they open with (hotkeys, debouncing, fullscreen behavior).
-/// The owner's message-only windows are never in it.
+/// The windows of FLUI's class the platform tracks, keyed by HWND, and what
+/// every one of them opens with. The owner's message-only windows are never
+/// in it.
 ///
 /// The host builds it and hands it to the loop, which holds it as
 /// [`ClassWindows`]; each window's context and wrapper keep it too, to leave
@@ -51,7 +50,6 @@ pub struct WindowSet {
     /// never one twice: Win32 recycles HWND values, so a handle is never an
     /// id.
     ids: RefCell<WindowIdMint>,
-    pub(super) config: WindowConfiguration,
     /// What every window hands out of the window-level positions.
     pub(super) positions: WindowPositions<WindowRef>,
     /// Whether the build the platform runs on draws a material behind a
@@ -100,17 +98,12 @@ fn display_adapters() -> Vec<DisplayAdapter> {
 }
 
 impl WindowSet {
-    /// No window yet; every window opens with `config` and hands out
-    /// `positions`, and draws a material as `build` allows.
-    pub(crate) fn new(
-        config: WindowConfiguration,
-        positions: WindowPositions<WindowRef>,
-        build: WindowsBuild,
-    ) -> Self {
+    /// No window yet; every window hands out `positions` and draws a material
+    /// as `build` allows.
+    pub(crate) fn new(positions: WindowPositions<WindowRef>, build: WindowsBuild) -> Self {
         Self {
             by_handle: RefCell::default(),
             ids: RefCell::default(),
-            config,
             positions,
             material: material::gate(build),
             presentation: presentation_absence(&display_adapters()),
@@ -176,8 +169,7 @@ impl std::fmt::Debug for WindowSet {
             Some(ids) => out.field("ids", &format_args!("{ids}")),
             None => out.field("ids", &borrowed),
         };
-        out.field("config", &self.config)
-            .field("positions", &self.positions)
+        out.field("positions", &self.positions)
             .field("material", &self.material)
             .field("presentation", &self.presentation)
             .field("system_scale_streak", &self.system_scale_streak.get())

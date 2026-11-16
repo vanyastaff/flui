@@ -131,6 +131,26 @@ pub enum ScrollPhase {
     MomentumEnded,
 }
 
+/// Whether the device reports a scroll inverted from the fingers' motion (natural scrolling).
+///
+/// [`ScrollDelta`] is always in scroll-offset terms, whatever the user's natural-scrolling
+/// setting: content follows it. A control that maps a scroll onto a value (a slider, a stepper,
+/// a knob) needs this to move with the fingers: under natural scrolling the platform reversed
+/// the device's direction, so such a control negates the delta. No widget reads it yet: the
+/// slider's wheel handling is the first consumer (`docs/gaps.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum ScrollInversion {
+    /// The platform does not say: Windows, X11 and Android report no such flag.
+    #[default]
+    Unknown,
+    /// The delta runs the way the device moved.
+    FromDevice,
+    /// The platform reversed the device's direction (natural scrolling): AppKit's
+    /// `isDirectionInvertedFromDevice`, Wayland's `axis_relative_direction`.
+    InvertedFromDevice,
+}
+
 /// A wheel or trackpad scroll over a point in the window.
 ///
 /// Built with [`ScrollEvent::new`] and the `with_*` methods.
@@ -173,12 +193,16 @@ pub struct ScrollEvent {
     pub precision: ScrollPrecision,
     /// Where the event sits in a scroll gesture; `None` for a wheel tick outside one.
     pub phase: Option<ScrollPhase>,
+    /// Whether the delta runs the way the device moved; [`ScrollInversion::Unknown`] where the
+    /// platform does not say.
+    pub inversion: ScrollInversion,
     /// The modifiers held.
     pub modifiers: Modifiers,
 }
 
 impl ScrollEvent {
-    /// A scroll of `delta` at `position`, with unknown precision, no phase and no modifiers.
+    /// A scroll of `delta` at `position`, with unknown precision and direction, no phase and no
+    /// modifiers.
     #[must_use]
     pub const fn new(
         pointer: PointerInfo,
@@ -193,8 +217,15 @@ impl ScrollEvent {
             delta,
             precision: ScrollPrecision::Unknown,
             phase: None,
+            inversion: ScrollInversion::Unknown,
             modifiers: Modifiers::NONE,
         }
+    }
+
+    /// This event with its delta `inversion` relative to the fingers.
+    #[must_use]
+    pub const fn with_inversion(self, inversion: ScrollInversion) -> Self {
+        Self { inversion, ..self }
     }
 
     /// This event with `precision`.

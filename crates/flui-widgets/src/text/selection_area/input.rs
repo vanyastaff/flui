@@ -664,7 +664,7 @@ impl SelectionModel {
     /// edge, or a line up or down, crossing into the neighbouring text at an
     /// edge. Any key takes a touch's toolbar away.
     pub(super) fn key(&self, ctx: &mut EventContext<'_>, event: &KeyEvent) -> KeyEventResult {
-        if event.state() != KeyState::Down {
+        if !matches!(event.state, KeyState::Down(_)) {
             return KeyEventResult::Ignored;
         }
         let mut failure = FirstPanic::new();

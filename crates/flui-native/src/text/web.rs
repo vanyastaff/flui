@@ -445,7 +445,7 @@ mod input {
 
     use std::rc::{Rc, Weak};
 
-    use flui_platform::keyboard::KeyState;
+    use flui_platform::keyboard::{KeyPress, KeyState};
     use flui_platform::text_store::{
         CompositionEnd, LockGrant, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus, Utf16Offset,
@@ -1537,7 +1537,10 @@ mod input {
                     .map_err(|error| JsValue::from_str(&error.to_string()))
             };
             if hidden {
-                for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
+                for (kind, state) in [
+                    ("keydown", KeyState::Down(KeyPress::First)),
+                    ("keyup", KeyState::Up),
+                ] {
                     let keys = Rc::clone(&self.keys);
                     listeners.push(listen(
                         target,
@@ -2049,6 +2052,12 @@ mod input {
             self.drain();
             Ok(end)
         }
+
+        /// The browser shows its keyboard for the editor that has the
+        /// page's focus, and this host reopens it from the pointer event's
+        /// own handler, inside the user gesture the browser requires; a
+        /// field's tap, recognised later, asks nothing more.
+        fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
     }
 
     /// What the store tells the browser's surface when the application changes

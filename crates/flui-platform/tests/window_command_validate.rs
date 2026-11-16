@@ -1178,12 +1178,6 @@ fn the_presentation_report_answers_why_it_is_missing() {
         host, device,
         "the absence is part of what the window honours"
     );
-    let shown = flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(1));
-    assert_eq!(
-        shown.with_refresh(std::time::Duration::ZERO).refresh,
-        None,
-        "a zero refresh, a variable rate, is no interval"
-    );
     let mut restored = host.into_parts();
     restored.reports_presentation = WindowCapability::Native;
     let restored = restored.into_capabilities();

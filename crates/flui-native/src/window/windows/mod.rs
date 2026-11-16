@@ -158,6 +158,96 @@ pub(crate) mod mode {
             }
         }
     }
+
+    /// `rect` moved, and shrunk on a side where it is larger, so that it lies
+    /// inside `area`: where a window comes back to when the monitor it left
+    /// is gone, fitted to the work area of the nearest monitor that is there.
+    /// A rectangle already inside `area` is returned as it is. Computed in
+    /// `i64`, so no sum of two coordinates overflows.
+    pub(crate) fn fit_within(rect: Bounds<i32>, area: Bounds<i32>) -> Bounds<i32> {
+        let fit = |origin: i32, extent: i32, start: i32, room: i32| -> (i32, i32) {
+            let room = i64::from(room.max(0));
+            let extent = i64::from(extent.max(0)).min(room);
+            let start = i64::from(start);
+            let origin = i64::from(origin).clamp(start, start + room - extent);
+            // Both lie inside `area`'s own `i32` span.
+            (
+                i32::try_from(origin).expect("BUG: a coordinate inside the area fits i32"),
+                i32::try_from(extent).expect("BUG: an extent within the area fits i32"),
+            )
+        };
+        let (x, width) = fit(
+            rect.origin.x,
+            rect.size.width,
+            area.origin.x,
+            area.size.width,
+        );
+        let (y, height) = fit(
+            rect.origin.y,
+            rect.size.height,
+            area.origin.y,
+            area.size.height,
+        );
+        Bounds {
+            origin: flui_foundation::geometry::Point::new(x, y),
+            size: flui_foundation::geometry::Size::new(width, height),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use flui_foundation::geometry::{Bounds, Point, Size};
+
+        use super::fit_within;
+
+        fn rect(x: i32, y: i32, width: i32, height: i32) -> Bounds<i32> {
+            Bounds {
+                origin: Point::new(x, y),
+                size: Size::new(width, height),
+            }
+        }
+
+        #[test]
+        fn a_rectangle_comes_back_inside_a_monitor_that_is_there() {
+            let work = rect(0, 0, 1920, 1040);
+            let cases = [
+                (
+                    "inside stays",
+                    rect(100, 80, 800, 600),
+                    rect(100, 80, 800, 600),
+                ),
+                (
+                    "on a monitor to the right that is gone",
+                    rect(2200, 100, 800, 600),
+                    rect(1120, 100, 800, 600),
+                ),
+                (
+                    "on a monitor to the left that is gone",
+                    rect(-1500, -200, 800, 600),
+                    rect(0, 0, 800, 600),
+                ),
+                (
+                    "larger than the work area",
+                    rect(-10, -10, 2560, 1440),
+                    rect(0, 0, 1920, 1040),
+                ),
+                (
+                    "at the edge of the coordinate range",
+                    rect(i32::MAX - 10, i32::MIN, 800, 600),
+                    rect(1120, 0, 800, 600),
+                ),
+            ];
+            for (name, from, wanted) in cases {
+                assert_eq!(fit_within(from, work), wanted, "{name}");
+            }
+            let offset = rect(-1280, 40, 1280, 984);
+            assert_eq!(
+                fit_within(rect(5000, 5000, 640, 480), offset),
+                rect(-640, 544, 640, 480),
+                "a work area left of the primary and below a top taskbar"
+            );
+        }
+    }
 }
 
 pub(crate) mod material {

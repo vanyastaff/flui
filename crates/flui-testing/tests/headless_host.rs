@@ -792,7 +792,7 @@ pub(crate) fn a_failure_streak_past_thirty_three_keeps_the_one_second_cap() {
 fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
     use flui_interaction::focus::KeyEventResult;
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
 
     let log = Rc::new(RefCell::new(Vec::new()));
     let keys = Rc::clone(&log);
@@ -800,7 +800,7 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
         flui_widgets::Focus::new(flui_widgets::SizedBox::new(40.0, 40.0))
             .autofocus(true)
             .on_key_event(move |_, event| {
-                keys.borrow_mut().push((event.state(), event.key.clone()));
+                keys.borrow_mut().push((event.state, event.key.clone()));
                 KeyEventResult::Handled
             }),
         tight(100.0, 100.0),
@@ -819,12 +819,12 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
         )
     };
 
-    laid.dispatch_key(key(KeyState::Down, "a"));
+    laid.dispatch_key(key(KeyState::Down(KeyPress::First), "a"));
     laid.set_window_focused(false);
     laid.dispatch_key(key(KeyState::Up, "a"));
     assert_eq!(
         *log.borrow(),
-        [(KeyState::Down, Key::character("a"))],
+        [(KeyState::Down(KeyPress::First), Key::character("a"))],
         "the release of a forgotten key reaches no one"
     );
 
@@ -834,12 +834,120 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
         restored.is_some_and(|node| Rc::ptr_eq(&node, &focused)),
         "the window returns with the focus it had"
     );
-    laid.dispatch_key(key(KeyState::Down, "b"));
+    laid.dispatch_key(key(KeyState::Down(KeyPress::First), "b"));
     assert_eq!(
         log.borrow().last(),
-        Some(&(KeyState::Down, Key::character("b"))),
+        Some(&(KeyState::Down(KeyPress::First), Key::character("b"))),
         "keys reach the focused node again"
     );
+}
+
+/// A window opened beside the focused one takes the OS focus: the first
+/// window is told the key it held was cancelled, as when it loses focus to
+/// another application.
+///
+/// Fails when installing the window clears the first one's focus without
+/// the transfer that forgets its keys.
+#[test]
+fn opening_a_window_cancels_the_keys_the_focused_one_held() {
+    use flui_interaction::focus::{FocusNode, KeyEventResult};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::{EventTime, PlatformInput};
+
+    let node = FocusNode::with_debug_label("held");
+    let cancelled = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&cancelled);
+    let _cancel = node.register_on_key_cancel(Rc::new(move |press: &KeyEvent| {
+        seen.borrow_mut().push(press.key.clone());
+    }));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    host.attach(
+        &flui_widgets::Focus::new(flui_widgets::SizedBox::new(40.0, 40.0))
+            .focus_node(Rc::clone(&node))
+            .on_key_event(|_, _| KeyEventResult::Handled),
+    )
+    .expect("a fresh host has no root");
+    let _ = host.pump(Duration::ZERO);
+    let _ = node.request_focus();
+    let _ = host.pump(Duration::ZERO);
+    host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
+        KeyState::Down(KeyPress::First),
+        Key::character("a"),
+        Code::KeyA,
+        EventTime::from_nanos(0),
+    )));
+    assert!(cancelled.borrow().is_empty(), "the key is held");
+
+    host.open_window(HeadlessWindow::new(100, 100));
+    assert_eq!(
+        *cancelled.borrow(),
+        [Key::character("a")],
+        "the first window forgot the key it held"
+    );
+}
+
+/// A window that opens beside a focused one takes its focus, which cancels
+/// the first window's held keys and pressed pointers. A handler of the first
+/// window that panics there is the first window's failure: the new window
+/// opens, and every handler still runs (ADR-0345 §2).
+///
+/// Fails if a sibling's failure fails the window opening: `open_window`
+/// resumes the panic.
+#[test]
+fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::PointerId;
+    use flui_interaction::events::{PointerKind, make_down_event_for_id};
+    use flui_interaction::focus::{FocusNode, KeyEventResult};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
+    use flui_platform::{EventTime, PlatformInput};
+
+    let node = FocusNode::with_debug_label("held");
+    let keys = Rc::new(Cell::new(0_u32));
+    let pointers = Rc::new(Cell::new(0_u32));
+    let key_count = Rc::clone(&keys);
+    let _cancel = node.register_on_key_cancel(Rc::new(move |_: &KeyEvent| {
+        key_count.set(key_count.get() + 1);
+        panic!("the key-cancel handler fails");
+    }));
+    let pointer_count = Rc::clone(&pointers);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    host.attach(
+        &flui_widgets::Listener::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .child(
+                flui_widgets::Focus::new(flui_widgets::SizedBox::new(100.0, 100.0))
+                    .focus_node(Rc::clone(&node))
+                    .on_key_event(|_, _| KeyEventResult::Handled),
+            )
+            .on_pointer_cancel(move |_, _| -> () {
+                pointer_count.set(pointer_count.get() + 1);
+                panic!("the pointer-cancel handler fails");
+            }),
+    )
+    .expect("a fresh host has no root");
+    let _ = host.pump(Duration::ZERO);
+    let _ = node.request_focus();
+    let _ = host.pump(Duration::ZERO);
+    host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
+        KeyState::Down(KeyPress::First),
+        Key::character("a"),
+        Code::KeyA,
+        EventTime::from_nanos(0),
+    )));
+    host.dispatch(PlatformInput::Pointer(
+        make_down_event_for_id(
+            PointerId::try_from(1).expect("nonzero pointer id"),
+            Offset::new(10.0, 10.0),
+            PointerKind::Touch,
+        )
+        .expect("down"),
+    ));
+
+    let _ = host.pump(Duration::ZERO);
+    host.open_window(HeadlessWindow::new(100, 100));
+    assert_eq!(keys.get(), 1, "the held key was cancelled");
+    assert_eq!(pointers.get(), 1, "the pressed pointer was cancelled");
 }
 
 /// Tab moves the primary focus to the next field, and Shift+Tab back, in a
@@ -849,13 +957,13 @@ fn a_window_that_loses_focus_forgets_its_keys_and_keeps_its_focus() {
 #[test]
 fn tab_moves_focus_in_a_headless_host_attached_app() {
     use flui_interaction::focus::FocusNode;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
     use flui_platform::{EventTime, PlatformInput};
     use flui_view::ViewExt as _;
     use flui_widgets::{Column, Focus, SizedBox};
 
     let tab = |host: &mut HeadlessHost, modifiers: Modifiers| {
-        for state in [KeyState::Down, KeyState::Up] {
+        for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             host.dispatch(PlatformInput::Keyboard(
                 KeyEvent::new(
                     state,

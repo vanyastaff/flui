@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-30)
 - **Date:** 2026-10-30
-- **Related:** [ADR-0257](ADR-0257-frame-timing-and-latency.md) decision 1 (a frame request carries
+- **Related:** [ADR-0347](ADR-0347-a-frame-request-carries-the-hosts-frame-times-and-reports-that-name-their-frame.md) decision 1 (a frame request carries
   the host's vsync and target present time), [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md)
   §2 (the loop has no timer of its own; this ADR adds the turn that waits for the choreographer),
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md) §4 (gates are types, and an API above the floor
@@ -35,7 +35,7 @@ choreographer's frame?
 
 ## Decision drivers
 
-- A frame request carries what the platform reports, never an invention (ADR-0257 decision 1).
+- A frame request carries what the platform reports, never an invention (ADR-0347 decision 1).
 - The loop blocks until woken and never busy-waits (ADR-0249).
 - A function above the floor is never linked and is reached only through its gate (ADR-0244 §4).
 - No accepted work is dropped: a frame the loop is waiting on still runs.
@@ -45,7 +45,7 @@ choreographer's frame?
 1. **Keep the turn-driven frames and stamp them from the last refresh period.**
    - Good: no change to when frames run.
    - Bad: the period says how long a frame lasts, not when it started. The stamp would be an
-     estimate, which ADR-0257 rules out.
+     estimate, which ADR-0347 rules out.
 2. **The choreographer's next frame paces the frames: post a callback, deliver on its tick.**
    - Good: the request carries the platform's vsync, and on API 33 its expected presentation time.
      Frames line up with the display as on iOS and the Web.
@@ -94,7 +94,7 @@ API 24 post is kept for 64-bit processes, where its `long` is the same 64 bits a
 ### Consequences
 
 - Good, because Android frame requests carry the display's vsync, and from API 33 a target present
-  time that bounds idle work (ADR-0257 decision 3).
+  time that bounds idle work (ADR-0347 decision 3).
 - Good, because frames start on the display's frame and not at whatever point the loop turn reached.
 - Bad, because a frame owed after idle waits up to one refresh.
 - Bad, because with the screen off the choreographer sends no callback, so an owed frame waits for

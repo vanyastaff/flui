@@ -770,6 +770,92 @@ fn maximizing_a_fullscreen_window_leaves_fullscreen() {
     assert_ne!(style(&window) & WS_CAPTION.0, 0, "it has its frame");
 }
 
+/// A window maximized, made fullscreen and maximized again comes back in one
+/// step: no snapshot between shows it normal, it returns to the normal
+/// rectangle it had before fullscreen, and no report of the round trip says
+/// the user placed it.
+fn a_fullscreen_window_maximized_again_never_reads_normal() {
+    let platform = platform();
+    let window = open(&platform, options());
+    let normal = window.state().outer;
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    settle();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    on_changes(&window, move |_, _, next| {
+        log.lock().expect("log").push((next.mode, next.interaction));
+    });
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    settle();
+    let seen = seen.lock().expect("log").clone();
+    assert!(
+        seen.iter().all(|(mode, _)| *mode != WindowMode::Normal),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .all(|(_, interaction)| *interaction == WindowInteraction::None),
+        "{seen:?}"
+    );
+    let state = window.state();
+    assert_eq!(state.mode, WindowMode::Maximized);
+    // SAFETY: a plain query of the live window.
+    assert!(unsafe { IsZoomed(hwnd_of(&window)) }.as_bool());
+    assert_ne!(style(&window) & WS_CAPTION.0, 0, "it has its frame");
+    let returns = state.normal_geometry.expect("a maximized window's normal");
+    assert!(near(returns.size().width, normal.size().width), "{state:?}");
+    assert!(
+        near(returns.size().height, normal.size().height),
+        "{state:?}"
+    );
+}
+
+/// A fullscreen window that was minimized leaves fullscreen straight from
+/// minimized: a subscriber sees it minimized, then in the mode asked, and
+/// never fullscreen or (on its way to maximized) normal between.
+fn a_minimized_fullscreen_window_leaves_in_one_step() {
+    for (target, between) in [
+        (
+            WindowMode::Maximized,
+            [WindowMode::Fullscreen, WindowMode::Normal],
+        ),
+        (
+            WindowMode::Normal,
+            [WindowMode::Fullscreen, WindowMode::Maximized],
+        ),
+    ] {
+        let platform = platform();
+        let window = open(&platform, options());
+        let normal = window.state().outer;
+        apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+        apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
+        settle();
+        assert_eq!(window.state().mode, WindowMode::Minimized);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        on_changes(&window, move |_, _, next| {
+            log.lock().expect("log").push(next.mode);
+        });
+        apply(&window, WindowCommand::SetMode(target));
+        settle();
+        let seen = seen.lock().expect("log").clone();
+        assert!(
+            seen.iter().all(|mode| !between.contains(mode)),
+            "{target:?}: {seen:?}"
+        );
+        let state = window.state();
+        assert_eq!(state.mode, target);
+        assert!(shown(&window));
+        let returns = state.normal_geometry.unwrap_or(state.outer);
+        assert!(near(returns.size().width, normal.size().width), "{state:?}");
+        assert!(
+            near(returns.size().height, normal.size().height),
+            "{state:?}"
+        );
+    }
+}
+
 fn entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot() {
     let platform = platform();
     let window = open(&platform, options());
@@ -848,6 +934,34 @@ fn a_hidden_windows_frame_request_reaches_its_frame_callback() {
     assert!(pump_until(Duration::from_secs(2), || redraws
         .load(Ordering::SeqCst)
         > 0));
+}
+
+/// Win32 folds a painted window's invalidations into one paint; a hidden
+/// window's frame requests fold the same way until it takes one, so a burst
+/// of wakes from another thread is one frame, not a thousand posts.
+fn a_burst_of_frame_requests_on_a_hidden_window_is_one_frame() {
+    let platform = platform();
+    let window = open(&platform, hidden());
+    settle();
+    let frames = count_frames(&window);
+    let requester = window.redraw_requester();
+    std::thread::spawn(move || {
+        for _ in 0..1000 {
+            requester.request_redraw();
+        }
+    })
+    .join()
+    .expect("the requesting thread");
+    assert!(pump_until(Duration::from_secs(2), || frames
+        .load(Ordering::SeqCst)
+        > 0));
+    settle();
+    assert_eq!(frames.load(Ordering::SeqCst), 1);
+    // Taken, the next request asks again.
+    window.request_redraw();
+    assert!(pump_until(Duration::from_secs(2), || frames
+        .load(Ordering::SeqCst)
+        > 1));
 }
 
 /// The window stays on its thread; another thread asks for a frame through
@@ -1282,47 +1396,23 @@ fn press_f11(window: &Rc<dyn HostWindow>) {
     send(window, WM_KEYDOWN, usize::from(VK_F11.0), 0x0057_0001);
 }
 
-fn the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through() {
+/// The host has no key of its own: an F11 the application answers without
+/// preventing its default leaves the window as it was. Fullscreen is the
+/// application's `SetMode`.
+fn a_key_the_application_lets_through_leaves_the_mode_alone() {
     let platform = platform();
     let window = open(&platform, options());
     settle();
-    // A toggle request that names another window (one whose handle this
-    // window reuses) is not this window's.
-    // SAFETY: a post to the live window; the parameters are plain values.
-    let _ = unsafe {
-        PostMessageW(
-            Some(hwnd_of(&window)),
-            windows::Win32::UI::WindowsAndMessaging::WM_APP + 3,
-            WPARAM(0),
-            LPARAM(0),
-        )
-    };
-    settle();
-    assert_ne!(window.state().mode, WindowMode::Fullscreen);
-
-    window
-        .handler
-        .react_to_input(|_| DispatchEventResult::resolved(false, true));
-    press_f11(&window);
-    settle();
-    assert_ne!(
-        window.state().mode,
-        WindowMode::Fullscreen,
-        "the app prevented it"
-    );
-
+    let before = window.state();
     window
         .handler
         .react_to_input(|_| DispatchEventResult::resolved(true, false));
     press_f11(&window);
-    assert_ne!(
-        window.state().mode,
-        WindowMode::Fullscreen,
-        "not inside the key's own message"
-    );
-    assert!(pump_until(Duration::from_secs(1), || {
-        window.state().mode == WindowMode::Fullscreen
-    }));
+    let changed = pump_until(Duration::from_millis(500), || {
+        window.state().mode != WindowMode::Normal
+    });
+    assert!(!changed, "{:?}", window.state().mode);
+    assert_eq!(window.state().outer, before.outer);
 }
 
 fn a_resize_outside_a_live_resize_asks_for_one_frame_after_it() {
@@ -1704,23 +1794,31 @@ impl DxgiPresenter {
         }
     }
 
-    /// The statistics as wgpu's DX12 backend reads them before a present:
-    /// none until the display has shown one.
+    /// The counters as the renderer reads them from wgpu's DX12 swap chain
+    /// before a present: the presents made so far, and the statistics, which
+    /// name nothing until the display has shown a present.
     fn statistics(&self) -> flui_platform::SwapChainStatistics {
         let mut statistics = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
-        // SAFETY: a read of the swap chain's counters on its presenting
-        // thread; `statistics` outlives the call that fills it.
-        let read = unsafe { self.swap_chain.GetFrameStatistics(&raw mut statistics) };
-        match read {
-            Ok(()) => {
-                flui_platform::SwapChainStatistics::Dxgi(flui_platform::DxgiFrameStatistics::new(
-                    statistics.PresentCount,
-                    statistics.SyncRefreshCount,
-                    statistics.SyncQPCTime,
-                ))
-            }
-            Err(_) => flui_platform::SwapChainStatistics::None,
-        }
+        // SAFETY: reads of the swap chain's counters on its presenting
+        // thread; `statistics` and `made` outlive the calls that fill them.
+        let (read, made) = unsafe {
+            (
+                self.swap_chain.GetFrameStatistics(&raw mut statistics),
+                self.swap_chain.GetLastPresentCount(),
+            )
+        };
+        let shown = match read {
+            Ok(()) => flui_platform::DxgiShown::Present(flui_platform::DxgiFrameStatistics::new(
+                statistics.PresentCount,
+                statistics.SyncRefreshCount,
+                statistics.SyncQPCTime,
+            )),
+            Err(_) => flui_platform::DxgiShown::Nothing,
+        };
+        flui_platform::SwapChainStatistics::Dxgi(flui_platform::DxgiStatistics::new(
+            made.expect("a swap chain counts its presents"),
+            shown,
+        ))
     }
 
     /// Present the back buffer at the next refresh.
@@ -1808,18 +1906,25 @@ impl WindowFixture for Win32Fixture {
         {
             let presenter = DxgiPresenter::on(hwnd);
             let mut shown = std::collections::BTreeSet::new();
-            for _ in 0..300 {
+            for present in 1..=300 {
                 let statistics = presenter.statistics();
-                if let flui_platform::SwapChainStatistics::Dxgi(read) = statistics
+                if let flui_platform::SwapChainStatistics::Dxgi(counters) = statistics
+                    && let flui_platform::DxgiShown::Present(read) = counters.shown
                     && read.sync_qpc_time > 0
                     && shown.insert(read.present_count)
                 {
                     eprintln!(
-                        "DXGI before a present: present {} shown at refresh {}, QPC {}",
-                        read.present_count, read.sync_refresh_count, read.sync_qpc_time
+                        "DXGI before present {}: present {} shown at refresh {}, QPC {}",
+                        counters.last_present_count + 1,
+                        read.present_count,
+                        read.sync_refresh_count,
+                        read.sync_qpc_time
                     );
                 }
-                target.pre_present_notify(statistics);
+                target.pre_present_notify(
+                    Some(flui_testing::window_conformance::fixture_frame(present)),
+                    statistics,
+                );
                 presenter.present();
                 let _ = pump_until(Duration::ZERO, || false);
                 if shown.len() >= 2 {
@@ -2289,6 +2394,14 @@ fn native_window_commands() {
             maximizing_a_fullscreen_window_leaves_fullscreen,
         ),
         (
+            "a_fullscreen_window_maximized_again_never_reads_normal",
+            a_fullscreen_window_maximized_again_never_reads_normal,
+        ),
+        (
+            "a_minimized_fullscreen_window_leaves_in_one_step",
+            a_minimized_fullscreen_window_leaves_in_one_step,
+        ),
+        (
             "entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot",
             entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot,
         ),
@@ -2307,6 +2420,10 @@ fn native_window_commands() {
         (
             "a_hidden_windows_frame_request_reaches_its_frame_callback",
             a_hidden_windows_frame_request_reaches_its_frame_callback,
+        ),
+        (
+            "a_burst_of_frame_requests_on_a_hidden_window_is_one_frame",
+            a_burst_of_frame_requests_on_a_hidden_window_is_one_frame,
         ),
         (
             "a_redraw_asked_from_another_thread_reaches_the_window",
@@ -2365,8 +2482,8 @@ fn native_window_commands() {
             a_size_past_the_largest_surface_is_admitted,
         ),
         (
-            "the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through",
-            the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through,
+            "a_key_the_application_lets_through_leaves_the_mode_alone",
+            a_key_the_application_lets_through_leaves_the_mode_alone,
         ),
         (
             "a_resize_outside_a_live_resize_asks_for_one_frame_after_it",

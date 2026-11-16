@@ -11,7 +11,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_widgets::{
@@ -24,14 +24,14 @@ use crate::common::{LaidOut, SignalProbe, lay_out, tight};
 fn character(ch: char) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyA)
         .key(Key::character(ch.to_string()))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .build()
 }
 
 fn named(key: NamedKey, modifiers: Modifiers) -> KeyEvent {
     KeyEventBuilder::new(Code::Tab)
         .key(Key::Named(key))
-        .state(KeyState::Down)
+        .state(KeyState::Down(KeyPress::First))
         .modifiers(modifiers)
         .build()
 }

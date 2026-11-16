@@ -368,8 +368,7 @@ impl WindowMessages for Tsf {
             | WindowStep::SizeMoveStarted
             | WindowStep::SizeMoveEnded
             | WindowStep::SettingChanged
-            | WindowStep::SessionLocked(_)
-            | WindowStep::KeyLetThrough { .. } => {}
+            | WindowStep::SessionLocked(_) => {}
         }
     }
 

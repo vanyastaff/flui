@@ -33,6 +33,8 @@ import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.CursorAnchorInfo;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.ExtractedText;
+import android.view.inputmethod.ExtractedTextRequest;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
@@ -69,7 +71,7 @@ public final class FluiView extends View {
     static native boolean nativeDrop(long handle, long offer, float x, float y, boolean local);
 
     static native void nativeImeState(long handle, String text, int selectionStart,
-            int selectionEnd, int compositionStart, int compositionEnd, int generation);
+            int selectionEnd, int compositionStart, int compositionEnd);
 
     static native void nativeImeAction(long handle, int action, long uptimeMillis);
 
@@ -126,9 +128,15 @@ public final class FluiView extends View {
 
     /** The text the input method edits, a mirror of the focused field's. */
     final SpannableStringBuilder editable = new SpannableStringBuilder();
-    /** The owner snapshot {@link #editable} was last set from. */
-    int generation;
     private boolean editing;
+    /**
+     * The input method's request to be sent the extracted text on every
+     * change ({@code GET_EXTRACTED_TEXT_MONITOR}), until its connection is
+     * replaced or the editor loses its field.
+     */
+    private ExtractedTextRequest extractedMonitor;
+    /** The connection the input method was handed last. */
+    private FluiInputConnection connection;
     private int inputType = EditorInfo.TYPE_CLASS_TEXT;
     private int imeOptions = EditorInfo.IME_ACTION_DONE;
     private boolean handwriting;
@@ -148,7 +156,6 @@ public final class FluiView extends View {
     private int reportedSelectionEnd = -1;
     private int reportedCompositionStart = -1;
     private int reportedCompositionEnd = -1;
-    private int reportedGeneration = -1;
     /** Reports a change of {@link #OBSERVED_SETTINGS}, on this thread. */
     private final ContentObserver settings;
     /** Whether {@link #settings} and the contrast listener are registered. */
@@ -311,7 +318,10 @@ public final class FluiView extends View {
         if (Build.VERSION.SDK_INT >= 35) {
             Api35.handwriting(info, handwriting);
         }
-        return new FluiInputConnection(this);
+        // A new connection: the previous one's monitor request ended with it.
+        extractedMonitor = null;
+        connection = new FluiInputConnection(this);
+        return connection;
     }
 
     /**
@@ -319,14 +329,29 @@ public final class FluiView extends View {
      * mirror the input method edits, and the soft keyboard shows.
      */
     public void focusEditor(int type, int options, boolean stylus, String text, int selectionStart,
-            int selectionEnd, int compositionStart, int compositionEnd, int snapshot) {
+            int selectionEnd, int compositionStart, int compositionEnd) {
         inputType = type;
         imeOptions = options;
         handwriting = stylus;
-        setMirror(text, selectionStart, selectionEnd, compositionStart, compositionEnd, snapshot);
+        setMirror(text, selectionStart, selectionEnd, compositionStart, compositionEnd);
         editing = true;
         requestFocus();
         inputMethods.restartInput(this);
+        inputMethods.showSoftInput(this, 0);
+    }
+
+    /**
+     * The user tapped the focused field: show the soft keyboard again, as a
+     * tap on a platform text field does, so a keyboard put away with Back
+     * returns. Nothing happens while the editor has no field.
+     */
+    public void showKeyboard() {
+        if (!editing || handle == 0) {
+            return;
+        }
+        if (!hasFocus()) {
+            requestFocus();
+        }
         inputMethods.showSoftInput(this, 0);
     }
 
@@ -336,32 +361,37 @@ public final class FluiView extends View {
             return;
         }
         editing = false;
+        extractedMonitor = null;
         inputMethods.hideSoftInputFromWindow(getWindowToken(), 0);
         inputMethods.restartInput(this);
     }
 
     /**
      * The field changed outside the input method's edits (or refused one): the
-     * mirror becomes the owner's snapshot. A text change restarts the input
-     * method, whose own copy of the text is then stale; a selection or
-     * composition change only tells it.
+     * mirror becomes the owner's snapshot. With {@code restart} the input
+     * method starts over on it (its composition was ended or rewritten, or
+     * its copy of the text no longer matches); otherwise it is told the new
+     * selection and composing bounds, and the extracted text if it monitors
+     * it, and keeps its composition and suggestions.
      */
     public void pushState(String text, int selectionStart, int selectionEnd, int compositionStart,
-            int compositionEnd, int snapshot, boolean restart) {
-        setMirror(text, selectionStart, selectionEnd, compositionStart, compositionEnd, snapshot);
+            int compositionEnd, boolean restart) {
+        setMirror(text, selectionStart, selectionEnd, compositionStart, compositionEnd);
         if (!editing) {
             return;
         }
         if (restart) {
+            extractedMonitor = null;
             inputMethods.restartInput(this);
         } else {
             inputMethods.updateSelection(this, selectionStart, selectionEnd, compositionStart,
                     compositionEnd);
+            sendExtractedText();
         }
     }
 
     private void setMirror(String text, int selectionStart, int selectionEnd, int compositionStart,
-            int compositionEnd, int snapshot) {
+            int compositionEnd) {
         editable.clear();
         editable.clearSpans();
         editable.append(text);
@@ -371,13 +401,11 @@ public final class FluiView extends View {
             new Composer(this).setComposingRegion(clamp(compositionStart, length),
                     clamp(compositionEnd, length));
         }
-        generation = snapshot;
         reportedText = editable.toString();
         reportedSelectionStart = Selection.getSelectionStart(editable);
         reportedSelectionEnd = Selection.getSelectionEnd(editable);
         reportedCompositionStart = BaseInputConnection.getComposingSpanStart(editable);
         reportedCompositionEnd = BaseInputConnection.getComposingSpanEnd(editable);
-        reportedGeneration = snapshot;
     }
 
     /**
@@ -402,6 +430,17 @@ public final class FluiView extends View {
         return Math.max(0, Math.min(value, length));
     }
 
+    /**
+     * Report what the input method did since the last report, an edit inside
+     * a batch it has not ended included. The native side calls this before it
+     * hands the view a snapshot, so the snapshot is decided against every
+     * edit the input method made; the batch's later edits are reported when
+     * it ends, from this state.
+     */
+    public void reportPending() {
+        report();
+    }
+
     /** Send the mirror's state to the owner, when it changed since the last report. */
     void report() {
         if (handle == 0 || !editing) {
@@ -412,7 +451,7 @@ public final class FluiView extends View {
         int selectionEnd = Selection.getSelectionEnd(editable);
         int compositionStart = BaseInputConnection.getComposingSpanStart(editable);
         int compositionEnd = BaseInputConnection.getComposingSpanEnd(editable);
-        if (generation == reportedGeneration && text.equals(reportedText)
+        if (text.equals(reportedText)
                 && selectionStart == reportedSelectionStart && selectionEnd == reportedSelectionEnd
                 && compositionStart == reportedCompositionStart
                 && compositionEnd == reportedCompositionEnd) {
@@ -425,9 +464,8 @@ public final class FluiView extends View {
         reportedSelectionEnd = selectionEnd;
         reportedCompositionStart = compositionStart;
         reportedCompositionEnd = compositionEnd;
-        reportedGeneration = generation;
         nativeImeState(handle, text, selectionStart, selectionEnd, compositionStart,
-                compositionEnd, generation);
+                compositionEnd);
         // The input method's own edit changed the text or moved the selection: the
         // contract is that the editor says so, and the suggestion and
         // autocorrect-revert state of some keyboards depends on it. A report that
@@ -435,6 +473,79 @@ public final class FluiView extends View {
         if (moved) {
             inputMethods.updateSelection(this, selectionStart, selectionEnd, compositionStart,
                     compositionEnd);
+            sendExtractedText();
+        }
+    }
+
+    /** {@code ExtractedText.FLAG_SINGLE_LINE}'s source: a field whose Enter does not break lines. */
+    private boolean singleLine() {
+        return (inputType & EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE) == 0;
+    }
+
+    /**
+     * Whether the field is protected: its text is mirrored as bullets, and
+     * neither the bullets nor the text leave it through Cut or Copy.
+     */
+    boolean isProtected() {
+        int variation = inputType & (EditorInfo.TYPE_MASK_CLASS | EditorInfo.TYPE_MASK_VARIATION);
+        return variation == (EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_PASSWORD);
+    }
+
+    /**
+     * The mirror as {@code request} asks for it: the whole text, or, when the
+     * request hints at fewer characters than the text holds, a window of
+     * that many around the selection (never splitting a surrogate pair),
+     * with the selection counted from the window's start. With
+     * {@code GET_EXTRACTED_TEXT_MONITOR} in {@code flags}, asked through the
+     * current {@code connection}, the request is kept, and the text is sent
+     * again on every change until the connection is replaced.
+     */
+    ExtractedText extractedText(FluiInputConnection asking, ExtractedTextRequest request,
+            int flags) {
+        if (request != null && asking == connection
+                && (flags & InputConnection.GET_EXTRACTED_TEXT_MONITOR) != 0) {
+            extractedMonitor = request;
+        }
+        return extract(request);
+    }
+
+    private ExtractedText extract(ExtractedTextRequest request) {
+        int length = editable.length();
+        int selectionStart = Math.max(0, Selection.getSelectionStart(editable));
+        int selectionEnd = Math.max(0, Selection.getSelectionEnd(editable));
+        int start = 0;
+        int end = length;
+        int limit = request == null ? 0 : request.hintMaxChars;
+        if (limit > 0 && limit < length) {
+            int low = Math.min(selectionStart, selectionEnd);
+            int high = Math.max(selectionStart, selectionEnd);
+            // Centred on the selection, then pulled back inside the text.
+            start = Math.max(0, low - Math.max(0, limit - (high - low)) / 2);
+            end = Math.min(length, start + limit);
+            start = Math.max(0, end - limit);
+            if (start > 0 && Character.isLowSurrogate(editable.charAt(start))) {
+                start++;
+            }
+            if (end < length && Character.isHighSurrogate(editable.charAt(end - 1))) {
+                end--;
+            }
+        }
+        ExtractedText extracted = new ExtractedText();
+        extracted.text = editable.subSequence(start, end).toString();
+        extracted.startOffset = start;
+        extracted.partialStartOffset = -1;
+        extracted.partialEndOffset = -1;
+        extracted.selectionStart = clamp(Selection.getSelectionStart(editable) - start, end - start);
+        extracted.selectionEnd = clamp(Selection.getSelectionEnd(editable) - start, end - start);
+        extracted.flags = singleLine() ? ExtractedText.FLAG_SINGLE_LINE : 0;
+        return extracted;
+    }
+
+    /** Send the extracted text to an input method that monitors it. */
+    private void sendExtractedText() {
+        ExtractedTextRequest monitor = extractedMonitor;
+        if (monitor != null && editing) {
+            inputMethods.updateExtractedText(this, monitor.token, extract(monitor));
         }
     }
 

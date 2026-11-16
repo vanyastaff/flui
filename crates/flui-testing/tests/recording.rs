@@ -2,19 +2,20 @@
 //! arena decisions it made, written as JSON Lines with text redacted by
 //! default, read back, checked whole, and replayed to the same decisions.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::FrameEpoch;
 use flui_foundation::geometry::Offset;
 use flui_interaction::GestureDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
 use flui_platform::{
-    EventTime, FramePresented, GesturePreferences, PlatformInput, SystemPreferences,
+    EventTime, GesturePreferences, PlatformInput, RefreshPeriod, SystemPreferences,
 };
 use flui_runtime::owner::InputOutcome;
-use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow};
+use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow, ShownFrame};
 use flui_testing::recording::{
     Privacy, RecordingClock, RecordingError, RecordingReader, RecordingWriter, ReplayableRecording,
     record,
@@ -514,7 +515,7 @@ fn a_truncated_recording_dispatches_nothing() {
 
 /// Rows carrying text in each place a recording redacts it.
 fn text_rows() -> Vec<InputRecord> {
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
     use flui_platform::{EventTime, ImeEvent, WindowId};
 
     let at = EventTime::from_nanos(1_000);
@@ -526,7 +527,7 @@ fn text_rows() -> Vec<InputRecord> {
     };
     [
         HostInput::Platform(PlatformInput::Keyboard(KeyEvent::new(
-            KeyState::Down,
+            KeyState::Down(KeyPress::First),
             Key::character("q"),
             Code::KeyQ,
             at,
@@ -787,11 +788,12 @@ fn reporting_host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
 const REFRESH: Duration = Duration::from_millis(16);
 
 /// A touch, the frame that draws it, a report that the frame was shown 24 ms after the touch,
-/// and two more frames, recorded on the host `make` builds: the touch's arrival and the
-/// presentation report a frame carried, if any did.
+/// and two more frames, recorded on the host `make` builds: the touch's arrival, the frame that
+/// drew it, and the presentation report a frame carried, if any did.
 fn touch_and_presentation(
     make: fn(&Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost,
-) -> (EventTime, Option<FramePresented>) {
+) -> (EventTime, FrameEpoch, Option<ShownFrame>) {
+    let drawn = Cell::new(None);
     let (bytes, _) = recorded_on(make, Privacy::Redact, |host| {
         let touched = EventTime::from_nanos(
             u64::try_from(host.clock().elapsed().as_nanos()).expect("test time fits"),
@@ -799,8 +801,12 @@ fn touch_and_presentation(
         touch(host, 1, true);
         let _ = host.pump(REFRESH);
         // The frame that drew the touch is shown at the refresh after it.
-        host.report_presented(
-            FramePresented::new(touched + Duration::from_millis(24)).with_refresh(REFRESH),
+        let drew = host.sink().last_presented().expect("the touch's frame");
+        drawn.set(Some(drew));
+        let _reported = host.report_presented(
+            drew,
+            touched + Duration::from_millis(24),
+            Some(RefreshPeriod::try_from(REFRESH).expect("a refresh period")),
         );
         let _ = host.pump(REFRESH);
         touch(host, 1, false);
@@ -823,7 +829,7 @@ fn touch_and_presentation(
         }) => Some(*presented),
         _ => None,
     });
-    (touch, presented)
+    (touch, drawn.get().expect("the touch was drawn"), presented)
 }
 
 /// One timeline for input, frames and presentation: a report that a
@@ -832,21 +838,25 @@ fn touch_and_presentation(
 /// showing is a subtraction of the two recorded stamps, with no conversion.
 #[test]
 fn a_presentation_and_the_input_before_it_are_on_one_timeline() {
-    let (touch, presented) = touch_and_presentation(reporting_host);
+    let (touch, drew, presented) = touch_and_presentation(reporting_host);
     let presented = presented.expect("a frame carried the presentation report");
+    assert_eq!(
+        presented.epoch, drew,
+        "the recorded report names the frame that drew the touch"
+    );
     assert_eq!(
         presented.at.saturating_duration_since(touch),
         Duration::from_millis(24),
         "the touch's stamp and the presentation's are on one timeline"
     );
-    assert_eq!(presented.refresh, Some(REFRESH));
+    assert_eq!(presented.refresh.map(RefreshPeriod::get), Some(REFRESH));
 }
 
 /// A headless window whose capabilities say it reports no presentation
 /// carries none, whatever a test injects.
 #[test]
 fn a_window_that_reports_no_presentation_carries_none() {
-    assert_eq!(touch_and_presentation(host).1, None);
+    assert_eq!(touch_and_presentation(host).2, None);
 }
 
 /// The pointer rows of `rows`, with their positions.

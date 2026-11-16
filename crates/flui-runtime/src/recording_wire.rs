@@ -34,31 +34,32 @@ use flui_platform::data_transfer::{
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, Location, Modifiers,
-    NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenSqueeze, PenSqueezePhase, PenTool, PointerButton,
-    PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRevision,
-    PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
+    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
+    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
+    ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, HourCycle, ImeEvent,
-    InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
+    InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
     RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
     WheelStep, WindowExecutionState, WindowInsets,
 };
 use flui_protocol::input_recording as rec;
 use flui_protocol::native_recording as wire;
 
+use crate::ShownFrame;
 use crate::owner::{InputOutcome, WindowObservation};
 #[cfg(feature = "testing")]
 use crate::{DeadlineRow, DecisionRow, InputRow, RecordedMember, RecordedSequence};
 use crate::{HostInput, InputRecord, PreferencesRow, RecordedSurface, RecordingStart};
+use flui_foundation::{FrameEpoch, SurfaceGeneration};
 
 /// A value the recording's wire form cannot convert in either direction.
 #[derive(Debug, thiserror::Error)]
@@ -302,7 +303,11 @@ impl TryConvert<&HostInput> for rec::HostInput {
                 target_present: target_present.map(EventTime::as_nanos),
                 presented: presented.map(|presented| rec::FramePresented {
                     at: presented.at.as_nanos(),
-                    refresh: presented.refresh.map(nanos),
+                    refresh: presented.refresh.map(|refresh| nanos(refresh.get())),
+                    frame: Some(rec::ShownFrameId {
+                        epoch: presented.epoch.get(),
+                        surface: presented.surface_generation.get(),
+                    }),
                 }),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_convert_into()?),
@@ -323,14 +328,23 @@ impl TryConvert<rec::HostInput> for HostInput {
             } => Self::Frame {
                 vsync: EventTime::from_nanos(vsync),
                 target_present: target_present.map(EventTime::from_nanos),
-                presented: presented.map(|presented| {
-                    let shown = FramePresented::new(EventTime::from_nanos(presented.at));
-                    match presented.refresh {
-                        Some(refresh) => {
-                            shown.with_refresh(std::time::Duration::from_nanos(refresh))
-                        }
-                        None => shown,
-                    }
+                // A report recorded without its frame names none, and is no report; a recorded
+                // refresh outside a cadence is none.
+                presented: presented.and_then(|presented| {
+                    let frame = presented.frame?;
+                    let shown = ShownFrame::new(
+                        FrameEpoch::from_raw(frame.epoch),
+                        SurfaceGeneration::from_raw(frame.surface),
+                        EventTime::from_nanos(presented.at),
+                    );
+                    Some(
+                        match presented.refresh.and_then(|refresh| {
+                            RefreshPeriod::try_from(std::time::Duration::from_nanos(refresh)).ok()
+                        }) {
+                            Some(refresh) => shown.refresh(refresh),
+                            None => shown,
+                        },
+                    )
                 }),
             },
             rec::HostInput::Accessibility(request) => {
@@ -755,6 +769,14 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                             })
                         })
                         .transpose()?,
+                    inversion: match scroll.inversion {
+                        ScrollInversion::Unknown => None,
+                        ScrollInversion::FromDevice => Some(rec::ScrollInversion::FromDevice),
+                        ScrollInversion::InvertedFromDevice => {
+                            Some(rec::ScrollInversion::InvertedFromDevice)
+                        }
+                        _ => return Err(unmirrored("ScrollInversion")),
+                    },
                     modifiers: modifiers_dto(scroll.modifiers),
                 })
             }
@@ -791,22 +813,6 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(zoom.modifiers),
                 })
             }
-            PointerEvent::Revise(revision) => Self::Revise {
-                pointer: (&revision.pointer).try_convert_into()?,
-                sample: (&revision.sample).convert_into(),
-            },
-            PointerEvent::PenSqueeze(squeeze) => Self::PenSqueeze {
-                pointer: (&squeeze.pointer).try_convert_into()?,
-                t: squeeze.time.as_nanos(),
-                phase: match squeeze.phase {
-                    PenSqueezePhase::Began => rec::SqueezePhase::Began,
-                    PenSqueezePhase::Changed => rec::SqueezePhase::Changed,
-                    PenSqueezePhase::Ended => rec::SqueezePhase::Ended,
-                    PenSqueezePhase::Cancelled => rec::SqueezePhase::Cancelled,
-                    _ => return Err(unmirrored("PenSqueezePhase")),
-                },
-                hover: squeeze.hover.as_ref().map(rec::Sample::convert),
-            },
             PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)?),
             PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)?),
             _ => return Err(unmirrored("PointerEvent")),
@@ -875,6 +881,13 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                     rec::ScrollPrecision::Notched => ScrollPrecision::Notched,
                     rec::ScrollPrecision::Precise => ScrollPrecision::Precise,
                 })
+                .with_inversion(match scroll.inversion {
+                    None => ScrollInversion::Unknown,
+                    Some(rec::ScrollInversion::FromDevice) => ScrollInversion::FromDevice,
+                    Some(rec::ScrollInversion::InvertedFromDevice) => {
+                        ScrollInversion::InvertedFromDevice
+                    }
+                })
                 .with_modifiers(modifiers(&scroll.modifiers)?);
                 if let Some(phase) = scroll.phase {
                     event = event.with_phase(match phase {
@@ -916,31 +929,6 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 )
                 .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
-            rec::PointerEvent::Revise { pointer, sample } => Self::Revise(PointerRevision::new(
-                pointer.try_convert_into()?,
-                sample.try_convert_into()?,
-            )),
-            rec::PointerEvent::PenSqueeze {
-                pointer,
-                t,
-                phase,
-                hover,
-            } => {
-                let mut squeeze = PenSqueeze::new(
-                    pointer.try_convert_into()?,
-                    EventTime::from_nanos(t),
-                    match phase {
-                        rec::SqueezePhase::Began => PenSqueezePhase::Began,
-                        rec::SqueezePhase::Changed => PenSqueezePhase::Changed,
-                        rec::SqueezePhase::Ended => PenSqueezePhase::Ended,
-                        rec::SqueezePhase::Cancelled => PenSqueezePhase::Cancelled,
-                    },
-                );
-                if let Some(hover) = hover {
-                    squeeze = squeeze.with_hover(hover.try_convert_into()?);
-                }
-                Self::PenSqueeze(squeeze)
-            }
             rec::PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change(change)?),
             rec::PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change(change)?),
         })
@@ -954,13 +942,16 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
 impl TryConvert<&KeyEvent> for rec::KeyEvent {
     fn try_convert(event: &KeyEvent) -> Result<Self> {
         Ok(Self {
-            state: match event.state() {
-                KeyState::Down => rec::KeyState::Down,
+            state: match event.state {
+                KeyState::Down(KeyPress::First) => rec::KeyState::Down,
+                KeyState::Down(KeyPress::AutoRepeat) => rec::KeyState::Repeat,
+                KeyState::Down(KeyPress::Unpaired) => rec::KeyState::Unpaired,
                 KeyState::Up => rec::KeyState::Up,
             },
             key: match &event.key {
                 Key::Character(text) => rec::Key::Character(text.as_str().to_owned()),
                 Key::Named(named) => rec::Key::Named(named.as_str().to_owned()),
+                Key::Dead(accent) => rec::Key::Dead(*accent),
                 _ => return Err(unmirrored("Key")),
             },
             code: event.code.as_str().to_owned(),
@@ -971,9 +962,7 @@ impl TryConvert<&KeyEvent> for rec::KeyEvent {
                 Location::Numpad => rec::Location::Numpad,
             },
             modifiers: modifiers_dto(event.modifiers),
-            repeat: event.repeat() == KeyRepeat::AutoRepeat,
             composing: event.composition == ImeComposition::Active,
-            unreleased: event.release() == KeyRelease::Never,
             t: event.time.as_nanos(),
         })
     }
@@ -986,12 +975,15 @@ impl TryConvert<rec::KeyEvent> for KeyEvent {
             rec::Key::Named(name) => {
                 Key::Named(NamedKey::from_w3c(&name).ok_or(WireError::UnknownSpelling(name))?)
             }
+            rec::Key::Dead(accent) => Key::Dead(accent),
         };
         let code = Code::from_w3c(&event.code)
             .ok_or_else(|| WireError::UnknownSpelling(event.code.clone()))?;
         Ok(Self::new(
             match event.state {
-                rec::KeyState::Down => KeyState::Down,
+                rec::KeyState::Down => KeyState::Down(KeyPress::First),
+                rec::KeyState::Repeat => KeyState::Down(KeyPress::AutoRepeat),
+                rec::KeyState::Unpaired => KeyState::Down(KeyPress::Unpaired),
                 rec::KeyState::Up => KeyState::Up,
             },
             key,
@@ -1005,20 +997,10 @@ impl TryConvert<rec::KeyEvent> for KeyEvent {
             rec::Location::Numpad => Location::Numpad,
         })
         .with_modifiers(modifiers(&event.modifiers)?)
-        .with_repeat(if event.repeat {
-            KeyRepeat::AutoRepeat
-        } else {
-            KeyRepeat::First
-        })
         .with_composition(if event.composing {
             ImeComposition::Active
         } else {
             ImeComposition::Inactive
-        })
-        .with_release(if event.unreleased {
-            KeyRelease::Never
-        } else {
-            KeyRelease::Follows
         }))
     }
 }

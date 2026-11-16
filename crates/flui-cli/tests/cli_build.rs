@@ -169,7 +169,16 @@ fn main() {
     let name = Path::new(&exe).file_stem().expect("tool name").to_string_lossy();
     let args: Vec<_> = env::args_os().skip(1).collect();
     match name.as_ref() {
-        "rustup" => println!("wasm32-unknown-unknown"),
+        "rustc" if args.iter().any(|arg| arg == "target-libdir") => {
+            let target = args.iter().skip_while(|arg| *arg != "--target").nth(1).expect("a target");
+            let libraries = Path::new(&env::var_os("FLUI_FIXTURE_TARGET_LIBS").expect("target libraries")).join(target);
+            println!("{}", libraries.display());
+        }
+        "rustc" => {
+            let status = Command::new(env::var_os("FLUI_FIXTURE_REAL_RUSTC").expect("real rustc"))
+                .args(args).status().expect("rustc");
+            exit(status.code().unwrap_or(1));
+        }
         "wasm-bindgen" => println!("wasm-bindgen 0.2.100"),
         "cargo" if args.first().is_some_and(|arg| arg == "build") => {
             eprintln!("selected fixture Cargo args: {args:?}");
@@ -199,14 +208,18 @@ fn main() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    for name in ["rustup", "wasm-bindgen", "cargo"] {
+    for name in ["rustc", "wasm-bindgen", "cargo"] {
         std::fs::copy(
             &shim,
             tools.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
         )
         .expect("install tool alias");
     }
+    // The toolchain the build asks has the wasm target's libraries.
+    let target_libs = root.join("target-libs");
+    std::fs::create_dir_all(target_libs.join("wasm32-unknown-unknown")).expect("wasm libraries");
     let real_cargo = which::which("cargo").expect("real Cargo executable");
+    let real_rustc = which::which("rustc").expect("real rustc executable");
     let mut paths = vec![tools];
     paths.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
@@ -216,6 +229,9 @@ fn main() {
         .current_dir(root)
         .env("PATH", std::env::join_paths(paths).expect("fixture PATH"))
         .env("FLUI_FIXTURE_REAL_CARGO", real_cargo)
+        .env("FLUI_FIXTURE_REAL_RUSTC", real_rustc)
+        .env("FLUI_FIXTURE_TARGET_LIBS", &target_libs)
+        .env_remove("RUSTC")
         .env("CARGO_NET_OFFLINE", "true")
         .env("CARGO_TARGET_DIR", root.join("target"))
         .args(["build", "web", selector, selected, "--json"])
@@ -343,8 +359,8 @@ fn build_brings_the_cargo_env_in_line_with_the_app_identifier() {
 }
 
 /// A `[platforms]` table FLUI cannot honour fails the build before anything
-/// is compiled or an SDK is looked for, naming the table and, below the floor,
-/// both values (ADR-0244 §10).
+/// is compiled or an SDK is looked for, naming the table and, below the floor
+/// or above the Android target, both values (ADR-0244 §10).
 #[test]
 fn a_platform_min_flui_cannot_honour_is_refused_before_building() {
     let cases = [
@@ -352,6 +368,11 @@ fn a_platform_min_flui_cannot_honour_is_refused_before_building() {
             "android",
             "[platforms.android]\nmin = 21\n",
             "[platforms.android] min = 21 is below FLUI's floor for android, 23",
+        ),
+        (
+            "android",
+            "[platforms.android]\nmin = 1000\n",
+            "[platforms.android] min = 1000 is above the targetSdk FLUI declares",
         ),
         (
             "desktop",

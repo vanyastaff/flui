@@ -297,7 +297,7 @@ trait depends on `flui-platform` instead.
     (`window::windows::proc::WindowProc`: creation, close and destruction,
     size, position and their limits, DPI, focus, paint, the cursor, the
     title, the modal size-move and menu loops with their deadline timer, the
-    setting changes, the frame and fullscreen requests posted to it and the
+    setting changes, the frame, close and delivery requests posted to it and the
     keyboard's system-menu command), the input
     (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
     characters and the keyboard layout, and the precision touchpad's hit
@@ -332,10 +332,10 @@ trait depends on `flui-platform` instead.
     pen in range), read-only, through the class on their thread
     (`owner::windows::window_inputs`). The text services' state of a window
     is theirs too; the window hands out its text-store host through the
-    class's text (`WindowTexts`, `owner::windows::window_texts`). A keydown
-    the application lets through is a step, which the window answers with its
-    own keys, the fullscreen hotkey; the session's lock is a step the window
-    answers by hiding. Tests:
+    class's text (`WindowTexts`, `owner::windows::window_texts`). The
+    window has no keys of its own: a keydown the application lets through
+    reaches only the default procedure. The session's lock is a step the
+    window answers by hiding. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class` (two instances of the owner's
@@ -744,9 +744,7 @@ trait depends on `flui-platform` instead.
   `flui_platform::MAX_SURFACE_EXTENT`; and `window::state::device_limits` for size
   limits, a minimum up and a maximum down and never below it, which Win32 and X11 both
   call; every host that hands its window system an extent or draws a surface of
-  its own reads them), the desktop window configuration
-  (`window::config`, crate-private: its windows open with F11 as the
-  fullscreen key) and the acknowledgement
+  its own reads them) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
@@ -1080,26 +1078,41 @@ trait depends on `flui-platform` instead.
     (destroyed when the last holder drops) and a clone of the connection. Its
     `pre_present_notify` arms the Wayland frame callback on the
     native Wayland host, and returns at once elsewhere. It is also where a
-    presentation report starts: the native Wayland target asks
-    `wp_presentation` for a feedback per commit, whose `presented` event the
-    window rebases from the compositor's clock (`clock_id`) onto the event
-    clock, and the Win32 target rebases the DXGI frame statistics the renderer
+    presentation report starts, and every report names the frame the present
+    it describes carried (ADR-0347): the native Wayland target asks
+    `wp_presentation` for a feedback per present of a frame, numbered, the
+    frame kept by the number (`presented::CommitFeedbacks`): a feedback binds
+    to the surface's next commit whichever present makes it, so it counts as
+    committed once a frame callback armed with its present or later fired,
+    and the next present forgets the unconfirmed ones; its `presented` event
+    the window rebases from the compositor's clock (`clock_id`) onto the event
+    clock. The Win32 target rebases the DXGI frame statistics the renderer
     read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
     the refresh period between two reports (`frame_timing::PresentTracker`:
-    a read naming the present or refresh already reported is no report, and
-    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). The
-    AppKit window reports from its view's backing layer, not the target:
+    a read naming the present or refresh already reported is no report,
+    `DxgiShown::Disjoint` forgets the last refresh, and each present's frame
+    is kept by its DXGI number until the statistics name it or a later one
+    shown, per surface generation, since a present number is a swap chain's
+    and a replaced surface numbers from the start again). Every reporting
+    host forgets what it kept of a surface at a present of another surface
+    generation.
+    The AppKit window reports from its view's backing layer, not the target:
     `owner::apple::metal_layer::FluiMetalLayer` (from `makeBackingLayer`)
     is the `CAMetalLayer` wgpu takes as the view's root layer and gets every
     drawable from, and its `nextDrawable` adds a presented handler to each,
     which Metal calls on a thread of its own with the drawable's
     `presentedTime`, rebased from `CACurrentMediaTime` onto the event clock,
-    with the refresh of the window's display.
+    with the refresh of the window's display; the handler names the frame the
+    target's `pre_present_notify` wrote into the slot `nextDrawable` armed for
+    that drawable. The headless window keeps each present's frame until its
+    simulated window system shows or discards it.
     Each reports into the window's
     `frame_timing::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
-    (`FrameRequest::presented`): the newest report wins, a report no later
-    than one kept or carried is dropped. A stamp ahead of the event clock's
+    (`FrameRequest::presented`): the newest report wins; a report of a frame
+    of another presentation than the window's newest present carried is
+    dropped, and so is one of a frame no newer than one kept or carried, or
+    shown before it. A stamp ahead of the event clock's
     reading when the report arrives (a rebase's error, a compositor that
     adds its display's latency) is carried with its stamp while it lies
     within `REPORT_LEAD`: the stamp is the phase of the refresh grid the
@@ -1109,8 +1122,9 @@ trait depends on `flui-platform` instead.
     of a frame, and the report is dropped: kept, a rebase saturated at the
     timeline's end would silence the window for good. Every host's reports
     pass there, and no host judges a stamp's lead itself: the Win32 window
-    hands on the swap chain's stamp and its counter reading as they are. The headless window reports what a test injects
-    (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
+    hands on the swap chain's stamp and its counter reading as they are. The headless window reports the presents a test has its
+    simulated window system show (`HeadlessHostWindow::simulate_presented`,
+    `simulate_discarded`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),
     and UIKit and the Activity
@@ -1618,10 +1632,20 @@ rotation and resume additionally require a device run.
 
 Android printable keyboard keys come from the input device's `KeyCharacterMap`
 using the event's native meta-state. Physical codes and named keys keep their
-existing translation. A dead key remains `NamedKey::Dead`; unavailable maps
-retain the legacy US keycode fallback, including Shift and Caps Lock. A successful
-map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
-pins the projection, while actual layout and Shift mapping require live input.
+existing translation. Unavailable maps retain the legacy US keycode fallback,
+including Shift and Caps Lock. A successful map reporting no character remains
+unidentified. `android_native_key_map_preserves_logical_keys` pins the projection,
+while actual layout and Shift mapping require live input.
+
+A hardware dead key is composed here, because a native activity receives the raw
+key events and no `TextView` key listener composes them. Its map entry
+(`COMBINING_ACCENT` with the spacing accent) reports `Key::Dead(Some(accent))` and
+leaves the accent pending in `keys::DeadKeyComposer`; the next character key's first
+press types `KeyCharacterMap.getDeadChar(accent, base)`, or the accent and the
+character when the pair composes nothing, so no keystroke is lost. A modifier keeps
+the accent, a named key that types nothing and focus loss drop it, and a key the
+input method passes on during a composition feeds nothing
+(`a_hardware_dead_key_composes_with_the_next_key`, over a stand-in key map).
 
 ### The web window keeps its canvas and two hosts in one order, and takes them out
 
@@ -2631,7 +2655,7 @@ either SDK admission or sentinel handling makes its corresponding case fail.
 This portable test and Android cross-target checking do not prove JNI execution
 or configuration-change delivery on a device.
 
-### Native Win32 owner delivery survives message-post refusal
+### Native Win32 delivery survives message-post refusal
 
 Owner turns ordinarily use the internal HWND's posted message, including inside
 native modal loops. If posting fails, the transport signals an unnamed auto-reset
@@ -2640,11 +2664,46 @@ and frame/source deadlines, including an infinite idle wait without user windows
 Both paths drive the same owner-turn slot and quit policy. A strong `OwnedHandle`
 owner spans every wait; closing admission prevents a retired proxy from posting.
 The event contains no callback or UI state and requires no polling thread.
-`failed_native_posts_still_deliver_owner_turns_and_quit` injects physical post
-refusal and verifies worker admission, reentrant continuation and quit through
-the actual native loop. If both the post and kernel signal fail, the caller still
-receives an error and OwnerSignal retains its debt. A third-party modal loop does
-not wait on this private event; fallback delivery resumes when FLUI regains its loop.
+If both the post and kernel signal fail, the caller still receives an error and
+OwnerSignal retains its debt. A third-party modal loop does not wait on this
+private event; fallback delivery resumes when FLUI regains its loop.
+
+Every other message the host posts to a window of its owner thread carries
+accepted work: a hidden or minimized window's frame request, the deliveries
+another thread raised for a window, a close (granted behind a running method,
+commanded from another thread, or asked by a wrapper dropped off its thread),
+the exit policy's request and the low-memory
+report. Each goes through `OwnerQueue::post`, and names its window by identity
+in its parameters, which the procedure checks. A post to a handle that is no
+window of the owner thread is refused (`PostRefusal`). A post the thread's
+queue refuses for its quota is handed to the owner signal, which inherits the
+event fallback above: once the next owner turn has released its state
+(`OwnerSignal::run_outside_turn`), the message is sent, which on the owner
+thread calls the window procedure past the full queue, so the procedure answers
+it as it answers the posted one and a modal loop it opens still gets owner
+turns. A send checks again that the handle is the owner thread's window, so it
+never waits on another thread. Nothing is logged where a post is asked for.
+
+Each kind of work a window posts from any thread is posted at most once until
+the window takes it (`WindowPost`): a burst of wakes is one frame request
+(`FramePost`, as Win32 folds a painted window's invalidations into one
+`WM_PAINT`) and a burst of deliveries one `DELIVER_QUEUED`, so neither can
+fill the queue, and a refused burst is one item for the owner's turn. Two
+posts stay outside `OwnerQueue` because their refusal loses nothing: a system
+character the queue refuses back after a keydown runs its default at once, and
+a drag start the owner window cannot take is refused to its caller with
+`DragError`.
+
+`failed_native_posts_still_deliver_owner_turns_and_quit` injects refusal into
+the owner signal's own post (worker admission, reentrant continuation and quit
+through the actual native loop). `window_posts_under_a_full_queue` fills the
+thread's queue to its quota: a thousand frame requests on a hidden window from
+a worker are one frame, a delivery a worker raised reaches the window, and the
+last window closed by a command or by a posted close still ends the loop.
+`a_burst_of_deliveries_from_another_thread_is_one_post_and_one_debt` and
+`a_burst_of_frame_requests_on_a_hidden_window_is_one_frame` show the folding,
+and `host_event_sources` shows a refused low-memory report sent from the
+owner's turn.
 
 ### Native Win32 delivers admitted idle deadlines through live window paints
 
@@ -4764,8 +4823,7 @@ was not read for: a device the OS reset or removed is seen at the press that
 starts a sequence and at the lift, exit or cancel that ends it (a reset
 cancels its sequences) (`the_device_is_queried_for_every_event_but_a_move`).
 
-Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
-estimated properties to revise, so the backend never emits `Revise`.
+A `MotionEvent` carries no estimated properties to revise.
 A run on a device held the translation (see the
 native recording section below).
 
@@ -5124,7 +5182,7 @@ capabilities; after it a request is `Submitted`. Chrome's own answer is all
 that ran: a headless desktop has no vibration motor.
 
 Android tier 1 posts `performHapticFeedback` to the Java main thread, which
-owns the decor view, and the owner never waits for it (ADR-0247 §5): a busy
+owns the decor view, and the owner never waits for it (ADR-0348 §2): a busy
 Java thread, or one blocked on the native thread in a lifecycle callback,
 never stalls the owner. One call waits at a time (`AndroidViewAnswers`): a
 request made while it waits posts nothing and reports `Suppressed`, since a
@@ -5366,7 +5424,7 @@ a `FluiActivity`; anything else refuses the start with `PlatformError::HostProto
 naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
-lays one full-window view over the Activity's content (ADR-0247). Every owner-to-view call is posted
+lays one full-window view over the Activity's content (ADR-0348). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the
@@ -5476,9 +5534,22 @@ size. The count of `WindowResized` during a keyboard animation on both sides of 
 a device (`docs/platform-parity.md`, "Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
-view's mirror; `text::android::ime::Mirror` turns each report into one edit against the
-snapshot the view holds, and the host replays it under an async lock, dropping one made on an
-older snapshot than it published last (`replay_current`). A key the native queue delivers while
+view's mirror, under the rule of ADR-0348: the owner's `text::android::ime::Ledger` (one per
+view, shared by the windows over it) mints a `Publication` for each snapshot and records the last
+report it replayed; `text::android::ime::Mirror`, on the Java main thread, turns each report into
+one edit, numbered by a `ReportId`, against the publication it holds. A snapshot reaches the view
+in one posted call (`text::android::input::Publisher`): the view first reports what the input
+method did since its last report, an open batch edit included (`FluiView.reportPending`), the
+mirror decides against it (`Mirror::decide`), the view's editor takes the snapshot, and only then
+the mirror (`Mirror::take`); a call that fails asks the field for one resynchronisation. A
+selection-only snapshot that missed a report is not taken (`Install::Keep`) and the owner still
+replays the edit; a text snapshot that missed one wins and restarts the input method, and the
+owner drops the edit (`Ledger::replay`, `Replayed::Stale`); a selection change that moved or
+ended the composition is published as a text change; otherwise the input method restarts only
+when a snapshot ends its composition or changes the composed text, and is told the rest
+(`updateSelection`, and `updateExtractedText` for a monitoring input method). The focused field's
+own tap asks for the soft keyboard (`TextStoreHost::show_keyboard`, `FluiView.showKeyboard`), and
+the keyboard's Cut and Copy reach the clipboard except from a protected field. A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
 platform's one `DragTransport`: drags over the view mint offers from their
@@ -5679,7 +5750,30 @@ window's current DPI with the frame measured for the style the window has
 **Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
 before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
 `WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back
-fullscreen. `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
+fullscreen.
+
+**No host switches fullscreen by its own decision.** No host has a key of its own for it: a key for
+fullscreen is the application's. A change the system makes (the macOS green button and its
+full-screen space, the browser ending fullscreen on Escape, a window manager or a compositor) is
+reported in the snapshot and not fought. A borderless Win32 window has no exit of its own, so every
+exit is a `SetMode` that names where it goes (`proc::FullscreenExit`), from fullscreen or from
+minimized out of fullscreen: `Normal` takes the style and the rectangle it had before fullscreen
+back, `Maximized` maximizes it with that rectangle as the one it is restored to. That rectangle is
+fitted first to the work area of the nearest monitor when the one it was on is gone
+(`mode::fit_within`). A fullscreen window leaving for `Normal` is moved there with one
+`SetWindowPos`; one leaving for `Maximized`, or out of minimized, is placed with one
+`SetWindowPlacement`, which never shows the normal rectangle on the way to maximized nor fullscreen
+on the way out of minimized. Each publishes one snapshot, in
+the mode it ends in, and sends no system command, so no report of the round trip says the user
+placed the window (ADR-0343 §2) and no placement is written as the user's. Tests:
+`a_key_the_application_lets_through_leaves_the_mode_alone`,
+`a_fullscreen_window_maximized_again_never_reads_normal`,
+`a_minimized_fullscreen_window_leaves_in_one_step` (Win32 window commands table),
+`a_rectangle_comes_back_inside_a_monitor_that_is_there` (the fitting rule),
+`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table). X11,
+Wayland and AppKit still publish a mode in between ([gaps](../../docs/gaps.md#leaving-fullscreen-publishes-a-mode-in-between-on-appkit-x11-and-wayland)).
+
+`WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.
 
 **System events** arrive on the hidden top-level receiver (`owner/windows/broadcast.rs`), which a

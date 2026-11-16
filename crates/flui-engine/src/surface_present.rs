@@ -30,10 +30,11 @@ pub(crate) fn swap_chain_statistics(
     flui_platform::SwapChainStatistics::None
 }
 
-/// The frame statistics of the DXGI swap chain behind `surface`, when wgpu
-/// presents it through DX12: a shown present, a break in the statistics, or
-/// nothing (another backend, or nothing shown yet: DXGI then answers an
-/// error, not statistics).
+/// The counters of the DXGI swap chain behind `surface`, when wgpu presents
+/// it through DX12: how many presents it made before the one about to be,
+/// which numbers that present, and what its frame statistics name: a shown
+/// present, a break in the statistics, or nothing (nothing shown yet: DXGI
+/// then answers an error, not statistics). Nothing on another backend.
 ///
 /// The crate's one production `unsafe`: wgpu reaches its swap chain only
 /// through the hal escape (`Surface::as_hal`), and DXGI's statistics are COM
@@ -50,7 +51,7 @@ pub(crate) fn swap_chain_statistics(
 pub(crate) fn dxgi_frame_statistics(
     surface: &wgpu::Surface<'static>,
 ) -> flui_platform::SwapChainStatistics {
-    use flui_platform::{DxgiFrameStatistics, SwapChainStatistics};
+    use flui_platform::{DxgiFrameStatistics, DxgiShown, DxgiStatistics, SwapChainStatistics};
 
     // SAFETY: `as_hal` requires that the resource it hands out is not
     // destroyed unless its guard is the last reference to it and the GPU no
@@ -71,12 +72,22 @@ pub(crate) fn dxgi_frame_statistics(
     };
     drop(hal);
     let mut statistics = Default::default();
-    // SAFETY: a read of the swap chain's counters through a reference this
+    // SAFETY: reads of the swap chain's counters through a reference this
     // function holds, on the thread that presents through it; `statistics`
     // is an initialized `DXGI_FRAME_STATISTICS` the call fills and outlives.
-    let read = unsafe { swap_chain.GetFrameStatistics(&raw mut statistics) };
-    match read {
-        Ok(()) => SwapChainStatistics::Dxgi(DxgiFrameStatistics::new(
+    let (read, made) = unsafe {
+        (
+            swap_chain.GetFrameStatistics(&raw mut statistics),
+            swap_chain.GetLastPresentCount(),
+        )
+    };
+    // Without the count of presents made, no shown present can be told
+    // apart: the statistics alone would name a present no frame is kept for.
+    let Ok(made) = made else {
+        return SwapChainStatistics::None;
+    };
+    let shown = match read {
+        Ok(()) => DxgiShown::Present(DxgiFrameStatistics::new(
             statistics.PresentCount,
             statistics.SyncRefreshCount,
             statistics.SyncQPCTime,
@@ -86,10 +97,11 @@ pub(crate) fn dxgi_frame_statistics(
             reason = "an HRESULT's bits, compared with the documented value"
         )]
         Err(error) if error.code().0 as u32 == DXGI_ERROR_FRAME_STATISTICS_DISJOINT => {
-            SwapChainStatistics::DxgiDisjoint
+            DxgiShown::Disjoint
         }
-        Err(_) => SwapChainStatistics::None,
-    }
+        Err(_) => DxgiShown::Nothing,
+    };
+    SwapChainStatistics::Dxgi(DxgiStatistics::new(made, shown))
 }
 
 /// What a frame's presentation became, from the two facts `render_scene`

@@ -14,31 +14,35 @@
 
 use std::time::Duration;
 
+use flui_foundation::FrameStamp;
 use flui_platform::{DisplayId, DisplayRevision, DisplaySnapshot, FramePresented, RefreshPeriod};
 
-/// What a drawable shown at `presented_secs` reports, when `media_now_secs`
-/// is a reading of the same clock taken as the event clock read `event_now`
-/// (nanoseconds), on a display whose refresh is `refresh` (`None` when
-/// variable or unknown). A time of 0 or less is Metal's "never shown", and a
-/// time that is no finite number of seconds reports nothing either.
+/// What a drawable that carried `frame` and was shown at `presented_secs`
+/// reports, when `media_now_secs` is a reading of the same clock taken as the
+/// event clock read `event_now` (nanoseconds), on a display whose refresh is
+/// `refresh` (`None` when variable or unknown). A time of 0 or less is Metal's
+/// "never shown", and a time that is no finite number of seconds reports
+/// nothing either.
 #[cfg(any(target_os = "macos", test))]
 #[must_use]
 pub(crate) fn presented(
+    frame: FrameStamp,
     event_now: u64,
     media_now_secs: f64,
     presented_secs: f64,
-    refresh: Option<Duration>,
+    refresh: Option<RefreshPeriod>,
 ) -> Option<FramePresented> {
     if presented_secs <= 0.0 {
         return None;
     }
     let stamp = Duration::try_from_secs_f64(presented_secs).ok()?;
     let now = Duration::try_from_secs_f64(media_now_secs).ok()?;
-    let report = FramePresented::new(crate::owner::frame_timing::rebased_at(
-        event_now, now, stamp,
-    ));
+    let report = FramePresented::new(
+        frame,
+        crate::owner::frame_timing::rebased_at(event_now, now, stamp),
+    );
     Some(match refresh {
-        Some(refresh) => report.with_refresh(refresh),
+        Some(refresh) => report.refresh(refresh),
         None => report,
     })
 }
@@ -94,6 +98,8 @@ mod layer {
     use std::time::Duration;
 
     use block2::RcBlock;
+    use flui_foundation::FrameStamp;
+    use flui_platform::RefreshPeriod;
     use objc2::AnyThread;
     use objc2::rc::{Allocated, Retained};
     use objc2::runtime::{AnyObject, ProtocolObject};
@@ -106,13 +112,17 @@ mod layer {
     use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 
     /// What a layer reports to: its window's reports, set once the window
-    /// has them, and the refresh interval of the display the window is on, in
+    /// has them, the refresh interval of the display the window is on, in
     /// nanoseconds (0 when variable or unknown), which the window keeps
-    /// current.
+    /// current, and the frame slot of the drawable handed out last.
     #[derive(Debug, Default)]
     pub(crate) struct Feedback {
         reports: OnceLock<PresentationReports>,
         refresh_nanos: AtomicU64,
+        /// The frame slot of the newest drawable `nextDrawable` handed out
+        /// and no present has claimed yet: the next present of the window
+        /// presents that drawable, so it writes its frame there.
+        armed: parking_lot::Mutex<Option<Arc<OnceLock<FrameStamp>>>>,
     }
 
     /// The presented handler holds the feedback on a Metal thread.
@@ -141,21 +151,44 @@ mod layer {
             self.refresh_nanos.store(nanos, Ordering::Relaxed);
         }
 
-        fn refresh(&self) -> Option<Duration> {
+        fn refresh(&self) -> Option<RefreshPeriod> {
             match self.refresh_nanos.load(Ordering::Relaxed) {
                 0 => None,
-                nanos => Some(Duration::from_nanos(nanos)),
+                nanos => RefreshPeriod::try_from(Duration::from_nanos(nanos)).ok(),
             }
         }
 
-        /// Metal showed `drawable`, or skipped it.
-        fn shown(&self, drawable: &ProtocolObject<dyn MTLDrawable>) {
-            let Some(reports) = self.reports.get() else {
+        /// A drawable was handed out: the slot its present's frame goes in.
+        fn arm(&self) -> Arc<OnceLock<FrameStamp>> {
+            let slot = Arc::new(OnceLock::new());
+            *self.armed.lock() = Some(Arc::clone(&slot));
+            slot
+        }
+
+        /// The window is about to present the drawable handed out last,
+        /// showing `frame` (`None` for a present that shows no frame of the
+        /// window): its slot takes the frame, and the window's reports learn
+        /// which presentation the window presents.
+        pub(crate) fn presenting(&self, frame: Option<FrameStamp>) {
+            let slot = self.armed.lock().take();
+            if let Some(reports) = self.reports.get() {
+                reports.presenting(frame);
+            }
+            if let (Some(slot), Some(frame)) = (slot, frame) {
+                let _ = slot.set(frame);
+            }
+        }
+
+        /// Metal showed `drawable`, or skipped it; `frame` is the frame its
+        /// present wrote, empty for a drawable no present of a frame claimed.
+        fn shown(&self, drawable: &ProtocolObject<dyn MTLDrawable>, frame: &OnceLock<FrameStamp>) {
+            let (Some(reports), Some(&frame)) = (self.reports.get(), frame.get()) else {
                 return;
             };
             let presented_secs = drawable.presentedTime();
             let media_now_secs = CACurrentMediaTime();
             if let Some(presented) = super::presented(
+                frame,
                 flui_platform::EventTime::now().as_nanos(),
                 media_now_secs,
                 presented_secs,
@@ -163,10 +196,11 @@ mod layer {
             ) {
                 tracing::trace!(
                     target: "flui.present",
+                    epoch = frame.epoch.get(),
                     presented_secs,
                     media_now_secs,
                     at_ns = presented.at.as_nanos(),
-                    refresh_ns = presented.refresh.map(|refresh| refresh.as_nanos()),
+                    refresh_ns = presented.refresh.map(|refresh| refresh.get().as_nanos()),
                     "Metal reported a drawable shown"
                 );
                 reports.report(presented);
@@ -306,9 +340,11 @@ mod layer {
     }
 
     /// Hand `drawable` a handler that reports to `feedback` when Metal shows
-    /// it. Metal calls the handler once, on a thread of its own; the block
-    /// holds `feedback` until then.
+    /// it, naming the frame its present writes in the slot armed for it.
+    /// Metal calls the handler once, on a thread of its own; the block holds
+    /// `feedback` and the slot until then.
     fn watch(drawable: &ProtocolObject<dyn CAMetalDrawable>, feedback: Arc<Feedback>) {
+        let frame = feedback.arm();
         let handler = RcBlock::new(move |drawable: NonNull<ProtocolObject<dyn MTLDrawable>>| {
             os_entry(
                 "a drawable's presented handler",
@@ -317,7 +353,7 @@ mod layer {
                 || {
                     // SAFETY: Metal hands the handler the live drawable it
                     // was added to, for the duration of the call.
-                    feedback.shown(unsafe { drawable.as_ref() });
+                    feedback.shown(unsafe { drawable.as_ref() }, &frame);
                 },
             );
         });
@@ -341,24 +377,33 @@ mod tests {
     /// along when known.
     #[test]
     fn a_shown_drawable_is_reported_on_the_event_clock() {
-        let refresh = Some(Duration::from_millis(10));
+        let frame = flui_foundation::FrameStamp::new(
+            flui_foundation::PresentationAddress {
+                ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+                presentation_id: flui_foundation::PresentationId::new(1),
+            },
+            flui_foundation::FrameEpoch::from_raw(3),
+            flui_foundation::SurfaceGeneration::ZERO.next(),
+        );
+        let refresh = RefreshPeriod::try_from(Duration::from_millis(10)).ok();
         // Binary fractions, so the seconds convert to nanoseconds exactly.
-        let report = presented(500_000_000, 2.5, 2.25, refresh).expect("shown");
+        let report = presented(frame, 500_000_000, 2.5, 2.25, refresh).expect("shown");
+        assert_eq!(report.frame, frame, "the frame its present carried");
         assert_eq!(
             report.at.as_nanos(),
             250_000_000,
             "250 ms before the reading"
         );
-        let ahead = presented(500_000_000, 2.25, 2.5, refresh).expect("shown");
+        let ahead = presented(frame, 500_000_000, 2.25, 2.5, refresh).expect("shown");
         assert_eq!(ahead.at.as_nanos(), 750_000_000, "250 ms after the reading");
         assert_eq!(report.refresh, refresh);
         assert_eq!(
-            presented(50_000_000, 100.0, 100.0, None).map(|p| p.refresh),
+            presented(frame, 50_000_000, 100.0, 100.0, None).map(|p| p.refresh),
             Some(None)
         );
         for never in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             assert!(
-                presented(50_000_000, 100.0, never, refresh).is_none(),
+                presented(frame, 50_000_000, 100.0, never, refresh).is_none(),
                 "{never} is no shown frame"
             );
         }

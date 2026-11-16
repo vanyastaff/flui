@@ -142,7 +142,7 @@ pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 pub(crate) use presentations::start_os_drags;
-pub(crate) use settlement::PendingFrame;
+pub(crate) use settlement::{IN_FLIGHT_FLOOR, PendingFrame};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -232,6 +232,12 @@ pub struct UiRuntime {
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
     host_lifecycle: Cell<HostLifecycle>,
+    /// How many lifecycle passes are running, one inside another: a pass a
+    /// callback starts while another pass still has steps pending attributes
+    /// no failure to a sibling (ADR-0345 §2). A pass ends before it reports
+    /// its siblings' failures, so a report handler's pass is not counted
+    /// inside it.
+    lifecycle_passes: Cell<u32>,
     /// Wall-clock origin for the production `raw_frame_time` computation, moved
     /// here from the retired `AppBinding`: frame times are UI runtime-relative.
     /// `raw_frame_time()` = `start.elapsed()`, stored once here so
@@ -250,7 +256,7 @@ pub struct UiRuntime {
     /// clears it, so a panic unwinding out of the frame does too.
     frame_time: Cell<Option<web_time::Instant>>,
     /// The time the previous frame ran at, the floor a delivered vsync is held to so the frame
-    /// clock never runs backwards (ADR-0257).
+    /// clock never runs backwards (ADR-0347).
     last_frame_time: Cell<Option<web_time::Instant>>,
     /// The epoch of the last frame a presentation of this runtime handed its
     /// sink: each submit takes the next one, so a settlement names the frame

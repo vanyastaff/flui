@@ -248,7 +248,12 @@ mod tests {
     }
 
     impl SurfaceTarget for Window {
-        fn pre_present_notify(&self, _statistics: SwapChainStatistics) {}
+        fn pre_present_notify(
+            &self,
+            _frame: Option<flui_foundation::FrameStamp>,
+            _statistics: SwapChainStatistics,
+        ) {
+        }
     }
 
     fn window(display: Handle, window: Option<c_ulong>) -> Arc<dyn SurfaceTarget> {

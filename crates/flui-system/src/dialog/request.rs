@@ -266,6 +266,75 @@ impl SaveRequest {
     }
 }
 
+/// What the user picked in an open dialog: one file or folder at least,
+/// several only when the request [allowed them](OpenRequest::allow_multiple).
+///
+/// Never empty, so an answer with nothing picked cannot read as a pick: the
+/// user cancelling is `None`, not an empty list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picks {
+    first: PickedFile,
+    rest: Vec<PickedFile>,
+}
+
+impl Picks {
+    /// `picks`, in the order the user picked them; `None` when there are
+    /// none.
+    #[must_use]
+    pub fn try_new(picks: Vec<PickedFile>) -> Option<Self> {
+        let mut picks = picks.into_iter();
+        let first = picks.next()?;
+        Some(Self {
+            first,
+            rest: picks.collect::<Vec<PickedFile>>(),
+        })
+    }
+
+    /// The first pick: the only one of a dialog that picks one.
+    #[must_use]
+    pub fn first(&self) -> &PickedFile {
+        &self.first
+    }
+
+    /// How many were picked; at least one.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        1 + self.rest.len()
+    }
+
+    /// Always `false`: there is at least one pick. Here for the `len`
+    /// convention.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// The picks, in order.
+    pub fn iter(&self) -> impl Iterator<Item = &PickedFile> {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+}
+
+/// The picks, in the order the user picked them.
+impl IntoIterator for Picks {
+    type Item = PickedFile;
+    type IntoIter = std::iter::Chain<std::iter::Once<PickedFile>, std::vec::IntoIter<PickedFile>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(self.first).chain(self.rest)
+    }
+}
+
+impl<'a> IntoIterator for &'a Picks {
+    type Item = &'a PickedFile;
+    type IntoIter =
+        std::iter::Chain<std::iter::Once<&'a PickedFile>, std::slice::Iter<'a, PickedFile>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once(&self.first).chain(self.rest.iter())
+    }
+}
+
 /// A file or folder the user picked.
 ///
 /// Its own type rather than a path, so that a later backend can carry the
@@ -278,10 +347,14 @@ pub struct PickedFile {
 }
 
 impl PickedFile {
-    /// The pick at `path`, as a backend reports it.
+    /// The pick at `path`, as a backend reports it; `None` when `path` is
+    /// relative or holds a NUL byte, which no file the system picked has
+    /// and no file API accepts.
     #[must_use]
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+    pub fn try_new(path: impl Into<PathBuf>) -> Option<Self> {
+        let path: PathBuf = path.into();
+        let nul = path.as_os_str().as_encoded_bytes().contains(&0);
+        (path.is_absolute() && !nul).then_some(Self { path })
     }
 
     /// Where it is.

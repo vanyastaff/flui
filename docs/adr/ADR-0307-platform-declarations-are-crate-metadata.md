@@ -181,9 +181,10 @@ each entry (`flui build -v` names them).
   overwritten, so a hand edit is never lost silently.
   The dex files the graph declares (`android.dex`) go into the APK the packager without Gradle
   builds as `classes.dex`, `classes2.dex`, …, in crate order; a Gradle build gets the source
-  directories (`android.java`) as `flui.javaSources` in `gradle.properties`, which the scaffolded
+  directories (`android.java`) as `-Pflui.javaSources` on the `gradlew` command line (paths into
+  the machine's cargo registry stay out of the committed `gradle.properties`), which the scaffolded
   script adds to its `main` source set, and the R8 rules (`android.proguard`) as
-  `flui.proguardFiles`, which its release build type adds to its rules; a script that does not
+  `-Pflui.proguardFiles`, which its release build type adds to its rules; a script that does not
   read either is refused.
   What the application opens becomes intent filters on `FluiActivity`: one `VIEW` filter,
   `BROWSABLE`, with a `<data android:scheme>` per URL scheme; one with `android:autoVerify="true"`

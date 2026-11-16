@@ -213,6 +213,30 @@ pub(super) struct StandInBackend {
     shared: Arc<Mutex<Shared>>,
 }
 
+impl StandInBackend {
+    /// A present into `slot`: counted, or the fault the test asked for.
+    fn present(&mut self, slot: SlotId) -> EngineResult<PresentDisposition> {
+        let mut shared = self.shared.lock();
+        if shared.device.lost {
+            return Err(EngineError::DeviceLost);
+        }
+        if shared.device.panics_ahead > 0 {
+            shared.device.panics_ahead -= 1;
+            drop(shared);
+            // A fault the test asked for, not a broken invariant.
+            std::panic::panic_any("injected panic in a stand-in frame");
+        }
+        let window = shared
+            .slot(slot)
+            .expect("BUG: the executor renders only an attached slot");
+        window.presented = window
+            .presented
+            .checked_add(1)
+            .expect("BUG: a stand-in window presented u64::MAX frames");
+        Ok(PresentDisposition::Presented)
+    }
+}
+
 impl RasterBackend for StandInBackend {
     fn attach(
         &mut self,
@@ -283,43 +307,22 @@ impl RasterBackend for StandInBackend {
     fn render(
         &mut self,
         slot: SlotId,
+        _frame: flui_foundation::FrameStamp,
         _scene: &Scene,
         _damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
-        let mut shared = self.shared.lock();
-        if shared.device.lost {
-            return Err(EngineError::DeviceLost);
-        }
-        if shared.device.panics_ahead > 0 {
-            shared.device.panics_ahead -= 1;
-            drop(shared);
-            // A fault the test asked for, not a broken invariant.
-            std::panic::panic_any("injected panic in a stand-in frame");
-        }
-        let window = shared
-            .slot(slot)
-            .expect("BUG: the executor renders only an attached slot");
-        window.presented = window
-            .presented
-            .checked_add(1)
-            .expect("BUG: a stand-in window presented u64::MAX frames");
-        Ok(PresentDisposition::Presented)
+        self.present(slot)
     }
 
     /// A lent scene counts as a presented frame, as the stand-in draws none.
     fn render_lent(
         &mut self,
         slot: SlotId,
-        scene: &Scene,
+        _scene: &Scene,
         _reset_fonts: bool,
     ) -> EngineResult<PresentDisposition> {
-        self.render(
-            slot,
-            scene,
-            DamageRegion::Full(flui_layer::FullReason::FirstFrame),
-        )
+        self.present(slot)
     }
-
     fn detach(&mut self, slot: SlotId) {
         if let Some(window) = self.shared.lock().slot(slot) {
             window.released = true;

@@ -692,7 +692,14 @@ pub struct HeadlessSink {
     last: Option<(SceneVersion, OnceCell<Option<LayerTree>>)>,
     submits: u64,
     deferred: u32,
+    /// The epochs of the frames presented most recently, oldest first, at
+    /// most [`PRESENTED_KEPT`].
+    presented: std::collections::VecDeque<flui_foundation::FrameEpoch>,
 }
+
+/// How many presented frames a [`HeadlessSink`] remembers for a presentation
+/// report to name.
+const PRESENTED_KEPT: usize = 16;
 
 impl HeadlessSink {
     /// A `width` × `height` surface that has presented nothing yet.
@@ -703,7 +710,20 @@ impl HeadlessSink {
             last: None,
             submits: 0,
             deferred: 0,
+            presented: std::collections::VecDeque::new(),
         }
+    }
+
+    /// The epoch of the frame presented last, which a presentation report
+    /// may name ([`HeadlessHost::report_presented`]).
+    #[must_use]
+    pub fn last_presented(&self) -> Option<flui_foundation::FrameEpoch> {
+        self.presented.back().copied()
+    }
+
+    /// Whether the frame of `epoch` is one of the frames presented recently.
+    fn presented(&self, epoch: flui_foundation::FrameEpoch) -> bool {
+        self.presented.contains(&epoch)
     }
 
     /// The layer tree the pipeline's frame node paints in the last version
@@ -740,7 +760,7 @@ impl FrameSink for HeadlessSink {
 
     fn submit(
         &mut self,
-        _epoch: flui_foundation::FrameEpoch,
+        epoch: flui_foundation::FrameEpoch,
         publication: ScenePublication,
     ) -> SubmitVerdict {
         if let Some(deferred) = self.deferred.checked_sub(1) {
@@ -749,6 +769,10 @@ impl FrameSink for HeadlessSink {
         }
         self.last = Some((publication.scene, OnceCell::new()));
         self.submits = self.submits.saturating_add(1);
+        if self.presented.len() == PRESENTED_KEPT {
+            self.presented.pop_front();
+        }
+        self.presented.push_back(epoch);
         SubmitVerdict::Presented
     }
 }
@@ -1221,21 +1245,49 @@ impl HeadlessHost {
         }
     }
 
-    /// Report that a frame reached the screen, as a host's platform does
-    /// (DXGI statistics, `wp_presentation_time`): the next
-    /// [`pump`](Self::pump)'s frame requests carry it
+    /// Report that the primary window's frame of `frame` reached the screen
+    /// at `at`, on a display refreshing every `refresh` where it names a
+    /// period, as a host's platform does (DXGI statistics,
+    /// `wp_presentation_time`): the report names that frame
+    /// ([`FramePresented::frame`](flui_platform::FramePresented::frame)), and
+    /// the next [`pump`](Self::pump)'s frame request of the primary window
+    /// carries it
     /// ([`FrameRequest::presented`](flui_platform::FrameRequest::presented)),
-    /// and each presentation's frame clock keeps it. Its time is on the
-    /// event timeline input and frames are stamped on: the time since the
-    /// [`clock`](Self::clock) started. A later report before that pump
-    /// replaces it. A primary window whose capabilities say it reports no
+    /// which its frame clock keeps. Its time is on the event timeline input
+    /// and frames are stamped on: the time since the [`clock`](Self::clock)
+    /// started. A later report before that pump replaces it.
+    ///
+    /// Returns whether the report was made. As a real host reports only a
+    /// frame it presented, a frame the sink did not present recently
+    /// ([`HeadlessSink::last_presented`]) is not reported, and neither is any
+    /// frame of a primary window whose capabilities say it reports no
     /// presentation (made without
-    /// [`HeadlessWindow::with_presentation_reports`]) ignores it, as a host
-    /// whose platform reports none does.
-    pub fn report_presented(&mut self, presented: flui_platform::FramePresented) {
-        if self.window.reports_presentation {
-            self.presented = Some(presented);
+    /// [`HeadlessWindow::with_presentation_reports`]).
+    pub fn report_presented(
+        &mut self,
+        frame: flui_foundation::FrameEpoch,
+        at: flui_platform::EventTime,
+        refresh: Option<flui_platform::RefreshPeriod>,
+    ) -> bool {
+        if !self.window.reports_presentation || !self.sink.presented(frame) {
+            return false;
         }
+        let address = flui_foundation::PresentationAddress {
+            ui_runtime_id: self.ui_runtime.id(),
+            presentation_id: self.ui_runtime.presentation_id(),
+        };
+        // The double draws on one surface, its first.
+        let stamp = flui_foundation::FrameStamp::new(
+            address,
+            frame,
+            flui_foundation::SurfaceGeneration::ZERO.next(),
+        );
+        let mut presented = flui_platform::FramePresented::new(stamp, at);
+        if let Some(refresh) = refresh {
+            presented = presented.refresh(refresh);
+        }
+        self.presented = Some(presented);
+        true
     }
 
     /// Hand this UI runtime's window to `agent`'s hook, as a runner hands it a
@@ -1775,7 +1827,15 @@ impl HeadlessHost {
     /// until a view is [attached](Self::attach_to) to it.
     ///
     /// The window gets a window identity no window of this host had, open
-    /// or closed.
+    /// or closed. It reports itself as it opened, focused and shown, as a
+    /// native window does once installed: it takes the OS focus from the
+    /// other windows, which forget their held keys, and the application's
+    /// lifecycle moves with it.
+    ///
+    /// # Panics
+    ///
+    /// Resumes the panic of an observer that report reaches, with the window
+    /// open.
     pub fn open_window(&mut self, mut window: HeadlessWindow) -> HeadlessWindowId {
         window.id = self
             .window_ids
@@ -1801,12 +1861,24 @@ impl HeadlessHost {
         );
         let id = self.ui_runtime.install_presentation(presentation);
         install_window_control(&self.ui_runtime, id, &window);
+        let seed = window.state();
         self.secondary.push(SecondaryWindow {
             text_store_host,
             id,
             window,
             accessibility,
         });
+        // The window reports itself as it opened, as a native host does once
+        // it is installed: the change it makes to the application's lifecycle
+        // is delivered in the owner's turn.
+        self.observe(
+            id,
+            flui_runtime::owner::WindowObservation::Snapshot {
+                execution: seed.execution,
+                focused: seed.focused,
+                visible: seed.is_seen(),
+            },
+        );
         HeadlessWindowId(id)
     }
 

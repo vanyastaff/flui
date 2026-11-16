@@ -197,6 +197,108 @@ pub(crate) fn a_later_settlement_folds_the_frames_it_superseded() {
     assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
 }
 
+/// While a frame is in flight the owner sleeps no longer than the floor, so a settlement whose
+/// wake was lost is drained within it; once nothing is pending the floor goes.
+pub(crate) fn a_frame_in_flight_bounds_the_owners_sleep() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let primary = |ui_runtime: &UiRuntime| ui_runtime.presentations.primary().in_flight_floor();
+    let [_, (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    // The wake is read first: the floor read after it lies no earlier on the same clock.
+    let wake = ui_runtime.next_wake();
+    let floor = primary(&ui_runtime).expect("a frame in flight keeps a floor");
+    let submitted = ui_runtime
+        .presentations
+        .primary()
+        .pending_frames
+        .borrow()
+        .front()
+        .expect("BUG: two frames are pending")
+        .submitted_at();
+    assert_eq!(
+        floor.duration_since(submitted).as_nanos() % super::IN_FLIGHT_FLOOR.as_nanos(),
+        0,
+        "the floor counts whole intervals from the oldest frame's submit, not from each read"
+    );
+    let now = ui_runtime.presentations.primary().clock().now();
+    assert!(floor <= now + super::IN_FLIGHT_FLOOR);
+    assert!(
+        wake.is_some_and(|wake| wake <= floor),
+        "the owner sleeps no longer than the floor"
+    );
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(
+        primary(&ui_runtime),
+        None,
+        "with nothing in flight the floor goes"
+    );
+}
+
+/// Work that reached a presentation at its in-flight limit without demand on its clock (a tree
+/// dirtied after the gated pump, whose wake the gate held back) is asked for by the settlement
+/// that frees a place (ADR-0305 §5), unless a dropped frame's backoff still runs or the device
+/// rebuild was given up: those presentations attempt no frame, and their deadline or a new
+/// rebuild wakes them.
+pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
+    #[derive(Debug, Clone, Copy)]
+    enum Hold {
+        Nothing,
+        BackoffRunning,
+        BackoffOver,
+        DeviceAbandoned,
+    }
+    for (hold, wakes) in [
+        (Hold::Nothing, true),
+        (Hold::BackoffRunning, false),
+        (Hold::BackoffOver, true),
+        (Hold::DeviceAbandoned, false),
+    ] {
+        let mut ui_runtime = mount_box();
+        // Two frames fill the sink; the older one's settlement frees a place without showing
+        // the current tree, so it leaves an armed backoff in place.
+        let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued)
+            .holding(std::num::NonZeroUsize::new(2).expect("BUG: two is not zero"));
+        let [(older, _), _] = queue_two_frames(&ui_runtime, &mut sink);
+        let primary = ui_runtime.presentations.primary();
+        assert!(primary.frames_in_flight().is_saturated(), "{hold:?}");
+        ui_runtime.mark_needs_full_repaint_for(primary);
+        ui_runtime.mark_rendered();
+        let now = primary.clock().now();
+        match hold {
+            Hold::Nothing => {}
+            Hold::BackoffRunning => {
+                primary.arm_failure_retry(now + std::time::Duration::from_secs(60));
+            }
+            Hold::BackoffOver => {
+                primary.arm_failure_retry(now);
+                // The ended backoff is no wake while the sink is full: no frame would follow.
+                assert!(
+                    ui_runtime
+                        .next_wake_excluding_agent_waits()
+                        .is_none_or(|wake| wake > now),
+                    "an ended backoff of a saturated presentation is no wake"
+                );
+            }
+            Hold::DeviceAbandoned => {
+                primary.replace_device_recovery(Some(
+                    crate::frame_failure::DeviceRecovery::Abandoned { attempts: 1 },
+                ));
+            }
+        }
+        assert!(
+            primary.clock().demand_mask().is_empty() && !ui_runtime.needs_redraw(),
+            "{hold:?}: the dirt carries no clock demand and no wake"
+        );
+        assert_eq!(settle(&mut ui_runtime, older), Settled::Applied, "{hold:?}");
+        assert_eq!(
+            ui_runtime.needs_redraw(),
+            wakes,
+            "{hold:?}: the freed place asks for the dirty tree's frame unless the presentation \
+             may attempt none"
+        );
+    }
+}
+
 fn held_pointer_count(ui_runtime: &UiRuntime) -> usize {
     ui_runtime
         .presentations

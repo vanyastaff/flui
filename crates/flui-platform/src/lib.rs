@@ -143,6 +143,7 @@ mod regional;
 mod storage;
 mod surface_target;
 mod system_chrome;
+mod system_failure;
 mod target_platform;
 pub mod testing;
 mod text_input;
@@ -181,7 +182,7 @@ pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
-pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
+pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use locale::{InvalidLocale, Locale};
 pub use opened::{
@@ -190,11 +191,11 @@ pub use opened::{
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
-    PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
+    ScrollUnit, SmartZoomEvent,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
@@ -211,9 +212,11 @@ pub use storage::{
     Stored, StoredVersion, WriteMode,
 };
 pub use surface_target::{
-    DisplayConnection, DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
+    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, RedrawRequester,
+    SurfaceTarget, SwapChainStatistics,
 };
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
+pub use system_failure::SystemFailure;
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};

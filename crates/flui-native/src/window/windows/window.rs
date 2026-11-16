@@ -12,8 +12,8 @@ use raw_window_handle::{
 };
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
-        Graphics::Gdi::{ClientToScreen, InvalidateRect, ScreenToClient, UpdateWindow},
+        Foundation::{HWND, POINT, RECT},
+        Graphics::Gdi::{ClientToScreen, ScreenToClient, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
@@ -22,12 +22,11 @@ use windows::{
                 GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
                 IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
                 IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic,
-                IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SW_HIDE, SW_MAXIMIZE,
-                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE,
-                WS_EX_APPWINDOW, WS_MAXIMIZE,
+                IsWindowVisible, IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
+                SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetCursor,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+                SetWindowTextW, ShowWindow, WS_EX_APPWINDOW, WS_MAXIMIZE,
             },
         },
     },
@@ -45,7 +44,7 @@ use flui_platform::os_options::WindowsCornerPreference;
 use super::material::SystemBackdrop;
 use super::mode::NativeMode;
 use super::proc::{
-    FirstShow, OwnerTracking, REQUEST_FRAME, WindowRecord, first_show_command, frame_style,
+    FirstShow, FullscreenExit, OwnerTracking, WindowRecord, first_show_command, frame_style,
     restyled, sample_state, to_screen, to_workspace,
 };
 use super::set::{
@@ -54,6 +53,7 @@ use super::set::{
 };
 use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
+use crate::owner::windows::control::PostRefusal;
 use crate::text::WindowTextInput;
 use crate::version::gate::Since;
 use crate::window::state::{WindowStateCell, device_extent};
@@ -113,6 +113,14 @@ pub struct WindowsWindow {
     /// handler itself lives in an owner-thread slot of it, so this field
     /// reaches nothing off that thread.
     delivery: Arc<WindowDelivery>,
+
+    /// The window's frame requests, shared with its context and its
+    /// surfaces.
+    frame_post: super::proc::FramePost,
+
+    /// The owner thread's queue the window posts its close to from
+    /// another thread.
+    queue: crate::owner::windows::control::OwnerQueue,
 }
 
 impl std::fmt::Debug for WindowsWindow {
@@ -493,7 +501,6 @@ impl WindowsWindow {
 
             use super::proc::WindowContext;
 
-            let config = windows.config.clone();
             // The window class's input hook gives the capabilities of the
             // devices attached before the handler hears its snapshot.
             let delivery = Arc::new(WindowDelivery::counting_frames(
@@ -501,9 +508,22 @@ impl WindowsWindow {
                 flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
                 frames.counter(),
             ));
+            // What the window posts to itself goes to the owner thread's
+            // queue, and from the owner's next turn when the queue refuses it.
+            let queue = crate::owner::windows::control::OwnerQueue::new(std::sync::Weak::clone(
+                &app_hooks.borrow().signal,
+            ));
+            let frame_post = super::proc::FramePost::new(hwnd, identity, queue.clone());
             // What another thread raises for the window is delivered in a
-            // turn of the window's own message queue.
-            delivery.resume_through(super::proc::deliver_queued_turn(hwnd, identity));
+            // turn of the window's own message queue, asked for once until
+            // that turn comes.
+            let deliveries = super::proc::WindowPost::new(
+                hwnd,
+                identity,
+                super::proc::DELIVER_QUEUED,
+                queue.clone(),
+            );
+            delivery.resume_through(super::proc::deliver_queued_turn(deliveries.clone()));
             // Each fact the window reports, its input's hover included, is
             // published from the owner context of this very window before its
             // own callback runs: the context must carry this window's identity,
@@ -539,6 +559,9 @@ impl WindowsWindow {
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
                 exit_policy,
+                queue: queue.clone(),
+                deliveries,
+                frame_post: frame_post.clone(),
                 delivery: Arc::clone(&delivery),
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
@@ -546,7 +569,6 @@ impl WindowsWindow {
                 dpi_streak: std::cell::Cell::default(),
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
-                config,
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
                 constraints: std::cell::Cell::new(constraints),
@@ -603,6 +625,8 @@ impl WindowsWindow {
                 facets: positions.for_window(&this),
                 drag_source: Arc::clone(&drag).drag_source(this),
                 delivery: Arc::clone(&delivery),
+                frame_post,
+                queue,
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -684,7 +708,7 @@ impl WindowsWindow {
             }
         }
         if mode == WindowMode::Fullscreen {
-            Self::toggle_fullscreen_for_hwnd(hwnd);
+            Self::enter_fullscreen_for_hwnd(hwnd);
         }
     }
 
@@ -811,6 +835,7 @@ impl WindowsWindow {
             context: self.context as isize,
             retirement: self.delivery.retirement(),
             presented: self.delivery.presentation_reports(),
+            frame_post: self.frame_post.clone(),
             tracker: Mutex::default(),
         }
     }
@@ -1160,7 +1185,13 @@ impl WindowsWindow {
             ));
         }
         if self.awaiting_reveal() {
-            self.set_fullscreen(mode == WindowMode::Fullscreen);
+            // A hidden window takes its rectangle back here and its staged
+            // mode when it is revealed.
+            if mode == WindowMode::Fullscreen {
+                self.enter_fullscreen();
+            } else {
+                self.leave_fullscreen(FullscreenExit::Normal);
+            }
             super::proc::with_window_context(self.hwnd, "stage_mode", |ctx| {
                 // Fullscreen is entered hidden and shown like a normal window.
                 let staged = match mode {
@@ -1178,11 +1209,12 @@ impl WindowsWindow {
             }
             WindowMode::Maximized => {
                 self.note_show_request();
-                // A fullscreen popup is not maximized: it leaves fullscreen first.
-                self.set_fullscreen(false);
+                // A fullscreen popup is not maximized: it leaves fullscreen
+                // straight into maximized, which the show below then finds.
+                self.leave_fullscreen(FullscreenExit::Maximized);
                 self.show_native(SW_MAXIMIZE);
             }
-            WindowMode::Fullscreen => self.set_fullscreen(true),
+            WindowMode::Fullscreen => self.enter_fullscreen(),
             _ => self.restore_normal(),
         }
         // A window that was never shown has had its first show if the mode
@@ -1221,31 +1253,50 @@ impl WindowsWindow {
         self.state.lock().scale_factor.get()
     }
 
-    /// Toggle fullscreen mode for this window
-    pub fn toggle_fullscreen(&self) {
-        Self::toggle_fullscreen_for_hwnd(self.hwnd);
+    /// Make the window borderless over its monitor; a fullscreen window stays
+    /// as it is. A fullscreen window that was minimized is restored, which
+    /// brings fullscreen back.
+    fn enter_fullscreen(&self) {
+        self.restore_minimized_fullscreen();
+        Self::enter_fullscreen_for_hwnd(self.hwnd);
     }
 
-    /// Check if the window is currently in fullscreen mode
-    ///
-    /// `false` off the owning thread or once the window is gone — the
-    /// context gate refuses the read instead of racing `WM_DESTROY`'s free.
-    pub fn is_fullscreen(&self) -> bool {
-        super::proc::with_window_context(self.hwnd, "is_fullscreen", |ctx| {
+    /// Take the window out of fullscreen into the mode `exit` names; a window
+    /// that holds no fullscreen stays as it is. A shown fullscreen window
+    /// that was minimized leaves straight from minimized; a hidden one is
+    /// restored first, which nobody sees. Either way the window publishes
+    /// once, in the mode it ends in.
+    fn leave_fullscreen(&self, exit: FullscreenExit) {
+        let hwnd = self.hwnd;
+        let left = super::proc::with_window_context(hwnd, "leave_fullscreen", |ctx| {
+            let hold = ctx.hold_publishing();
+            // SAFETY: a plain query of this wrapper's window handle.
+            if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                self.restore_minimized_fullscreen();
+            }
+            Self::leave_fullscreen_for_hwnd(hwnd, exit);
+            drop(hold);
+            ctx.publish_window_state(hwnd);
+        });
+        if left.is_none() {
+            tracing::warn!(?hwnd, "cannot leave fullscreen: no usable window context");
+        }
+    }
+
+    /// Whether the window is fullscreen, or minimized out of fullscreen;
+    /// `false` once its context is gone.
+    fn holds_fullscreen(&self) -> bool {
+        super::proc::with_window_context(self.hwnd, "holds_fullscreen", |ctx| {
             ctx.mode.get().holds_fullscreen()
         })
         .unwrap_or(false)
     }
 
-    /// Set fullscreen mode
-    ///
-    /// # Arguments
-    /// * `fullscreen` - true to enter fullscreen, false to exit fullscreen
-    pub fn set_fullscreen(&self, fullscreen: bool) {
-        // A fullscreen window that is minimized comes back fullscreen when it
-        // is restored; leaving fullscreen starts from there.
+    /// Restore a fullscreen window that is minimized: it comes back
+    /// fullscreen, which a change of mode starts from.
+    fn restore_minimized_fullscreen(&self) {
         let minimized_from_fullscreen =
-            super::proc::with_window_context(self.hwnd, "set_fullscreen", |ctx| {
+            super::proc::with_window_context(self.hwnd, "restore_minimized_fullscreen", |ctx| {
                 matches!(
                     ctx.mode.get(),
                     NativeMode::Minimized {
@@ -1256,28 +1307,6 @@ impl WindowsWindow {
             .unwrap_or(false);
         if minimized_from_fullscreen {
             self.show_native(SW_RESTORE);
-        }
-        // Only toggle if state needs to change
-        if fullscreen != self.is_fullscreen() {
-            Self::toggle_fullscreen_for_hwnd(self.hwnd);
-        }
-    }
-
-    /// Ask for a frame of `hwnd`, from any thread. A window that is shown and
-    /// not minimized is invalidated and paints. Win32 paints neither a hidden
-    /// window nor a minimized one, whose client area is empty, so those get
-    /// the frame request posted: their frame is what earns a deferred window
-    /// its reveal, and what polls the tasks woken while nobody sees it.
-    pub(crate) fn redraw_native(hwnd: HWND) {
-        // SAFETY: plain calls on a window handle with no pointer arguments.
-        // Each may fail for a window that is already gone, which leaves
-        // nothing to draw; a redraw request is best-effort.
-        unsafe {
-            if IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
-                let _ = InvalidateRect(Some(hwnd), None, false);
-            } else {
-                let _ = PostMessageW(Some(hwnd), REQUEST_FRAME, WPARAM(0), LPARAM(0));
-            }
         }
     }
 
@@ -1736,20 +1765,9 @@ impl WindowsWindow {
                 // `WM_CLOSE`: that asks the should-close veto, and a close
                 // command is not a request. The message names this window,
                 // so a handle reused before it arrives is left alone.
-                let (low, high) = self.identity.halves();
-                // SAFETY: `PostMessageW` takes the handle and plain
-                // integers by value — nothing dereferenced, delivery
-                // marshalled by the OS to the owning thread.
-                unsafe {
-                    if let Err(error) = PostMessageW(
-                        Some(self.hwnd),
-                        super::proc::CLOSE_WINDOW,
-                        WPARAM(low),
-                        LPARAM(high),
-                    ) {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread WindowCommand::Close) failed");
-                    }
-                }
+                // A window no longer the owner thread's is closed already.
+                let _: Result<(), PostRefusal> =
+                    super::proc::post_close(&self.queue, self.hwnd, self.identity);
             }
             TeardownRoute::AlreadyGone => {
                 tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
@@ -1861,6 +1879,8 @@ pub(crate) struct Win32Surface {
     /// What the statistics last reported, so each read reports only a new
     /// present.
     tracker: Mutex<super::frame_timing::PresentTracker>,
+    /// The window's frame requests.
+    frame_post: super::proc::FramePost,
 }
 
 impl Win32Surface {
@@ -1925,28 +1945,30 @@ impl HasDisplayHandle for Win32Surface {
 impl flui_platform::SurfaceTarget for Win32Surface {
     /// Win32 has no frame callback to arm before a present. DXGI frame
     /// statistics the renderer read become the window's presentation report:
-    /// the newest present the display showed, at the refresh it began on,
-    /// rebased from the performance counter onto the event clock, with the
-    /// refresh period two reports measure. A read naming the present or the
-    /// refresh already reported reports nothing, and a disjoint read forgets
-    /// the last refresh ([`PresentTracker`](super::frame_timing::PresentTracker)).
-    fn pre_present_notify(&self, statistics: flui_platform::SwapChainStatistics) {
+    /// the newest present the display showed, named by the frame its own
+    /// present carried (kept by the present's DXGI number), at the refresh it
+    /// began on, rebased from the performance counter onto the event clock,
+    /// with the refresh period two reports measure. A read naming the present
+    /// or the refresh already reported reports nothing, a shown present that
+    /// carried no frame reports nothing, and a disjoint read forgets the last
+    /// refresh ([`PresentTracker`](super::frame_timing::PresentTracker)).
+    fn pre_present_notify(
+        &self,
+        frame: Option<flui_foundation::FrameStamp>,
+        statistics: flui_platform::SwapChainStatistics,
+    ) {
         use std::num::NonZeroU64;
         use windows::Win32::System::Performance::{
             QueryPerformanceCounter, QueryPerformanceFrequency,
         };
 
-        let read = match statistics {
-            flui_platform::SwapChainStatistics::Dxgi(read) => read,
-            flui_platform::SwapChainStatistics::DxgiDisjoint => {
-                self.tracker.lock().disjoint();
-                return;
-            }
-            _ => return,
-        };
         if self.retirement.is_retired() {
             return;
         }
+        self.presented.presenting(frame);
+        let flui_platform::SwapChainStatistics::Dxgi(read) = statistics else {
+            return;
+        };
         let (mut now, mut frequency) = (0_i64, 0_i64);
         // SAFETY: each call writes one `i64` through a pointer to an
         // initialized local that outlives it.
@@ -1961,29 +1983,23 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         ) else {
             return;
         };
-        let shown = self.tracker.lock().read(
-            read.present_count,
-            read.sync_refresh_count,
-            read.sync_qpc_time,
-            now,
-            frequency,
-        );
+        let shown = self.tracker.lock().observe(read, frame, now, frequency);
         let Some(shown) = shown else {
             return;
         };
         let mut presented = flui_platform::FramePresented::new(
+            shown.frame,
             crate::owner::frame_timing::rebased(shown.read_at, shown.shown_at),
         );
         if let Some(refresh) = shown.refresh {
-            presented = presented.with_refresh(refresh);
+            presented = presented.refresh(refresh);
         }
         tracing::trace!(
             target: "flui.present",
-            present = read.present_count,
-            sync_refresh = read.sync_refresh_count,
-            sync_qpc = read.sync_qpc_time,
+            epoch = shown.frame.epoch.get(),
+            made = read.last_present_count,
             at_ns = presented.at.as_nanos(),
-            refresh_ns = presented.refresh.map(|refresh| refresh.as_nanos()),
+            refresh_ns = presented.refresh.map(|refresh| refresh.get().as_nanos()),
             "DXGI reported a present shown"
         );
         self.presented.report(presented);
@@ -1992,10 +2008,11 @@ impl flui_platform::SurfaceTarget for Win32Surface {
 
 impl flui_platform::RedrawRequester for Win32Surface {
     /// `InvalidateRect` and `PostMessageW` take a window handle from any
-    /// thread, so the request goes to the window system directly.
+    /// thread, so the request goes to the window system directly, coalesced
+    /// until the window takes it ([`FramePost`](super::proc::FramePost)).
     fn request_redraw(&self) {
         if self.is_live() {
-            WindowsWindow::redraw_native(self.hwnd());
+            self.frame_post.request();
         }
     }
 }
@@ -2019,6 +2036,8 @@ impl Clone for WindowsWindow {
             facets: self.facets.clone(),
             drag_source: Arc::clone(&self.drag_source),
             delivery: Arc::clone(&self.delivery),
+            frame_post: self.frame_post.clone(),
+            queue: self.queue.clone(),
         }
     }
 }
@@ -2061,17 +2080,10 @@ impl Drop for WindowsWindow {
                     // posted to the owner's queue, and the subclass adapter
                     // is left for the bridge's own drop guard
                     // (which leaks it, with a warning, rather than unhook
-                    // cross-thread).
-                    //
-                    // SAFETY: `PostMessageW` takes the handle and plain
-                    // integers by value — nothing dereferenced.
-                    unsafe {
-                        if let Err(error) =
-                            PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
-                        {
-                            tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread Drop) failed");
-                        }
-                    }
+                    // cross-thread). The close asks no veto, as the owner
+                    // thread's `DestroyWindow` above asks none.
+                    let _: Result<(), PostRefusal> =
+                        super::proc::post_close(&self.queue, self.hwnd, self.identity);
                 }
                 TeardownRoute::AlreadyGone => {
                     tracing::debug!(hwnd = ?self.hwnd, "Drop: the native window is already gone");
@@ -2104,6 +2116,12 @@ impl WindowsWindow {
                 IsWindowVisible(self.hwnd()).as_bool(),
             )
         };
+        // A shown fullscreen window, minimized or not, leaves fullscreen in
+        // one step: a restore first would show it fullscreen on the way.
+        if shown && self.holds_fullscreen() {
+            self.leave_fullscreen(FullscreenExit::Normal);
+            return;
+        }
         if away && shown {
             self.show_native(SW_RESTORE);
         } else if away {
@@ -2111,7 +2129,7 @@ impl WindowsWindow {
         }
         // A fullscreen window that was minimized comes back fullscreen from the
         // restore above; leaving fullscreen is the second step.
-        self.set_fullscreen(false);
+        self.leave_fullscreen(FullscreenExit::Normal);
     }
 
     /// Take a hidden maximized or minimized window back to its normal rectangle

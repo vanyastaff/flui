@@ -803,3 +803,41 @@ fn result_keys_and_codes_hold_their_rules() {
         assert_eq!(code.raw(), raw);
     }
 }
+
+#[test]
+fn a_window_closes_once_and_tells_only_the_watches_still_held() {
+    use flui_platform::capability::WindowCloser;
+
+    let (closer, lifetime) = WindowCloser::new();
+    assert!(!lifetime.is_closed());
+    let heard = Rc::new(Cell::new(0_u32));
+    let count = |heard: &Rc<Cell<u32>>| {
+        let heard = Rc::clone(heard);
+        move || heard.set(heard.get() + 1)
+    };
+    let kept = lifetime.on_close(count(&heard));
+    let observer = lifetime.clone();
+    let reads_closed = Rc::new(Cell::new(false));
+    let read = Rc::clone(&reads_closed);
+    let reader = lifetime.on_close(move || read.set(observer.is_closed()));
+    drop(lifetime.on_close(count(&heard)));
+
+    closer.close();
+    assert_eq!(heard.get(), 1, "only the held watch is told");
+    assert!(reads_closed.get(), "a listener reads the window as closed");
+    assert!(lifetime.is_closed());
+    closer.close();
+    assert_eq!(heard.get(), 1, "a window closes once");
+
+    let late = lifetime.on_close(count(&heard));
+    drop(closer);
+    assert_eq!(heard.get(), 1, "a watch taken after the close never runs");
+    drop((kept, reader, late));
+
+    let (closer, lifetime) = WindowCloser::new();
+    let watch = lifetime.on_close(count(&heard));
+    drop(closer);
+    assert!(lifetime.is_closed(), "a dropped closer closes its window");
+    assert_eq!(heard.get(), 2);
+    drop(watch);
+}

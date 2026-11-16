@@ -15,8 +15,8 @@ use flui_platform::launch::{Launcher, LauncherCapability};
 pub use flui_platform::testing::{LaunchRequest, ScriptedLauncher};
 
 use crate::dialog::{
-    FileDialogBackend, FileDialogCapability, FileDialogs, OpenRequest, OpenResult, SaveRequest,
-    SaveResult,
+    DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs, OpenRequest, OpenResult,
+    SaveRequest, SaveResult,
 };
 
 /// One dialog a [`ScriptedFileDialogs`] was asked to show.
@@ -120,25 +120,46 @@ impl ScriptedFileDialogs {
     pub fn requests(&self) -> Vec<DialogRequest> {
         self.requests.borrow().clone()
     }
+
+    /// How many dialogs were dismissed before they answered: dropped by
+    /// their caller, or ended with their window.
+    #[must_use]
+    pub fn dismissed(&self) -> usize {
+        self.open.withdrawn().saturating_add(self.save.withdrawn())
+    }
 }
 
 impl FileDialogBackend for ScriptedFileDialogs {
-    fn open(&self, window: &WindowRef, request: OpenRequest, answer: Resolver<OpenResult>) {
+    /// The dialog waits on the open script by a ticket: dismissing it
+    /// withdraws a held request, as the system takes a dismissed dialog
+    /// down.
+    fn open(
+        &self,
+        window: &WindowRef,
+        request: OpenRequest,
+        answer: Resolver<OpenResult>,
+    ) -> DialogHold {
         let request = DialogRequest::Open {
             window: window.id(),
             request,
         };
         self.requests.borrow_mut().push(request.clone());
-        self.open.receive(request, answer);
+        DialogHold::new(self.open.receive_with_ticket(request, answer))
     }
 
-    fn save(&self, window: &WindowRef, request: SaveRequest, answer: Resolver<SaveResult>) {
+    /// As [`open`](Self::open), on the save script.
+    fn save(
+        &self,
+        window: &WindowRef,
+        request: SaveRequest,
+        answer: Resolver<SaveResult>,
+    ) -> DialogHold {
         let request = DialogRequest::Save {
             window: window.id(),
             request,
         };
         self.requests.borrow_mut().push(request.clone());
-        self.save.receive(request, answer);
+        DialogHold::new(self.save.receive_with_ticket(request, answer))
     }
 }
 

@@ -134,6 +134,27 @@ epoch_counters! {
     pub struct ResourceGeneration;
 }
 
+/// The counters a recording writes and reads back: a presentation report
+/// names its frame by the frame's epoch and surface generation.
+macro_rules! recorded_counters {
+    ($($name:ident),*) => {
+        $(
+            impl $name {
+                /// The value whose raw counter is `value`, as
+                /// [`get`](Self::get) read it: what a recording that wrote
+                /// the counter reads back. Nothing checks that a counter ever
+                /// reached it.
+                #[must_use]
+                pub const fn from_raw(value: u64) -> Self {
+                    Self(value)
+                }
+            }
+        )*
+    };
+}
+
+recorded_counters!(FrameEpoch, SurfaceGeneration);
+
 /// The canonical commit-time freshness gate for worker results.
 ///
 /// A worker result is applied only if its declared [`ResourceGeneration`] is

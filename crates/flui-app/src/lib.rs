@@ -118,7 +118,7 @@ pub use flui_engine::{BackendFailure, FrameLatency, GpuBackend};
 // per runtime; the serialiser for its records lives in `flui-testing`.
 pub use app::{
     DecisionRow, HostInput, InputOutcome, InputRecord, InputRow, InputTap, InputTapFactory,
-    PreferencesRow, RecordingStart, RecordingWindow, WindowObservation,
+    PreferencesRow, RecordingStart, RecordingWindow, ShownFrame, WindowObservation,
 };
 // The app's font registration door (ADR-0092 §2).
 pub use app::EXIT_CODE_HUNG;

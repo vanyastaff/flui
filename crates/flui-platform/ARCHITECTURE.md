@@ -139,7 +139,7 @@ this one path (ADR-0151 §9).
   minimized window, so the three never overlap, and `WindowState::is_seen`
   (shown, not minimized, not occluded) is the one reading of "the surface is
   seen" that frame scheduling, haptics and the lifecycle aggregate
-  (ADR-0035 §4) take. Folding occlusion into `visible` made the hosts
+  (ADR-0345 §1) take. Folding occlusion into `visible` made the hosts
   disagree (X11 read a minimized window hidden, Win32 shown); a separate fact
   is what winit (`Occluded`), AppKit (`occlusionState` beside `isVisible`)
   and Chromium (`OcclusionState` visible/occluded/hidden) keep too.
@@ -270,19 +270,26 @@ this one path (ADR-0151 §9).
   (`HandleError::NotSupported`). No window target implements it, since a
   target answers `Unavailable` once its window is gone.
 - **A frame request carries when earlier frames reached the screen, on the
-  event timeline.** `FrameRequest::presented` is a `FramePresented { at,
-  refresh }`: the instant the display started showing the newest earlier
-  frame the platform reported since the window's last request, an `EventTime`
-  like every input stamp, so input-to-photon time is a subtraction; never a
-  prediction (a platform that names when a frame is due fills
-  `target_present`). Whether a window reports at all is a capability,
+  event timeline, each report naming its frame (ADR-0347).**
+  `FrameRequest::presented` is a `FramePresented { frame, at, refresh }`: the
+  platform's newest report since the window's last request, naming the frame
+  shown by the `FrameStamp` its present carried, the instant the display
+  started showing it, an `EventTime` like every input stamp, so
+  input-to-photon time is a subtraction, and the display's period as a checked
+  `RefreshPeriod`; never a prediction (a platform that names when a frame is
+  due fills `target_present`). The raster side hands each present's stamp to
+  the target (`pre_present_notify(Option<FrameStamp>, SwapChainStatistics)`,
+  `None` for a present that shows no frame), and a host carries it to the
+  platform's answer for that present, never to "the newest present". Whether a
+  window reports at all is a capability,
   `WindowCapabilities::reports_presentation`, `Absent` with why not; no verb
   answers for it, so the capability holds its reason. Where the platform reports
   presentation only to whoever holds the swap chain (DXGI), the presenter
   hands the surface target what it read before each present
-  (`pre_present_notify(SwapChainStatistics)`, `DxgiFrameStatistics` in the
-  platform's own units), and the host rebases it; a presenter that reads
-  nothing passes `SwapChainStatistics::None`.
+  (`SwapChainStatistics::Dxgi(DxgiStatistics)`: the presents made so far,
+  which number the next, and `DxgiShown`, in the platform's own units), and
+  the host rebases it; a presenter that reads nothing passes
+  `SwapChainStatistics::None`.
 
 ## Mapping decisions
 
@@ -361,6 +368,22 @@ and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
 made instead of handing the host a reference it would have to trust.
 
+### A provider learns that its window closed, and a system failure names its source
+
+A UI runtime outlives each of its windows but one, so a provider that answers a window later
+cannot take "the runtime retired" as the end of the window. `WindowRef::lifetime` is the
+window's `WindowLifetime`: `is_closed`, and `on_close`, whose `WindowCloseWatch` runs a
+listener once when the window closes. The runtime keeps the window's `WindowCloser` in the
+presentation and closes it when the presentation's close begins, before its state drops, from
+the one function every close path calls (`begin_close`: a window closed alone, the last window
+of a runtime, the headless host's close); a closer dropped unclosed closes too. A listener that
+panics does not keep the window open. The file dialogs end their dialog there (ADR-0344).
+
+What a service's own error does not name is `SystemFailure`: an OS error code, a portal's
+response code, a bus failure, or an answer outside the system's contract. `LaunchError::Failed`
+and `flui-system`'s `DialogError::Failed` carry it, so no backend invents a number or guesses a
+named variant for a code it cannot read.
+
 ### A capability's double is built from one scenario primitive
 
 `capability::scripted`, under the `scripted` feature (which `testing` turns on), is what every
@@ -412,6 +435,13 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   script idle. When that code panics, the request it served stays held, every other request
   is still answered and the first panic is resumed (`FirstPanic`). A stream ends once, with a
   `StreamEnd`, and an ended stream answers its end to every later `next`.
+- **A request its caller calls off is withdrawn, not owed.** `Script::receive_with_ticket`
+  hands back a `RequestTicket`, the scenario's form of a system request that lives while its
+  requester holds it (a portal's `Request` object, an activity result's `ResultTicket`).
+  Dropping it while the request is held or scheduled removes the request, drops its resolver,
+  takes a scheduled answer off the timeline, tells the observers it ended unanswered and counts
+  it in `Script::withdrawn`; a withdrawn
+  request is neither `Unanswered` nor `NotReached`, and an answered one is untouched.
 
 The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
 doubles are not, each for its contract's sake. `testing::FakeHaptics` answers synchronously
@@ -474,17 +504,20 @@ store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,
 
 `pointer` and `keyboard` follow the W3C Pointer Events and UI Events models
 and keep what flattening loses (ADR-0143): a scroll keeps its unit (lines,
-pixels or pages, resolved by the scrollable that receives it), its precision
-and its gesture phase; a trackpad gesture is one pan/zoom stream whose
-transform is cumulative since its `Start`; the pen eraser is a tool, not a
-button; a cancelled sequence says why. A value is checked once, where it is
-built, so the framework never re-checks finiteness downstream. The bridge from
-the `ui-events` values the backends still build lives in `flui-native`
-(`shared::input_vocabulary`), because it names upstream types.
+pixels or pages, resolved by the scrollable that receives it), its precision,
+its gesture phase and whether the platform reversed the device's direction
+(`ScrollInversion`, `Unknown` where it does not say); a trackpad gesture is one
+pan/zoom stream whose transform is cumulative since its `Start`; the pen eraser
+is a tool, not a button; a cancelled sequence says why. A key-down says its
+kind in its state (`KeyState::Down(KeyPress::{First, AutoRepeat, Unpaired})`),
+so a release carries no repeat, and a dead key is `Key::Dead` with the accent
+it leaves pending, never a named key (ADR-0346). A variant has a producer: a
+pointer revision or a pen squeeze joins the vocabulary with the host that
+reports it (`docs/gaps.md`). A value is checked once, where it is built, so the
+framework never re-checks finiteness downstream.
 **Tests:** `input_vocabulary_contract` here (sanitization, "no sensor",
-scroll units, button sets, generated key spellings) and `flui-native`'s
-`input_vocabulary_conversion` (every backend shape, eraser, non-finite
-release, key round trip through `keyboard-types`).
+scroll units, button sets, generated key spellings, key-down kinds, the dead
+key) and `flui-native`'s backend conformance table.
 
 ### Bounded measured history retains checked ownership
 

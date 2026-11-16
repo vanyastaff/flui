@@ -86,6 +86,8 @@ pub struct AppliedTextures {
 #[derive(Default)]
 struct Script {
     calls: Vec<SlotCall>,
+    /// The stamp of each frame rendered, in order.
+    rendered_frames: Vec<flui_foundation::FrameStamp>,
     attaches: VecDeque<ScriptedAnswer>,
     resizes: VecDeque<ScriptedAnswer>,
     restores: VecDeque<ScriptedAnswer>,
@@ -106,26 +108,45 @@ struct Script {
     /// The clock each rebuild advances, and by how much.
     rebuild_takes: Option<(ManualClock, Duration)>,
     /// What the next render waits on before it answers.
-    render_hold: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+    render_hold: Option<HeldCall>,
+    /// What the next resize waits on before it answers.
+    resize_hold: Option<HeldCall>,
 }
 
-/// A render a [`ScriptedSlots`] backend holds: it answers once this is
-/// released or dropped, so a raster thread stands for one that does not
-/// answer.
+/// The two ends a held call waits on: it tells the test it began, then
+/// waits for the release.
+struct HeldCall {
+    began: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+/// Wait out `hold`, if the call was held.
+fn wait_out(hold: Option<HeldCall>) {
+    if let Some(HeldCall { began, release }) = hold {
+        // A test that stopped watching does not hold the call up.
+        let _told = began.send(());
+        // Released or dropped: either way the call goes on.
+        let _released = release.recv();
+    }
+}
+
+/// A call a [`ScriptedSlots`] backend holds (a render or a resize): it
+/// answers once this is released or dropped, so a raster thread stands for
+/// one that does not answer.
 #[derive(Debug)]
-pub struct RenderHold {
+pub struct CallHold {
     _release: std::sync::mpsc::Sender<()>,
     started: std::sync::mpsc::Receiver<()>,
 }
 
-impl RenderHold {
-    /// Whether the held render began within `timeout`.
+impl CallHold {
+    /// Whether the held call began within `timeout`.
     #[must_use]
     pub fn began_within(&self, timeout: Duration) -> bool {
         self.started.recv_timeout(timeout).is_ok()
     }
 
-    /// Let the held render answer.
+    /// Let the held call answer.
     pub fn release(self) {}
 }
 
@@ -154,13 +175,31 @@ impl ScriptedSlots {
         Self::default()
     }
 
-    /// Hold the next render until the answer is released or dropped.
-    #[must_use = "dropping the hold releases the render at once"]
-    pub fn hold_next_render(&self) -> RenderHold {
+    /// Hold the next resize until the answer is released or dropped.
+    #[must_use = "dropping the hold releases the resize at once"]
+    pub fn hold_next_resize(&self) -> CallHold {
         let (release, held) = std::sync::mpsc::channel();
         let (began, started) = std::sync::mpsc::channel();
-        self.script.lock().render_hold = Some((began, held));
-        RenderHold {
+        self.script.lock().resize_hold = Some(HeldCall {
+            began,
+            release: held,
+        });
+        CallHold {
+            _release: release,
+            started,
+        }
+    }
+
+    /// Hold the next render until the answer is released or dropped.
+    #[must_use = "dropping the hold releases the render at once"]
+    pub fn hold_next_render(&self) -> CallHold {
+        let (release, held) = std::sync::mpsc::channel();
+        let (began, started) = std::sync::mpsc::channel();
+        self.script.lock().render_hold = Some(HeldCall {
+            began,
+            release: held,
+        });
+        CallHold {
             _release: release,
             started,
         }
@@ -276,6 +315,13 @@ impl ScriptedSlots {
             .collect()
     }
 
+    /// The stamps the frames rendered so far carried to the backend, in
+    /// order: what a window slot hands its surface target with each present.
+    #[must_use]
+    pub fn rendered_frames(&self) -> Vec<flui_foundation::FrameStamp> {
+        self.script.lock().rendered_frames.clone()
+    }
+
     fn answer(&self, call: SlotCall) -> Option<ScriptedAnswer> {
         let mut script = self.script.lock();
         script.calls.push(call);
@@ -319,6 +365,8 @@ impl RasterBackend for ScriptedSlots {
     }
 
     fn resize(&mut self, slot: SlotId, size: DeviceSize) -> EngineResult<()> {
+        let hold = self.script.lock().resize_hold.take();
+        wait_out(hold);
         self.succeed(SlotCall::Resize(slot, size), "resize")
     }
 
@@ -372,18 +420,15 @@ impl RasterBackend for ScriptedSlots {
     fn render(
         &mut self,
         slot: SlotId,
+        frame: flui_foundation::FrameStamp,
         _scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
         let hold = self.script.lock().render_hold.take();
-        if let Some((began, hold)) = hold {
-            // A test that stopped watching does not hold the render up.
-            let _told = began.send(());
-            // Released or dropped: either way the render goes on.
-            let _released = hold.recv();
-        }
+        wait_out(hold);
         {
             let mut script = self.script.lock();
+            script.rendered_frames.push(frame);
             if std::mem::take(&mut script.lose_in_next_render) {
                 script.device_lost = true;
             }
@@ -581,7 +626,12 @@ impl raw_window_handle::HasDisplayHandle for FakeWindow {
 }
 
 impl flui_platform::SurfaceTarget for FakeWindow {
-    fn pre_present_notify(&self, _statistics: flui_platform::SwapChainStatistics) {}
+    fn pre_present_notify(
+        &self,
+        _frame: Option<flui_foundation::FrameStamp>,
+        _statistics: flui_platform::SwapChainStatistics,
+    ) {
+    }
 }
 
 /// What a test's window slot acquires instead of a surface texture.

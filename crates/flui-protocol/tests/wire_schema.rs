@@ -448,18 +448,74 @@ fn every_published_schema_is_additive_to_the_next() {
         };
         let broke = BREAKING.iter().find(|change| change.version == *newer);
         let renamed = broke.map_or(&[][..], |change| change.renamed);
-        let violations = additivity_violations(
-            &read_schema(older_path),
-            &read_schema(newer_path),
-            renamed,
-            broke.is_some() || PUBLISHED_UNSEEN.iter().any(|(version, _)| version == newer),
-            &open_unions(),
+        let removed = broke.map_or(&[][..], |change| change.removed);
+        let violations = without_removed(
+            additivity_violations(
+                &read_schema(older_path),
+                &read_schema(newer_path),
+                renamed,
+                broke.is_some() || PUBLISHED_UNSEEN.iter().any(|(version, _)| version == newer),
+                &open_unions(),
+            ),
+            removed,
         );
         assert!(
             violations.is_empty(),
-            "protocol {newer} is not additive to {older}; list what it renamed in BREAKING with \
-             its ADR, or restore:\n{}",
+            "protocol {newer} is not additive to {older}; list what it renamed or removed in \
+             BREAKING with its ADR, or restore:\n{}",
             violations.join("\n")
+        );
+    }
+}
+
+/// `violations` less the losses at or under a schema path a break `removed` (a property,
+/// a tagged variant, a definition), named in full so it hides nothing else of that name.
+fn without_removed(violations: Vec<String>, removed: &[&str]) -> Vec<String> {
+    violations
+        .into_iter()
+        .filter(|violation| {
+            let Some(path) = violation
+                .strip_prefix("property removed: ")
+                .or_else(|| violation.strip_prefix("name removed: "))
+            else {
+                return true;
+            };
+            !removed.iter().any(|gone| {
+                path == *gone
+                    || path
+                        .strip_prefix(gone)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+        .collect()
+}
+
+/// A loss a break lists as removed may go; anything else it lost, and anything it added
+/// to a closed union, still fails.
+#[test]
+fn a_removal_breaking_lists_may_go() {
+    let older = current_schema();
+    let mut removed = older.clone();
+    removed["Node"]["properties"]
+        .as_object_mut()
+        .expect("Node has properties")
+        .remove("focusable");
+    let violations = additivity_violations(&older, &removed, &[], false, &open_unions());
+    assert_eq!(violations, ["property removed: /Node/properties/focusable"]);
+    assert_eq!(
+        without_removed(violations.clone(), &["/Node/properties/focusable"]),
+        [] as [String; 0]
+    );
+    // A bare name, or a path that only begins the same way, hides nothing.
+    for other in [
+        "focusable",
+        "/Node/properties/focus",
+        "/Other/properties/focusable",
+    ] {
+        assert_eq!(
+            without_removed(violations.clone(), &[other]).len(),
+            1,
+            "{other}"
         );
     }
 }

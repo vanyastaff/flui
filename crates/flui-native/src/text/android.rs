@@ -1,5 +1,5 @@
 //! The Android host's text input: `FluiView`'s editor mirrors the focused
-//! field for the input method (ADR-0247, ADR-0090), and the system font scale
+//! field for the input method (ADR-0348, ADR-0090), and the system font scale
 //! sizes text natively.
 //!
 //! - `ime`: the decidable half, how the view's mirror and the field's store
@@ -25,22 +25,34 @@
     )
 )]
 pub(crate) mod ime {
-    //! The decidable half of the Android backend's input method (ADR-0247,
+    //! The decidable half of the Android backend's input method (ADR-0348,
     //! ADR-0090): how `FluiView`'s mirror and the field's `TextStore` stay one
     //! document while two threads own the session.
     //!
     //! The input method reads and edits `FluiView`'s mirror on the Java main
-    //! thread and never waits for FLUI's owner thread. The owner publishes a
-    //! [`Snapshot`] of the focused store whenever the store changed outside the
-    //! input method's edits, tagged with a generation; the mirror becomes that
-    //! snapshot. After each input method edit (or batch of edits) the view
-    //! reports its state, and [`Mirror::report`] turns the report into one
-    //! [`ImeEdit`] against the snapshot it was made on. The owner replays the
-    //! edits in order ([`replay_current`]); an edit made on an older snapshot
-    //! than the one the owner published last is dropped, and the owner restarts
-    //! the view on the store's text, because a newer snapshot that only moved the
-    //! selection leaves the dropped edit's text in the input method. The owner
-    //! is the authority; the mirror never is.
+    //! thread and never waits for FLUI's owner thread. Two ledgers keep the
+    //! threads in step (ADR-0348):
+    //!
+    //! - the owner's [`Ledger`] mints a [`Publication`] for each [`Snapshot`]
+    //!   of the focused store it publishes (a field took focus, the
+    //!   application changed the text, the selection or the composition), and
+    //!   records which of the view's reports it had already replayed when it
+    //!   read the store;
+    //! - the Java thread's [`Mirror`] holds the text the view holds, installs
+    //!   each snapshot when the view takes it ([`Mirror::install`]), and turns
+    //!   each report of the view into one [`ImeEdit`] against the publication
+    //!   it was made on, numbered by a [`ReportId`].
+    //!
+    //! A snapshot that missed reports the view had already made raced the
+    //! input method. If it only moved the selection, the view keeps the input
+    //! method's text and the owner still replays the edits ([`Install::Keep`]):
+    //! nothing typed is lost. If it changed the text, the application's text
+    //! wins: the view takes it and the input method starts over, and the owner
+    //! drops the edits made before it ([`Replayed::Stale`]). Otherwise the
+    //! input method starts over only when the snapshot ends its composition
+    //! or changes the composed text; a text or selection change outside the
+    //! composition is only told (`updateSelection`), and leaves the
+    //! keyboard's composition and suggestions alone.
     //!
     //! Plain values over UTF-16, built for tests on every host, so Linux CI
     //! pins them; `input` moves them across JNI. What the view reports
@@ -49,6 +61,9 @@ pub(crate) mod ime {
 
     #![forbid(unsafe_code)]
 
+    use std::num::NonZeroU64;
+
+    use flui_foundation::IdMint;
     use flui_foundation::geometry::{Bounds, Point};
     use flui_platform::keyboard::NamedKey;
     use flui_platform::text_store::{
@@ -76,11 +91,53 @@ pub(crate) mod ime {
         pub composition_end: i32,
     }
 
-    /// The focused store as the owner last published it to the view.
+    /// One publication of the focused store to the view, minted by the
+    /// owner's [`Ledger`] in the order it publishes. A later publication
+    /// compares greater, and none is ever minted twice.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct Publication(NonZeroU64);
+
+    /// One report of the view's editor, minted by the [`Mirror`] on the Java
+    /// main thread in the order the view reports. A later report compares
+    /// greater, and none is ever minted twice.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct ReportId(NonZeroU64);
+
+    /// Why the owner publishes the focused store, which decides how the view
+    /// takes the snapshot ([`Mirror::install`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Change {
+        /// A field took focus, or its status changed: the view becomes its
+        /// editor and the input method starts on it.
+        Focus,
+        /// The view no longer mirrors the store (the store refused a step):
+        /// the input method starts over on the store's text.
+        Resync,
+        /// The owner changed the text: the application's edit, or a
+        /// composition the owner committed.
+        Text,
+        /// Only the selection or the composition moved.
+        Selection,
+    }
+
+    impl Change {
+        /// Whether the snapshot replaces the text the input method edits, so
+        /// an edit made before it was made on text the store no longer holds.
+        const fn replaces_text(self) -> bool {
+            !matches!(self, Self::Selection)
+        }
+    }
+
+    /// The focused store as the owner published it to the view.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Snapshot {
         /// Which publication this is; every edit names the one it was made on.
-        pub generation: u32,
+        pub publication: Publication,
+        /// Why it was published.
+        pub change: Change,
+        /// The last of the view's reports the owner had replayed or dropped
+        /// when it read the store; `None` before the first.
+        pub seen: Option<ReportId>,
         /// The text, or [`PROTECTED_UNIT`](crate::text::ime::PROTECTED_UNIT)s for a
         /// protected field.
         pub text: String,
@@ -91,15 +148,12 @@ pub(crate) mod ime {
     }
 
     impl Snapshot {
-        /// The store as `session` reads it, published as `generation`.
-        #[must_use]
-        pub fn read(session: &dyn TextStoreRead, generation: u32) -> Self {
-            Self {
-                generation,
-                text: document_text(session),
-                selection: session.selection(),
-                composition: session.composition().map(|composition| composition.range),
-            }
+        /// The text of the composition, in UTF-16 code units; empty with none.
+        fn composed_units(&self) -> impl Iterator<Item = u16> + '_ {
+            let (start, len) = self
+                .composition
+                .map_or((0, 0), |range| (range.start().get(), range.len()));
+            self.text.encode_utf16().skip(start).take(len)
         }
 
         /// The offsets `FluiView` takes: selection start and end, composition
@@ -122,8 +176,10 @@ pub(crate) mod ime {
     /// One input method edit, against the snapshot it was made on.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct ImeEdit {
-        /// The snapshot generation the view held when it made the edit.
-        pub base: u32,
+        /// The publication the view held when it made the edit.
+        pub base: Publication,
+        /// Which report of the view this is.
+        pub report: ReportId,
         /// The span of that text the edit replaced, and what replaced it; `None`
         /// when only the selection or the composition moved.
         pub replaced: Option<(Utf16Range, String)>,
@@ -158,80 +214,201 @@ pub(crate) mod ime {
         }
     }
 
-    /// What [`replay_current`] did with an edit.
+    /// What [`Ledger::replay`] did with an edit.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Replayed {
         /// The store took it.
         Applied,
-        /// It was made on an older snapshot than the owner's latest, which resets
-        /// the view: dropped.
+        /// It was made before a publication that replaced the text, on text
+        /// the store no longer holds: dropped. The view took that publication
+        /// after the edit and restarted the input method on it
+        /// ([`Mirror::install`]), so nothing is left to correct.
         Stale,
         /// The store refused a step: the view no longer mirrors the store, and
-        /// the owner publishes a new snapshot.
+        /// the owner publishes it again ([`Change::Resync`]).
         Refused,
     }
 
     impl Replayed {
-        /// Whether the view must restart on a fresh snapshot of the store. A
-        /// stale edit was dropped after the owner's newer snapshot reached the
-        /// view as a selection-only update, which only tells the input method:
-        /// the character it committed would otherwise stay in its cached text
-        /// while the field never received it.
+        /// Whether the owner must restart the view on a fresh snapshot of the
+        /// store: only after a refused step, which no publication in flight
+        /// corrects.
         #[must_use]
         pub const fn restarts_the_view(self) -> bool {
-            !matches!(self, Self::Applied)
+            matches!(self, Self::Refused)
         }
     }
 
-    /// Replay `edit` into `session` if it was made on the snapshot the owner
-    /// published last (`published`).
-    pub fn replay_current(
-        edit: &ImeEdit,
-        published: u32,
-        session: &mut dyn TextStoreEdit,
-    ) -> Replayed {
-        if edit.base != published {
-            return Replayed::Stale;
+    /// The owner's half: the publications it made and the view's reports it
+    /// replayed. One per [`Mirror`], so per view, whichever window's field
+    /// the view edits: a publication of one window's field never compares
+    /// equal to another's, so an edit made for a field of a window that has
+    /// gone is dropped by the next window's focus. Owner thread only; every
+    /// method takes `&self` and holds no borrow while the store runs, since
+    /// the store is application code.
+    #[derive(Debug, Default)]
+    pub struct Ledger {
+        publications: IdMint<NonZeroU64>,
+        /// The last publication that replaced the view's text.
+        text_base: std::cell::Cell<Option<Publication>>,
+        /// The last report replayed or dropped.
+        seen: std::cell::Cell<Option<ReportId>>,
+        /// The composition the store holds as far as the owner has seen it:
+        /// as it last published it, or as the last edit it replayed left it.
+        composition: std::cell::Cell<Option<Utf16Range>>,
+    }
+
+    impl Ledger {
+        /// The store as `session` reads it, published for `change`. A
+        /// selection change that also moved or ended the composition is the
+        /// application's edit of what the input method composes, so it is
+        /// published as a text change: it wins a race and restarts the input
+        /// method. The store is read before the ledger counts the
+        /// publication, so a read that panics leaves the ledger as it was.
+        #[must_use]
+        pub fn publish(&self, session: &dyn TextStoreRead, change: Change) -> Snapshot {
+            let text = document_text(session);
+            let selection = session.selection();
+            let composition = session.composition().map(|composition| composition.range);
+            let change = if change == Change::Selection && composition != self.composition.get() {
+                Change::Text
+            } else {
+                change
+            };
+            let publication = Publication(
+                self.publications
+                    .next()
+                    .expect("BUG: a view publishes fewer than 2^64 snapshots"),
+            );
+            if change.replaces_text() {
+                self.text_base.set(Some(publication));
+            }
+            self.composition.set(composition);
+            Snapshot {
+                publication,
+                change,
+                seen: self.seen.get(),
+                text,
+                selection,
+                composition,
+            }
         }
-        match edit.replay(session) {
-            Ok(()) => Replayed::Applied,
-            Err(_) => Replayed::Refused,
+
+        /// Replay `edit` into `session`, unless a publication that replaced the
+        /// text came after the one it was made on. Edits arrive in the order
+        /// the view reported them.
+        pub fn replay(&self, edit: &ImeEdit, session: &mut dyn TextStoreEdit) -> Replayed {
+            self.seen.set(self.seen.get().max(Some(edit.report)));
+            if Some(edit.base) < self.text_base.get() {
+                return Replayed::Stale;
+            }
+            match edit.replay(session) {
+                Ok(()) => {
+                    self.composition.set(edit.composition);
+                    Replayed::Applied
+                }
+                Err(_) => Replayed::Refused,
+            }
         }
     }
 
-    /// The Java-thread half: the text of the snapshot the view holds now, which
+    /// How the view takes a snapshot ([`Mirror::install`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Install {
+        /// The view's editor becomes the snapshot; the input method starts
+        /// over when `restart`, and is told the new selection otherwise.
+        Replace {
+            /// Whether the input method starts over on the snapshot.
+            restart: bool,
+        },
+        /// The snapshot only moved the selection and missed edits the view
+        /// had already reported: the view keeps the input method's text and
+        /// selection, which the owner replays on top of the store.
+        Keep,
+    }
+
+    /// The Java-thread half: what the view holds of the focused field, which
     /// each report is diffed against.
     #[derive(Debug, Default)]
     pub struct Mirror {
-        generation: u32,
+        /// The publication the view holds; `None` before the first.
+        publication: Option<Publication>,
+        /// The view's text, in UTF-16 code units.
         units: Vec<u16>,
+        /// The view's composing span.
+        composition: Option<Utf16Range>,
+        reports: IdMint<NonZeroU64>,
+        /// The last report made on the text the view holds since it last
+        /// took a snapshot's text: a snapshot that has not seen it raced it.
+        /// Reports made before that are on text the view no longer holds.
+        unconfirmed: Option<ReportId>,
     }
 
     impl Mirror {
-        /// The view now holds `snapshot`.
-        #[cfg(test)]
-        pub fn install(&mut self, snapshot: &Snapshot) {
-            self.hold(snapshot.generation, &snapshot.text);
+        /// How the view takes `snapshot` (see the module doc), decided
+        /// against every edit the view has reported: the view reports what
+        /// the input method did since its last report, an open batch edit
+        /// included, before it asks. Changes nothing; [`Self::take`] does,
+        /// once the view's own editor holds what the answer says.
+        #[must_use]
+        pub fn decide(&self, snapshot: &Snapshot) -> Install {
+            let raced = self.unconfirmed > snapshot.seen;
+            match snapshot.change {
+                Change::Focus | Change::Resync => Install::Replace { restart: true },
+                Change::Selection if raced => Install::Keep,
+                Change::Text if raced => Install::Replace { restart: true },
+                Change::Text | Change::Selection => Install::Replace {
+                    restart: self.composition_touched(snapshot),
+                },
+            }
         }
 
-        /// The view now holds `text`, published as `generation`: a snapshot's
-        /// text, which is all of it the reports are diffed against.
-        pub fn hold(&mut self, generation: u32, text: &str) {
-            self.generation = generation;
-            self.units = text.encode_utf16().collect();
+        /// The view took `snapshot` as `install` says: the reports that
+        /// follow are diffed against what it holds now.
+        pub fn take(&mut self, snapshot: &Snapshot, install: Install) {
+            self.publication = Some(snapshot.publication);
+            if matches!(install, Install::Replace { .. }) {
+                self.units = snapshot.text.encode_utf16().collect();
+                self.composition = snapshot.composition;
+                self.unconfirmed = None;
+            }
         }
 
-        /// The edit that turned the mirror into `state`, which the view reported
-        /// holding snapshot `generation`; `None` when the report is about an older
-        /// snapshot than the one published since (the owner drops such edits
-        /// anyway) or changes nothing.
+        /// [`Self::decide`], then [`Self::take`]: a view whose editor always
+        /// takes what it is told.
+        #[cfg(any(test, feature = "testing"))]
+        pub fn install(&mut self, snapshot: &Snapshot) -> Install {
+            let install = self.decide(snapshot);
+            self.take(snapshot, install);
+            install
+        }
+
+        /// Whether `snapshot` touches the composition the input method holds:
+        /// ends it or changes its text. A composition the snapshot only moves
+        /// (text inserted before it) is told with its new bounds, as a text
+        /// change outside it is; with no composition the input method has
+        /// nothing a new text could break.
+        fn composition_touched(&self, snapshot: &Snapshot) -> bool {
+            let Some(held) = self.composition else {
+                return false;
+            };
+            if snapshot.composition.is_none() {
+                return true;
+            }
+            let held_units = self
+                .units
+                .get(held.start().get()..held.end().get())
+                .unwrap_or_default();
+            !held_units.iter().copied().eq(snapshot.composed_units())
+        }
+
+        /// The edit that turned the mirror into `state`; `None` before the view
+        /// holds a publication, when there is nothing to diff against.
         ///
         /// Offsets are clamped into the new text and moved off the middle of a
         /// surrogate pair, which a store refuses.
-        pub fn report(&mut self, generation: u32, state: &EditorReport) -> Option<ImeEdit> {
-            if generation != self.generation {
-                return None;
-            }
+        pub fn report(&mut self, state: &EditorReport) -> Option<ImeEdit> {
+            let base = self.publication?;
             let units: Vec<u16> = state.text.encode_utf16().collect();
             let replaced = diff(&self.units, &units).map(|change| {
                 let range = Utf16Range::try_new(
@@ -263,9 +440,17 @@ pub(crate) mod ime {
                     Utf16Range::try_new(start, end).expect("BUG: ordered offsets make a range")
                 })
                 .filter(|range| !range.is_empty());
+            let report = ReportId(
+                self.reports
+                    .next()
+                    .expect("BUG: a view reports fewer than 2^64 edits"),
+            );
+            self.unconfirmed = Some(report);
             self.units = units;
+            self.composition = composition;
             Some(ImeEdit {
-                base: generation,
+                base,
+                report,
                 replaced,
                 selection,
                 composition,
@@ -516,20 +701,22 @@ pub(crate) mod ime {
 mod input {
     //! The Android window's text input: the focused field's `TextStore`
     //! (ADR-0090) served to the input method through `FluiView`'s
-    //! `InputConnection` (ADR-0247).
+    //! `InputConnection` (ADR-0348).
     //!
     //! [`AndroidTextInput`] is the window's `TextStoreHost` (ADR-0135). The input
     //! method asks synchronously on the Java main thread and never waits for the
     //! owner: it reads and edits the view's mirror of the field, and the owner
     //! keeps that mirror honest. Focusing a field publishes a snapshot of its
-    //! store, which becomes the mirror, and shows the soft keyboard. Each edit the
-    //! view reports is replayed into the store under an asynchronous lock, in
-    //! order, now if the store is free and else when its frame transaction lets
-    //! it; an edit made on a snapshot older than the latest one the owner
-    //! published is dropped (`text::android::ime`). When the field changes
-    //! outside the input method's edits (the application's own edit, a moved
-    //! caret) the store's observer publishes a new snapshot: a text change
-    //! restarts the input method, a selection change only tells it.
+    //! store, which becomes the mirror, and shows the soft keyboard; so does
+    //! the focused field's own tap (`TextStoreHost::show_keyboard`). Each edit
+    //! the view reports is
+    //! replayed into the store under an asynchronous lock, in order, now if the
+    //! store is free and else when its frame transaction lets it. When the field
+    //! changes outside the input method's edits (the application's own edit, a
+    //! moved caret) the store's observer publishes a new snapshot, which the
+    //! view takes on the Java main thread by `text::android::ime`'s rule: the
+    //! input method restarts only when its composition was touched or the
+    //! snapshot raced its edits.
     //!
     //! A request the presentation makes from inside a store call the host started
     //! waits and runs, in order, when that call returns.
@@ -546,8 +733,9 @@ mod input {
     use jni::{JValue, jni_sig, jni_str};
 
     use super::ime::{
-        CharacterBounds, EditorReport, ImeEdit, Mirror, Snapshot, character_bounds, cursor_anchor,
-        editor_action_key, editor_info, replay_current, starts_handwriting,
+        Change, CharacterBounds, EditorReport, ImeEdit, Install, Ledger, Mirror, Replayed,
+        Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info,
+        starts_handwriting,
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -559,7 +747,7 @@ mod input {
     use crate::version::gate::android::{AndroidApi, StylusHandwriting};
 
     use super::sizing::Acquisition;
-    use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};
+    use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView, ViewEvent};
     use crate::owner::android::{ActivityRef, ActivityWindow, ActivityWindowId};
 
     /// The key presses an input method's editor action arrives as: `key`
@@ -569,7 +757,7 @@ mod input {
         shift: bool,
         uptime_ms: i64,
     ) -> [flui_platform::PlatformInput; 2] {
-        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers};
+        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers};
         let time = flui_platform::EventTime::from_nanos(
             u64::try_from(uptime_ms)
                 .unwrap_or(0)
@@ -580,7 +768,7 @@ mod input {
         } else {
             Modifiers::NONE
         };
-        [KeyState::Down, KeyState::Up].map(|state| {
+        [KeyState::Down(KeyPress::First), KeyState::Up].map(|state| {
             flui_platform::PlatformInput::Keyboard(
                 KeyEvent::new(state, Key::Named(key), Code::Unidentified, time)
                     .with_modifiers(modifiers),
@@ -620,15 +808,45 @@ mod input {
 
     /// The text position of the Android table: what answers the input
     /// method's calls through `FluiView` — the text the view holds of the
-    /// focused field, as the owner last published it or the input method last
-    /// reported it, against which each report becomes one edit of the field —
+    /// focused field, as the view last took the owner's snapshot or the input
+    /// method last edited it, against which each report becomes one edit of
+    /// the field, touched only on the Java main thread —
     /// and the field of each window, keyed by the window's identity, which
     /// the work it hands the owner reaches. Public where it is defined, as the
     /// host's table names it, and nameable only inside the crate.
-    #[derive(Default)]
     pub struct ViewInputMethod {
-        mirror: parking_lot::Mutex<Mirror>,
+        /// The view's mirror, which each report is diffed against and each
+        /// window's field installs its snapshots in, on the Java main thread.
+        mirror: Arc<parking_lot::Mutex<Mirror>>,
+        /// The owner's half of the mirror, which every window's field
+        /// publishes through and replays against ([`Ledger`]); made with the
+        /// first window, on the owner thread that made this.
+        ledger: OwnerSlot<Rc<Ledger>>,
         fields: Arc<Fields>,
+    }
+
+    /// Made by the loop, on the owner thread, with the view.
+    impl Default for ViewInputMethod {
+        fn default() -> Self {
+            Self {
+                mirror: Arc::default(),
+                ledger: OwnerSlot::new(),
+                fields: Arc::default(),
+            }
+        }
+    }
+
+    impl ViewInputMethod {
+        /// The view's ledger, made on the first call; `None` off the owner
+        /// thread.
+        fn ledger(&self) -> Option<Rc<Ledger>> {
+            if let Some(ledger) = self.ledger.cloned() {
+                return Some(ledger);
+            }
+            let ledger = Rc::new(Ledger::default());
+            self.ledger.replace(Rc::clone(&ledger)).ok()?;
+            Some(ledger)
+        }
     }
 
     impl std::fmt::Debug for ViewInputMethod {
@@ -638,11 +856,7 @@ mod input {
     }
 
     impl InputMethod for ViewInputMethod {
-        fn hold(&self, generation: u32, text: &str) {
-            self.mirror.lock().hold(generation, text);
-        }
-
-        fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply> {
+        fn edited(&self, state: EditorState) -> Option<InputMethodReply> {
             let EditorState {
                 text,
                 selection_start,
@@ -657,7 +871,7 @@ mod input {
                 composition_start,
                 composition_end,
             };
-            let edit = self.mirror.lock().report(generation, &report)?;
+            let edit = self.mirror.lock().report(&report)?;
             let fields = Arc::clone(&self.fields);
             Some(InputMethodReply {
                 composing: Some(edit.composes()),
@@ -707,10 +921,18 @@ mod input {
 
         fn window_opened(&self, window: ActivityWindowId, view: &Arc<JavaView>, api: AndroidApi) {
             let input = OwnerSlot::new();
-            if input
-                .replace(AndroidTextInput::new(Arc::clone(view), api))
-                .is_err()
-            {
+            let made = self.ledger().is_some_and(|ledger| {
+                input
+                    .replace(AndroidTextInput::new(
+                        Arc::clone(view),
+                        api,
+                        Arc::clone(&self.mirror),
+                        ledger,
+                        Arc::downgrade(&self.fields),
+                    ))
+                    .is_ok()
+            });
+            if !made {
                 tracing::warn!(
                     target: "flui_native::android",
                     "a window's field was made off its owner thread"
@@ -812,26 +1034,15 @@ mod input {
         }
     }
 
-    /// How a published snapshot reaches the view.
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Publish {
-        /// A field took focus: the view becomes its editor.
-        Focus,
-        /// The text changed: the input method restarts on the new text.
-        Restart,
-        /// Only the selection or the composition moved.
-        Selection,
-    }
-
     /// The window's text input (see the module doc).
     pub struct AndroidTextInput {
         view: Arc<JavaView>,
         /// Whether the input method can start stylus handwriting on the view.
         handwriting: Option<Since<StylusHandwriting>>,
         focused: RefCell<Option<Rc<dyn TextStore>>>,
-        /// The generation of the snapshot published last; every replayed edit
-        /// must have been made on it.
-        published: Rc<Cell<u32>>,
+        /// What publishes the focused store to the view and decides whether
+        /// an edit still applies.
+        publisher: Publisher,
         /// What `requestCursorUpdates` last asked for.
         cursor_mode: Cell<i32>,
         queue: HostQueue<MirrorHostOp>,
@@ -845,71 +1056,153 @@ mod input {
         }
     }
 
-    /// Publish `snapshot` to the view: it becomes the mirror the next reports are
-    /// diffed against, and the view takes it as `how` says.
-    fn publish(view: &Arc<JavaView>, snapshot: Snapshot, how: Publish, status: (i32, i32, bool)) {
-        view.input_method()
-            .hold(snapshot.generation, &snapshot.text);
-        view.set_composing(snapshot.composition.is_some());
+    /// The view's two halves of the focused field, shared by every window's
+    /// field over the view: the mirror the Java main thread diffs reports
+    /// against, and the owner's ledger of publications and replayed reports;
+    /// and the fields of the view's windows, which a failed publication asks
+    /// to publish again.
+    #[derive(Clone)]
+    struct Publisher {
+        view: Arc<JavaView>,
+        mirror: Arc<parking_lot::Mutex<Mirror>>,
+        ledger: Rc<Ledger>,
+        fields: std::sync::Weak<Fields>,
+    }
+
+    impl Publisher {
+        /// Replay `edit` into `session` by the ledger's rule.
+        fn replay(&self, edit: &ImeEdit, session: &mut dyn TextStoreEdit) -> Replayed {
+            self.ledger.replay(edit, session)
+        }
+
+        /// Publish the store `session` reads, for `change`, to the view. On
+        /// the Java main thread, in the call that hands it to the view and so
+        /// ordered with the view's reports, the mirror installs it
+        /// ([`Mirror::install`]) and the view takes it as the install says: as
+        /// a new editor for a focus, by replacing its text with or without a
+        /// restart, or not at all when it keeps the input method's newer
+        /// edits.
+        ///
+        /// The ledger counts the publication before the view takes it, so a
+        /// publication the view never takes (the view not installed, the call
+        /// failing or dropped unrun) would leave every later report older
+        /// than it, and dropped: the window's field publishes the store once
+        /// more as a resynchronisation, whose own failure is only logged.
+        fn publish(&self, session: &dyn TextStoreRead, change: Change, status: (i32, i32, bool)) {
+            let snapshot = self.ledger.publish(session, change);
+            let mirror = Arc::clone(&self.mirror);
+            let bridge = Arc::clone(&self.view);
+            let fields = self.fields.clone();
+            self.view.post_or(
+                move |env, view| take_snapshot(env, view, &bridge, &mirror, &snapshot, status),
+                move |view: &JavaView| {
+                    if change == Change::Resync {
+                        return;
+                    }
+                    view.push_event(ViewEvent::RunOnWindow(Box::new(
+                        move |window: &dyn ActivityWindow| {
+                            if let Some(input) = fields
+                                .upgrade()
+                                .and_then(|fields| fields.of(window.activity_id()))
+                            {
+                                input.publish_now(Change::Resync);
+                            }
+                        },
+                    )));
+                },
+            );
+        }
+    }
+
+    /// The view takes `snapshot` (see [`Publisher::publish`]); on the Java
+    /// main thread. Answers whether the view took it.
+    fn take_snapshot(
+        env: &mut jni::Env<'_>,
+        view: &jni::objects::JObject<'_>,
+        bridge: &JavaView,
+        mirror: &parking_lot::Mutex<Mirror>,
+        snapshot: &Snapshot,
+        status: (i32, i32, bool),
+    ) -> jni::errors::Result<bool> {
+        let text = env.new_string(&snapshot.text)?;
+        // What the input method did since the view last reported (an edit
+        // inside a batch it has not ended) is reported first, through the
+        // view's native method into the mirror, so the decision sees it and
+        // nothing typed is lost to the snapshot. The mirror's lock is not
+        // held: the report takes it.
+        env.call_method(view, jni_str!("reportPending"), jni_sig!("()V"), &[])?;
+        let install = mirror.lock().decide(snapshot);
+        let Install::Replace { restart } = install else {
+            mirror.lock().take(snapshot, install);
+            return Ok(true);
+        };
+        bridge.set_composing(snapshot.composition.is_some());
         let [
             selection_start,
             selection_end,
             composition_start,
             composition_end,
         ] = snapshot.java_offsets();
-        // The generation wraps; Java carries its bits as an opaque `int`.
-        let generation = snapshot.generation.cast_signed();
-        let text = snapshot.text;
-        view.post(move |env, view| {
-            let text = env.new_string(&text)?;
-            match how {
-                Publish::Focus => {
-                    let (input_type, options, stylus) = status;
-                    env.call_method(
-                        view,
-                        jni_str!("focusEditor"),
-                        jni_sig!("(IIZLjava/lang/String;IIIII)V"),
-                        &[
-                            JValue::Int(input_type),
-                            JValue::Int(options),
-                            JValue::Bool(stylus),
-                            JValue::Object(&text),
-                            JValue::Int(selection_start),
-                            JValue::Int(selection_end),
-                            JValue::Int(composition_start),
-                            JValue::Int(composition_end),
-                            JValue::Int(generation),
-                        ],
-                    )?;
-                }
-                Publish::Restart | Publish::Selection => {
-                    env.call_method(
-                        view,
-                        jni_str!("pushState"),
-                        jni_sig!("(Ljava/lang/String;IIIIIZ)V"),
-                        &[
-                            JValue::Object(&text),
-                            JValue::Int(selection_start),
-                            JValue::Int(selection_end),
-                            JValue::Int(composition_start),
-                            JValue::Int(composition_end),
-                            JValue::Int(generation),
-                            JValue::Bool(how == Publish::Restart),
-                        ],
-                    )?;
-                }
-            }
-            Ok(())
-        });
+        if snapshot.change == Change::Focus {
+            let (input_type, options, stylus) = status;
+            env.call_method(
+                view,
+                jni_str!("focusEditor"),
+                jni_sig!("(IIZLjava/lang/String;IIII)V"),
+                &[
+                    JValue::Int(input_type),
+                    JValue::Int(options),
+                    JValue::Bool(stylus),
+                    JValue::Object(&text),
+                    JValue::Int(selection_start),
+                    JValue::Int(selection_end),
+                    JValue::Int(composition_start),
+                    JValue::Int(composition_end),
+                ],
+            )?;
+        } else {
+            env.call_method(
+                view,
+                jni_str!("pushState"),
+                jni_sig!("(Ljava/lang/String;IIIIZ)V"),
+                &[
+                    JValue::Object(&text),
+                    JValue::Int(selection_start),
+                    JValue::Int(selection_end),
+                    JValue::Int(composition_start),
+                    JValue::Int(composition_end),
+                    JValue::Bool(restart),
+                ],
+            )?;
+        }
+        // Taken only once the view holds it: a call that failed part way left
+        // the view's editor unknown, and the resynchronisation the failure
+        // asks for replaces both.
+        mirror.lock().take(snapshot, install);
+        Ok(true)
     }
 
     impl AndroidTextInput {
-        pub(crate) fn new(view: Arc<JavaView>, api: AndroidApi) -> Rc<Self> {
+        /// The field of a window over `view`, whose mirror and ledger every
+        /// window over the view shares; `fields` holds the field, which so
+        /// keeps them weakly.
+        fn new(
+            view: Arc<JavaView>,
+            api: AndroidApi,
+            mirror: Arc<parking_lot::Mutex<Mirror>>,
+            ledger: Rc<Ledger>,
+            fields: std::sync::Weak<Fields>,
+        ) -> Rc<Self> {
             Rc::new_cyclic(|this| Self {
+                publisher: Publisher {
+                    view: Arc::clone(&view),
+                    mirror,
+                    ledger,
+                    fields,
+                },
                 view,
                 handwriting: api.since::<StylusHandwriting>(),
                 focused: RefCell::new(None),
-                published: Rc::new(Cell::new(0)),
                 cursor_mode: Cell::new(0),
                 queue: HostQueue::new(),
                 retired: Cell::new(false),
@@ -926,12 +1219,6 @@ mod input {
 
         fn focused(&self) -> Option<Rc<dyn TextStore>> {
             self.focused.borrow().clone()
-        }
-
-        fn next_generation(published: &Cell<u32>) -> u32 {
-            let next = published.get().wrapping_add(1);
-            published.set(next);
-            next
         }
 
         fn status(&self, store: &dyn TextStore) -> (i32, i32, bool) {
@@ -962,18 +1249,18 @@ mod input {
         }
 
         /// One input method edit the view reported: replayed into the focused
-        /// store in order, or dropped when it was made on an older snapshot.
+        /// store in order, or dropped when a publication that replaced the
+        /// text came after the one it was made on ([`Ledger::replay`]).
         fn apply(&self, edit: ImeEdit) {
             let Some(store) = self.focused() else {
                 return;
             };
-            let published = Rc::clone(&self.published);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&*store);
             let this = self.this.clone();
             let edited = Rc::clone(&store);
             let grant = LockGrant::read_write(move |session| {
-                let outcome = replay_current(&edit, published.get(), session);
+                let outcome = publisher.replay(&edit, session);
                 // Focus may have moved to another field while the grant waited: its
                 // snapshot is the one the view mirrors now, and a restart on this
                 // store would overwrite it.
@@ -982,38 +1269,30 @@ mod input {
                     .and_then(|input| input.focused())
                     .is_some_and(|current| Rc::ptr_eq(&current, &edited));
                 if outcome.restarts_the_view() && still_focused {
-                    // The store refused a step, or the edit was dropped as stale:
-                    // the input method's text no longer matches the store's.
-                    let generation = Self::next_generation(&published);
-                    publish(
-                        &view,
-                        Snapshot::read(&*session, generation),
-                        Publish::Restart,
-                        status,
-                    );
+                    // The store refused a step: the input method's text no longer
+                    // matches the store's.
+                    publisher.publish(&*session, Change::Resync, status);
                 }
             });
             {
                 let _entered = self.queue.enter();
                 if let Err(error) = store.request_lock(grant, LockTiming::Async) {
                     tracing::debug!(?error, "the focused store refused the input method's edit");
-                    self.publish_now(Publish::Restart);
+                    self.publish_now(Change::Resync);
                 }
             }
             self.drain();
         }
 
         /// Publish the focused store now, or when its frame transaction lets it.
-        fn publish_now(&self, how: Publish) {
+        fn publish_now(&self, change: Change) {
             let Some(store) = self.focused() else {
                 return;
             };
-            let published = Rc::clone(&self.published);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&*store);
             let grant = move |session: &dyn TextStoreRead| {
-                let generation = Self::next_generation(&published);
-                publish(&view, Snapshot::read(session, generation), how, status);
+                publisher.publish(session, change, status);
             };
             let _entered = self.queue.enter();
             let sync = {
@@ -1057,27 +1336,21 @@ mod input {
                 input: self.this.clone(),
             });
             contain_owner_callback(|| store.set_observer(Some(observer)));
-            self.publish_now(Publish::Focus);
+            self.publish_now(Change::Focus);
         }
 
         /// End the input method's composition in `store`: commit it in the store
-        /// and restart the input method on the result, which drops its own.
+        /// and publish the result, which ends the input method's own (the view
+        /// restarts it when it was composing).
         fn end_composition(&self, store: &Rc<dyn TextStore>) -> CompositionEnd {
-            let published = Rc::clone(&self.published);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&**store);
             let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
                 if session.composition().is_some() {
                     let _ = session.set_composition(None);
                 }
-                let generation = Self::next_generation(&published);
-                view.set_composing(false);
-                publish(
-                    &view,
-                    Snapshot::read(&*session, generation),
-                    Publish::Restart,
-                    status,
-                );
+                publisher.view.set_composing(false);
+                publisher.publish(&*session, Change::Text, status);
             });
             let outcome = {
                 let _entered = self.queue.enter();
@@ -1101,22 +1374,15 @@ mod input {
             let Some(store) = self.focused() else {
                 return;
             };
-            let published = Rc::clone(&self.published);
-            let view = Arc::clone(&self.view);
+            let publisher = self.publisher.clone();
             let status = self.status(&*store);
             let grant = LockGrant::read_write(move |session: &mut dyn TextStoreEdit| {
                 if session.composition().is_none() {
                     return;
                 }
                 let _ = session.set_composition(None);
-                view.set_composing(false);
-                let generation = Self::next_generation(&published);
-                publish(
-                    &view,
-                    Snapshot::read(&*session, generation),
-                    Publish::Restart,
-                    status,
-                );
+                publisher.view.set_composing(false);
+                publisher.publish(&*session, Change::Text, status);
             });
             {
                 let _entered = self.queue.enter();
@@ -1268,6 +1534,23 @@ mod input {
             self.drain();
             Ok(end)
         }
+
+        /// Android shows the keyboard when a field takes focus, but not
+        /// again after Back put it away: the field's tap asks for it, as a
+        /// tap on an `EditText` does.
+        fn show_keyboard(&self, store: &Rc<dyn TextStore>) {
+            if self.retired.get() {
+                return;
+            }
+            let focused = self.queue.focus_after_queue(|| self.focused());
+            if !focused.is_some_and(|focused| Rc::ptr_eq(&focused, store)) {
+                return;
+            }
+            self.view.post(|env, view| {
+                env.call_method(view, jni_str!("showKeyboard"), jni_sig!("()V"), &[])
+                    .map(drop)
+            });
+        }
     }
 
     /// What the store tells the view when the application changes the field.
@@ -1278,7 +1561,7 @@ mod input {
     impl TextStoreObserver for MirrorObserver {
         fn text_changed(&self, _change: TextChange) {
             if let Some(input) = self.input.upgrade() {
-                input.publish_now(Publish::Restart);
+                input.publish_now(Change::Text);
             }
         }
 
@@ -1286,7 +1569,7 @@ mod input {
         // carries both the selection and composing bounds to updateSelection.
         fn selection_changed(&self) {
             if let Some(input) = self.input.upgrade() {
-                input.publish_now(Publish::Selection);
+                input.publish_now(Change::Selection);
             }
         }
 
@@ -1300,7 +1583,7 @@ mod input {
 
         fn status_changed(&self) {
             if let Some(input) = self.input.upgrade() {
-                input.publish_now(Publish::Focus);
+                input.publish_now(Change::Focus);
             }
         }
     }
