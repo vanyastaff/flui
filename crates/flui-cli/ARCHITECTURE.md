@@ -466,7 +466,7 @@ needs. The manifest a build writes for a project that keeps none and the one
 `flui platform add web` scaffolds come from one renderer
 (`web_page::manifest`), which writes JSON through `serde_json`.
 
-A project's page is never overridden in silence. A `platforms/web/index.html`
+A project's page is never overridden in silence. An `index.html` in a project's web platform directory
 that `[web] page` does not name stops the build before anything compiles,
 with the two ways on: delete it, or name it as the page template. A template
 holds `{{flui_module}}`, which becomes the script that starts the app, and
