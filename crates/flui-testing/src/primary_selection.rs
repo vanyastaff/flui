@@ -1,14 +1,16 @@
 //! A scripted primary selection: the [`PrimarySelectionCapability`] a
 //! headless host registers, which a test reads, fills and steers
-//! (ADR-0152 §4).
+//! (ADR-0152 §4), on the scenario primitive
+//! ([`flui_platform::capability::scripted`]).
 //!
 //! The selection lives in the test: a widget's claim is asked for its text
 //! when the test or a widget reads, as another application would ask it;
 //! [`select`](ScriptedPrimarySelection::select) stands in for another
-//! application selecting, which makes every claim stale. Reads answer at once
-//! unless [`hold_reads`](ScriptedPrimarySelection::hold_reads), and
-//! [`refuse`](ScriptedPrimarySelection::refuse) makes the provider refuse,
-//! as a host without a primary selection does.
+//! application selecting, which makes every claim stale. Reads go through a
+//! [`Script`] whose standing answer is the selection's text, so they answer
+//! at once unless [`hold_reads`](ScriptedPrimarySelection::hold_reads), and
+//! [`refuse`](ScriptedPrimarySelection::refuse) turns the service off so the
+//! provider refuses, as a host without a primary selection does.
 
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
@@ -18,62 +20,104 @@ use flui_interaction::{
 };
 use flui_platform::{
     ClipboardRead, Unsupported,
+    capability::scripted::{Scenario, Script, ServiceState, Track},
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
 };
 
+/// A request a primary selection's handle makes of its host and is answered
+/// later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PrimarySelectionRequest {
+    /// Read the selection's text.
+    ReadText,
+}
+
 /// The primary selection a headless test host hands its widgets.
 /// Owner-thread, cheap to clone; every clone is the same selection.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScriptedPrimarySelection {
-    state: Rc<RefCell<State>>,
+    selection: Rc<RefCell<Selection>>,
+    reads: Script<PrimarySelectionRequest, ClipboardRead>,
+    service: Track<ServiceState>,
 }
 
 #[derive(Default)]
-struct State {
+struct Selection {
     claims: PrimaryClaims,
     /// Another application's selection, which holds while no claim does.
     foreign: Option<String>,
-    hold: bool,
-    held: Vec<Resolver<ClipboardRead>>,
-    refusal: Option<Unsupported>,
     fail_releases: bool,
+    /// One clone per live handle.
     handles: Rc<()>,
 }
 
+impl Default for ScriptedPrimarySelection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScriptedPrimarySelection {
-    /// An empty selection whose reads answer at once.
+    /// An empty selection on a scenario of its own, whose reads answer at
+    /// once.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::on(&Scenario::new())
+    }
+
+    /// An empty selection on `scenario`, whose reads answer at once.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        let selection = Rc::new(RefCell::new(Selection::default()));
+        let reads = scenario.script("primary selection");
+        let read = Rc::clone(&selection);
+        reads
+            .otherwise(move |_: &PrimarySelectionRequest| Ok(text_of(&read).map(Arc::<str>::from)));
+        Self {
+            selection,
+            reads,
+            service: scenario.service("primary selection"),
+        }
+    }
+
+    /// The script that answers reads: its standing answer is the
+    /// selection's text, and its steps answer reads in order before it.
+    #[must_use]
+    pub fn reads(&self) -> &Script<PrimarySelectionRequest, ClipboardRead> {
+        &self.reads
+    }
+
+    /// Whether the primary selection is there: turned off (now, or at an
+    /// instant with [`Track::set_at`]), the provider refuses every
+    /// acquisition with the refusal it was turned off with; turned on again,
+    /// it provides.
+    #[must_use]
+    pub fn service(&self) -> &Track<ServiceState> {
+        &self.service
     }
 
     /// The selection's text: the current claim's, asked now, or another
     /// application's.
     #[must_use]
     pub fn text(&self) -> Option<String> {
-        let (claim, foreign) = {
-            let state = self.state.borrow();
-            (state.claims.current(), state.foreign.clone())
-        };
-        // Asked with no borrow held: the claim may read widget state.
-        match claim {
-            Some(claim) => claim.text(),
-            None => foreign,
-        }
+        text_of(&self.selection)
     }
 
     /// Whether a widget's claim holds the selection.
     #[must_use]
     pub fn is_claimed(&self) -> bool {
-        self.state.borrow().claims.current().is_some()
+        self.selection.borrow().claims.current().is_some()
     }
 
     /// Select `text` in another application: every claim goes stale.
     pub fn select(&self, text: impl Into<String>) {
+        // `Into` is the caller's code: it runs before the state is borrowed.
+        let text: String = text.into();
         let lost = {
-            let mut state = self.state.borrow_mut();
-            state.foreign = Some(text.into());
-            state.claims.lose()
+            let mut selection = self.selection.borrow_mut();
+            selection.foreign = Some(text);
+            selection.claims.lose()
         };
         drop(lost);
     }
@@ -81,41 +125,33 @@ impl ScriptedPrimarySelection {
     /// Keep every later read unanswered until
     /// [`answer_held_reads`](Self::answer_held_reads).
     pub fn hold_reads(&self) {
-        self.state.borrow_mut().hold = true;
+        self.reads.hold();
     }
 
     /// Answer the reads held so far with the selection's text now, and
     /// answer later reads at once again. Returns how many reads it answered.
     pub fn answer_held_reads(&self) -> usize {
-        let held = {
-            let mut state = self.state.borrow_mut();
-            state.hold = false;
-            std::mem::take(&mut state.held)
-        };
+        self.reads.resume();
         let text: ClipboardRead = Ok(self.text().map(Arc::<str>::from));
-        let answered = held.len();
-        for answer in held {
-            // A retired owner has nobody left to tell.
-            let _ = answer.resolve(text.clone());
-        }
-        answered
+        self.reads.release_held(|_| text.clone())
     }
 
-    /// Make the provider refuse every later acquisition with `refusal`.
+    /// Turn the primary selection off: the provider refuses every later
+    /// acquisition with `refusal`.
     pub fn refuse(&self, refusal: Unsupported) {
-        self.state.borrow_mut().refusal = Some(refusal);
+        self.service.set(ServiceState::Off(refusal));
     }
 
     /// Make every later release of a claim panic once the claim is
     /// released, as a failing host backend does.
     pub fn fail_releases(&self) {
-        self.state.borrow_mut().fail_releases = true;
+        self.selection.borrow_mut().fail_releases = true;
     }
 
     /// How many handles over this selection are alive.
     #[must_use]
     pub fn live_handles(&self) -> usize {
-        Rc::strong_count(&self.state.borrow().handles) - 1
+        Rc::strong_count(&self.selection.borrow().handles) - 1
     }
 
     /// Register this selection as the provider of
@@ -125,15 +161,25 @@ impl ScriptedPrimarySelection {
     }
 }
 
+/// The selection's text: the current claim's, asked with no borrow held
+/// (the claim may read widget state), or another application's.
+fn text_of(selection: &RefCell<Selection>) -> Option<String> {
+    let (claim, foreign) = {
+        let selection = selection.borrow();
+        (selection.claims.current(), selection.foreign.clone())
+    };
+    match claim {
+        Some(claim) => claim.text(),
+        None => foreign,
+    }
+}
+
 impl CapabilityProvider<PrimarySelectionCapability> for ScriptedPrimarySelection {
     fn provide(&self, ctx: &ProviderContext<'_>) -> Result<PrimarySelectionHandle, Unsupported> {
-        let state = self.state.borrow();
-        if let Some(refusal) = state.refusal {
-            return Err(refusal);
-        }
+        self.service.check()?;
         let backend = Backend {
             selection: self.clone(),
-            _handle: Rc::clone(&state.handles),
+            _handle: Rc::clone(&self.selection.borrow().handles),
         };
         Ok(PrimarySelectionHandle::new(backend, ctx))
     }
@@ -141,12 +187,20 @@ impl CapabilityProvider<PrimarySelectionCapability> for ScriptedPrimarySelection
 
 impl fmt::Debug for ScriptedPrimarySelection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let state = self.state.borrow();
+        // Copied out and the borrow released before writing: the formatter
+        // is the caller's code.
+        let (claimed, foreign) = {
+            let selection = self.selection.borrow();
+            (
+                selection.claims.current().is_some(),
+                selection.foreign.clone(),
+            )
+        };
         f.debug_struct("ScriptedPrimarySelection")
-            .field("claims", &state.claims)
-            .field("foreign", &state.foreign)
-            .field("held_reads", &state.held.len())
-            .field("refusal", &state.refusal)
+            .field("claimed", &claimed)
+            .field("foreign", &foreign)
+            .field("reads", &self.reads)
+            .field("service", &self.service.get())
             .finish()
     }
 }
@@ -162,36 +216,30 @@ impl PrimarySelectionBackend for Backend {
         &self,
         text: Rc<dyn SelectionText>,
     ) -> (PrimaryClaimId, Option<Rc<dyn SelectionText>>) {
-        let mut state = self.selection.state.borrow_mut();
-        let claimed = state.claims.claim(text);
-        if state.claims.is_current(claimed.0) {
-            state.foreign = None;
+        let mut selection = self.selection.selection.borrow_mut();
+        let claimed = selection.claims.claim(text);
+        if selection.claims.is_current(claimed.0) {
+            selection.foreign = None;
         }
         claimed
     }
 
     fn release(&self, claim: PrimaryClaimId) -> Option<Rc<dyn SelectionText>> {
         let (released, fails) = {
-            let mut state = self.selection.state.borrow_mut();
-            (state.claims.release(claim), state.fail_releases)
+            let mut selection = self.selection.selection.borrow_mut();
+            (selection.claims.release(claim), selection.fail_releases)
         };
         assert!(!fails, "the primary selection backend failed to release");
         released
     }
 
     fn is_current(&self, claim: PrimaryClaimId) -> bool {
-        self.selection.state.borrow().claims.is_current(claim)
+        self.selection.selection.borrow().claims.is_current(claim)
     }
 
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        {
-            let mut state = self.selection.state.borrow_mut();
-            if state.hold {
-                state.held.push(answer);
-                return;
-            }
-        }
-        // A retired owner has nobody left to tell.
-        let _ = answer.resolve(Ok(self.selection.text().map(Arc::<str>::from)));
+        self.selection
+            .reads
+            .receive(PrimarySelectionRequest::ReadText, answer);
     }
 }
