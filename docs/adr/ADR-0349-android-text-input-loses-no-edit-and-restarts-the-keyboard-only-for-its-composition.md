@@ -1,4 +1,4 @@
-# ADR-0347: Android's Java view serves the input method from a mirror that loses no edit, and restarts the keyboard only for its composition
+# ADR-0349: Android's Java view serves the input method from a mirror that loses no edit, and restarts the keyboard only for its composition
 
 - **Status:** Implemented (2026-11-16)
 - **Date:** 2026-11-16

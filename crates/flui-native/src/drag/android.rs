@@ -1,4 +1,4 @@
-//! Android drag and drop through `FluiView` (ADR-0211, ADR-0347).
+//! Android drag and drop through `FluiView` (ADR-0211, ADR-0349).
 //!
 //! [`AndroidTransfer`] is the platform's one [`DragTransport`]. A drag
 //! over the view mints an offer from its `ClipDescription` when it enters,
@@ -29,7 +29,7 @@
 //! [`drops`], with no JNI call, so every host compiles and checks them; the
 //! JNI side around them is Android's alone.
 
-/// The decidable half of the backend (ADR-0347, ADR-0211): how a
+/// The decidable half of the backend (ADR-0349, ADR-0211): how a
 /// `DragEvent`'s clip maps to an offer, how a read of the held clip answers a
 /// request, what a FLUI drag puts in its `ClipData`, and how the source learns
 /// the end. Plain values, so every host checks them; the JNI side around them

@@ -1,5 +1,5 @@
 //! The Android host's text input: `FluiView`'s editor mirrors the focused
-//! field for the input method (ADR-0347, ADR-0090), and the system font scale
+//! field for the input method (ADR-0349, ADR-0090), and the system font scale
 //! sizes text natively.
 //!
 //! - `ime`: the decidable half, how the view's mirror and the field's store
@@ -25,13 +25,13 @@
     )
 )]
 pub(crate) mod ime {
-    //! The decidable half of the Android backend's input method (ADR-0347,
+    //! The decidable half of the Android backend's input method (ADR-0349,
     //! ADR-0090): how `FluiView`'s mirror and the field's `TextStore` stay one
     //! document while two threads own the session.
     //!
     //! The input method reads and edits `FluiView`'s mirror on the Java main
     //! thread and never waits for FLUI's owner thread. Two ledgers keep the
-    //! threads in step (ADR-0347):
+    //! threads in step (ADR-0349):
     //!
     //! - the owner's [`Ledger`] mints a [`Publication`] for each [`Snapshot`]
     //!   of the focused store it publishes (a field took focus, the
@@ -701,7 +701,7 @@ pub(crate) mod ime {
 mod input {
     //! The Android window's text input: the focused field's `TextStore`
     //! (ADR-0090) served to the input method through `FluiView`'s
-    //! `InputConnection` (ADR-0347).
+    //! `InputConnection` (ADR-0349).
     //!
     //! [`AndroidTextInput`] is the window's `TextStoreHost` (ADR-0135). The input
     //! method asks synchronously on the Java main thread and never waits for the

@@ -1,5 +1,5 @@
 //! The Android drag and drop state (`drag::android::drops`, ADR-0211,
-//! ADR-0347): the offers a drag over the view mints, the drops it takes and
+//! ADR-0349): the offers a drag over the view mints, the drops it takes and
 //! where their representations are read from, the reads of URIs' bytes and
 //! their places, and drops that overlap. The JNI side, the view's reads of the
 //! held clip and the URI permissions run on a device.

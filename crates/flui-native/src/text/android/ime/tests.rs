@@ -1,5 +1,5 @@
 //! The decidable half of the Android backend's input method
-//! (`text::android::ime`, ADR-0347): how `FluiView`'s mirror
+//! (`text::android::ime`, ADR-0349): how `FluiView`'s mirror
 //! reports become ordered edits of the field's store, how the view takes a
 //! snapshot that raced the input method's edits, when the input method
 //! restarts, and what an editor action, a stylus press and a tap become. The

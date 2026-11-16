@@ -455,7 +455,7 @@ impl AndroidFeedbackCall {
 
 /// The decor view's semantic feedback calls as the owner posts them and the
 /// Java main thread answers them. The owner never waits for that thread
-/// (ADR-0347 §2): it posts at most one call at a time, and a request made
+/// (ADR-0349 §2): it posts at most one call at a time, and a request made
 /// while that call waits is [`AndroidFeedbackCall::Busy`], so a stalled
 /// Java thread never piles calls up to play together. A request reports the
 /// table's outcome, or `Suppressed` while the view declines: declining is a
