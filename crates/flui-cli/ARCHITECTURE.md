@@ -216,7 +216,10 @@ application's own: a crate another crate of the build links by a normal or build
 when it declares them (`only_the_application_declares_the_links_it_opens`), since the run admits
 what `#[flui::main]` reads from the crate it marks. A Linux build writes the desktop entry and the
 shared-mime-info package beside the executable (`build/linux_desktop.rs`,
-`a_linux_desktop_registers_what_the_application_opens`).
+`a_linux_desktop_registers_what_the_application_opens`). The entry is written for every Linux
+build (ADR-0348): it is named by the application id, names it again as `StartupWMClass`, and the
+build compiles the same id in as `FLUI_APP_ID`, so the window that carries it matches the entry
+(`the_entry_and_the_window_are_named_by_one_identifier`).
 
 `flui doctor` reads the same declarations for a manifest the CLI does not write
 (`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android

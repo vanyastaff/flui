@@ -164,8 +164,8 @@ pub use backend::{LogcatPriority, PlatformLayer};
 pub use config::{DesktopFormat, LogConfig, LogConfigBuilder};
 pub use filter::{DEFAULT_DIRECTIVES, DEFAULT_ENV_VAR, DirectiveError, FilterConfig, FilterError};
 pub use identity::{
-    APP_ID_MAX_LEN, APPLE_CATEGORY, AppId, AppIdentity, DEFAULT_DISPLAY_NAME, IdentityError,
-    UNIDENTIFIED_APPLE_SUBSYSTEM,
+    APP_ID_MAX_LEN, APPLE_CATEGORY, AppId, AppIdError, AppIdentity, DEFAULT_DISPLAY_NAME,
+    IdentityError, UNIDENTIFIED_APPLE_SUBSYSTEM,
 };
 pub use ownership::{
     InstallPolicy, LogBridgePolicy, LogBridgeStatus, SetupError, SubscriberInstallation,

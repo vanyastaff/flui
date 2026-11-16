@@ -1,7 +1,13 @@
-//! What a Linux desktop registers about what the application opens
-//! (ADR-0307 §4): a desktop entry whose `MimeType` names each URL scheme as
+//! What a Linux desktop knows the application by (ADR-0307 §4): a desktop
+//! entry named by the application's identifier, which names it again as
+//! `StartupWMClass` and whose `MimeType` names each URL scheme as
 //! `x-scheme-handler/<scheme>` and each file type's MIME type, and a
 //! shared-mime-info package that gives each file type its extension.
+//!
+//! The identifier is the one the application is compiled with
+//! (`FLUI_APP_ID`), which its windows carry as their Wayland app id and their
+//! X11 class: the shell matches a window to this entry by it, so the dock
+//! shows the entry's name and groups the window under its launcher.
 //!
 //! `flui build linux` writes them under the output directory at the paths a
 //! package installs them to below its `share` prefix
@@ -16,10 +22,9 @@ use crate::build::platform::AppBundle;
 use crate::build::util::xml::xml_escape;
 use crate::declarations::Declarations;
 
-/// The desktop entry and MIME package for `bundle`, whose executable is
-/// `executable`, written under `output_dir` when `declarations` gives the
-/// application something a Linux desktop registers: a URL scheme or a file
-/// type. The paths written, none when there is nothing to register.
+/// The desktop entry for `bundle`, whose executable is `executable`, and the
+/// MIME package when `declarations` gives the application a file type,
+/// written under `output_dir`. The paths written.
 ///
 /// # Errors
 ///
@@ -30,14 +35,11 @@ pub(crate) fn stage(
     executable: &str,
     declarations: &Declarations,
 ) -> std::io::Result<Vec<PathBuf>> {
-    let Some(entry) = desktop_entry(bundle, executable, declarations) else {
-        return Ok(Vec::new());
-    };
     let mut written = Vec::new();
     let applications = output_dir.join("share").join("applications");
     std::fs::create_dir_all(&applications)?;
     let entry_path = applications.join(format!("{}.desktop", bundle.identifier));
-    std::fs::write(&entry_path, entry)?;
+    std::fs::write(&entry_path, desktop_entry(bundle, executable, declarations))?;
     written.push(entry_path);
     if let Some(package) = mime_package(declarations) {
         let packages = output_dir.join("share").join("mime").join("packages");
@@ -49,13 +51,9 @@ pub(crate) fn stage(
     Ok(written)
 }
 
-/// The desktop entry, or `None` when the application opens no URL scheme
-/// and no file type.
-fn desktop_entry(
-    bundle: &AppBundle,
-    executable: &str,
-    declarations: &Declarations,
-) -> Option<String> {
+/// The desktop entry: its `MimeType` line only when the application opens a
+/// URL scheme or a file type.
+fn desktop_entry(bundle: &AppBundle, executable: &str, declarations: &Declarations) -> String {
     let mut mime_types: Vec<String> = declarations
         .url_schemes()
         .map(|(scheme, _)| format!("x-scheme-handler/{scheme}"))
@@ -65,17 +63,22 @@ fn desktop_entry(
             .file_types()
             .map(|(file_type, _)| file_type.mime().to_owned()),
     );
-    if mime_types.is_empty() {
-        return None;
-    }
-    let mut mime_type = mime_types.join(";");
-    mime_type.push(';');
-    Some(format!(
+    let mut entry = format!(
         "[Desktop Entry]\nType=Application\nName={name}\nExec={exec}\nTerminal=false\n\
-         MimeType={mime_type}\n",
+         StartupWMClass={class}\n",
         name = string_value(&bundle.name),
         exec = string_value(&format!("{} %U", exec_argument(executable))),
-    ))
+        class = string_value(&bundle.identifier),
+    );
+    if !mime_types.is_empty() {
+        entry.push_str("MimeType=");
+        for mime_type in mime_types {
+            entry.push_str(&mime_type);
+            entry.push(';');
+        }
+        entry.push('\n');
+    }
+    entry
 }
 
 /// The shared-mime-info package giving each file type its extension, or
@@ -183,6 +186,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&written[0]).expect("the entry"),
             "[Desktop Entry]\nType=Application\nName=Notes\nExec=notes %U\nTerminal=false\n\
+             StartupWMClass=com.example.notes\n\
              MimeType=x-scheme-handler/notes;application/x-notes-note;\n"
         );
         let package = std::fs::read_to_string(&written[1]).expect("the package");
@@ -199,13 +203,70 @@ mod tests {
             "notes",
             "schema = 3\nassociated-domains = [\"a.example\"]\n",
         );
-        let nothing = tempfile::tempdir().expect("a temporary directory");
+        let entry_only = tempfile::tempdir().expect("a temporary directory");
+        let written =
+            stage(entry_only.path(), &bundle, "notes", &web_only).expect("the entry is written");
         assert_eq!(
-            stage(nothing.path(), &bundle, "notes", &web_only).expect("nothing fails"),
-            Vec::<std::path::PathBuf>::new(),
-            "an associated domain has no Linux registration"
+            written,
+            [entry_only
+                .path()
+                .join("share")
+                .join("applications")
+                .join("com.example.notes.desktop")],
+            "an associated domain has no Linux registration: the entry alone, for the identity"
         );
-        assert!(!nothing.path().join("share").exists());
+        assert_eq!(
+            std::fs::read_to_string(&written[0]).expect("the entry"),
+            "[Desktop Entry]\nType=Application\nName=Notes\nExec=notes %U\nTerminal=false\n\
+             StartupWMClass=com.example.notes\n",
+            "no MimeType for an application that opens nothing"
+        );
+        assert!(!entry_only.path().join("share").join("mime").exists());
+    }
+
+    /// One identifier names the desktop entry's file, is its `StartupWMClass`
+    /// and is what the application is compiled with (`FLUI_APP_ID`), which
+    /// its windows carry as their Wayland app id and X11 class: the shell
+    /// matches the window to the entry, whether the identifier comes from
+    /// `flui.toml` or, without one, from the application's directory.
+    #[test]
+    fn the_entry_and_the_window_are_named_by_one_identifier() {
+        let configured = crate::app_id::AppId::try_new("com.example.notes").expect("an id");
+        let unconfigured = crate::app_id::AppId::unconfigured("my notes");
+        for app_id in [configured, unconfigured] {
+            let bundle = AppBundle::new("Notes", app_id.desktop_entry_id());
+            let compiled = crate::build::desktop::DesktopBuilder::compiled_identity(
+                "x86_64-unknown-linux-gnu",
+                Some(&bundle),
+            );
+            assert_eq!(
+                compiled,
+                Some((crate::config::APP_ID_ENV, app_id.as_str().to_owned())),
+                "{app_id}: the Linux build compiles the identifier in"
+            );
+            let output = tempfile::tempdir().expect("a temporary directory");
+            let written = stage(output.path(), &bundle, "notes", &Declarations::default())
+                .expect("the entry is written");
+            let entry_name = written[0]
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a UTF-8 file name");
+            assert_eq!(entry_name, format!("{app_id}.desktop"), "{app_id}");
+            let entry = std::fs::read_to_string(&written[0]).expect("the entry");
+            let class = entry
+                .lines()
+                .find_map(|line| line.strip_prefix("StartupWMClass="))
+                .expect("a StartupWMClass");
+            assert_eq!(class, app_id.as_str(), "{app_id}");
+        }
+        assert_eq!(
+            crate::build::desktop::DesktopBuilder::compiled_identity(
+                "x86_64-pc-windows-msvc",
+                Some(&AppBundle::new("Notes", "com.example.notes".to_owned()))
+            ),
+            None,
+            "only a Linux build compiles the entry's identifier in"
+        );
     }
 
     /// A name and an executable are each one value of their key, whatever

@@ -211,18 +211,18 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | Cases | In CI | Why there |
 |-------|-------|-----------|
 | `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
-| `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, a seat. Weston 13 lacks all five. |
+| `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, `zwlr_foreign_toplevel_manager_v1` (a window's app id read back), a seat. Weston 13 lacks all six. |
 | `a_window_moved_to_another_output_names_its_display` | none: a case of `optional`, it says under both runs that it skipped | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
 
 A case of `optional` that meets a compositor without its subject says in its
 output what it skipped and what it checked instead, and both Wayland runs
 show each case's output at their end. `FLUI_REQUIRE_COMPOSITOR`, a variable
 of the test suite and not of a crate's consumer, is a comma-separated list of
-the subjects the compositor must offer (`fractional-scale`, `seat`,
+the subjects the compositor must offer (`foreign-toplevel`, `fractional-scale`, `seat`,
 `two-outputs`, `xdg-activation`, `xdg-decoration`, `xdg-foreign`, the names
 `Optional::ALL` in `tests/wayland_window.rs` holds): a case that finds a
 listed one missing fails, and a name of no subject fails every case of the
-module. `cargo xtask wayland-optional` lists the five a sway offers, and a
+module. `cargo xtask wayland-optional` lists the six a sway offers, and a
 Weston run with two outputs lists `two-outputs`. What no CI compositor runs
 is in [gaps](gaps.md#native-linux-host-wayland-and-x11).
 

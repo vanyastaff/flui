@@ -7180,6 +7180,38 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `owner/apple/metal_layer.rs`, `owner/apple/macos/content_view.rs`, `window/apple/{macos,ios,mod}.rs`,
   `window/android.rs`, `window/web.rs`, `tests/appkit_window.rs`.
 
+- [x] **LY128** — ветка `native/linux-app-identity`, решение — ADR-0348 (заменяет условие desktop
+  entry в ADR-0307 §4, оговорку ADR-0254 §4 о неверном id и сигнатуру `start_with` в ADR-0327 §3).
+  Подтверждено на `main` @ `ac3b1ee58`: `set_app_id` в `flui-native` нет, X11 писал `WM_CLASS` из
+  основы имени исполняемого файла и не писал `WM_HINTS`, desktop entry писалась только при схеме
+  или типе файла и без `StartupWMClass`; хост брал id строкой и проверял своей грамматикой
+  (`instance_name`), предупреждая и продолжая при отказе. Одно тождество: `AppId` переехал в
+  `flui-foundation` (`flui-log` реэкспортирует его, `IdentityError` оставил отказы имени показа),
+  длина — не больше `APP_ID_MAX_LEN` = 255 − `.desktop`, так что `<id>.desktop` — имя файла, а
+  более длинный id — `AppIdError::TooLong` в `AppId::try_new` (CLI держит ту же границу, тест
+  `the_cli_and_the_framework_accept_the_same_identifiers`). `CurrentHost::start_with(executor,
+  Option<&AppId>)` и `start_single(executor, &AppId)`; `instance_name` и путь предупреждения
+  удалены. Хост Linux решает `window::linux::class::AppClass` один раз при старте (id или основа
+  имени); Wayland зовёт `set_app_id` до первого commit, X11 пишет `WM_CLASS` (экземпляр и класс —
+  id), `_GTK_APPLICATION_ID` при id и `WM_HINTS` (`InputHint`, input `True`). `flui build linux`
+  пишет `<id>.desktop` для каждой сборки со `StartupWMClass=<id>` (`MimeType` — только когда
+  есть что открывать) и компилирует тот же id как `FLUI_APP_ID`, так что приложение без
+  `flui.toml` совпадает с записью тоже. Тесты: `a_window_carries_the_application_id_it_was_started_with`
+  в `x11_window` (Xvfb + openbox: при откате `WM_CLASS` к основе имени — падает на «the instance
+  and the class», при откате `WM_HINTS` — на «32-bit hints») и в `wayland_window::optional`
+  (headless sway 1.9, другой клиент читает app id через `zwlr_foreign_toplevel_manager_v1`, новый
+  предмет `foreign-toplevel` в `SWAY_OFFERS`; без `set_app_id` — `None` вместо id; Weston
+  пропускает), `a_window_is_classed_by_the_application_id_or_the_executable`,
+  `the_entry_and_the_window_are_named_by_one_identifier` (из одного id: имя файла записи,
+  `StartupWMClass` и компилируемый `FLUI_APP_ID`; с id из `flui.toml` и без него),
+  `a_linux_desktop_registers_what_the_application_opens`,
+  `an_app_id_is_a_reverse_dns_name_every_platform_accepts` (перенесён в `flui-foundation`).
+  Прогоны 2026-11-16 (WSL Ubuntu 24.04): весь `x11_window` (38 случаев), весь
+  `wayland_window::optional` под sway с `FLUI_REQUIRE_COMPOSITOR` из `SWAY_OFFERS`, clippy Linux
+  с `--all-features`. Не запущено и записано в строке паритета
+  `app-identity-aumid-bundle-id-desktop-file`: сопоставление окна с установленной записью в сессиях
+  GNOME и KDE; AppUserModelID на Windows не ставится (`docs/gaps.md`).
+
 ### Доведение до приёмки
 
 Аудит кода 2026-10-21 по каждому пункту выше дал порядок PR:

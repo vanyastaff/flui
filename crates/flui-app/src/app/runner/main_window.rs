@@ -816,6 +816,7 @@ where
     let single = application
         .opening
         .single_instance_id(&application.config.application_identity);
+    let app_id = application.config.application_identity.app_id().cloned();
     // Held for the main window's first frame; a launch the running instance
     // takes drops it, so only the instance that runs registers.
     #[cfg(windows)]
@@ -832,7 +833,7 @@ where
             let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
             // Before the platform, whose registries report only to a capture already installed.
             super::begin_native_journal(host.backend());
-            start_host(host, single.as_deref())
+            start_host(host, single.as_ref(), app_id.as_ref())
         },
         Rc::default(),
         RasterFactory::Gpu,
@@ -840,8 +841,9 @@ where
     started.map_or(Ok(()), StartedLoop::finish)
 }
 
-/// Start `host`, as one instance named `single` when it is given
-/// (`CurrentHost::start_single`):
+/// Start `host` for the application identified by `app_id` (which its Linux
+/// windows carry as their class and app id), as one instance named `single`
+/// when it is given (`CurrentHost::start_single`):
 /// `None` when another process of the application took this launch. The
 /// Wayland and X11 hosts run their IO sources (XIM, IBus, logind, the
 /// settings portal, the session bus), and the Windows host its single-instance
@@ -850,7 +852,8 @@ where
 /// starts on the host's own.
 fn start_host(
     host: flui_native::CurrentHost,
-    single: Option<&str>,
+    single: Option<&flui_log::AppId>,
+    app_id: Option<&flui_log::AppId>,
 ) -> Result<Option<Box<dyn flui_native::Platform>>, LaunchError> {
     let executor =
         host_executor(host, single.is_some())?.unwrap_or_else(flui_native::NativeExecutor::own);
@@ -864,7 +867,7 @@ fn start_host(
             flui_native::HostStart::Forwarded => Ok(None),
         };
     }
-    host.start_with(executor)
+    host.start_with(executor, app_id)
         .map(Some)
         .map_err(LaunchError::from_platform)
 }

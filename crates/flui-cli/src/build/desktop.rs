@@ -34,6 +34,21 @@ impl DesktopBuilder {
 }
 
 impl DesktopBuilder {
+    /// The identifier a build for `target` compiles in (`FLUI_APP_ID`), when
+    /// it is a Linux build staging the desktop entry of `bundle`: the entry's
+    /// own identifier, which names its file and is its `StartupWMClass`, so
+    /// the window that carries it as its class and app id matches the entry.
+    /// An application without a `flui.toml` has it from its directory alone.
+    /// `None` for every other build, which takes the identifier from the
+    /// project's cargo configuration.
+    pub(crate) fn compiled_identity(
+        target: &str,
+        bundle: Option<&crate::build::platform::AppBundle>,
+    ) -> Option<(&'static str, String)> {
+        let bundle = bundle.filter(|_| target.contains("-linux-"))?;
+        Some((crate::config::APP_ID_ENV, bundle.identifier.clone()))
+    }
+
     pub(crate) fn validate_environment() -> BuildResult<()> {
         // Just need cargo
         crate::build::util::check_command_exists("cargo")?;
@@ -76,7 +91,8 @@ impl DesktopBuilder {
             args.push(profile_flag.to_string());
         }
 
-        let env = ctx.floors.cargo_env(&target);
+        let mut env = ctx.floors.cargo_env(&target);
+        env.extend(Self::compiled_identity(&target, ctx.bundle.as_ref()));
         let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected, &env).await?;
 
         Ok(BuildArtifacts {

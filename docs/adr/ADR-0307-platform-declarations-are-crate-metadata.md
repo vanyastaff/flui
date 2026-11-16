@@ -10,6 +10,9 @@
   of §8 stand. [ADR-0255](ADR-0255-mobile-and-web-hosts.md) decision 6 only (the manifest lines
   capability crates contribute through `[package.metadata.flui.capability]` declarations in
   marker-delimited blocks: the CLI writes the manifest whole, §4); its other manifest lines stand
+- **Superseded-by:** [ADR-0348](ADR-0348-a-linux-window-and-its-desktop-entry-carry-the-application-id.md)
+  for §4's condition on the Linux desktop entry only (every Linux build writes it, with
+  `StartupWMClass`)
 - **Related:** [ADR-0280](ADR-0280-http-is-a-capability-of-the-host.md) (the HTTP capability, whose Android
   stack needs the network permission); [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)
   (facade features)

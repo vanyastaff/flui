@@ -78,7 +78,10 @@ impl OpenSettings {
         feature = "single-instance",
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
-    pub(crate) fn single_instance_id(&self, identity: &flui_log::AppIdentity) -> Option<String> {
+    pub(crate) fn single_instance_id(
+        &self,
+        identity: &flui_log::AppIdentity,
+    ) -> Option<flui_log::AppId> {
         // The Linux and Windows hosts keep one instance; macOS, iOS and
         // Android keep one themselves, and each page on the Web is an
         // application of its own.
@@ -86,7 +89,7 @@ impl OpenSettings {
         if !kept_here || !self.single_instance.unwrap_or(self.declares_a_launch()) {
             return None;
         }
-        let app_id = identity.app_id().map(|app_id| app_id.as_str().to_owned());
+        let app_id = identity.app_id().cloned();
         if app_id.is_none() {
             tracing::warn!(
                 "one instance needs an application id (`AppConfig::application_identity`): \
@@ -104,7 +107,10 @@ impl OpenSettings {
         not(feature = "single-instance"),
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
-    pub(crate) fn single_instance_id(&self, _identity: &flui_log::AppIdentity) -> Option<String> {
+    pub(crate) fn single_instance_id(
+        &self,
+        _identity: &flui_log::AppIdentity,
+    ) -> Option<flui_log::AppId> {
         if cfg!(any(target_os = "linux", windows)) && self.declares_a_launch() {
             tracing::warn!(
                 "the application declares a URL scheme or a file type but is built without flui's \
@@ -1136,7 +1142,7 @@ mod tests {
             "Note",
         )];
         let file_type = Some(OpenDeclarations::new().file_types(NOTE));
-        let id = Some("com.example.Notes".to_owned());
+        let id = named.app_id().cloned();
         let cases = [
             (
                 "a declared scheme",

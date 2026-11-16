@@ -2176,6 +2176,7 @@ dependencies = [
  "wayland-cursor",
  "wayland-protocols",
  "wayland-protocols-misc",
+ "wayland-protocols-wlr",
  "web-sys",
  "web-time",
  "windows 0.62.2",

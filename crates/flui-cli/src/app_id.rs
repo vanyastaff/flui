@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CliError, CliResult};
 use crate::types::{OrganizationId, ProjectName};
 
-/// The longest identifier, in bytes: the longest directory name, since the
-/// application's data directory is named after it.
-const MAX_LEN: usize = 255;
+/// The longest identifier, in bytes: the longest file name (255 bytes) less
+/// the `.desktop` of the Linux desktop entry named after it, so the entry, the
+/// data directory and the D-Bus name each hold it.
+const MAX_LEN: usize = 255 - ".desktop".len();
 
 /// Words Java reserves, which Android refuses as a package-name label.
 const JAVA_RESERVED: &[&str] = &[
@@ -80,7 +81,7 @@ const JAVA_RESERVED: &[&str] = &[
 /// A validated reverse-DNS application identifier, such as
 /// `com.example.my_app`: two or more `.`-separated labels, each starting with
 /// an ASCII letter and continuing with ASCII letters, digits and `_`, none a
-/// word Java reserves, at most 255 bytes.
+/// word Java reserves, at most 247 bytes (so `<id>.desktop` is a file name).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub(crate) struct AppId(String);
@@ -246,8 +247,8 @@ mod tests {
     /// `flui.toml` holds is what the application is compiled with.
     #[test]
     fn the_cli_and_the_framework_accept_the_same_identifiers() {
-        let long = format!("com.{}", "a".repeat(251));
-        let too_long = format!("com.{}", "a".repeat(252));
+        let long = format!("com.{}", "a".repeat(MAX_LEN - 4));
+        let too_long = format!("com.{}", "a".repeat(MAX_LEN - 3));
         let cases = [
             "com.example.notes",
             "com.example.my_app",

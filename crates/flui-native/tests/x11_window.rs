@@ -64,6 +64,10 @@ mod cases {
             the_host_runs_its_io_on_the_runtime_it_is_handed,
         ),
         (
+            "a_window_carries_the_application_id_it_was_started_with",
+            a_window_carries_the_application_id_it_was_started_with,
+        ),
+        (
             "a_decorated_window_is_placed_and_measured_by_its_frame",
             a_decorated_window_is_placed_and_measured_by_its_frame,
         ),
@@ -543,6 +547,16 @@ mod cases {
             handler: Rc<dyn flui_platform::WindowHandler>,
         ) -> Self {
             let platform = X11Platform::try_new().expect("the X11 platform");
+            Self::open_on(platform, options, handler)
+        }
+
+        /// A window of `platform` opened with `options`, delivering to
+        /// `handler`.
+        pub(crate) fn open_on(
+            platform: X11Platform,
+            options: WindowOptions,
+            handler: Rc<dyn flui_platform::WindowHandler>,
+        ) -> Self {
             let window = platform
                 .open_window(options, handler)
                 .expect("an X11 window opens");
@@ -1152,7 +1166,7 @@ mod cases {
         let active_window = atom(&watcher, "_NET_ACTIVE_WINDOW");
 
         let HostStart::Started(platform) = CurrentHost::X11
-            .start_single(NativeExecutor::own(), APP_ID)
+            .start_single(NativeExecutor::own(), &app_id(APP_ID))
             .expect("the X11 platform")
         else {
             panic!("the first launch owns the application's name");
@@ -1181,7 +1195,7 @@ mod cases {
         log.bootstrap(move |owner| {
             quit_after(owner.proxy(), Duration::from_secs(10));
             std::thread::spawn(move || {
-                let started = CurrentHost::X11.start_single(NativeExecutor::own(), APP_ID);
+                let started = CurrentHost::X11.start_single(NativeExecutor::own(), &app_id(APP_ID));
                 let _ = later.send(matches!(started, Ok(HostStart::Forwarded)));
             });
             Ok(())
@@ -1222,7 +1236,7 @@ mod cases {
             return;
         }
         let HostStart::Started(platform) = CurrentHost::X11
-            .start_single(NativeExecutor::own(), APP_ID)
+            .start_single(NativeExecutor::own(), &app_id(APP_ID))
             .expect("the X11 platform")
         else {
             panic!("the first launch owns the application's name");
@@ -1251,7 +1265,7 @@ mod cases {
                 .try_ready()?;
             *window_slot.borrow_mut() = Some(window);
             std::thread::spawn(move || {
-                let started = CurrentHost::X11.start_single(NativeExecutor::own(), APP_ID);
+                let started = CurrentHost::X11.start_single(NativeExecutor::own(), &app_id(APP_ID));
                 let _ = later.send(matches!(started, Ok(HostStart::Forwarded)));
             });
             Ok(())
@@ -1425,6 +1439,76 @@ mod cases {
         assert_eq!(log.count(AppCall::ExitPolicy), 1);
     }
 
+    /// An application id parsed for the cases.
+    fn app_id(id: &str) -> flui_foundation::AppId {
+        flui_foundation::AppId::try_new(id).expect("a valid application id")
+    }
+
+    /// A window of a host started with an application id carries it as both
+    /// halves of `WM_CLASS` and as `_GTK_APPLICATION_ID`, which a desktop
+    /// entry named by the id matches; a host started without one carries the
+    /// executable's stem and claims no id. Either way the window says it takes
+    /// the input focus (`WM_HINTS`) and names its process.
+    fn a_window_carries_the_application_id_it_was_started_with() {
+        let stem = std::env::current_exe()
+            .expect("the test's executable")
+            .file_stem()
+            .expect("a file stem")
+            .to_string_lossy()
+            .into_owned();
+        let notes = app_id("com.example.Notes");
+        let cases = [
+            (
+                flui_native::testing::x11::identified(&notes),
+                "com.example.Notes",
+                Some("com.example.Notes"),
+            ),
+            (X11Platform::try_new(), stem.as_str(), None),
+        ];
+        for (platform, class, claimed) in cases {
+            let fixture = X11Fixture::open_on(
+                platform.expect("the X11 platform"),
+                WindowOptions::default().title("identity"),
+                RecordingWindowHandler::new(),
+            );
+            let read = |name: &str| {
+                let property = match name {
+                    "WM_CLASS" => u32::from(AtomEnum::WM_CLASS),
+                    "WM_HINTS" => u32::from(AtomEnum::WM_HINTS),
+                    other => atom(&fixture.server, other),
+                };
+                fixture
+                    .server
+                    .get_property(false, fixture.xid, property, AtomEnum::ANY, 0, 64)
+                    .expect("request")
+                    .reply()
+                    .expect("the property")
+            };
+            assert_eq!(
+                read("WM_CLASS").value,
+                format!("{class}\0{class}\0").into_bytes(),
+                "{class}: the instance and the class"
+            );
+            let gtk = read("_GTK_APPLICATION_ID");
+            assert_eq!(
+                (gtk.type_ != u32::from(AtomEnum::NONE)).then_some(gtk.value),
+                claimed.map(|id| id.as_bytes().to_vec()),
+                "{class}: the claimed application id"
+            );
+            let hints: Vec<u32> = read("WM_HINTS").value32().expect("32-bit hints").collect();
+            assert_eq!(
+                hints.get(..2),
+                Some(&[1, 1][..]),
+                "{class}: InputHint set, input True"
+            );
+            let pid: Vec<u32> = read("_NET_WM_PID")
+                .value32()
+                .expect("a 32-bit pid")
+                .collect();
+            assert_eq!(pid, [std::process::id()], "{class}");
+        }
+    }
+
     /// A host started on a runtime its creator lends runs its IO there (ADR-0327 §3): the
     /// input-method bus's task is the lent runtime's, and it ends when the platform is dropped.
     fn the_host_runs_its_io_on_the_runtime_it_is_handed() {
@@ -1438,9 +1522,10 @@ mod cases {
         assert_eq!(metrics.num_alive_tasks(), 0, "the lent runtime starts idle");
 
         let platform = flui_native::CurrentHost::X11
-            .start_with(flui_native::NativeExecutor::from_tokio(
-                lent.handle().clone(),
-            ))
+            .start_with(
+                flui_native::NativeExecutor::from_tokio(lent.handle().clone()),
+                None,
+            )
             .expect("the X11 platform");
         assert!(
             metrics.num_alive_tasks() >= 1,

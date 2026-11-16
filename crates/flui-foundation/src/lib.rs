@@ -154,6 +154,8 @@ extern crate self as flui_foundation;
 mod test_cases;
 
 pub mod affinity;
+// The application identifier every platform names the application by.
+pub mod app_id;
 #[expect(
     unsafe_code,
     reason = "ADR-0328: the frame arena implements `Allocator`, an unsafe trait"
@@ -246,6 +248,7 @@ pub mod tree_error;
 
 // Core types - IDs for all tree levels
 pub use affinity::OwnerAffinity;
+pub use app_id::{APP_ID_MAX_LEN, AppId, AppIdError};
 // Arity markers. Kept out of the prelude: a glob import of `Range` would
 // shadow `std::ops::Range`.
 pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};

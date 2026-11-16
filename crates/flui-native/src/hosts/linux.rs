@@ -30,6 +30,8 @@ use crate::owner::signal::OwnerSignal;
 use crate::platform::HostPlatform;
 use crate::preferences::linux::PreferenceSource;
 use crate::storage::UserDataDirs;
+use crate::window::linux::class::AppClass;
+use flui_foundation::AppId;
 
 #[cfg(wayland_host)]
 pub use wayland::WaylandPlatform;
@@ -61,9 +63,9 @@ mod wayland {
     use std::sync::Arc;
 
     use super::{
-        Absent, AppDelivery, FirstInstance, Host, HostPlatform, LinuxNotices, LinuxPreferences,
-        NativeExecutor, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs,
-        position,
+        Absent, AppClass, AppDelivery, AppId, FirstInstance, Host, HostPlatform, LinuxNotices,
+        LinuxPreferences, NativeExecutor, NoticeChannel, OwnerSignal, PlatformError,
+        UnixAccessibility, UserDataDirs, position,
     };
     use crate::clipboard::linux::wayland::SeatClipboard;
     use crate::display::linux::protocol::Environment;
@@ -167,14 +169,16 @@ mod wayland {
         /// compositor answers on it, libwayland cannot be loaded, or the
         /// compositor lacks the globals a window needs.
         pub fn try_new() -> Result<Self, PlatformError> {
-            Self::try_new_with(NativeExecutor::own(), None)
+            Self::try_new_with(NativeExecutor::own(), None, None)
         }
 
-        /// [`try_new`](Self::try_new) on `executor`'s runtime, as
+        /// [`try_new`](Self::try_new) on `executor`'s runtime, its windows
+        /// carrying `app_id` as their app id, as
         /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
         pub(crate) fn try_new_with(
             executor: NativeExecutor,
             instance: Option<FirstInstance>,
+            app_id: Option<&AppId>,
         ) -> Result<Self, PlatformError> {
             let socket = Environment::current()
                 .wayland_socket_path()
@@ -183,9 +187,11 @@ mod wayland {
                               XDG_RUNTIME_DIR)"
                         .to_owned(),
                 })?;
-            Self::try_from_parts(WaylandWindows::new, |_| {
-                WaylandLoop::try_new::<Wayland>(&socket, executor, instance)
-            })
+            let class = AppClass::current(app_id);
+            Self::try_from_parts(
+                |positions| WaylandWindows::new(positions, class),
+                |_| WaylandLoop::try_new::<Wayland>(&socket, executor, instance),
+            )
         }
     }
 }
@@ -196,9 +202,9 @@ mod x11 {
     use std::sync::Arc;
 
     use super::{
-        Absent, AppDelivery, FirstInstance, Host, HostPlatform, LinuxNotices, LinuxPreferences,
-        NativeExecutor, NoticeChannel, OwnerSignal, PlatformError, UnixAccessibility, UserDataDirs,
-        position,
+        Absent, AppClass, AppDelivery, AppId, FirstInstance, Host, HostPlatform, LinuxNotices,
+        LinuxPreferences, NativeExecutor, NoticeChannel, OwnerSignal, PlatformError,
+        UnixAccessibility, UserDataDirs, position,
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
@@ -325,20 +331,23 @@ mod x11 {
         /// [`PlatformError::Init`] when libxcb cannot be loaded, no X server
         /// answers, or the loop's wake descriptor cannot be made.
         pub fn try_new() -> Result<Self, PlatformError> {
-            Self::try_new_with(NativeExecutor::own(), None)
+            Self::try_new_with(NativeExecutor::own(), None, None)
         }
 
-        /// [`try_new`](Self::try_new) on `executor`'s runtime, as
+        /// [`try_new`](Self::try_new) on `executor`'s runtime, its windows
+        /// carrying `app_id` as their class, as
         /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
         pub(crate) fn try_new_with(
             executor: NativeExecutor,
             instance: Option<FirstInstance>,
+            app_id: Option<&AppId>,
         ) -> Result<Self, PlatformError> {
             let connection = X11Connection::connect()?;
             let atoms = WindowAtoms::intern(&connection)?;
             let windows = Arc::clone(&connection);
+            let class = AppClass::current(app_id);
             Self::try_from_parts(
-                |positions| X11Windows::new(positions, windows, atoms),
+                |positions| X11Windows::new(positions, windows, atoms, class),
                 |windows| {
                     X11Loop::try_new::<X11>(
                         connection,
