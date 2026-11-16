@@ -83,7 +83,11 @@
 //!   unwinds into the page; a panic traps the instance, and `catch_unwind` has
 //!   nothing to catch there.
 //! - android-activity's glue: that crate holds the boundary of its own
-//!   procedures (it aborts with a log).
+//!   procedures (it aborts with a log). The closures the crate posts to
+//!   Android's Java main thread through it are not: a call of
+//!   `run_on_java_main_thread` anywhere but `owner::android::main_thread`,
+//!   whose `post` runs the closure inside the boundary and reports every exit
+//!   but success, is a finding.
 //! - `flui-hot-reload`'s plugin ABI (`flui_scene_build`, `flui_app_build`):
 //!   entries a host process calls in a plugin, outside `flui-native`.
 //! - Test code: a stub's panic aborts the test process, which fails the run.

@@ -13936,9 +13936,33 @@ impl core::hash::Hash for flui::platform::capability::Abandoned
 impl core::marker::StructuralPartialEq for flui::platform::capability::Abandoned
 variant flui::platform::capability::Abandoned::OwnerRetired // at 1
 variant flui::platform::capability::Abandoned::ProviderDropped // at 0
+pub struct flui::platform::capability::Activity { .. }
+impl Clone for flui::platform::capability::Activity
+impl core::fmt::Debug for flui::platform::capability::Activity
+pub fn flui::platform::capability::Activity::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey, intent: impl FnOnce(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+pub fn flui::platform::capability::Activity::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultData, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Result<R, flui::platform::capability::DataRefused>
+pub fn flui::platform::capability::Activity::with_java<R>(&self, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
+pub trait flui::platform::capability::ActivityBridge: 'static
+fn flui::platform::capability::ActivityBridge::bind(&self, mint: flui::platform::capability::ResultMint)
+fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+fn flui::platform::capability::ActivityBridge::lend(&self, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
+fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
+fn flui::platform::capability::ActivityBridge::take_data(&self, capability: &flui::platform::capability::CapabilityId, data: flui::platform::capability::ResultData, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> Result<(), flui::platform::capability::DataRefused>
+pub struct flui::platform::capability::ActivityResult { .. }
+impl core::fmt::Debug for flui::platform::capability::ActivityResult
+pub fn flui::platform::capability::ActivityResult::code(&self) -> flui::platform::capability::ResultCode
+pub fn flui::platform::capability::ActivityResult::has_data(&self) -> bool
+pub fn flui::platform::capability::ActivityResult::take_data(&mut self) -> Option<flui::platform::capability::ResultData>
 pub trait flui::platform::capability::Capability: 'static
 const flui::platform::capability::Capability::NAME: &'static str
 type flui::platform::capability::Capability::Handle: Clone + 'static
+pub struct flui::platform::capability::CapabilityId(_)
+impl Clone for flui::platform::capability::CapabilityId
+impl Eq for flui::platform::capability::CapabilityId
+impl PartialEq for flui::platform::capability::CapabilityId
+impl core::fmt::Debug for flui::platform::capability::CapabilityId
+pub fn flui::platform::capability::CapabilityId::name(&self) -> &'static str
 pub trait flui::platform::capability::CapabilityProvider<C: flui::platform::capability::Capability>: 'static
 fn flui::platform::capability::CapabilityProvider::provide(&self, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<<C as flui::platform::capability::Capability>::Handle, flui::platform::Unsupported>
 impl<C, F> flui::platform::capability::CapabilityProvider<C> for F where C: flui::platform::capability::Capability, F: Fn(&flui::platform::capability::ProviderContext<'_>) -> Result<<C as flui::platform::capability::Capability>::Handle, flui::platform::Unsupported> + 'static
@@ -13960,6 +13984,55 @@ impl core::fmt::Debug for flui::platform::capability::CompletionSource
 pub fn flui::platform::capability::CompletionSource::new(poster: flui::platform::capability::OwnerPoster, pending: flui::platform::capability::PendingCompletions) -> Self
 pub fn flui::platform::capability::CompletionSource::pending<T: 'static>(&self) -> (flui::platform::capability::Completion<T>, flui::platform::capability::Resolver<T>)
 pub fn flui::platform::capability::CompletionSource::poster(&self) -> &flui::platform::capability::OwnerPoster
+#[non_exhaustive] pub enum flui::platform::capability::DataRefused
+impl Clone for flui::platform::capability::DataRefused
+impl Copy for flui::platform::capability::DataRefused
+impl Eq for flui::platform::capability::DataRefused
+impl PartialEq for flui::platform::capability::DataRefused
+impl core::error::Error for flui::platform::capability::DataRefused
+impl core::fmt::Debug for flui::platform::capability::DataRefused
+impl core::fmt::Display for flui::platform::capability::DataRefused
+impl core::hash::Hash for flui::platform::capability::DataRefused
+impl core::marker::StructuralPartialEq for flui::platform::capability::DataRefused
+variant flui::platform::capability::DataRefused::NotHeld // at 1
+variant flui::platform::capability::DataRefused::NotLent // at 2
+variant flui::platform::capability::DataRefused::OtherCapability // at 0
+pub struct flui::platform::capability::HostBridge { .. }
+impl Clone for flui::platform::capability::HostBridge
+impl Default for flui::platform::capability::HostBridge
+impl core::fmt::Debug for flui::platform::capability::HostBridge
+pub fn flui::platform::capability::HostBridge::install_activity(&self, activity: Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>>
+pub fn flui::platform::capability::HostBridge::new() -> Self
+pub struct flui::platform::capability::IntentFrame { .. }
+impl Clone for flui::platform::capability::IntentFrame
+impl Copy for flui::platform::capability::IntentFrame
+impl core::fmt::Debug for flui::platform::capability::IntentFrame
+pub const fn flui::platform::capability::IntentFrame::activity(&self) -> flui::platform::capability::JniFrame
+pub const fn flui::platform::capability::IntentFrame::intent(&self) -> *mut core::ffi::c_void
+pub const fn flui::platform::capability::IntentFrame::new(activity: flui::platform::capability::JniFrame, intent: core::ptr::non_null::NonNull<core::ffi::c_void>) -> Self
+#[non_exhaustive] pub enum flui::platform::capability::InvalidResultKey
+impl Clone for flui::platform::capability::InvalidResultKey
+impl Copy for flui::platform::capability::InvalidResultKey
+impl Eq for flui::platform::capability::InvalidResultKey
+impl PartialEq for flui::platform::capability::InvalidResultKey
+impl core::error::Error for flui::platform::capability::InvalidResultKey
+impl core::fmt::Debug for flui::platform::capability::InvalidResultKey
+impl core::fmt::Display for flui::platform::capability::InvalidResultKey
+impl core::marker::StructuralPartialEq for flui::platform::capability::InvalidResultKey
+variant flui::platform::capability::InvalidResultKey::Empty // at 0
+variant flui::platform::capability::InvalidResultKey::NotPrintable // at 2
+variant flui::platform::capability::InvalidResultKey::TooLong // at 1
+pub struct flui::platform::capability::JniFrame { .. }
+impl Clone for flui::platform::capability::JniFrame
+impl Copy for flui::platform::capability::JniFrame
+impl core::fmt::Debug for flui::platform::capability::JniFrame
+pub const fn flui::platform::capability::JniFrame::env(&self) -> *mut core::ffi::c_void
+pub const fn flui::platform::capability::JniFrame::new(vm: core::ptr::non_null::NonNull<core::ffi::c_void>, env: core::ptr::non_null::NonNull<core::ffi::c_void>, object: core::ptr::non_null::NonNull<core::ffi::c_void>) -> Self
+pub const fn flui::platform::capability::JniFrame::object(&self) -> *mut core::ffi::c_void
+pub const fn flui::platform::capability::JniFrame::vm(&self) -> *mut core::ffi::c_void
+pub const flui::platform::capability::MAX_OPEN_REQUESTS: usize = 16
+pub const flui::platform::capability::MAX_OPEN_REQUESTS_PER_CAPABILITY: usize
+pub const flui::platform::capability::MAX_RESULT_KEY_LEN: usize = 64
 pub struct flui::platform::capability::OwnerJob(_)
 impl core::fmt::Debug for flui::platform::capability::OwnerJob
 pub fn flui::platform::capability::OwnerJob::run(self, scope: &flui::platform::capability::OwnerScope<'_>)
@@ -13994,8 +14067,9 @@ pub trait flui::platform::capability::Plugin: 'static
 fn flui::platform::capability::Plugin::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
 #[non_exhaustive] pub struct flui::platform::capability::ProviderContext<'a> { .. }
 impl core::fmt::Debug for flui::platform::capability::ProviderContext<'_>
+pub fn flui::platform::capability::ProviderContext::activity(&self) -> Option<flui::platform::capability::Activity> // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::completions(&self) -> &flui::platform::capability::CompletionSource // impl<'a> flui::platform::capability::ProviderContext<'a>
-pub fn flui::platform::capability::ProviderContext::new(owner: &'a flui::platform::capability::OwnerPoster, completions: &'a flui::platform::capability::CompletionSource, locals: &'a flui::platform::capability::RuntimeLocals, window: Option<flui::platform::capability::WindowRef>) -> Self // impl<'a> flui::platform::capability::ProviderContext<'a>
+pub fn flui::platform::capability::ProviderContext::new(owner: &'a flui::platform::capability::OwnerPoster, completions: &'a flui::platform::capability::CompletionSource, locals: &'a flui::platform::capability::RuntimeLocals, host: &'a flui::platform::capability::HostBridge, window: Option<flui::platform::capability::WindowRef>) -> Self // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::owner(&self) -> &flui::platform::capability::OwnerPoster // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::runtime_local<T: Default + 'static>(&self) -> alloc::rcs::rc::Rc<T> // impl<'a> flui::platform::capability::ProviderContext<'a>
 pub fn flui::platform::capability::ProviderContext::window(&self) -> Option<flui::platform::capability::WindowRef> // impl<'a> flui::platform::capability::ProviderContext<'a>
@@ -14003,13 +14077,110 @@ pub struct flui::platform::capability::RegisteredProvider { .. }
 impl Clone for flui::platform::capability::RegisteredProvider
 impl core::fmt::Debug for flui::platform::capability::RegisteredProvider
 pub fn flui::platform::capability::RegisteredProvider::capability(&self) -> core::any::TypeId
+pub fn flui::platform::capability::RegisteredProvider::id(&self) -> &flui::platform::capability::CapabilityId
 pub fn flui::platform::capability::RegisteredProvider::name(&self) -> &'static str
-pub fn flui::platform::capability::RegisteredProvider::new<C: flui::platform::capability::Capability>(provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub fn flui::platform::capability::RegisteredProvider::provide(&self, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Box<dyn core::any::Any>, flui::platform::Unsupported>
+pub struct flui::platform::capability::RequestKey { .. }
+impl Clone for flui::platform::capability::RequestKey
+impl Copy for flui::platform::capability::RequestKey
+impl Eq for flui::platform::capability::RequestKey
+impl PartialEq for flui::platform::capability::RequestKey
+impl core::fmt::Debug for flui::platform::capability::RequestKey
+impl core::hash::Hash for flui::platform::capability::RequestKey
+impl core::marker::StructuralPartialEq for flui::platform::capability::RequestKey
+pub const fn flui::platform::capability::RequestKey::capability(self) -> flui::platform::capability::ResultKey
+pub const fn flui::platform::capability::RequestKey::key(self) -> flui::platform::capability::ResultKey
+pub const fn flui::platform::capability::RequestKey::new(capability: flui::platform::capability::ResultKey, key: flui::platform::capability::ResultKey) -> Self
+pub fn flui::platform::capability::RequestKey::matches(self, capability: &str, key: &str) -> bool
 pub struct flui::platform::capability::Resolver<T> { .. }
 impl<T> Drop for flui::platform::capability::Resolver<T>
 impl<T> core::fmt::Debug for flui::platform::capability::Resolver<T>
 pub fn flui::platform::capability::Resolver::resolve(self, value: T) -> Result<(), flui::platform::capability::OwnerRetired> // impl<T: 'static> flui::platform::capability::Resolver<T>
+pub enum flui::platform::capability::ResultCode
+impl Clone for flui::platform::capability::ResultCode
+impl Copy for flui::platform::capability::ResultCode
+impl Eq for flui::platform::capability::ResultCode
+impl PartialEq for flui::platform::capability::ResultCode
+impl core::fmt::Debug for flui::platform::capability::ResultCode
+impl core::hash::Hash for flui::platform::capability::ResultCode
+impl core::marker::StructuralPartialEq for flui::platform::capability::ResultCode
+pub const fn flui::platform::capability::ResultCode::from_raw(code: i32) -> Self
+pub const fn flui::platform::capability::ResultCode::raw(self) -> i32
+variant flui::platform::capability::ResultCode::Canceled // at 1
+variant flui::platform::capability::ResultCode::Ok // at 0
+variant flui::platform::capability::ResultCode::Other(i32) // at 2
+pub struct flui::platform::capability::ResultData(_)
+impl core::fmt::Debug for flui::platform::capability::ResultData
+pub fn flui::platform::capability::ResultData::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultDataHold(_)
+impl core::fmt::Debug for flui::platform::capability::ResultDataHold
+pub fn flui::platform::capability::ResultDataHold::is_released(&self) -> bool
+pub struct flui::platform::capability::ResultKey(_)
+impl Clone for flui::platform::capability::ResultKey
+impl Copy for flui::platform::capability::ResultKey
+impl Eq for flui::platform::capability::ResultKey
+impl PartialEq for flui::platform::capability::ResultKey
+impl core::fmt::Debug for flui::platform::capability::ResultKey
+impl core::hash::Hash for flui::platform::capability::ResultKey
+impl core::marker::StructuralPartialEq for flui::platform::capability::ResultKey
+pub const fn flui::platform::capability::ResultKey::as_str(self) -> &'static str
+pub const fn flui::platform::capability::ResultKey::check(name: &str) -> Result<(), flui::platform::capability::InvalidResultKey>
+pub const fn flui::platform::capability::ResultKey::try_new(name: &'static str) -> Result<Self, flui::platform::capability::InvalidResultKey>
+pub struct flui::platform::capability::ResultMint { .. }
+impl Clone for flui::platform::capability::ResultMint
+impl core::fmt::Debug for flui::platform::capability::ResultMint
+pub fn flui::platform::capability::ResultMint::data(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultData, flui::platform::capability::ResultDataHold)
+pub fn flui::platform::capability::ResultMint::made(&self, data: &flui::platform::capability::ResultData) -> bool
+pub fn flui::platform::capability::ResultMint::request(&self, ticket: flui::platform::capability::ResultTicket, completion: flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>) -> flui::platform::capability::ResultRequest
+pub fn flui::platform::capability::ResultMint::result(&self, code: flui::platform::capability::ResultCode, data: Option<flui::platform::capability::ResultData>) -> flui::platform::capability::ActivityResult
+pub fn flui::platform::capability::ResultMint::ticket(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultTicket, flui::platform::capability::ResultTicketHold)
+pub type flui::platform::capability::ResultOutcome = Result<flui::platform::capability::ActivityResult, flui::platform::capability::ResultRefused>
+#[non_exhaustive] pub enum flui::platform::capability::ResultRefused
+impl Clone for flui::platform::capability::ResultRefused
+impl Copy for flui::platform::capability::ResultRefused
+impl Eq for flui::platform::capability::ResultRefused
+impl PartialEq for flui::platform::capability::ResultRefused
+impl core::error::Error for flui::platform::capability::ResultRefused
+impl core::fmt::Debug for flui::platform::capability::ResultRefused
+impl core::fmt::Display for flui::platform::capability::ResultRefused
+impl core::hash::Hash for flui::platform::capability::ResultRefused
+impl core::marker::StructuralPartialEq for flui::platform::capability::ResultRefused
+variant flui::platform::capability::ResultRefused::ActivityEnded // at 7
+variant flui::platform::capability::ResultRefused::AnswerUnreadable // at 9
+variant flui::platform::capability::ResultRefused::Cancelled // at 5
+variant flui::platform::capability::ResultRefused::DataLost { code: flui::platform::capability::ResultCode } // at 8
+variant flui::platform::capability::ResultRefused::HandOffFailed // at 4
+variant flui::platform::capability::ResultRefused::IntentNotMade // at 2
+variant flui::platform::capability::ResultRefused::NotLaunched // at 3
+variant flui::platform::capability::ResultRefused::NothingPending // at 6
+variant flui::platform::capability::ResultRefused::TokensExhausted // at 1
+variant flui::platform::capability::ResultRefused::TooManyOpen // at 0
+pub struct flui::platform::capability::ResultRequest { .. }
+impl core::fmt::Debug for flui::platform::capability::ResultRequest
+pub fn flui::platform::capability::ResultRequest::into_parts(self) -> (flui::platform::capability::ResultTicket, flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>)
+pub fn flui::platform::capability::ResultRequest::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultTicket(_)
+impl core::fmt::Debug for flui::platform::capability::ResultTicket
+pub fn flui::platform::capability::ResultTicket::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultTicketHold(_)
+impl core::fmt::Debug for flui::platform::capability::ResultTicketHold
+pub fn flui::platform::capability::ResultTicketHold::is_released(&self) -> bool
+pub struct flui::platform::capability::ResultToken(_)
+impl Clone for flui::platform::capability::ResultToken
+impl Copy for flui::platform::capability::ResultToken
+impl Eq for flui::platform::capability::ResultToken
+impl Ord for flui::platform::capability::ResultToken
+impl PartialEq for flui::platform::capability::ResultToken
+impl PartialOrd for flui::platform::capability::ResultToken
+impl core::fmt::Debug for flui::platform::capability::ResultToken
+impl core::hash::Hash for flui::platform::capability::ResultToken
+impl core::marker::StructuralPartialEq for flui::platform::capability::ResultToken
+pub const fn flui::platform::capability::ResultToken::get(self) -> u64
+pub struct flui::platform::capability::ResultTokenMint(_)
+impl Default for flui::platform::capability::ResultTokenMint
+impl core::fmt::Debug for flui::platform::capability::ResultTokenMint
+pub const fn flui::platform::capability::ResultTokenMint::new() -> Self
+pub fn flui::platform::capability::ResultTokenMint::next(&self) -> Result<flui::platform::capability::ResultToken, flui::foundation::IdExhausted>
 pub struct flui::platform::capability::RuntimeLocals { .. }
 impl Clone for flui::platform::capability::RuntimeLocals
 impl Default for flui::platform::capability::RuntimeLocals
@@ -35831,6 +36002,7 @@ impl core::fmt::Debug for flui_runtime::capability::CapabilityConflict
 impl core::fmt::Display for flui_runtime::capability::CapabilityConflict
 impl core::marker::StructuralPartialEq for flui_runtime::capability::CapabilityConflict
 variant flui_runtime::capability::CapabilityConflict::Duplicate { name: &'static str, tier: flui_runtime::capability::ProviderTier } // at 0
+variant flui_runtime::capability::CapabilityConflict::InvalidName { name: &'static str, reason: flui::platform::capability::InvalidResultKey } // at 2
 variant flui_runtime::capability::CapabilityConflict::SharedName { name: &'static str } // at 1
 pub struct flui_runtime::capability::CapabilityRegistry { .. }
 impl Clone for flui_runtime::capability::CapabilityRegistry
@@ -35844,6 +36016,7 @@ impl Default for flui_runtime::capability::CapabilityRegistryBuilder
 impl core::fmt::Debug for flui_runtime::capability::CapabilityRegistryBuilder
 pub fn flui_runtime::capability::CapabilityRegistryBuilder::build(self) -> Result<flui_runtime::capability::CapabilityRegistry, flui_runtime::capability::CapabilityConflict>
 pub fn flui_runtime::capability::CapabilityRegistryBuilder::built_ins(self, registrar: flui::platform::capability::CapabilityRegistrar) -> Self
+pub fn flui_runtime::capability::CapabilityRegistryBuilder::host(self, host: flui::platform::capability::HostBridge) -> Self
 pub fn flui_runtime::capability::CapabilityRegistryBuilder::overrides(self, registrar: flui::platform::capability::CapabilityRegistrar) -> Self
 pub fn flui_runtime::capability::CapabilityRegistryBuilder::plugin(self, plugin: &dyn flui::platform::capability::Plugin) -> Self
 #[non_exhaustive] pub enum flui_runtime::capability::ProviderTier

@@ -256,6 +256,9 @@ pub struct AndroidLoop {
     /// The owner's end of `FluiHost`'s queue, bound on the Java main thread
     /// at start (ADR-0255 decision 2).
     host_queue: Arc<java_host::HostQueue>,
+    /// The Activity's requests for results, which providers reach through
+    /// the bridge `android_platform` hands out.
+    results: Rc<super::result_bridge::ResultBridge>,
     /// `FluiView`, installed on the Java main thread at start (ADR-0247).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
@@ -301,11 +304,13 @@ impl AndroidLoop {
     /// input, the clipboard and the drag-and-drop transport, and names what
     /// `FluiView` reports to. `library` is the NDK the level `api` was read
     /// from, kept for the platform's life: every function pointer looked up in
-    /// it is valid until the last handle to it is gone.
+    /// it is valid until the last handle to it is gone. `epoch` is the one
+    /// `FluiHost.nextEpoch` gave this platform's requests for results.
     pub(crate) fn new<H: AndroidHost>(
         app: AndroidApp,
         library: Arc<dyn SymbolSource>,
         api: AndroidApi,
+        epoch: std::num::NonZeroU64,
     ) -> Self {
         let waker = app.create_waker();
         let owner_signal = OwnerSignal::new(Arc::new(move || {
@@ -319,6 +324,8 @@ impl AndroidLoop {
             H::transfer,
         );
         let host_queue = java_host::HostQueue::start(app.clone(), Arc::downgrade(&owner_signal));
+        let results =
+            super::result_bridge::ResultBridge::new(&app, epoch, Arc::downgrade(&owner_signal));
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
         let clipboard = H::clipboard(&app, api);
@@ -327,6 +334,7 @@ impl AndroidLoop {
         Self {
             java_view,
             host_queue,
+            results,
             app,
             notices: H::notices(&app_delivery),
             app_delivery,
@@ -412,6 +420,9 @@ impl AndroidLoop {
         }
         self.java_view.detach();
         self.host_queue.detach();
+        // The requests still open end, and a provider's later ones are
+        // refused: the Activity is gone with this loop.
+        self.results.end();
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
@@ -481,7 +492,9 @@ impl AndroidLoop {
     /// the owner thread, whether or not the Activity is resumed: a trim level
     /// matters most in the background.
     fn deliver_host_entries(&self) {
-        for entry in self.host_queue.take() {
+        let (entries, answers) = self.host_queue.take();
+        self.results.answer(answers);
+        for entry in entries {
             let event = match entry {
                 java_host::HostEntry::TrimMemory(level) => ActivityEvent::TrimMemory(level),
                 java_host::HostEntry::Intent(intent) => {
@@ -803,6 +816,7 @@ impl host::Loop for AndroidLoop {
                             resumed,
                             wake_deadline: [wake_deadline, turn_wait].into_iter().flatten().min(),
                             next_preference_sample: self.next_sample(next_preference_sample),
+                            hand_off_deadline: self.results.next_deadline(),
                         },
                         web_time::Instant::now(),
                     );
@@ -1163,6 +1177,15 @@ impl host::Loop for AndroidLoop {
 
     fn request_exit_policy_reevaluation(&self) {
         // No exit policy is consulted, so there is nothing to re-evaluate.
+    }
+}
+
+impl AndroidLoop {
+    /// The Activity a capability provider is offered (ADR-0154 §9). Valid
+    /// while this loop runs: once it ends, the Activity refuses every
+    /// request.
+    pub(crate) fn activity(&self) -> Rc<dyn flui_platform::capability::ActivityBridge> {
+        self.results.bridge()
     }
 }
 
