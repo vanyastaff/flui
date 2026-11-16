@@ -266,7 +266,7 @@ mod queue {
     use jni::{Env, EnvUnowned, JValue, JavaVM, NativeMethod, jni_sig, jni_str};
     use parking_lot::Mutex;
 
-    use super::{HOST_CLASS, HostEntry, ReceivedIntent, load_class};
+    use super::{HOST_CLASS, HostEntry, load_class};
     use crate::owner::android::activity::with_activity;
     use crate::owner::android::activity_results::Answer;
     use crate::owner::android::java_view::strings;

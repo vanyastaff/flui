@@ -1696,7 +1696,7 @@ pub(crate) mod sizing {
             // succeeded before a panic, its queued callback still owns the ticket.
             contain_os_entry("android text sizing post", || {
                 crate::owner::android::main_thread::run(
-                    &app,
+                    app,
                     "android text sizing capture",
                     move || {
                         let result =

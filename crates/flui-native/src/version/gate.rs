@@ -532,6 +532,14 @@ pub(crate) mod android {
     /// `Window.setDecorFitsSystemWindows` (API 30). Without it the window
     /// lays out edge to edge through the `SYSTEM_UI_FLAG_LAYOUT_*` flags.
     #[derive(Debug, Clone, Copy)]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "FluiActivity.onCreate applies this level in Java; the Rust table that \
+                      names it, owner::android::window_setup, is test-only"
+        )
+    )]
     pub(crate) struct DecorFitsSystemWindows;
 
     impl Gate for DecorFitsSystemWindows {
