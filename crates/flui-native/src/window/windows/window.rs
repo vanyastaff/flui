@@ -12,8 +12,8 @@ use raw_window_handle::{
 };
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
-        Graphics::Gdi::{ClientToScreen, InvalidateRect, ScreenToClient, UpdateWindow},
+        Foundation::{HWND, POINT, RECT},
+        Graphics::Gdi::{ClientToScreen, ScreenToClient, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
@@ -22,12 +22,11 @@ use windows::{
                 GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
                 IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL,
                 IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, IsIconic,
-                IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SW_HIDE, SW_MAXIMIZE,
-                SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-                SetClassLongPtrW, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-                SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, WM_CLOSE,
-                WS_EX_APPWINDOW, WS_MAXIMIZE,
+                IsWindowVisible, IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
+                SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SWP_FRAMECHANGED,
+                SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetClassLongPtrW, SetCursor,
+                SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+                SetWindowTextW, ShowWindow, WS_EX_APPWINDOW, WS_MAXIMIZE,
             },
         },
     },
@@ -45,8 +44,8 @@ use flui_platform::os_options::WindowsCornerPreference;
 use super::material::SystemBackdrop;
 use super::mode::NativeMode;
 use super::proc::{
-    FirstShow, OwnerTracking, REQUEST_FRAME, WindowRecord, first_show_command, frame_style,
-    restyled, sample_state, to_screen, to_workspace,
+    FirstShow, OwnerTracking, WindowRecord, first_show_command, frame_style, restyled,
+    sample_state, to_screen, to_workspace,
 };
 use super::set::{
     USER_DEFAULT_SCREEN_DPI, WindowSet, checked_logical_to_device, open_spot, outer_size,
@@ -54,6 +53,7 @@ use super::set::{
 };
 use crate::host::WindowFacets;
 use crate::owner::windows::WINDOW_CLASS_NAME;
+use crate::owner::windows::control::PostRefusal;
 use crate::text::WindowTextInput;
 use crate::version::gate::Since;
 use crate::window::state::{WindowStateCell, device_extent};
@@ -113,6 +113,14 @@ pub struct WindowsWindow {
     /// handler itself lives in an owner-thread slot of it, so this field
     /// reaches nothing off that thread.
     delivery: Arc<WindowDelivery>,
+
+    /// The window's frame requests, shared with its context and its
+    /// surfaces.
+    frame_post: super::proc::FramePost,
+
+    /// The owner thread's queue the window posts its close to from
+    /// another thread.
+    queue: crate::owner::windows::control::OwnerQueue,
 }
 
 impl std::fmt::Debug for WindowsWindow {
@@ -501,9 +509,22 @@ impl WindowsWindow {
                 flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
                 frames.counter(),
             ));
+            // What the window posts to itself goes to the owner thread's
+            // queue, and from the owner's next turn when the queue refuses it.
+            let queue = crate::owner::windows::control::OwnerQueue::new(std::sync::Weak::clone(
+                &app_hooks.borrow().signal,
+            ));
+            let frame_post = super::proc::FramePost::new(hwnd, identity, queue.clone());
             // What another thread raises for the window is delivered in a
-            // turn of the window's own message queue.
-            delivery.resume_through(super::proc::deliver_queued_turn(hwnd, identity));
+            // turn of the window's own message queue, asked for once until
+            // that turn comes.
+            let deliveries = super::proc::WindowPost::new(
+                hwnd,
+                identity,
+                super::proc::DELIVER_QUEUED,
+                queue.clone(),
+            );
+            delivery.resume_through(super::proc::deliver_queued_turn(deliveries.clone()));
             // Each fact the window reports, its input's hover included, is
             // published from the owner context of this very window before its
             // own callback runs: the context must carry this window's identity,
@@ -539,6 +560,9 @@ impl WindowsWindow {
                 window_state: Arc::downgrade(&state),
                 snapshot: Arc::clone(&snapshot),
                 exit_policy,
+                queue: queue.clone(),
+                deliveries,
+                frame_post: frame_post.clone(),
                 delivery: Arc::clone(&delivery),
                 hooks: Rc::clone(&window_hooks),
                 preferences: Rc::clone(&preferences),
@@ -603,6 +627,8 @@ impl WindowsWindow {
                 facets: positions.for_window(&this),
                 drag_source: Arc::clone(&drag).drag_source(this),
                 delivery: Arc::clone(&delivery),
+                frame_post,
+                queue,
             });
             // The wrapper owns the window from here: a panic out of a hook
             // (or anything after it) drops it, which destroys the window and
@@ -811,6 +837,7 @@ impl WindowsWindow {
             context: self.context as isize,
             retirement: self.delivery.retirement(),
             presented: self.delivery.presentation_reports(),
+            frame_post: self.frame_post.clone(),
             tracker: Mutex::default(),
         }
     }
@@ -1260,24 +1287,6 @@ impl WindowsWindow {
         // Only toggle if state needs to change
         if fullscreen != self.is_fullscreen() {
             Self::toggle_fullscreen_for_hwnd(self.hwnd);
-        }
-    }
-
-    /// Ask for a frame of `hwnd`, from any thread. A window that is shown and
-    /// not minimized is invalidated and paints. Win32 paints neither a hidden
-    /// window nor a minimized one, whose client area is empty, so those get
-    /// the frame request posted: their frame is what earns a deferred window
-    /// its reveal, and what polls the tasks woken while nobody sees it.
-    pub(crate) fn redraw_native(hwnd: HWND) {
-        // SAFETY: plain calls on a window handle with no pointer arguments.
-        // Each may fail for a window that is already gone, which leaves
-        // nothing to draw; a redraw request is best-effort.
-        unsafe {
-            if IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
-                let _ = InvalidateRect(Some(hwnd), None, false);
-            } else {
-                let _ = PostMessageW(Some(hwnd), REQUEST_FRAME, WPARAM(0), LPARAM(0));
-            }
         }
     }
 
@@ -1736,20 +1745,9 @@ impl WindowsWindow {
                 // `WM_CLOSE`: that asks the should-close veto, and a close
                 // command is not a request. The message names this window,
                 // so a handle reused before it arrives is left alone.
-                let (low, high) = self.identity.halves();
-                // SAFETY: `PostMessageW` takes the handle and plain
-                // integers by value — nothing dereferenced, delivery
-                // marshalled by the OS to the owning thread.
-                unsafe {
-                    if let Err(error) = PostMessageW(
-                        Some(self.hwnd),
-                        super::proc::CLOSE_WINDOW,
-                        WPARAM(low),
-                        LPARAM(high),
-                    ) {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread WindowCommand::Close) failed");
-                    }
-                }
+                // A window no longer the owner thread's is closed already.
+                let _: Result<(), PostRefusal> =
+                    super::proc::post_close(&self.queue, self.hwnd, self.identity);
             }
             TeardownRoute::AlreadyGone => {
                 tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
@@ -1861,6 +1859,8 @@ pub(crate) struct Win32Surface {
     /// What the statistics last reported, so each read reports only a new
     /// present.
     tracker: Mutex<super::frame_timing::PresentTracker>,
+    /// The window's frame requests.
+    frame_post: super::proc::FramePost,
 }
 
 impl Win32Surface {
@@ -1992,10 +1992,11 @@ impl flui_platform::SurfaceTarget for Win32Surface {
 
 impl flui_platform::RedrawRequester for Win32Surface {
     /// `InvalidateRect` and `PostMessageW` take a window handle from any
-    /// thread, so the request goes to the window system directly.
+    /// thread, so the request goes to the window system directly, coalesced
+    /// until the window takes it ([`FramePost`](super::proc::FramePost)).
     fn request_redraw(&self) {
         if self.is_live() {
-            WindowsWindow::redraw_native(self.hwnd());
+            self.frame_post.request();
         }
     }
 }
@@ -2019,6 +2020,8 @@ impl Clone for WindowsWindow {
             facets: self.facets.clone(),
             drag_source: Arc::clone(&self.drag_source),
             delivery: Arc::clone(&self.delivery),
+            frame_post: self.frame_post.clone(),
+            queue: self.queue.clone(),
         }
     }
 }
@@ -2061,17 +2064,10 @@ impl Drop for WindowsWindow {
                     // posted to the owner's queue, and the subclass adapter
                     // is left for the bridge's own drop guard
                     // (which leaks it, with a warning, rather than unhook
-                    // cross-thread).
-                    //
-                    // SAFETY: `PostMessageW` takes the handle and plain
-                    // integers by value — nothing dereferenced.
-                    unsafe {
-                        if let Err(error) =
-                            PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0))
-                        {
-                            tracing::warn!(hwnd = ?self.hwnd, ?error, "PostMessageW(WM_CLOSE) (cross-thread Drop) failed");
-                        }
-                    }
+                    // cross-thread). The close asks no veto, as the owner
+                    // thread's `DestroyWindow` above asks none.
+                    let _: Result<(), PostRefusal> =
+                        super::proc::post_close(&self.queue, self.hwnd, self.identity);
                 }
                 TeardownRoute::AlreadyGone => {
                     tracing::debug!(hwnd = ?self.hwnd, "Drop: the native window is already gone");
