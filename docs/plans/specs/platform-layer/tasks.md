@@ -6718,7 +6718,21 @@ GPU-память простаивающего или невидимого окн
   бэкенде, стартующем при начале перетаскивания, сессия стартует вместо отказа `start`).
   Id нажатия уникален в реестре, его выпустившем (на Windows — окно); перенос нажатия одного
   окна в перетаскивание другого записан в `docs/gaps.md`.
-  Проверки и непрогнанное — в теле PR.
+  Проверки и непрогнанное — в теле PR #2666.
+  Доведение после чтения (ветка `platform/drag-terms-identity`): тип тождества сверяется по
+  медиатипу, которым формат предлагается (`TransferFormat::essence`), а не по варианту
+  перечисления — `Image` с типом тождества отказывает так же, как `Custom`; каждый медиатип в
+  условиях один (`DragRequestError::DuplicateFormat`), а владелец предлагает ОС первое
+  представление каждого типа и подаёт его из своего элемента; `serve_stored` хоста Web берёт
+  `&OsDragTerms` и `indexed()`; двойник headless отказывает нажатию, которого окно не держит
+  (`HeldPresses`), сценарный двойник `flui-testing` — нет, причина в `docs/gaps.md`. Тесты, в
+  скобках результат с откатом: строки `os_drag_terms_refuse_what_no_os_session_may_offer`
+  «an image under the identity's type», «the identity's type spelled with capitals and
+  parameters», «text and a custom text/plain», «one image type twice» (сверка по варианту и без
+  проверки повторов — принимаются); `the_identity_format_is_known_by_its_media_type_alone`
+  (строка `Image`); `an_os_session_names_its_press_and_offers_only_what_it_can` (два элемента с
+  текстом: без отбора — `Refused(DuplicateFormat)`); `a_request_from_a_press_the_window_does_not_hold_is_refused`
+  в `headless_drag_contracts` (без проверки — сессия закончившегося нажатия принята).
 
 ## Отступление от порядка, решённое владельцем
 
