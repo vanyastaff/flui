@@ -201,15 +201,18 @@ enum Commands {
         hot_reload: bool,
 
         /// Scene-only hot-reload mode (Android): rebuild and push scene plugin
-        /// without restarting the app. Much faster than full rebuild.
-        #[arg(long, requires = "scene_crate", requires = "package")]
+        /// without restarting the app. Much faster than full rebuild. The
+        /// device is `--device`, or the one Android device `adb` sees online.
+        #[arg(long, requires = "scene_crate")]
         scene: bool,
 
         /// Scene plugin crate name (used with --scene)
         #[arg(long, requires = "scene")]
         scene_crate: Option<String>,
 
-        /// Android package name (used with --scene)
+        /// The application the plugin is copied into, an application
+        /// identifier like `com.example.app` (used with --scene; default:
+        /// flui.toml's `[app] id`)
         #[arg(long, requires = "scene")]
         package: Option<String>,
 
@@ -790,12 +793,15 @@ fn main() {
             register_associations,
         } => {
             if scene {
-                // clap enforces both via `requires`; the unwraps document that.
                 let scene_crate = scene_crate
                     .expect("BUG: clap `requires` guarantees --scene-crate with --scene");
-                let package =
-                    package.expect("BUG: clap `requires` guarantees --package with --scene");
-                commands::run::execute_scene(&scene_crate, &package, &target, release, verbose)
+                commands::run::execute_scene(
+                    &scene_crate,
+                    package.as_deref(),
+                    device.as_deref(),
+                    &target,
+                    release,
+                )
             } else {
                 commands::run::execute(
                     device,

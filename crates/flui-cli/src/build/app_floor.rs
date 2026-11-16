@@ -14,7 +14,9 @@
 //! number `RtlGetVersion` reports), macOS and iOS (a dotted release) and
 //! Android (the API level). The web has no version to compare, and Linux's
 //! floor is an ABI and a set of drivers and protocols, so a `min` for either is
-//! refused. The floor a build uses, [`AppFloors`], is the higher of FLUI's and
+//! refused. An Android level above the `targetSdk` FLUI declares is refused
+//! too: no package could declare a floor above its target. The floor a build
+//! uses, [`AppFloors`], is the higher of FLUI's and
 //! the application's; every file the system reads its minimum from is written
 //! from it, and the same value goes to rustc, so the binary and its bundle
 //! agree.
@@ -130,6 +132,18 @@ pub(crate) enum AppFloorError {
         stated: String,
         floor: String,
     },
+    /// The application's `min` is above the newest release FLUI builds for,
+    /// so no package FLUI makes could declare it.
+    #[error(
+        "flui.toml: [platforms.{environment}] min = {stated} is above {ceiling_name}, \
+         {ceiling}, the newest FLUI builds for; lower it to {ceiling} or below"
+    )]
+    AboveCeiling {
+        environment: &'static str,
+        stated: String,
+        ceiling_name: &'static str,
+        ceiling: String,
+    },
     /// The environment has no version an application could state.
     #[error("flui.toml: [platforms.{environment}] takes no `min`: {reason}")]
     NoVersion {
@@ -181,12 +195,24 @@ impl PlatformsConfig {
                     )?);
                 }
                 "android" => {
-                    floors.android = Some(at_least(
+                    let level = at_least(
                         "android",
                         number("android", stated, "an Android API level, like 26")?,
                         platform_floor::ANDROID_MIN_SDK,
                         stated,
-                    )?);
+                    )?;
+                    // A `minSdk` above the `targetSdk` the package declares
+                    // is refused by the packagers and by `cargo ndk`, each
+                    // with a message that names neither value.
+                    if level > platform_floor::ANDROID_TARGET_SDK {
+                        return Err(AppFloorError::AboveCeiling {
+                            environment: "android",
+                            stated: stated.to_string(),
+                            ceiling_name: "the targetSdk FLUI declares",
+                            ceiling: platform_floor::ANDROID_TARGET_SDK.to_string(),
+                        });
+                    }
+                    floors.android = Some(level);
                 }
                 "macos" => {
                     // The lower of the two architectures' floors: each build
@@ -409,6 +435,22 @@ mod tests {
                 Err(error) if error.to_string() == expected => {}
                 other => failures.push(format!("{toml:?}: {other:?}")),
             }
+        }
+        let target = super::platform_floor::ANDROID_TARGET_SDK;
+        let above = format!("[android]\nmin = {}", target + 1);
+        let expected = format!(
+            "flui.toml: [platforms.android] min = {} is above the targetSdk FLUI declares, \
+             {target}, the newest FLUI builds for; lower it to {target} or below",
+            target + 1
+        );
+        match floors(&above) {
+            Err(error) if error.to_string() == expected => {}
+            other => failures.push(format!("{above:?}: {other:?}")),
+        }
+        if floors(&format!("[android]\nmin = {target}")).map(|floors| floors.android_api())
+            != Ok(target)
+        {
+            failures.push(format!("a min at the targetSdk {target} must be accepted"));
         }
 
         let raised = floors(

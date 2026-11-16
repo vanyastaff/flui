@@ -1016,13 +1016,13 @@ id = "package-the-os-installs-msix-or-installer-notarised-app-flatpak-and-deb-ip
 feature = 'Package the OS installs (MSIX or installer, notarised `.app`, Flatpak and `.deb`, `.ipa`, `.aab`, web bundle)'
 status = { windows = "unaudited", macos = "partial", wayland = "unaudited", x11 = "unaudited", ios = "partial", android = "partial", web = "partial", headless = "na" }
 note = '`flui build` stages an unsigned `.app`, a debug or release APK (no AAB) and a `wasm-bindgen` bundle; Windows and Linux packaging not audited.'
-evidence = '`flui build` stages an unsigned `.app` on macOS and iOS, builds a debug or release APK (no AAB, no Play path), and a `wasm-bindgen` bundle served from `localhost`; Windows and Linux packaging not audited'
+evidence = '`flui build` stages an unsigned `.app` on macOS and iOS, builds a debug or release APK (no AAB, no Play path), and a `wasm-bindgen` bundle served from `localhost`; Windows and Linux packaging not audited. The APK states `[app] version` (`versionCode` major * 10000 + minor * 100 + patch, `versionName` as written) and `extractNativeLibs="false"` on the packager without Gradle, and both packagers link and strip with the NDK `flui build` resolved; headless tests cover the `aapt2` and Gradle inputs. Owed on a device: a release APK with a named key installed over a debug one refused and over an older release accepted, `versionCode` read back with `dumpsys package`, libraries mapped from the archive (no `lib/` directory in the app data), and `flui run --scene` copying its plugin into the app'
 
 [[group.section.row]]
 id = "code-signing-and-notarisation"
 feature = 'Code signing and notarisation'
 status = { windows = "unaudited", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "partial", web = "na", headless = "na" }
-note = 'Android signs with the debug or a given key; no macOS or iOS signing, no Windows Authenticode, no notarisation'
+note = 'Android: a debug build is signed with the debug keystore where the Android Gradle plugin keeps it, a release one with the key `flui.toml` names under `[signing.android]` (passwords from `FLUI_ANDROID_KEYSTORE_PASSWORD` and `FLUI_ANDROID_KEY_PASSWORD`), or with the debug key and a warning when it names none, on both packagers; the arguments, the key resolution and the refusal of an unsigned Gradle APK are tested headless, and no signed release has been installed on a device or emulator yet. No macOS or iOS signing, no Windows Authenticode, no notarisation'
 
 [[group.section.row]]
 id = "app-identity-reaches-the-package-aumid-bundle-id-desktop-file-and-app-id-manifest"
