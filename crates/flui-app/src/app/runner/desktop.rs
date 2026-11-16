@@ -146,15 +146,18 @@ where
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
     let scale_factor = geometry.scale;
-    let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
-        Ok(ui_runtime) => ui_runtime,
-        Err(e) => {
-            tracing::error!(error = %e, "UiRuntime construction failed");
-            return Err(crate::app::AppWindowError::Mount {
-                source: Arc::new(e),
-            });
-        }
-    };
+    // The opened URLs its runtime took are on loan until the installation
+    // commits; a return before it is prepared gives them back.
+    let (ui_runtime, opened) =
+        match super::host::build_lending_ui_runtime(presentation_window, scale_factor) {
+            Ok(built) => built,
+            Err(e) => {
+                tracing::error!(error = %e, "UiRuntime construction failed");
+                return Err(crate::app::AppWindowError::Mount {
+                    source: Arc::new(e),
+                });
+            }
+        };
 
     // Debug overlay: `Some` stats IS the enable flag, so this is the
     // single point that turns the frame path's overlay work on.
@@ -212,6 +215,7 @@ where
     );
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
+    installation.lend_opened(opened);
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 

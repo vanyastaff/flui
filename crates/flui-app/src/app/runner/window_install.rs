@@ -81,6 +81,9 @@ pub(super) struct InstallationWindow {
     /// The window's agent, vended before the install, handed to the loop's
     /// hooks once it commits.
     agent: Option<flui_view::dev_agent::AgentWindow>,
+    /// The opened URLs its UI runtime took before the installation
+    /// committed: committed with it, given back by any other end.
+    opened: Option<super::opened::OpenedLoan>,
 }
 
 impl InstallationWindow {
@@ -90,6 +93,16 @@ impl InstallationWindow {
             closed: Arc::new(AtomicBool::new(false)),
             published: false,
             agent: None,
+            opened: None,
+        }
+    }
+
+    /// Hold `loan` until the installation ends, after what it holds already.
+    pub(super) fn lend(&mut self, loan: Option<super::opened::OpenedLoan>) {
+        match (&mut self.opened, loan) {
+            (Some(held), Some(loan)) => held.join(loan),
+            (held @ None, loan) => *held = loan,
+            (Some(_), None) => {}
         }
     }
 
@@ -110,8 +123,13 @@ impl InstallationWindow {
     pub(super) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
+    /// The installation committed: the window and the URLs opened into it
+    /// are the presentation's.
     pub(super) fn publish(&mut self) {
         self.published = true;
+        if let Some(loan) = self.opened.take() {
+            loan.commit();
+        }
     }
 
     pub(super) fn notify_opened(&mut self) {
@@ -141,6 +159,11 @@ impl Drop for InstallationWindow {
             // A retired window agent's drop runs contained; the first failure is kept.
             first.contain(|| drop(agent));
         }
+        // An installation that ended without committing gives the URLs opened
+        // into its runtime back, once its window is gone, and they are routed
+        // again; their navigations run contained, the first failure is kept.
+        let opened = self.opened.take();
+        first.contain(|| drop(opened));
         first.resume();
     }
 }
@@ -207,6 +230,13 @@ impl WindowInstall {
 
     pub(super) fn dev_agent(&mut self, agent: Option<flui_view::dev_agent::AgentWindow>) {
         self.window.agent = agent;
+    }
+
+    /// Own the loan of the opened URLs `build_ui_runtime` opened into this
+    /// installation's UI runtime: committed when it commits, given back by
+    /// any other end of it.
+    pub(super) fn lend_opened(&mut self, loan: Option<super::opened::OpenedLoan>) {
+        self.window.lend(loan);
     }
 
     pub(super) fn frame_driver(

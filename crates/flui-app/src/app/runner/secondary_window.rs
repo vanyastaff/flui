@@ -1093,7 +1093,7 @@ fn finish_open_secondary_window(
             WindowPolicy::Isolated => {
                 let scale_factor =
                     super::window_install::SurfaceGeometry::of(window.as_ref()).scale;
-                let ui_runtime = super::host::build_ui_runtime(
+                let (ui_runtime, opened) = super::host::build_lending_ui_runtime(
                     super::presentation_window(Rc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                     scale_factor,
@@ -1111,7 +1111,9 @@ fn finish_open_secondary_window(
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is
                 // blocked on the documented secondary-window rendering contract.
-                prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window))
+                let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
+                installation.lend_opened(opened);
+                installation
             }
         };
     let owner_dispatch = installation.dispatcher();

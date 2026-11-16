@@ -38,6 +38,15 @@ pub(super) fn hold_terminal(payload: Box<dyn Any + Send>, during: &'static str) 
     }
 }
 
+/// Whether the loop holds a terminal failure: the application's panic is
+/// ending the run.
+pub(super) fn is_terminal() -> bool {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow()
+            .is_ok_and(|state| state.terminal.is_some())
+    })
+}
+
 /// Take the loop's terminal failure, to resume once the exit order ran.
 #[cfg_attr(
     target_arch = "wasm32",

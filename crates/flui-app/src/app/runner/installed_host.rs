@@ -203,21 +203,6 @@ impl InstalledHost {
         !self.0.pending.borrow().is_empty() || !self.0.initializing.borrow().is_empty()
     }
 
-    /// Whether the installation of `address` is submitted and has not ended.
-    pub(super) fn is_installing(&self, address: PresentationAddress) -> bool {
-        self.0
-            .pending
-            .borrow()
-            .iter()
-            .any(|pending| pending.prepared.address() == address)
-            || self
-                .0
-                .initializing
-                .borrow()
-                .iter()
-                .any(|entry| entry.address == address)
-    }
-
     /// Where what the operating system opened for `target` goes now: the
     /// window registry's answer ([`WindowRegistry::open_target`]), with a
     /// window that has no presentation told apart by whether its
@@ -261,16 +246,6 @@ impl InstalledHost {
             | OpenDestination::Closed
             | OpenDestination::NotOpen) => destination,
         }
-    }
-}
-
-/// Give back the URLs lent to the installation of `address`, which ended
-/// without committing ([`OpenRouting::install_failed`]).
-///
-/// [`OpenRouting::install_failed`]: super::opened::OpenRouting::install_failed
-fn install_failed(address: PresentationAddress) {
-    if let Some(routing) = super::host::current_open_routing() {
-        routing.install_failed(address);
     }
 }
 
@@ -354,10 +329,8 @@ impl OwnerEffects for HostState {
     ) -> Option<InstallInitialization> {
         let pending = self.take_install(token);
         if pending.window.is_closed() {
-            let address = pending.prepared.address();
             pending.result.set(Some(Err(InstallError::WindowClosed)));
             drop(pending);
-            install_failed(address);
             return None;
         }
         self.initializing.borrow_mut().reserve(1);
@@ -374,7 +347,6 @@ impl OwnerEffects for HostState {
             Err(refused) => {
                 result.set(Some(Err(InstallError::Logical(refused.error))));
                 drop(refused);
-                install_failed(address);
                 return None;
             }
         };
@@ -382,7 +354,6 @@ impl OwnerEffects for HostState {
             result.set(Some(Err(InstallError::Native(error))));
             drop(permit);
             drop(native);
-            install_failed(address);
             return None;
         }
         let published = permit.commit();
@@ -412,12 +383,17 @@ impl OwnerEffects for HostState {
         let mut first = FirstPanic::new();
         if outcome == InitializationOutcome::Ready {
             // URLs that arrived before this presentation existed are queued
-            // ahead of its first frame, so its first Router opens on them.
+            // ahead of its first frame, so its first Router opens on them:
+            // on loan to the installation until it commits, like those its
+            // runtime took as it was built. The rest go where they go now.
             if self.is_current()
                 && recovery == RecoveryState::Healthy
                 && let Some(routing) = super::host::current_open_routing()
             {
-                first.contain(|| routing.deliver_held());
+                if let Some(loan) = first.contain(|| routing.lend_to_installing(address)) {
+                    entry.window.lend(loan);
+                }
+                first.contain(|| routing.route_held());
             }
             first.contain(|| entry.window.native().request_redraw());
             if !first.is_held() && self.installation_is_live(&entry) {
@@ -432,11 +408,6 @@ impl OwnerEffects for HostState {
             if !first.is_held() && self.installation_is_live(&entry) {
                 entry.window.publish();
                 entry.result.set(Some(Ok(())));
-                // The URLs opened into its runtime before its root mounted
-                // are its now.
-                if let Some(routing) = super::host::current_open_routing() {
-                    routing.installed(address);
-                }
                 return;
             }
         }
@@ -456,7 +427,6 @@ impl OwnerEffects for HostState {
         self.native.retire_presentation(address);
         self.complete_native(&mut first);
         first.contain(|| drop(entry.window));
-        first.contain(|| install_failed(address));
         first.resume();
     }
 

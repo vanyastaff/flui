@@ -343,10 +343,21 @@ fn close_vetoes() -> Vec<flui_view::CloseReason> {
 /// collection and the host's byte storage. Every runner site and secondary
 /// window builds its UI runtime through this one call, so a UI runtime cannot be
 /// handed a stand-in for any of them.
-pub(super) fn build_ui_runtime(
+///
+/// It also opens the URLs held for the window's presentation in the runtime,
+/// on loan to the installation: the caller hands the guard to the
+/// installation it prepares (`WindowInstall::lend_opened`), and a return
+/// before that drops it, which gives the URLs back.
+pub(super) fn build_lending_ui_runtime(
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
-) -> Result<crate::app::ui_runtime::UiRuntime, HostServicesError> {
+) -> Result<
+    (
+        crate::app::ui_runtime::UiRuntime,
+        Option<super::opened::OpenedLoan>,
+    ),
+    HostServicesError,
+> {
     let window = window.into();
     let redraw = Arc::new(AtomicBool::new(false));
     let pending = Arc::clone(&redraw);
@@ -390,12 +401,23 @@ pub(super) fn build_ui_runtime(
     attach_window_control(&ui_runtime, &native);
     // Before its first presentation can hear an opened URL, and before its
     // root mounts, so a link that launched the application opens its first
-    // Router on the link.
-    if let Some(routing) = current_open_routing() {
+    // Router on the link. The links are on loan to the installation, which
+    // the caller hands the guard to (`WindowInstall::lend_opened`).
+    let loan = current_open_routing().and_then(|routing| {
         routing.admit_in(&ui_runtime);
-        routing.open_held_in(&ui_runtime, native.as_ref());
-    }
-    Ok(ui_runtime)
+        routing.open_held_in(&ui_runtime, native.as_ref())
+    });
+    Ok((ui_runtime, loan))
+}
+
+/// [`build_lending_ui_runtime`] for a test that installs no window: a loan it
+/// opened is given back as it drops.
+#[cfg(test)]
+pub(super) fn build_ui_runtime(
+    window: impl Into<crate::app::presentation::PresentationWindow>,
+    scale_factor: f64,
+) -> Result<crate::app::ui_runtime::UiRuntime, HostServicesError> {
+    build_lending_ui_runtime(window, scale_factor).map(|(ui_runtime, _)| ui_runtime)
 }
 
 /// Answer one phase of the user's session ending (ADR-0237, ADR-0260).
@@ -1190,20 +1212,32 @@ impl RunnerHandler {
     fn route<T: ?Sized>(&self, pick: impl FnOnce(&AppRoutes) -> Option<Rc<T>>) -> Option<Rc<T>> {
         pick(&self.routes.borrow())
     }
+}
 
-    /// Open the main window when URLs are held for the application and it
-    /// has none ([`OpenRouting::waits_for_a_window`](super::opened::OpenRouting::waits_for_a_window)),
-    /// through the route a Dock click takes; the held URLs open in its first
-    /// Router. A run with no main window (iOS, Android, the web) routes no
-    /// reopen: there the host opens the window they wait for. Asked again
-    /// while the window is coming, the route only keeps the intent it set.
-    fn reopen_for_held_urls(&self) {
-        let waits = self
-            .route(|routes| routes.opened.clone())
-            .is_some_and(|routing| routing.waits_for_a_window());
-        if waits && let Some(reopen) = self.route(|routes| routes.reopen.clone()) {
-            reopen();
-        }
+/// Take the reopen route of the innermost run on this thread whose handler
+/// is alive, as a Dock click does: the main window opens, and the URLs held
+/// for the application open in its first Router
+/// ([`OpenRouting::route_held`](super::opened::OpenRouting::route_held)). A
+/// run with no main window (iOS, Android, the web) routes no reopen: there
+/// the host opens the window they wait for. Asked again while the window is
+/// coming, the route only keeps the intent it set.
+pub(super) fn reopen_current_run() {
+    let routes = APP_RUNTIME.with(|slot| {
+        let state = slot.try_borrow().ok()?;
+        state
+            .run_routes
+            .iter()
+            .rev()
+            .find_map(std::rc::Weak::upgrade)
+    });
+    let reopen = routes.and_then(|routes| {
+        routes
+            .try_borrow()
+            .ok()
+            .and_then(|routes| routes.reopen.clone())
+    });
+    if let Some(reopen) = reopen {
+        reopen();
     }
 }
 
@@ -1245,7 +1279,9 @@ impl flui_native::AppHandler for RunnerHandler {
             }
             // A link that launched an application which opened no window (a
             // resident one) opens its main window.
-            self.reopen_for_held_urls();
+            if let Some(routing) = routing {
+                routing.route_held();
+            }
             Ok(())
         })
     }
@@ -1267,13 +1303,11 @@ impl flui_native::AppHandler for RunnerHandler {
     }
 
     /// Files to the application's callback, URLs to the presentation they
-    /// address ([`OpenRouting::deliver`](super::opened::OpenRouting::deliver)),
-    /// and the main window opened for URLs that found none.
+    /// address ([`OpenRouting::deliver`](super::opened::OpenRouting::deliver)).
     fn opened(&self, _: &flui_native::OwnerPlatform, opened: flui_platform::Opened) {
         contained((), "application open", || {
             if let Some(routing) = self.route(|routes| routes.opened.clone()) {
                 routing.deliver(opened);
-                self.reopen_for_held_urls();
             }
         });
     }

@@ -137,6 +137,9 @@ struct State {
     /// A reopen asked while a quit was asked, consulted or deferred: shown
     /// once the quit is abandoned, dropped once it commits.
     reopen_after_quit: bool,
+    /// A reopen asked while a main window was opening: shown again if that
+    /// opening fails, since the window it counted on never came.
+    reopen_if_opening_fails: bool,
     active: bool,
     batch: Option<Arc<()>>,
     superseded: bool,
@@ -315,6 +318,7 @@ impl Ingress {
                 quit: QuitAsk::None,
                 intent: startup_open,
                 reopen_after_quit: false,
+                reopen_if_opening_fails: false,
                 active: false,
                 batch: None,
                 superseded: false,
@@ -384,6 +388,9 @@ impl Ingress {
         }
         if !state.active || state.superseded || state.closing.is_some() {
             state.intent = true;
+        } else {
+            // The window opening now answers it, unless the opening fails.
+            state.reopen_if_opening_fails = true;
         }
     }
 
@@ -446,10 +453,13 @@ impl Ingress {
             state.active = false;
             state.batch = None;
             state.superseded = false;
-            if state.phase == Phase::Accepting
-                && let Ok(address) = &result
-            {
-                state.open_address = Some(*address);
+            let reopen = std::mem::take(&mut state.reopen_if_opening_fails);
+            if state.phase == Phase::Accepting {
+                match &result {
+                    Ok(address) => state.open_address = Some(*address),
+                    Err(_) if reopen => state.intent = true,
+                    Err(_) => {}
+                }
             }
             let replies = std::mem::take(&mut state.active_replies);
             state.outstanding = state
@@ -477,7 +487,7 @@ impl Ingress {
     }
     /// Settle exactly the failed pending generation, never a replacement request.
     pub(crate) fn fail_pending(&self, batch: &Arc<()>, error: AppWindowError) -> bool {
-        let replies = {
+        let (replies, pending) = {
             let mut state = self.state.lock();
             if !state
                 .batch
@@ -488,14 +498,21 @@ impl Ingress {
             }
             state.active = false;
             state.batch = None;
+            if std::mem::take(&mut state.reopen_if_opening_fails) && state.phase == Phase::Accepting
+            {
+                state.intent = true;
+            }
             let replies = std::mem::take(&mut state.active_replies);
             state.outstanding = state
                 .outstanding
                 .checked_sub(replies.len())
                 .expect("BUG: failed batch exceeds admitted requests");
-            replies
+            (replies, state.phase == Phase::Accepting && state.intent)
         };
         Self::deliver(replies, Err(error));
+        if pending {
+            self.wake_owner();
+        }
         true
     }
     fn deliver(replies: Vec<Reply>, result: Result<PresentationAddress, AppWindowError>) {

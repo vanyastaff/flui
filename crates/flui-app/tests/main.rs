@@ -292,6 +292,10 @@ fn runner_open() {
                 runner_open::a_link_outlives_a_window_that_failed_to_install as fn(),
             ),
             (
+                "runner_open::a_link_shows_the_hidden_window_it_opens_in",
+                runner_open::a_link_shows_the_hidden_window_it_opens_in as fn(),
+            ),
+            (
                 "runner_open::a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned",
                 runner_open::a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned
                     as fn(),

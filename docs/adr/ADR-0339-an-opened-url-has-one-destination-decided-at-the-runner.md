@@ -68,6 +68,12 @@ struct HeldUrls {
     application: Option<String>,                    // the newest alone
     windows: Vec<(OpenTarget, VecDeque<String>)>,   // per window, in order, at most MAX_HELD_PER_WINDOW
 }
+
+// flui-app (crate-private): URLs opened into a window whose installation has not
+// committed; the installation owns it, `commit` keeps them, `Drop` gives them back
+// and routes them again at once
+#[must_use]
+struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<(OpenTarget, String)> }
 ```
 
 - **§1. Admission first.** The runner admits each URL by `OpenDeclarations::admit`, the rule the UI
@@ -75,7 +81,9 @@ struct HeldUrls {
   arrives: it is never held and never opens a window.
 - **§2. One destination.** A URL for a window goes to that window's presentation; one for the
   application to the presentation whose window was focused last, else the first opened. URLs held
-  for that target open first, so the order is the platform's. A URL for a window whose presentation
+  for that target open first, so the order is the platform's. A URL delivered to a window that is
+  not shown (a tray application that hid its only window) shows that window and brings it forward,
+  on every host; a URL the runner refuses shows nothing. A URL for a window whose presentation
   was removed is refused (`Closed`); one for a window with no presentation and no installation
   under way (nobody announced it, or its installation failed) is refused (`NotOpen`).
 - **§3. The hold is bounded by its target's rule.** For the application as a whole only the newest
@@ -91,18 +99,22 @@ struct HeldUrls {
   addresses its scene, whose installation is under way when the URL is reported; an Android URL
   waits for the activity's window the host opens; the web's page is its window, and its address is
   the cold link the first window opens on.
-- **§5. URLs lent to an installation come back if it fails.** URLs opened into a window's UI runtime
-  before its root mounts are lent to the installation; it commits them, or a failed installation
-  gives them back to the hold, where the application's waits for the next window and a window's own
-  is refused.
+- **§5. A URL that enters a window before its installation commits is on loan to it.** Every URL
+  opened into a window's UI runtime before the installation commits, as the runtime is built or as
+  the installation becomes ready, is held by an `OpenedLoan` the installation owns from the moment
+  the URL leaves the hold. The installation's commit keeps them; every other end of it (a failure
+  before or after it is submitted, a cancel, a window closed before it commits) drops the guard,
+  which gives them back to the hold and routes them again at once, by the rule a URL that just
+  arrived follows: into an open window, the main window reopened, or refused. A loan is never
+  inferred from what the registry holds, so a URL never opens in two windows.
 - **§6. Every other end is reported.** What is held is refused in the log, by reason and never with
   the URL, when the bootstrap fails or panics (with the launch's files, which the application then
   never hears) and when the run ends. A panic in `on_open_files` or in a URL's navigation ends the
   run (ADR-0258 §4), which refuses what is held.
 - **§7. A later launch of a single-instance application.** A launch that opens nothing is the user
   starting the application again: once answered, it asks the application to reopen while no window
-  shows, as relaunching it does on macOS. A launch that opens URLs or files asks no reopen: the
-  runner decides, and opens a window only for a URL it admits.
+  shows, as relaunching it does on macOS. A launch that opens URLs or files asks the host for no
+  reopen: the runner decides, and opens or shows a window (§2, §4) only for a URL it admits.
 
 ### Consequences
 
@@ -126,8 +138,12 @@ struct HeldUrls {
 `a_burst_of_links_with_no_window_opens_one_window_on_the_last` (§3: nine links near the length
 bound, the window opens on the ninth),
 `a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link` and
-`a_link_for_a_closed_window_is_refused_as_it_arrives` (§2),
-`a_link_outlives_a_window_that_failed_to_install` (§5),
+`a_link_for_a_closed_window_is_refused_as_it_arrives` and
+`a_link_shows_the_hidden_window_it_opens_in` (§2),
+`a_link_outlives_a_window_that_failed_to_install` (§5: the GPU refuses the window, and the loan
+opens the next one with no other event), with `a_loan_is_committed_or_given_back_by_its_drop` for
+the guard itself (the exits the headless kit cannot reach are in
+[gaps](../gaps.md#the-headless-kit-cannot-end-an-installation-between-its-build-and-its-commit)),
 `a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end`,
 `a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned` and
 `a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead` (§4),

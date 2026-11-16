@@ -157,8 +157,9 @@ mod inbox {
     /// user starting the application again: answered first, it then asks the
     /// application to reopen while `shows_any` says no window is shown, as
     /// relaunching an application does on macOS (ADR-0254 §4). A launch that
-    /// opens URLs or files asks no reopen: the application's runner decides
-    /// where they open, and opens a window only for a URL it admits.
+    /// opens URLs or files asks no reopen of the host: the application's
+    /// runner decides where they open, and opens or shows a window only for a
+    /// URL it admits (ADR-0339), as it does for every host.
     pub(crate) fn hand_on_forwarded(
         app: &AppDelivery,
         opened: Opened,
@@ -607,9 +608,12 @@ mod inbox {
 
         /// A later launch that opens nothing is the user starting the
         /// application again: it asks for a reopen while no window shows,
-        /// after its caller is answered. One that opens a URL or a file asks
-        /// none, shown window or not: where it opens is the application's
-        /// runner's to decide.
+        /// after its caller is answered. One that opens a URL or a file
+        /// reaches the application's `opened` and asks the host for no
+        /// reopen, shown window or not: the runner opens or shows the window
+        /// a URL it admits goes to (`flui-app`'s
+        /// `a_link_shows_the_hidden_window_it_opens_in`), and nothing for one
+        /// it refuses.
         #[test]
         fn only_a_launch_that_opens_nothing_asks_for_a_reopen() {
             use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
@@ -642,6 +646,7 @@ mod inbox {
             ];
             let runtime = timers();
             for (case, opened, shown, reopens) in cases {
+                let opens = usize::from(!opened.is_empty());
                 let log = AppLog::new();
                 let run = bound(Rc::clone(&log) as Rc<dyn crate::platform::AppHandler>);
                 let inbox = Inbox::new(Duration::from_secs(15), runtime.handle().clone());
@@ -657,6 +662,14 @@ mod inbox {
                     "{case}: its caller is answered as taken"
                 );
                 assert_eq!(log.count(AppCall::Reopen), reopens, "{case}: reopens");
+                assert_eq!(
+                    log.calls()
+                        .iter()
+                        .filter(|call| matches!(call, AppCall::Opened { .. }))
+                        .count(),
+                    opens,
+                    "{case}: what it opens reaches the application"
+                );
             }
         }
     }

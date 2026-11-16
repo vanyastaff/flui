@@ -611,18 +611,14 @@ pub(crate) fn a_panic_in_on_open_files_ends_the_run_and_refuses_the_link() {
     );
 }
 
-pub(crate) fn a_link_outlives_a_window_that_failed_to_install() {
-    let built = Built::default();
-    let handle = Rc::new(RefCell::new(None));
-    let ready = Rc::clone(&handle);
+/// A run with its main window closed and the run going on, the window's
+/// renderer kept so a test can refuse the next window's GPU slot.
+fn closed_main_window(built: &Built) -> (HeadlessRunHandle, flui_app::testing::StandInRenderer) {
     let run = HeadlessRun::start(
         Application::new()
             .declares(DECLARES)
-            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit))
-            .on_ready(move |app: &AppHandle| {
-                *ready.borrow_mut() = Some(app.clone());
-            }),
-        router("main", &built),
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        router("main", built),
     );
     turns(&run, 2);
     let window = run.open_windows().pop().expect("the main window opened");
@@ -630,28 +626,76 @@ pub(crate) fn a_link_outlives_a_window_that_failed_to_install() {
     assert!(window.simulate_close(), "the user closes it");
     turns(&run, 3);
     assert!(run.open_windows().is_empty(), "no window is left");
+    built.borrow_mut().clear();
+    (run, renderer)
+}
 
+pub(crate) fn a_link_outlives_a_window_that_failed_to_install() {
+    let built = Built::default();
+    let (run, renderer) = closed_main_window(&built);
     // The window the link reopens is refused its GPU slot after the link
-    // was opened into its runtime.
+    // was opened into its runtime: the link comes back from the failed
+    // window and opens the next one by itself.
     renderer.refuse_next_window();
     run.open(link("myapp:///note/3", Launch::Running));
-    turns(&run, 4);
-    assert!(
-        run.open_windows().is_empty(),
-        "the window the GPU refused did not open"
-    );
-
-    let app = handle.borrow_mut().take().expect("on_ready ran");
-    drop(
-        app.request_show_main_window()
-            .expect("the run accepts the show"),
-    );
-    turns(&run, 4);
+    turns(&run, 8);
     assert_eq!(run.open_windows().len(), 1, "the next main window opened");
     assert!(
         built_page(&built, "main", &Page::Note { id: 3 }),
-        "the link came back from the failed window and opened in the next: {:?}",
+        "on the link the failed window gave back: {:?}",
         built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_shows_the_hidden_window_it_opens_in() {
+    let built = Built::default();
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |app: &AppHandle| {
+            *ready.borrow_mut() = Some(app.clone());
+        }),
+    );
+    turns(&run, 2);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let mut shown = app
+        .request_show_main_window()
+        .expect("the run accepts the show");
+    turns(&run, 3);
+    let address = shown
+        .try_result()
+        .expect("the show is answered")
+        .expect("the main window opened");
+    let window = flui_app::app::window_handle(address).expect("the main window's handle");
+    // A tray application hides its only window and keeps running.
+    window.hide().expect("the window takes the hide");
+    turns(&run, 3);
+    assert!(
+        !window.state().expect("open").visible,
+        "the window is hidden"
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 3);
+    assert!(
+        window.state().expect("open").visible,
+        "the link shows the window it opened in"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "{:?}",
+        built.borrow()
+    );
+
+    window.hide().expect("the window takes the hide");
+    turns(&run, 3);
+    run.open(link("other:///note/4", Launch::Running));
+    turns(&run, 3);
+    assert!(
+        !window.state().expect("open").visible,
+        "a link the application does not open shows nothing"
     );
     drop(run);
 }

@@ -540,12 +540,18 @@ here is where the code keeps it.
   or initializing. The registry remembers the last `MAX_OPENED_ITEMS` closed windows.
 - `HeldUrls` states each target's rule in its shape: the application's newest URL alone, and per
   window being installed at most `MAX_HELD_PER_WINDOW`. Its `Debug` prints counts, never a URL.
-- `open_held_in` lends what it opens into a new UI runtime (`Lent`); `finish_install` commits the
-  loan or gives it back, and a loan to an installation that failed before it was submitted is
-  reclaimed by the next routing step (`reclaim_lent`).
-- `RunnerHandler::reopen_for_held_urls` takes the reopen route after each delivery and after the
-  bootstrap. `Ingress::request_native_show` keeps a reopen asked during a quit and shows it only if
-  the quit is abandoned.
+- Every URL that enters a window before its installation commits is on loan: `OpenedLoan`, a guard
+  `build_lending_ui_runtime` returns and the runner hands to its `WindowInstall`
+  (`lend_opened`); `finish_install` adds the URLs it opens as the installation becomes ready
+  (`lend_to_installing`). `InstallationWindow::publish` commits it; any other end drops the
+  `InstallationWindow` (or the guard, before the installation is prepared), whose `Drop` gives
+  the URLs back and routes them at once. Nothing infers a loan from the registry.
+- `OpenRouting::route_held` is the one step for "a URL is in the hold": into an open presentation
+  (shown and brought forward if its window is not shown), kept, refused, or the main window
+  reopened through `host::reopen_current_run`. Arrival, the end of the bootstrap and a loan given
+  back call it.
+- `Ingress::request_native_show` keeps a reopen asked during a quit and shows it only if the quit
+  is abandoned, and asks again when the main window it counted on fails to open.
 - Every refusal is one `tracing` warning with the count and `Refusal::reason`, never the URL.
 
 Pinned by `runner_open`'s rows and the failed-bootstrap rows of `app_handler_routes`.
