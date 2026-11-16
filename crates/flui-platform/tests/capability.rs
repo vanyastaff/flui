@@ -13,11 +13,11 @@ use std::{
 use flui_platform::{
     Unsupported, UnsupportedReason,
     capability::{
-        Abandoned, Activity, ActivityBridge, ActivityResult, Capability, CapabilityProvider,
+        Abandoned, ActivityBridge, ActivityResult, Capability, CapabilityProvider,
         CompletionSource, HostBridge, IntentFrame, InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN,
         OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions, ProviderContext,
-        Resolver, ResultCode, ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken,
-        ResultTokenMint, RuntimeLocals,
+        RequestKey, Resolver, ResultCode, ResultKey, ResultOutcome, ResultRefused, ResultRequest,
+        ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -284,6 +284,7 @@ fn a_leaf_crate_declares_registers_and_acquires_on_the_contract_alone() {
             &owner.source,
             &locals,
             &host,
+            "vibration",
             None,
         );
         entries[0].provide(&ctx).map(|handle| {
@@ -596,7 +597,7 @@ fn runtime_locals_keep_one_value_per_type_until_retirement() {
 /// and answers each launch with a pending request.
 struct BridgeCalls {
     mint: ResultTokenMint,
-    launched: RefCell<Vec<(ResultKey, ResultToken)>>,
+    launched: RefCell<Vec<(RequestKey, ResultToken)>>,
     resolvers: RefCell<Vec<Resolver<ResultOutcome>>>,
 }
 
@@ -604,7 +605,7 @@ impl ActivityBridge for BridgeCalls {
     fn launch_for_result(
         &self,
         completions: &CompletionSource,
-        key: ResultKey,
+        key: RequestKey,
         _intent: &mut dyn FnMut(IntentFrame) -> bool,
     ) -> Result<ResultRequest, ResultRefused> {
         let token = self
@@ -620,7 +621,7 @@ impl ActivityBridge for BridgeCalls {
     fn reattach(
         &self,
         _completions: &CompletionSource,
-        _key: ResultKey,
+        _key: RequestKey,
     ) -> Result<ResultRequest, ResultRefused> {
         Err(ResultRefused::ActivityEnded)
     }
@@ -638,7 +639,9 @@ impl ActivityBridge for BridgeCalls {
 
 /// A provider reaches the Activity the host offers through its context, and
 /// none once the host takes it back; a launch through it is answered by the
-/// completion of the token it was minted, at an owner turn.
+/// completion of the token it was minted, at an owner turn. Its requests are
+/// keyed under the acquiring capability, and a capability whose name could not
+/// key them is offered none.
 #[test]
 fn a_provider_reaches_the_activity_the_host_offers() {
     const PICK: ResultKey = match ResultKey::try_new("flui-test.pick") {
@@ -648,23 +651,44 @@ fn a_provider_reaches_the_activity_the_host_offers() {
     let owner = Owner::new();
     let locals = RuntimeLocals::new();
     let host = HostBridge::new();
-    let context =
-        || ProviderContext::new(owner.source.poster(), &owner.source, &locals, &host, None);
-    assert!(context().activity().is_none(), "no host offers one yet");
+    let context = |capability| {
+        ProviderContext::new(
+            owner.source.poster(),
+            &owner.source,
+            &locals,
+            &host,
+            capability,
+            None,
+        )
+    };
+    assert!(
+        context("files").activity().is_none(),
+        "no host offers one yet"
+    );
 
     let bridge = Rc::new(BridgeCalls {
         mint: ResultTokenMint::new(),
         launched: RefCell::default(),
         resolvers: RefCell::default(),
     });
-    let offered = Activity::new(Rc::clone(&bridge) as Rc<dyn ActivityBridge>);
+    let offered: Rc<dyn ActivityBridge> = Rc::clone(&bridge) as Rc<dyn ActivityBridge>;
     assert!(host.install_activity(Some(offered)).is_none());
-    let activity = context().activity().expect("the host offers its Activity");
+    assert!(
+        context("not a key").activity().is_none(),
+        "a name with a space cannot key requests"
+    );
+    let activity = context("files")
+        .activity()
+        .expect("the host offers its Activity");
     let request = activity
         .launch_for_result(&owner.source, PICK, |_| true)
         .expect("taken");
     let (token, mut completion) = request.into_parts();
-    assert_eq!(*bridge.launched.borrow(), [(PICK, token)]);
+    let files = ResultKey::try_new("files").expect("a key");
+    assert_eq!(
+        *bridge.launched.borrow(),
+        [(RequestKey::new(files, PICK), token)]
+    );
     assert!(
         activity.with_java(|_| ()).is_none(),
         "this host lends nothing"
@@ -684,7 +708,7 @@ fn a_provider_reaches_the_activity_the_host_offers() {
         host.install_activity(None).is_some(),
         "the host takes it back"
     );
-    assert!(context().activity().is_none());
+    assert!(context("files").activity().is_none());
 }
 
 /// A result key is a short printable name, checked where it is written; a

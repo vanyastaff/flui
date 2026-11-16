@@ -82,3 +82,173 @@ fn a_package_declares_registers_and_acquires_its_own_capability() {
     let _ = host.pump(Duration::ZERO);
     assert_eq!(level.get(), Some(80));
 }
+
+/// A package's Android picker, written against the SDK alone: what a
+/// provider names to start an activity for a result and read its answer.
+mod picker {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use flui_sdk::platform::capability::{
+        Activity, ActivityResult, Capability, CompletionSource, IntentFrame, InvalidResultKey,
+        JniFrame, ProviderContext, ResultCode, ResultKey, ResultOutcome, ResultRefused,
+        ResultRequest, ResultToken,
+    };
+    use flui_sdk::platform::{Unsupported, UnsupportedReason};
+
+    /// The picker's one purpose, a constant of the package.
+    pub(super) const PICK: ResultKey = match ResultKey::try_new("pick") {
+        Ok(key) => key,
+        Err(_) => panic!("BUG: a printable key"),
+    };
+
+    /// What a pick ended with, as the package's widget hears it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) enum Picked {
+        /// The picker answered; `read` says whether its `Intent` was read.
+        Answered { code: ResultCode, read: bool },
+        /// No answer, and why.
+        Refused(ResultRefused),
+    }
+
+    pub(super) enum Picker {}
+
+    #[derive(Clone)]
+    pub(super) struct PickerHandle {
+        activity: Activity,
+        completions: CompletionSource,
+        picked: Rc<RefCell<Vec<Picked>>>,
+    }
+
+    impl Capability for Picker {
+        type Handle = PickerHandle;
+        const NAME: &'static str = "picker";
+    }
+
+    /// The provider: the Activity the context offers, which only Android's
+    /// host does.
+    pub(super) fn provide(ctx: &ProviderContext<'_>) -> Result<PickerHandle, Unsupported> {
+        let activity = ctx.activity().ok_or(Unsupported::of::<Picker>(
+            UnsupportedReason::NotOnThisPlatform,
+        ))?;
+        Ok(PickerHandle {
+            activity,
+            completions: ctx.completions().clone(),
+            picked: Rc::default(),
+        })
+    }
+
+    impl PickerHandle {
+        /// Start a pick; its outcome lands in what the handle has picked.
+        pub(super) fn pick(&self) -> Result<ResultToken, ResultRefused> {
+            let request: ResultRequest = self.activity.launch_for_result(
+                &self.completions,
+                PICK,
+                |frame: IntentFrame| {
+                    // The package's own `jni` fills the Intent here.
+                    !frame.intent().is_null()
+                },
+            )?;
+            let (token, completion) = request.into_parts();
+            let (activity, picked) = (self.activity.clone(), Rc::clone(&self.picked));
+            completion.on_complete(move |outcome| {
+                let outcome: ResultOutcome = outcome.unwrap_or(Err(ResultRefused::ActivityEnded));
+                picked.borrow_mut().push(match outcome {
+                    Ok(answer) => {
+                        let answer: ActivityResult = answer;
+                        let read = answer.has_data()
+                            && activity
+                                .take_data(token, |frame: JniFrame| !frame.object().is_null())
+                                .unwrap_or(false);
+                        Picked::Answered {
+                            code: answer.code(),
+                            read,
+                        }
+                    }
+                    Err(refused) => Picked::Refused(refused),
+                });
+            });
+            Ok(token)
+        }
+    }
+
+    /// A key that is not one names its reason.
+    pub(super) fn bad_key() -> Option<InvalidResultKey> {
+        ResultKey::try_new("").err()
+    }
+}
+
+/// What acquiring the picker answered.
+type PickerAcquired = Rc<std::cell::RefCell<Option<Result<(), flui_sdk::platform::Unsupported>>>>;
+
+/// The picker's handle, acquired in `init_state`.
+#[derive(Clone)]
+struct PickerView {
+    acquired: PickerAcquired,
+}
+
+struct PickerViewState {
+    acquired: PickerAcquired,
+}
+
+impl StatefulView for PickerView {
+    type State = PickerViewState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        PickerViewState {
+            acquired: Rc::clone(&self.acquired),
+        }
+    }
+}
+
+impl View for PickerView {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<PickerView> for PickerViewState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        let acquired = ctx.capability::<picker::Picker>().map(|handle| {
+            // On Android the widget would pick from a callback.
+            let _ = handle.pick();
+        });
+        self.acquired.replace(Some(acquired));
+    }
+
+    fn build(&self, _view: &PickerView, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+struct PickerPlugin;
+
+impl Plugin for PickerPlugin {
+    fn register(&self, registrar: &mut CapabilityRegistrar) {
+        registrar.provide::<picker::Picker>(picker::provide);
+    }
+}
+
+/// A package names everything a provider of activity results writes through
+/// the SDK alone; on a host without an Activity its provider refuses.
+#[test]
+fn a_package_provides_activity_results_against_the_sdk_alone() {
+    assert_eq!(picker::PICK.as_str(), "pick");
+    assert!(picker::bad_key().is_some());
+    let mut host = HeadlessHost::with_plugin(HeadlessWindow::new(10, 10), &PickerPlugin);
+    let acquired = PickerAcquired::default();
+    host.attach(&PickerView {
+        acquired: Rc::clone(&acquired),
+    })
+    .expect("root attaches");
+    let _ = host.pump(Duration::ZERO);
+    let refusal = acquired
+        .borrow_mut()
+        .take()
+        .expect("init_state ran")
+        .expect_err("the headless host has no Activity");
+    assert_eq!(
+        refusal.reason,
+        flui_sdk::platform::UnsupportedReason::NotOnThisPlatform
+    );
+}

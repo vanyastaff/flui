@@ -5038,42 +5038,58 @@ forgets the handle, unless a later platform bound its own since, and the handle 
 on the Java main thread, the only thread that passes it to `nativeWake`. The Java side queues
 and wakes and never waits for the owner; the lock guards the deques alone.
 
-A capability provider reaches the Activity through its context
-(`ProviderContext::activity`, ADR-0154 §9). It is the Android host's alone, so it is no position
-of the host table and no method of `Platform`: `android_platform` hands it out beside the
-platform, made from the Android loop's `owner::android::result_bridge::ResultBridge`, and
-`flui-app`'s Android runner installs it in the registry's `HostBridge` for the loop's life; on
-every other host the bridge offers none. A request for a result is
-identified by a `ResultToken` the bridge mints per call (`ResultTokenMint`, never reissued) and the
-loop's epoch, which `FluiHost.nextEpoch` gives each platform of the process; the provider names
-its purpose with a `ResultKey`. The provider fills an `Intent` the bridge made and lends it
-(`IntentFrame`), so no reference flows from a provider's JNI code into the host; the start is
-posted to the Java main thread, where `FluiHost.launch` picks the request code Android sees, holds
-the start until `onStart` while the Activity is stopped, and refuses past `MAX_OPEN` open requests
-across the process. `FluiActivity.onSaveInstanceState` saves the started requests' codes and keys,
-and a recreated Activity whose process died restores them with epoch 0. `onActivityResult` queues
-the answer with its epoch, token and key. The result `Intent` never leaves the owner thread or the
-host: the router holds it by a global reference under the token of the request it settled, at
-most `MAX_HELD`, and the provider reads only what it asked for, once, through
-`Activity::take_data`; an `Intent` nobody takes is let go when the Activity ends. The
-pure model, `owner::android::activity_results::ResultRouter`, routes each drained `Answer`: one of
-this epoch settles the open request with its token once, and one for a token that is not open is
-stale; one of another epoch belongs to an earlier Activity, whose runtime ended with it, and waits,
-at most `MAX_EARLIER`, for `Activity::reattach` under its key. At the loop's exit every open
-request ends as `ResultRefused::ActivityEnded` and later ones are refused; the router resolves
-nothing under its own borrow (`Delivery`). Its tests run on every host beside it
+A capability provider reaches the Activity through its context (`ProviderContext::activity`,
+ADR-0154 §9, ADR-0336 §2). It is the Android host's alone, so it is no position of the host table
+and no method of `Platform`: `android_platform` hands the bridge of the Android loop's
+`owner::android::result_bridge::ResultBridge` out beside the platform, and `flui-app`'s Android
+runner installs it in the registry's `HostBridge` for the loop's life; on every other host the
+bridge offers none. The `Activity` a provider gets is scoped by the acquiring capability's `NAME`,
+which the registry holds unique, so the `RequestKey` of a request (capability and the provider's
+`ResultKey`) never meets another capability's. A request is a `ResultToken` the bridge mints per
+call (`ResultTokenMint`, never reissued) and the loop's epoch, which `FluiHost.nextEpoch` gives
+each platform of the process. The provider fills an `Intent` the bridge made and lends it
+(`IntentFrame`), so no reference flows from a provider's JNI code into the host. The start is
+posted to the Java main thread through `owner::android::main_thread::post`, which runs every
+closure the host sends there inside `os_entry` and reports each exit but success (the body's
+error, a panic, the closure dropped unrun); a failed hand-off comes back to the owner and ends the
+request as `HandOffFailed`. There `FluiHost.launch` picks the request code Android sees from the
+range it keeps for the host (`FIRST_HOST_CODE..=LAST_HOST_CODE`, within 16 bits; an application's
+own codes below it pass through untouched), holds the start until `onStart` while the Activity is
+stopped, and answers `ANSWER_TOO_MANY` past `MAX_OPEN` open requests across the process.
+`FluiActivity.onSaveInstanceState` saves the started requests' codes and keys, and a recreated
+Activity whose process died restores them with epoch 0. `onActivityResult` queues the answer with
+its epoch, token and key. Every Java queue is read before `FluiHost` lets go of what was read
+(`peekEntries`/`commitEntries`, `peekOpened`/`commitOpened`, `peekAnswers`/`commitAnswers`), so a
+failed drain loses nothing and the next turn reads it again. The result `Intent` never leaves the
+owner thread or the host: the router holds it by a global reference under the token of the
+request it settled, and the provider reads only what it asked for, once, through
+`Activity::take_data`; an untaken `Intent` counts against `MAX_OPEN_REQUESTS`, so none accepted is
+ever let go to make room, and the Activity's end lets them go. The pure model,
+`owner::android::activity_results::ResultRouter`, routes each drained `Answer`: one of this epoch
+settles the open request with its token once, and one for a token that is not open is stale; one
+of another epoch belongs to an earlier Activity, whose runtime ended with it, and waits, at most
+`MAX_EARLIER`, for `Activity::reattach` under its key, which answers `NothingPending` when nothing
+waits and `FluiHost.stillToCome` says nothing is to come. At the loop's exit every open request
+ends as `ResultRefused::ActivityEnded` and later ones are refused; the router resolves nothing
+under its own borrow (`Delivery`). Its tests run on every host beside it
 (`an_answer_settles_the_request_its_token_names_once`,
-`an_earlier_activitys_answer_waits_for_its_key`, `the_end_refuses_every_open_request` and the
-rest of its table). A permission request (`onRequestPermissionsResult`) is the same shape, a
-request code answered once, and joins as one more `FluiHost` method and answer kind on this router
-with the first capability that needs a permission (ADR-0152 §2, item 8).
+`each_launch_that_is_not_answered_ends_with_its_reason`,
+`an_earlier_activitys_answer_waits_for_its_key` and the rest of its table), as do the posting
+function's (`posted_work_reports_every_exit_but_success`). A permission request
+(`onRequestPermissionsResult`) is the same shape, a request code answered once, and joins as one
+more `FluiHost` method and answer kind on this router with the first capability that needs a
+permission (ADR-0152 §2, item 8).
 
-The window's soft input mode is `adjustNothing` from API 30, set by `FluiActivity.onCreate` after
-`NativeActivity.onCreate` has set `adjustResize` (so the manifest's attribute would change
-nothing): the window never resizes for the input method, whose height arrives as the `ime()`
-insets and their `WindowInsetsAnimation` (ADR-0277). Below API 30 the insets carry the input
-method only under `adjustResize`, the mode Flutter's template keeps on every level, so it stays
-there, where the window is expected to resize once per show and hide. The count of `WindowResized` during a
+The window keeps one soft input mode on every level (ADR-0336 §3): `adjustResize`, with the window
+edge to edge, `Window.setDecorFitsSystemWindows(false)` from API 30 and the decor view's
+`SYSTEM_UI_FLAG_LAYOUT_STABLE | _LAYOUT_HIDE_NAVIGATION | _LAYOUT_FULLSCREEN` below it.
+`owner::android::window_setup` decides it as a pure function of the API level
+(`the_window_resizes_its_insets_not_its_surface_on_every_level`) and sets it on the Java main thread
+at start, after `NativeActivity.onCreate` has set its own `adjustResize` (so the manifest's
+attribute would change nothing); the layout flags are added to the decor view's, where the status
+bar's appearance also lives. In that state Android dispatches the input method's inset to the
+views (`Type.ime()` and its `WindowInsetsAnimation` from API 30, the system window inset below it)
+and leaves the content, and so the surface, at its size. The count of `WindowResized` during a
 keyboard animation on both sides of API 30 is owed on a device (`docs/platform-parity.md`,
 "Soft-keyboard insets").
 

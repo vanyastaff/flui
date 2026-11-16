@@ -2,9 +2,7 @@ package dev.flui.platform;
 
 import android.app.NativeActivity;
 import android.content.Intent;
-import android.os.Build;
 import android.os.Bundle;
-import android.view.WindowManager;
 
 /**
  * The Activity of a FLUI application (ADR-0255 decision 1).
@@ -15,27 +13,17 @@ import android.view.WindowManager;
  * the APK, where the Activity's class loader finds them, and gives FLUI the
  * callbacks only an Activity subclass receives, which it forwards to the
  * queue in {@link FluiHost}.
+ *
+ * <p>The request codes {@link FluiHost#FIRST_HOST_CODE} to
+ * {@link FluiHost#LAST_HOST_CODE} are the host's: capability providers start
+ * activities for results under them. An application that subclasses this
+ * Activity and calls {@code startActivityForResult} itself uses codes below
+ * them; its results reach its own {@code onActivityResult} untouched.
  */
 public class FluiActivity extends NativeActivity {
-    /**
-     * The window's soft input mode from API 30: the window never resizes for
-     * the input method, whose height reaches FLUI as the {@code ime()}
-     * insets and their animation instead. Below API 30 the insets carry the
-     * input method only under {@code adjustResize}, which
-     * {@code NativeActivity} sets, so the mode stays.
-     */
-    static final int SOFT_INPUT_FROM_API_30 =
-            WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED
-                    | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        // `NativeActivity.onCreate` sets `adjustResize` on the window itself,
-        // so the manifest's attribute would change nothing.
-        if (Build.VERSION.SDK_INT >= 30) {
-            getWindow().setSoftInputMode(SOFT_INPUT_FROM_API_30);
-        }
         if (savedInstanceState != null) {
             FluiHost.restore(savedInstanceState);
         }

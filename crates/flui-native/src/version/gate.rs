@@ -529,6 +529,16 @@ pub(crate) mod android {
         const SINCE: u64 = 30;
     }
 
+    /// `Window.setDecorFitsSystemWindows` (API 30). Without it the window
+    /// lays out edge to edge through the `SYSTEM_UI_FLAG_LAYOUT_*` flags.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct DecorFitsSystemWindows;
+
+    impl Gate for DecorFitsSystemWindows {
+        type Version = AndroidApi;
+        const SINCE: u64 = 30;
+    }
+
     /// `View.startDragAndDrop` and `Activity.requestDragAndDropPermissions` (API 24). Without them
     /// the window offers no drag source and every drag stays in its window.
     #[derive(Debug, Clone, Copy)]
@@ -727,11 +737,12 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::android::{
-        AndroidApi, BackgroundBlur, ClipExtras, ContextDisplay, DisplayCutout, DragSource,
-        EnvelopeEffects, GestureExclusion, HapticComposition, InsetsByType, InsetsController,
-        LocaleList, PointerIcons, RoundPrimitives, ScaledScrollFactor, SegmentFeedback,
-        StylusHandwriting, SystemContrast, SystemGestureInsets, TextWeight, TouchpadGestures,
-        UnbufferedDispatch, VibrationTouchUsage, WindowColorMode,
+        AndroidApi, BackgroundBlur, ClipExtras, ContextDisplay, DecorFitsSystemWindows,
+        DisplayCutout, DragSource, EnvelopeEffects, GestureExclusion, HapticComposition,
+        InsetsByType, InsetsController, LocaleList, PointerIcons, RoundPrimitives,
+        ScaledScrollFactor, SegmentFeedback, StylusHandwriting, SystemContrast,
+        SystemGestureInsets, TextWeight, TouchpadGestures, UnbufferedDispatch, VibrationTouchUsage,
+        WindowColorMode,
     };
     use super::testing::row;
 
@@ -778,6 +789,12 @@ mod tests {
         ));
         failures.extend(row::<InsetsController>(
             "InsetsController",
+            api(29),
+            api(30),
+            unknown,
+        ));
+        failures.extend(row::<DecorFitsSystemWindows>(
+            "DecorFitsSystemWindows",
             api(29),
             api(30),
             unknown,

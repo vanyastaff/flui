@@ -378,11 +378,20 @@ mod queue {
             if !self.inbox.pending.swap(false, Ordering::AcqRel) {
                 return (Vec::new(), Vec::new());
             }
-            // Each queue is drained on its own: a failure leaves that queue's
-            // entries queued for the next turn and loses neither.
+            // Each queue is drained on its own, and `FluiHost` lets go of
+            // what was read only once it is read whole: a failure leaves that
+            // queue's entries queued for the next turn and loses none.
             let pairs = self.drained("entries", drain);
             let records = self.drained("intents", drain_opened);
-            let answers = self.drained("answers", drain_answers);
+            let answers = self
+                .drained("answers", drain_answers)
+                .map(|(answers, remaining)| {
+                    // More than one drain reads: the next turn reads the rest.
+                    if remaining > 0 {
+                        self.inbox.wake();
+                    }
+                    answers
+                });
             let mut entries = HostEntry::from_pairs(&pairs.unwrap_or_default());
             entries.extend(
                 records
@@ -506,14 +515,23 @@ mod queue {
         Ok(global)
     }
 
+    /// Every entry `FluiHost` queued, read whole before `FluiHost` lets go
+    /// of exactly those, so a failure leaves them queued.
     fn drain(env: &mut Env<'_>, activity: &JObject<'_>) -> jni::errors::Result<Vec<i32>> {
         let class = host_class(env, activity)?;
         let pairs = env
-            .call_static_method(&class, jni_str!("drain"), jni_sig!("()[I"), &[])?
+            .call_static_method(&class, jni_str!("peekEntries"), jni_sig!("()[I"), &[])?
             .l()?;
         let pairs = JIntArray::cast_local(env, pairs)?;
         let mut out = vec![0; pairs.len(env)?];
         pairs.get_region(env, 0, &mut out)?;
+        let read = i32::try_from(out.len() / 2).map_err(|_| jni::errors::Error::JavaException)?;
+        env.call_static_method(
+            &class,
+            jni_str!("commitEntries"),
+            jni_sig!("(I)V"),
+            &[JValue::Int(read)],
+        )?;
         Ok(out)
     }
 
@@ -561,7 +579,8 @@ mod queue {
     }
     /// Every intent's record `FluiHost` queued, oldest first, each read in a
     /// frame of its own so that a full queue holds no more local references
-    /// than one record.
+    /// than one record; `FluiHost` lets go of exactly those once all are
+    /// read, so a failure leaves them queued.
     fn drain_opened(
         env: &mut Env<'_>,
         activity: &JObject<'_>,
@@ -570,7 +589,7 @@ mod queue {
         let records = env
             .call_static_method(
                 &class,
-                jni_str!("drainOpened"),
+                jni_str!("peekOpened"),
                 jni_sig!("()[[Ljava/lang/String;"),
                 &[],
             )?
@@ -586,6 +605,13 @@ mod queue {
             })?;
             out.push(record);
         }
+        let read = i32::try_from(len).map_err(|_| jni::errors::Error::JavaException)?;
+        env.call_static_method(
+            &class,
+            jni_str!("commitOpened"),
+            jni_sig!("(I)V"),
+            &[JValue::Int(read)],
+        )?;
         Ok(out)
     }
 
@@ -776,9 +802,6 @@ mod tests {
             "FluiHost.started(this);",
             "FluiHost.stopped(this);",
             "FluiHost.destroyed(this);",
-            // The window never resizes for the input method from API 30.
-            "if (Build.VERSION.SDK_INT >= 30) {\n            getWindow().setSoftInputMode(SOFT_INPUT_FROM_API_30);",
-            "SOFT_INPUT_STATE_UNSPECIFIED\n                    | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING;",
         ] {
             assert!(activity.contains(forwarded), "{forwarded:?} in\n{activity}");
         }

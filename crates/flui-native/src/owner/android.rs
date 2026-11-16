@@ -46,10 +46,14 @@ pub(crate) mod java_view;
 mod launch;
 #[cfg(target_os = "android")]
 mod looper;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod main_thread;
 pub(crate) mod ndk;
 pub(crate) mod poll;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod window_setup;
 
 #[cfg(target_os = "android")]
 pub(crate) use looper::{ActivityFlags, ActivityRef, ActivityWindow, AndroidLoop};

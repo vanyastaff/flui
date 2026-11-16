@@ -322,7 +322,22 @@ impl AndroidLoop {
             H::transfer,
         );
         let host_queue = java_host::HostQueue::start(app.clone(), Arc::downgrade(&owner_signal));
-        let results = super::result_bridge::ResultBridge::start(&app);
+        let results =
+            super::result_bridge::ResultBridge::start(&app, Arc::downgrade(&owner_signal));
+        // The soft keyboard reaches layout as an inset on every level, and
+        // the surface keeps its size (`window_setup`).
+        let setup_app = app.clone();
+        super::main_thread::post(
+            &app,
+            "window setup",
+            move || super::window_setup::apply(&setup_app, api).map_err(|error| error.to_string()),
+            |failure: super::main_thread::PostFailure| {
+                tracing::warn!(
+                    ?failure,
+                    "the window kept NativeActivity's soft input setup"
+                );
+            },
+        );
         let owner = Arc::downgrade(&owner_signal);
         let preferences = H::preferences(&app, api, &owner_signal);
         let clipboard = H::clipboard(&app, api);
@@ -1172,10 +1187,10 @@ impl AndroidLoop {
     /// The Activity a capability provider is offered (ADR-0154 §9); `None`
     /// when `FluiHost` gave no epoch. Valid while this loop runs: once it
     /// ends, the Activity refuses every request.
-    pub(crate) fn activity(&self) -> Option<flui_platform::capability::Activity> {
+    pub(crate) fn activity(&self) -> Option<Rc<dyn flui_platform::capability::ActivityBridge>> {
         self.results
             .as_ref()
-            .map(super::result_bridge::ResultBridge::activity)
+            .map(super::result_bridge::ResultBridge::bridge)
     }
 }
 

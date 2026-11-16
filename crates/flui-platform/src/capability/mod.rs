@@ -27,8 +27,8 @@ mod window_ref;
 
 pub use activity_result::{
     Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey, JniFrame,
-    MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN, ResultCode, ResultKey, ResultOutcome, ResultRefused,
-    ResultRequest, ResultToken, ResultTokenMint,
+    MAX_OPEN_REQUESTS, MAX_REQUEST_KEY_LEN, MAX_RESULT_KEY_LEN, RequestKey, ResultCode, ResultKey,
+    ResultOutcome, ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
@@ -89,18 +89,21 @@ pub struct ProviderContext<'a> {
     completions: &'a CompletionSource,
     locals: &'a RuntimeLocals,
     host: &'a HostBridge,
+    capability: &'static str,
     window: Option<WindowRef>,
 }
 
 impl<'a> ProviderContext<'a> {
-    /// The context a UI runtime hands its providers: `host` is what the
-    /// running host offers beyond the window.
+    /// The context a UI runtime hands the provider of the capability named
+    /// `capability`: `host` is what the running host offers beyond the
+    /// window.
     #[must_use]
     pub fn new(
         owner: &'a OwnerPoster,
         completions: &'a CompletionSource,
         locals: &'a RuntimeLocals,
         host: &'a HostBridge,
+        capability: &'static str,
         window: Option<WindowRef>,
     ) -> Self {
         Self {
@@ -108,16 +111,18 @@ impl<'a> ProviderContext<'a> {
             completions,
             locals,
             host,
+            capability,
             window,
         }
     }
 
     /// The running Android Activity, which starts activities for results
-    /// ([`Activity::launch_for_result`]); `None` on every other platform,
-    /// and between two Activities.
+    /// ([`Activity::launch_for_result`]) keyed under the acquiring
+    /// capability; `None` on every other platform, between two Activities,
+    /// and for a capability whose name is not a [`ResultKey`].
     #[must_use]
     pub fn activity(&self) -> Option<Activity> {
-        self.host.activity()
+        self.host.activity(self.capability)
     }
 
     /// A poster that runs a closure on the owner thread; it may be cloned and

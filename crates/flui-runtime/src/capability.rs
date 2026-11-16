@@ -372,6 +372,7 @@ impl CapabilitySource for PresentationCapabilities {
             &self.completions,
             &self.locals,
             self.registry.host(),
+            name,
             window,
         );
         self.registry.acquire(capability, name, &ctx)

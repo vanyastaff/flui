@@ -17,7 +17,10 @@
 - **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for
   decision 6 only (its manifest lines that capability crates contribute through
   `[package.metadata.flui.capability]` declarations in marker-delimited blocks: the CLI writes the
-  manifest whole from `[package.metadata.flui.declares]`); its other manifest lines stand
+  manifest whole from `[package.metadata.flui.declares]`); its other manifest lines stand; and
+  [ADR-0336](ADR-0336-the-android-activity-forwards-what-has-a-consumer-and-routes-results-by-token-and-epoch.md)
+  for decision 2's list of forwarded callbacks, the shape of decision 8's `launch_for_result`, and
+  the `windowSoftInputMode` sentence of decision 6 with its Confirmation row
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (the platform crates and
   where host code lives), [ADR-0152](ADR-0152-capability-seam-revised.md) (the capability seam and
   `Completion`), [ADR-0154](ADR-0154-capability-crates.md) (capability crates and their native

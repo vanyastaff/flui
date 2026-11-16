@@ -933,9 +933,9 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// }
 /// ```
 ///
-/// Beside the platform comes the Activity it runs in, which the composition
-/// root offers capability providers (`ProviderContext::activity`, ADR-0154
-/// §9) while the platform runs; `None` when `FluiHost` could not be read for
+/// Beside the platform comes the bridge of the Activity it runs in, which the
+/// composition root installs in its `HostBridge` for capability providers
+/// (`ProviderContext::activity`, ADR-0154 §9) while the platform runs; `None` when `FluiHost` could not be read for
 /// it. It is the Android host's alone, so it is no position of the host
 /// table and no method of [`Platform`].
 ///

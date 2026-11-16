@@ -307,7 +307,7 @@ What only the host owns reaches a provider through its `ProviderContext`
 `HostBridge` the composition root fills for each run's host and `None`
 elsewhere. `capability::activity_result` holds that vocabulary and no JNI
 type: a request is identified by a `ResultToken` the host mints per call and
-named by the provider's `ResultKey`, which outlives an Activity Android
+named by a `RequestKey`, the acquiring capability's `NAME` and the provider's `ResultKey`, which outlives an Activity Android
 replaces; it ends exactly once, with an `ActivityResult` or a typed
 `ResultRefused`; and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host

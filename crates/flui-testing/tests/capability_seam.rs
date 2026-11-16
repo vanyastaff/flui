@@ -767,7 +767,7 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
     fn launch_for_result(
         &self,
         _completions: &flui_platform::capability::CompletionSource,
-        _key: flui_platform::capability::ResultKey,
+        _key: flui_platform::capability::RequestKey,
         _intent: &mut dyn FnMut(flui_platform::capability::IntentFrame) -> bool,
     ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
     {
@@ -777,7 +777,7 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
     fn reattach(
         &self,
         _completions: &flui_platform::capability::CompletionSource,
-        _key: flui_platform::capability::ResultKey,
+        _key: flui_platform::capability::RequestKey,
     ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
     {
         Err(flui_platform::capability::ResultRefused::ActivityEnded)
@@ -816,9 +816,7 @@ pub(crate) fn a_provider_sees_the_activity_the_host_offers() {
     };
 
     assert!(!seen(&registry), "no Activity before the host offers one");
-    let activity = flui_platform::capability::Activity::new(
-        Rc::new(EndedActivity) as Rc<dyn flui_platform::capability::ActivityBridge>
-    );
+    let activity: Rc<dyn flui_platform::capability::ActivityBridge> = Rc::new(EndedActivity);
     assert!(host_bridge.install_activity(Some(activity)).is_none());
     assert!(seen(&registry), "the Activity the host offers");
     assert!(host_bridge.install_activity(None).is_some());

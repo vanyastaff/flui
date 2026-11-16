@@ -32,10 +32,10 @@ import java.util.Map;
  *
  * <p>The queues buffer: an entry, or what an intent opens, can arrive before
  * {@code android_main} runs, or between two platforms of one process. Entries
- * are pairs of kind and value ({@link #drain}); an intent is a record of its
- * launch, action and URIs ({@link #drainOpened}); an answer to an activity
+ * are pairs of kind and value ({@link #peekEntries}); an intent is a record of its
+ * launch, action and URIs ({@link #peekOpened}); an answer to an activity
  * the library started for a result names the request's epoch, token and key
- * ({@link #drainAnswers}). The open requests are saved with the Activity's
+ * ({@link #peekAnswers}, {@link #commitAnswers}). The open requests are saved with the Activity's
  * state, so an answer that reaches a later Activity, or a later process,
  * still names its key. The library binds a wake
  * handle on the Java main thread once its platform starts, and unbinds it
@@ -81,10 +81,13 @@ public final class FluiHost {
     /** An answer: the activity a request started answered ({@code onActivityResult}). */
     static final int ANSWER_RESULT = 1;
 
-    /** An answer: Android refused to start the request's activity, or it was not taken. */
+    /** An answer: Android refused to start the request's activity. */
     static final int ANSWER_NOT_LAUNCHED = 2;
 
-    /** The numbers of one answer in {@link #drainAnswers}: epoch, token, kind, result code. */
+    /** An answer: the host held as many requests as it holds, {@link #MAX_OPEN}. */
+    static final int ANSWER_TOO_MANY = 3;
+
+    /** The numbers of one answer in {@link #peekAnswers}: epoch, token, kind, result code. */
     static final int ANSWER_NUMBERS = 4;
 
     /** The epoch of a request restored from the saved state of a process that died. */
@@ -96,6 +99,16 @@ public final class FluiHost {
      * past it is an answer too, so at most twice as many answers wait.
      */
     static final int MAX_OPEN = 16;
+
+    /**
+     * The first of the request codes the host keeps for itself (see {@link FluiActivity}):
+     * within the 16 bits {@code FragmentActivity} allows, so an application's own codes below
+     * it never meet the host's.
+     */
+    static final int FIRST_HOST_CODE = 0xFF00;
+
+    /** The last of the request codes the host keeps for itself. */
+    static final int LAST_HOST_CODE = 0xFFFF;
 
     private static final String SAVED_CODES = "dev.flui.platform.requests.codes";
 
@@ -152,16 +165,16 @@ public final class FluiHost {
         }
     }
 
-    /** Started requests by their request code. Java main thread only. */
+    /** Started requests by their request code. Guarded by {@link #LOCK}. */
     private static final HashMap<Integer, Request> STARTED = new HashMap<>();
 
-    /** Requests taken while their Activity was stopped, oldest first. Java main thread only. */
+    /** Requests taken while their Activity was stopped, oldest first. Guarded by {@link #LOCK}. */
     private static final ArrayDeque<Waiting> WAITING = new ArrayDeque<>();
 
-    /** The next request code to try. Java main thread only. */
-    private static int nextCode = 1;
+    /** The next request code to try. Guarded by {@link #LOCK}. */
+    private static int nextCode = FIRST_HOST_CODE;
 
-    /** The Activity between its {@code onStart} and {@code onStop}. Java main thread only. */
+    /** The Activity between its {@code onStart} and {@code onStop}. Guarded by {@link #LOCK}. */
     private static Activity startedActivity;
 
     /** Answers, oldest first. Guarded by {@link #LOCK}. */
@@ -272,12 +285,22 @@ public final class FluiHost {
         return fields.toArray(new String[0]);
     }
 
-    /** Every intent's record queued, oldest first; any thread. */
-    static String[][] drainOpened() {
+    /**
+     * Every intent's record queued, oldest first; any thread. They stay
+     * queued until {@link #commitOpened}, so a read that fails loses none.
+     */
+    static String[][] peekOpened() {
         synchronized (LOCK) {
-            String[][] records = OPENED.toArray(new String[0][]);
-            OPENED.clear();
-            return records;
+            return OPENED.toArray(new String[0][]);
+        }
+    }
+
+    /** The library holds the oldest {@code count} records: they leave the queue; any thread. */
+    static void commitOpened(int count) {
+        synchronized (LOCK) {
+            for (int index = 0; index < count && !OPENED.isEmpty(); index++) {
+                OPENED.poll();
+            }
         }
     }
 
@@ -333,62 +356,90 @@ public final class FluiHost {
      * Start {@code intent} for a result from {@code activity}; Java main thread. The request is
      * the library's {@code token} under {@code key}, of the platform whose epoch is
      * {@code epoch}. While {@code activity} is stopped it waits for {@link #started}. Past
-     * {@link #MAX_OPEN} open requests, or when Android refuses, it is answered with
-     * {@link #ANSWER_NOT_LAUNCHED}.
+     * {@link #MAX_OPEN} open requests it is answered with {@link #ANSWER_TOO_MANY}, and when
+     * Android refuses with {@link #ANSWER_NOT_LAUNCHED}.
      */
     static void launch(Activity activity, Intent intent, long epoch, long token, String key) {
         Request request = new Request(epoch, token, key);
-        int answered;
         synchronized (LOCK) {
-            answered = ANSWERS.size();
+            if (STARTED.size() + WAITING.size() + ANSWERS.size() >= MAX_OPEN) {
+                Log.w(TAG, "as many activity requests are open as FLUI holds; this one is refused");
+                ANSWERS.add(new Answer(request, ANSWER_TOO_MANY, 0, null));
+                request = null;
+            } else if (activity != startedActivity) {
+                WAITING.add(new Waiting(activity, intent, request));
+                request = null;
+            }
         }
-        if (STARTED.size() + WAITING.size() + answered >= MAX_OPEN) {
-            Log.w(TAG, "as many activity requests are open as FLUI holds; this one is refused");
-            answer(new Answer(request, ANSWER_NOT_LAUNCHED, 0, null));
-            return;
-        }
-        if (activity != startedActivity) {
-            WAITING.add(new Waiting(activity, intent, request));
+        if (request == null) {
+            wake();
             return;
         }
         start(activity, intent, request);
     }
 
     private static void start(Activity activity, Intent intent, Request request) {
-        int code = freeCode();
-        STARTED.put(code, request);
+        int code;
+        synchronized (LOCK) {
+            code = freeCode(STARTED, nextCode);
+            if (code > 0) {
+                nextCode = code == LAST_HOST_CODE ? FIRST_HOST_CODE : code + 1;
+                STARTED.put(code, request);
+            }
+        }
+        if (code <= 0) {
+            answer(new Answer(request, ANSWER_TOO_MANY, 0, null));
+            return;
+        }
         try {
             activity.startActivityForResult(intent, code);
         } catch (RuntimeException error) {
             // `ActivityNotFoundException`, `SecurityException`: nothing started.
-            STARTED.remove(code);
+            synchronized (LOCK) {
+                STARTED.remove(code);
+            }
             Log.w(TAG, "an activity FLUI was asked to start did not start", error);
             answer(new Answer(request, ANSWER_NOT_LAUNCHED, 0, null));
         }
     }
 
     /**
-     * A positive request code no started request holds. Codes go up and start again at 1 after
-     * {@code Integer.MAX_VALUE}: a code only tells Android's answer apart while its request is
-     * started, and the library matches the answer by epoch and token.
+     * The first request code from {@code next} on, through {@link #LAST_HOST_CODE} and then from
+     * {@link #FIRST_HOST_CODE}, that {@code started} does not hold; {@code 0} when every code of
+     * the host's range is held. A code only tells Android's answer apart while its request is
+     * started; the library matches the answer by epoch and token.
      */
-    private static int freeCode() {
-        while (true) {
-            int code = nextCode;
-            nextCode = code == Integer.MAX_VALUE ? 1 : code + 1;
-            if (!STARTED.containsKey(code)) {
+    static int freeCode(Map<Integer, ?> started, int next) {
+        int first = next < FIRST_HOST_CODE || next > LAST_HOST_CODE ? FIRST_HOST_CODE : next;
+        int count = LAST_HOST_CODE - FIRST_HOST_CODE + 1;
+        for (int step = 0; step < count; step++) {
+            int code = FIRST_HOST_CODE + (first - FIRST_HOST_CODE + step) % count;
+            if (!started.containsKey(code)) {
                 return code;
             }
         }
+        return 0;
+    }
+
+    /** Whether {@code code} is one of the request codes the host keeps for itself. */
+    static boolean isHostCode(int code) {
+        return code >= FIRST_HOST_CODE && code <= LAST_HOST_CODE;
     }
 
     /**
      * {@link FluiActivity#onActivityResult}: the answer of a request FLUI started waits for the
-     * owner; a code FLUI did not start is not FLUI's. {@code data} comes from another
-     * application: it is held as it is, and only the provider that asked reads it.
+     * owner. A code outside the host's range is the application's own, and is not looked at.
+     * {@code data} comes from another application: it is held as it is, and only the provider
+     * that asked reads it.
      */
     static void activityResult(int code, int resultCode, Intent data) {
-        Request request = STARTED.remove(code);
+        if (!isHostCode(code)) {
+            return;
+        }
+        Request request;
+        synchronized (LOCK) {
+            request = STARTED.remove(code);
+        }
         if (request != null) {
             answer(new Answer(request, ANSWER_RESULT, resultCode, data));
         }
@@ -400,37 +451,71 @@ public final class FluiHost {
      * answer it then gives reaches the library, which drops it as answered.
      */
     static void cancel(Activity activity, long epoch, long token) {
-        for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
-            if (waiting.next().request.is(epoch, token)) {
-                waiting.remove();
-                return;
+        int finish = 0;
+        synchronized (LOCK) {
+            for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
+                if (waiting.next().request.is(epoch, token)) {
+                    waiting.remove();
+                    return;
+                }
+            }
+            for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
+                if (started.getValue().is(epoch, token)) {
+                    finish = started.getKey();
+                    break;
+                }
             }
         }
-        for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
-            if (started.getValue().is(epoch, token)) {
-                activity.finishActivity(started.getKey());
-                return;
+        if (finish != 0) {
+            activity.finishActivity(finish);
+        }
+    }
+
+    /**
+     * Whether a request of another platform than {@code epoch} under {@code key} has not been
+     * answered, or its answer has not been drained; any thread. A reattachment under
+     * {@code key} then waits for it.
+     */
+    static boolean stillToCome(long epoch, String key) {
+        synchronized (LOCK) {
+            for (Request request : STARTED.values()) {
+                if (request.epoch != epoch && request.key.equals(key)) {
+                    return true;
+                }
             }
+            for (Answer answer : ANSWERS) {
+                if (answer.request.epoch != epoch && answer.request.key.equals(key)) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
     /** {@link FluiActivity#onStart}: the requests waiting for {@code activity} start. */
     static void started(Activity activity) {
-        startedActivity = activity;
-        for (int count = WAITING.size(); count > 0; count--) {
-            Waiting waiting = WAITING.poll();
-            if (waiting.activity == activity) {
-                start(activity, waiting.intent, waiting.request);
-            } else {
-                WAITING.add(waiting);
+        ArrayList<Waiting> ready = new ArrayList<>();
+        synchronized (LOCK) {
+            startedActivity = activity;
+            for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
+                Waiting next = waiting.next();
+                if (next.activity == activity) {
+                    waiting.remove();
+                    ready.add(next);
+                }
             }
+        }
+        for (Waiting waiting : ready) {
+            start(activity, waiting.intent, waiting.request);
         }
     }
 
     /** {@link FluiActivity#onStop}. */
     static void stopped(Activity activity) {
-        if (startedActivity == activity) {
-            startedActivity = null;
+        synchronized (LOCK) {
+            if (startedActivity == activity) {
+                startedActivity = null;
+            }
         }
     }
 
@@ -439,12 +524,16 @@ public final class FluiHost {
      * platform ends with it, and the library has ended those requests.
      */
     static void destroyed(Activity activity) {
-        for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
-            if (waiting.next().activity == activity) {
-                waiting.remove();
+        synchronized (LOCK) {
+            for (Iterator<Waiting> waiting = WAITING.iterator(); waiting.hasNext(); ) {
+                if (waiting.next().activity == activity) {
+                    waiting.remove();
+                }
+            }
+            if (startedActivity == activity) {
+                startedActivity = null;
             }
         }
-        stopped(activity);
     }
 
     /**
@@ -452,23 +541,30 @@ public final class FluiHost {
      * answers of a process that dies before them still name their key.
      */
     static void save(Bundle state) {
-        int[] codes = new int[STARTED.size()];
-        String[] keys = new String[codes.length];
-        int index = 0;
-        for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
-            codes[index] = started.getKey();
-            keys[index] = started.getValue().key;
-            index++;
+        int[] codes;
+        String[] keys;
+        int next;
+        synchronized (LOCK) {
+            codes = new int[STARTED.size()];
+            keys = new String[codes.length];
+            int index = 0;
+            for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
+                codes[index] = started.getKey();
+                keys[index] = started.getValue().key;
+                index++;
+            }
+            next = nextCode;
         }
         state.putIntArray(SAVED_CODES, codes);
         state.putStringArray(SAVED_KEYS, keys);
-        state.putInt(SAVED_NEXT_CODE, nextCode);
+        state.putInt(SAVED_NEXT_CODE, next);
     }
 
     /**
      * {@link FluiActivity#onCreate} with saved state: a started request this process does not
      * know (its process died) is known again, of {@link #EARLIER_PROCESS}, at most
-     * {@link #MAX_OPEN}. One the process still knows keeps its epoch.
+     * {@link #MAX_OPEN}; a code outside the host's range is not taken. One the process still
+     * knows keeps its epoch.
      */
     static void restore(Bundle state) {
         int[] codes = state.getIntArray(SAVED_CODES);
@@ -476,14 +572,17 @@ public final class FluiHost {
         if (codes == null || keys == null || codes.length != keys.length) {
             return;
         }
-        for (int index = 0; index < codes.length && STARTED.size() < MAX_OPEN; index++) {
-            if (codes[index] > 0 && keys[index] != null && !STARTED.containsKey(codes[index])) {
-                STARTED.put(codes[index], new Request(EARLIER_PROCESS, 0, keys[index]));
+        synchronized (LOCK) {
+            for (int index = 0; index < codes.length && STARTED.size() < MAX_OPEN; index++) {
+                int code = codes[index];
+                if (isHostCode(code) && keys[index] != null && !STARTED.containsKey(code)) {
+                    STARTED.put(code, new Request(EARLIER_PROCESS, 0, keys[index]));
+                }
             }
-        }
-        int next = state.getInt(SAVED_NEXT_CODE, 1);
-        if (next > nextCode) {
-            nextCode = next;
+            int next = state.getInt(SAVED_NEXT_CODE, FIRST_HOST_CODE);
+            if (isHostCode(next)) {
+                nextCode = next;
+            }
         }
     }
 
@@ -495,18 +594,23 @@ public final class FluiHost {
     }
 
     /**
-     * Every answer queued, oldest first, as {@code {long[] numbers, String[] keys,
-     * Intent[] data}}: {@link #ANSWER_NUMBERS} numbers each (epoch, token, kind, result code), and
-     * one key and one {@code Intent}, or {@code null}, each; any thread.
+     * The oldest answers queued, at most {@code max}, oldest first, as
+     * {@code {long[] numbers, String[] keys, Intent[] data}}: {@link #ANSWER_NUMBERS} numbers
+     * each (epoch, token, kind, result code), and one key and one {@code Intent}, or
+     * {@code null}, each; any thread. They stay queued until {@link #commitAnswers}, so a read
+     * that fails loses none.
      */
-    static Object[] drainAnswers() {
+    static Object[] peekAnswers(int max) {
         synchronized (LOCK) {
-            int count = ANSWERS.size();
+            int count = Math.min(Math.max(max, 0), ANSWERS.size());
             long[] numbers = new long[count * ANSWER_NUMBERS];
             String[] keys = new String[count];
             Intent[] data = new Intent[count];
             int index = 0;
-            for (Answer answer = ANSWERS.poll(); answer != null; answer = ANSWERS.poll()) {
+            for (Answer answer : ANSWERS) {
+                if (index == count) {
+                    break;
+                }
                 int at = index * ANSWER_NUMBERS;
                 numbers[at] = answer.request.epoch;
                 numbers[at + 1] = answer.request.token;
@@ -517,6 +621,19 @@ public final class FluiHost {
                 index++;
             }
             return new Object[] {numbers, keys, data};
+        }
+    }
+
+    /**
+     * The library holds the oldest {@code count} answers {@link #peekAnswers} returned: they
+     * leave the queue; any thread. Answers how many are still queued.
+     */
+    static int commitAnswers(int count) {
+        synchronized (LOCK) {
+            for (int index = 0; index < count && !ANSWERS.isEmpty(); index++) {
+                ANSWERS.poll();
+            }
+            return ANSWERS.size();
         }
     }
 
@@ -552,16 +669,29 @@ public final class FluiHost {
         }
     }
 
-    /** Every entry queued, oldest first, as kind and value pairs; any thread. */
-    static int[] drain() {
+    /**
+     * Every entry queued, oldest first, as kind and value pairs; any thread.
+     * They stay queued until {@link #commitEntries}, so a read that fails
+     * loses none.
+     */
+    static int[] peekEntries() {
         synchronized (LOCK) {
             int[] pairs = new int[ENTRIES.size() * 2];
             int index = 0;
-            for (int[] entry = ENTRIES.poll(); entry != null; entry = ENTRIES.poll()) {
+            for (int[] entry : ENTRIES) {
                 pairs[index++] = entry[0];
                 pairs[index++] = entry[1];
             }
             return pairs;
+        }
+    }
+
+    /** The library holds the oldest {@code count} entries: they leave the queue; any thread. */
+    static void commitEntries(int count) {
+        synchronized (LOCK) {
+            for (int index = 0; index < count && !ENTRIES.isEmpty(); index++) {
+                ENTRIES.poll();
+            }
         }
     }
 
