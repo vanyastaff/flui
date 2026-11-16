@@ -43,7 +43,7 @@ use flui_platform::{
 use crate::owner::web::listener::CanvasListener;
 use crate::owner::web::{
     Accepting, CanvasEditor, CanvasFocus, CanvasRef, CanvasRegistration, CanvasTimer, HostDisplays,
-    HostSlots, PointerCustody,
+    HostSlots, PointerCustody, overlaid_keyboard, viewport_keyboard, virtual_keyboard,
 };
 
 mod root;
@@ -283,55 +283,6 @@ fn safe_area_over(
         },
         logical,
     )
-}
-
-/// `navigator.virtualKeyboard`, where the browser has it.
-fn virtual_keyboard(window: &web_sys::Window) -> Option<web_sys::EventTarget> {
-    js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("virtualKeyboard"))
-        .ok()?
-        .dyn_into::<web_sys::EventTarget>()
-        .ok()
-}
-
-/// The keyboard's rectangle from `navigator.virtualKeyboard`, which the
-/// browser reports only while the page has the keyboard overlay its content;
-/// an empty one while it is hidden.
-fn overlaid_keyboard(window: &web_sys::Window) -> Option<crate::window::keyboard::Frame> {
-    let keyboard = virtual_keyboard(window)?;
-    let overlays = js_sys::Reflect::get(&keyboard, &JsValue::from_str("overlaysContent"))
-        .ok()?
-        .as_bool()?;
-    if !overlays {
-        return None;
-    }
-    // The API gives a `DOMRect`; only its four sides are read.
-    let rect = js_sys::Reflect::get(&keyboard, &JsValue::from_str("boundingRect"))
-        .ok()
-        .filter(JsValue::is_object)?
-        .unchecked_into::<web_sys::DomRect>();
-    Some(crate::window::keyboard::Frame {
-        x: rect.x(),
-        y: rect.y(),
-        width: rect.width(),
-        height: rect.height(),
-    })
-}
-
-/// The layout viewport below the visual viewport, in client coordinates;
-/// `None` while the page is zoomed in.
-fn viewport_keyboard(window: &web_sys::Window) -> Option<crate::window::keyboard::Frame> {
-    let visual = window.visual_viewport()?;
-    if visual.scale() > 1.0 + 1e-3 {
-        return None;
-    }
-    let layout = window.document()?.document_element()?;
-    let bottom = visual.offset_top() + visual.height();
-    Some(crate::window::keyboard::Frame {
-        x: 0.0,
-        y: bottom,
-        width: f64::from(layout.client_width()),
-        height: f64::from(layout.client_height()) - bottom,
-    })
 }
 
 /// The user's color scheme as the page sees it (`prefers-color-scheme`).

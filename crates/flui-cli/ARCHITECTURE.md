@@ -498,7 +498,12 @@ that reaches `MAX_HEAD` without its end is 431, none or two `Host`s 400, and
 a `Host` other than the loopback (`localhost`, `127.0.0.1`, `[::1]`) 421,
 against a page whose name is rebound to 127.0.0.1. It serves at most
 `MAX_CONNECTIONS` connections at once, of which at most `MAX_POLLS` reload
-long polls, answering one past either bound 503; it cuts a request head off
+long polls; one connection past the first bound is answered 503, one poll
+past the second at once with the current generation (a short poll, which the
+page asks again a second later), and a refused client has its request bytes
+read before the close, so it reads the status. The page is served with the
+generation it is (`reload.js?generation=N`), which its first poll waits past,
+so a rebuild before that poll still reloads it. It cuts a request head off
 at `REQUEST_HEAD` however slowly it arrives, and sends
 `X-Content-Type-Options: nosniff`. A missing asset and a request that is not
 a navigation get a 404 (`dev_server_contract`).

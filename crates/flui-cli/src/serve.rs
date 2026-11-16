@@ -24,8 +24,11 @@
 //! two is answered 400, and only a `Host` of this machine's loopback
 //! (`localhost`, `127.0.0.1`, `[::1]`) is served, so a page of another site
 //! whose name is rebound to 127.0.0.1 gets a 421. At most `MAX_CONNECTIONS`
-//! are served at once and at most `MAX_POLLS` of them may be reload long
-//! polls; one past either bound is answered 503. A request's head must arrive
+//! are served at once (one past them is answered 503, and a refused request
+//! has its bytes read before the close, so the client reads the status) and
+//! at most `MAX_POLLS` of them may be reload long polls; one past them is a
+//! short poll, answered at once. The page is served with the generation it
+//! is, which its first poll waits past. A request's head must arrive
 //! within `REQUEST_HEAD`. Every response is `nosniff`.
 //!
 //! Standard library only: a thread accepts, a thread per connection serves,
@@ -34,7 +37,7 @@
 //! graph stays where it is.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -53,16 +56,21 @@ const LONG_POLL: Duration = Duration::from_secs(25);
 /// Upper bound on a request head; anything longer is not a browser.
 const MAX_HEAD: usize = 16 * 1024;
 
+/// The page's script waits for a generation other than the one the page was
+/// served with (its `src` carries it, `?generation=N`), so a rebuild between
+/// serving the page and its first poll reloads it too. A poll answered at
+/// once because too many wait (`short`) is asked again a second later.
 const RELOAD_SCRIPT: &str = r#"(async () => {
-  let seen = null;
+  const seen = new URL(document.currentScript.src).searchParams.get("generation");
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 1000));
   for (;;) {
     try {
-      const response = await fetch(`/__flui/reload?since=${seen ?? ""}`, { cache: "no-store" });
-      const { generation } = await response.json();
-      if (seen !== null && generation !== seen) { location.reload(); return; }
-      seen = generation;
+      const response = await fetch(`/__flui/reload?since=${seen}`, { cache: "no-store" });
+      const { generation, short } = await response.json();
+      if (String(generation) !== seen) { location.reload(); return; }
+      if (short) await pause();
     } catch (_) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await pause();
     }
   }
 })();
@@ -197,7 +205,11 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
                 .set_write_timeout(Some(Duration::from_millis(250)))
                 .is_ok()
             {
-                let _ = write_response(&mut stream, &busy, false);
+                refuse(
+                    &mut stream,
+                    &busy,
+                    Instant::now() + Duration::from_millis(250),
+                );
             }
             continue;
         }
@@ -233,20 +245,29 @@ fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
         Head::Closed => return Ok(()),
         Head::TooLarge => {
             let refused = Response::text("431 Request Header Fields Too Large", "too large\n");
-            return write_response(&mut stream, &refused, false);
+            refuse(&mut stream, &refused, Instant::now() + REQUEST_HEAD);
+            return Ok(());
         }
         Head::NoHost => {
             let refused = Response::text("400 Bad Request", "exactly one Host header\n");
-            return write_response(&mut stream, &refused, false);
+            refuse(&mut stream, &refused, Instant::now() + REQUEST_HEAD);
+            return Ok(());
         }
     };
     // A long poll holds its connection for up to `LONG_POLL`: past its own
-    // smaller bound it is answered at once, so polls never take the slots
-    // that requests need.
+    // smaller bound it is answered at once with the current generation (a
+    // short poll, which the page's script asks again a second later), so
+    // polls never take the slots that requests need and every tab still
+    // learns of a rebuild.
     let _poll = if request.path == RELOAD_PATH {
         let Some(slot) = Slot::take(&shared.polls, MAX_POLLS) else {
-            let busy = Response::text("503 Service Unavailable", "too many reload polls\n");
-            return write_response(&mut stream, &busy, false);
+            let generation = shared.generation.load(Ordering::SeqCst);
+            let short = Response {
+                status: "200 OK",
+                content_type: "application/json",
+                body: format!("{{\"generation\":{generation},\"short\":true}}").into_bytes(),
+            };
+            return write_response(&mut stream, &short, false);
         };
         Some(slot)
     } else {
@@ -381,7 +402,8 @@ const REQUEST_HEAD: Duration = Duration::from_secs(10);
 /// How many connections are served at once; one past them is answered 503.
 const MAX_CONNECTIONS: usize = 64;
 /// How many of those may be reload long polls, each held for up to
-/// `LONG_POLL`; one past them is answered 503 at once.
+/// `LONG_POLL`; one past them is answered at once with the current
+/// generation (a short poll).
 const MAX_POLLS: usize = 8;
 
 /// One of `count`'s places, given back when dropped.
@@ -475,7 +497,12 @@ fn respond(request: &Request, shared: &Shared) -> Response {
             .strip_prefix(shared.base.as_str())
             .or_else(|| (format!("{path}/") == shared.base.as_str()).then_some(""))
         {
-            Some(within) => serve_file(&shared.root, within, request.navigation),
+            Some(within) => serve_file(
+                &shared.root,
+                within,
+                request.navigation,
+                shared.generation.load(Ordering::SeqCst),
+            ),
             None => not_found(),
         },
     }
@@ -488,7 +515,7 @@ fn not_found() -> Response {
 /// The file `request_path` (relative to the base) names under `root`; for a
 /// navigation to a path that names no file and whose last segment has no
 /// extension, the page.
-fn serve_file(root: &Path, request_path: &str, navigation: bool) -> Response {
+fn serve_file(root: &Path, request_path: &str, navigation: bool, generation: u64) -> Response {
     let Some(relative) = safe_relative_path(request_path) else {
         return not_found();
     };
@@ -511,7 +538,7 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool) -> Response {
     };
     let content_type = mime_for(&relative);
     let body = if relative == Path::new("index.html") {
-        inject_reload_script(&body)
+        inject_reload_script(&body, generation)
     } else {
         body
     };
@@ -603,8 +630,8 @@ fn mime_for(path: &Path) -> &'static str {
 }
 
 /// Add the reload script before `</body>` (or at the end when there is none).
-fn inject_reload_script(html: &[u8]) -> Vec<u8> {
-    let tag = format!("<script src=\"{RELOAD_SCRIPT_PATH}\"></script>\n");
+fn inject_reload_script(html: &[u8], generation: u64) -> Vec<u8> {
+    let tag = format!("<script src=\"{RELOAD_SCRIPT_PATH}?generation={generation}\"></script>\n");
     let text = String::from_utf8_lossy(html);
     let Some(at) = text.rfind("</body>") else {
         let mut out = html.to_vec();
@@ -616,6 +643,24 @@ fn inject_reload_script(html: &[u8]) -> Vec<u8> {
     out.extend_from_slice(tag.as_bytes());
     out.extend_from_slice(&html[at..]);
     out
+}
+
+/// Answer a refused request with `response` and close: the write side is
+/// shut after the response, and the request's bytes still arriving are read
+/// and dropped, at most `MAX_HEAD` of them and until `until`, so the client
+/// reads the status rather than a connection reset.
+fn refuse(stream: &mut TcpStream, response: &Response, until: Instant) {
+    if write_response(stream, response, false).is_err() {
+        return;
+    }
+    let _ = stream.shutdown(Shutdown::Write);
+    let Ok(stream) = stream.try_clone() else {
+        return;
+    };
+    let _ = io::copy(
+        &mut Deadline { stream, until }.take(MAX_HEAD as u64),
+        &mut io::sink(),
+    );
 }
 
 fn write_response(stream: &mut TcpStream, response: &Response, head_only: bool) -> io::Result<()> {
@@ -947,8 +992,32 @@ mod tests {
         }
     }
 
-    /// Reload long polls past their own bound are answered 503 at once, and
-    /// a request still finds a slot while they wait.
+    /// The page is served with the generation it is, so a rebuild between
+    /// serving it and its first poll is not taken as seen: a poll since the
+    /// page's generation answers the newer one at once.
+    fn the_page_carries_the_generation_it_was_served_with() {
+        let (_dir, server) = fixture();
+        let local = server.addr.to_string();
+        let (_, page) = get(server.addr, "GET", "/");
+        let page = String::from_utf8_lossy(&page).into_owned();
+        assert!(
+            page.contains(&format!("{RELOAD_SCRIPT_PATH}?generation=1")),
+            "{page}"
+        );
+        server.reload();
+        let poll = format!("GET {RELOAD_PATH}?since=1 HTTP/1.1\r\nHost: {local}\r\n\r\n");
+        let answer = raw(server.addr, &poll);
+        assert!(answer.ends_with("{\"generation\":2}"), "{answer}");
+        let (_, page) = get(server.addr, "GET", "/");
+        assert!(
+            String::from_utf8_lossy(&page).contains("?generation=2"),
+            "a page served after the rebuild carries its generation"
+        );
+    }
+
+    /// Reload long polls past their own bound are answered at once with the
+    /// current generation (a short poll), and a request still finds a slot
+    /// while they wait.
     fn long_polls_cannot_take_every_slot() {
         let (_dir, server) = fixture();
         let local = server.addr.to_string();
@@ -962,8 +1031,14 @@ mod tests {
             .collect();
         // The held polls are read and waiting before the next one comes.
         std::thread::sleep(Duration::from_millis(500));
+        let started = Instant::now();
         let answer = raw(server.addr, &poll);
-        assert!(answer.starts_with("HTTP/1.1 503"), "{answer:.80}");
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer:.80}");
+        assert!(
+            answer.ends_with("{\"generation\":1,\"short\":true}"),
+            "{answer}"
+        );
+        assert!(started.elapsed() < LONG_POLL / 5, "answered at once");
         let (head, _) = get(server.addr, "GET", "/pkg/app.js");
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
         drop(held);
@@ -1126,6 +1201,10 @@ mod tests {
             (
                 "the host check runs on a whole head with one host",
                 the_host_check_runs_on_a_whole_head_with_one_host,
+            ),
+            (
+                "the page carries the generation it was served with",
+                the_page_carries_the_generation_it_was_served_with,
             ),
             (
                 "long polls cannot take every slot",

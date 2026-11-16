@@ -2084,19 +2084,29 @@ its content and hints and leaves its focus, so the keyboard stays up from one
 field to the next, and a store released with no field after it gives the
 focus back to the canvas. In the `pointerup` handler of a touch or pen tap (a
 contact that travelled at most `TAP_SLOP`), after the canvas's input
-dispatched it: a tap on the served field's box opens the keyboard, the editor
-taking the focus again where iOS's hiding blurred it, and, where it kept the
-focus (Android's Back), by a focus given to the canvas and taken back inside
-the handler (`navigator.virtualKeyboard.show()` shows nothing without
+dispatched it: a tap on the served field's box gives the focus back to an
+editor that lost it (iOS hides the keyboard by blurring). An editor that kept
+its focus is the normal state while typing and moves no focus, which would
+commit a live composition and reset the keyboard's shift and page; it gives
+its focus to the canvas and takes it back inside the handler only when the
+page says the keyboard is hidden (Android's Back keeps the focus), from the
+same `navigator.virtualKeyboard` and visual-viewport reading the window's
+keyboard inset uses (`owner::web::keyboard_shown`), and not where the page
+cannot tell. `navigator.virtualKeyboard.show()` shows nothing without
 `virtualkeyboardpolicy="manual"`, a policy under which no focus opens the
-keyboard by itself, so it is not used); a tap elsewhere or a drag leaves it.
-The editor's attributes follow its state, set in one place on every change:
-a served field's hints, or, idle, `aria-hidden`, `inputmode="none"`,
-`autocomplete="off"` and no value. A composition still live when a field
-gives the editor up is committed in place to it and ended in the browser by
-the same focus round trip before the next field binds
-(`the_hidden_editor_s_attributes_follow_its_state`,
-`a_composition_left_in_one_field_lands_in_no_other`).
+keyboard by itself, so it is not used; a tap elsewhere or a drag leaves the
+keyboard. The canvas hands the focus it takes (a click, the compatibility
+`mousedown` after a tap, the host's own round trip) on to the editor that
+serves a field or that a tap focused, through one listener for the window's
+life (`forward_canvas_focus`). The hidden editor's attributes follow its
+state and are written only by `set_hidden_state`: a served field's hints, or,
+idle, `aria-hidden`, `inputmode="none"`, `autocomplete="off"` and no value. A
+composition still live when a field gives the editor up is committed in place
+to it, once, and the idle state's value, replaced from script, ends it in the
+browser with no focus move (`the_hidden_editor_s_attributes_follow_its_state`,
+`a_composition_left_in_one_field_lands_in_no_other`,
+`a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
+`a_tap_s_compatibility_mousedown_leaves_the_focus_on_the_editor`).
 With nothing served (and no `EditContext`) the editor is focused with
 `inputmode="none"` and `aria-hidden`, which opens no keyboard and announces
 nothing; the field that attaches writes its hints, and two animation frames
@@ -2110,7 +2120,7 @@ headless-Chrome tests (constructed events; the test driver has no trusted
 input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
 `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
 `moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus`,
-`a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again`,
+`a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
 `a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
 `a_page_canvas_gets_back_the_inputmode_and_the_style_it_had` and
 `the_hidden_editor_states_each_purpose_and_enter_action` pin the rule; whether

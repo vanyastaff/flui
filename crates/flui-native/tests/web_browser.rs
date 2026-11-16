@@ -254,17 +254,55 @@ export function markEditor() { editor().dataset.mark = 'kept'; }
 export function editorIsMarked() { return editor()?.dataset.mark === 'kept'; }
 export function textareaCount() { return canvas().nextElementSibling.querySelectorAll('textarea').length; }
 export function editorAriaHidden() { return editor().getAttribute('aria-hidden'); }
-// A `navigator.virtualKeyboard` whose `show()` the test counts, or none at
-// all (`undefined`), as a browser without the API has.
+// The soft keyboard as the page reads it: 'up' is a `navigator.virtualKeyboard`
+// that overlays the page and covers its lower part, as Chromium on Android
+// reports a shown keyboard (its `show()` counted, which shows nothing for an
+// element without `virtualkeyboardpolicy="manual"`); 'hidden' is the page as
+// headless Chrome has it, a visual viewport over the whole layout viewport;
+// 'unknown' is a page with neither API to tell.
 let shows = 0;
-export function fakeVirtualKeyboard(present) {
+export function fakeKeyboard(state) {
     shows = 0;
-    Object.defineProperty(navigator, 'virtualKeyboard', {
-        value: present ? { show() { shows += 1; } } : undefined,
-        configurable: true,
-    });
+    const keyboard = state === 'up' ? Object.assign(new EventTarget(), {
+        overlaysContent: true,
+        boundingRect: new DOMRect(0, innerHeight / 2, innerWidth, innerHeight / 2),
+        show() { shows += 1; },
+    }) : undefined;
+    Object.defineProperty(navigator, 'virtualKeyboard', { value: keyboard, configurable: true });
+    if (state === 'unknown') {
+        Object.defineProperty(window, 'visualViewport', { value: null, configurable: true });
+    } else {
+        delete window.visualViewport;
+    }
 }
-export function restoreVirtualKeyboard() { delete navigator.virtualKeyboard; }
+export function restoreKeyboard() {
+    delete navigator.virtualKeyboard;
+    delete window.visualViewport;
+}
+// Type `text` into the focused textarea as a keyboard does, through the
+// browser's editing, so it enters the textarea's undo history.
+export function insertIntoEditor(text) {
+    editor().focus();
+    document.execCommand('insertText', false, text);
+}
+// A tap as Chrome on a phone delivers it: the pointer events, then the
+// compatibility mouse events, whose `mousedown` focuses the canvas
+// (`tabindex=0`), then `click`.
+export function tapWithCompatibilityEvents(x, y) {
+    const pointer = (type, buttons) => canvas().dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 4, pointerType: 'touch', isPrimary: true,
+        button: 0, buttons, clientX: x, clientY: y,
+    }));
+    const mouse = type => canvas().dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y,
+    }));
+    pointer('pointerdown', 1);
+    pointer('pointerup', 0);
+    mouse('mousedown');
+    canvas().focus({ preventScroll: true });
+    mouse('mouseup');
+    mouse('click');
+}
 // The browser's undo in the focused textarea; its value afterwards.
 export function undoInEditor() {
     editor().focus();
@@ -409,10 +447,14 @@ extern "C" {
     fn textarea_count() -> u32;
     #[wasm_bindgen(js_name = editorAriaHidden)]
     fn editor_aria_hidden() -> Option<String>;
-    #[wasm_bindgen(js_name = fakeVirtualKeyboard)]
-    fn fake_virtual_keyboard(present: bool);
-    #[wasm_bindgen(js_name = restoreVirtualKeyboard)]
-    fn restore_virtual_keyboard();
+    #[wasm_bindgen(js_name = fakeKeyboard)]
+    fn fake_keyboard(state: &str);
+    #[wasm_bindgen(js_name = restoreKeyboard)]
+    fn restore_keyboard();
+    #[wasm_bindgen(js_name = insertIntoEditor)]
+    fn insert_into_editor(text: &str);
+    #[wasm_bindgen(js_name = tapWithCompatibilityEvents)]
+    fn tap_with_compatibility_events(x: f64, y: f64);
     #[wasm_bindgen(js_name = undoInEditor)]
     fn undo_in_editor() -> String;
     #[wasm_bindgen(js_name = keyboardShows)]
@@ -1646,18 +1688,18 @@ fn moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus() {
     assert_eq!(page_focus(), "canvas");
 }
 
-/// A keyboard hidden with the editor keeping its focus (Android's Back)
-/// opens again on a tap on the field: the editor gives its focus to the
-/// canvas and takes it back inside the tap's handler, whether or not the
-/// browser has `navigator.virtualKeyboard`, whose `show()` (which shows
-/// nothing for an element without `virtualkeyboardpolicy="manual"`) the
-/// host never relies on.
+/// A tap on the field whose editor kept its focus moves focus only when the
+/// page says the keyboard is hidden (Android's Back keeps the focus): the
+/// editor gives its focus to the canvas and takes it back inside the tap's
+/// handler. With the keyboard up (typing, perhaps mid-composition) or where
+/// the page cannot tell, it changes no focus. `navigator.virtualKeyboard`'s
+/// `show()` is never called.
 #[wasm_bindgen_test]
-fn a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again() {
+fn a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard() {
     struct Keyboard;
     impl Drop for Keyboard {
         fn drop(&mut self) {
-            restore_virtual_keyboard();
+            restore_keyboard();
         }
     }
     let _hidden = EditContextHidden::hide();
@@ -1667,28 +1709,46 @@ fn a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again() {
     canvas.host.focus_store(Some(as_store(&store)));
     assert_eq!(page_focus(), "editor");
     let _keyboard = Keyboard;
-    for present in [true, false] {
-        fake_virtual_keyboard(present);
+    for (state, focuses) in [("up", 0), ("unknown", 0), ("hidden", 1)] {
+        fake_keyboard(state);
         count_editor_focus();
         touch_stroke(5.0, 5.0, 5.0, 5.0);
-        assert_eq!(
-            editor_focus_count(),
-            1,
-            "focused again inside the tap (virtualKeyboard: {present})"
-        );
-        assert_eq!(page_focus(), "editor");
+        assert_eq!(editor_focus_count(), focuses, "keyboard {state}");
+        assert_eq!(page_focus(), "editor", "keyboard {state}");
         assert_eq!(keyboard_shows(), 0, "show() is never relied on");
     }
+    fake_keyboard("hidden");
+    count_editor_focus();
     touch_stroke(200.0, 100.0, 200.0, 100.0);
-    assert_eq!(editor_focus_count(), 1, "a tap off the field does nothing");
+    assert_eq!(editor_focus_count(), 0, "a tap off the field does nothing");
+    canvas.host.focus_store(None);
+}
+
+/// A tap with nothing served, as Chrome on a phone delivers it (the pointer
+/// events, then the compatibility `mousedown`, which focuses the canvas):
+/// the canvas hands the focus on to the editor the tap focused, so the field
+/// attached after it finds the editor focused rather than the canvas.
+#[wasm_bindgen_test]
+fn a_tap_s_compatibility_mousedown_leaves_the_focus_on_the_editor() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    blur_all();
+    tap_with_compatibility_events(5.0, 5.0);
+    assert_eq!(page_focus(), "editor", "handed on from the canvas");
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    let state = editor().expect("the editor");
+    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
     canvas.host.focus_store(None);
 }
 
 /// The window's editor's attributes follow its state on every change: a
 /// served field's hints with no `aria-hidden`; between fields `aria-hidden`,
 /// `inputmode="none"`, `autocomplete="off"` and no value, so a password
-/// field's text and hints do not linger, and the browser's undo cannot bring
-/// the password back into the next field.
+/// field's text and hints do not linger. The password typed through the
+/// browser's editing is in the textarea's undo history; the next field's
+/// value, replaced from script (`EditorElement::show`), leaves the browser's
+/// undo nothing that brings it back.
 #[wasm_bindgen_test]
 fn the_hidden_editor_s_attributes_follow_its_state() {
     let _hidden = EditContextHidden::hide();
@@ -1699,7 +1759,8 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     canvas.host.focus_store(Some(as_store(&password)));
     assert_eq!(editor_hints(), r#"["text","new-password",null]"#);
     assert_eq!(editor_aria_hidden(), None);
-    type_into_editor("secret", 6, false);
+    insert_into_editor("secret");
+    assert_eq!(password.text(), "secret", "typed through the browser");
     canvas.host.focus_store(None);
     let idle = editor().expect("the window's editor");
     assert_eq!(idle.value, "", "no value between fields");
@@ -1710,10 +1771,10 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     canvas.host.focus_store(Some(as_store(&plain)));
     assert_eq!(editor_hints(), r#"["search","off","search"]"#);
     assert_eq!(editor_aria_hidden(), None);
-    assert_ne!(
-        undo_in_editor(),
-        "secret",
-        "the browser's undo does not bring the password back"
+    let undone = undo_in_editor();
+    assert!(
+        !undone.contains("secret"),
+        "the browser's undo does not bring the password back: {undone:?}"
     );
     canvas.host.focus_store(None);
 }

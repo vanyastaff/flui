@@ -5506,9 +5506,13 @@ GPU-память простаивающего или невидимого окн
   полю; хранилище, отпущенное без следующего поля, отдаёт фокус canvas. В обработчике
   `pointerup` касания или пера, если это тап (путь не больше `TAP_SLOP`): тап по рамке
   обслуживаемого поля открывает клавиатуру (iOS: фокус снова; Android после Back, где фокус
-  остался: фокус на canvas и обратно внутри обработчика, без `navigator.virtualKeyboard.show()`, который без `virtualkeyboardpolicy="manual"` ничего не показывает), тап мимо и
+  остался: фокус на canvas и обратно внутри обработчика, только если страница говорит, что
+  клавиатура скрыта; при поднятой клавиатуре фокус не двигается, чтобы не сбросить композицию
+  и регистр; без `navigator.virtualKeyboard.show()`, который без
+  `virtualkeyboardpolicy="manual"` ничего не показывает), тап мимо и
   прокрутка — нет; без поля и без `EditContext` редактор фокусируется с `inputmode="none"` и
-  `aria-hidden` (клавиатуры нет, экранный диктор поля не видит), поле, прикреплённое следом,
+  `aria-hidden` (клавиатуры нет, экранный диктор поля не видит; фокус, который canvas получает
+  от совместимого `mousedown`, передаётся редактору одним слушателем), поле, прикреплённое следом,
   пишет свои подсказки, а два кадра этого тапа без поля (у каждого тапа свой билет) возвращают
   фокус canvas. `inputmode` холста при `EditContext` пишется и возвращается через
   `owner::web::CanvasWrites`, `editContext` холста возвращается прежний. Тесты в headless Chrome
@@ -5517,7 +5521,7 @@ GPU-память простаивающего или невидимого окн
   `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
   `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
   `moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus`,
-  `a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again`,
+  `a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
   `a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
   `a_page_canvas_gets_back_the_inputmode_and_the_style_it_had`,
   `the_hidden_editor_states_each_purpose_and_enter_action`. Только CI их собирает и запускает.

@@ -1098,3 +1098,71 @@ fn frame_request_for_animation_frame(timestamp: f64) -> flui_platform::FrameRequ
         .unwrap_or(0.0);
     crate::frame_request_aged(std::time::Duration::from_secs_f64(age_ms / 1000.0))
 }
+
+// The soft keyboard as the page reports it, which the window publishes as its
+// inset and the text input reads to decide whether a tap reopens it.
+
+/// `navigator.virtualKeyboard`, where the browser has it.
+pub(crate) fn virtual_keyboard(window: &web_sys::Window) -> Option<web_sys::EventTarget> {
+    js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("virtualKeyboard"))
+        .ok()?
+        .dyn_into::<web_sys::EventTarget>()
+        .ok()
+}
+
+/// The keyboard's rectangle from `navigator.virtualKeyboard`, which the
+/// browser reports only while the page has the keyboard overlay its content;
+/// an empty one while it is hidden.
+pub(crate) fn overlaid_keyboard(
+    window: &web_sys::Window,
+) -> Option<crate::window::keyboard::Frame> {
+    let keyboard = virtual_keyboard(window)?;
+    let overlays = js_sys::Reflect::get(&keyboard, &JsValue::from_str("overlaysContent"))
+        .ok()?
+        .as_bool()?;
+    if !overlays {
+        return None;
+    }
+    // The API gives a `DOMRect`; only its four sides are read.
+    let rect = js_sys::Reflect::get(&keyboard, &JsValue::from_str("boundingRect"))
+        .ok()
+        .filter(JsValue::is_object)?
+        .unchecked_into::<web_sys::DomRect>();
+    Some(crate::window::keyboard::Frame {
+        x: rect.x(),
+        y: rect.y(),
+        width: rect.width(),
+        height: rect.height(),
+    })
+}
+
+/// The layout viewport below the visual viewport, in client coordinates;
+/// `None` while the page is zoomed in.
+pub(crate) fn viewport_keyboard(
+    window: &web_sys::Window,
+) -> Option<crate::window::keyboard::Frame> {
+    let visual = window.visual_viewport()?;
+    if visual.scale() > 1.0 + 1e-3 {
+        return None;
+    }
+    let layout = window.document()?.document_element()?;
+    let bottom = visual.offset_top() + visual.height();
+    Some(crate::window::keyboard::Frame {
+        x: 0.0,
+        y: bottom,
+        width: f64::from(layout.client_width()),
+        height: f64::from(layout.client_height()) - bottom,
+    })
+}
+
+/// Whether the page's soft keyboard is shown now: `Some(true)` while
+/// `navigator.virtualKeyboard` (where the page has the keyboard overlay its
+/// content) or the visual viewport (the layout viewport below it) says a
+/// keyboard covers part of the page, `Some(false)` while it says none does,
+/// `None` where neither can tell (no visual viewport, or a page zoomed in by a
+/// pinch, whose smaller visual viewport is no keyboard).
+pub(crate) fn keyboard_shown() -> Option<bool> {
+    let window = web_sys::window()?;
+    let frame = overlaid_keyboard(&window).or_else(|| viewport_keyboard(&window))?;
+    Some(frame.width > 0.0 && frame.height > 0.0)
+}

@@ -400,16 +400,17 @@ mod input {
     //! In the `pointerup` handler of a touch or pen tap (a contact that
     //! travelled at most `TAP_SLOP`), after the canvas's input dispatched it:
     //!
-    //! - a field served and the tap on its box: the keyboard opens. iOS hides
-    //!   it by blurring, so the editor takes the focus again; Chromium on
-    //!   Android hides it with Back and keeps the focus, so the editor gives
-    //!   its focus to the canvas and takes it back. A focus inside a tap's
-    //!   handler opens the keyboard in Safari on iOS and in Chromium and
-    //!   Firefox on Android, and a desktop browser shows none either way.
-    //!   `navigator.virtualKeyboard.show()` is not used: it shows nothing for
-    //!   an element without `virtualkeyboardpolicy="manual"`, a policy under
-    //!   which no focus opens the keyboard by itself any more. A tap elsewhere
-    //!   or a drag leaves the keyboard as it is;
+    //! - a field served and the tap on its box: an editor that lost its focus
+    //!   (iOS hides the keyboard by blurring it) takes it again. One that kept
+    //!   it is the normal state while typing, and changes no focus, which
+    //!   would commit a live composition and reset the keyboard's shift and
+    //!   page; it gives its focus to the canvas and takes it back only when
+    //!   the page says the keyboard is hidden (Chromium on Android hides it
+    //!   with Back and keeps the focus), and not where the page cannot tell
+    //!   (`keyboard_shown`). `navigator.virtualKeyboard.show()` is not used:
+    //!   it shows nothing for an element without
+    //!   `virtualkeyboardpolicy="manual"`, a policy under which no focus opens
+    //!   the keyboard by itself. A tap elsewhere or a drag leaves it as it is;
     //! - nothing served (and no `EditContext`): whether the tap lands on a
     //!   field is the application's to say, after the handler (the window has
     //!   no tree of the fields unless a screen reader runs: the runtime turns
@@ -419,16 +420,23 @@ mod input {
     //!   (counted from that tap, a later tap holding its own ticket) give the
     //!   focus back.
     //!
-    //! The editor's attributes follow its state, set in one place
-    //! (`set_hidden_state`) on every change: a served field's hints, or, idle,
-    //! `aria-hidden`, `inputmode="none"`, `autocomplete="off"` and no value. A
-    //! composition still live when a field gives the editor up is committed in
-    //! place to that field and ended in the browser before the next one binds.
+    //! The canvas hands the focus it takes (a click, the compatibility
+    //! `mousedown` that follows a tap, the host's own round trip) on to the
+    //! editor the store is served through, or that a tap focused for a field,
+    //! through one listener for the window's life (`forward_canvas_focus`).
+    //!
+    //! The hidden editor's attributes follow its state and are written only
+    //! by `set_hidden_state`, on every change: a served field's hints, or,
+    //! idle, `aria-hidden`, `inputmode="none"`, `autocomplete="off"` and no
+    //! value. A composition still live when a field gives the editor up is
+    //! committed in place to that field, once, and the idle state's value,
+    //! replaced from script, ends it in the browser with no focus move.
     //!
     //! A field attached outside a tap focuses the editor only when the canvas
     //! holds the page's focus (a desktop click focused it). Every focus the
     //! host makes passes `preventScroll`: it places its editors itself, and a
-    //! scroll would move the canvas under the user.
+    //! scroll would move the canvas under the user. What no phone has run is
+    //! recorded in `platform-parity.toml` ("Input purpose and hints").
 
     use std::cell::{Cell, RefCell};
 
@@ -452,6 +460,7 @@ mod input {
     use crate::owner::web::listener::{CanvasListener, viewport_listeners};
     use crate::owner::web::{
         Accepting, CanvasEditor, CanvasKeys, CanvasRef, EDITOR_FONT_SIZE, FocusedField,
+        keyboard_shown,
     };
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{document_text, scalar_spans};
@@ -869,7 +878,21 @@ mod input {
                     }),
                 )?
             };
-            Ok(vec![down, up])
+            let focus = {
+                let this = self.this.clone();
+                CanvasListener::install(
+                    self.canvas.as_ref(),
+                    "focus",
+                    &self.accepting,
+                    move |_: web_sys::Event| {
+                        if let Some(this) = this.upgrade() {
+                            this.forward_canvas_focus();
+                        }
+                    },
+                )
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
+            };
+            Ok(vec![down, up, focus])
         }
 
         /// A touch or pen tapped the canvas at `at` (in its CSS pixels): the
@@ -920,19 +943,56 @@ mod input {
         }
 
         /// Open the keyboard for the served `editor`, inside a tap's handler.
-        /// An editor that lost its focus takes it. One that kept it (the
-        /// keyboard hidden with Android's Back) gives its focus to the canvas
-        /// and takes it back, a focus move inside the canvas's focus area that
-        /// the window does not see: a focus inside a tap's handler opens the
-        /// keyboard in every browser, where `navigator.virtualKeyboard.show()`
-        /// would do nothing without `virtualkeyboardpolicy="manual"`, a policy
-        /// that would make the host open and close the keyboard on every
-        /// focus itself.
+        /// An editor that lost its focus takes it. One that kept it is the
+        /// normal state while typing, and a focus move would commit a live
+        /// composition and reset the keyboard's shift and page: it gives its
+        /// focus to the canvas and takes it back only when the page says the
+        /// keyboard is hidden (Android's Back keeps the focus), and changes no
+        /// focus while the keyboard is up or the page cannot tell
+        /// (`keyboard_shown`). `navigator.virtualKeyboard.show()` is not used:
+        /// it shows nothing without `virtualkeyboardpolicy="manual"`, a policy
+        /// under which no focus opens the keyboard by itself.
         fn reopen(&self, editor: &web_sys::HtmlElement) {
-            if self.page_focus_is(editor.as_ref()) {
+            if !self.page_focus_is(editor.as_ref()) {
+                focus_unscrolled(editor);
+            } else if keyboard_shown() == Some(false) {
                 focus_unscrolled(self.canvas.as_ref());
+                focus_unscrolled(editor);
             }
-            focus_unscrolled(editor);
+        }
+
+        /// The canvas took the page's focus (a click, the compatibility
+        /// `mousedown` after a tap, the host's own focus round trip): it hands
+        /// it on to the editor the store is served through, the window's
+        /// hidden editor while it serves a field or a tap waits for one, or
+        /// the semantics host's field while the host still names it. One
+        /// listener, for the window's life ([`Self::gesture_listeners`]).
+        fn forward_canvas_focus(&self) {
+            let served = self
+                .attached
+                .borrow()
+                .as_ref()
+                .map(|attached| Rc::clone(&attached.surface));
+            let target = match served.as_deref() {
+                Some(Surface::Editor {
+                    element,
+                    hidden: true,
+                    ..
+                }) => Some(element.html().clone()),
+                Some(Surface::Editor { element, .. }) => self
+                    .field
+                    .named()
+                    .filter(|named| named.is_same_node(Some(element.html().as_ref()))),
+                Some(Surface::Context(_)) => None,
+                None => self
+                    .provisional
+                    .get()
+                    .and(self.hidden.borrow().clone())
+                    .map(web_sys::HtmlElement::from),
+            };
+            if let Some(target) = target {
+                focus_unscrolled(&target);
+            }
         }
 
         /// Whether `at`, in the canvas's CSS pixels, lies on the served
@@ -1146,15 +1206,10 @@ mod input {
                 if this.retired.get() || !still_focused {
                     return;
                 }
-                // Detaching forgets the browser's composition, so the store's is
-                // committed in place, as when the host ends one.
-                let composing = this.keys.composing();
                 // The browser has no call that replaces a surface's whole text
-                // and selection with exact offsets, so the surface is made anew.
+                // and selection with exact offsets, so the surface is made
+                // anew; detaching commits a live composition in place, once.
                 this.detach();
-                if composing {
-                    crate::text::refusal::commit_in_place(&*store);
-                }
                 this.attach(store);
             });
         }
@@ -1187,25 +1242,12 @@ mod input {
                 }
                 // The window's hidden editor stays, with its focus: the next
                 // field takes it over, keyboard and all (`refocus` gives the
-                // focus to the canvas when no field follows). A composition
-                // the browser still holds is committed in place to this
-                // field, as the host commits one whenever its surface goes,
-                // and ended in the browser by a focus round trip, whose
-                // `compositionend` reaches no listener, so none of it lands
-                // in the next field. Then the editor goes back to its idle
-                // state.
-                Surface::Editor {
-                    element,
-                    hidden: true,
-                    ..
-                } => {
-                    if composing {
-                        crate::text::refusal::commit_in_place(&*store);
-                        if self.page_focus_is(element.html().as_ref()) {
-                            focus_unscrolled(self.canvas.as_ref());
-                            focus_unscrolled(element.html());
-                        }
-                    }
+                // focus to the canvas when no field follows). Its idle state
+                // replaces the value from script, which ends a composition the
+                // browser still holds, with no focus move that would close a
+                // phone's keyboard outside a tap: none of it lands in the
+                // next field, whose listeners are not yet bound.
+                Surface::Editor { hidden: true, .. } => {
                     let hidden = self.hidden.borrow().clone();
                     if let Some(hidden) = hidden {
                         set_hidden_state(&hidden, None);
@@ -1220,6 +1262,12 @@ mod input {
                 }
             }
             contain_owner_callback(|| store.set_observer(None));
+            // The browser forgot its composition with the surface: the store's
+            // is committed in place, once, as every host does when its surface
+            // goes, with no observer left to write it back to the surface.
+            if composing {
+                crate::text::refusal::commit_in_place(&*store);
+            }
         }
 
         fn refocus(&self, store: Option<Rc<dyn TextStore>>) {
@@ -1398,9 +1446,14 @@ mod input {
                 Surface::Context(_) => self
                     .canvas_writes
                     .set("inputmode", input_mode(status.purpose)),
-                Surface::Editor {
-                    element, hidden, ..
-                } => set_editor_hints(element.html(), &status, !*hidden),
+                Surface::Editor { hidden: true, .. } => {
+                    let hidden = self.hidden.borrow().clone();
+                    if let Some(hidden) = hidden {
+                        set_hidden_state(&hidden, Some(&status));
+                    }
+                    Ok(())
+                }
+                Surface::Editor { element, .. } => set_editor_hints(element.html(), &status, true),
             };
             if let Err(error) = result {
                 tracing::debug!(?error, "the keyboard hints could not be updated");
@@ -1458,7 +1511,12 @@ mod input {
             element: EditorElement,
             hidden: bool,
         ) -> Result<Attached, JsValue> {
-            set_editor_hints(element.html(), &store.status(), !hidden)?;
+            // The hidden editor's hints are its state's (`set_hidden_state`,
+            // written by `attach`); the semantics host's field is filled as a
+            // native field of its purpose.
+            if !hidden {
+                set_editor_hints(element.html(), &store.status(), true)?;
+            }
             let shown = element.show(text);
             element.select(&shown, selection);
             let target: &web_sys::EventTarget = element.html().as_ref();
@@ -1522,28 +1580,8 @@ mod input {
                     )?);
                 }
             }
-            // The canvas forwards its focus to the field's editor: the hidden
-            // one, or the host's field while the host still names it (the
-            // tree's focus that left it puts the page's focus on the canvas
-            // before the store moves off it).
-            {
-                let editor = element.html().clone();
-                let field = (!hidden).then(|| Rc::clone(&self.field));
-                listeners.push(listen(
-                    self.canvas.as_ref(),
-                    "focus",
-                    Box::new(move |_| {
-                        let named = field.as_ref().is_none_or(|field| {
-                            field
-                                .named()
-                                .is_some_and(|named| named.is_same_node(Some(editor.as_ref())))
-                        });
-                        if named {
-                            focus_unscrolled(&editor);
-                        }
-                    }),
-                )?);
-            }
+            // The canvas hands its focus on through the window's one listener
+            // (`forward_canvas_focus`).
             if hidden {
                 listeners.extend(self.viewport_listeners()?);
                 // The window's hidden editor is in the host already: moving it
