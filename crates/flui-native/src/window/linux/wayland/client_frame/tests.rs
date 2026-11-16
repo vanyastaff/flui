@@ -1,4 +1,4 @@
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_painting::text_layout::FontCollection;
 
 use super::title::TitleText;
@@ -18,6 +18,7 @@ fn framed(states: ToplevelStates) -> Frame {
         resizable: true,
         offers: EVERYTHING,
         title_bar: true,
+        viewported: true,
     }
 }
 
@@ -450,7 +451,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
 
     let dark = paint_header(
         &frame,
-        BufferScale::try_new(2.0).expect("a scale"),
+        BufferScale::of(DevicePixelRatio::try_new(2.0).expect("a ratio")),
         HeaderLook {
             look: Look {
                 dark: true,
@@ -482,7 +483,7 @@ fn a_hostile_scale_draws_no_gibibyte() {
         content: Size::new(37.0, 300.0),
         ..floating()
     };
-    let hostile = BufferScale::try_new(442.0).expect("a scale");
+    let hostile = BufferScale::of(DevicePixelRatio::MAX);
     let pixels = paint_header(&narrow, hostile, PLAIN).expect("drawn");
     assert_eq!(
         (pixels.width, pixels.height),
@@ -490,19 +491,24 @@ fn a_hostile_scale_draws_no_gibibyte() {
         "at the largest scale"
     );
 
-    let side = device_extent(37.0, 442.0).expect("within the largest extent");
+    // The same 16 354 pixels a side, from a longer bar at the largest ratio.
+    let side = device_extent(
+        37.0 * 442.0 / DevicePixelRatio::MAX.get(),
+        DevicePixelRatio::MAX,
+    )
+    .expect("within the largest extent");
     assert_eq!(side, 16_354);
     assert!(
         Pixels::try_new(side, side).is_none(),
         "each side is within the largest extent, the area is not"
     );
-    assert!(Pixels::try_new(MAX_EXTENT, 297).is_none());
+    assert!(Pixels::try_new(MAX_SURFACE_EXTENT, 297).is_none());
     // The widest bar at the largest scale is the most a frame draws.
     assert_eq!(
         f64::from(MAX_PIXELS),
-        f64::from(MAX_EXTENT) * HEADER * BufferScale::MAX
+        f64::from(MAX_SURFACE_EXTENT) * HEADER * BufferScale::MAX
     );
-    let widest = Pixels::try_new(MAX_EXTENT, 296).expect("within the area");
+    let widest = Pixels::try_new(MAX_SURFACE_EXTENT, 296).expect("within the area");
     assert_eq!(widest.data.len(), 4 * 16_384 * 296);
 }
 
@@ -517,8 +523,8 @@ fn a_hostile_scale_draws_no_gibibyte() {
 fn a_window_that_publishes_metrics_draws_its_whole_frame() {
     use crate::window::linux::wayland::scale::metrics;
 
-    let largest = BufferScale::try_new(BufferScale::MAX).expect("a scale");
-    let cap = f64::from(MAX_EXTENT);
+    let largest = BufferScale::of(DevicePixelRatio::MAX);
+    let cap = f64::from(MAX_SURFACE_EXTENT);
     for (width, height) in [
         (cap / BufferScale::MAX, 300.0),
         (3_000.0, 300.0),
@@ -704,28 +710,58 @@ fn damage_is_sent_with_the_request_the_surface_has() {
     }
 }
 
-/// A frame the compositor sizes past any screen or does not show is not
+/// A frame the compositor sizes past any screen is drawn at the largest
+/// extent, as every host clamps a window extent; one it does not show is not
 /// drawn, and a margin is a transparent image.
 #[test]
-fn a_frame_past_the_largest_extent_is_not_drawn() {
+fn a_frame_past_the_largest_extent_is_drawn_at_it() {
     let plain = PLAIN;
     let wide = Frame {
         content: Size::new(1e7, 300.0),
+        viewported: false,
         ..floating()
     };
-    assert!(paint_header(&wide, BufferScale::ONE, plain).is_none());
+    let bar = paint_header(&wide, BufferScale::ONE, plain).expect("drawn");
+    assert_eq!((bar.width, bar.height), (MAX_SURFACE_EXTENT, 37));
+    // With no viewport to stretch the bar, its buttons are laid out within
+    // what is drawn, and a press is routed to the one drawn there.
+    let drawn = f64::from(MAX_SURFACE_EXTENT);
+    assert_eq!(wide.drawn_width(), drawn);
+    for button in wide.buttons() {
+        let area = wide.button_rect(button).expect("a shown button");
+        assert!(area.x + area.width <= drawn, "{button:?} at {area:?}");
+        let (x, y) = (area.x + area.width / 2.0, area.y + area.height / 2.0);
+        assert_eq!(
+            wide.part_at(Piece::Header, x, y),
+            Some(Part::Button(button))
+        );
+        assert_eq!(
+            wide.part_at(Piece::Header, x - drawn + 1e7, y),
+            Some(Part::Caption),
+            "{button:?}: nothing is drawn where the content would end"
+        );
+    }
+    assert!(wide.title_room() <= drawn);
+    // A viewport stretches the bar, so its controls end with the content.
+    let stretched = Frame {
+        viewported: true,
+        ..wide
+    };
+    let close = stretched.button_rect(Button::Close).expect("close");
+    assert_eq!(close.x + close.width + BUTTON_GAP, 1e7);
     let fullscreen = framed(ToplevelStates {
         fullscreen: true,
         ..ToplevelStates::default()
     });
     assert!(paint_header(&fullscreen, BufferScale::ONE, plain).is_none());
-    assert_eq!(device_extent(f64::INFINITY, 1.0), None);
-    assert_eq!(device_extent(0.2, 1.0), None);
-    assert_eq!(device_extent(36.5, 1.0), Some(37));
+    let one = DevicePixelRatio::ONE;
+    assert_eq!(device_extent(f64::INFINITY, one), None);
+    assert_eq!(device_extent(0.2, one), Some(1));
+    assert_eq!(device_extent(36.5, one), Some(37));
     let margin = paint_margin(3, 2).expect("drawn");
     assert!(margin.data.iter().all(|byte| *byte == 0));
     assert!(paint_margin(0, 2).is_none());
-    assert!(paint_margin(MAX_EXTENT + 1, 2).is_none());
+    assert!(paint_margin(MAX_SURFACE_EXTENT + 1, 2).is_none());
 }
 
 /// The title is shaped over the font collection and rasterized: it has
@@ -747,7 +783,7 @@ fn a_title_is_shaped_and_rasterized() {
         .mask(
             "Client frame",
             300.0,
-            BufferScale::try_new(2.0).expect("a scale"),
+            BufferScale::of(DevicePixelRatio::try_new(2.0).expect("a ratio")),
         )
         .expect("shaped");
     assert!(double.width >= mask.width * 2 - 2 && double.width <= mask.width * 2 + 2);
@@ -778,7 +814,7 @@ fn a_press_on_the_applications_bar_is_the_windows() {
         ..floating()
     };
     let mut chrome = ContentChrome {
-        scale: 1.0,
+        scale: DevicePixelRatio::ONE,
         ..ContentChrome::default()
     };
     let _changed = chrome.projected.update(
@@ -786,7 +822,7 @@ fn a_press_on_the_applications_bar_is_the_windows() {
             InputRegionKind::WindowMove,
             flui_foundation::geometry::Rect::from_ltrb(0.0, 0.0, 400.0, 32.0),
         )],
-        1.0,
+        DevicePixelRatio::ONE,
         None,
     );
     let at = Instant::now();

@@ -351,6 +351,7 @@ impl UiRuntime {
         self.presentations.get(id).map(|presentation| {
             flui_rendering::binding::RendererBinding::root_pipeline_owner(presentation.renderer())
                 .with(flui_rendering::PipelineOwner::device_pixel_ratio)
+                .get()
         })
     }
 

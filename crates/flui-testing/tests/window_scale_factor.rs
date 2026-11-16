@@ -84,7 +84,10 @@ fn rescaling_one_window_leaves_the_other(
         "scale 1 publishes logical bounds"
     );
 
-    host.set_scale_factor(moved, 2.0);
+    host.set_scale_factor(
+        moved,
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
     let _ = host.pump(Duration::from_millis(16));
 
     assert_eq!(
@@ -96,6 +99,50 @@ fn rescaling_one_window_leaves_the_other(
         probe_bounds(&host, kept),
         logical,
         "the other window keeps its own scale"
+    );
+}
+
+/// A scale the window cannot have metrics at is answered, typed, and leaves
+/// the window as it was: no silent return at the old scale.
+pub(crate) fn a_scale_no_window_can_have_is_answered_and_changes_nothing() {
+    use flui_foundation::geometry::InvalidMetrics;
+
+    let (mut host, window, _) = two_windows();
+    host.set_scale_factor(
+        window,
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
+    let _ = host.pump(Duration::from_millis(16));
+    let at_two = A11yRect::new(0.0, 0.0, 80.0, 48.0);
+    assert_eq!(probe_bounds(&host, window), at_two);
+    for refused in [64.0, 1.0 / 64.0, 0.0, f64::NAN] {
+        assert!(
+            matches!(
+                host.try_set_scale_factor(window, refused),
+                Err(InvalidMetrics::InvalidScale(_))
+            ),
+            "{refused}"
+        );
+    }
+    let _ = host.pump(Duration::from_millis(16));
+    assert_eq!(
+        probe_bounds(&host, window),
+        at_two,
+        "the window keeps the scale it had"
+    );
+    assert!(
+        host.try_set_scale_factor(
+            window,
+            flui_foundation::geometry::DevicePixelRatio::MAX.get()
+        )
+        .is_ok(),
+        "the largest ratio is one"
+    );
+    let _ = host.pump(Duration::from_millis(16));
+    assert_eq!(
+        probe_bounds(&host, window),
+        A11yRect::new(0.0, 0.0, 1280.0, 768.0),
+        "and is taken"
     );
 }
 
@@ -148,7 +195,10 @@ pub(crate) fn a_secondary_window_publishes_its_own_media_query() {
     );
     assert!((first.device_pixel_ratio - 1.0).abs() < f64::EPSILON);
 
-    host.set_scale_factor(second, 2.0);
+    host.set_scale_factor(
+        second,
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
     let _ = host.pump(Duration::from_millis(16));
     let rescaled = seen.borrow().last().cloned().expect("the reader built");
     assert!(

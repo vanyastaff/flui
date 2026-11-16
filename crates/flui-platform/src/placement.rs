@@ -182,7 +182,7 @@ impl WindowPlacement {
         let (key, scale, offset) = match display {
             Some((display, usable)) => (
                 display.persistent_key.clone(),
-                display.scale_factor,
+                display.scale_factor.get(),
                 normal
                     .position()
                     .map(|at| Point::new(at.x - usable.origin.x, at.y - usable.origin.y)),
@@ -369,7 +369,7 @@ impl WindowPlacement {
         let carry = if remembered {
             1.0
         } else {
-            self.scale / display.scale_factor
+            self.scale / display.scale_factor.get()
         };
         let outer = Size::new(
             (self.size.width * carry + frame.width).min(area.size.width),
@@ -405,28 +405,20 @@ impl WindowPlacement {
 }
 
 /// A display's usable area in its own logical pixels: where it starts in the
-/// global logical space and how large it is. `None` for a display whose scale
-/// is not finite and positive or whose usable area is empty.
+/// global logical space and how large it is. `None` for a display whose usable
+/// area is empty.
 struct Usable {
     origin: Point<f64>,
     size: Size<f64>,
 }
 
 fn usable(display: &DisplayInfo) -> Option<Usable> {
-    let scale = display.scale_factor;
-    if !positive_finite(scale) {
-        return None;
-    }
+    let ratio = display.scale_factor;
     let bounds = display.usable_bounds;
-    let size = Size::new(
-        f64::from(bounds.size.width) / scale,
-        f64::from(bounds.size.height) / scale,
-    );
+    let logical = |device: i32| ratio.to_logical(f64::from(device));
+    let size = Size::new(logical(bounds.size.width), logical(bounds.size.height));
     (size.width >= 1.0 && size.height >= 1.0).then(|| Usable {
-        origin: Point::new(
-            f64::from(bounds.origin.x) / scale,
-            f64::from(bounds.origin.y) / scale,
-        ),
+        origin: Point::new(logical(bounds.origin.x), logical(bounds.origin.y)),
         size,
     })
 }

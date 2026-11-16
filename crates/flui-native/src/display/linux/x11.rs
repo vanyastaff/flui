@@ -17,9 +17,10 @@
 //! ([`Stale`]). A step hears at most [`MAX_STEP_EVENTS`] events before it
 //! reads.
 
+use std::cell::Cell;
 use std::os::fd::{AsFd, BorrowedFd};
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
 use x11rb::protocol::Event;
@@ -33,6 +34,7 @@ use super::x11_model::{
     RandrCrtc, RandrMode, RandrMonitor, RandrOutput, RandrState, bounded_monitors,
     current_work_area, modes_run, outputs_to_read, xft_scale_factor,
 };
+use crate::display::scale::ScaleStreak;
 
 const PROTOCOL: &str = "X11";
 /// The events one step hears before it reads what they said changed. A
@@ -93,6 +95,9 @@ pub(super) struct X11Session {
     root: xproto::Window,
     atoms: Atoms,
     state: RandrState,
+    /// Whether the last `Xft.dpi` read was refused, so a run of refusals is
+    /// reported once.
+    xft_streak: Cell<ScaleStreak>,
 }
 
 impl X11Session {
@@ -140,13 +145,15 @@ impl X11Session {
             current_desktop: intern(&connection, b"_NET_CURRENT_DESKTOP")?,
             edid: intern(&connection, b"EDID")?,
         };
-        let state = read_state(&connection, root, &atoms)?
+        let xft_streak = Cell::new(ScaleStreak::default());
+        let state = read_state(&connection, root, &atoms, &xft_streak)?
             .ok_or_else(|| error("the RandR configuration kept changing during the first read"))?;
         Ok(Self {
             connection,
             root,
             atoms,
             state,
+            xft_streak,
         })
     }
 
@@ -174,11 +181,11 @@ impl X11Session {
     /// state: the scale and the work area are a property each.
     fn read_again(&self, stale: Stale) -> Result<Option<RandrState>, DisplayError> {
         if stale.outputs {
-            return read_state(&self.connection, self.root, &self.atoms);
+            return read_state(&self.connection, self.root, &self.atoms, &self.xft_streak);
         }
         let mut state = self.state.clone();
         if stale.scale {
-            state.scale_factor = resource_scale(&self.connection, self.root);
+            state.scale_factor = resource_scale(&self.connection, self.root, &self.xft_streak);
         }
         if stale.work_area {
             state.work_area = work_area(&self.connection, self.root, &self.atoms);
@@ -288,6 +295,7 @@ fn read_state(
     connection: &RustConnection,
     root: xproto::Window,
     atoms: &Atoms,
+    xft_streak: &Cell<ScaleStreak>,
 ) -> Result<Option<RandrState>, DisplayError> {
     let Some(resources) = settle(
         randr::get_screen_resources_current(connection, root)
@@ -377,7 +385,7 @@ fn read_state(
         outputs,
         crtcs,
         modes,
-        scale_factor: resource_scale(connection, root),
+        scale_factor: resource_scale(connection, root, xft_streak),
         work_area: work_area(connection, root, atoms),
     }))
 }
@@ -435,8 +443,14 @@ fn atom_name(connection: &RustConnection, atom: xproto::Atom) -> String {
         .unwrap_or_else(|| "Display".to_owned())
 }
 
-/// `Xft.dpi / 96` from the root window's `RESOURCE_MANAGER`, if it sets one.
-fn resource_scale(connection: &RustConnection, root: xproto::Window) -> Option<f64> {
+/// `Xft.dpi / 96` from the root window's `RESOURCE_MANAGER`, if it sets one,
+/// read by the hosts' one rule against `streak`, the server's one source of
+/// it.
+fn resource_scale(
+    connection: &RustConnection,
+    root: xproto::Window,
+    streak: &Cell<ScaleStreak>,
+) -> Option<DevicePixelRatio> {
     let reply = xproto::get_property(
         connection,
         false,
@@ -449,7 +463,15 @@ fn resource_scale(connection: &RustConnection, root: xproto::Window) -> Option<f
     .ok()?
     .reply()
     .ok()?;
-    xft_scale_factor(&String::from_utf8_lossy(&reply.value))
+    let reported = xft_scale_factor(&String::from_utf8_lossy(&reply.value))?;
+    // The number set, by the hosts' one rule; nothing is borrowed here.
+    let mut read = streak.get();
+    let (ratio, refused) = read.read(reported, "Xft.dpi");
+    streak.set(read);
+    if let Some(refused) = refused {
+        refused.report();
+    }
+    Some(ratio)
 }
 
 /// The work area of the current desktop, if the window manager sets one.

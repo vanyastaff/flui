@@ -4,7 +4,9 @@
 
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, DeviceSize, EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{
+    Bounds, DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
+};
 use flui_platform::{
     AppTitleBar, Availability, CapabilityAbsence, ColorGamut, DisplayColor, DisplayInfo,
     DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
@@ -63,7 +65,7 @@ fn a_display_round_trips_through_its_parts() {
         id,
         "Studio Display",
         Bounds::new(Point::new(-1920, 0), Size::new(5120, 2880)),
-        2.0,
+        DevicePixelRatio::try_new(2.0).expect("a positive ratio"),
     )
     .with_usable_bounds(Bounds::new(Point::new(-1920, 40), Size::new(5120, 2840)))
     .with_primary(true)

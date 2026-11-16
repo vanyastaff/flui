@@ -84,7 +84,7 @@ fn view(output: u32) -> OutputView {
         name: format!("Output {output}"),
         bounds,
         usable_bounds: bounds,
-        scale_factor: 1.0,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio::ONE,
         refresh_period: None,
         is_primary: false,
         persistent_key: None,

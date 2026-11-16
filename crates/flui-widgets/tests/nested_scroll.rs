@@ -460,7 +460,9 @@ pub(crate) fn steps_carry_the_focal_point_and_the_device_pixel_ratio() {
     )
     .boxed();
     let mut laid = mounted(tree, vsync);
-    laid.set_scale_factor(2.0);
+    laid.set_scale_factor(
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
     probe.take();
     let by_cause = |cause: ScrollCause| {
         probe

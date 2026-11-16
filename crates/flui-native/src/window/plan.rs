@@ -10,7 +10,7 @@
 
 #![forbid(unsafe_code)]
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{DevicePixelRatio, Point, Size};
 use flui_platform::{
     DisplayId, DisplaySnapshot, WindowCapabilities, WindowGeometry, WindowMode, WindowOptions,
     WindowReveal,
@@ -22,20 +22,17 @@ use parking_lot::Mutex;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct PlacementDisplay {
     pub origin: Point<i32>,
-    pub scale_factor: f64,
+    pub scale_factor: DevicePixelRatio,
 }
 
 impl PlacementDisplay {
     /// `geometry`, measured from this display's usable origin in its logical
     /// pixels, as the global logical rectangle a window state publishes.
     fn to_global(self, geometry: WindowGeometry) -> WindowGeometry {
-        let scale = self.scale_factor;
-        if !(scale.is_finite() && scale > 0.0) {
-            return geometry;
-        }
+        let ratio = self.scale_factor;
         let origin = Point::new(
-            f64::from(self.origin.x) / scale,
-            f64::from(self.origin.y) / scale,
+            ratio.to_logical(f64::from(self.origin.x)),
+            ratio.to_logical(f64::from(self.origin.y)),
         );
         // A sum that leaves the finite numbers moves nothing.
         geometry
@@ -66,7 +63,7 @@ impl PlacementDisplay {
                 origin: Point::new(0, 0),
                 scale_factor: snapshot
                     .and_then(DisplaySnapshot::primary)
-                    .map_or(1.0, |display| display.scale_factor),
+                    .map_or(DevicePixelRatio::ONE, |display| display.scale_factor),
             },
         }
     }
@@ -191,7 +188,7 @@ impl OpenPlan {
 /// coordinate can hold.
 fn device_position(at: Point<f64>, display: PlacementDisplay) -> Option<Point<i32>> {
     let device = |offset: f64, origin: i32| {
-        let pixels = (offset * display.scale_factor).round() + f64::from(origin);
+        let pixels = display.scale_factor.to_device(offset).round() + f64::from(origin);
         // Not `as`: a value past the range saturates silently, and a placement
         // that far from every display is a bad one, not one to clamp.
         (pixels.is_finite() && pixels >= f64::from(i32::MIN) && pixels <= f64::from(i32::MAX))
@@ -232,15 +229,14 @@ impl FrameInset {
 
     /// The frame in logical pixels on a display of `scale_factor`; zero before
     /// any was measured.
-    pub(crate) fn logical(&self, scale_factor: f64) -> Size<f64> {
+    pub(crate) fn logical(&self, scale_factor: DevicePixelRatio) -> Size<f64> {
         let measured = *self.measured.lock();
-        match measured {
-            Some(frame) if scale_factor.is_finite() && scale_factor > 0.0 => Size::new(
-                f64::from(frame.width) / scale_factor,
-                f64::from(frame.height) / scale_factor,
-            ),
-            _ => Size::new(0.0, 0.0),
-        }
+        measured.map_or(Size::new(0.0, 0.0), |frame| {
+            Size::new(
+                scale_factor.to_logical(f64::from(frame.width)),
+                scale_factor.to_logical(f64::from(frame.height)),
+            )
+        })
     }
 }
 
@@ -249,9 +245,13 @@ mod tests {
     use super::*;
     use flui_platform::{AppTitleBar, CapabilityAbsence, WindowCommand, WindowFrame};
 
+    fn ratio(scale: f64) -> DevicePixelRatio {
+        DevicePixelRatio::try_new(scale).expect("a positive ratio")
+    }
+
     const DISPLAY: PlacementDisplay = PlacementDisplay {
         origin: Point { x: 1920, y: 0 },
-        scale_factor: 1.0,
+        scale_factor: DevicePixelRatio::ONE,
     };
 
     const ALL: WindowCapabilities = WindowCapabilities::ALL;
@@ -291,10 +291,10 @@ mod tests {
         // A 1920x1080 display at scale 2 with a 56-pixel panel along its top.
         let bounds = Bounds::new(Point::new(1920, 0), Size::new(1920, 1080));
         let usable = Bounds::new(Point::new(1920, 56), Size::new(1920, 1024));
-        let main = DisplayInfo::new(id(0), "main", bounds, 2.0)
+        let main = DisplayInfo::new(id(0), "main", bounds, ratio(2.0))
             .with_usable_bounds(usable)
             .with_primary(true);
-        let other = DisplayInfo::new(id(1), "other", bounds, 1.0);
+        let other = DisplayInfo::new(id(1), "other", bounds, DevicePixelRatio::ONE);
         let (main_id, other_id) = (main.id, other.id);
         let snapshot = DisplaySnapshot::empty()
             .successor(vec![main, other])
@@ -307,7 +307,7 @@ mod tests {
                 Some(main_id),
                 PlacementDisplay {
                     origin: Point::new(1920, 56),
-                    scale_factor: 2.0,
+                    scale_factor: ratio(2.0),
                 },
             ),
             (
@@ -315,7 +315,7 @@ mod tests {
                 Some(other_id),
                 PlacementDisplay {
                     origin: Point::new(1920, 0),
-                    scale_factor: 1.0,
+                    scale_factor: DevicePixelRatio::ONE,
                 },
             ),
             (
@@ -323,7 +323,7 @@ mod tests {
                 None,
                 PlacementDisplay {
                     origin: Point::new(0, 0),
-                    scale_factor: 2.0,
+                    scale_factor: ratio(2.0),
                 },
             ),
         ];
@@ -344,7 +344,7 @@ mod tests {
             PlacementDisplay::choose(None, Some(main_id)),
             PlacementDisplay {
                 origin: Point::new(0, 0),
-                scale_factor: 1.0
+                scale_factor: DevicePixelRatio::ONE,
             },
             "no snapshot"
         );
@@ -368,7 +368,7 @@ mod tests {
         // (case, position, display, device position)
         let scaled = PlacementDisplay {
             origin: Point::new(-2560, 100),
-            scale_factor: 1.5,
+            scale_factor: ratio(1.5),
         };
         let table = [
             (
@@ -522,7 +522,7 @@ mod tests {
         // On a scaled display the usable origin is in device pixels.
         let scaled = PlacementDisplay {
             origin: Point::new(1920, 56),
-            scale_factor: 2.0,
+            scale_factor: ratio(2.0),
         };
         let relative = geometry(Some(Point::new(100.0, 50.0)), Size::new(1000.0, 700.0));
         let on_scaled = options()
@@ -666,7 +666,7 @@ mod tests {
     fn frame_inset_is_recorded_from_a_framed_window_on_screen() {
         let inset = FrameInset::default();
         assert_eq!(
-            inset.logical(1.0),
+            inset.logical(DevicePixelRatio::ONE),
             Size::new(0.0, 0.0),
             "nothing recorded yet"
         );
@@ -681,25 +681,19 @@ mod tests {
         }
 
         inset.record(Size::new(20, 60));
-        assert_eq!(inset.logical(1.0), Size::new(20.0, 60.0));
+        assert_eq!(inset.logical(DevicePixelRatio::ONE), Size::new(20.0, 60.0));
         assert!(inset.is_known());
         assert_eq!(
-            inset.logical(2.0),
+            inset.logical(ratio(2.0)),
             Size::new(10.0, 30.0),
             "device pixels over scale"
         );
-        assert_eq!(
-            inset.logical(0.0),
-            Size::new(0.0, 0.0),
-            "a scale that divides by zero"
-        );
-        assert_eq!(inset.logical(f64::NAN), Size::new(0.0, 0.0));
 
         // A frame of one dimension only (a bar and no borders) is a frame, and a
         // later report replaces an earlier one.
         inset.record(Size::new(0, 30));
-        assert_eq!(inset.logical(1.0), Size::new(0.0, 30.0));
+        assert_eq!(inset.logical(DevicePixelRatio::ONE), Size::new(0.0, 30.0));
         inset.record(Size::new(8, 38));
-        assert_eq!(inset.logical(1.0), Size::new(8.0, 38.0));
+        assert_eq!(inset.logical(DevicePixelRatio::ONE), Size::new(8.0, 38.0));
     }
 }

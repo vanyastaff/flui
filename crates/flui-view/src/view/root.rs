@@ -191,10 +191,9 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         let (width, height) = self.view.size;
         let mut render_view = RenderViewObject::new();
         let logical_size = Size::new(width, height);
-        let dpr = self
-            .pipeline_owner
-            .as_ref()
-            .map_or(1.0, |owner| owner.with(PipelineOwner::device_pixel_ratio));
+        let dpr = self.pipeline_owner.as_ref().map_or(1.0, |owner| {
+            owner.with(PipelineOwner::device_pixel_ratio).get()
+        });
         let config = ViewConfiguration::from_size(logical_size, dpr);
         render_view.set_configuration(config);
         // Bootstrap the root transform + root layer. Without this,
@@ -295,7 +294,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
                     // every update after the first on any HiDPI (2x+) display,
                     // since the config `mount` built with the real DPR would be
                     // silently overwritten by this one.
-                    let dpr = owner.device_pixel_ratio();
+                    let dpr = owner.device_pixel_ratio().get();
                     if let Some(node) = owner.render_tree_mut().get_mut(render_id) {
                         // RenderView uses BoxProtocol
                         let render_object = node.box_render_object_mut();

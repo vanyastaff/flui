@@ -21,8 +21,8 @@ use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{DevicePixelRatio, DevicePoint};
 use flui_platform::text_store::{
-    OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreError, TextStoreObserver,
-    TextStoreStatus, Utf16Range,
+    OwnerCalls, TextChange, TextInputPurpose, TextStore, TextStoreObserver, TextStoreStatus,
+    Utf16Range,
 };
 use windows::Win32::{
     Foundation::{
@@ -771,8 +771,7 @@ impl ITextStoreACP_Impl for TsfStore_Impl {
             let screen = unsafe { *ptscreen };
             let (scale, origin) = state.screen_frame();
             let logical =
-                screen_point_to_client(DevicePoint::new(screen.x, screen.y), origin, scale)
-                    .ok_or_else(|| store_error(TextStoreError::PointOutside))?;
+                screen_point_to_client(DevicePoint::new(screen.x, screen.y), origin, scale);
             let mode = acp::point_mode(dwflags);
             Ok(state.slot.read(|session| {
                 session

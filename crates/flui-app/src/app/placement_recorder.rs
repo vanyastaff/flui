@@ -81,7 +81,7 @@ pub(crate) fn restore_into(
     placement: &WindowPlacement,
     displays: &DisplaySnapshot,
     capabilities: &WindowCapabilities,
-    frame_inset: impl Fn(f64) -> Size<f64>,
+    frame_inset: impl Fn(flui_foundation::geometry::DevicePixelRatio) -> Size<f64>,
 ) {
     // The frame is measured at the scale of the display the window lands on,
     // which `resolve` decides; ask for the scale of the display it will pick by
@@ -89,9 +89,10 @@ pub(crate) fn restore_into(
     let Some(first) = placement.resolve(displays, capabilities, Size::new(0.0, 0.0)) else {
         return;
     };
-    let scale = displays
-        .get(first.display)
-        .map_or(1.0, |display| display.scale_factor);
+    let scale = displays.get(first.display).map_or(
+        flui_foundation::geometry::DevicePixelRatio::ONE,
+        |display| display.scale_factor,
+    );
     let frame = if options.frame.at_open(capabilities).has_system_title_bar() {
         frame_inset(scale)
     } else {

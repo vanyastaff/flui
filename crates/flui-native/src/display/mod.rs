@@ -40,6 +40,8 @@
     test
 ))]
 pub(crate) mod source;
+// The one rule for a scale an operating system reports.
+pub(crate) mod scale;
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;

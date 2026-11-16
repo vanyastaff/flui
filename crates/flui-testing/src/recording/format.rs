@@ -86,7 +86,7 @@ pub struct RecordedWindow {
     /// The window.
     pub window: WindowId,
     /// Device pixels per logical pixel, possibly fractional.
-    pub scale_factor: f64,
+    pub scale_factor: flui_foundation::geometry::DevicePixelRatio,
     /// The window's title, when known; redacted unless text is kept.
     pub title: Option<String>,
     /// The per-kind gesture values the host's preferences resolved over
@@ -98,7 +98,10 @@ pub struct RecordedWindow {
 impl RecordedWindow {
     /// `window` at `scale_factor`, untitled, its presets unknown.
     #[must_use]
-    pub fn new(window: WindowId, scale_factor: f64) -> Self {
+    pub fn new(
+        window: WindowId,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Self {
         Self {
             window,
             scale_factor,
@@ -233,7 +236,7 @@ fn header_to_wire(header: &RecordingHeader, privacy: Privacy) -> Result<rec::Hea
             .map(|window| {
                 Ok(rec::Window {
                     window: window.window.get().get(),
-                    scale_factor: window.scale_factor,
+                    scale_factor: window.scale_factor.get(),
                     title: text(&window.title),
                     gestures: window
                         .gesture_profiles
@@ -281,7 +284,18 @@ fn header_from_wire(header: rec::Header, line: u64) -> Result<RecordingHeader, R
                 Ok(RecordedWindow {
                     window: WindowId::try_from_raw(window.window)
                         .ok_or_else(|| WireError::Invalid("window id 0".into()))?,
-                    scale_factor: window.scale_factor,
+                    // A recording is untrusted input: a window scale no
+                    // screen has is refused here, naming the row, rather
+                    // than replayed at whatever scale the host has.
+                    scale_factor: flui_foundation::geometry::DevicePixelRatio::try_new(
+                        window.scale_factor,
+                    )
+                    .ok_or_else(|| {
+                        WireError::Invalid(format!(
+                            "window {} scale {}",
+                            window.window, window.scale_factor
+                        ))
+                    })?,
                     title: window.title,
                     gesture_profiles: window.gestures.map(profiles_from_wire).transpose()?,
                 })

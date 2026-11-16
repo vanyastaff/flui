@@ -15,10 +15,11 @@ use flui_platform::pointer::{
 
 use super::ContactRegistry;
 use crate::input::primary_mouse_info;
-use crate::input::scroll::{WheelAmount, wheel_step};
+use crate::input::scroll::{DetentSteps, WheelAmount, wheel_step};
 use flui_platform::PlatformInput;
 
-/// The distance of one wheel detent (Win32's `WHEEL_DELTA`).
+/// The steps to one wheel detent: a wheel distance is counted in 1/120 of a
+/// detent by Win32 (`WHEEL_DELTA`) and by Wayland (`value120`) alike.
 pub const WHEEL_DETENT: i16 = 120;
 
 /// Which wheel turned.
@@ -69,7 +70,8 @@ impl ContactRegistry {
         let position = PointerPosition::try_new(Point::new(x / scale, y / scale)).ok()?;
         // Win32 signs the vertical wheel turned away from the user, toward
         // earlier content, and the horizontal one tilted right.
-        let detents = f64::from(reading.distance) / f64::from(WHEEL_DETENT);
+        let steps = DetentSteps::new(i32::from(reading.distance));
+        let detents = steps.detents();
         let (x, y) = match reading.axis {
             WheelAxis::Vertical => (0.0, detents),
             WheelAxis::Horizontal => (detents, 0.0),
@@ -80,7 +82,7 @@ impl ContactRegistry {
             WheelAmount::content(y),
         )
         .expect("BUG: a whole Win32 wheel distance over a nonzero detent is finite");
-        let precision = if reading.distance % WHEEL_DETENT == 0 {
+        let precision = if steps.is_whole() {
             ScrollPrecision::Unknown
         } else {
             ScrollPrecision::Precise

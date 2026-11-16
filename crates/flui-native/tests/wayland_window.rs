@@ -130,7 +130,7 @@ impl WaylandFixture {
                     .displays()
                     .iter()
                     .find(|info| Some(info.id) == display)
-                    .map(|info| info.scale_factor)
+                    .map(|info| info.scale_factor.get())
             })
             .unwrap_or(1.0)
     }

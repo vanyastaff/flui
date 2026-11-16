@@ -100,8 +100,8 @@ pub use rrect::{RRect, Radius};
 pub use rsuperellipse::RSuperellipse;
 pub use size::{Size, size};
 pub use snap::{
-    DevicePixelRatio, cover, device_rect_covering, device_size, resolve_stroke_width, snap,
-    snap_edges, snap_point,
+    DevicePixelRatio, cover, device_extent, device_rect_covering, device_size,
+    resolve_stroke_width, snap, snap_edges, snap_point,
 };
 pub use traits::{
     Along, ApproxEq, Double, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,

@@ -124,10 +124,10 @@ impl GeometryProjection {
 }
 
 fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
-    presentation.renderer().root_pipeline_owner().with(|owner| {
-        DevicePixelRatio::try_new(owner.device_pixel_ratio())
-            .expect("BUG: renderer accepted invalid pixel ratio")
-    })
+    presentation
+        .renderer()
+        .root_pipeline_owner()
+        .with(flui_rendering::PipelineOwner::device_pixel_ratio)
 }
 
 /// The display the presentation's window is on, when its backend can say.

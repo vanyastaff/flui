@@ -18,6 +18,13 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 
+use crate::input::assembly::counter_nanos;
+
+/// `ticks` of the performance counter at `frequency` as a duration.
+fn counter_duration(ticks: u64, frequency: NonZeroU64) -> Duration {
+    Duration::from_nanos(counter_nanos(ticks, frequency))
+}
+
 /// The compositor's refresh around a counter reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RefreshTiming {
@@ -51,13 +58,9 @@ pub(crate) fn refresh_timing(
         let into_period = (period - (vblank - now) % period) % period;
         (into_period, period - into_period)
     };
-    let to_duration = |ticks: u64| {
-        let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
-        Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
-    };
     Some(RefreshTiming {
-        since_refresh: to_duration(since),
-        until_refresh: to_duration(until),
+        since_refresh: counter_duration(since, frequency),
+        until_refresh: counter_duration(until, frequency),
     })
 }
 
@@ -121,10 +124,7 @@ impl PresentTracker {
             return None;
         }
         let ticks = u64::try_from(sync_ticks).ok().filter(|&ticks| ticks > 0)?;
-        let to_duration = |ticks: u64| {
-            let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
-            Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
-        };
+        let to_duration = |ticks: u64| counter_duration(ticks, frequency);
         let refresh = self.last.and_then(|previous| {
             let refreshes = sync_refresh
                 .checked_sub(previous.refresh)

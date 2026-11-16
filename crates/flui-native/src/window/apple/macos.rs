@@ -202,7 +202,10 @@ struct MacOSWindowState {
     bounds: Bounds<f64>,
 
     /// Scale factor (1.0 for non-Retina, 2.0 for Retina)
-    scale_factor: f64,
+    scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    /// Whether the last backing scale read was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: crate::display::scale::ScaleStreak,
 
     /// The display this window is on. Cached, not queried per call: reading it
     /// messages the window's screen, which is AppKit traffic this backend keeps
@@ -621,7 +624,13 @@ impl MacOSWindow {
             };
 
             // Get backing scale factor
-            let scale: f64 = msg_send![ns_window, backingScaleFactor];
+            let reported: f64 = msg_send![ns_window, backingScaleFactor];
+            // By the hosts' one rule; a refusal is reported here, nothing borrowed.
+            let mut scale_streak = crate::display::scale::ScaleStreak::default();
+            let (scale, refused) = scale_streak.read(reported, "NSWindow backingScaleFactor");
+            if let Some(refused) = refused {
+                refused.report();
+            }
 
             // A window opened `visible: true` is ordered front now. With
             // `WindowReveal::AfterFirstFrame` it is ordered fully
@@ -679,6 +688,7 @@ impl MacOSWindow {
                         size: content_size,
                     },
                     scale_factor: scale,
+                    scale_streak,
                     display: None,
                     layer_refresh: LayerRefresh::default(),
                     cursor: CursorIcon::default(),
@@ -765,7 +775,7 @@ impl MacOSWindow {
                 ns_window,
                 content.width(),
                 content.height(),
-                scale
+                scale.get()
             );
 
             Ok(window)
@@ -1303,7 +1313,11 @@ impl host::Window<MacOSLoop> for MacOSWindow {
         appkit_window_capabilities(windows.presentation)
     }
 
-    fn frame_inset(owner: &MacOSLoop, _: &MacOSWindows, _scale_factor: f64) -> Size<f64> {
+    fn frame_inset(
+        owner: &MacOSLoop,
+        _: &MacOSWindows,
+        _scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         owner
             .affinity
             .debug_assert_owner("MacOSPlatform::window_frame_inset");
@@ -1788,7 +1802,7 @@ impl MacOSWindow {
             (
                 state.display,
                 state.normal,
-                state.scale_factor,
+                state.scale_factor.get(),
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
                 state.frame,

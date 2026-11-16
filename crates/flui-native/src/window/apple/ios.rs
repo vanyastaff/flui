@@ -123,6 +123,9 @@ pub struct FluiViewIvars {
     /// metrics of a window this view no longer serves.
     sampling: std::cell::Cell<SamplingAdmission>,
     sampling_active: std::cell::Cell<bool>,
+    /// Whether the last content scale read was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
     sampling_pending: std::cell::Cell<bool>,
     /// The per-frame tick source, created once and paused/resumed around the
     /// app's background transitions. `RefCell` because the view's methods
@@ -482,6 +485,7 @@ impl FluiView {
             input: RefCell::new(touches),
             sampling: std::cell::Cell::new(SamplingAdmission::Detached),
             sampling_active: std::cell::Cell::new(false),
+            scale_streak: std::cell::Cell::default(),
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
             frame_demand: Arc::default(),
@@ -1023,9 +1027,16 @@ impl FluiView {
         let bounds = self.bounds();
         let insets = self.safeAreaInsets();
         let size = Size::new(bounds.size.width, bounds.size.height);
+        // The content scale by the hosts' one rule; nothing is borrowed here.
+        let mut streak = self.ivars().scale_streak.get();
+        let (scale, refused) = streak.read(self.contentScaleFactor(), "UIView contentScaleFactor");
+        self.ivars().scale_streak.set(streak);
+        if let Some(refused) = refused {
+            refused.report();
+        }
         let next = WindowMetrics {
             size,
-            scale: self.contentScaleFactor(),
+            scale,
             safe_area: EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left),
             keyboard: self.keyboard_over(&window, size),
         };
@@ -1058,7 +1069,7 @@ struct IOSLifecycle {
 #[derive(Clone, Copy, PartialEq)]
 struct WindowMetrics {
     size: Size<f64>,
-    scale: f64,
+    scale: flui_foundation::geometry::DevicePixelRatio,
     safe_area: EdgeInsets,
     keyboard: flui_platform::KeyboardInset,
 }
@@ -1176,7 +1187,7 @@ impl IOSWindow {
         }
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
-            scale: 1.0,
+            scale: flui_foundation::geometry::DevicePixelRatio::ONE,
             safe_area: EdgeInsets::ZERO,
             keyboard: flui_platform::KeyboardInset::HIDDEN,
         }));
@@ -1476,7 +1487,7 @@ impl IOSWindow {
             ReportedFacts {
                 metrics: flui_foundation::geometry::WindowMetrics::from_logical(
                     metrics.size,
-                    metrics.scale,
+                    metrics.scale.get(),
                 )
                 .ok(),
                 appearance: if self.dark.load(Ordering::Relaxed) {
@@ -1683,7 +1694,11 @@ impl host::Window<IOSLoop> for IOSWindow {
         scene_capabilities()
     }
 
-    fn frame_inset(_: &IOSLoop, _: &IOSWindows, _: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &IOSLoop,
+        _: &IOSWindows,
+        _: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         // A UIKit window has no non-client area.
         Size::new(0.0, 0.0)
     }
@@ -1823,8 +1838,8 @@ impl PlatformWindow for IOSWindow {
         let (size, scale) = {
             let metrics = *self.metrics.lock();
             let size = Size::new(
-                (metrics.size.width * metrics.scale).round() as i32,
-                (metrics.size.height * metrics.scale).round() as i32,
+                metrics.scale.to_device(metrics.size.width).round() as i32,
+                metrics.scale.to_device(metrics.size.height).round() as i32,
             );
             (size, metrics.scale)
         };
