@@ -261,6 +261,16 @@ export function editorAriaHidden() { return editor().getAttribute('aria-hidden')
 // headless Chrome has it, a visual viewport over the whole layout viewport;
 // 'unknown' is a page with neither API to tell.
 let shows = 0;
+// The page's own `visualViewport`, an own property of the global object
+// that a plain `delete` would remove for good: the fakes put it back.
+const ownViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+function restoreViewport() {
+    if (ownViewport) {
+        Object.defineProperty(window, 'visualViewport', ownViewport);
+    } else {
+        delete window.visualViewport;
+    }
+}
 export function fakeKeyboard(state) {
     shows = 0;
     const keyboard = state === 'up' ? Object.assign(new EventTarget(), {
@@ -272,12 +282,12 @@ export function fakeKeyboard(state) {
     if (state === 'unknown') {
         Object.defineProperty(window, 'visualViewport', { value: null, configurable: true });
     } else {
-        delete window.visualViewport;
+        restoreViewport();
     }
 }
 export function restoreKeyboard() {
     delete navigator.virtualKeyboard;
-    delete window.visualViewport;
+    restoreViewport();
 }
 // Type `text` into the focused textarea as a keyboard does, through the
 // browser's editing, so it enters the textarea's undo history.
