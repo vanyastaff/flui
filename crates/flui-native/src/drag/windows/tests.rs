@@ -33,7 +33,10 @@ use flui_platform::data_transfer::{
     RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
     TransferPayload, TransferRequest,
 };
-use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+use flui_platform::drag::{
+    DragError, DragSessionKey, OsDragEnd, OsDragParts, OsDragProvider, OsDragRequest,
+    OsDragTerms, ProcessNonce,
+};
 use flui_platform::{
     DispatchEventResult, DragDropEvent, PlatformInput, Unsupported, UnsupportedReason,
 };
@@ -389,24 +392,26 @@ fn path() -> std::path::PathBuf {
 /// A session offering text, HTML, a file, custom bytes and its identity,
 /// telling `ended` how it ended.
 fn request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
-    let key = key();
     let descriptor = |format| RepresentationDescriptor {
         format,
         declared_len: None,
     };
     let ended = Rc::clone(ended);
-    OsDragRequest {
-        key,
-        pointer: None,
-        representations: vec![
+    let terms = OsDragTerms::try_new(
+        key(),
+        vec![
             descriptor(TransferFormat::Text),
             descriptor(TransferFormat::Html),
             descriptor(TransferFormat::UriList),
             descriptor(TransferFormat::Custom { mime: custom() }),
-            key.representation(),
         ],
-        allowed: TransferActions::COPY | TransferActions::MOVE,
-        provider: Box::new(|RepresentationIndex(index)| match index {
+        TransferActions::COPY | TransferActions::MOVE,
+    )
+    .expect("four representations under COPY and MOVE");
+    OsDragRequest::new(
+        terms,
+        None,
+        Box::new(|RepresentationIndex(index)| match index {
             0 => Ok(TransferPayload::Text("dragged \u{2713}".into())),
             1 => Ok(TransferPayload::Html("<b>dragged</b>".into())),
             2 => Ok(TransferUri::list_payload(
@@ -419,13 +424,16 @@ fn request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
             }),
             _ => Err(TransferError::Cancelled),
         }),
-        on_end: Box::new(move |end| ended.set(Some(end))),
-    }
+        Box::new(move |end| ended.set(Some(end))),
+    )
 }
 
 /// The data object `request` becomes, as `DoDragDrop` is handed it.
 fn data_object(request: OsDragRequest) -> IDataObject {
-    super::com::SourceData::new(&request.representations, request.provider).into()
+    let OsDragParts {
+        terms, provider, ..
+    } = request.into_parts();
+    super::com::SourceData::new(&terms, provider).into()
 }
 
 /// The window `hwnd` as its class's hooks name it.
@@ -785,19 +793,19 @@ fn a_fetch_from_inside_the_provider_is_refused_not_reentered() {
     let reentered = Rc::clone(&inner);
     let offered = Rc::clone(&target.offer);
     let fetcher = Arc::clone(&transfer);
-    let key = key();
-    let request = OsDragRequest {
-        key,
-        pointer: None,
-        representations: vec![
-            RepresentationDescriptor {
-                format: TransferFormat::Text,
-                declared_len: None,
-            },
-            key.representation(),
-        ],
-        allowed: TransferActions::COPY,
-        provider: Box::new(move |_| {
+    let terms = OsDragTerms::try_new(
+        key(),
+        vec![RepresentationDescriptor {
+            format: TransferFormat::Text,
+            declared_len: None,
+        }],
+        TransferActions::COPY,
+    )
+    .expect("one text representation under COPY");
+    let request = OsDragRequest::new(
+        terms,
+        None,
+        Box::new(move |_| {
             let offer = offered.borrow().clone();
             if let Some(offer) = offer
                 && reentered.borrow().is_none()
@@ -807,8 +815,8 @@ fn a_fetch_from_inside_the_provider_is_refused_not_reentered() {
             }
             Ok(TransferPayload::Text("outer".into()))
         }),
-        on_end: Box::new(|_| {}),
-    };
+        Box::new(|_| {}),
+    );
     let data = data_object(request);
     let ole = target.ole.clone();
     let at = screen_point(target.hwnd);
@@ -888,29 +896,56 @@ fn hold_mouse_buttons(buttons: u32) {
 }
 
 /// The pointer a pen press on `hwnd` opens in its window's registry.
-fn pen_pressed(hwnd: HWND) -> flui_platform::PointerId {
-    use flui_platform::EventTime;
-    use flui_platform::pointer::{PenTool, PointerButton, PointerEvent, PointerKind};
+fn pen_pressed(hwnd: HWND) -> flui_platform::pointer::PressId {
+    use flui_platform::pointer::{PenTool, PointerButton, PointerKind};
 
-    use crate::input::assembly::{
-        NativeContact, NativeDevice, NativeReading, ReadingAction, ReadingTime,
-    };
-    let press = NativeReading::new(
+    use crate::input::assembly::{NativeContact, NativeDevice, ReadingAction};
+    press_of(&decode_reading(
+        hwnd,
         NativeContact(0x4242),
         PointerKind::Pen { tool: PenTool::Tip },
         ReadingAction::Press(PointerButton::PRIMARY),
+        Some(NativeDevice(0x51)),
+    ))
+}
+
+/// What the window's input makes of a `kind` reading of `contact`.
+fn decode_reading(
+    hwnd: HWND,
+    contact: crate::input::assembly::NativeContact,
+    kind: flui_platform::pointer::PointerKind,
+    action: crate::input::assembly::ReadingAction,
+    device: Option<crate::input::assembly::NativeDevice>,
+) -> Vec<PlatformInput> {
+    use flui_platform::EventTime;
+
+    use crate::input::assembly::{NativeReading, ReadingTime};
+    let mut reading = NativeReading::new(
+        contact,
+        kind,
+        action,
         ReadingTime::epoch(EventTime::from_nanos(1_000_000)),
     )
-    .at_device(10.0, 10.0, 1.0)
-    .from_device(NativeDevice(0x51));
-    crate::input::windows::testing::decode_into(hwnd, press)
+    .at_device(10.0, 10.0, 1.0);
+    if let Some(device) = device {
+        reading = reading.from_device(device);
+    }
+    crate::input::windows::testing::decode_into(hwnd, reading)
         .expect("a valid reading")
         .into_iter()
+        .collect()
+}
+
+/// The press sequence the `Down` among `inputs` began.
+fn press_of(inputs: &[PlatformInput]) -> flui_platform::pointer::PressId {
+    use flui_platform::pointer::PointerEvent;
+    inputs
+        .iter()
         .find_map(|input| match input {
-            PlatformInput::Pointer(PointerEvent::Down(down)) => Some(down.pointer.id),
+            PlatformInput::Pointer(PointerEvent::Down(down)) => down.press(),
             _ => None,
         })
-        .expect("the press opens a pointer")
+        .expect("the press begins a sequence")
 }
 
 /// OLE's loop follows the mouse alone: a drag no mouse button holds, or one
@@ -930,9 +965,7 @@ fn a_drag_the_os_loop_cannot_carry_stays_in_its_window() {
     let unheld = drag.start(request(&ended));
     let pen = pen_pressed(source.hwnd);
     hold_mouse_buttons(MK_LBUTTON.0);
-    let mut by_pen = request(&ended);
-    by_pen.pointer = Some(pen);
-    let pen_started = drag.start(by_pen);
+    let pen_started = drag.start(pressed_by(request(&ended), pen));
     hold_mouse_buttons(0);
     let refused = |reason| Err(DragError::from(Unsupported::new(reason)));
     assert_eq!(
@@ -1127,14 +1160,39 @@ impl Drop for HostileCapture {
 
 /// `request(ended)` whose provider captures a [`HostileCapture`].
 fn hostile_request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
-    let mut request = request(ended);
-    let mut serve = request.provider;
     let capture = HostileCapture;
-    request.provider = Box::new(move |index| {
-        let _ = &capture;
-        serve(index)
-    });
-    request
+    serving_through(request(ended), |mut serve| {
+        Box::new(move |index| {
+            let _ = &capture;
+            serve(index)
+        })
+    })
+}
+
+/// `request` begun by the press sequence `press`.
+fn pressed_by(request: OsDragRequest, press: flui_platform::pointer::PressId) -> OsDragRequest {
+    let OsDragParts {
+        terms,
+        provider,
+        on_end,
+        ..
+    } = request.into_parts();
+    OsDragRequest::new(terms, Some(press), provider, on_end)
+}
+
+/// `request` with its provider replaced by what `wrap` makes of it.
+fn serving_through(
+    request: OsDragRequest,
+    wrap: impl FnOnce(OsDragProvider) -> OsDragProvider,
+) -> OsDragRequest {
+    let OsDragParts {
+        terms,
+        press,
+        provider,
+        on_end,
+        ..
+    } = request.into_parts();
+    OsDragRequest::new(terms, press, wrap(provider), on_end)
 }
 
 /// The provider goes with the data object's last reference, inside COM's
@@ -1190,19 +1248,26 @@ fn releasing_request(
     released: &Rc<Cell<bool>>,
     end_panics: bool,
 ) -> OsDragRequest {
-    let mut request = request(ended);
-    let mut serve = request.provider;
     let capture = Released(Rc::clone(released));
-    request.provider = Box::new(move |index| {
-        let _ = &capture;
-        serve(index)
-    });
-    let end = request.on_end;
-    request.on_end = Box::new(move |how| {
-        end(how);
-        assert!(!end_panics, "a session's end hook panicked");
-    });
-    request
+    let OsDragParts {
+        terms,
+        press,
+        provider: mut serve,
+        on_end: end,
+        ..
+    } = request(ended).into_parts();
+    OsDragRequest::new(
+        terms,
+        press,
+        Box::new(move |index| {
+            let _ = &capture;
+            serve(index)
+        }),
+        Box::new(move |how| {
+            end(how);
+            assert!(!end_panics, "a session's end hook panicked");
+        }),
+    )
 }
 
 /// A provider that panics serving a fetch is dropped at once, contained, and
@@ -1213,13 +1278,15 @@ fn a_provider_that_panicked_is_dropped_and_not_called_again() {
 
     let (ended, released) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
     let calls = Rc::new(Cell::new(0_u32));
-    let mut session = request(&ended);
     let capture = Released(Rc::clone(&released));
     let counted = Rc::clone(&calls);
-    session.provider = Box::new(move |_| {
-        let _ = &capture;
-        counted.set(counted.get() + 1);
-        panic!("a drag's provider panicked");
+    let session = serving_through(request(&ended), |serve| {
+        drop(serve);
+        Box::new(move |_| {
+            let _ = &capture;
+            counted.set(counted.get() + 1);
+            panic!("a drag's provider panicked");
+        })
     });
     let data = data_object(session);
     for _ in 0..2 {
@@ -1259,6 +1326,54 @@ fn pending(
     hold_mouse_buttons(0);
     assert_eq!(started, Ok(()));
     (platform, source, drag)
+}
+
+/// A request begun by a press that has ended is refused, though the same
+/// mouse is pressed again and holds its button: the session would start from
+/// that later press. Red-check: resolve the contact by its pointer id.
+fn a_request_from_a_press_the_window_does_not_hold_is_refused() {
+    use crate::input::assembly::{NativeContact, ReadingAction};
+    use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind};
+
+    let platform = WindowsPlatform::try_new().expect("platform");
+    let source = open(&platform, "flui stale press", |_| {});
+    let drag = source
+        .host
+        .drag_source()
+        .expect("a Win32 window starts OS drags");
+    let mouse = |action| {
+        decode_reading(
+            source.hwnd,
+            NativeContact(0x77),
+            PointerKind::Mouse,
+            action,
+            None,
+        )
+    };
+    let first = mouse(ReadingAction::Press(PointerButton::PRIMARY));
+    let ended_press = press_of(&first);
+    mouse(ReadingAction::Release(PointerButton::PRIMARY));
+    let again = mouse(ReadingAction::Press(PointerButton::PRIMARY));
+    let pointer = |inputs: &[PlatformInput]| {
+        inputs.iter().find_map(|input| match input {
+            PlatformInput::Pointer(PointerEvent::Down(down)) => Some(down.pointer.id),
+            _ => None,
+        })
+    };
+    assert_eq!(pointer(&first), pointer(&again), "the mouse keeps its pointer id");
+    assert_ne!(press_of(&again), ended_press);
+    let ended = Rc::new(Cell::new(None));
+    hold_mouse_buttons(MK_LBUTTON.0);
+    let started = drag.start(pressed_by(request(&ended), ended_press));
+    hold_mouse_buttons(0);
+    assert_eq!(
+        started,
+        Err(DragError::Unsupported(Unsupported::new(
+            UnsupportedReason::Unavailable
+        ))),
+        "a press the window does not hold starts no session"
+    );
+    assert_eq!(ended.get(), None, "a refused session is never told an end");
 }
 
 /// A session accepted but never started is told `Cancelled` as its owner
@@ -1309,7 +1424,7 @@ fn a_pending_session_ends_when_its_platform_unwinds() {
 
 /// A drag source reads the contacts of the window it was made for, never of
 /// a window the OS later built behind the same handle. Red-check: read the
-/// context by handle alone in `contact_kind`.
+/// context by handle alone in `press_kind`.
 fn a_drag_source_reads_only_its_own_windows_contacts() {
     use crate::owner::windows::WindowRef;
     use flui_platform::pointer::{PenTool, PointerKind};
@@ -1327,21 +1442,17 @@ fn a_drag_source_reads_only_its_own_windows_contacts() {
             .identity
     };
     let pen = pen_pressed(second.hwnd);
-    let own = super::Win32DragSource::new(
-        Arc::clone(&transport),
-        WindowRef::new(second.hwnd, identity(&second)),
-    );
+    let inputs = crate::owner::windows::window_inputs().expect("the loop's window inputs");
     assert_eq!(
-        own.contact_kind(Some(pen)),
+        inputs.press_kind(WindowRef::new(second.hwnd, identity(&second)), pen),
         Some(PointerKind::Pen { tool: PenTool::Tip })
     );
     // The second window's handle with the first's identity, as for a source
     // whose window closed and whose handle the OS recycled.
-    let recycled = super::Win32DragSource::new(
-        Arc::clone(&transport),
-        WindowRef::new(second.hwnd, identity(&first)),
+    assert_eq!(
+        inputs.press_kind(WindowRef::new(second.hwnd, identity(&first)), pen),
+        None
     );
-    assert_eq!(recycled.contact_kind(Some(pen)), None);
 }
 
 /// A dropped offer stays open past its window's close, for the owner to
@@ -1357,12 +1468,12 @@ fn a_drop_concluded_after_its_window_closed_releases_the_data_object() {
     );
     let released = Rc::new(Cell::new(false));
     let ended = Rc::new(Cell::new(None));
-    let mut session = request(&ended);
-    let mut serve = session.provider;
     let capture = Released(Rc::clone(&released));
-    session.provider = Box::new(move |index| {
-        let _ = &capture;
-        serve(index)
+    let session = serving_through(request(&ended), |mut serve| {
+        Box::new(move |index| {
+            let _ = &capture;
+            serve(index)
+        })
     });
     let data = data_object(session);
     let ole = target.ole.clone();
@@ -1535,6 +1646,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_drag_the_os_loop_cannot_carry_stays_in_its_window",
                 a_drag_the_os_loop_cannot_carry_stays_in_its_window,
+            ),
+            (
+                "a_request_from_a_press_the_window_does_not_hold_is_refused",
+                a_request_from_a_press_the_window_does_not_hold_is_refused,
             ),
             (
                 "a_second_window_repaints_while_the_modal_loop_rests",

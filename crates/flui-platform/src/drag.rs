@@ -21,6 +21,7 @@ use crate::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
     TransferError, TransferFormat, TransferPayload,
 };
+use crate::pointer::PressId;
 use crate::{Unsupported, UnsupportedReason};
 
 /// Why a drag could not start, or could not continue as asked (ADR-0211 §6).
@@ -48,6 +49,10 @@ pub enum DragError {
     /// drag source), or not for this contact. The session stays in-window.
     #[error("no OS drag session can start: {0}")]
     Unsupported(#[from] Unsupported),
+    /// What the drag offers cannot be offered to the OS. The session stays
+    /// in-window.
+    #[error(transparent)]
+    Terms(#[from] DragRequestError),
 }
 
 impl DragError {
@@ -60,7 +65,8 @@ impl DragError {
             | Self::NoAllowedActions
             | Self::NoOutsideActions
             | Self::NoSerializedRepresentation
-            | Self::SessionClosed => None,
+            | Self::SessionClosed
+            | Self::Terms(_) => None,
         }
     }
 }
@@ -272,33 +278,203 @@ pub type OsDragProvider =
 /// Told once, on the owner thread, how the OS session ended.
 pub type OsDragEndHook = Box<dyn FnOnce(OsDragEnd)>;
 
+/// Why the terms of an OS drag session could not be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum DragRequestError {
+    /// No action is advertised: no OS session may announce an empty mask.
+    #[error("an OS drag session advertises no action")]
+    NoActions,
+    /// More representations than a [`RepresentationIndex`] names, counting
+    /// the identity representation the terms add last.
+    #[error("an OS drag session offers more representations than an index names")]
+    TooManyRepresentations,
+    /// A serialized representation is of the identity's media type
+    /// ([`IDENTITY_ESSENCE`]): a target reading the first identity in the
+    /// offer would take the drag for another session.
+    #[error("a serialized representation claims the drag identity's media type")]
+    ClaimsIdentity,
+}
+
+/// What an OS drag session offers and allows, checked as it is built: at
+/// least one action, every representation addressable by a
+/// [`RepresentationIndex`], and the session's identity representation last
+/// and only there.
+#[derive(Clone, Debug)]
+pub struct OsDragTerms {
+    key: DragSessionKey,
+    representations: Vec<RepresentationDescriptor>,
+    allowed: TransferActions,
+}
+
+impl OsDragTerms {
+    /// The terms of `key`'s session: `serialized`, in the source's preference
+    /// order, followed by the identity representation of `key`, under the
+    /// advertised actions `allowed`.
+    ///
+    /// # Errors
+    ///
+    /// [`DragRequestError::NoActions`] when `allowed` is empty,
+    /// [`DragRequestError::TooManyRepresentations`] when `serialized` and the
+    /// identity together pass the last index, and
+    /// [`DragRequestError::ClaimsIdentity`] when a serialized representation
+    /// is of the identity's media type.
+    pub fn try_new(
+        key: DragSessionKey,
+        mut serialized: Vec<RepresentationDescriptor>,
+        allowed: TransferActions,
+    ) -> Result<Self, DragRequestError> {
+        if allowed.is_empty() {
+            return Err(DragRequestError::NoActions);
+        }
+        // The identity takes the last index, so the serialized ones end one
+        // short of the index space.
+        if serialized.len() > usize::from(u16::MAX) {
+            return Err(DragRequestError::TooManyRepresentations);
+        }
+        if serialized
+            .iter()
+            .any(|descriptor| descriptor.format.is_drag_identity())
+        {
+            return Err(DragRequestError::ClaimsIdentity);
+        }
+        serialized.push(key.representation());
+        Ok(Self {
+            key,
+            representations: serialized,
+            allowed,
+        })
+    }
+
+    /// The session these terms start.
+    #[must_use]
+    pub const fn key(&self) -> DragSessionKey {
+        self.key
+    }
+
+    /// Every representation offered, in the source's preference order, the
+    /// identity representation last.
+    #[must_use]
+    pub fn representations(&self) -> &[RepresentationDescriptor] {
+        &self.representations
+    }
+
+    /// Each representation with the index its provider serves it under.
+    pub fn indexed(&self) -> impl ExactSizeIterator<Item = (RepresentationIndex, &RepresentationDescriptor)> {
+        self.representations.iter().enumerate().map(|(index, descriptor)| {
+            let index = u16::try_from(index)
+                .expect("BUG: OsDragTerms::try_new keeps every index within u16");
+            (RepresentationIndex(index), descriptor)
+        })
+    }
+
+    /// The actions advertised to the OS; never empty.
+    #[must_use]
+    pub const fn allowed(&self) -> TransferActions {
+        self.allowed
+    }
+
+    /// The representations, the identity last, for a backend that keeps
+    /// them past the terms.
+    #[must_use]
+    pub fn into_representations(self) -> Vec<RepresentationDescriptor> {
+        self.representations
+    }
+}
+
 /// What the runtime asks a window's OS drag session to do. Neither `Send` nor
 /// `Sync`: the provider holds owner-thread state, and the backend keeps the
 /// request on the owner thread.
+///
+/// Its terms were checked as they were built ([`OsDragTerms::try_new`]); a
+/// backend takes the request apart with [`Self::into_parts`].
 #[must_use = "an OS drag request does nothing until a drag source starts it"]
 pub struct OsDragRequest {
-    /// The session this request starts.
-    pub key: DragSessionKey,
-    /// The contact whose native event began the drag, for backends whose start
-    /// call needs it (AppKit's dragging event, Wayland's grab serial).
-    pub pointer: Option<crate::PointerId>,
-    /// What the session offers, in the source's preference order, ending with
-    /// the identity representation.
-    pub representations: Vec<RepresentationDescriptor>,
-    /// The actions advertised to the OS. Never empty.
-    pub allowed: TransferActions,
-    /// Serves a representation by its index in [`Self::representations`].
+    terms: OsDragTerms,
+    press: Option<PressId>,
+    provider: OsDragProvider,
+    on_end: OsDragEndHook,
+}
+
+/// An [`OsDragRequest`] taken apart by the backend that starts it.
+#[non_exhaustive]
+pub struct OsDragParts {
+    /// What the session offers and allows.
+    pub terms: OsDragTerms,
+    /// The press sequence that began the drag, as its host minted it; `None`
+    /// for a drag no decoded press began.
+    pub press: Option<PressId>,
+    /// Serves a representation by its index in the terms.
     pub provider: OsDragProvider,
     /// Told once how the session ended.
     pub on_end: OsDragEndHook,
 }
 
+impl OsDragRequest {
+    /// A request to start the session of `terms`, begun by the press sequence
+    /// `press`, serving its representations from `provider` and telling
+    /// `on_end` once how it ended.
+    pub fn new(
+        terms: OsDragTerms,
+        press: Option<PressId>,
+        provider: OsDragProvider,
+        on_end: OsDragEndHook,
+    ) -> Self {
+        Self {
+            terms,
+            press,
+            provider,
+            on_end,
+        }
+    }
+
+    /// What the session offers and allows.
+    #[must_use]
+    pub const fn terms(&self) -> &OsDragTerms {
+        &self.terms
+    }
+
+    /// The press sequence that began the drag. A backend whose start call
+    /// needs that press's native event (AppKit's mouse event, Wayland's grab
+    /// serial, the contact Win32 reads) resolves it by this id, and refuses
+    /// the request when the window no longer holds that press, rather than
+    /// start from a later press of the same contact.
+    #[must_use]
+    pub const fn press(&self) -> Option<PressId> {
+        self.press
+    }
+
+    /// The request's parts, for the backend that starts it.
+    pub fn into_parts(self) -> OsDragParts {
+        let Self {
+            terms,
+            press,
+            provider,
+            on_end,
+        } = self;
+        OsDragParts {
+            terms,
+            press,
+            provider,
+            on_end,
+        }
+    }
+}
+
 impl fmt::Debug for OsDragRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OsDragRequest")
-            .field("key", &self.key)
-            .field("allowed", &self.allowed)
-            .field("representations", &self.representations.len())
+            .field("terms", &self.terms)
+            .field("press", &self.press)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for OsDragParts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OsDragParts")
+            .field("terms", &self.terms)
+            .field("press", &self.press)
             .finish_non_exhaustive()
     }
 }

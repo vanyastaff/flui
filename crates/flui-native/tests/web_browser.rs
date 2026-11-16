@@ -25,7 +25,7 @@ use flui_platform::data_transfer::{
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
 };
 use flui_platform::drag::{
-    DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, ProcessNonce,
+    DragError, DragSessionKey, OsDragEnd, OsDragRequest, OsDragStart, OsDragTerms, ProcessNonce,
 };
 use flui_platform::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
@@ -1041,14 +1041,13 @@ fn os_drag_request(ended: &Rc<RefCell<Vec<OsDragEnd>>>) -> OsDragRequest {
         format: TransferFormat::Text,
         declared_len: None,
     };
-    let identity = key.representation();
     let ended = Rc::clone(ended);
-    OsDragRequest {
-        key,
-        pointer: None,
-        representations: vec![text, identity],
-        allowed: TransferActions::COPY | TransferActions::MOVE,
-        provider: Box::new(|index| {
+    let terms = OsDragTerms::try_new(key, vec![text], TransferActions::COPY | TransferActions::MOVE)
+        .expect("one text representation under COPY and MOVE");
+    OsDragRequest::new(
+        terms,
+        None,
+        Box::new(|index| {
             Ok(if index.0 == 0 {
                 TransferPayload::Text("dragged".to_owned())
             } else {
@@ -1058,8 +1057,8 @@ fn os_drag_request(ended: &Rc<RefCell<Vec<OsDragEnd>>>) -> OsDragRequest {
                 }
             })
         }),
-        on_end: Box::new(move |end| ended.borrow_mut().push(end)),
-    }
+        Box::new(move |end| ended.borrow_mut().push(end)),
+    )
 }
 
 /// The canvas is draggable, and the browser's `dragstart` starts the HTML

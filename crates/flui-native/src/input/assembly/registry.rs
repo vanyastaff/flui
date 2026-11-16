@@ -10,7 +10,7 @@ use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, PointerSignal, Pressure, TangentialPressure, Twist,
+    PointerSample, PointerSignal, PressId, Pressure, TangentialPressure, Twist,
 };
 
 use super::batch::MoveBatch;
@@ -263,6 +263,14 @@ impl ContactKey {
     }
 }
 
+/// A press sequence in progress: the id its events carry and the reading
+/// that began it, which a native drag starts from.
+#[derive(Debug, Clone, Copy)]
+struct OpenPress {
+    id: PressId,
+    origin: NativeReading,
+}
+
 #[derive(Debug, Clone)]
 struct Contact {
     key: ContactKey,
@@ -271,7 +279,9 @@ struct Contact {
     clock: ClockChoice,
     last_time: Option<EventTime>,
     last_position: Option<(PointerPosition, RawPoint)>,
-    origin: Option<NativeReading>,
+    /// The press sequence in progress, from its `Down` to its `Up` or
+    /// cancellation.
+    press: Option<OpenPress>,
     gesture: PanZoomAccumulator,
     /// Whether an `Enter` was delivered for it, which its removal pairs
     /// with a `Leave`.
@@ -346,6 +356,7 @@ pub struct ContactRegistry {
     devices: DeviceRegistry,
     contacts: Vec<Contact>,
     pointers: IdMint<NonZeroU64>,
+    presses: IdMint<PressId>,
     reserved: Option<NativeContact>,
     clicks: ClickCounter,
     #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -377,6 +388,7 @@ impl ContactRegistry {
             devices: DeviceRegistry::default(),
             contacts: Vec::new(),
             pointers: IdMint::new(),
+            presses: IdMint::new(),
             reserved: None,
             clicks: ClickCounter::default(),
             #[cfg(all(debug_assertions, feature = "native-capture"))]
@@ -519,15 +531,16 @@ impl ContactRegistry {
         Some(self.contacts[index].buttons.held())
     }
 
-    /// The reading that started `pointer`'s current press sequence, kept
-    /// until the sequence ends so a native drag can start from it.
+    /// The reading that began the press sequence `press`, while that sequence
+    /// is in progress, so a native drag starts from it; `None` once it ended,
+    /// even when the same contact is pressed again.
     #[must_use]
-    pub fn origin(&self, pointer: PointerId) -> Option<&NativeReading> {
+    pub fn press_origin(&self, press: PressId) -> Option<&NativeReading> {
         self.contacts
             .iter()
-            .find(|contact| contact.info.id == pointer)?
-            .origin
-            .as_ref()
+            .filter_map(|contact| contact.press.as_ref())
+            .find(|open| open.id == press)
+            .map(|open| &open.origin)
     }
 
     /// The native contact of a pen in range (touching or hovering): the one
@@ -784,7 +797,7 @@ impl ContactRegistry {
             clock,
             last_time: None,
             last_position: None,
-            origin: None,
+            press: None,
             gesture: PanZoomAccumulator::default(),
             entered: false,
         });
@@ -887,7 +900,7 @@ impl ContactRegistry {
             let ending = if contact.persists() {
                 let ending = contact.ending(time, reason);
                 contact.buttons.clear();
-                contact.origin = None;
+                contact.press = None;
                 contact.gesture = PanZoomAccumulator::default();
                 contact.last_time = Some(time);
                 ending
@@ -1002,7 +1015,7 @@ impl ContactRegistry {
                 {
                     // Where the release happened is unknown: the press is
                     // taken back, not completed here.
-                    contact.origin = None;
+                    contact.press = None;
                     contact.buttons.clear();
                     output.push(PlatformInput::Pointer(PointerEvent::Cancel(
                         PointerCancel::new(info, time, CancelReason::Platform),
@@ -1035,11 +1048,24 @@ impl ContactRegistry {
                         if let Some(count) = count {
                             press = press.with_click_count(count);
                         }
+                        // A press past the last id still arrives, with no id:
+                        // nothing native can start from it.
+                        let begun = (transition == ButtonTransition::Down)
+                            .then(|| self.presses.next().ok())
+                            .flatten();
                         let contact = &mut self.contacts[index];
                         contact.buttons.press(button, reading.buttons);
+                        if transition == ButtonTransition::Down {
+                            contact.press = begun.map(|id| OpenPress {
+                                id,
+                                origin: *reading,
+                            });
+                        }
+                        if let Some(open) = contact.press {
+                            press = press.with_press(open.id);
+                        }
                         output.push(PlatformInput::Pointer(
                             if transition == ButtonTransition::Down {
-                                contact.origin = Some(*reading);
                                 PointerEvent::Down(press)
                             } else {
                                 PointerEvent::ButtonChange(ButtonChange::Pressed(press))
@@ -1057,10 +1083,13 @@ impl ContactRegistry {
                 if let Some(sample) = current
                     && transition != ButtonTransition::Ignored
                 {
-                    let release =
+                    let mut release =
                         PointerRelease::new(info, button, before, sample).with_modifiers(modifiers);
+                    if let Some(open) = contact.press {
+                        release = release.with_press(open.id);
+                    }
                     if transition == ButtonTransition::Up {
-                        contact.origin = None;
+                        contact.press = None;
                         contact.buttons.clear();
                         remove = !contact.hovers();
                         output.push(PlatformInput::Pointer(PointerEvent::Up(release)));

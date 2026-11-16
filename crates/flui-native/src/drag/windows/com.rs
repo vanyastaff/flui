@@ -17,7 +17,7 @@ use flui_foundation::geometry::Point;
 use flui_platform::data_transfer::{
     RepresentationDescriptor, RepresentationIndex, TransferActions,
 };
-use flui_platform::drag::OsDragProvider;
+use flui_platform::drag::{OsDragProvider, OsDragTerms};
 use flui_platform::{DragDropEvent, PlatformInput};
 use windows::Win32::{
     Foundation::{
@@ -151,16 +151,10 @@ pub(super) struct SourceEntry {
 }
 
 impl SourceData {
-    /// The data object of a session offering `representations`.
-    pub(super) fn new(
-        representations: &[RepresentationDescriptor],
-        provider: OsDragProvider,
-    ) -> Self {
+    /// The data object of a session offering what `terms` offer.
+    pub(super) fn new(terms: &OsDragTerms, provider: OsDragProvider) -> Self {
         let mut entries: Vec<SourceEntry> = Vec::new();
-        for (index, descriptor) in representations.iter().enumerate() {
-            let Ok(index) = u16::try_from(index) else {
-                break;
-            };
+        for (representation, descriptor) in terms.indexed() {
             let native = native_format(&descriptor.format);
             let Some(format) = clipboard_format(&native) else {
                 tracing::warn!(?descriptor.format, "no clipboard format; the representation is not offered");
@@ -182,7 +176,7 @@ impl SourceData {
             entries.push(SourceEntry {
                 format,
                 native,
-                representation: RepresentationIndex(index),
+                representation,
                 identity,
             });
         }

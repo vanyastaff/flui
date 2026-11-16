@@ -27,11 +27,14 @@ use flui_interaction::{
     PenTool, PointerEvent, PointerId, PointerInfo,
 };
 use flui_platform::data_transfer::{
-    DataTransferOffer, DragTransport, DropFeedback, RepresentationIndex, TransferActions,
+    DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
     TransferCompleter, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
 };
-use flui_platform::drag::{OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource};
+use flui_platform::drag::{
+    DragRequestError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource,
+};
+use flui_platform::pointer::PressId;
 use flui_platform::{
     DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowId,
 };
@@ -487,6 +490,18 @@ impl Fixture {
         reach: Option<DragReach>,
         items: Vec<DragItem>,
     ) -> DragSession {
+        self.start_pressed(window, allowed, reach, items, None)
+    }
+
+    /// [`Self::start_with`], begun by the press sequence `press`.
+    fn start_pressed(
+        &self,
+        window: Rc<dyn PlatformWindow>,
+        allowed: AllowedActions,
+        reach: Option<DragReach>,
+        items: Vec<DragItem>,
+        press: Option<PressId>,
+    ) -> DragSession {
         let mut start = DragStart::new(self.presentation, items, allowed)
             .pointer(PointerInfo::new(
                 PointerId::try_from(1_u64).expect("pointer"),
@@ -498,13 +513,16 @@ impl Fixture {
         if let Some(reach) = reach {
             start = start.reach(reach);
         }
+        if let Some(press) = press {
+            start = start.press(press);
+        }
         // The session holds its window weakly; the fixture keeps it open.
         self.windows.borrow_mut().push(window);
         self.handle.start(start).expect("a valid drag starts")
     }
 
-    fn offer_for(&self, request: &OsDragRequest) -> DataTransferOffer {
-        DataTransferOffer::new(self.mint(), Arc::from(request.representations.clone()))
+    fn offer_for(&self, request: &OsDragParts) -> DataTransferOffer {
+        DataTransferOffer::new(self.mint(), Arc::from(request.terms.representations()))
     }
 
     /// A fresh offer id, as the OS's one table mints it: never one minted
@@ -561,12 +579,15 @@ fn moved(session: &DragSession, x: f64) -> MoveOutcome {
     session.pointer_moved(at(x), None).expect("a live session")
 }
 
-fn take_started() -> Vec<OsDragRequest> {
+fn take_started() -> Vec<OsDragParts> {
     STARTED.with(|started| std::mem::take(&mut *started.borrow_mut()))
+        .into_iter()
+        .map(OsDragRequest::into_parts)
+        .collect()
 }
 
 /// Enter `pending` on a backend that accepts it: the request the OS now holds.
-fn enter_os(pending: PendingOsDrag) -> OsDragRequest {
+fn enter_os(pending: PendingOsDrag) -> OsDragParts {
     pending
         .start(Some(&FakeDragSource(OsDragStart::OnLeavingWindow)))
         .expect("the backend accepts");
@@ -575,7 +596,7 @@ fn enter_os(pending: PendingOsDrag) -> OsDragRequest {
 
 /// The single OS session `f`'s drags decided on, entered on a backend that
 /// accepts it.
-fn enter_one(f: &Fixture) -> OsDragRequest {
+fn enter_one(f: &Fixture) -> OsDragParts {
     let mut pending = f.owner.take_pending_os_drags();
     assert_eq!(pending.len(), 1, "one OS session");
     enter_os(pending.remove(0))
@@ -914,9 +935,9 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     assert_eq!(outcome, MoveOutcome::Escalating, "{name}");
                     assert_eq!(pending.len(), 1, "{name}");
                     let request = enter_os(pending.remove(0));
-                    assert_eq!(request.allowed, COPY | MOVE, "{name}");
+                    assert_eq!(request.terms.allowed(), COPY | MOVE, "{name}");
                     assert_eq!(
-                        request.representations.len(),
+                        request.terms.representations().len(),
                         2,
                         "text and identity: {name}"
                     );
@@ -942,8 +963,8 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
                     assert_eq!(outcome, MoveOutcome::Escalating, "{name}");
                     assert_eq!(pending.len(), 1, "{name}");
                     let request = enter_os(pending.remove(0));
-                    assert_eq!(request.allowed, MOVE, "within_app is advertised: {name}");
-                    assert_eq!(request.representations.len(), 1, "identity only: {name}");
+                    assert_eq!(request.terms.allowed(), MOVE, "within_app is advertised: {name}");
+                    assert_eq!(request.terms.representations().len(), 1, "identity only: {name}");
                     assert_eq!(session.stage(), Ok(DragStage::System), "{name}");
                 }
             }
@@ -1073,7 +1094,7 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
         let request = enter_one(&f);
         assert_eq!(
-            request.allowed, MOVE,
+            request.terms.allowed(), MOVE,
             "the identity-only session advertises within_app"
         );
         let offer = f.offer_for(&request);
@@ -1418,10 +1439,10 @@ fn value_is_redeemed_only_in_source_runtime() {
         drop(w);
         (request, session)
     });
-    assert_eq!(request.representations.len(), 2);
+    assert_eq!(request.terms.representations().len(), 2);
     let offer = a.offer_for(&request);
     // The OS holds the end hook until the drag ends.
-    let OsDragRequest {
+    let OsDragParts {
         mut provider,
         on_end,
         ..
@@ -2395,6 +2416,70 @@ impl PlatformDragSource for HoardingDragSource {
     }
 }
 
+/// The OS session names the press its drag began in, so the backend starts
+/// from that press and no later one; and a drag whose representations cannot
+/// be offered to the OS (one claims the identity's media type, which a target
+/// reading the first identity would take for another session) is refused at
+/// the window's edge and stays in it. Red-check: drop the press from the
+/// request, or offer the serialized representations unchecked.
+fn an_os_session_names_its_press_and_offers_only_what_it_can() {
+    in_lane(|f| {
+        let press = IdMint::<PressId>::new().next().expect("fresh mint");
+        let session = f.start_pressed(
+            desktop(),
+            AllowedActions::new(COPY, COPY),
+            None,
+            vec![DragItem::new().with_text("payload")],
+            Some(press),
+        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
+        let request = enter_one(f);
+        assert_eq!(request.press, Some(press), "the press reaches the backend");
+        let identity = request.terms.representations().last().expect("identity");
+        assert!(identity.format.is_drag_identity(), "the identity is last");
+    });
+    in_lane(|f| {
+        // A press released before the host entered the session takes the
+        // session with it: no backend is asked to start from whatever press
+        // holds the contact by then.
+        let press = IdMint::<PressId>::new().next().expect("fresh mint");
+        let session = f.start_pressed(
+            desktop(),
+            AllowedActions::new(COPY, COPY),
+            None,
+            vec![DragItem::new().with_text("payload")],
+            Some(press),
+        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
+        session
+            .pointer_released(at(150.0), None)
+            .expect("a live session");
+        assert!(f.owner.take_pending_os_drags().is_empty(), "nothing to enter");
+    });
+    in_lane(|f| {
+        let claimed = TransferFormat::Custom {
+            mime: Mime::new(&format!(
+                "{};process=1;runtime=1.1;session=1",
+                flui_platform::drag::IDENTITY_ESSENCE
+            )),
+        };
+        let session = f.start_with(
+            desktop(),
+            AllowedActions::new(COPY, COPY),
+            None,
+            vec![
+                DragItem::new()
+                    .with_text("payload")
+                    .with_serialized(claimed, || Err(TransferError::Cancelled)),
+            ],
+        );
+        let refused = DragError::Terms(DragRequestError::ClaimsIdentity);
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Refused(refused));
+        assert!(f.owner.take_pending_os_drags().is_empty(), "nothing to enter");
+        assert_eq!(session.stage(), Ok(DragStage::InWindow));
+    });
+}
+
 /// A session that left its window and waits for the host to enter its OS session.
 fn escalated(f: &Fixture) -> DragSession {
     let session = f.start_with(
@@ -2520,7 +2605,7 @@ fn an_os_end_whose_value_fails_to_drop_still_tells_the_observer() {
             ],
         );
         assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
-        let OsDragRequest {
+        let OsDragParts {
             provider, on_end, ..
         } = enter_os(the_one_pending(f));
         drop(provider);
@@ -3135,6 +3220,10 @@ fn drag_sessions() {
     run_table(
         "drag sessions",
         &[
+            (
+                "an_os_session_names_its_press_and_offers_only_what_it_can",
+                an_os_session_names_its_press_and_offers_only_what_it_can,
+            ),
             (
                 "a_fetch_is_held_to_its_limit_on_every_path",
                 a_fetch_is_held_to_its_limit_on_every_path,

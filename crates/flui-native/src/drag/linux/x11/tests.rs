@@ -20,7 +20,10 @@ use flui_platform::data_transfer::{
     TransferActions, TransferError, TransferFormat, TransferLimits, TransferPayload,
     TransferRequest,
 };
-use flui_platform::drag::{DragError, DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+use flui_platform::drag::{
+    DragError, DragSessionKey, OsDragEnd, OsDragProvider, OsDragRequest, OsDragTerms,
+    ProcessNonce,
+};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{DispatchEventResult, DragDropEvent, PlatformInput, WindowId};
 use flui_testing::window_handler::RecordingWindowHandler;
@@ -1481,25 +1484,33 @@ fn key() -> DragSessionKey {
 /// A session offering text and its identity, allowing a copy or a move,
 /// telling `ended` how it ended.
 fn request(ended: &Rc<Cell<Option<OsDragEnd>>>) -> OsDragRequest {
-    let key = key();
-    let ended = Rc::clone(ended);
-    OsDragRequest {
-        key,
-        pointer: None,
-        representations: vec![
-            RepresentationDescriptor {
-                format: TransferFormat::Text,
-                declared_len: None,
-            },
-            key.representation(),
-        ],
-        allowed: TransferActions::COPY | TransferActions::MOVE,
-        provider: Box::new(|RepresentationIndex(index)| match index {
+    request_serving(
+        ended,
+        Box::new(|RepresentationIndex(index)| match index {
             0 => Ok(TransferPayload::Text("dragged \u{2713}".to_owned())),
             _ => Err(TransferError::Cancelled),
         }),
-        on_end: Box::new(move |end| ended.set(Some(end))),
-    }
+    )
+}
+
+/// [`request`] serving its representations from `provider`.
+fn request_serving(ended: &Rc<Cell<Option<OsDragEnd>>>, provider: OsDragProvider) -> OsDragRequest {
+    let ended = Rc::clone(ended);
+    let terms = OsDragTerms::try_new(
+        key(),
+        vec![RepresentationDescriptor {
+            format: TransferFormat::Text,
+            declared_len: None,
+        }],
+        TransferActions::COPY | TransferActions::MOVE,
+    )
+    .expect("one text representation under COPY and MOVE");
+    OsDragRequest::new(
+        terms,
+        None,
+        provider,
+        Box::new(move |end| ended.set(Some(end))),
+    )
 }
 
 /// Another application's window taking drops, at (400, 300) on the root
@@ -2091,12 +2102,14 @@ fn an_end_hook_hears_the_end_though_the_provider_fails_as_it_drops() {
     let atoms = &other.atoms;
     let _held = Held::press(&other.connection);
     let ended = Rc::new(Cell::new(None));
-    let mut failing = request(&ended);
     let capture = FailsOnDrop;
-    failing.provider = Box::new(move |_| {
-        let _held = &capture;
-        Err(TransferError::Cancelled)
-    });
+    let failing = request_serving(
+        &ended,
+        Box::new(move |_| {
+            let _held = &capture;
+            Err(TransferError::Cancelled)
+        }),
+    );
     target.start(failing).expect("the session starts");
     target.pointer_to((450, 350), 100);
     heard_by(&other, &target, atoms.position);
@@ -2404,13 +2417,13 @@ fn convert_into(
 
 /// A session offering `text` alone, telling `ended` how it ended.
 fn request_of(ended: &Rc<Cell<Option<OsDragEnd>>>, text: String) -> OsDragRequest {
-    OsDragRequest {
-        provider: Box::new(move |RepresentationIndex(index)| match index {
+    request_serving(
+        ended,
+        Box::new(move |RepresentationIndex(index)| match index {
             0 => Ok(TransferPayload::Text(text.clone())),
             _ => Err(TransferError::Cancelled),
         }),
-        ..request(ended)
-    }
+    )
 }
 
 /// Text of `len` bytes, every chunk of it different.

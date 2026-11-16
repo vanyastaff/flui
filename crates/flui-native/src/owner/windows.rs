@@ -229,12 +229,12 @@ pub(crate) trait WindowInputs {
     /// Whether the mouse is over the window's client area.
     fn hovered(&self, window: WindowRef) -> Option<bool>;
 
-    /// The kind of the contact whose press began `pointer`'s sequence in the
-    /// window.
+    /// The kind of the contact whose press began the sequence `press` in the
+    /// window, while that sequence is in progress; `None` once it ended.
     fn press_kind(
         &self,
         window: WindowRef,
-        pointer: flui_platform::PointerId,
+        press: flui_platform::pointer::PressId,
     ) -> Option<flui_platform::pointer::PointerKind>;
 
     /// The OS's id of a pen contact in range of the window (touching or

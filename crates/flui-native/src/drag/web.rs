@@ -211,10 +211,9 @@ mod mapping {
         provider: &mut OsDragProvider,
     ) -> Result<Vec<(String, String)>, ProviderPanicked> {
         let mut out = Vec::new();
-        for (index, descriptor) in representations.iter().enumerate() {
-            let Ok(index) = u16::try_from(index) else {
-                break;
-            };
+        // A drag's terms keep every representation within an index
+        // (`OsDragTerms::try_new`).
+        for (index, descriptor) in (0..=u16::MAX).zip(representations) {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a drag provider's panic is reported as a failed transfer"
@@ -287,7 +286,7 @@ use flui_platform::{
         RepresentationIndex, TransferActions, TransferError, TransferFormat, TransferLimits,
         TransferPayload, TransferRequest,
     },
-    drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
+    drag::{DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
 };
 #[cfg(target_arch = "wasm32")]
 use parking_lot::Mutex;
@@ -604,9 +603,9 @@ impl WebDragSource {
         match outgoing {
             Outgoing::Idle => {}
             Outgoing::Waiting(request) => {
-                let OsDragRequest {
+                let OsDragParts {
                     provider, on_end, ..
-                } = request;
+                } = request.into_parts();
                 contain_owner_callback(|| drop(provider));
                 contain_owner_callback(|| on_end(OsDragEnd::Cancelled));
             }
@@ -626,20 +625,20 @@ impl WebDragSource {
             self.refused.set(true);
             return false;
         };
-        let OsDragRequest {
-            representations,
-            allowed,
+        let OsDragParts {
+            terms,
             mut provider,
             on_end,
             ..
-        } = request;
+        } = request.into_parts();
+        let allowed = terms.allowed();
         let Some(transfer) = transfer else {
             contain_owner_callback(|| drop(provider));
             contain_owner_callback(|| on_end(OsDragEnd::Cancelled));
             self.refused.set(true);
             return false;
         };
-        let served = serve_stored(&representations, &mut provider);
+        let served = serve_stored(terms.representations(), &mut provider);
         contain_owner_callback(|| drop(provider));
         // A provider that panicked ends its session here, before the drag
         // is refused: no later `dragend` would reach it.
@@ -673,9 +672,9 @@ impl PlatformDragSource for WebDragSource {
         if !startable {
             // The request is dropped here, outside any borrow: the session
             // stays in its window.
-            let OsDragRequest {
+            let OsDragParts {
                 provider, on_end, ..
-            } = request;
+            } = request.into_parts();
             contain_owner_callback(|| drop(provider));
             drop(on_end);
             return Err(Unsupported::new(UnsupportedReason::Unavailable).into());

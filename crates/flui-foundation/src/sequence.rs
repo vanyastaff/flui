@@ -65,7 +65,7 @@ mod sealed {
 
 /// An identity an [`IdMint`] can issue. Sealed: each implementor is an id
 /// whose only source is a mint — no `Default`, no conversion from a number
-/// (`ListenerId`, `FrameCallbackId`, `TaskId`, `InputSequenceId`), an id a
+/// (`ListenerId`, `FrameCallbackId`, `TaskId`, `PressId`, `InputSequenceId`), an id a
 /// private wire representation names back (`DragSessionId`), or the raw
 /// `NonZeroU64` issue for an identity type defined above this crate, whose
 /// owner keeps its constructor private.
@@ -199,6 +199,22 @@ minted_ids! {
     /// let forged = flui_foundation::TaskId::new(1);
     /// ```
     TaskId;
+
+    /// The identity of one press sequence of one contact, from the press that
+    /// begins it to the release or cancellation that ends it, minted by the
+    /// platform host that decoded the press.
+    ///
+    /// A pointer id names the contact and comes back for its next press; a
+    /// press id never does. What starts from a press later (an OS drag
+    /// session, whose start call needs the press's native event) names the
+    /// press by this id, and the host refuses an id whose sequence has ended
+    /// instead of starting from whatever press holds the contact now.
+    ///
+    /// ```compile_fail
+    /// // A press id is minted, never built from a number.
+    /// let forged = flui_foundation::PressId::new(1);
+    /// ```
+    PressId;
 }
 
 /// An owner-local issuer of identities that never reissues one.

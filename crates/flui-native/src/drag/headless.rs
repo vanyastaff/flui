@@ -26,7 +26,8 @@ use flui_platform::data_transfer::{
     TransferRequest,
 };
 use flui_platform::drag::{
-    DragError, OsDragEnd, OsDragProvider, OsDragRequest, OsDragStart, PlatformDragSource,
+    DragError, OsDragEnd, OsDragParts, OsDragProvider, OsDragRequest, OsDragStart,
+    PlatformDragSource,
 };
 use flui_platform::{DragDropEvent, PlatformInput, Unsupported, UnsupportedReason, WindowId};
 use parking_lot::Mutex;
@@ -171,13 +172,16 @@ impl PlatformDragSource for HeadlessDragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let OsDragRequest {
-            representations,
-            allowed,
+        // The press is not checked: a headless window's input is synthesized,
+        // so no press it delivers carries an id a drag could name.
+        let OsDragParts {
+            terms,
             provider,
             on_end,
             ..
-        } = request;
+        } = request.into_parts();
+        let allowed = terms.allowed();
+        let representations = terms.into_representations();
         // The slots are filled, and dropped on a refusal, before the lock is
         // taken: their values are user code.
         let slot = Arc::new(OwnerSlot::new());

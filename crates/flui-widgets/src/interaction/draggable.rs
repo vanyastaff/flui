@@ -32,7 +32,7 @@ use flui_interaction::{
 };
 use flui_platform::data_transfer::TransferActions;
 use flui_platform::haptics::{HapticRequest, HapticTiming};
-use flui_platform::pointer::PointerInfo;
+use flui_platform::pointer::{PointerInfo, PressId};
 use flui_platform::{CursorIcon, HapticFeedback};
 use flui_view::element::ElementKind;
 use flui_view::environment::GesturePolicy;
@@ -382,6 +382,14 @@ struct Capabilities {
 
 /// One draggable as its drags, recognizers and actions share it. Owner-local;
 /// no borrow of it is held while user code runs.
+/// A contact pressed on the child: who pressed, and the press sequence its
+/// host named, which an OS drag from it starts from.
+#[derive(Clone, Copy)]
+struct PressedContact {
+    info: PointerInfo,
+    press: Option<PressId>,
+}
+
 struct Source {
     config: RefCell<SourceConfig>,
     capabilities: RefCell<Capabilities>,
@@ -390,7 +398,7 @@ struct Source {
     /// The cut or copy waiting for a paste.
     held: RefCell<Option<DragSession>>,
     /// The contacts pressed on the child, as their Down reported them.
-    pressed: RefCell<Vec<PointerInfo>>,
+    pressed: RefCell<Vec<PressedContact>>,
     /// Held while a drag is live, so a lazy list scrolling the dragged row
     /// out of its cache band keeps its state and its drags (ADR-0211).
     kept_alive: RefCell<Option<KeepAliveLease>>,
@@ -467,13 +475,16 @@ impl Source {
             )
         };
         let config = self.config.borrow().clone();
-        let info = self
+        let pressed = self
             .pressed
             .borrow()
             .iter()
             .copied()
-            .find(|info| info.id == pointer)
-            .unwrap_or_else(|| PointerInfo::new(pointer, flui_interaction::PointerKind::Unknown));
+            .find(|contact| contact.info.id == pointer);
+        let info = pressed.map_or_else(
+            || PointerInfo::new(pointer, flui_interaction::PointerKind::Unknown),
+            |contact| contact.info,
+        );
         // A frame lifts the feedback from the box around the child, so it
         // starts where that box is painted.
         let frame_offset = config
@@ -498,6 +509,9 @@ impl Source {
             .drag((config.items)(), config.allowed)
             .pointer(info)
             .observer(observer);
+        if let Some(press) = pressed.and_then(|contact| contact.press) {
+            start = start.press(press);
+        }
         if let Some(reach) = config.reach {
             start = start.reach(reach);
         }
@@ -942,7 +956,12 @@ impl DraggableState {
                             // that one is handed to the drag.
                             let contacts: Vec<PointerId> =
                                 pressed.upgrade().map_or_default(|source| {
-                                    source.pressed.borrow().iter().map(|info| info.id).collect()
+                                    source
+                                        .pressed
+                                        .borrow()
+                                        .iter()
+                                        .map(|contact| contact.info.id)
+                                        .collect()
                                 });
                             for pointer in contacts {
                                 if hand_off.hand_off(pointer) {
@@ -1042,8 +1061,11 @@ impl ViewState<Draggable> for DraggableState {
                     (pressed.upgrade(), dispatch.local)
                 {
                     let mut contacts = source.pressed.borrow_mut();
-                    contacts.retain(|info| info.id != press.pointer.id);
-                    contacts.push(press.pointer);
+                    contacts.retain(|contact| contact.info.id != press.pointer.id);
+                    contacts.push(PressedContact {
+                        info: press.pointer,
+                        press: press.press(),
+                    });
                 }
             })
             .on_pointer_up(move |_ctx, dispatch| forget_contact(&lifted, dispatch.local))
@@ -1105,7 +1127,7 @@ fn forget_contact(source: &Weak<Source>, event: &PointerEvent) {
     source
         .pressed
         .borrow_mut()
-        .retain(|info| info.id != pointer);
+        .retain(|contact| contact.info.id != pointer);
 }
 
 /// Answers the cut and copy keys and commands by holding the items for a
