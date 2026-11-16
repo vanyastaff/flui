@@ -120,6 +120,11 @@ impl TextStoreHost for Host {
         self.panic_if_told("complete");
         self.answer.get()
     }
+
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {
+        self.enter("show keyboard");
+        self.leave();
+    }
 }
 
 fn pull_owner() -> (Rc<TextInputOwner>, Rc<Host>, Log) {

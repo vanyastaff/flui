@@ -152,6 +152,8 @@ impl flui_platform::TextStoreHost for FocusLog {
     > {
         Ok(flui_platform::text_store::CompositionEnd::Committed)
     }
+
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
 }
 
 /// A window that carries a text-store host takes text input through it, even

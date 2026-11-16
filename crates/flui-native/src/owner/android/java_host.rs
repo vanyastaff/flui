@@ -31,7 +31,7 @@ use crate::PlatformError;
 /// the native methods and their signatures, the methods the library calls,
 /// the entries of the queue, and what each means. `FluiHost.PROTOCOL` states
 /// it on the Java side; the two are raised together.
-pub(crate) const PROTOCOL: i32 = 4;
+pub(crate) const PROTOCOL: i32 = 5;
 
 /// The binary name of the Activity class the manifest names.
 pub(crate) const ACTIVITY_CLASS: &str = "dev.flui.platform.FluiActivity";

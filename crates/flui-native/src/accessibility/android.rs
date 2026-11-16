@@ -1,7 +1,7 @@
 //! TalkBack for Android, via `accesskit_android`'s low-level [`Adapter`]
 //! (`docs/gaps.md#no-accessibility-on-mobile-and-the-web`).
 //!
-//! `FluiView` is FLUI's own view (ADR-0247), so the accessibility delegate it
+//! `FluiView` is FLUI's own view (ADR-0347), so the accessibility delegate it
 //! installs (ADR-0255 decision 3) hands the framework a node provider that
 //! forwards `createAccessibilityNodeInfo`, `findFocus` and `performAction` to
 //! the adapter itself: AccessKit's injecting adapter and its dex are not

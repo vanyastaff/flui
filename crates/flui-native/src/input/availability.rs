@@ -71,7 +71,7 @@ pub struct AndroidInputApis {
     pub gesture_exclusion: bool,
     /// The touchpad gesture axes of `MotionEvent` (API 34).
     pub touchpad_gestures: bool,
-    /// `FluiView.startDragAndDrop`: API 24, and the view installed (ADR-0247).
+    /// `FluiView.startDragAndDrop`: API 24, and the view installed (ADR-0347).
     pub drag_source: bool,
 }
 
@@ -169,7 +169,7 @@ pub const fn x11(gestures: bool) -> InputCapabilities {
 /// When an OS drag session can start on Win32, X11, AppKit and Android: the
 /// drag runs in its window and escalates when the pointer leaves
 /// it (ADR-0211 §2). Win32 starts them through OLE, X11 over XDND and Android
-/// through `startDragAndDrop` (ADR-0247); the other backends report outgoing
+/// through `startDragAndDrop` (ADR-0347); the other backends report outgoing
 /// drags `Unavailable` until their native session lands.
 pub const DESKTOP_DRAG_START: flui_platform::drag::OsDragStart =
     flui_platform::drag::OsDragStart::OnLeavingWindow;
