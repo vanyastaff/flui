@@ -1145,7 +1145,10 @@ async fn a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus() {
     );
     accessibility.publish(form("ab", FIELD));
     super::wait(0).await;
-    assert!(super::editor().is_none(), "the hidden editor is gone");
+    assert!(
+        super::editor().is_some_and(|editor| !editor.focused && editor.value.is_empty()),
+        "the window's hidden editor stays, empty and without the focus"
+    );
     assert!(
         field("name").expect("the field").focused,
         "the field has the focus"
