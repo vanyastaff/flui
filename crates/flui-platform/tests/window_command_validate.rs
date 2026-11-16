@@ -3,12 +3,12 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, CapabilityAbsence, CapabilityParts,
-    ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset, SizeConstraints,
-    SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
-    WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
-    WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption, WindowOptions,
-    WindowRevision, WindowRevisionExhausted, WindowState,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilityAbsence,
+    CapabilityParts, ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
+    SizeConstraints, SystemControls, Unsupported, UnsupportedReason, WindowAppearance,
+    WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
+    WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption,
+    WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -818,18 +818,34 @@ fn an_edit_of_published_capabilities_is_refused_at_admission() {
     );
 }
 
-/// Withdrawn capabilities honour nothing, admit nothing and open no token,
-/// and the window keeps them so: a later snapshot claiming capabilities again
-/// still holds withdrawn ones that honour nothing, while its other facts
-/// publish, so the counters of publications and revisions fail apart.
-fn withdrawn_capabilities_honour_nothing_in_every_later_snapshot() {
+/// Withdrawn capabilities take no command, the normal mode included, and say
+/// why (`WITHDRAWN`); the reports and verbs no command reads keep their
+/// values; a token admitted before opens under them no more; and the window
+/// keeps them so: a later snapshot claiming capabilities again still holds
+/// withdrawn ones, while its other facts publish, so the counters of
+/// publications and revisions fail apart.
+fn withdrawn_capabilities_admit_nothing_in_every_later_snapshot() {
+    let withdrawn_reason = WindowCapability::Absent(CapabilityAbsence::WITHDRAWN);
     let published = as_published(WindowCapabilities::ALL);
     let hide = WindowCommand::Hide
         .admit(&published)
         .expect("the window hides");
     let withdrawn = published.withdraw();
     assert!(withdrawn.is_withdrawn());
-    assert_eq!(withdrawn, WindowCapabilities::NONE, "it honours nothing");
+    assert_ne!(withdrawn, published, "a reader sees the withdrawal");
+    for command in [
+        WindowCommand::Hide,
+        WindowCommand::SetMode(WindowMode::Maximized),
+        WindowCommand::SetMode(WindowMode::Normal),
+    ] {
+        assert_eq!(
+            withdrawn.capability(&command),
+            withdrawn_reason,
+            "{command:?}"
+        );
+    }
+    assert_eq!(withdrawn.reports_presentation(), WindowCapability::Native);
+    assert_eq!(withdrawn.frame_rate_hint(), Availability::Native);
     assert_eq!(opens(hide, &withdrawn), Err(()));
     assert_eq!(
         WindowCommand::SetMode(WindowMode::Normal).admit(&withdrawn),
@@ -847,7 +863,7 @@ fn withdrawn_capabilities_honour_nothing_in_every_later_snapshot() {
     assert!(later.focused, "the other facts publish");
     assert_eq!(later.revision.get(), frozen.revision.get() + 1);
     assert!(later.capabilities.is_withdrawn());
-    assert_eq!(later.capabilities, WindowCapabilities::NONE);
+    assert_eq!(later.capabilities.hides(), withdrawn_reason);
     assert_eq!(
         WindowCommand::Hide.admit(&later.capabilities),
         Err(AdmissionError::Unpublished)
@@ -1119,8 +1135,8 @@ fn window_command_validate() {
                 a_successor_of_unpublished_capabilities_stays_unpublished,
             ),
             (
-                "withdrawn_capabilities_honour_nothing_in_every_later_snapshot",
-                withdrawn_capabilities_honour_nothing_in_every_later_snapshot,
+                "withdrawn_capabilities_admit_nothing_in_every_later_snapshot",
+                withdrawn_capabilities_admit_nothing_in_every_later_snapshot,
             ),
             (
                 "a_capability_restored_is_the_one_never_taken_away",

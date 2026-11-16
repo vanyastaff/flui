@@ -63,6 +63,15 @@ impl WindowRevision {
         }
     }
 
+    /// The revision `raw`, behind the `testing` feature: a test that drives a
+    /// window near its last revision starts there instead of publishing every
+    /// revision before it.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
     /// The last revision a window can publish.
     pub const LAST: Self = Self(u64::MAX);
 }
@@ -465,7 +474,22 @@ impl WindowState {
     /// # Errors
     /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
     /// at the last revision. The revision never wraps.
-    pub fn successor(&self, mut sample: Self) -> Result<Self, WindowRevisionExhausted> {
+    pub fn successor(&self, sample: Self) -> Result<Self, WindowRevisionExhausted> {
+        self.successor_from(sample, crate::PublicationMint::process())
+    }
+
+    /// [`successor`](Self::successor) with the mint a changed publication comes
+    /// from named, for a host that takes its mint (production passes
+    /// [`PublicationMint::process`](crate::PublicationMint::process)).
+    ///
+    /// # Errors
+    /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
+    /// at the last revision.
+    pub fn successor_from(
+        &self,
+        mut sample: Self,
+        mint: &crate::PublicationMint,
+    ) -> Result<Self, WindowRevisionExhausted> {
         sample.revision = self.revision;
         sample.capabilities = sample.capabilities.carried_from(&self.capabilities);
         if sample.metrics.is_none() {
@@ -478,7 +502,9 @@ impl WindowState {
         let next = self.revision.next().ok_or(WindowRevisionExhausted)?;
         sample.revision = next;
         if sample.capabilities != self.capabilities {
-            sample.capabilities = sample.capabilities.changed_from(&self.capabilities, next);
+            sample.capabilities = sample
+                .capabilities
+                .changed_from(&self.capabilities, next, mint);
         }
         Ok(sample)
     }

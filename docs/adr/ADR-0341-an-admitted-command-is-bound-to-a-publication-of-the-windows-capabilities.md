@@ -82,7 +82,8 @@ impl WindowCapabilities {
     pub fn publish(self) -> Result<Self, IdExhausted>;   // a host's first snapshot
     pub const fn into_parts(self) -> CapabilityParts;    // the one way out: unpublished
     pub const fn unavailable(self, ..) -> Self;           // an edit: unpublished
-    pub const fn withdraw(self) -> Self;                  // honours nothing: withdrawn
+    pub const fn withdraw(self) -> Self;                  // commands absent: withdrawn
+    pub fn publish_from(self, mint: &PublicationMint) -> Result<Self, IdExhausted>;
     pub const fn is_withdrawn(&self) -> bool;
     pub const fn material(&self) -> WindowCapability;     // one accessor per capability
 }
@@ -122,28 +123,37 @@ pub enum AdmissionError { Unsupported(Unsupported), InvalidGeometry(InvalidGeome
   question twice.
 - **Revision.** The capabilities revision stays a published fact (`WindowCapabilities::revision`).
   It moves at exactly the points where the publication changes.
-- **A window with no publication publishes no capabilities.** Withdrawn capabilities
-  (`WindowCapabilities::withdraw`) honour nothing, so equality sees the withdrawal, `state_changed`
-  fires once, and placement and widgets read what is true. Every token then answers
-  `Superseded`, and admission answers `Unpublished`. A window never carries out what it lost
-  because it could not say so.
+- **A window with no publication honours no command.** Withdrawn capabilities
+  (`WindowCapabilities::withdraw`) set every field a command is admitted against to
+  `Absent(CapabilityAbsence::WITHDRAWN)`; `capability` answers the same for the normal mode. The
+  reports, observations and verbs no command reads (`reports_presentation`, `frame_rate_hint`,
+  `places_at_open`, the `observes_*`) keep their values, because a window keeps serving them.
+  - Published capabilities never carry the withdrawn reason, so a withdrawn snapshot always
+    differs from the published one before it: equality sees the withdrawal, `state_changed`
+    fires, and placement and widgets read that no command is taken.
+  - Every token then answers `Superseded`, and admission answers `Unpublished`. A window never
+    carries out what it lost because it could not say so.
+  - `UnsupportedReason::Withdrawn` names the reason. The agent protocol carries it as the
+    recording's absence `withdrawn`, an additive change published as protocol 0.13.
 - **The two counters fail apart.** Neither wraps.
-  - **Publications.** When the process has no publication left and a window's capabilities
-    change, `successor` withdraws them. The window goes on publishing its geometry, metrics, focus
-    and every other fact at new revisions, and its capabilities stay withdrawn in every later
+  - **Publications.** The process's publications come from one `PublicationMint`
+    (`PublicationMint::process`). When it has none left and a window's capabilities change,
+    `successor` withdraws them. The window goes on publishing its geometry, metrics, focus and
+    every other fact at new revisions, and its capabilities stay withdrawn in every later
     snapshot. A window opened after that opens with withdrawn capabilities, and `open` stays
     infallible. Refusing the open is not every host's to do: an Android activity or a UIKit scene
     exists before its window is built.
-  - **Revisions.** At the last revision, `successor` refuses with `WindowRevisionExhausted`, and
-    the window publishes nothing again. **Frozen means unpublished, with no exception.** The cell
-    withdraws the frozen snapshot's capabilities whatever froze it and whether or not they moved,
-    so a capability lost later cannot be carried out.
-  - **How a revision cache learns of a frozen withdrawal.** The revision cannot move, so the
-    withdrawal is announced through `state_changed` at the revision the window froze at, which
-    names a second snapshot this once. A reader that caches by revision re-reads on
-    `state_changed`, as every reader of the payload-free notification does (ADR-0254 §4). The
-    withdrawn snapshot is the last one that revision, or any revision of the window, will ever
-    name.
+  - A host takes its mint (`WindowCapabilities::publish_from`, `WindowState::successor_from`),
+    and production passes the process's. Behind the `testing` feature,
+    `PublicationMint::exhausted` issues nothing, so a test can drive these paths.
+  - **Revisions.** The snapshot that takes the last revision is the window's final one. The cell
+    publishes it with its capabilities withdrawn, announces it as any change, and freezes. **Frozen
+    means unpublished, with no exception**, whatever the sample carried, so a capability lost
+    later cannot be carried out.
+  - **Revision equality stays exact.** No revision names two snapshots: the withdrawal is the
+    snapshot at the last revision, not a second announcement at it. A first snapshot already at
+    the last revision opens frozen and withdrawn. `successor` refuses with
+    `WindowRevisionExhausted` only for a snapshot already at the last revision.
 
 ### Consequences
 
@@ -176,13 +186,17 @@ pub enum AdmissionError { Unsupported(Unsupported), InvalidGeometry(InvalidGeome
   - `a_successor_a_caller_computes_opens_nothing`: a token admitted against a successor a caller
     computed does not open under the window's next capabilities at the same revision.
   - `a_successor_of_unpublished_capabilities_stays_unpublished`.
-  - `withdrawn_capabilities_honour_nothing_in_every_later_snapshot`: withdrawn capabilities
-    honour nothing and admit nothing, and a later snapshot keeps them so while its other facts
-    publish.
-- **Test** in `flui-native`'s window state cell:
-  `a_frozen_window_withdraws_its_capabilities`: a window frozen by a sample with the same
-  capabilities announces a snapshot that honours nothing, and refuses a command after it loses
-  maximizing.
+  - `withdrawn_capabilities_admit_nothing_in_every_later_snapshot`: withdrawn capabilities take
+    no command, the normal mode included, keep their reports, and stay withdrawn in a later
+    snapshot while its other facts publish.
+- **Tests** in `flui-native`'s window state cell:
+  - `the_snapshot_that_takes_the_last_revision_withdraws_the_capabilities`: the snapshot at the
+    last revision is announced with its commands withdrawn, even though the sample kept them;
+    reports keep their values; nothing is admitted or published afterwards.
+  - `a_window_opened_at_the_last_revision_is_frozen`.
+  - `a_window_opened_with_no_publication_left_publishes_on_withdrawn` and
+    `a_change_with_no_publication_left_withdraws_the_capabilities`, with
+    `PublicationMint::exhausted`.
 - **Conformance**, run by every host the kit runs: `a_window_opens_only_its_own_publication` (a
   command admitted against the window's snapshot opens, one against capabilities the caller
   published answers `Superseded`), and `a_window_opened_after_a_close_has_an_id_of_its_own` (one

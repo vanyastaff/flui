@@ -10,6 +10,9 @@
   no command and opens no token, instead of carrying out what it may have lost. A window opened
   when the process has no publication left opens with them, and its other facts publish as usual.
 
+- Agent protocol 0.13: a recorded window capability can be absent as `withdrawn`
+  (`UnsupportedReason::Withdrawn`, `CapabilityAbsence::WITHDRAWN`).
+
 ### Changed
 
 - A window carries out only what its own published capabilities honour (ADR-0341). Before, a

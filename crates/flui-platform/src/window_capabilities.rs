@@ -143,8 +143,8 @@ enum Edition {
     /// This publication.
     Published(Publication),
     /// A window held them as a publication and can publish no more
-    /// (`WindowCapabilities::withdraw`): they say nothing is honoured, and
-    /// every later snapshot of the window keeps them so.
+    /// (`WindowCapabilities::withdraw`): every command is absent as withdrawn,
+    /// and every later snapshot of the window keeps it so.
     Withdrawn,
 }
 
@@ -155,17 +155,41 @@ enum Edition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Publication(NonZeroU64);
 
-/// The publications issued so far in the process.
-static PUBLICATIONS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+/// The issuer of capability publications (ADR-0341). There is one for the
+/// process, [`PublicationMint::process`], which every host publishes from:
+/// two mints issuing the same number would make two publications one, so no
+/// other issuing mint exists. Behind the `testing` feature,
+/// [`PublicationMint::exhausted`] is one that issues nothing, so a test can
+/// drive what a window does once the process has no publication left.
+#[derive(Debug)]
+pub struct PublicationMint(AtomicIdMint<NonZeroU64>);
 
-impl Publication {
+/// The process's publications.
+static PUBLICATIONS: PublicationMint = PublicationMint(AtomicIdMint::new());
+
+impl PublicationMint {
+    /// The process's mint, which every host publishes from.
+    #[must_use]
+    pub fn process() -> &'static Self {
+        &PUBLICATIONS
+    }
+
+    /// A mint that has issued everything it can: every publication it is
+    /// asked for is refused with [`IdExhausted`], and it can never issue a
+    /// number the process's mint issues.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub const fn exhausted() -> Self {
+        Self(AtomicIdMint::starting_after(u64::MAX))
+    }
+
     /// A publication no capabilities had before.
     ///
     /// # Errors
-    /// [`IdExhausted`] once the process issued every publication it can; the
-    /// mint never reissues one.
-    pub(crate) fn mint() -> Result<Self, IdExhausted> {
-        PUBLICATIONS.next().map(Self)
+    /// [`IdExhausted`] once the mint issued every publication it can; it never
+    /// reissues one.
+    fn mint(&self) -> Result<Publication, IdExhausted> {
+        self.0.next().map(Publication)
     }
 }
 
@@ -237,6 +261,13 @@ macro_rules! command_capabilities {
                 match slot {
                     $(Slot::$slot => &mut self.$field),+
                 }
+            }
+
+            /// Every field a command is admitted against, absent because the
+            /// window withdrew its capabilities; the reports, observations and
+            /// verbs no command reads keep their values.
+            const fn withdraw_commands(&mut self) {
+                $(self.$field = WindowCapability::Absent(CapabilityAbsence::WITHDRAWN);)+
             }
         }
     };
@@ -338,23 +369,38 @@ impl WindowCapabilities {
     ///
     /// # Errors
     /// [`IdExhausted`] once the process issued every publication it can.
-    pub fn publish(mut self) -> Result<Self, IdExhausted> {
-        self.edition = Edition::Published(Publication::mint()?);
+    pub fn publish(self) -> Result<Self, IdExhausted> {
+        self.publish_from(PublicationMint::process())
+    }
+
+    /// These capabilities as a new publication of `mint`: [`publish`](Self::publish)
+    /// with the mint named, for a host that takes its mint (production passes
+    /// [`PublicationMint::process`]).
+    ///
+    /// # Errors
+    /// [`IdExhausted`] once `mint` issued every publication it can.
+    pub fn publish_from(mut self, mint: &PublicationMint) -> Result<Self, IdExhausted> {
+        self.edition = Edition::Published(mint.mint()?);
         Ok(self)
     }
 
     /// What a window publishes once it can publish no more of what it
-    /// honours (ADR-0341): capabilities that honour nothing, at this
-    /// revision, which [`WindowState::successor`](crate::WindowState::successor)
-    /// keeps so for every later snapshot. Every token admitted against the
-    /// publication these were answers
+    /// honours (ADR-0341): these capabilities with every command absent as
+    /// [`WITHDRAWN`](CapabilityAbsence::WITHDRAWN), at this revision, which
+    /// [`WindowState::successor`](crate::WindowState::successor) keeps so for
+    /// every later snapshot. The reports, observations and verbs no command
+    /// reads (`reports_presentation`, `frame_rate_hint`, `places_at_open`,
+    /// the `observes_*`) keep their values: a window still serves them. Every
+    /// token admitted against the publication these were answers
     /// [`ApplyError::Superseded`](crate::ApplyError::Superseded), and admission
-    /// refuses them; as they honour nothing, a reader of the snapshot sees the
-    /// change.
+    /// refuses them; no published capabilities carry the withdrawn reason, so
+    /// a reader of the snapshot always sees the change.
     #[must_use]
     pub const fn withdraw(self) -> Self {
+        let mut parts = self.parts;
+        parts.withdraw_commands();
         Self {
-            parts: Self::NONE.parts,
+            parts,
             edition: Edition::Withdrawn,
             revision: self.revision,
         }
@@ -379,10 +425,11 @@ impl WindowCapabilities {
 
     /// These capabilities as a sample of the window that published `previous`:
     /// the edition and revision `previous` carries, whatever the sample's, and
-    /// nothing honoured where `previous` was withdrawn.
+    /// every command withdrawn where `previous` was withdrawn (the sample's
+    /// reports and observations still publish).
     pub(crate) const fn carried_from(mut self, previous: &Self) -> Self {
         if let Edition::Withdrawn = previous.edition {
-            return *previous;
+            self = self.withdraw();
         }
         self.edition = previous.edition;
         self.revision = previous.revision;
@@ -394,10 +441,15 @@ impl WindowCapabilities {
     /// withdrawn ones where the process has none left; still none where
     /// `previous` was none, so a sample of hand-built capabilities never
     /// becomes admissible by being succeeded.
-    pub(crate) fn changed_from(mut self, previous: &Self, revision: WindowRevision) -> Self {
+    pub(crate) fn changed_from(
+        mut self,
+        previous: &Self,
+        revision: WindowRevision,
+        mint: &PublicationMint,
+    ) -> Self {
         self.revision = revision;
         match previous.edition {
-            Edition::Published(_) => match Publication::mint() {
+            Edition::Published(_) => match mint.mint() {
                 Ok(publication) => self.edition = Edition::Published(publication),
                 Err(IdExhausted) => return self.withdraw(),
             },
@@ -409,13 +461,16 @@ impl WindowCapabilities {
 
     /// How this window honours `command`, or why it does not.
     ///
-    /// [`WindowMode::Normal`] is always [`Native`](WindowCapability::Native):
-    /// asking a window for the mode every window has is never a no-op that
-    /// pretends.
+    /// [`WindowMode::Normal`] is [`Native`](WindowCapability::Native) on every
+    /// window but one that withdrew its capabilities: asking a window for the
+    /// mode every window has is never a no-op that pretends. Withdrawn ones
+    /// ([`withdraw`](Self::withdraw)) honour no command, the normal mode
+    /// included.
     #[must_use]
     pub const fn capability(&self, command: &WindowCommand) -> WindowCapability {
         match Self::slot(command) {
             Some(slot) => self.parts.field(slot),
+            None if self.is_withdrawn() => WindowCapability::Absent(CapabilityAbsence::WITHDRAWN),
             None => WindowCapability::Native,
         }
     }
