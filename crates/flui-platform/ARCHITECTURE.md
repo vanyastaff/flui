@@ -409,7 +409,8 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   hands back a `RequestTicket`, the scenario's form of a system request that lives while its
   requester holds it (a portal's `Request` object, an activity result's `ResultTicket`).
   Dropping it while the request is held or scheduled removes the request, drops its resolver,
-  takes a scheduled answer off the timeline and counts it in `Script::withdrawn`; a withdrawn
+  takes a scheduled answer off the timeline, tells the observers it ended unanswered and counts
+  it in `Script::withdrawn`; a withdrawn
   request is neither `Unanswered` nor `NotReached`, and an answered one is untouched.
 
 The launcher, file dialog, clipboard and primary selection doubles are built on it. Three

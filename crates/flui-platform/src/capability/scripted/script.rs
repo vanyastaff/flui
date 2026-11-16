@@ -732,7 +732,17 @@ impl<R: fmt::Debug + 'static, A: 'static> Withdraw for ScriptCell<R, A> {
         {
             self.scenario.unschedule(*scheduled);
         }
+        // The request ends unanswered: every observer hears it, as of an
+        // abandoned one, with no borrow held and each panic contained.
+        let mut first = FirstPanic::new();
+        if let Some(waiting) = &withdrawn {
+            let observers = self.state.borrow().observers.clone();
+            for observe in observers {
+                first.contain(|| observe(&waiting.request, None));
+            }
+        }
         drop(withdrawn);
+        first.resume();
     }
 }
 
