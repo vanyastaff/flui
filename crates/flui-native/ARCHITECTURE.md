@@ -2028,7 +2028,7 @@ focus back to the canvas.
 A mobile browser shows its keyboard only for an element focused inside a
 user gesture, and iOS Safari zooms the page into a focused field whose text
 is below 16 CSS pixels. Every element the host focuses for editing (the
-textarea, a semantics field) has `font-size: 16px` (`text::web::EDITOR_FONT_SIZE`).
+textarea, a semantics field) has `font-size: 16px` (`owner::web::EDITOR_FONT_SIZE`).
 The textarea takes the page's focus when it attaches while the canvas has
 it, or while the page's focus is on nothing and the page has transient user
 activation (`navigator.userActivation.isActive`: a tap on a canvas the

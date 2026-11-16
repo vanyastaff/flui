@@ -6,7 +6,7 @@
 [[allow]]
 path = "crates/flui-cli/README.md"
 kind = "path"
-count = 3
+count = 2
 reason = "a file of the project `flui create` generates, not of this repository"
 
 [[allow]]

@@ -5307,7 +5307,7 @@ graph LR
 - [x] **LY75** (закрыта: код и тесты в ветке `native/web-dom-root`; прогоны Safari iOS и Firefox
   записаны в `platform-parity.toml`, строка «Input purpose and hints») — атрибуты #2109
   (`3223e936d`). Скрытый textarea и поля дерева доступности получают `font-size: 16px`
-  (`text::web::EDITOR_FONT_SIZE`). Textarea берёт фокус страницы при прикреплении, если фокус на
+  (`owner::web::EDITOR_FONT_SIZE`). Textarea берёт фокус страницы при прикреплении, если фокус на
   canvas или ни на чём при активном жесте (`navigator.userActivation.isActive`), а пока он
   обслуживает хранилище без фокуса, касание или перо, отпущенные над canvas (`pointerup`), его
   фокусируют: поле, прикреплённое после жеста, поднимает клавиатуру со следующего касания. Тесты

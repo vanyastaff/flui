@@ -1390,7 +1390,7 @@ fn create(document: &Document, id: NodeId, spec: &ElementSpec) -> Result<HtmlEle
         // The field is focused for editing: below 16 CSS pixels iOS Safari
         // zooms the page into it, and a field's own text is the platform's
         // small control font.
-        style.set_property("font-size", crate::text::web::EDITOR_FONT_SIZE)?;
+        style.set_property("font-size", crate::owner::web::EDITOR_FONT_SIZE)?;
     }
     write(&element, None, spec, false)?;
     Ok(element)

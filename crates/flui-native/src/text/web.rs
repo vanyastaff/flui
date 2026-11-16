@@ -406,7 +406,9 @@ mod input {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::slot::OwnerSlot;
     use crate::owner::web::listener::{CanvasListener, viewport_listeners};
-    use crate::owner::web::{Accepting, CanvasEditor, CanvasKeys, CanvasRef, FocusedField};
+    use crate::owner::web::{
+        Accepting, CanvasEditor, CanvasKeys, CanvasRef, EDITOR_FONT_SIZE, FocusedField,
+    };
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{document_text, scalar_spans};
 
@@ -1693,10 +1695,6 @@ mod input {
         }
     }
 
-    /// The font size of an element the host focuses for editing: the
-    /// smallest at which iOS Safari does not zoom the page into it.
-    pub(crate) const EDITOR_FONT_SIZE: &str = "16px";
-
     /// Whether the page has transient user activation now
     /// (`navigator.userActivation.isActive`): inside the handler of a tap, a
     /// click or a key, and for a moment after it. A browser without the API
@@ -1738,4 +1736,4 @@ mod input {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use input::{EDITOR_FONT_SIZE, WebTextInput};
+pub(crate) use input::WebTextInput;

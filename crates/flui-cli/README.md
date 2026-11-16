@@ -468,7 +468,7 @@ refuses to start below it. A plain `cargo build` uses FLUI's floor alone.
 with the module import, the manifest link, `viewport-fit=cover` (so the app
 reads the safe area) and `[web] base_href` as its `<base href>`, the site's
 root when absent; it must start and end with `/`. Edits to the page are lost;
-`platforms/web/manifest.json` and `platforms/web/icons/` are copied as they
+the project's web manifest and icons (`manifest.json` and `icons` in its web platform directory) are copied as they
 are, and a manifest named after the app is written when the project has none.
 `flui run` serves its build at the root.
 

@@ -216,6 +216,12 @@ pub(crate) trait CanvasEditor {
     fn sync(&self);
 }
 
+/// The font size of every element a canvas window focuses for editing (the
+/// text input's hidden editor, a semantics host's field): the smallest at
+/// which iOS Safari does not zoom the page into a field it focuses, where a
+/// field's own text is the platform's small control font.
+pub(crate) const EDITOR_FONT_SIZE: &str = "16px";
+
 /// The two hosts a canvas window's root keeps after the canvas, in this
 /// order (`window::web::root`): what the window's text input and its
 /// accessibility put in the page goes into them, never beside the canvas, so

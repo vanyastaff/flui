@@ -435,7 +435,7 @@ text-input paths its platform requires.
   | `crates/flui-cli/src/build/ios_package.rs` | The plist keys of decision 14 |
   | `crates/flui-native/src/text/web.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
   | `crates/flui-native/src/accessibility/`, `crates/flui-native/src/window/web.rs` | The semantics host and ARIA DOM; the history strategy, ownership of the root element |
-  | `crates/flui-cli/templates/platforms/web/index.html`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
+  | `crates/flui-cli/src/build/web_page.rs`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
 
 - Bad, because a packager other than `flui-cli` (cargo-apk, a hand-written Gradle project) must
   add the dex and the manifest itself; ADR-0247 item 1's "every packager ships the dex" no longer
