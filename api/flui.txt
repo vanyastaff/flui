@@ -36216,6 +36216,7 @@ impl core::fmt::Debug for flui_runtime::sink::FrameSettlement
 impl core::marker::StructuralPartialEq for flui_runtime::sink::FrameSettlement
 pub const fn flui_runtime::sink::FrameSettlement::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, verdict: flui_runtime::sink::SubmitVerdict) -> Self
 pub trait flui_runtime::sink::FrameSink
+fn flui_runtime::sink::FrameSink::in_flight_limit(&mut self) -> core::num::nonzero::NonZeroUsize { .. }
 fn flui_runtime::sink::FrameSink::submit(&mut self, epoch: flui::foundation::FrameEpoch, publication: flui_layer::scene::owner::ScenePublication) -> flui_runtime::sink::SubmitVerdict
 fn flui_runtime::sink::FrameSink::surface_size(&mut self) -> (u32, u32)
 pub enum flui_runtime::sink::Settled

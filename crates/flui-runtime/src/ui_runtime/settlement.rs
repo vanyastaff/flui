@@ -38,6 +38,9 @@ pub(crate) const IN_FLIGHT_FLOOR: std::time::Duration = std::time::Duration::fro
 pub(crate) struct PendingFrame {
     /// The stamp the frame's settlement names.
     epoch: FrameEpoch,
+    /// When the frame was handed to its sink, on its presentation's clock: what the in-flight
+    /// floor counts from.
+    submitted_at: Instant,
     /// What the frame's telemetry is recorded from.
     telemetry: SubmittedTelemetry,
     /// The scene version the sink was handed, acknowledged once it is shown.
@@ -55,6 +58,11 @@ pub(crate) struct PendingFrame {
 }
 
 impl PendingFrame {
+    /// When the frame was handed to its sink.
+    pub(crate) fn submitted_at(&self) -> Instant {
+        self.submitted_at
+    }
+
     /// How many layer reads the frame holds.
     pub(crate) fn staged_layer_reads(&self) -> usize {
         self.layer_reads.len()
@@ -111,6 +119,7 @@ impl UiRuntime {
         let layer_reads = producer.stage_agent_layer_reads(scene);
         PendingFrame {
             epoch: FrameEpoch::ZERO,
+            submitted_at: producer.clock().now(),
             telemetry: SubmittedTelemetry {
                 frame_time,
                 segment: producer.take_last_segment_span(),
@@ -304,12 +313,8 @@ impl UiRuntime {
                     self.mark_needs_full_repaint_for(producer);
                 }
                 self.wake_frame();
-            } else if !producer.clock().demand_mask().is_empty()
-                && !producer
-                    .frames_in_flight(self.in_flight_limit.get())
-                    .is_saturated()
-            {
-                // Demand the in-flight gate kept while the sink held as many frames as it may:
+            } else if !producer.frames_in_flight().is_saturated() && producer.has_frame_work() {
+                // Work the in-flight gate kept while the sink held as many frames as it may:
                 // this settlement freed a place, and nothing else wakes the loop for it
                 // (ADR-0305 §5).
                 self.wake_frame();
@@ -346,6 +351,7 @@ impl UiRuntime {
     ) -> VerdictTail {
         let PendingFrame {
             epoch: _,
+            submitted_at: _,
             telemetry,
             shown,
             tree_revision,

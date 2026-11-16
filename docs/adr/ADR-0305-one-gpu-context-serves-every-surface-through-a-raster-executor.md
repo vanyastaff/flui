@@ -307,7 +307,8 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 §5. **Pacing, restated per slot.** ADR-0045 decision 3 and the rule of decision 5 stand, per slot:
 
 - `FrameClock`'s in-flight gate paces production: `FrameClock::poll` is handed the presentation's
-  `FramesInFlight`, the frames it has pending (queued and not settled) against the sink's
+  `FramesInFlight`, the frames it has pending (queued and not settled) against the limit its last
+  frame's sink names,
   `FrameSink::in_flight_limit`. A presentation at its limit skips with `Backpressure`, keeps its
   demand and reports no pending work, and the settlement that frees a place wakes the loop. The
   limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. wgpu's
@@ -318,9 +319,11 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   `queue.present` and only for a frame that will present; `flui-engine` already reaches
   `flui-platform` (`crates/flui-engine/Cargo.toml:50-52`), so no hook closure is installed.
 - `FallbackWake`'s deadline applies only when the slot's in-flight count is zero and its last
-  settlement did not present. While a frame is in flight `UiRuntime::next_wake` keeps a floor of
-  50 ms, which the host turns into its `WaitUntil`, so a lost wake costs at most one floor
-  interval.
+  settlement did not present. While a frame is in flight `UiRuntime::next_wake` keeps a floor, the
+  next multiple of 50 ms since the oldest pending frame was handed to its sink, which the host
+  turns into its `WaitUntil`; the host drains the raster side's settlements on every wake, whatever
+  its frame gate decides, so a lost wake costs at most one floor interval and a frame that never
+  settles wakes the owner once per interval.
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's

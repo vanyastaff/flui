@@ -478,6 +478,9 @@ pub struct PresentationState {
     /// The frames handed to a sink that answered `Queued`, oldest first: what each commits once
     /// its settlement arrives (ADR-0305 §4). Owner thread only.
     pub(crate) pending_frames: RefCell<std::collections::VecDeque<crate::ui_runtime::PendingFrame>>,
+    /// How many frames the sink this presentation's last frame reached may hold unsettled
+    /// (`FrameSink::in_flight_limit`): the in-flight gate paces the presentation by it (ADR-0305 §5).
+    in_flight_limit: Cell<NonZeroUsize>,
     /// The subscriptions an agent holds to this presentation's events, and how far they have
     /// been reported. Ended when the presentation closes. Owner thread only.
     pub(crate) agent_events: RefCell<crate::ui_runtime::EventHub>,
@@ -1123,6 +1126,7 @@ impl PresentationState {
             url_owner,
             agent_layer_reads: RefCell::default(),
             pending_frames: RefCell::default(),
+            in_flight_limit: Cell::new(NonZeroUsize::MIN),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1267,6 +1271,7 @@ impl PresentationState {
             url_owner,
             agent_layer_reads: RefCell::default(),
             pending_frames: RefCell::default(),
+            in_flight_limit: Cell::new(NonZeroUsize::MIN),
             agent_events: RefCell::default(),
             window_control: RefCell::new(None),
             window_placement: Cell::new(None),
@@ -1964,24 +1969,46 @@ impl PresentationState {
             .is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned)
     }
 
-    /// The frames this presentation's sink holds unsettled, against the `limit` it may hold: the
-    /// in-flight gate its clock is polled with (ADR-0305 §5).
-    pub(crate) fn frames_in_flight(&self, limit: NonZeroUsize) -> flui_scheduler::FramesInFlight {
-        flui_scheduler::FramesInFlight::new(self.pending_frames.borrow().len(), limit)
+    /// The frames this presentation's sink holds unsettled, against the limit the sink its last
+    /// frame reached may hold: the in-flight gate its clock is polled with (ADR-0305 §5).
+    pub(crate) fn frames_in_flight(&self) -> flui_scheduler::FramesInFlight {
+        flui_scheduler::FramesInFlight::new(
+            self.pending_frames.borrow().len(),
+            self.in_flight_limit.get(),
+        )
     }
 
-    /// While this presentation has frames pending, the latest the owner sleeps until: one
-    /// [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) from now, so a lost settlement wake
-    /// costs at most that interval (ADR-0305 §5).
+    /// Record the limit of the sink this presentation's frame is handed to.
+    pub(crate) fn set_in_flight_limit(&self, limit: NonZeroUsize) {
+        self.in_flight_limit.set(limit);
+    }
+
+    /// Whether this presentation has work a frame would do: demand its clock keeps, a redraw it
+    /// was asked for, a build or a dirty node, or completion callbacks that wait. What a
+    /// settlement that frees an in-flight place wakes the loop for (ADR-0305 §5).
+    pub(crate) fn has_frame_work(&self) -> bool {
+        !self.clock().demand_mask().is_empty()
+            || self.redraw_pending.get()
+            || self.has_pending_work_snapshot()
+            || self.has_eligible_completion()
+    }
+
+    /// While this presentation has frames pending, the latest the owner sleeps until: the next
+    /// multiple of [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) since the oldest
+    /// pending frame was handed to its sink, so a lost settlement wake costs at most that interval, and a
+    /// frame that never settles wakes the owner once per interval, not on every read
+    /// (ADR-0305 §5).
     pub(crate) fn in_flight_floor(&self) -> Option<Instant> {
-        if self.pending_frames.borrow().is_empty() {
-            return None;
-        }
+        let queued = self.pending_frames.borrow().front()?.submitted_at();
+        let floor = crate::ui_runtime::IN_FLIGHT_FLOOR;
         let now = self.clock().now();
-        Some(
-            now.checked_add(crate::ui_runtime::IN_FLIGHT_FLOOR)
-                .unwrap_or(now),
-        )
+        let elapsed = now.saturating_duration_since(queued);
+        let intervals = elapsed.as_nanos() / floor.as_nanos() + 1;
+        let next = u32::try_from(intervals)
+            .ok()
+            .and_then(|intervals| floor.checked_mul(intervals))
+            .and_then(|since| queued.checked_add(since));
+        Some(next.unwrap_or_else(|| now.checked_add(floor).unwrap_or(now)))
     }
 
     /// The instant a dropped frame's wait ends, if one waits.
