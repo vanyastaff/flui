@@ -454,6 +454,8 @@ pub(crate) struct PresentationCapabilities {
     pub(crate) completions: CompletionSource,
     pub(crate) locals: flui_platform::capability::RuntimeLocals,
     pub(crate) window: std::rc::Weak<dyn PlatformWindow>,
+    /// Whether the window is still open, handed to its providers.
+    pub(crate) lifetime: flui_platform::capability::WindowLifetime,
 }
 
 impl CapabilitySource for PresentationCapabilities {
@@ -463,7 +465,12 @@ impl CapabilitySource for PresentationCapabilities {
                 .state()
                 .metrics
                 .map_or(1.0, |metrics| metrics.scale().get());
-            WindowRef::new(window.id(), scale, window.surface_target())
+            WindowRef::new(
+                window.id(),
+                scale,
+                window.surface_target(),
+                self.lifetime.clone(),
+            )
         });
         acquire_with(
             &self.registry,

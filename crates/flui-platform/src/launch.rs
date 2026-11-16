@@ -18,6 +18,7 @@ use std::{
 };
 
 use crate::capability::{Capability, Completion, CompletionSource, ProviderContext, Resolver};
+use crate::system_failure::SystemFailure;
 use crate::unsupported::Unsupported;
 
 /// The launcher capability: `ctx.capability::<LauncherCapability>()` hands out
@@ -157,13 +158,10 @@ pub enum LaunchError {
     /// trying later may help.
     #[error("the launch service cannot do this: {0}")]
     Unsupported(#[from] Unsupported),
-    /// The system answered with an error the launcher does not name; `code`
-    /// is the system's, for diagnostics only.
-    #[error("the system failed with code {code}")]
-    Failed {
-        /// The operating system's error code.
-        code: i32,
-    },
+    /// The system failed in a way the launcher does not name; the
+    /// [`SystemFailure`] says where the failure came from, for diagnostics.
+    #[error("the system failed: {0}")]
+    Failed(#[from] SystemFailure),
 }
 
 impl LaunchError {
@@ -176,7 +174,7 @@ impl LaunchError {
             | Self::NotFound
             | Self::NoHandler
             | Self::Denied
-            | Self::Failed { .. } => None,
+            | Self::Failed(_) => None,
         }
     }
 }

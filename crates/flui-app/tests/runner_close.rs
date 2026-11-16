@@ -1295,6 +1295,117 @@ fn join_ok_after_close(started: Started) {
     join_ok(started.run);
 }
 
+/// A capability whose handle is the acquiring window's lifetime, as a
+/// provider that answers the window later sees it.
+enum WindowLifetimeProbe {}
+
+impl flui_platform::capability::Capability for WindowLifetimeProbe {
+    type Handle = Option<flui_platform::capability::WindowLifetime>;
+    const NAME: &'static str = "test.runner-close.window-lifetime";
+}
+
+struct WindowLifetimePlugin;
+
+impl flui_platform::capability::Plugin for WindowLifetimePlugin {
+    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
+        registrar.provide::<WindowLifetimeProbe>(
+            |ctx: &flui_platform::capability::ProviderContext<'_>| {
+                Ok::<_, flui_platform::Unsupported>(
+                    ctx.window().map(|window| window.lifetime().clone()),
+                )
+            },
+        );
+    }
+}
+
+/// What the probing root saw: the window's lifetime, and whether its state
+/// was disposed when the window told its providers that it closed.
+#[derive(Clone, Default)]
+struct LifetimeSeen {
+    lifetime: Rc<RefCell<Option<flui_platform::capability::WindowLifetime>>>,
+    disposed: Rc<Cell<bool>>,
+    disposed_when_told: Rc<RefCell<Option<bool>>>,
+}
+
+#[derive(Clone, StatefulView)]
+struct LifetimeRoot {
+    seen: LifetimeSeen,
+}
+
+struct LifetimeRootState {
+    seen: LifetimeSeen,
+    /// Held for its drop, which detaches the listener.
+    watch: Option<flui_platform::capability::WindowCloseWatch>,
+}
+
+impl StatefulView for LifetimeRoot {
+    type State = LifetimeRootState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        LifetimeRootState {
+            seen: self.seen.clone(),
+            watch: None,
+        }
+    }
+}
+
+impl ViewState<LifetimeRoot> for LifetimeRootState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        use flui_view::LifecycleContextExt as _;
+        let lifetime = ctx
+            .capability::<WindowLifetimeProbe>()
+            .expect("the probe is registered")
+            .expect("the root is in a window");
+        let disposed = Rc::clone(&self.seen.disposed);
+        let told = Rc::clone(&self.seen.disposed_when_told);
+        self.watch = Some(lifetime.on_close(move || {
+            told.replace(Some(disposed.get()));
+        }));
+        self.seen.lifetime.replace(Some(lifetime));
+    }
+
+    fn dispose(&mut self) {
+        self.seen.disposed.set(true);
+    }
+
+    fn build(&self, _view: &LifetimeRoot, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// The runner's close of a UI runtime's last window tells the window's
+/// providers that it closed as the close begins, before its tree is
+/// disposed, as every other close does: a dialog modal to it ends there.
+pub(crate) fn a_last_window_close_tells_its_providers_before_the_tree_goes() {
+    let seen = LifetimeSeen::default();
+    let application = Application::new()
+        .config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed))
+        .plugin(WindowLifetimePlugin);
+    let run = HeadlessRun::start(application, LifetimeRoot { seen: seen.clone() });
+    run.run_owner_turn();
+    let lifetime = seen
+        .lifetime
+        .borrow()
+        .clone()
+        .expect("the root acquired its window's lifetime");
+    assert!(!lifetime.is_closed());
+    let window = run
+        .open_windows()
+        .into_iter()
+        .next()
+        .expect("the main window");
+
+    assert!(window.simulate_close(), "the window closes");
+    run.run_owner_turn();
+    assert!(lifetime.is_closed(), "the window reads as closed");
+    assert_eq!(
+        *seen.disposed_when_told.borrow(),
+        Some(false),
+        "the providers were told as the close began, before the tree was disposed"
+    );
+    let _report = run.join().expect("the run returns Ok");
+}
+
 #[test]
 fn runner_close() {
     crate::run_table(
@@ -1307,6 +1418,10 @@ fn runner_close() {
             (
                 "last_window_close_releases_the_runtime_through_the_runner",
                 last_window_close_releases_the_runtime_through_the_runner,
+            ),
+            (
+                "a_last_window_close_tells_its_providers_before_the_tree_goes",
+                a_last_window_close_tells_its_providers_before_the_tree_goes,
             ),
             (
                 "closing_with_a_pending_load_retires_the_future_once",

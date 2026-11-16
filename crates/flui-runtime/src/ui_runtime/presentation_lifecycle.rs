@@ -33,6 +33,18 @@ fn forget_pressed_keys(
     });
 }
 
+/// Begin closing `presentation`, on every path that closes one (alone, or
+/// with every presentation of its runtime): it is told it is detached, drops
+/// its held input, and the providers that answer its window later learn that
+/// it closed. Their listeners are provider code: one that panics does not
+/// keep the window open, and an earlier failure in `failure` stays first.
+fn begin_close(presentation: &crate::presentation::PresentationState, failure: &mut FirstPanic) {
+    presentation.closing_requested.set(true);
+    presentation.widgets().lifecycle_source().begin_close();
+    presentation.held_pointer_input().borrow_mut().clear();
+    failure.contain(|| presentation.window_closer.close());
+}
+
 /// An observed Detached state is reversible; terminal lifetime is explicit.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum HostLifecycle {
@@ -384,23 +396,24 @@ impl UiRuntime {
         self.stop_presentations_after_failure(FirstPanic::new());
     }
 
-    pub(crate) fn stop_presentations_after_failure(&self, failure: FirstPanic) {
+    pub(crate) fn stop_presentations_after_failure(&self, mut failure: FirstPanic) {
         self.host_lifecycle.set(HostLifecycle::Stopping);
         for presentation in self.presentations.iter() {
-            presentation.closing_requested.set(true);
-            presentation.widgets().lifecycle_source().begin_close();
-            presentation.held_pointer_input().borrow_mut().clear();
+            begin_close(presentation, &mut failure);
         }
         self.reconcile_lifecycle_after_failure(Vec::new(), failure);
     }
 
     /// Begin closing presentation `id` alone: it is told it is detached and
-    /// drops its held input.
-    pub(super) fn stop_presentation_after_failure(&self, id: PresentationId, failure: FirstPanic) {
+    /// drops its held input, and the providers that answer its window later
+    /// learn that it closed.
+    pub(super) fn stop_presentation_after_failure(
+        &self,
+        id: PresentationId,
+        mut failure: FirstPanic,
+    ) {
         if let Some(presentation) = self.presentations.get(id) {
-            presentation.closing_requested.set(true);
-            presentation.widgets().lifecycle_source().begin_close();
-            presentation.held_pointer_input().borrow_mut().clear();
+            begin_close(presentation, &mut failure);
             self.reconcile_lifecycle_after_failure(Vec::new(), failure);
         } else if let Some(payload) = failure.into_payload() {
             resume_unwind(payload);

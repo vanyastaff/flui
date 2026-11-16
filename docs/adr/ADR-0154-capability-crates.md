@@ -279,8 +279,8 @@ one owner, the host, so a capability crate asks for them through `ProviderContex
 which grows by methods and never exposes an OS type in a public signature. In the order the first
 crates need it:
 
-1. **`owner()` and `WindowRef`**: a poster to the owner thread and a window's id, scale and raw
-   handles.
+1. **`owner()` and `WindowRef`**: a poster to the owner thread and a window's id, scale, raw
+   handles and lifetime ([ADR-0344](ADR-0344-a-dialog-lasts-while-its-caller-holds-it-and-ends-with-its-window.md)).
 2. **Android**: the host's `FluiActivity` queue (ADR-0255) provides `launch_for_result` (with
    `flui-system`, whose file picker needs an activity result) and `request_permissions` (with the
    first capability that needs a permission, ADR-0152), each returning a `Completion` and routed

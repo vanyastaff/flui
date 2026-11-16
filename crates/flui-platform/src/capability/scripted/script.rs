@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 
-use super::{Audit, Debt, Scenario, ScenarioFailure, describe};
+use super::{Audit, Debt, Scenario, ScenarioFailure, TimelineKey, describe};
 use crate::capability::Resolver;
 
 /// How many requests a script keeps for [`Script::requests`]; later ones are
@@ -194,6 +194,8 @@ struct ScriptState<R, A> {
     received: Vec<Rc<R>>,
     /// How many requests reached the script, recorded or not.
     received_count: usize,
+    /// How many requests their tickets withdrew before an answer.
+    withdrawn: usize,
 }
 
 struct Step<R, A> {
@@ -214,7 +216,11 @@ enum Until<R, A> {
     /// Until the test releases or abandons it.
     Released,
     /// Until the scenario's clock reaches the instant scheduled for it.
-    Due(Reply<R, A>),
+    Due {
+        reply: Reply<R, A>,
+        /// Where its answer sits on the scenario's timeline.
+        scheduled: TimelineKey,
+    },
 }
 
 impl<R, A> ScriptState<R, A> {
@@ -252,6 +258,7 @@ where
                 waiting: VecDeque::new(),
                 received: Vec::new(),
                 received_count: 0,
+                withdrawn: 0,
             }),
         });
         let audited: Rc<dyn Audit> = Rc::clone(&cell) as Rc<dyn Audit>;
@@ -476,13 +483,53 @@ where
     /// request (a matcher, a computed or standing answer, the request's
     /// `Debug`), after the request is held or answered.
     pub fn receive(&self, request: R, resolver: Resolver<A>) {
+        self.receive_as(EntryId(self.cell.scenario.mint()), request, resolver);
+    }
+
+    /// A request its caller can withdraw reached the double: answer it as
+    /// [`receive`](Self::receive) does, and hand back the ticket it waits
+    /// by.
+    ///
+    /// Dropping the ticket while the request is still held or scheduled
+    /// withdraws it, as a system dismisses what its caller stopped waiting
+    /// for (a dialog closed with its window, a started activity whose
+    /// requester left): its resolver is dropped, no step or release answers
+    /// it, it is no [`Unanswered`](ScenarioFailure::Unanswered) failure, and
+    /// [`withdrawn`](Self::withdrawn) counts it. A request answered already
+    /// is not affected.
+    ///
+    /// # Panics
+    ///
+    /// As [`receive`](Self::receive); the ticket is dropped on the way out,
+    /// so a request the panic left held is withdrawn. An observer that
+    /// panics during that withdrawal has its panic discarded: the first one
+    /// goes on.
+    pub fn receive_with_ticket(&self, request: R, resolver: Resolver<A>) -> RequestTicket {
+        let id = EntryId(self.cell.scenario.mint());
+        let script: Rc<dyn Withdraw> = Rc::clone(&self.cell) as Rc<dyn Withdraw>;
+        let ticket = RequestTicket {
+            script: Rc::downgrade(&script),
+            id,
+        };
+        self.receive_as(id, request, resolver);
+        ticket
+    }
+
+    fn receive_as(&self, id: EntryId, request: R, resolver: Resolver<A>) {
         let request = Rc::new(request);
         let mut first = FirstPanic::new();
-        self.dispatch(request, resolver, &mut first);
+        self.dispatch(id, request, resolver, &mut first);
         first.resume();
     }
 
-    fn dispatch(&self, request: Rc<R>, resolver: Resolver<A>, first: &mut FirstPanic) {
+    /// How many requests were withdrawn by dropping their
+    /// [`RequestTicket`] before they were answered.
+    #[must_use]
+    pub fn withdrawn(&self) -> usize {
+        self.cell.state.borrow().withdrawn
+    }
+
+    fn dispatch(&self, id: EntryId, request: Rc<R>, resolver: Resolver<A>, first: &mut FirstPanic) {
         let candidates = {
             let mut state = self.cell.state.borrow_mut();
             state.received_count = state.received_count.saturating_add(1);
@@ -491,7 +538,7 @@ where
             }
             if state.holding {
                 drop(state);
-                self.hold_request(request, resolver);
+                self.hold_request(id, request, resolver);
                 return;
             }
             state
@@ -502,26 +549,26 @@ where
         };
         // Matched with no borrow held; a matcher that re-entered and used a
         // step up leaves it gone, and the next candidate is tried.
-        for (id, matches) in candidates {
+        for (step_id, matches) in candidates {
             match first.contain(|| matches(&request)) {
                 Some(false) => {}
                 Some(true) => {
                     let step = {
                         let mut state = self.cell.state.borrow_mut();
-                        let position = state.steps.iter().position(|step| step.id == id);
+                        let position = state.steps.iter().position(|step| step.id == step_id);
                         position.and_then(|position| state.steps.remove(position))
                     };
                     if let Some(Step { expect, answer, .. }) = step {
                         drop(expect);
                         match answer {
-                            Some(answer) => self.answer(request, resolver, answer, first),
-                            None => self.hold_request(request, resolver),
+                            Some(answer) => self.answer(id, request, resolver, answer, first),
+                            None => self.hold_request(id, request, resolver),
                         }
                         return;
                     }
                 }
                 None => {
-                    self.hold_request(request, resolver);
+                    self.hold_request(id, request, resolver);
                     return;
                 }
             }
@@ -530,7 +577,7 @@ where
         if let Some(otherwise) = otherwise {
             match first.contain(|| otherwise(&request)) {
                 Some(value) => self.deliver(&request, resolver, value, first),
-                None => self.hold_request(request, resolver),
+                None => self.hold_request(id, request, resolver),
             }
             return;
         }
@@ -542,8 +589,7 @@ where
         self.end_unanswered(&request, resolver, first);
     }
 
-    fn hold_request(&self, request: Rc<R>, resolver: Resolver<A>) {
-        let id = EntryId(self.cell.scenario.mint());
+    fn hold_request(&self, id: EntryId, request: Rc<R>, resolver: Resolver<A>) {
         self.keep(Waiting {
             id,
             request,
@@ -558,6 +604,7 @@ where
 
     fn answer(
         &self,
+        id: EntryId,
         request: Rc<R>,
         resolver: Resolver<A>,
         answer: Answer<R, A>,
@@ -565,7 +612,7 @@ where
     ) {
         let Answer { reply, delay } = answer;
         if delay.is_zero() {
-            self.reply_now(request, resolver, reply, first);
+            self.reply_now(id, request, resolver, reply, first);
             return;
         }
         let what = Cow::Owned(format!(
@@ -573,16 +620,9 @@ where
             self.cell.name,
             describe(&*request, first)
         ));
-        let id = EntryId(self.cell.scenario.mint());
-        self.keep(Waiting {
-            id,
-            request,
-            resolver,
-            until: Until::Due(reply),
-        });
         let at = self.cell.scenario.now().saturating_add(delay);
         let script = Rc::downgrade(&self.cell);
-        self.cell.scenario.schedule(
+        let scheduled = self.cell.scenario.schedule(
             at,
             what,
             Box::new(move || {
@@ -591,6 +631,12 @@ where
                 }
             }),
         );
+        self.keep(Waiting {
+            id,
+            request,
+            resolver,
+            until: Until::Due { reply, scheduled },
+        });
     }
 
     fn answer_due(&self, id: EntryId) {
@@ -602,18 +648,19 @@ where
         if let Some(Waiting {
             request,
             resolver,
-            until: Until::Due(reply),
+            until: Until::Due { reply, .. },
             ..
         }) = due
         {
             let mut first = FirstPanic::new();
-            self.reply_now(request, resolver, reply, &mut first);
+            self.reply_now(id, request, resolver, reply, &mut first);
             first.resume();
         }
     }
 
     fn reply_now(
         &self,
+        id: EntryId,
         request: Rc<R>,
         resolver: Resolver<A>,
         reply: Reply<R, A>,
@@ -623,9 +670,91 @@ where
             Reply::Value(value) => self.deliver(&request, resolver, value, first),
             Reply::Computed(compute) => match first.contain(|| compute(&request)) {
                 Some(value) => self.deliver(&request, resolver, value, first),
-                None => self.hold_request(request, resolver),
+                None => self.hold_request(id, request, resolver),
             },
             Reply::Abandon => self.end_unanswered(&request, resolver, first),
+        }
+    }
+}
+
+/// What a double keeps for a request it received through
+/// [`Script::receive_with_ticket`]: the request waits for as long as the
+/// ticket is held, and dropping the ticket withdraws it if nothing answered
+/// it yet.
+///
+/// The scenario's form of a system request that lives while its requester
+/// holds it (a portal's `Request` object, a started activity's ticket).
+/// Owner-thread only.
+#[must_use = "dropping the ticket withdraws the request"]
+pub struct RequestTicket {
+    script: std::rc::Weak<dyn Withdraw>,
+    id: EntryId,
+}
+
+impl Drop for RequestTicket {
+    fn drop(&mut self) {
+        if let Some(script) = self.script.upgrade() {
+            script.withdraw(self.id);
+        }
+    }
+}
+
+impl fmt::Debug for RequestTicket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RequestTicket")
+            .field("id", &self.id.0)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A script as a [`RequestTicket`] reaches it, whatever its types.
+trait Withdraw {
+    /// Withdraw the request `id` if it still waits.
+    fn withdraw(&self, id: EntryId);
+}
+
+impl<R: fmt::Debug + 'static, A: 'static> Withdraw for ScriptCell<R, A> {
+    fn withdraw(&self, id: EntryId) {
+        let withdrawn = {
+            let mut state = self.state.borrow_mut();
+            let position = state.waiting.iter().position(|waiting| waiting.id == id);
+            let withdrawn = position.and_then(|position| state.waiting.remove(position));
+            if withdrawn.is_some() {
+                state.withdrawn = state.withdrawn.saturating_add(1);
+            }
+            withdrawn
+        };
+        // A scheduled answer is taken off the timeline, so the run does not
+        // owe it; the request and its resolver are dropped after the borrow,
+        // since the request's `Drop` is the test's code.
+        if let Some(Waiting {
+            until: Until::Due { scheduled, .. },
+            ..
+        }) = &withdrawn
+        {
+            self.scenario.unschedule(*scheduled);
+        }
+        // The request ends unanswered: every observer hears it, as of an
+        // abandoned one, with no borrow held and each panic contained.
+        let mut first = FirstPanic::new();
+        if let Some(waiting) = &withdrawn {
+            let observers = self.state.borrow().observers.clone();
+            for observe in observers {
+                first.contain(|| observe(&waiting.request, None));
+            }
+        }
+        // The request's and the resolver's drops run contained too, so an
+        // observer's earlier panic stays the first.
+        first.contain(|| drop(withdrawn));
+        // A ticket dropped while its thread unwinds (the panic of the code
+        // that received the request) must not raise a second panic from a
+        // destructor: that one is discarded, and the first goes on.
+        if std::thread::panicking() {
+            if let Some(payload) = first.into_payload() {
+                flui_foundation::panic::discard_payload(payload);
+            }
+        } else {
+            first.resume();
         }
     }
 }
