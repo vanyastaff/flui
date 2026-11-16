@@ -11,7 +11,8 @@
 //! shared decoder on any host. The header names the format's major version under
 //! [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal, never a
 //! skipped row. A recording is untrusted input: a reader refuses a line longer than
-//! [`MAX_LINE_BYTES`] before it parses it, and a row past [`MAX_ROWS`].
+//! [`MAX_LINE_BYTES`] before it parses it, a row past [`MAX_ROWS`] and a line that takes the
+//! recording past [`MAX_RECORDING_BYTES`].
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -1662,6 +1663,13 @@ pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 /// How many rows one native recording may hold: a reader refuses the row past it.
 pub const MAX_ROWS: usize = 1 << 20;
 
+/// How many bytes one native recording may hold, its lines and their endings together: a reader
+/// refuses the line that would pass it, as it reads, before it parses or keeps that line. The two
+/// bounds above alone admit about a tebibyte held at once; the largest recording a device run has
+/// written is a few mebibytes, so this leaves room for long sessions and keeps what one read
+/// holds within what a test host and a CI runner have.
+pub const MAX_RECORDING_BYTES: usize = 64 * 1024 * 1024;
+
 vocabulary! {
     /// The kind of lock an input method was granted on a text store.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1967,6 +1975,14 @@ pub struct StoreLock {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub incomplete: bool,
+    /// The store was protected (a password field): the row records that the lock happened and
+    /// nothing derived from the field's content, no text, range, offset or length, so it has no
+    /// `opened` and no `steps`, and a replay refuses it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub protected: bool,
 }
 
 /// One line of a native recording as a live stream of it carries it: the header first, then

@@ -4979,7 +4979,7 @@ GPU-память простаивающего или невидимого окн
 - [ ] **LY97** (не закрыта, остался только `--record` `os`-lane драйвера: строка его называет, а
   крейта `flui-driver` нет, он ждёт спеки flui-driver (FD6); всё остальное на `main` — потоки
   #1981, предпочтения #1989, дисплеи #1996, состояние окна #2017, закрытие и блокировки хранилища
-  (пятая часть ниже). Эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и
+  (запись «Закрытие и правки хранилища» ниже). Эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и
   iOS, страница Web пишет только слой `input`; захват настоящего метода ввода на устройствах не
   прогонялся, долг записан в строке parity «Recorded native input replays deterministically on
   the headless host») — ветка
@@ -5042,53 +5042,56 @@ GPU-память простаивающего или невидимого окн
   даёт те же факты и ревизии, что живая публикация, включая свёрнутое окно, которое не бывает
   occluded и сохраняет метрики; отказ на снимке с вычеркнутым заголовком в
   `a_row_the_replay_does_not_reproduce_is_a_typed_error`.
-  **Пятая часть — закрытие и правки хранилища** (ветка `native/recording-close-and-edits` от
-  `main` @ `ab45cd94c`; T8 спеки teardown сделана). Поток `window`: `WindowDelivery` пишет
-  `close_request` после ответа обработчика (в нём охранник закрытия `flui-app`) и до действия
-  по нему — `close`, `keep_open`, `closing` (прежний запрос уже разрешён, обработчика не
-  спрашивали), `no_handler`, `panicked` — и `queued` (запрос ждал за работающим методом, ОС
-  ответили «оставить»); `closed` с причиной `granted_request` или `no_request` (команда
-  приложения или ОС, без вето). Запись — через `contain_owner_callback`: паника приёмника
-  заканчивает захват и не теряет разрешённое закрытие. Правки хранилища pull-модели (TSF,
-  AppKit, UIKit, зеркала Android и Web, текстовые входы Linux) идут без событий, поэтому
-  журнал стоит у хранилища: `OwnerPlatform::text_store_host`, единственное место выдачи хоста,
-  в debug-сборке с `native-capture` оборачивает хост в `journal::store_capture::JournaledHost`,
-  если при открытии окна был захват (иначе хост выдаётся как есть, без обёртки и выделений).
-  Обёртка отдаёт хосту `JournaledStore` вместо каждого фокусного хранилища под ключом
-  `RecordedStore` из `AtomicIdMint` окна (не переиздаётся; отложенная блокировка после смены
-  фокуса называет своё хранилище) и сопоставляет `complete_composition` по идентичности.
-  Каждая блокировка — одна строка `store_lock`: вид, каждое чтение и правка по порядку с ответом
-  хранилища (отказ — видом ошибки) и документ, который блокировка застала, если запись его ещё не
-  держит: первая блокировка после фокуса и первая после правки приложения (наблюдатель
-  хранилища обёрнут, чтобы это заметить). Геометрия не пишется (она ставит окно кандидатов и
-  ничего не меняет в хранилище); смещение по точке пишется с ответом и при replay не
-  переспрашивается — правка за ним несёт смещение сама. Границы — во `flui-protocol`:
-  `MAX_STORE_STEPS`, `MAX_STORE_TEXT_BYTES`; блокировка сверх них, с документом, который
-  хранилище не отдаёт (защищённое поле), или с размоткой тела пишется `incomplete`, replay
-  отказывает `ReplayError::Incomplete`. Replay (`StoreLock::replay_on`) восстанавливает
-  застанный документ и повторяет вызовы синхронной блокировкой того же вида, сверяя каждый
-  ответ: иной ответ чтения — `ReplayError::Diverged` с именем строки, так же и иное решение
-  по закрытию. Читатель записи считает её недоверенной: строка длиннее `MAX_LINE_BYTES`
-  отвергается до разбора, строка сверх `MAX_ROWS` — тоже, у `store_lock` число вызовов, объём
-  текста, диапазоны, «ответ или ошибка» и вид блокировки проверяются до построения вызовов.
-  Протокол 0.13 (схема опубликована); проверка аддитивности схемы называла каждый элемент
-  массива `*` и не отличала новый вариант тегированного объединения от поля, ставшего
-  обязательным, — теперь вариант называется тегом, самопроверка покрывает оба случая. Тесты
-  (таблица `native_recording_contracts`): золотой `headless_window_store_and_close.jsonl` и
+  **Закрытие и правки хранилища** (#2657; T8 спеки teardown сделана). Поток `window`:
+  `WindowDelivery` пишет `close_request` после ответа обработчика (в нём охранник закрытия
+  `flui-app`) и до действия по нему — `close`, `keep_open`, `closing` (прежний запрос уже
+  разрешён, обработчика не спрашивали), `no_handler`, `panicked` — и `queued`; `closed` с
+  причиной `granted_request` или `no_request`. Запись — через `contain_owner_callback`. Replay
+  спрашивает обработчик только о строках, где его спрашивали (`close`, `keep_open`), и сверяет
+  решение; `closing` и `no_handler` воспроизводятся без вопроса, `panicked` — отказ
+  `ReplayError::Incomplete`; `closed` закрывает окно, если оно ещё открыто. Правки хранилища
+  pull-модели (TSF, AppKit, UIKit, зеркала Android и Web, текстовые входы Linux) журналируются у
+  хранилища: `OwnerPlatform::text_store_host` в debug-сборке с `native-capture` оборачивает хост в
+  `journal::store_capture::JournaledHost`, если при открытии окна был захват; все хосты одного
+  окна делят его `StoreJournal` (фокус и `IdMint` ключей `RecordedStore`) в `OwnerSlot` доставки.
+  Каждая блокировка — строка `store_lock`: вызовы с ответами и документ, который она застала,
+  если запись его ещё не держит (первая после фокуса и после правки приложения). Блокировка
+  защищённого хранилища пишется только как факт (`protected`, без текста, диапазонов, смещений и
+  длин), replay отказывает `Redacted`. Документ длиннее `MAX_STORE_TEXT_BYTES` единиц UTF-16 не
+  читается вовсе (`incomplete`); если приёмник не хочет строк (`capture_wanting`,
+  `LineSink::wants`), блокировка идёт без журнала и ничего не читает. `store_focus` — не
+  setup-строка: смена фокуса не вытесняет состояние окна из префикса позднего читателя, а запись,
+  начатая после фокуса или после блокировки с документом, получает `ReplayError::JoinedLate` с
+  именем строки; второй `store_focus` того же ключа отвергается при чтении. Читатель отвергает
+  строку длиннее `MAX_LINE_BYTES` до разбора, строку сверх `MAX_ROWS` и строку, выводящую запись
+  за `MAX_RECORDING_BYTES` (64 МиБ), а у `store_lock` проверяет границы до построения вызовов.
+  Протокол 0.13 — в `BREAKING` (ADR-0215 §4): клиент 0.12 не читает новые строки в
+  `record_native`, поэтому приложение 0.13 его не обслуживает. Проверка аддитивности теперь
+  называет вариант тегированного объединения тегом: новый вариант не аддитивен, кроме версии из
+  `BREAKING` и подписочного `Event` (ADR-0238 §2); версии до 0.13, вышедшие, когда проверка
+  вариантов не видела (0.8 добавила `InspectValue::NonFinite`), остаются как есть.
+  `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs:494`, ADR-0215 §7)
+  сертифицирует перевод нативного чтения в `HostInput` и строки IME путей ввода; строки журнала —
+  запись тех же путей, их воспроизводимость проверяет `StoreLock::replay_on` в таблице ниже, а не
+  этот гейт. `tools/xtask/src/recording_vocabulary.rs` читает только перечисления записи
+  `HostInput` (`RECORDED`, `flui-runtime`); словари нативной записи — `vocabulary!`, пять новых
+  добавлены в `every_vocabulary_enum_is_spelled_as_it_is_named`. Тесты таблицы
+  `native_recording_contracts`: золотой `headless_window_store_and_close.jsonl` и
   `window_store_and_close_recordings_replay_on_the_headless_host`,
-  `a_row_replayed_otherwise_is_a_divergence`, `a_native_recording_past_its_bounds_is_refused`;
-  с `native-capture` — `captured_store_locks_replay_to_the_document_they_left` (модели TSF,
-  `EditContext` и зеркала Android через `text::conformance`, захват через
-  `OwnerPlatform::text_store_host` headless-окна, replay на свежем хранилище headless, отказ
-  редактированной записи), `a_store_lock_past_its_bounds_or_unwound_is_incomplete`,
-  `captured_close_requests_replay_to_the_same_decisions`. С откатом (наблюдатель не отмечает
-  правку приложения, `journal_close` ничего не пишет, проверка длины строки снята, сверка
-  ответов всегда «равно») падают соответственно `captured_store_locks_…`,
-  `captured_close_requests_…`, `a_native_recording_past_its_bounds_is_refused`,
-  `a_row_replayed_otherwise_is_a_divergence`. Не построено и не прогнано: `--record` драйвера
-  (ждёт `flui-driver`); захват настоящего TSF с IME на Windows (зонд `text_services` печатает в
-  настоящее окно через собственный хост окна, мимо `OwnerPlatform::text_store_host`), macOS,
-  iOS, Android, браузера и Linux — долг в строке parity.
+  `a_row_replayed_otherwise_is_a_divergence`, `a_native_recording_past_its_bounds_is_refused`,
+  `a_store_lock_the_recording_joined_after_is_refused`; с `native-capture` —
+  `captured_store_locks_replay_to_the_document_they_left` (модели TSF, `EditContext`, зеркала
+  Android), `a_protected_store_journals_nothing_of_its_content`,
+  `the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
+  `a_store_lock_past_its_bounds_or_unwound_is_incomplete`, `every_close_answer_and_cause_replays`.
+  С откатом падают: без отметки правки приложения — `captured_store_locks_…`; без записи закрытия
+  или с прежним `closing` → `keep_open` — `every_close_answer_…`; без проверок длины строки и
+  объёма записи — `a_native_recording_past_its_bounds_…`; со сверкой «всегда равно» —
+  `a_row_replayed_otherwise_…`; без `JoinedLate` — `a_store_lock_the_recording_joined_after_…`;
+  без ветки `protected` — `a_protected_store_…`; без проверки длины документа или `is_wanted` —
+  `the_journal_reads_no_document_…`; без пометки размотанного тела — `a_store_lock_past_its_bounds_or_unwound_…`.
+  Не построено: `--record` драйвера (ждёт `flui-driver`). Не прогнано: захват настоящего метода
+  ввода на устройствах — долг в строке parity.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей

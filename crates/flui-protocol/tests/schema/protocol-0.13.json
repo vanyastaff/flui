@@ -9311,6 +9311,9 @@
             }
           ]
         },
+        "protected": {
+          "type": "boolean"
+        },
         "steps": {
           "items": {
             "$ref": "#/$defs/StoreStep"

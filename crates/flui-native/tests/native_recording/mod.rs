@@ -858,7 +858,7 @@ fn a_native_recording_outside_its_format_is_refused() {
 /// of its calls is built.
 fn a_native_recording_past_its_bounds_is_refused() {
     use flui_protocol::native_recording::{
-        MAX_LINE_BYTES, MAX_ROWS, MAX_STORE_STEPS, MAX_STORE_TEXT_BYTES,
+        MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS, MAX_STORE_STEPS, MAX_STORE_TEXT_BYTES,
     };
 
     let window =
@@ -875,6 +875,24 @@ fn a_native_recording_past_its_bounds_is_refused() {
     assert!(matches!(
         read_error(&many),
         CodecError::TooManyRows { line, limit } if limit == MAX_ROWS && line == MAX_ROWS as u64 + 2
+    ));
+    // A recording exactly at the byte bound reads; one byte past it is
+    // refused at the line that passes it.
+    let mut whole = format!("{window}\n");
+    while whole.len() < MAX_RECORDING_BYTES {
+        let room = (MAX_RECORDING_BYTES - whole.len()).min(MAX_LINE_BYTES + 1);
+        whole.push_str(&" ".repeat(room - 1));
+        whole.push('\n');
+    }
+    assert!(
+        NativeRecording::read(whole.as_bytes()).is_ok(),
+        "a recording at the byte bound reads"
+    );
+    let lines = whole.lines().count() as u64;
+    whole.push('\n');
+    assert!(matches!(
+        read_error(&whole),
+        CodecError::TooLarge { line, limit } if limit == MAX_RECORDING_BYTES && line == lines + 1
     ));
     let selection = r#"{"call":"selection","selection":[0,0]}"#;
     let steps = |count: usize| vec![selection; count].join(",");

@@ -13,7 +13,7 @@
 //!
 //! [`Recorder`]: super::recorder::Recorder
 
-use super::capture::{CaptureGuard, CaptureSource, Captured, capture};
+use super::capture::{CaptureGuard, CaptureSource, Captured, capture_wanting};
 use super::codec::{Backend, Header, Row};
 use super::recorder::{Privacy, Pseudonyms, fold, opened};
 use flui_protocol::native_recording as wire;
@@ -33,9 +33,11 @@ pub struct StreamLine<'a> {
     /// The source the line is of, numbered in the order the capture saw them open.
     pub stream: u32,
     /// Whether it is a header or a row that sets up what later rows are read against: a device
-    /// added or removed, the click thresholds, the preferences, the displays, a window's
-    /// state or the text store its input method serves.
-    /// A sink keeps these for a reader that joins later.
+    /// added or removed, the click thresholds, the preferences, the displays or a window's
+    /// state.
+    /// A sink keeps these for a reader that joins later. A text store's focus is not one: a
+    /// reader that joins after it lacks the store's document as well, and its replay refuses the
+    /// store's locks with a typed error, so focus changes never crowd window state out.
     pub setup: bool,
     /// The line with its text kept, when it was made.
     pub kept: Option<&'a wire::Line>,
@@ -64,11 +66,22 @@ pub struct LineCapture {
 }
 
 /// Installs a capture for `backend` on this thread that hands every source's lines to `sink`.
-pub fn capture_lines(backend: Backend, mut sink: impl LineSink + 'static) -> LineCapture {
+///
+/// A row that costs work to build (a text store lock) is built only while the sink
+/// [`wants`](LineSink::wants) a form of it.
+pub fn capture_lines(backend: Backend, sink: impl LineSink + 'static) -> LineCapture {
+    let sink = std::sync::Arc::new(parking_lot::Mutex::new(sink));
+    let asked = std::sync::Arc::clone(&sink);
     let mut sources: Vec<Source> = Vec::new();
-    let guard = capture(move |source, call| {
-        journal(&mut sources, &mut sink, backend, source, call);
-    });
+    let guard = capture_wanting(
+        move |source, call| {
+            journal(&mut sources, &mut *sink.lock(), backend, source, call);
+        },
+        move || {
+            let forms = asked.lock().wants();
+            forms.kept || forms.redacted
+        },
+    );
     LineCapture { _guard: guard }
 }
 
@@ -204,6 +217,5 @@ const fn is_setup(call: Captured<'_>) -> bool {
             | Captured::Preferences(_)
             | Captured::Displays(_)
             | Captured::WindowState(_)
-            | Captured::StoreFocus(_)
     )
 }

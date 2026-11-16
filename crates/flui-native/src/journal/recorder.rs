@@ -328,6 +328,7 @@ fn redacted_lock(lock: &StoreLock) -> (StoreLock, bool) {
             store: lock.store,
             kind: lock.kind,
             incomplete: lock.incomplete,
+            protected: lock.protected,
         },
         redacted,
     )

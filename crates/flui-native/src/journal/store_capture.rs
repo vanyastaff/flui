@@ -17,10 +17,9 @@
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Point};
-use flui_foundation::sequence::AtomicIdMint;
+use flui_foundation::sequence::IdMint;
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, LockGrant, LockKind, LockOutcome, LockTiming,
     OwnerCalls, PointMode, RangeRect, Selection, TextChange, TextStore, TextStoreChange,
@@ -35,19 +34,25 @@ use super::store::{
 };
 use crate::owner::panic_boundary::contain_owner_callback;
 
-/// The keys a window issues to the stores its input method serves, one per
-/// focus of a store it was not serving, never reissued within the window's
-/// recording.
-pub(crate) type StoreKeys = AtomicIdMint<NonZeroU64>;
+/// What one window's text store journal holds on its owner thread, shared by
+/// every journaled host handed out for the window, so two of them cannot
+/// disagree about which store is focused or issue one key twice.
+#[derive(Default)]
+pub(crate) struct StoreJournal {
+    /// The keys the window issues to the stores its input method serves, one
+    /// per focus of a store it was not serving, never reissued in its
+    /// recording.
+    keys: IdMint<NonZeroU64>,
+    /// The store the presentation last focused, and the journaled store the
+    /// host serves in its place.
+    focused: RefCell<Option<Focused>>,
+}
 
 /// A window's store host whose stores journal to the window's stream.
 pub(crate) struct JournaledHost {
     inner: Rc<dyn TextStoreHost>,
     journal: Journal,
-    keys: Arc<StoreKeys>,
-    /// The store the presentation last focused, and the journaled store the
-    /// host serves in its place.
-    focused: RefCell<Option<Focused>>,
+    state: Rc<StoreJournal>,
 }
 
 /// A store the presentation focused and the journaled store served for it.
@@ -59,12 +64,12 @@ struct Focused {
 }
 
 impl JournaledHost {
-    /// `inner` journaled to `journal`, with stores keyed from `keys`; `inner`
+    /// `inner` journaled to `journal`, sharing the window's `state`; `inner`
     /// itself when `journal` reports nowhere.
     pub(crate) fn wrap(
         inner: Rc<dyn TextStoreHost>,
         journal: &Journal,
-        keys: &Arc<StoreKeys>,
+        state: Rc<StoreJournal>,
     ) -> Rc<dyn TextStoreHost> {
         if !journal.is_reporting() {
             return inner;
@@ -72,8 +77,7 @@ impl JournaledHost {
         Rc::new(Self {
             inner,
             journal: journal.clone(),
-            keys: Arc::clone(keys),
-            focused: RefCell::new(None),
+            state,
         })
     }
 
@@ -82,12 +86,12 @@ impl JournaledHost {
     /// `None` once the window's keys are exhausted, and then `store` is
     /// served unjournaled.
     fn journaled(&self, store: &Rc<dyn TextStore>) -> Option<Rc<JournaledStore>> {
-        if let Some(focused) = &*self.focused.borrow()
+        if let Some(focused) = &*self.state.focused.borrow()
             && Rc::ptr_eq(&focused.presented, store)
         {
             return Some(Rc::clone(&focused.served));
         }
-        let Ok(raw) = self.keys.next() else {
+        let Ok(raw) = self.state.keys.next() else {
             tracing::error!(
                 "a window's text store keys are exhausted: its stores are not journaled"
             );
@@ -111,7 +115,7 @@ impl TextStoreHost for JournaledHost {
     fn focus_store(&self, store: Option<Rc<dyn TextStore>>) {
         let (pair, served): (_, Option<Rc<dyn TextStore>>) = match store {
             None => {
-                if self.focused.borrow().is_some() {
+                if self.state.focused.borrow().is_some() {
                     self.journal.record(Captured::StoreFocus(None));
                 }
                 (None, None)
@@ -130,7 +134,7 @@ impl TextStoreHost for JournaledHost {
         };
         // The previous pair is let go outside the borrow, and the host is
         // told with none held: it may reach application code.
-        let replaced = self.focused.replace(pair);
+        let replaced = self.state.focused.replace(pair);
         drop(replaced);
         self.inner.focus_store(served);
     }
@@ -139,7 +143,7 @@ impl TextStoreHost for JournaledHost {
         &self,
         store: &Rc<dyn TextStore>,
     ) -> Result<CompositionEnd, TextStoreHostError> {
-        let served: Rc<dyn TextStore> = match &*self.focused.borrow() {
+        let served: Rc<dyn TextStore> = match &*self.state.focused.borrow() {
             Some(focused) if Rc::ptr_eq(&focused.presented, store) => {
                 Rc::clone(&focused.served) as Rc<dyn TextStore>
             }
@@ -182,15 +186,24 @@ impl TextStore for JournaledStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        let (key, journal, document) = (self.key, self.journal.clone(), Rc::clone(&self.document));
+        let tap = LockTap {
+            key: self.key,
+            journal: self.journal.clone(),
+            document: Rc::clone(&self.document),
+            store: Rc::downgrade(&self.inner),
+        };
         let grant = match grant {
             LockGrant::Read(body) => LockGrant::read(move |session| {
-                let log = LockLog::open(key, LockKind::Read, journal, document);
+                let Some(log) = tap.open(LockKind::Read) else {
+                    return body(session);
+                };
                 body(&ReadTap { session, log: &log });
                 log.finish();
             }),
             LockGrant::ReadWrite(body) => LockGrant::read_write(move |session| {
-                let log = LockLog::open(key, LockKind::ReadWrite, journal, document);
+                let Some(log) = tap.open(LockKind::ReadWrite) else {
+                    return body(session);
+                };
                 body(&mut EditTap { session, log: &log });
                 log.finish();
             }),
@@ -224,6 +237,53 @@ impl TextStore for JournaledStore {
 
     fn screen_moved(&self) {
         self.inner.screen_moved();
+    }
+}
+
+/// What a granted lock on a journaled store needs to journal itself.
+struct LockTap {
+    key: RecordedStore,
+    journal: Journal,
+    document: Rc<Cell<HeldDocument>>,
+    store: std::rc::Weak<dyn TextStore>,
+}
+
+impl LockTap {
+    /// The journal of a lock of `kind` granted now, or `None` when the lock
+    /// runs untouched: no sink wants store rows now (the recording's copy of
+    /// the document goes stale), or the store is protected, when the lock is
+    /// recorded as having happened and nothing derived from the field's
+    /// content is (no text, range, offset or length).
+    fn open(self, kind: LockKind) -> Option<LockLog> {
+        if !self.journal.is_wanted() {
+            self.forget_document();
+            return None;
+        }
+        if self
+            .store
+            .upgrade()
+            .is_some_and(|store| store.status().protected)
+        {
+            self.forget_document();
+            let lock = StoreLock {
+                store: self.key,
+                kind,
+                opened: None,
+                steps: Vec::new(),
+                incomplete: false,
+                protected: true,
+            };
+            contain_owner_callback(|| self.journal.record(Captured::StoreLock(&lock)));
+            return None;
+        }
+        Some(LockLog::open(self.key, kind, self.journal, self.document))
+    }
+
+    /// The recording no longer holds what this lock leaves the document as.
+    fn forget_document(&self) {
+        if self.document.get() == HeldDocument::Current {
+            self.document.set(HeldDocument::Stale);
+        }
     }
 }
 
@@ -332,7 +392,14 @@ impl LockLog {
         if !std::mem::take(&mut self.entries.borrow_mut().document_due) {
             return;
         }
-        let whole = Utf16Range::try_new(Utf16Offset::ZERO, session.document_len())
+        let len = session.document_len();
+        // Every UTF-16 unit is at least one byte of UTF-8: a document of more
+        // units than the row holds bytes is never read, let alone copied.
+        if len.get() > MAX_STORE_TEXT_BYTES {
+            self.entries.borrow_mut().incomplete = true;
+            return;
+        }
+        let whole = Utf16Range::try_new(Utf16Offset::ZERO, len)
             .expect("BUG: a document's length is at or past its start");
         let text = session.text(whole);
         let (selection, composition) = (session.selection(), session.composition());
@@ -447,6 +514,7 @@ impl Drop for LockLog {
             opened: entries.opened,
             steps: entries.steps,
             incomplete,
+            protected: false,
         };
         // A sink that panics ends its capture; neither the lock's body nor an
         // unwind already under way is disturbed by it.

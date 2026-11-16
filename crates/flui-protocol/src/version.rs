@@ -104,6 +104,14 @@ pub const BREAKING: &[Break] = &[
         // is respelled, the handle has a new meaning, so an older client cannot read it.
         renamed: &[],
     },
+    Break {
+        version: ProtocolVersion::new(0, 13),
+        adr: "ADR-0215",
+        // The native recording's rows gain `store_focus`, `store_lock`, `close_request` and
+        // `closed` (§4): a `record_native` event carrying one does not read in an older client,
+        // which refuses the unknown row, so an app speaking 0.13 refuses older clients.
+        renamed: &[],
+    },
 ];
 
 impl fmt::Display for ProtocolVersion {

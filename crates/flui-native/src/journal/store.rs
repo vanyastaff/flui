@@ -211,6 +211,10 @@ pub struct StoreLock {
     /// more text than [`MAX_STORE_TEXT_BYTES`], a document the store would not
     /// read out, or a lock body that panicked. A replay refuses it.
     pub incomplete: bool,
+    /// The store was protected: the lock is recorded as having happened and
+    /// nothing derived from the field's content is, so it has no document
+    /// and no calls. A replay refuses it.
+    pub protected: bool,
 }
 
 /// How a store's replay departed from its recording.
@@ -220,6 +224,10 @@ pub enum StoreDivergence {
     /// The replaying store refused the lock the recording was granted.
     #[error("the replaying store refused the lock: {0:?}")]
     LockRefused(StoreError),
+    /// The replaying store refused the lock for a reason the schema does not
+    /// name yet.
+    #[error("the replaying store refused the lock for a reason the schema does not name")]
+    LockRefusedUnmirrored,
     /// The replaying store queued the lock the recording ran at once.
     #[error("the replaying store deferred the lock")]
     LockDeferred,
@@ -311,7 +319,7 @@ fn granted(answer: Result<LockOutcome, TextStoreError>) -> Result<(), StoreDiver
         Ok(LockOutcome::Granted) => Ok(()),
         Ok(LockOutcome::Deferred) => Err(StoreDivergence::LockDeferred),
         Err(error) => Err(error_kind(&error).map_or(
-            StoreDivergence::LockRefused(StoreError::Detached),
+            StoreDivergence::LockRefusedUnmirrored,
             StoreDivergence::LockRefused,
         )),
     }
@@ -658,12 +666,14 @@ pub(super) fn lock_to_wire(lock: &StoreLock) -> wire::StoreLock {
         }),
         steps: lock.steps.iter().map(step_to_wire).collect(),
         incomplete: lock.incomplete,
+        protected: lock.protected,
     }
 }
 
 /// A lock as the schema holds it, its bounds checked before any call of it
 /// is built: at most [`MAX_STORE_STEPS`] calls and [`MAX_STORE_TEXT_BYTES`]
-/// of text, a nonzero store, and no edit under a read lock.
+/// of text, a nonzero store, no edit under a read lock, and nothing of a
+/// protected store's content.
 pub(super) fn lock_from_wire(lock: wire::StoreLock) -> DtoResult<StoreLock> {
     let store = NonZeroU64::new(lock.store)
         .map(RecordedStore::from_raw)
@@ -691,6 +701,9 @@ pub(super) fn lock_from_wire(lock: wire::StoreLock) -> DtoResult<StoreLock> {
         wire::StoreLockKind::ReadWrite => LockKind::ReadWrite,
         other => return Err(unread(other.name())),
     };
+    if lock.protected && (lock.opened.is_some() || !lock.steps.is_empty()) {
+        return Err(invalid("a protected store's lock holds content"));
+    }
     if kind == LockKind::Read && lock.steps.iter().any(wire_is_edit) {
         return Err(invalid("a read lock holds an edit"));
     }
@@ -717,6 +730,7 @@ pub(super) fn lock_from_wire(lock: wire::StoreLock) -> DtoResult<StoreLock> {
             .map(step_from_wire)
             .collect::<DtoResult<Vec<StoreStep>>>()?,
         incomplete: lock.incomplete,
+        protected: lock.protected,
     })
 }
 

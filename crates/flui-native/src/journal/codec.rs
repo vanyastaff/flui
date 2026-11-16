@@ -72,6 +72,15 @@ pub enum CodecError {
         /// The bound.
         limit: usize,
     },
+    /// Line `line` takes the recording past the [`wire::MAX_RECORDING_BYTES`]
+    /// it may hold: refused before it is parsed.
+    #[error("line {line} takes the native recording past {limit} bytes")]
+    TooLarge {
+        /// The 1-based line.
+        line: u64,
+        /// The bound.
+        limit: usize,
+    },
     /// Line `line` is past the [`wire::MAX_ROWS`] rows a recording holds.
     #[error("line {line} is past the {limit} rows a native recording holds")]
     TooManyRows {
@@ -576,6 +585,16 @@ pub enum ReplayError {
         /// The row's name in the schema.
         row: &'static str,
     },
+    /// Line `line` is a text store lock the recording cannot set its store up
+    /// for: the recording began after the store was focused, or after the lock
+    /// that found the store's document (a live stream joined late).
+    #[error("line {line} is a `{row}` row on a store the recording joined after")]
+    JoinedLate {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+    },
     /// Line `line` was reproduced otherwise than recorded.
     #[error("line {line} (`{row}`) replayed otherwise than recorded: {divergence}")]
     Diverged {
@@ -685,9 +704,9 @@ pub trait ReplayTarget {
         Err(Unsupported)
     }
 
-    /// The window closed: after a close request its handler granted, the
-    /// target's window already has; otherwise the target closes it without
-    /// asking.
+    /// The window closed: the target closes its window unless it already
+    /// has (after a close request its handler granted), without asking its
+    /// handler.
     fn closed(&mut self, cause: CloseCause) -> Result<(), Unsupported> {
         let _ = cause;
         Err(Unsupported)
@@ -716,7 +735,8 @@ pub struct NativeRecording {
 impl NativeRecording {
     /// Read a whole recording. A recording is untrusted input: a line longer
     /// than [`wire::MAX_LINE_BYTES`] is refused before it is parsed, a row
-    /// past [`wire::MAX_ROWS`] is refused, and each row's values are checked
+    /// past [`wire::MAX_ROWS`] or a line that takes the recording past
+    /// [`wire::MAX_RECORDING_BYTES`] is refused, and each row's values are checked
     /// against their ranges before the row is built.
     ///
     /// # Errors
@@ -724,7 +744,7 @@ impl NativeRecording {
     /// [`CodecError`] for the first line that cannot be read.
     pub fn read(mut input: impl BufRead) -> Result<Self, CodecError> {
         let mut buffer = String::new();
-        read_bounded_line(&mut input, &mut buffer, 1)?;
+        let mut total = read_bounded_line(&mut input, &mut buffer, 1)?;
         let value: serde_json::Value =
             serde_json::from_str(&buffer).map_err(|source| CodecError::Json {
                 line: 1,
@@ -746,11 +766,21 @@ impl NativeRecording {
         let declared = dto.devices.clone();
         let header = header_from_wire(dto).map_err(|error| error.at(1))?;
         let mut rows = Vec::new();
+        // The stores the recording focused: one focus per key, never two.
+        let mut focused = std::collections::BTreeSet::new();
         let mut line: u64 = 1;
         loop {
             line += 1;
-            if read_bounded_line(&mut input, &mut buffer, line)? == 0 {
+            let read = read_bounded_line(&mut input, &mut buffer, line)?;
+            if read == 0 {
                 break;
+            }
+            total = total.saturating_add(read);
+            if total > wire::MAX_RECORDING_BYTES {
+                return Err(CodecError::TooLarge {
+                    line,
+                    limit: wire::MAX_RECORDING_BYTES,
+                });
             }
             if usize::try_from(line - 1).map_or(true, |rows| rows > wire::MAX_ROWS) {
                 return Err(CodecError::TooManyRows {
@@ -764,6 +794,14 @@ impl NativeRecording {
             let dto: wire::Row =
                 serde_json::from_str(&buffer).map_err(|source| json_error(line, source))?;
             let row = row_from_wire(dto).map_err(|error| error.at(line))?;
+            if let Row::StoreFocus(Some(focus)) = &row
+                && !focused.insert(focus.store)
+            {
+                return Err(CodecError::Invalid {
+                    line,
+                    what: format!("store {} is focused a second time", focus.store.get()),
+                });
+            }
             for (device, kind) in row_devices(&row) {
                 let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
                 if !declared
@@ -844,6 +882,9 @@ impl NativeRecording {
         let mut batch = MoveBatch::new();
         let mut touchpad = TouchpadAssembler::new(NativeSurface(0));
         let pointer = |event| PlatformInput::Pointer(event);
+        // Each store the replay saw focused, and whether a lock gave it a
+        // document yet.
+        let mut stores = std::collections::BTreeMap::<RecordedStore, bool>::new();
         for (index, row) in self.rows.iter().enumerate() {
             let line = index as u64 + 2;
             let unsupported = |Unsupported| ReplayError::Unsupported {
@@ -913,6 +954,12 @@ impl NativeRecording {
                         row: row.name(),
                     });
                 }
+                Row::StoreLock { lock, .. } if lock.protected => {
+                    return Err(ReplayError::Redacted {
+                        line,
+                        row: row.name(),
+                    });
+                }
                 Row::StoreLock { lock, .. } if lock.incomplete => {
                     return Err(ReplayError::Incomplete {
                         line,
@@ -933,9 +980,27 @@ impl NativeRecording {
                 Row::Displays { read, .. } => target.displays(read).map_err(unsupported)?,
                 Row::State { state, .. } => target.window_state(state).map_err(unsupported)?,
                 Row::StoreFocus(focus) => {
+                    if let Some(focus) = focus {
+                        stores.insert(focus.store, false);
+                    }
                     target.store_focus(focus.as_ref()).map_err(unsupported)?;
                 }
                 Row::StoreLock { lock, .. } => {
+                    // A recording that began after the store was focused, or
+                    // after the lock that found its document, cannot set a
+                    // store to what the input method edited.
+                    let documented =
+                        stores.get_mut(&lock.store).ok_or(ReplayError::JoinedLate {
+                            line,
+                            row: row.name(),
+                        })?;
+                    if lock.opened.is_none() && !*documented {
+                        return Err(ReplayError::JoinedLate {
+                            line,
+                            row: row.name(),
+                        });
+                    }
+                    *documented = true;
                     let store = target
                         .text_store(lock.store)
                         .ok_or(ReplayError::Unsupported {
@@ -949,10 +1014,17 @@ impl NativeRecording {
                             divergence: divergence.into(),
                         })?;
                 }
+                // The handler was not asked: an earlier request was granted,
+                // or the window had let go of its handler. Nothing is asked on
+                // replay either; the `closed` row closes the window.
+                Row::CloseRequest {
+                    answer: CloseAnswer::Closing | CloseAnswer::NoHandler,
+                    ..
+                } => {}
                 Row::CloseRequest { answer, .. } => {
                     let replayed = target.close_request().map_err(unsupported)?;
                     let recorded = match answer {
-                        CloseAnswer::KeepOpen | CloseAnswer::Closing => CloseDecision::KeepOpen,
+                        CloseAnswer::KeepOpen => CloseDecision::KeepOpen,
                         _ => CloseDecision::Close,
                     };
                     if replayed != recorded {

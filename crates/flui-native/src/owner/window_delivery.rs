@@ -325,11 +325,11 @@ pub struct WindowDelivery {
     /// The native capture this delivery reports to, in builds that have one.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     journal: crate::journal::capture::Journal,
-    /// The keys the window's journaled text store hosts give the stores they
-    /// are told to serve, one domain for every host handed out for the
-    /// window, so no two stores of its stream share one.
+    /// The owner thread's text store journal of the window, made by the first
+    /// journaled host handed out for it and shared by every later one, so
+    /// they agree on the focused store and issue each store key once.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
-    store_keys: Arc<crate::journal::store_capture::StoreKeys>,
+    store_journal: OwnerSlot<Rc<crate::journal::store_capture::StoreJournal>>,
 }
 
 impl WindowDelivery {
@@ -384,19 +384,29 @@ impl WindowDelivery {
                 flui_protocol::native_recording::Stream::Window,
             ),
             #[cfg(all(debug_assertions, feature = "native-capture"))]
-            store_keys: Arc::default(),
+            store_journal: OwnerSlot::new(),
         }
     }
 
     /// `host`, journaling into this window's stream what its input method
     /// does to the stores it serves; `host` itself when no capture was
-    /// installed as the window opened.
+    /// installed as the window opened, or off the window's owner thread.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     pub(crate) fn journaled_store_host(
         &self,
         host: Rc<dyn flui_platform::text_store::TextStoreHost>,
     ) -> Rc<dyn flui_platform::text_store::TextStoreHost> {
-        crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, &self.store_keys)
+        if !self.journal.is_reporting() || !self.store_journal.is_owner_thread() {
+            return host;
+        }
+        let state = self.store_journal.cloned().unwrap_or_else(|| {
+            let state = Rc::new(crate::journal::store_capture::StoreJournal::default());
+            if self.store_journal.replace(Rc::clone(&state)).is_err() {
+                tracing::error!("a window's store journal is not kept: owner slots are exhausted");
+            }
+            state
+        });
+        crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, state)
     }
 
     /// Journal a close request's answer or the close, in the window's turn and

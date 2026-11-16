@@ -4641,50 +4641,64 @@ did. `WindowDelivery` journals a `close_request` row when its handler (the
 application's close guard, in `flui-app`) has answered, before the answer is
 acted on: `close`, `keep_open`, `closing` (an earlier request was granted, the
 handler not asked), `no_handler` or `panicked`, and whether the request waited
-behind a running method (the window system was told to keep the window then).
-It journals `closed` with its cause: `granted_request`, or `no_request` (the
-application's close command or the system taking the window away, which ask no
-veto). Both are recorded through `contain_owner_callback`, so a sink that panics
-ends its capture and never drops a granted close. A pull-model input method
-(TSF, AppKit, UIKit, the Android and web mirrors, the Linux text inputs) edits
-the focused store with no event, so its edits are journaled at the store: in
-debug builds with `native-capture`, `OwnerPlatform::text_store_host`, the one
-place a host is handed out, wraps it in `journal::store_capture::JournaledHost`
-when a capture was installed as the window opened (otherwise the host is
-handed out as it is, and nothing is wrapped or allocated). The wrapper serves a
-`JournaledStore` in place of each store it is told to focus, under a
-`RecordedStore` key the window's own `AtomicIdMint` issues (never reissued, so
-a lock deferred past a focus change names the store it ran on), and maps
+behind a running method. It journals `closed` with its cause: `granted_request`,
+or `no_request` (the application's close command or the system taking the
+window away, which ask no veto). Both go through `contain_owner_callback`, so a
+sink that panics ends its capture and never drops a granted close. A replay asks
+its window's handler only where the live one was asked (`close`, `keep_open`)
+and compares the decision; `closing` and `no_handler` replay without asking,
+`panicked` is refused as incomplete, and `closed` closes the window unless the
+replayed request already did.
+
+A pull-model input method (TSF, AppKit, UIKit, the Android and web mirrors, the
+Linux text inputs) edits the focused store with no event, so its edits are
+journaled at the store: in debug builds with `native-capture`,
+`OwnerPlatform::text_store_host`, the one place a host is handed out, wraps it
+in `journal::store_capture::JournaledHost` when a capture was installed as the
+window opened (otherwise the host is handed out as it is). Every host handed out
+for a window shares the window's `StoreJournal`, held in an `OwnerSlot` of its
+delivery: the focused store and the `IdMint` of `RecordedStore` keys, never
+reissued, so a lock deferred past a focus change names the store it ran on. The
+wrapper serves a `JournaledStore` in place of each focused store and maps
 `complete_composition` back by the presented store's identity. Each lock the
-input method is granted becomes one `store_lock` row: its kind, every read and
-edit it made in order with the store's answer (a refusal by its kind), and the
-document the lock found when the recording does not hold it yet, which is at
-the first lock after the focus and at the first after the application changed
-the store (the observer the store is given is wrapped to notice). Geometry
-reads place the candidate window and change nothing in the store, so they are
-not recorded; an offset asked at a point is recorded with its answer and not
-asked again on replay, since the edit that followed carries it. A row holds at
-most `MAX_STORE_STEPS` calls and `MAX_STORE_TEXT_BYTES` of text
-(`flui-protocol`); a lock past either, one whose document the store would not
-read out (a protected field), or one whose body unwound, is written
-`incomplete`, and a replay refuses it with `ReplayError::Incomplete`. The row is
-written when the lock's body returns or unwinds, contained the same way.
-`StoreLock::replay_on` replays a lock on any store under a synchronous lock of
-the recorded kind, restoring the found document first, and compares each answer
-with the recorded one: a read that answers otherwise means the edit after it was
-based on another document, which is a `ReplayError::Diverged` naming the row,
-as is a close request the replaying handler decides otherwise. The reader
-treats a recording as untrusted input: a line past `MAX_LINE_BYTES` is refused
-before it is parsed, a row past `MAX_ROWS` is refused, and a store lock's call
-count, text size, ranges, answer-or-error shape and lock kind are checked
-before any call is built (`a_native_recording_past_its_bounds_is_refused`,
+input method is granted becomes one `store_lock` row: every read and edit in
+order with the store's answer (a refusal by its kind), and the document the lock
+found when the recording does not hold it yet (the first lock after the focus,
+and the first after the application changed the store, which the wrapped
+observer notices). Geometry reads change nothing in the store and are not
+recorded; an offset asked at a point is kept and not asked again on replay.
+
+What the journal holds of a field is bounded by what the field allows and what
+anyone wants. A lock on a protected store is recorded as having happened and
+nothing more: no text, range, offset or length, whatever the privacy, and its
+replay is refused as withheld. A document longer than `MAX_STORE_TEXT_BYTES`
+UTF-16 units is never read (each unit is at least a byte); a row holds at most
+`MAX_STORE_STEPS` calls and `MAX_STORE_TEXT_BYTES` of text; a lock past either,
+or whose body unwound, is written `incomplete` and refused on replay. While the
+capture's sink wants no rows (`capture_wanting`, which `capture_lines` answers
+from `LineSink::wants`), a lock runs untouched and the journal reads nothing.
+`store_focus` is not a setup row a late reader is handed, so focus changes never
+crowd window state out of that prefix; a recording that began after a store's
+focus or after the lock that found its document is refused at the store's first
+lock with `ReplayError::JoinedLate`. `StoreLock::replay_on` replays a lock under
+a synchronous lock of the recorded kind, restoring the found document first,
+and compares every answer: a read that answers otherwise is a
+`ReplayError::Diverged` naming the row. The reader treats a recording as
+untrusted input: a line past `MAX_LINE_BYTES` is refused before it is parsed, as
+is a row past `MAX_ROWS` and a line that takes the recording past
+`MAX_RECORDING_BYTES`; a store focused twice is refused, and a store lock's
+bounds, ranges, answer-or-error shape, lock kind and protected emptiness are
+checked before any call is built
+(`a_native_recording_past_its_bounds_is_refused`,
 `window_store_and_close_recordings_replay_on_the_headless_host`,
 `a_row_replayed_otherwise_is_a_divergence`,
+`a_store_lock_the_recording_joined_after_is_refused`,
 `captured_store_locks_replay_to_the_document_they_left`,
+`a_protected_store_journals_nothing_of_its_content`,
+`the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
 `a_store_lock_past_its_bounds_or_unwound_is_incomplete`,
-`captured_close_requests_replay_to_the_same_decisions`). The driver's own
-`--record` of these rows on a native host waits for the `flui-driver` crate;
-`flui record --native` writes them today.
+`every_close_answer_and_cause_replays`). The driver's own `--record` of these
+rows waits for the `flui-driver` crate; `flui record --native` writes them today.
 
 On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch

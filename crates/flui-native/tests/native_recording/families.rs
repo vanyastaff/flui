@@ -18,13 +18,13 @@ use flui_native::{
     HeadlessDisplayControls, HeadlessHostEvents, HeadlessHostWindow, HeadlessPlatform,
     HeadlessPreferences, OwnerPlatform,
 };
+use flui_platform::CloseDecision;
 use flui_platform::text_store::TextStore;
 use flui_platform::{
     CapabilityAbsence, DisplayId, DisplayKey, DisplayParts, DisplayRegistry, Headroom, ImeEvent,
     MemoryPressureLevel, PlatformInput, SessionEndPhase, SystemNotice, SystemPreferences,
     WindowOptions, WindowState, WindowStateParts,
 };
-use flui_platform::{CloseDecision, WindowCommand};
 use flui_testing::text_store_kit::InMemoryTextStore;
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -120,12 +120,9 @@ impl ReplayTarget for WindowTarget {
         })
     }
 
-    fn closed(&mut self, cause: CloseCause) -> Result<(), Unsupported> {
-        if cause == CloseCause::NoRequest {
-            self.window
-                .admit_and_apply(WindowCommand::Close)
-                .map_err(|_| Unsupported)?;
-        }
+    fn closed(&mut self, _cause: CloseCause) -> Result<(), Unsupported> {
+        // A window the replayed request it granted closed already is closed.
+        self.window.close_now();
         Ok(())
     }
 }
@@ -568,6 +565,41 @@ fn a_row_replayed_otherwise_is_a_divergence() {
     );
 }
 
+/// A recording that joined a live stream late is refused at the first lock
+/// it cannot set its store up for, naming the row: one that missed the
+/// store's focus, and one that missed the lock that found its document. A
+/// recording that focuses one store twice is refused as it is read.
+fn a_store_lock_the_recording_joined_after_is_refused() {
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    // The golden's rows: the focus, the lock that found "ab", a read lock, ….
+    for (case, missed, line) in [
+        ("joined after the focus", 0, 2),
+        ("joined after the document", 1, 3),
+    ] {
+        let mut joined = family("headless_window_store_and_close");
+        joined.rows.remove(missed);
+        let (window, _) = headless_window(&owner);
+        assert_eq!(
+            joined.replay_into(&mut WindowTarget::new(window)),
+            Err(ReplayError::JoinedLate {
+                line,
+                row: "store_lock"
+            }),
+            "{case}"
+        );
+    }
+    let (_, text) = FAMILY_RECORDINGS[0];
+    let focus = r#"{"row":"store_focus","focus":{"store":1,"status":{"single_line":true}}}"#;
+    let twice = format!("{text}{focus}\n");
+    assert!(
+        matches!(
+            NativeRecording::read(twice.as_bytes()),
+            Err(CodecError::Invalid { line: 10, .. })
+        ),
+        "a store focused twice is refused at its second focus"
+    );
+}
+
 /// A platform stream replays on the headless host: after each row the
 /// application reads what the recorded read returned, a failure included,
 /// with every preference field the full observation carries and each display
@@ -939,7 +971,11 @@ fn a_header_out_of_its_stream_is_refused() {
 }
 
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 10] = [
+pub(super) const CASES: [(&str, fn()); 11] = [
+    (
+        "a_store_lock_the_recording_joined_after_is_refused",
+        a_store_lock_the_recording_joined_after_is_refused,
+    ),
     (
         "window_store_and_close_recordings_replay_on_the_headless_host",
         window_store_and_close_recordings_replay_on_the_headless_host,
@@ -1383,11 +1419,13 @@ enum StorePath {
 /// journaled store host, and whose input method on `path` composes "漢"
 /// after it ("か", "かん", then the conversion), with an application edit
 /// between the first two steps on the paths that keep no snapshot of their
-/// own: the field, and the window's recording.
+/// own: the field, and the window's recording. A `protected` field is a
+/// password field.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn captured_store_session(
     path: StorePath,
     privacy: flui_native::journal::recorder::Privacy,
+    protected: bool,
 ) -> (Rc<InMemoryTextStore>, NativeRecording) {
     use flui_native::journal::codec::{Backend, Stream};
     use flui_native::journal::recorder::Recorder;
@@ -1406,6 +1444,7 @@ fn captured_store_session(
         .text_store_host(&window)
         .expect("the headless window is pull-model with a store host");
     let field = InMemoryTextStore::new("ab");
+    field.set_protected(protected);
     host.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
     let served = SERVED
         .with(|served| served.borrow().clone())
@@ -1503,7 +1542,7 @@ fn captured_store_locks_replay_to_the_document_they_left() {
         (StorePath::WebEditContext, "Ab漢", vec!["ab", "Abか"]),
         (StorePath::AndroidMirror, "ab漢", vec!["ab"]),
     ] {
-        let (field, recording) = captured_store_session(path, Privacy::KeepText);
+        let (field, recording) = captured_store_session(path, Privacy::KeepText, false);
         assert_eq!(field.text(), text, "{path:?}: the input method composed");
         assert!(
             matches!(recording.rows.first(), Some(Row::StoreFocus(Some(_)))),
@@ -1536,7 +1575,7 @@ fn captured_store_locks_replay_to_the_document_they_left() {
             "{path:?}: the replayed store holds what the field was left with"
         );
 
-        let (_, redacted) = captured_store_session(path, Privacy::Redact);
+        let (_, redacted) = captured_store_session(path, Privacy::Redact, false);
         let mut written = Vec::new();
         redacted
             .write(&mut written)
@@ -1629,67 +1668,454 @@ fn a_store_lock_past_its_bounds_or_unwound_is_incomplete() {
     );
 }
 
-/// The close rows a capture journals: a request the handler vetoed, one it
-/// granted, and the close that followed it; a window closed by the
-/// application's command, asked nothing. Both replay on fresh headless
-/// windows to the same decisions and closes.
+/// Every answer a close request's row can hold and every cause of a close,
+/// each recorded from a live headless window and replayed on a fresh one: a
+/// veto and a grant are asked again and decided the same; a request queued
+/// behind the granted one (`closing`) is replayed without asking, as it was
+/// answered; a handler that panicked is refused as incomplete; a close by the
+/// application's command asks nothing. `no_handler` cannot be recorded from a
+/// live window (the slot is vacant only once the window let go of its
+/// handler, after `closed`), so its row is written by hand and replayed
+/// without asking.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-fn captured_close_requests_replay_to_the_same_decisions() {
+fn every_close_answer_and_cause_replays() {
     use flui_native::journal::codec::{Backend, CloseAnswer, Stream};
     use flui_native::journal::recorder::Recorder;
 
-    let recorder = Recorder::start(Backend::Headless);
+    type Drive = fn(&HeadlessHostWindow, &RecordingWindowHandler);
+    let request = |answer, queued| Row::CloseRequest { answer, queued };
+    let cases: [(&str, Drive, Vec<Row>); 4] = [
+        (
+            "veto then grant",
+            |window, handler| {
+                let _ = veto_once(handler);
+                assert!(!window.simulate_close());
+                assert!(window.simulate_close());
+            },
+            vec![
+                request(CloseAnswer::KeepOpen, false),
+                request(CloseAnswer::Close, false),
+                Row::Closed(CloseCause::GrantedRequest),
+            ],
+        ),
+        (
+            "a request queued behind the granted one",
+            |window, handler| {
+                let again = window.clone();
+                handler.react_to_close_request(move || {
+                    assert!(!again.simulate_close(), "a nested request is queued");
+                    CloseDecision::Close
+                });
+                assert!(window.simulate_close());
+            },
+            vec![
+                request(CloseAnswer::Close, false),
+                request(CloseAnswer::Closing, true),
+                Row::Closed(CloseCause::GrantedRequest),
+            ],
+        ),
+        (
+            "a handler that panics",
+            |window, handler| {
+                handler.react_to_close_request(|| panic!("the close guard fails"));
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "ADR-0287: the test lets a handler's panic reach it on purpose"
+                )]
+                let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    window.simulate_close()
+                }));
+                assert!(unwound.is_err(), "the handler's panic goes on");
+            },
+            vec![request(CloseAnswer::Panicked, false)],
+        ),
+        (
+            "the application's command",
+            |window, _| window.close_now(),
+            vec![Row::Closed(CloseCause::NoRequest)],
+        ),
+    ];
     let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
-    let (asked, handler) = headless_window(&owner);
-    let _ = veto_once(&handler);
-    assert!(!asked.simulate_close(), "the first request is vetoed");
-    assert!(asked.simulate_close(), "the second is granted");
-    let (commanded, _) = headless_window(&owner);
-    commanded
-        .admit_and_apply(WindowCommand::Close)
-        .expect("the window closes on the application's command");
-    let windows: Vec<NativeRecording> = recorder
-        .finish()
-        .into_iter()
-        .filter(|recording| recording.header.stream == Stream::Window)
-        .collect();
-    let [asked, commanded] = windows.as_slice() else {
-        panic!("one window stream per window, in the order they opened");
-    };
-    assert_eq!(
-        asked.rows,
-        [
-            Row::CloseRequest {
-                answer: CloseAnswer::KeepOpen,
-                queued: false
-            },
-            Row::CloseRequest {
-                answer: CloseAnswer::Close,
-                queued: false
-            },
-            Row::Closed(CloseCause::GrantedRequest),
-        ]
-    );
-    assert_eq!(commanded.rows, [Row::Closed(CloseCause::NoRequest)]);
+    for (case, drive, rows) in cases {
+        let recorder = Recorder::start(Backend::Headless);
+        let (window, handler) = headless_window(&owner);
+        drive(&window, &handler);
+        let recording = only(&recorder.finish(), Stream::Window);
+        assert_eq!(recording.rows, rows, "{case}: what the capture journals");
+        // The replaying handler decides each request it is asked as the live
+        // one decided the requests it was asked, in order.
+        let (window, replaying) = headless_window(&owner);
+        let decisions: std::collections::VecDeque<CloseDecision> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::CloseRequest {
+                    answer: CloseAnswer::Close,
+                    ..
+                } => Some(CloseDecision::Close),
+                Row::CloseRequest {
+                    answer: CloseAnswer::KeepOpen,
+                    ..
+                } => Some(CloseDecision::KeepOpen),
+                _ => None,
+            })
+            .collect();
+        let decisions = RefCell::new(decisions);
+        let asked = Rc::new(std::cell::Cell::new(0));
+        let count = Rc::clone(&asked);
+        replaying.react_to_close_request(move || {
+            count.set(count.get() + 1);
+            decisions
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or(CloseDecision::KeepOpen)
+        });
+        let replayed = recording.replay_into(&mut WindowTarget::new(window));
+        if rows.contains(&request(CloseAnswer::Panicked, false)) {
+            assert_eq!(
+                replayed,
+                Err(ReplayError::Incomplete {
+                    line: 2,
+                    row: "close_request"
+                }),
+                "{case}"
+            );
+            continue;
+        }
+        replayed.unwrap_or_else(|error| panic!("{case}: the stream replays: {error}"));
+        let recorded_asks = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row,
+                    Row::CloseRequest {
+                        answer: CloseAnswer::Close | CloseAnswer::KeepOpen,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(asked.get(), recorded_asks, "{case}: asked as often as live");
+        assert_eq!(
+            replaying.count(&HandlerCall::Closed),
+            1,
+            "{case}: closed once"
+        );
+    }
 
-    let (window, handler) = headless_window(&owner);
-    let replayed = veto_once(&handler);
-    asked
+    let mut no_handler = NativeRecording::read(
+        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#
+            .as_bytes(),
+    )
+    .expect("a window header reads");
+    no_handler.rows = vec![
+        request(CloseAnswer::NoHandler, false),
+        Row::Closed(CloseCause::GrantedRequest),
+    ];
+    let (window, replaying) = headless_window(&owner);
+    no_handler
         .replay_into(&mut WindowTarget::new(window))
-        .expect("the asked window's stream replays");
-    assert_eq!(replayed.get(), 2);
-    assert_eq!(handler.count(&HandlerCall::Closed), 1);
-    let (window, handler) = headless_window(&owner);
-    commanded
-        .replay_into(&mut WindowTarget::new(window))
-        .expect("the commanded window's stream replays");
-    assert_eq!(handler.count(&HandlerCall::CloseRequested), 0);
-    assert_eq!(handler.count(&HandlerCall::Closed), 1);
+        .expect("a request no handler answered replays without asking");
+    assert_eq!(replaying.count(&HandlerCall::CloseRequested), 0);
+    assert_eq!(replaying.count(&HandlerCall::Closed), 1);
+}
+
+/// A lock on a protected store, on each model, is journaled as a lock that
+/// happened on a protected store and nothing derived from the field's
+/// content, with text kept or not: no text, no range, no offset, no length;
+/// its replay is refused as withheld.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+fn a_protected_store_journals_nothing_of_its_content() {
+    use flui_native::journal::recorder::Privacy;
+
+    for path in [
+        StorePath::Tsf,
+        StorePath::WebEditContext,
+        StorePath::AndroidMirror,
+    ] {
+        for privacy in [Privacy::KeepText, Privacy::Redact] {
+            let (field, recording) = captured_store_session(path, privacy, true);
+            assert!(
+                field.text().contains('漢'),
+                "{path:?}: the field took the text"
+            );
+            let mut written = Vec::new();
+            recording.write(&mut written).expect("it writes");
+            let written = String::from_utf8(written).expect("JSON Lines are UTF-8");
+            let locks: Vec<&str> = written
+                .lines()
+                .filter(|line| line.contains("\"store_lock\""))
+                .collect();
+            assert!(!locks.is_empty(), "{path:?}: the locks are journaled");
+            for lock in locks {
+                assert!(
+                    [
+                        r#"{"row":"store_lock","lock":{"store":1,"kind":"read_write","protected":true}}"#,
+                        r#"{"row":"store_lock","lock":{"store":1,"kind":"read","protected":true}}"#,
+                    ]
+                    .contains(&lock),
+                    "{path:?} {privacy:?}: a protected lock holds nothing of the field: {lock}"
+                );
+            }
+            let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+            let (window, _) = headless_window(&owner);
+            assert!(
+                matches!(
+                    recording.replay_into(&mut WindowTarget::new(window)),
+                    Err(ReplayError::Redacted {
+                        row: "store_lock",
+                        ..
+                    })
+                ),
+                "{path:?}"
+            );
+        }
+    }
+}
+
+/// A store whose document is longer than a row holds is never read whole by
+/// the journal, and a capture whose sink wants no rows reads nothing and
+/// journals no lock.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+fn the_journal_reads_no_document_it_cannot_hold_or_nobody_wants() {
+    use flui_native::journal::codec::{Backend, Stream};
+    use flui_native::journal::lines::{Forms, LineSink, StreamLine, capture_lines};
+    use flui_native::journal::recorder::Recorder;
+    use flui_native::journal::store::MAX_STORE_TEXT_BYTES;
+    use flui_platform::text_store::{LockGrant, LockTiming, Selection, Utf16Offset};
+
+    /// Opens a headless window, focuses `field` through its journaled host
+    /// counting the reads of its text, and sets the caret in one lock.
+    fn set_caret(field: Rc<InMemoryTextStore>) -> usize {
+        let platform =
+            HeadlessPlatform::new().with_text_store_host(|| Rc::new(ServedStore) as Rc<_>);
+        let owner = run_keeping_owner(Box::new(platform), &AppLog::new());
+        let window = owner
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("a headless window opens")
+            .try_ready()
+            .expect("at once");
+        let host = owner.text_store_host(&window).expect("a store host");
+        let counted = Rc::new(CountedReads::of(field));
+        host.focus_store(Some(Rc::clone(&counted) as Rc<dyn TextStore>));
+        let served = SERVED
+            .with(|served| served.borrow().clone())
+            .expect("the host serves the focused store");
+        let _granted = served
+            .request_lock(
+                LockGrant::read_write(|session| {
+                    let _ = session.set_selection(Selection::collapsed(Utf16Offset::ZERO));
+                }),
+                LockTiming::Sync,
+            )
+            .expect("a free store grants a sync lock");
+        counted.reads.get()
+    }
+
+    let recorder = Recorder::start(Backend::Headless);
+    let large = InMemoryTextStore::new("x".repeat(MAX_STORE_TEXT_BYTES + 1));
+    assert_eq!(set_caret(large), 0, "a document past the bound is not read");
+    let recording = only(&recorder.finish(), Stream::Window);
+    assert!(
+        recording
+            .rows
+            .iter()
+            .any(|row| matches!(row, Row::StoreLock { lock, .. } if lock.incomplete && lock.opened.is_none())),
+        "the lock is journaled incomplete"
+    );
+
+    /// A sink that wants no row, and counts the lines it is handed anyway.
+    struct Unwanted(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl LineSink for Unwanted {
+        fn wants(&self) -> Forms {
+            Forms::default()
+        }
+
+        fn line(&mut self, line: StreamLine<'_>) {
+            if !line.setup {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        fn lost(&mut self, _stream: u32) {}
+    }
+    let rows = std::sync::Arc::default();
+    let capture = capture_lines(Backend::Headless, Unwanted(std::sync::Arc::clone(&rows)));
+    assert_eq!(
+        set_caret(InMemoryTextStore::new("ab")),
+        0,
+        "nobody wants the lock: the document is not read"
+    );
+    drop(capture);
+    assert_eq!(
+        rows.load(std::sync::atomic::Ordering::Relaxed),
+        0,
+        "and no row was made of it"
+    );
+}
+
+/// A text store that counts how often a session reads its text, standing
+/// for the field an input method's lock reaches.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+struct CountedReads {
+    inner: Rc<InMemoryTextStore>,
+    reads: Rc<std::cell::Cell<usize>>,
+}
+
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+impl CountedReads {
+    fn of(inner: Rc<InMemoryTextStore>) -> Self {
+        Self {
+            inner,
+            reads: Rc::default(),
+        }
+    }
+}
+
+/// A session of a [`CountedReads`] store.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+struct CountedSession<'a, S: ?Sized> {
+    session: &'a mut S,
+    reads: &'a std::cell::Cell<usize>,
+}
+
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+impl<S: flui_platform::text_store::TextStoreRead + ?Sized> flui_platform::text_store::TextStoreRead
+    for CountedSession<'_, S>
+{
+    fn document_len(&self) -> flui_platform::text_store::Utf16Offset {
+        self.session.document_len()
+    }
+
+    fn text(
+        &self,
+        range: flui_platform::text_store::Utf16Range,
+    ) -> Result<String, flui_platform::text_store::TextStoreError> {
+        self.reads.set(self.reads.get() + 1);
+        self.session.text(range)
+    }
+
+    fn selection(&self) -> flui_platform::text_store::Selection {
+        self.session.selection()
+    }
+
+    fn composition(&self) -> Option<flui_platform::text_store::Composition> {
+        self.session.composition()
+    }
+
+    fn rect_for_range(
+        &self,
+        range: flui_platform::text_store::Utf16Range,
+    ) -> Result<flui_platform::text_store::RangeRect, flui_platform::text_store::TextStoreError>
+    {
+        self.session.rect_for_range(range)
+    }
+
+    fn document_bounds(
+        &self,
+    ) -> Result<flui_foundation::geometry::Bounds<f64>, flui_platform::text_store::TextStoreError>
+    {
+        self.session.document_bounds()
+    }
+
+    fn index_at_point(
+        &self,
+        point: flui_foundation::geometry::Point<f64>,
+        mode: flui_platform::text_store::PointMode,
+    ) -> Result<flui_platform::text_store::Utf16Offset, flui_platform::text_store::TextStoreError>
+    {
+        self.session.index_at_point(point, mode)
+    }
+}
+
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+impl<S: flui_platform::text_store::TextStoreEdit + ?Sized> flui_platform::text_store::TextStoreEdit
+    for CountedSession<'_, S>
+{
+    fn replace(
+        &mut self,
+        range: flui_platform::text_store::Utf16Range,
+        text: &str,
+    ) -> Result<flui_platform::text_store::TextChange, flui_platform::text_store::TextStoreError>
+    {
+        self.session.replace(range, text)
+    }
+
+    fn insert_at_selection(
+        &mut self,
+        text: &str,
+    ) -> Result<flui_platform::text_store::TextChange, flui_platform::text_store::TextStoreError>
+    {
+        self.session.insert_at_selection(text)
+    }
+
+    fn set_selection(
+        &mut self,
+        selection: flui_platform::text_store::Selection,
+    ) -> Result<(), flui_platform::text_store::TextStoreError> {
+        self.session.set_selection(selection)
+    }
+
+    fn set_composition(
+        &mut self,
+        composition: Option<flui_platform::text_store::Composition>,
+    ) -> Result<(), flui_platform::text_store::TextStoreError> {
+        self.session.set_composition(composition)
+    }
+}
+
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+impl TextStore for CountedReads {
+    fn status(&self) -> flui_platform::text_store::TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: flui_platform::text_store::LockGrant,
+        timing: flui_platform::text_store::LockTiming,
+    ) -> Result<flui_platform::text_store::LockOutcome, flui_platform::text_store::TextStoreError>
+    {
+        use flui_platform::text_store::LockGrant;
+
+        let reads = Rc::clone(&self.reads);
+        // The test's locks are read-write: a read lock is passed on uncounted.
+        let grant = match grant {
+            LockGrant::Read(body) => LockGrant::Read(body),
+            LockGrant::ReadWrite(body) => LockGrant::read_write(move |session| {
+                body(&mut CountedSession {
+                    session,
+                    reads: &reads,
+                });
+            }),
+        };
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: flui_platform::text_store::CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn flui_platform::text_store::TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
 }
 
 /// The capture cases of the streams beside a registry's.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-pub(super) const CAPTURE_CASES: [(&str, fn()); 4] = [
+pub(super) const CAPTURE_CASES: [(&str, fn()); 6] = [
+    (
+        "a_protected_store_journals_nothing_of_its_content",
+        a_protected_store_journals_nothing_of_its_content,
+    ),
+    (
+        "the_journal_reads_no_document_it_cannot_hold_or_nobody_wants",
+        the_journal_reads_no_document_it_cannot_hold_or_nobody_wants,
+    ),
     (
         "captured_streams_replay_to_what_the_session_delivered",
         captured_streams_replay_to_what_the_session_delivered,
@@ -1703,7 +2129,7 @@ pub(super) const CAPTURE_CASES: [(&str, fn()); 4] = [
         a_store_lock_past_its_bounds_or_unwound_is_incomplete,
     ),
     (
-        "captured_close_requests_replay_to_the_same_decisions",
-        captured_close_requests_replay_to_the_same_decisions,
+        "every_close_answer_and_cause_replays",
+        every_close_answer_and_cause_replays,
     ),
 ];
