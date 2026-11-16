@@ -27,12 +27,9 @@ use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 
 use crate::Opened;
 use flui_platform::{
-    ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
-    WindowCommand, WindowInteraction, WindowMode, WindowOptions, WindowReveal, WindowState,
-};
-use flui_platform::{
     ApplyError, DispatchEventResult, MAX_SURFACE_EXTENT, PlatformFailure, PlatformWindow,
-    SizeConstraints, WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
+    SizeConstraints, WindowCommand, WindowInteraction, WindowMode, WindowOptions, WindowReveal,
+    WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{

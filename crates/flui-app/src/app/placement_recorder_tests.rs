@@ -313,7 +313,7 @@ fn a_display_change_alone_measures_the_window_again() {
                 id,
                 "main",
                 Bounds::new(Point::new(60, 0), Size::new(1860, 1080)),
-                1.0,
+                DevicePixelRatio::ONE,
             )
             .with_primary(true)
             .with_persistent_key("key-main"),
@@ -336,7 +336,7 @@ fn displays_with_left_edge(left: i32) -> DisplaySnapshot {
                 id,
                 "main",
                 Bounds::new(Point::new(left, 0), Size::new(1920 - left, 1080)),
-                1.0,
+                DevicePixelRatio::ONE,
             )
             .with_primary(true)
             .with_persistent_key("key-main"),
