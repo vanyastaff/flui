@@ -14013,6 +14013,8 @@ impl Clone for flui::platform::capability::scripted::FailureReport
 impl Default for flui::platform::capability::scripted::FailureReport
 impl core::fmt::Debug for flui::platform::capability::scripted::FailureReport
 pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure) -> bool
+pub const flui::platform::capability::scripted::MAX_RECORDED_REQUESTS: usize = 4096
+pub const flui::platform::capability::scripted::MAX_REPORTS: usize = 256
 pub struct flui::platform::capability::scripted::Scenario { .. }
 impl Clone for flui::platform::capability::scripted::Scenario
 impl Default for flui::platform::capability::scripted::Scenario
@@ -22998,6 +23000,12 @@ pub fn flui::testing::Expectation::to_have_count(self, count: usize) // impl flu
 pub fn flui::testing::Expectation::to_have_name(self, name: &str) // impl flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::to_have_value(self, value: &str) // impl flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::within(self, timeout: core::time::Duration) -> Self // impl flui::testing::Expectation<'_>
+pub struct flui::testing::HostClock { .. }
+impl Clone for flui::testing::HostClock
+impl core::fmt::Debug for flui::testing::HostClock
+impl flui::foundation::MonotonicClock for flui::testing::HostClock
+pub fn flui::testing::HostClock::advance(&self, dt: core::time::Duration)
+pub fn flui::testing::HostClock::elapsed(&self) -> core::time::Duration
 #[non_exhaustive] pub struct flui::testing::InspectField
 field flui::testing::InspectField::default: Option<flui::testing::InspectValue> // at 4
 field flui::testing::InspectField::level: flui_protocol::inspect::InspectLevel // at 2
