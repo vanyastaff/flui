@@ -73,6 +73,8 @@ pub use value::{
     Quantity, TangentialPressure, Twist,
 };
 
+pub use flui_foundation::PressId;
+
 use crate::EventTime;
 use crate::keyboard::Modifiers;
 
@@ -426,6 +428,7 @@ pub struct PointerButtonEvent<D: ButtonDirection> {
     pub click_count: Option<NonZeroU8>,
     /// Where and when it happened.
     pub sample: PointerSample,
+    press: Option<PressId>,
     direction: PhantomData<D>,
 }
 
@@ -434,6 +437,16 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
     #[must_use]
     pub fn button(&self) -> PointerButton {
         self.button
+    }
+
+    /// The press sequence this change belongs to, as the host that decoded it
+    /// minted it: the same id on the press that began the sequence, on every
+    /// further button change in it and on the release that ends it. `None`
+    /// for an event no host decoded (a synthesized or replayed one), which
+    /// nothing native can start from.
+    #[must_use]
+    pub const fn press(&self) -> Option<PressId> {
+        self.press
     }
 
     /// The buttons held after the change; [`new`](Self::new) keeps it consistent with
@@ -464,7 +477,18 @@ impl<D: ButtonDirection> PointerButtonEvent<D> {
             modifiers: Modifiers::NONE,
             click_count: None,
             sample,
+            press: None,
             direction: PhantomData,
+        }
+    }
+
+    /// This event in the press sequence `press`, which the host minted when
+    /// the sequence began.
+    #[must_use]
+    pub const fn with_press(self, press: PressId) -> Self {
+        Self {
+            press: Some(press),
+            ..self
         }
     }
 

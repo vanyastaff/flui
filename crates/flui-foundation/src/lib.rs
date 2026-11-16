@@ -260,7 +260,7 @@ pub use consts::EPSILON;
 pub use creation_site::CreationSite;
 pub use sequence::{
     AtomicIdMint, DragSessionId, FrameCallbackId, IdExhausted, IdMint, InputSequenceId, ListenerId,
-    MintedId, TaskId,
+    MintedId, PressId, TaskId,
 };
 pub use text_direction::TextDirection;
 pub use ticket::{Ticket, TicketSource};
