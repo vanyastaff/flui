@@ -45,19 +45,21 @@ use flui_platform::pointer::{
     TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, HourCycle, ImeEvent,
-    InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts,
+    Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
+    InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
     RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
     WheelStep, WindowExecutionState, WindowInsets,
 };
 use flui_protocol::input_recording as rec;
 use flui_protocol::native_recording as wire;
 
+use crate::ShownFrame;
 use crate::owner::{InputOutcome, WindowObservation};
 #[cfg(feature = "testing")]
 use crate::{DeadlineRow, DecisionRow, InputRow, RecordedMember, RecordedSequence};
 use crate::{HostInput, InputRecord, PreferencesRow, RecordedSurface, RecordingStart};
+use flui_foundation::{FrameEpoch, SurfaceGeneration};
 
 /// A value the recording's wire form cannot convert in either direction.
 #[derive(Debug, thiserror::Error)]
@@ -301,7 +303,11 @@ impl TryConvert<&HostInput> for rec::HostInput {
                 target_present: target_present.map(EventTime::as_nanos),
                 presented: presented.map(|presented| rec::FramePresented {
                     at: presented.at.as_nanos(),
-                    refresh: presented.refresh.map(nanos),
+                    refresh: presented.refresh.map(|refresh| nanos(refresh.get())),
+                    frame: Some(rec::ShownFrameId {
+                        epoch: presented.epoch.get(),
+                        surface: presented.surface_generation.get(),
+                    }),
                 }),
             },
             HostInput::Accessibility(request) => Self::Accessibility(request.try_convert_into()?),
@@ -322,14 +328,23 @@ impl TryConvert<rec::HostInput> for HostInput {
             } => Self::Frame {
                 vsync: EventTime::from_nanos(vsync),
                 target_present: target_present.map(EventTime::from_nanos),
-                presented: presented.map(|presented| {
-                    let shown = FramePresented::new(EventTime::from_nanos(presented.at));
-                    match presented.refresh {
-                        Some(refresh) => {
-                            shown.with_refresh(std::time::Duration::from_nanos(refresh))
-                        }
-                        None => shown,
-                    }
+                // A report recorded without its frame names none, and is no report; a recorded
+                // refresh outside a cadence is none.
+                presented: presented.and_then(|presented| {
+                    let frame = presented.frame?;
+                    let shown = ShownFrame::new(
+                        FrameEpoch::from_raw(frame.epoch),
+                        SurfaceGeneration::from_raw(frame.surface),
+                        EventTime::from_nanos(presented.at),
+                    );
+                    Some(
+                        match presented.refresh.and_then(|refresh| {
+                            RefreshPeriod::try_from(std::time::Duration::from_nanos(refresh)).ok()
+                        }) {
+                            Some(refresh) => shown.refresh(refresh),
+                            None => shown,
+                        },
+                    )
                 }),
             },
             rec::HostInput::Accessibility(request) => {

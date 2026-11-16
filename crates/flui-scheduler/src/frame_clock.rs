@@ -638,7 +638,7 @@ impl FrameClock {
     // handler, `wp_presentation_time`), fed in by
     // the caller that receives the host's frame requests. It marks no demand
     // and moves no frame time: the frame tick stays the vsync instant
-    // (ADR-0257 decision 2), never a presentation time.
+    // (ADR-0347 decision 2), never a presentation time.
     // ------------------------------------------------------------------
 
     /// Record that the platform reported a frame of this presentation shown

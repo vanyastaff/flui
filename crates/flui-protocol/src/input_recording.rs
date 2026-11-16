@@ -318,6 +318,24 @@ pub struct FramePresented {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub refresh: Option<u64>,
+    /// The frame shown, within the presentation the row is addressed to. A recording made
+    /// before reports named their frame has none, and its report reads as no report.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub frame: Option<ShownFrameId>,
+}
+
+/// Which frame of its presentation a presentation report names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ShownFrameId {
+    /// The frame's epoch within the presentation's runtime.
+    pub epoch: u64,
+    /// The surface generation the frame was drawn for.
+    pub surface: u64,
 }
 
 /// An event the platform delivered.

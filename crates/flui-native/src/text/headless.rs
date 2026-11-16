@@ -157,6 +157,8 @@ mod tests {
         ) -> Result<CompositionEnd, TextStoreHostError> {
             Ok(CompositionEnd::Committed)
         }
+
+        fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
     }
 
     /// Open one window on `platform` and report whether the owner-thread

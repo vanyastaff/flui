@@ -944,7 +944,7 @@ impl WindowDelivery {
     }
 
     /// Deliver a frame request that carries no platform timestamp: its vsync
-    /// is the event clock's reading now (ADR-0257).
+    /// is the event clock's reading now (ADR-0347).
     pub(crate) fn dispatch_request_frame(&self) {
         self.dispatch_frame(frame_request_now());
     }

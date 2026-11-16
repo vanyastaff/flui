@@ -655,7 +655,7 @@ impl Renderer {
             present_mode: Self::select_present_mode(&surface_caps),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-            // The caller's `FrameLatency` (ADR-0257), `Balanced` unless the window asked for
+            // The caller's `FrameLatency` (ADR-0347), `Balanced` unless the window asked for
             // `Low`. The value only takes effect at `Surface::configure`, and `resize` and
             // `reconfigure_surface` re-configure this same value, while `recover` and
             // `recreate_surface` rebuild through this function with the renderer's stored
@@ -1224,7 +1224,7 @@ impl Renderer {
         wgpu::PresentMode::Fifo
     }
 
-    /// Set how many frames this window's swapchain holds ahead of the display (ADR-0257).
+    /// Set how many frames this window's swapchain holds ahead of the display (ADR-0347).
     ///
     /// Takes effect on the surface now, or when it is next configured while the surface is
     /// released; every later recovery or recreation keeps it.

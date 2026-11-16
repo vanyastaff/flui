@@ -1120,8 +1120,27 @@ impl HasDisplayHandle for MacOSSurface {
 
 impl SurfaceTarget for MacOSSurface {
     /// AppKit has no frame callback to arm before a present: the display pass
-    /// paces this window's frames. It returns at once.
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
+    /// paces this window's frames. The frame goes to the slot of the drawable
+    /// the view's layer handed out last, which this present presents, so the
+    /// drawable's presented handler reports that frame; the frames render on
+    /// the main thread (the raster lane is inline on macOS), and a present
+    /// made off it, or after the window is gone, names no frame and is not
+    /// reported. It returns at once.
+    fn pre_present_notify(
+        &self,
+        frame: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        if self.is_gone() {
+            return;
+        }
+        if let Some(view) = self.view.object(main) {
+            content_view::layer_presenting(view, frame);
+        }
+    }
 }
 
 /// How many owner-lane turns a deferred redraw request may take before it is

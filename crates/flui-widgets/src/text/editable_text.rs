@@ -56,9 +56,11 @@ use crate::{DefaultSelectionControls, DotHandles, SelectionHandles};
 mod clipboard;
 mod cursor_area;
 mod handles;
+mod input_requests;
 mod menu;
 use crate::text::{MagnifierChoice, MenuSettings, ShowSelectionMenu};
 use cursor_area::CursorAreaLoop;
+use input_requests::{CompositionCommit, KeyboardRequest};
 
 pub use handles::{CaretHandle, LongPressSelection};
 use handles::{FieldHandles, FieldLongPress, HandleParts};
@@ -1285,6 +1287,16 @@ impl EditableTextState {
                 }
             });
         }
+        // A tap the arena gives the field (not a drag, a scroll or a press on
+        // something drawn over it) asks for the soft keyboard while the field
+        // holds the input.
+        if view.enabled && self.ime_handle.is_some() {
+            let keyboard = KeyboardRequest {
+                handle: self.ime_handle.clone(),
+                token: Rc::clone(&self.ime_token),
+            };
+            detector = detector.on_tap_up(move |_ctx, _details| keyboard.run());
+        }
         // The popup opens on the secondary tap a press in the field began,
         // through the arena (see `menu::with_secondary_tap`).
         if view.enabled && self.touch_handles.menu().look().is_some() {
@@ -1720,44 +1732,6 @@ impl EditObserver {
     pub(super) fn deliver(&self, on_changed: TextChanged, committed: &str, calls: &mut OwnerCalls) {
         calls.run(|| self.writer.write(|ctx| on_changed(ctx, committed)));
         calls.retire(on_changed);
-    }
-}
-
-/// Commits a field's composition, keeping its text, before the field loses
-/// its input: a blur, a pointer-down on it and a paste (ADR-0142 item 4).
-/// The presentation asks the platform to end its composition (a pull host)
-/// and commits in place when it cannot, or does that directly (a push
-/// platform); inside a frame the request is queued with the field's store
-/// and reaches it at the anchor, even after a detach that follows.
-#[derive(Clone)]
-struct CompositionCommit {
-    handle: Option<TextInputHandle>,
-    /// The client this field attached, while it holds the input.
-    token: Rc<RefCell<Option<ClientToken>>>,
-}
-
-impl CompositionCommit {
-    /// Commit the attached client's composition inside `calls`, which keeps
-    /// a failure of the owner code the commit reaches (its `on_changed`, a
-    /// host) for the caller to resume once its own operation is complete.
-    /// A field with no client attached has no composition to commit.
-    fn run(&self, calls: &mut OwnerCalls) {
-        let Some(handle) = &self.handle else {
-            return;
-        };
-        // Read in a statement of its own: the commit runs owner code, which
-        // may detach this field and so take the token.
-        let token = *self.token.borrow();
-        if let Some(token) = token
-            && let Some(Err(error)) = calls.run(|| handle.complete_composition(token))
-        {
-            calls.run(|| {
-                tracing::trace!(
-                    ?error,
-                    "a composition commit reached a presentation that was already closing"
-                );
-            });
-        }
     }
 }
 

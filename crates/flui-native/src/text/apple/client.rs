@@ -872,6 +872,11 @@ impl TextStoreHost for TextClient {
         failure.resume();
         Ok(end)
     }
+
+    /// macOS has no soft keyboard, and UIKit keeps the keyboard of the
+    /// first responder, which the focused field's responder stays while it
+    /// has the input.
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
 }
 
 /// What the focused store tells the client when the application changes the

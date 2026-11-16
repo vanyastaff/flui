@@ -1794,23 +1794,31 @@ impl DxgiPresenter {
         }
     }
 
-    /// The statistics as wgpu's DX12 backend reads them before a present:
-    /// none until the display has shown one.
+    /// The counters as the renderer reads them from wgpu's DX12 swap chain
+    /// before a present: the presents made so far, and the statistics, which
+    /// name nothing until the display has shown a present.
     fn statistics(&self) -> flui_platform::SwapChainStatistics {
         let mut statistics = windows::Win32::Graphics::Dxgi::DXGI_FRAME_STATISTICS::default();
-        // SAFETY: a read of the swap chain's counters on its presenting
-        // thread; `statistics` outlives the call that fills it.
-        let read = unsafe { self.swap_chain.GetFrameStatistics(&raw mut statistics) };
-        match read {
-            Ok(()) => {
-                flui_platform::SwapChainStatistics::Dxgi(flui_platform::DxgiFrameStatistics::new(
-                    statistics.PresentCount,
-                    statistics.SyncRefreshCount,
-                    statistics.SyncQPCTime,
-                ))
-            }
-            Err(_) => flui_platform::SwapChainStatistics::None,
-        }
+        // SAFETY: reads of the swap chain's counters on its presenting
+        // thread; `statistics` and `made` outlive the calls that fill them.
+        let (read, made) = unsafe {
+            (
+                self.swap_chain.GetFrameStatistics(&raw mut statistics),
+                self.swap_chain.GetLastPresentCount(),
+            )
+        };
+        let shown = match read {
+            Ok(()) => flui_platform::DxgiShown::Present(flui_platform::DxgiFrameStatistics::new(
+                statistics.PresentCount,
+                statistics.SyncRefreshCount,
+                statistics.SyncQPCTime,
+            )),
+            Err(_) => flui_platform::DxgiShown::Nothing,
+        };
+        flui_platform::SwapChainStatistics::Dxgi(flui_platform::DxgiStatistics::new(
+            made.expect("a swap chain counts its presents"),
+            shown,
+        ))
     }
 
     /// Present the back buffer at the next refresh.
@@ -1898,18 +1906,25 @@ impl WindowFixture for Win32Fixture {
         {
             let presenter = DxgiPresenter::on(hwnd);
             let mut shown = std::collections::BTreeSet::new();
-            for _ in 0..300 {
+            for present in 1..=300 {
                 let statistics = presenter.statistics();
-                if let flui_platform::SwapChainStatistics::Dxgi(read) = statistics
+                if let flui_platform::SwapChainStatistics::Dxgi(counters) = statistics
+                    && let flui_platform::DxgiShown::Present(read) = counters.shown
                     && read.sync_qpc_time > 0
                     && shown.insert(read.present_count)
                 {
                     eprintln!(
-                        "DXGI before a present: present {} shown at refresh {}, QPC {}",
-                        read.present_count, read.sync_refresh_count, read.sync_qpc_time
+                        "DXGI before present {}: present {} shown at refresh {}, QPC {}",
+                        counters.last_present_count + 1,
+                        read.present_count,
+                        read.sync_refresh_count,
+                        read.sync_qpc_time
                     );
                 }
-                target.pre_present_notify(statistics);
+                target.pre_present_notify(
+                    Some(flui_testing::window_conformance::fixture_frame(present)),
+                    statistics,
+                );
                 presenter.present();
                 let _ = pump_until(Duration::ZERO, || false);
                 if shown.len() >= 2 {

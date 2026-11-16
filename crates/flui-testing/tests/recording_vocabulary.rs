@@ -29,10 +29,10 @@ use flui_platform::pointer::{
     SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
-    Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, HourCycle, ImeEvent,
-    InsetCurve, InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference,
-    NativeMouseGeometry, NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride,
-    RegionalFormats, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
+    Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
+    InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride, RegionalFormats,
+    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowExecutionState, WindowId, WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
@@ -351,7 +351,15 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             vsync: at(16_666_667),
             target_present: Some(at(33_333_334)),
             presented: Some(
-                FramePresented::new(at(9_000_000)).with_refresh(Duration::from_nanos(16_666_667)),
+                flui_runtime::ShownFrame::new(
+                    flui_foundation::FrameEpoch::from_raw(7),
+                    flui_foundation::SurfaceGeneration::from_raw(2),
+                    at(9_000_000),
+                )
+                .refresh(
+                    flui_platform::RefreshPeriod::try_from(Duration::from_nanos(16_666_667))
+                        .expect("a refresh period"),
+                ),
             ),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),

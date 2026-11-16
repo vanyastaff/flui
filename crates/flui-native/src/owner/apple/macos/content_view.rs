@@ -354,6 +354,17 @@ pub(crate) fn create(
     view
 }
 
+/// Tell the layer of `view`, a FLUIContentView, that the drawable it handed
+/// out last is about to be presented showing `frame` (`None` for a present
+/// that shows no frame of the window), so the drawable's report names it.
+pub(crate) fn layer_presenting(view: &AnyObject, frame: Option<flui_foundation::FrameStamp>) {
+    // SAFETY: `view` is a live NSView; `layer` answers its backing layer.
+    let layer: Option<Retained<AnyObject>> = unsafe { msg_send![view, layer] };
+    if let Some(feedback) = layer.as_deref().and_then(feedback_of) {
+        feedback.presenting(frame);
+    }
+}
+
 /// Tell the layer of `view`, a FLUIContentView, the refresh interval of the
 /// display its window is on; `None` when variable or unknown.
 pub(crate) fn set_layer_refresh(view: &AnyObject, refresh: Option<std::time::Duration>) {

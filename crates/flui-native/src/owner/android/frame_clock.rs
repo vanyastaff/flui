@@ -32,7 +32,7 @@ pub(crate) struct VsyncTick {
 impl VsyncTick {
     /// The frame this tick stands for, read at `now_nanos`, as
     /// `(age, until_present)`: its vsync is `age` before the reading, and it
-    /// reaches the screen `until_present` after it (ADR-0257). A vsync ahead of
+    /// reaches the screen `until_present` after it (ADR-0347). A vsync ahead of
     /// the reading is the reading itself, and an expected presentation that is
     /// not after both the vsync and the reading is unknown.
     #[must_use]

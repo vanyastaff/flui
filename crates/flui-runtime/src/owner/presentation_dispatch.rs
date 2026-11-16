@@ -513,7 +513,7 @@ impl PresentationDispatcher {
                     request = request.target_present(shown);
                 }
                 if let Some(presented) = presented {
-                    request = request.presented(presented);
+                    request = request.presented(presented.of_presentation(self.address));
                 }
                 core.deliver(RuntimeWork::Frame(self.address, request), effects)?
             }

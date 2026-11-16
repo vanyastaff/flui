@@ -1078,26 +1078,41 @@ trait depends on `flui-platform` instead.
     (destroyed when the last holder drops) and a clone of the connection. Its
     `pre_present_notify` arms the Wayland frame callback on the
     native Wayland host, and returns at once elsewhere. It is also where a
-    presentation report starts: the native Wayland target asks
-    `wp_presentation` for a feedback per commit, whose `presented` event the
-    window rebases from the compositor's clock (`clock_id`) onto the event
-    clock, and the Win32 target rebases the DXGI frame statistics the renderer
+    presentation report starts, and every report names the frame the present
+    it describes carried (ADR-0347): the native Wayland target asks
+    `wp_presentation` for a feedback per present of a frame, numbered, the
+    frame kept by the number (`presented::CommitFeedbacks`): a feedback binds
+    to the surface's next commit whichever present makes it, so it counts as
+    committed once a frame callback armed with its present or later fired,
+    and the next present forgets the unconfirmed ones; its `presented` event
+    the window rebases from the compositor's clock (`clock_id`) onto the event
+    clock. The Win32 target rebases the DXGI frame statistics the renderer
     read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
     the refresh period between two reports (`frame_timing::PresentTracker`:
-    a read naming the present or refresh already reported is no report, and
-    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). The
-    AppKit window reports from its view's backing layer, not the target:
+    a read naming the present or refresh already reported is no report,
+    `DxgiShown::Disjoint` forgets the last refresh, and each present's frame
+    is kept by its DXGI number until the statistics name it or a later one
+    shown, per surface generation, since a present number is a swap chain's
+    and a replaced surface numbers from the start again). Every reporting
+    host forgets what it kept of a surface at a present of another surface
+    generation.
+    The AppKit window reports from its view's backing layer, not the target:
     `owner::apple::metal_layer::FluiMetalLayer` (from `makeBackingLayer`)
     is the `CAMetalLayer` wgpu takes as the view's root layer and gets every
     drawable from, and its `nextDrawable` adds a presented handler to each,
     which Metal calls on a thread of its own with the drawable's
     `presentedTime`, rebased from `CACurrentMediaTime` onto the event clock,
-    with the refresh of the window's display.
+    with the refresh of the window's display; the handler names the frame the
+    target's `pre_present_notify` wrote into the slot `nextDrawable` armed for
+    that drawable. The headless window keeps each present's frame until its
+    simulated window system shows or discards it.
     Each reports into the window's
     `frame_timing::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
-    (`FrameRequest::presented`): the newest report wins, a report no later
-    than one kept or carried is dropped. A stamp ahead of the event clock's
+    (`FrameRequest::presented`): the newest report wins; a report of a frame
+    of another presentation than the window's newest present carried is
+    dropped, and so is one of a frame no newer than one kept or carried, or
+    shown before it. A stamp ahead of the event clock's
     reading when the report arrives (a rebase's error, a compositor that
     adds its display's latency) is carried with its stamp while it lies
     within `REPORT_LEAD`: the stamp is the phase of the refresh grid the
@@ -1107,8 +1122,9 @@ trait depends on `flui-platform` instead.
     of a frame, and the report is dropped: kept, a rebase saturated at the
     timeline's end would silence the window for good. Every host's reports
     pass there, and no host judges a stamp's lead itself: the Win32 window
-    hands on the swap chain's stamp and its counter reading as they are. The headless window reports what a test injects
-    (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
+    hands on the swap chain's stamp and its counter reading as they are. The headless window reports the presents a test has its
+    simulated window system show (`HeadlessHostWindow::simulate_presented`,
+    `simulate_discarded`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),
     and UIKit and the Activity
@@ -5166,7 +5182,7 @@ capabilities; after it a request is `Submitted`. Chrome's own answer is all
 that ran: a headless desktop has no vibration motor.
 
 Android tier 1 posts `performHapticFeedback` to the Java main thread, which
-owns the decor view, and the owner never waits for it (ADR-0247 §5): a busy
+owns the decor view, and the owner never waits for it (ADR-0347 §2): a busy
 Java thread, or one blocked on the native thread in a lifecycle callback,
 never stalls the owner. One call waits at a time (`AndroidViewAnswers`): a
 request made while it waits posts nothing and reports `Suppressed`, since a
@@ -5408,7 +5424,7 @@ a `FluiActivity`; anything else refuses the start with `PlatformError::HostProto
 naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
-lays one full-window view over the Activity's content (ADR-0247). Every owner-to-view call is posted
+lays one full-window view over the Activity's content (ADR-0347). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the
@@ -5518,9 +5534,22 @@ size. The count of `WindowResized` during a keyboard animation on both sides of 
 a device (`docs/platform-parity.md`, "Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
-view's mirror; `text::android::ime::Mirror` turns each report into one edit against the
-snapshot the view holds, and the host replays it under an async lock, dropping one made on an
-older snapshot than it published last (`replay_current`). A key the native queue delivers while
+view's mirror, under the rule of ADR-0347: the owner's `text::android::ime::Ledger` (one per
+view, shared by the windows over it) mints a `Publication` for each snapshot and records the last
+report it replayed; `text::android::ime::Mirror`, on the Java main thread, turns each report into
+one edit, numbered by a `ReportId`, against the publication it holds. A snapshot reaches the view
+in one posted call (`text::android::input::Publisher`): the view first reports what the input
+method did since its last report, an open batch edit included (`FluiView.reportPending`), the
+mirror decides against it (`Mirror::decide`), the view's editor takes the snapshot, and only then
+the mirror (`Mirror::take`); a call that fails asks the field for one resynchronisation. A
+selection-only snapshot that missed a report is not taken (`Install::Keep`) and the owner still
+replays the edit; a text snapshot that missed one wins and restarts the input method, and the
+owner drops the edit (`Ledger::replay`, `Replayed::Stale`); a selection change that moved or
+ended the composition is published as a text change; otherwise the input method restarts only
+when a snapshot ends its composition or changes the composed text, and is told the rest
+(`updateSelection`, and `updateExtractedText` for a monitoring input method). The focused field's
+own tap asks for the soft keyboard (`TextStoreHost::show_keyboard`, `FluiView.showKeyboard`), and
+the keyboard's Cut and Copy reach the clipboard except from a protected field. A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
 platform's one `DragTransport`: drags over the view mint offers from their

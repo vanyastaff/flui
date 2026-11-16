@@ -1561,7 +1561,12 @@ impl flui_platform::SurfaceTarget for WebSurface {
     /// The page presents on its animation frames: there is nothing to arm
     /// before a present, so it returns at once. A browser reports no time a
     /// frame reached the screen, so there is nothing to ask for either.
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
 }
 
 #[wasm_bindgen(inline_js = "

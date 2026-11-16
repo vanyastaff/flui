@@ -89,7 +89,7 @@ pub mod ui_runtime;
 #[cfg(test)]
 mod table_test;
 pub use flui_animation::MotionOverride;
-pub use host_input::HostInput;
+pub use host_input::{HostInput, ShownFrame};
 pub use input_record::{
     DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
     RecordedSequence, RecordedSurface, RecordingStart, RecordingWindow,

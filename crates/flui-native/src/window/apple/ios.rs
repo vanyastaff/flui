@@ -2055,7 +2055,12 @@ impl raw_window_handle::HasDisplayHandle for IOSSurface {
 impl SurfaceTarget for IOSSurface {
     /// UIKit has no frame callback to arm before a present: the view's
     /// `CADisplayLink` paces the frames. It returns at once.
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
 }
 
 /// Owner-thread session notification. A connection carries explicit completion

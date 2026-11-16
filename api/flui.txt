@@ -1449,7 +1449,7 @@ impl Clone for flui::app::HostInput
 impl core::fmt::Debug for flui::app::HostInput
 variant flui::app::HostInput::Accessibility(accesskit::ActionRequest) // at 3
 variant flui::app::HostInput::AssistiveFocus(Option<accesskit::NodeId>) // at 4
-variant flui::app::HostInput::Frame { vsync: flui::interaction::EventTime, target_present: Option<flui::interaction::EventTime>, presented: Option<flui::platform::FramePresented> } // at 2
+variant flui::app::HostInput::Frame { vsync: flui::interaction::EventTime, target_present: Option<flui::interaction::EventTime>, presented: Option<flui::app::ShownFrame> } // at 2
 variant flui::app::HostInput::Platform(flui::platform::PlatformInput) // at 0
 variant flui::app::HostInput::Window(flui::app::WindowObservation) // at 1
 pub trait flui::app::HostIoPool: Send + Sync
@@ -1678,6 +1678,21 @@ impl core::marker::StructuralPartialEq for flui::app::SpawnError
 variant flui::app::SpawnError::Saturated // at 0
 variant flui::app::SpawnError::ShuttingDown // at 1
 variant flui::app::SpawnError::Unavailable // at 2
+#[non_exhaustive] pub struct flui::app::ShownFrame
+field flui::app::ShownFrame::at: flui::interaction::EventTime // at 2
+field flui::app::ShownFrame::epoch: flui::foundation::FrameEpoch // at 0
+field flui::app::ShownFrame::refresh: Option<flui::platform::RefreshPeriod> // at 3
+field flui::app::ShownFrame::surface_generation: flui::foundation::SurfaceGeneration // at 1
+impl Clone for flui::app::ShownFrame
+impl Copy for flui::app::ShownFrame
+impl Eq for flui::app::ShownFrame
+impl From<flui::platform::FramePresented> for flui::app::ShownFrame
+impl PartialEq for flui::app::ShownFrame
+impl core::fmt::Debug for flui::app::ShownFrame
+impl core::marker::StructuralPartialEq for flui::app::ShownFrame
+pub const fn flui::app::ShownFrame::new(epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration, at: flui::interaction::EventTime) -> Self
+pub const fn flui::app::ShownFrame::refresh(self, refresh: flui::platform::RefreshPeriod) -> Self
+pub fn flui::app::ShownFrame::of_presentation(self, address: flui::foundation::PresentationAddress) -> flui::platform::FramePresented
 pub struct flui::app::TaskContext { .. }
 impl Clone for flui::app::TaskContext
 impl core::fmt::Debug for flui::app::TaskContext
@@ -2627,6 +2642,7 @@ impl core::fmt::Display for flui::foundation::FrameEpoch
 impl core::hash::Hash for flui::foundation::FrameEpoch
 impl core::marker::StructuralPartialEq for flui::foundation::FrameEpoch
 pub const flui::foundation::FrameEpoch::ZERO: Self = _
+pub const fn flui::foundation::FrameEpoch::from_raw(value: u64) -> Self
 pub const fn flui::foundation::FrameEpoch::get(self) -> u64
 pub const fn flui::foundation::FrameEpoch::next(self) -> Self
 #[non_exhaustive] pub struct flui::foundation::FrameStamp
@@ -3061,6 +3077,7 @@ impl core::fmt::Display for flui::foundation::SurfaceGeneration
 impl core::hash::Hash for flui::foundation::SurfaceGeneration
 impl core::marker::StructuralPartialEq for flui::foundation::SurfaceGeneration
 pub const flui::foundation::SurfaceGeneration::ZERO: Self = _
+pub const fn flui::foundation::SurfaceGeneration::from_raw(value: u64) -> Self
 pub const fn flui::foundation::SurfaceGeneration::get(self) -> u64
 pub const fn flui::foundation::SurfaceGeneration::next(self) -> Self
 pub struct flui::foundation::SystemClock;
@@ -7629,6 +7646,7 @@ pub fn flui::interaction::TextInputHandle::complete_composition(&self, token: fl
 pub fn flui::interaction::TextInputHandle::detach(&self, token: flui::interaction::ClientToken) -> Result<flui::interaction::DetachOutcome, flui::interaction::TextInputError>
 pub fn flui::interaction::TextInputHandle::ensure_open(&self) -> Result<(), flui::interaction::TextInputError>
 pub fn flui::interaction::TextInputHandle::set_cursor_area(&self, area: flui::geometry::Bounds<f64>) -> Result<(), flui::interaction::TextInputError>
+pub fn flui::interaction::TextInputHandle::show_keyboard(&self, token: flui::interaction::ClientToken) -> Result<(), flui::interaction::TextInputError>
 #[non_exhaustive] pub enum flui::interaction::TransformLock
 impl Clone for flui::interaction::TransformLock
 impl Copy for flui::interaction::TransformLock
@@ -12307,6 +12325,26 @@ impl PartialEq for flui::platform::DxgiFrameStatistics
 impl core::fmt::Debug for flui::platform::DxgiFrameStatistics
 impl core::marker::StructuralPartialEq for flui::platform::DxgiFrameStatistics
 pub const fn flui::platform::DxgiFrameStatistics::new(present_count: u32, sync_refresh_count: u32, sync_qpc_time: i64) -> Self
+#[non_exhaustive] pub enum flui::platform::DxgiShown
+impl Clone for flui::platform::DxgiShown
+impl Copy for flui::platform::DxgiShown
+impl Eq for flui::platform::DxgiShown
+impl PartialEq for flui::platform::DxgiShown
+impl core::fmt::Debug for flui::platform::DxgiShown
+impl core::marker::StructuralPartialEq for flui::platform::DxgiShown
+variant flui::platform::DxgiShown::Disjoint // at 2
+variant flui::platform::DxgiShown::Nothing // at 0
+variant flui::platform::DxgiShown::Present(flui::platform::DxgiFrameStatistics) // at 1
+#[non_exhaustive] pub struct flui::platform::DxgiStatistics
+field flui::platform::DxgiStatistics::last_present_count: u32 // at 0
+field flui::platform::DxgiStatistics::shown: flui::platform::DxgiShown // at 1
+impl Clone for flui::platform::DxgiStatistics
+impl Copy for flui::platform::DxgiStatistics
+impl Eq for flui::platform::DxgiStatistics
+impl PartialEq for flui::platform::DxgiStatistics
+impl core::fmt::Debug for flui::platform::DxgiStatistics
+impl core::marker::StructuralPartialEq for flui::platform::DxgiStatistics
+pub const fn flui::platform::DxgiStatistics::new(last_present_count: u32, shown: flui::platform::DxgiShown) -> Self
 #[non_exhaustive] pub enum flui::platform::DynamicRange
 impl Clone for flui::platform::DynamicRange
 impl Copy for flui::platform::DynamicRange
@@ -12363,16 +12401,17 @@ variant flui::platform::FrameOutcome::Declined // at 1
 variant flui::platform::FrameOutcome::Failed // at 2
 variant flui::platform::FrameOutcome::Produced // at 0
 #[non_exhaustive] pub struct flui::platform::FramePresented
-field flui::platform::FramePresented::at: flui::interaction::EventTime // at 0
-field flui::platform::FramePresented::refresh: Option<core::time::Duration> // at 1
+field flui::platform::FramePresented::at: flui::interaction::EventTime // at 1
+field flui::platform::FramePresented::frame: flui::foundation::FrameStamp // at 0
+field flui::platform::FramePresented::refresh: Option<flui::platform::RefreshPeriod> // at 2
 impl Clone for flui::platform::FramePresented
 impl Copy for flui::platform::FramePresented
 impl Eq for flui::platform::FramePresented
 impl PartialEq for flui::platform::FramePresented
 impl core::fmt::Debug for flui::platform::FramePresented
 impl core::marker::StructuralPartialEq for flui::platform::FramePresented
-pub const fn flui::platform::FramePresented::new(at: flui::interaction::EventTime) -> Self
-pub const fn flui::platform::FramePresented::with_refresh(self, refresh: core::time::Duration) -> Self
+pub const fn flui::platform::FramePresented::new(frame: flui::foundation::FrameStamp, at: flui::interaction::EventTime) -> Self
+pub const fn flui::platform::FramePresented::refresh(self, refresh: flui::platform::RefreshPeriod) -> Self
 #[non_exhaustive] pub enum flui::platform::FrameRateHint
 impl Clone for flui::platform::FrameRateHint
 impl Copy for flui::platform::FrameRateHint
@@ -13263,7 +13302,7 @@ impl core::hash::Hash for flui::platform::SurfaceColorSpace
 impl core::marker::StructuralPartialEq for flui::platform::SurfaceColorSpace
 pub const fn flui::platform::SurfaceColorSpace::new(gamut: flui::platform::ColorGamut, dynamic_range: flui::platform::DynamicRange) -> Self
 pub trait flui::platform::SurfaceTarget: raw_window_handle::borrowed::HasWindowHandle + raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
-fn flui::platform::SurfaceTarget::pre_present_notify(&self, statistics: flui::platform::SwapChainStatistics)
+fn flui::platform::SurfaceTarget::pre_present_notify(&self, frame: Option<flui::foundation::FrameStamp>, statistics: flui::platform::SwapChainStatistics)
 #[non_exhaustive] pub enum flui::platform::SwapChainStatistics
 impl Clone for flui::platform::SwapChainStatistics
 impl Copy for flui::platform::SwapChainStatistics
@@ -13272,8 +13311,7 @@ impl Eq for flui::platform::SwapChainStatistics
 impl PartialEq for flui::platform::SwapChainStatistics
 impl core::fmt::Debug for flui::platform::SwapChainStatistics
 impl core::marker::StructuralPartialEq for flui::platform::SwapChainStatistics
-variant flui::platform::SwapChainStatistics::Dxgi(flui::platform::DxgiFrameStatistics) // at 1
-variant flui::platform::SwapChainStatistics::DxgiDisjoint // at 2
+variant flui::platform::SwapChainStatistics::Dxgi(flui::platform::DxgiStatistics) // at 1
 variant flui::platform::SwapChainStatistics::None // at 0
 #[non_exhaustive] pub enum flui::platform::SystemControls
 impl Clone for flui::platform::SystemControls
@@ -13386,6 +13424,7 @@ fn flui::platform::TextStoreEdit::set_selection(&mut self, selection: flui::plat
 pub trait flui::platform::TextStoreHost
 fn flui::platform::TextStoreHost::complete_composition(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>) -> Result<flui::platform::text_store::CompositionEnd, flui::platform::text_store::TextStoreHostError>
 fn flui::platform::TextStoreHost::focus_store(&self, store: Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStore>>)
+fn flui::platform::TextStoreHost::show_keyboard(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>)
 pub trait flui::platform::TextStoreObserver
 fn flui::platform::TextStoreObserver::composition_changed(&self) { .. }
 fn flui::platform::TextStoreObserver::layout_changed(&self)
@@ -32777,6 +32816,7 @@ variant flui_protocol::input_recording::Execution::Suspended // at 1
 pub struct flui_protocol::input_recording::FramePresented
 field flui_protocol::input_recording::FramePresented::at: u64 // at 0
 field flui_protocol::input_recording::FramePresented::refresh: Option<u64> // at 1
+field flui_protocol::input_recording::FramePresented::frame: Option<flui_protocol::input_recording::ShownFrameId> // at 2
 impl Clone for flui_protocol::input_recording::FramePresented
 impl Copy for flui_protocol::input_recording::FramePresented
 impl Eq for flui_protocol::input_recording::FramePresented
@@ -33203,6 +33243,18 @@ variant flui_protocol::input_recording::ScrollUnit::Detents // at 3
 variant flui_protocol::input_recording::ScrollUnit::Lines // at 0
 variant flui_protocol::input_recording::ScrollUnit::Pages // at 2
 variant flui_protocol::input_recording::ScrollUnit::Pixels // at 1
+pub struct flui_protocol::input_recording::ShownFrameId
+field flui_protocol::input_recording::ShownFrameId::epoch: u64 // at 0
+field flui_protocol::input_recording::ShownFrameId::surface: u64 // at 1
+impl Clone for flui_protocol::input_recording::ShownFrameId
+impl Copy for flui_protocol::input_recording::ShownFrameId
+impl Eq for flui_protocol::input_recording::ShownFrameId
+impl PartialEq for flui_protocol::input_recording::ShownFrameId
+impl core::fmt::Debug for flui_protocol::input_recording::ShownFrameId
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::ShownFrameId
+impl schemars::JsonSchema for flui_protocol::input_recording::ShownFrameId
+impl serde_core::ser::Serialize for flui_protocol::input_recording::ShownFrameId
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::ShownFrameId
 pub struct flui_protocol::input_recording::Signal
 field flui_protocol::input_recording::Signal::pointer: flui_protocol::input_recording::PointerInfo // at 0
 field flui_protocol::input_recording::Signal::position: Option<[f64; 2]> // at 2
@@ -37361,6 +37413,7 @@ impl core::fmt::Debug for flui_testing::text_store_host::StoreHostCall
 impl core::marker::StructuralPartialEq for flui_testing::text_store_host::StoreHostCall
 variant flui_testing::text_store_host::StoreHostCall::CompleteComposition // at 2
 variant flui_testing::text_store_host::StoreHostCall::Focus // at 0
+variant flui_testing::text_store_host::StoreHostCall::ShowKeyboard // at 3
 variant flui_testing::text_store_host::StoreHostCall::Unfocus // at 1
 pub struct flui_view::context::build_context::sealed::CrateToken(_)
 impl Clone for flui_view::context::build_context::sealed::CrateToken

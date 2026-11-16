@@ -158,7 +158,8 @@ pub trait WindowFixture {
     /// Present frames into a window's surface the way a renderer does
     /// (the surface target's
     /// [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
-    /// with what the presenter read, then the present), let the window system
+    /// with the present's frame, [`fixture_frame`] of its count from 1, and
+    /// what the presenter read, then the present), let the window system
     /// show them, then have the window ask for a frame and return soon after
     /// the request arrived, not after a settle: the checks time its stamps
     /// against their reading as this returns, and a quiet second waited out
@@ -667,9 +668,32 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
     finish(broken)
 }
 
+/// The frame a fixture's `present`-th present into a window carries, counted
+/// from 1, as the raster side stamps it
+/// ([`SurfaceTarget::pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)):
+/// frame `present` of one presentation, on its first surface. The presentation
+/// check expects a report to name one of these frames.
+#[must_use]
+pub fn fixture_frame(present: u64) -> flui_foundation::FrameStamp {
+    flui_foundation::FrameStamp::new(
+        fixture_presentation(),
+        flui_foundation::FrameEpoch::from_raw(present),
+        flui_foundation::SurfaceGeneration::ZERO.next(),
+    )
+}
+
+/// The presentation whose frames a fixture presents.
+fn fixture_presentation() -> flui_foundation::PresentationAddress {
+    flui_foundation::PresentationAddress {
+        ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+        presentation_id: flui_foundation::PresentationId::new(1),
+    }
+}
+
 /// `presentation_is_reported_exactly_when_claimed`: a window whose
 /// capabilities say it reports when its frames reached the screen carries a
-/// report on the first frame request after frames were shown, stamped on the
+/// report on the first frame request after frames were shown, naming one of
+/// the frames the fixture presented ([`fixture_frame`]) and stamped on the
 /// event timeline between the first present and the time the request arrived;
 /// a window that says it does not answers why with a lasting reason and
 /// carries none.
@@ -686,6 +710,15 @@ fn presentation_is_reported_exactly_when_claimed(
     };
     let after = EventTime::now();
     match (claimed, request.presented) {
+        (WindowCapability::Native | WindowCapability::Emulated, Some(presented))
+            if presented.frame.address != fixture_presentation()
+                || presented.frame.epoch == flui_foundation::FrameEpoch::ZERO =>
+        {
+            broken.push(format!(
+                "a report names {:?}, no frame the fixture presented",
+                presented.frame
+            ));
+        }
         (WindowCapability::Native | WindowCapability::Emulated, Some(presented))
             if presented.at < before || presented.at > after =>
         {
@@ -799,7 +832,7 @@ fn a_surface_target_is_send_sync_and_unavailable_after_close(
     let (done, returned) = std::sync::mpsc::channel();
     let presenting = std::sync::Arc::clone(&target);
     std::thread::spawn(move || {
-        presenting.pre_present_notify(flui_platform::SwapChainStatistics::None);
+        presenting.pre_present_notify(None, flui_platform::SwapChainStatistics::None);
         let _ = done.send(());
     });
     if returned

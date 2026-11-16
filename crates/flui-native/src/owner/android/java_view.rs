@@ -1,4 +1,4 @@
-//! `FluiView`, the Java side of the Android backend (ADR-0247, ADR-0255).
+//! `FluiView`, the Java side of the Android backend (ADR-0347, ADR-0255).
 //!
 //! The view's classes are compiled from `crates/flui-native/android/java`
 //! into one dex (`android/classes.dex`, checked against its sources by
@@ -53,7 +53,7 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 /// The host's drag-and-drop transport as the view's drag callbacks reach it:
 /// `nativeDrag`, `nativeDropOffer` and `nativeDrop` run on the Java main thread and must be
 /// answered at once, from what the owner published earlier (ADR-0211,
-/// ADR-0247). The transport is the host's one [`DragTransport`].
+/// ADR-0347). The transport is the host's one [`DragTransport`].
 ///
 /// [`DragTransport`]: flui_platform::data_transfer::DragTransport
 pub(crate) trait ViewTransfer: flui_platform::data_transfer::DragTransport {
@@ -155,17 +155,13 @@ pub(crate) type WindowWork = Box<dyn FnOnce(&dyn ActivityWindow) + Send>;
 /// The input method reads and edits the view's copy of the focused field on
 /// the Java main thread and never waits for the owner; the owner publishes the
 /// field to the view, and the view reports what the input method made of it.
-/// Each call below but [`Self::hold`] and [`Self::pen_down`] comes from a
-/// native method of the view, on the Java main thread under no lock of the
-/// view, and answers what the view applies and queues.
+/// Each of `edited`, `editor_action` and `cursor_updates` comes from a native
+/// method of the view, on the Java main thread under no lock of the view, and
+/// answers what the view applies and queues.
 pub(crate) trait InputMethod: Send + Sync {
-    /// The view now holds `text`, which the owner published as `generation`:
-    /// the reports that follow are made against it. On the owner thread.
-    fn hold(&self, generation: u32, text: &str);
-
-    /// `nativeImeState`: what the view holds after an input method edit made
-    /// on the publication `generation` names; `None` when it changed nothing.
-    fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply>;
+    /// `nativeImeState`: what the view holds after an input method edit;
+    /// `None` before the view holds a snapshot.
+    fn edited(&self, state: EditorState) -> Option<InputMethodReply>;
 
     /// `nativeImeAction`: the input method performed its editor action
     /// (`EditorInfo.IME_ACTION_*`) at `uptime_ms` on the event clock.
@@ -668,7 +664,7 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeImeState"),
-                jni_str!("(JLjava/lang/String;IIIII)V"),
+                jni_str!("(JLjava/lang/String;IIII)V"),
                 native_ime_state as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
@@ -855,7 +851,6 @@ extern "system" fn native_ime_state<'local>(
     selection_end: jint,
     composition_start: jint,
     composition_end: jint,
-    generation: jint,
 ) {
     jni_native("nativeImeState", || {
         let Some(view) = bridge(handle) else {
@@ -872,7 +867,7 @@ extern "system" fn native_ime_state<'local>(
             composition_start,
             composition_end,
         };
-        if let Some(reply) = view.input_method.edited(generation.cast_unsigned(), state) {
+        if let Some(reply) = view.input_method.edited(state) {
             view.reply(reply);
         }
     });

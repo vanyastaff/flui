@@ -69,5 +69,5 @@ pub use flui_app::{open_secondary_window, open_window};
 // receives.
 pub use flui_app::{
     DecisionRow, HostInput, InputOutcome, InputRecord, InputRow, InputTap, InputTapFactory,
-    PreferencesRow, RecordingStart, RecordingWindow, WindowObservation,
+    PreferencesRow, RecordingStart, RecordingWindow, ShownFrame, WindowObservation,
 };

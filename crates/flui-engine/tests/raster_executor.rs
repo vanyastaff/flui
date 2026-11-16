@@ -393,6 +393,28 @@ fn a_full_settlement_ring_holds_the_next_frame() {
     assert_eq!(rig.backend.renders().len(), 2);
 }
 
+/// Each frame reaches the backend with its own stamp, which a window slot
+/// hands its surface target with the present: the presentation report of a
+/// frame names that frame, whatever frame is newest by then.
+#[test]
+fn each_frame_reaches_the_backend_with_its_own_stamp() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    let _ = rig.executor.turn();
+    let _ = verdicts(&rig.sender, at.slot);
+    let _ = rig.sender.send(frame(at, 2)).expect("accepted");
+    let _ = rig.executor.turn();
+    let rendered: Vec<(PresentationAddress, u64)> = rig
+        .backend
+        .rendered_frames()
+        .into_iter()
+        .map(|stamp| (stamp.address, stamp.epoch.get()))
+        .collect();
+    assert_eq!(rendered, [(at.address, 1), (at.address, 2)]);
+}
+
 /// Shutting down settles every pending frame `Failed`, those of a slot whose
 /// attach is still queued included, and every later send comes back `Gone`.
 #[test]
@@ -1545,6 +1567,7 @@ impl flui_engine::RasterBackend for PanicsAtAttach {
     fn render(
         &mut self,
         _: SlotId,
+        _: flui_foundation::FrameStamp,
         _: &Scene,
         _: DamageRegion,
     ) -> flui_engine::EngineResult<PresentDisposition> {

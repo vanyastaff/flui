@@ -256,7 +256,7 @@ pub struct UiRuntime {
     /// clears it, so a panic unwinding out of the frame does too.
     frame_time: Cell<Option<web_time::Instant>>,
     /// The time the previous frame ran at, the floor a delivered vsync is held to so the frame
-    /// clock never runs backwards (ADR-0257).
+    /// clock never runs backwards (ADR-0347).
     last_frame_time: Cell<Option<web_time::Instant>>,
     /// The epoch of the last frame a presentation of this runtime handed its
     /// sink: each submit takes the next one, so a settlement names the frame

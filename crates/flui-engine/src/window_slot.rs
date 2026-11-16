@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::FrameStamp;
 use flui_layer::{DamageRegion, Scene};
 use flui_platform::{DisplayColor, SurfaceTarget};
 
@@ -321,8 +322,9 @@ impl WindowSlot {
         ))
     }
 
-    /// Render `scene` with `painter` (retargeted to [`Self::target_format`])
-    /// and present it, repainting at least `damage`.
+    /// Render `scene`, the frame `frame` stamps, with `painter` (retargeted
+    /// to [`Self::target_format`]) and present it, repainting at least
+    /// `damage`.
     ///
     /// # Errors
     /// The frame's acquire, render or submission error.
@@ -333,6 +335,7 @@ impl WindowSlot {
         offscreen: &mut OffscreenRenderer,
         scene: &Scene,
         damage: DamageRegion,
+        frame: FrameStamp,
     ) -> EngineResult<PresentDisposition> {
         match damage {
             DamageRegion::Region(region) => self.frame.mark_dirty(region.bounds().to_rect()),
@@ -341,7 +344,7 @@ impl WindowSlot {
         }
         self.frame
             .select_font_source(painter, FontSource::Ordinary, false);
-        self.present(gpu, painter, offscreen, scene)
+        self.present(gpu, painter, offscreen, scene, Some(frame))
     }
 
     /// Render `scene`, lent outside the slot's frames, in full with the fonts
@@ -362,17 +365,21 @@ impl WindowSlot {
         self.frame
             .select_font_source(painter, FontSource::Plugin, reset_fonts);
         self.frame.begin_unmanaged();
-        let presented = self.present(gpu, painter, offscreen, scene);
+        let presented = self.present(gpu, painter, offscreen, scene, None);
         self.frame.end_unmanaged();
         presented
     }
 
+    /// Present `scene`, the frame `frame` names (`None` for a scene lent
+    /// outside the frames), handing the frame to the surface target with the
+    /// present so the window's presentation report names it.
     fn present(
         &mut self,
         gpu: &Gpu<'_>,
         painter: &mut WgpuPainter,
         offscreen: &mut OffscreenRenderer,
         scene: &Scene,
+        frame: Option<FrameStamp>,
     ) -> EngineResult<PresentDisposition> {
         let Some((working_format, size)) = self.target_format() else {
             return Ok(PresentDisposition::NotShown);
@@ -425,10 +432,10 @@ impl WindowSlot {
         } = steps;
         // The platform's frame-pacing signal, strictly before the present and
         // only for a frame that presents.
-        self.target
-            .pre_present_notify(crate::surface_present::swap_chain_statistics(
-                self.lease.surface(),
-            ));
+        self.target.pre_present_notify(
+            frame,
+            crate::surface_present::swap_chain_statistics(self.lease.surface()),
+        );
         tracing::trace!(
             target: "flui.gpu",
             event = "pre_present_notified",
@@ -444,7 +451,7 @@ impl WindowSlot {
         match reconfigure_after_suboptimal_present(&mut Acquire { slot: self, gpu }) {
             // The configure owes a repaint nothing else asks for: present the
             // same scene again, at most once (the episode is answered).
-            Ok(true) => return self.present(gpu, painter, offscreen, scene),
+            Ok(true) => return self.present(gpu, painter, offscreen, scene, frame),
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(target: "flui.gpu", %error, "reconfigure after a suboptimal frame failed");

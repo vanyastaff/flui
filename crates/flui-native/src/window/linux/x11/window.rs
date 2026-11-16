@@ -1615,7 +1615,12 @@ impl flui_platform::SurfaceTarget for X11Surface {
     /// chain, and this returns at once. The swap chain's completion events go
     /// to the GPU driver's own connection, so the host learns nothing of when
     /// the frame is shown.
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
 }
 
 /// An X11 window's redraw requester: any thread marks the window and rings
