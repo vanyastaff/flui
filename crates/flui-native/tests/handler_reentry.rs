@@ -20,7 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
-use flui_native::{HeadlessPlatform, HostWindow, OwnerPlatform, Platform};
+use flui_native::host::Host;
+use flui_native::testing::keyboard_layout;
+use flui_native::{HeadlessPlatform, HostPlatform, HostWindow, OwnerPlatform, Platform};
 use flui_platform::{
     CloseDecision, DispatchEventResult, SessionEndAnswer, SessionEndPhase, SystemNotice,
     WindowCommand, WindowOptions,
@@ -85,9 +87,6 @@ trait Reach {
 
     /// Quit the platform.
     fn quit(&self);
-
-    /// A call that takes the platform's state.
-    fn touch(&self);
 }
 
 impl Reach for Rc<dyn Platform> {
@@ -101,10 +100,6 @@ impl Reach for Rc<dyn Platform> {
 
     fn quit(&self) {
         Platform::quit(&**self);
-    }
-
-    fn touch(&self) {
-        let _ = self.active_window();
     }
 }
 
@@ -123,26 +118,25 @@ impl Reach for OwnerPlatform {
     fn quit(&self) {
         OwnerPlatform::quit(self);
     }
-
-    fn touch(&self) {
-        let _ = self.active_window();
-    }
 }
 
-/// The keyboard layout callback, the one application-level registration left:
-/// a replaced callback whose captures call the platform when dropped reaches
-/// the platform from its destructor.
-fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Rc<dyn Platform>) {
+/// The keyboard layout callback, the one registration left on a host: a
+/// replaced callback whose captures reach the host's input when dropped
+/// reaches it from its destructor.
+fn a_replaced_keyboard_layout_callback_reaches_the_platform<H: Host>(
+    platform: &Rc<HostPlatform<H>>,
+) {
     /// Reaches the platform when dropped: the callback is owner-local, so its
     /// capture holds the platform itself.
-    struct CallsBack {
+    struct CallsBack<H: Host> {
         reached: Arc<AtomicBool>,
-        platform: RcWeak<dyn Platform>,
+        platform: RcWeak<HostPlatform<H>>,
     }
-    impl Drop for CallsBack {
+    impl<H: Host> Drop for CallsBack<H> {
         fn drop(&mut self) {
             if let Some(platform) = self.platform.upgrade() {
-                let _ = platform.active_window();
+                let _ = keyboard_layout::current(&platform);
+                let _ = platform.window_capabilities();
                 self.reached.store(true, Ordering::SeqCst);
             }
         }
@@ -152,10 +146,13 @@ fn a_replaced_keyboard_layout_callback_reaches_the_platform(platform: &Rc<dyn Pl
         reached: Arc::clone(&reached),
         platform: Rc::downgrade(platform),
     };
-    platform.on_keyboard_layout_change(Box::new(move || {
-        let _ = &capture;
-    }));
-    platform.on_keyboard_layout_change(Box::new(|| {}));
+    keyboard_layout::on_change(
+        platform,
+        Box::new(move || {
+            let _ = &capture;
+        }),
+    );
+    keyboard_layout::on_change(platform, Box::new(|| {}));
     assert!(
         reached.load(Ordering::SeqCst),
         "the replaced callback's destructor did not reach the platform"
@@ -284,20 +281,23 @@ fn a_handler_method_reenters(
 }
 
 /// A window lets go of its handler when it closes; the handler's captures,
-/// whose destructor calls the platform, are dropped with none of the
-/// platform's locks held.
+/// whose destructor opens another window, are dropped with none of the
+/// platform's locks held. Opening takes the host's window table for writing
+/// (the headless `HeadlessWindows::tracked`, Win32's `WindowSet::by_handle`),
+/// so a close that dropped the handler with that table still borrowed fails
+/// here.
 fn a_handler_dropped_at_close_reaches_the_platform(
     platform: &Rc<dyn Reach>,
     options: fn() -> WindowOptions,
     settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
 ) {
-    let reached = Rc::new(Cell::new(false));
-    let observed = Rc::clone(&reached);
+    let opened: Rc<RefCell<Vec<Rc<dyn HostWindow>>>> = Rc::default();
+    let observed = Rc::clone(&opened);
     let weak = Rc::downgrade(platform);
     let calls_back = OnDrop::new(move || {
         if let Some(platform) = weak.upgrade() {
-            platform.touch();
-            observed.set(true);
+            let window = platform.open(options(), RecordingWindowHandler::new());
+            observed.borrow_mut().push(window);
         }
     });
     let handler = RecordingWindowHandler::new();
@@ -307,9 +307,12 @@ fn a_handler_dropped_at_close_reaches_the_platform(
     let window = platform.open(options(), handler);
     window.close_now();
     assert!(
-        settle(&|| reached.get()),
+        settle(&|| !opened.borrow().is_empty()),
         "the handler's destructor did not reach the platform"
     );
+    for window in opened.take() {
+        window.close_for_cleanup();
+    }
 }
 
 /// Raises something on a window from inside a handler method.
@@ -686,22 +689,24 @@ fn headless_a_layout_callback_registered_twice_is_replaced() {
     within(
         "headless keyboard layout callback, registered twice",
         || {
-            let headless = HeadlessPlatform::new();
-            let devices = headless.input_devices();
-            let platform: Rc<dyn Platform> = Rc::new(headless);
+            let platform = HeadlessPlatform::new();
+            let devices = platform.input_devices();
             let first = Rc::new(Cell::new(0_u32));
             let second = Rc::new(Cell::new(0_u32));
             let heard = Rc::clone(&first);
-            platform.on_keyboard_layout_change(Box::new(move || heard.set(heard.get() + 1)));
+            keyboard_layout::on_change(&platform, Box::new(move || heard.set(heard.get() + 1)));
             assert!(devices.set_keyboard_layout("de-DE"));
             let heard = Rc::clone(&second);
-            platform.on_keyboard_layout_change(Box::new(move || {
-                heard.set(heard.get() + 1);
-                assert!(heard.get() != 1, "the layout callback");
-            }));
+            keyboard_layout::on_change(
+                &platform,
+                Box::new(move || {
+                    heard.set(heard.get() + 1);
+                    assert!(heard.get() != 1, "the layout callback");
+                }),
+            );
             let failed = catch_unwind(AssertUnwindSafe(|| devices.set_keyboard_layout("fr-FR")));
             assert!(failed.is_err(), "the callback's panic was not raised");
-            assert_eq!(platform.keyboard_layout(), "fr-FR");
+            assert_eq!(keyboard_layout::current(&platform), "fr-FR");
             assert!(devices.set_keyboard_layout("en-US"));
             assert_eq!(
                 (first.get(), second.get()),
@@ -714,8 +719,7 @@ fn headless_a_layout_callback_registered_twice_is_replaced() {
 
 fn headless_replaced_keyboard_layout_callback_reaches_the_platform() {
     within("headless keyboard layout callback", || {
-        let platform: Rc<dyn Platform> = Rc::new(HeadlessPlatform::new());
-        a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
+        a_replaced_keyboard_layout_callback_reaches_the_platform(&Rc::new(HeadlessPlatform::new()));
     });
 }
 
@@ -947,8 +951,7 @@ mod win32 {
 
     fn replaced_keyboard_layout_callback() {
         within("Win32 keyboard layout callback", || {
-            let platform: Rc<dyn Platform> =
-                Rc::new(WindowsPlatform::try_new().expect("native Windows platform"));
+            let platform = Rc::new(WindowsPlatform::try_new().expect("native Windows platform"));
             a_replaced_keyboard_layout_callback_reaches_the_platform(&platform);
         });
     }
@@ -994,9 +997,12 @@ mod win32 {
             }
             let platform = WindowsPlatform::try_new().expect("native Windows platform");
             let capture = PanicsOnDrop;
-            platform.on_keyboard_layout_change(Box::new(move || {
-                let _ = &capture;
-            }));
+            flui_native::testing::keyboard_layout::on_change(
+                &platform,
+                Box::new(move || {
+                    let _ = &capture;
+                }),
+            );
             let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 Box::new(platform).run(crate::app::on_ready(|owner| {
                     owner.proxy().request_quit().expect("the loop takes a quit");

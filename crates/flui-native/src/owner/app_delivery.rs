@@ -36,7 +36,9 @@ use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::{Launch, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice};
+use flui_platform::{
+    Launch, MAX_OPENED_ITEMS, Opened, SessionEndAnswer, SessionEndPhase, SystemNotice,
+};
 use parking_lot::Mutex;
 
 use super::call_point::{Called, Failure, HandlerSlot, call, retire};
@@ -47,7 +49,7 @@ use crate::error::BootstrapError;
 use crate::platform::{AppHandler, ExitAnswer, Platform};
 
 /// The most [`Report::Opened`] that wait for the handler at once. Each is
-/// bounded ([`Opened::new`]); this bounds how many a host that keeps opening
+/// bounded where the host makes it ([`Opened::bounded`]); this bounds how many a host that keeps opening
 /// (a second instance forwarding in a loop, a flood of links before `ready`)
 /// can hold in the queue, and a later one is dropped with a warning.
 const MAX_PENDING_OPENED: usize = 16;
@@ -814,9 +816,11 @@ impl AppDelivery {
 }
 
 /// Take what launched the application out of the reports queued before
-/// `ready`: every [`Launch::Cold`] report of what was opened for the first
-/// one's target, joined in order and bounded again ([`Opened::new`]). The
-/// reports for another target stay queued.
+/// `ready`: the [`Launch::Cold`] reports of what was opened for the first
+/// one's target, joined in order while the join holds at most
+/// [`MAX_OPENED_ITEMS`] items. The first that would not fit, the ones after it
+/// and the reports for another target stay queued, so the join drops nothing
+/// the host accepted.
 fn take_launch(pending: &mut VecDeque<Report>) -> Option<Opened> {
     let target = pending.iter().find_map(|report| match report {
         Report::Opened(opened) if opened.launch == Launch::Cold => Some(opened.target),
@@ -824,15 +828,29 @@ fn take_launch(pending: &mut VecDeque<Report>) -> Option<Opened> {
     })?;
     let mut urls = Vec::new();
     let mut files = Vec::new();
+    let mut joining = true;
     pending.retain(|report| match report {
-        Report::Opened(opened) if opened.launch == Launch::Cold && opened.target == target => {
+        Report::Opened(opened)
+            if joining && opened.launch == Launch::Cold && opened.target == target =>
+        {
+            // Each report holds at most `MAX_OPENED_ITEMS`, so the sum is far
+            // from overflowing.
+            let joined = urls.len() + files.len() + opened.urls.len() + opened.files.len();
+            if joined > MAX_OPENED_ITEMS {
+                joining = false;
+                return true;
+            }
             urls.extend(opened.urls.iter().cloned());
             files.extend(opened.files.iter().cloned());
             false
         }
         _ => true,
     });
-    Some(Opened::new(urls, files, target, Launch::Cold))
+    // Each joined report was bounded where the host made it, and the join
+    // stops at the bound, so bounding drops nothing here.
+    let (launch, overflow) = Opened::bounded(urls, files, target, Launch::Cold);
+    debug_assert!(overflow.is_empty(), "BUG: the join stops at the bound");
+    Some(launch)
 }
 
 #[cfg(test)]

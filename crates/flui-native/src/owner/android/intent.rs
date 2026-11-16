@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use flui_platform::{Launch, MAX_OPENED_ITEMS, OpenTarget, Opened, OpenedFile};
+use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
 
 use crate::owner::file_uri::{PathConvention, file_uri_path};
 
@@ -133,9 +133,13 @@ impl Opening {
     /// surface, so the runner's last focused window is the one the intent
     /// reached. Each provider's document is opened by `open` (the content
     /// resolver, on the owner thread), at most as many as an [`Opened`]
-    /// carries; one it cannot open is left out, and `open` logs why.
+    /// carries after the links it keeps (an over-long link takes no room);
+    /// one it cannot open is left out, and `open` logs why. What bounding
+    /// drops, the documents past the room included, is reported as every host
+    /// reports it (`owner::opened::bounded`), even when nothing is left.
     pub(crate) fn opened(self, mut open: impl FnMut(&str) -> Option<OpenedFile>) -> Opened {
-        let room = MAX_OPENED_ITEMS.saturating_sub(self.links.len());
+        let room = crate::owner::opened::room_for_files(&self.links);
+        let unopened = self.documents.len().saturating_sub(room);
         let files: Vec<OpenedFile> = self
             .documents
             .into_iter()
@@ -145,7 +149,13 @@ impl Opening {
                 Document::Content(uri) => open(&uri),
             })
             .collect();
-        Opened::new(self.links, files, OpenTarget::Application, self.launch)
+        crate::owner::opened::bounded(
+            self.links,
+            files,
+            unopened,
+            OpenTarget::Application,
+            self.launch,
+        )
     }
 }
 
@@ -174,6 +184,58 @@ mod tests {
         Opening::of(
             ReceivedIntent::from_record(record(fields)).expect("a record FluiHost lays out"),
         )
+    }
+
+    /// An intent whose only link is past the length bound opens nothing, and
+    /// what bounding dropped is still reported, once; so are the documents
+    /// past the room the links leave.
+    #[test]
+    fn an_intent_reports_what_bounding_dropped_even_when_nothing_is_left() {
+        use crate::owner::opened::reports_in;
+
+        let long = format!("notes:///{}", "a".repeat(flui_platform::MAX_OPENED_URL_LEN));
+        let mut opened = None;
+        let reports = reports_in(|| {
+            opened = Some(opening(&["cold", "android.intent.action.VIEW", &long]).opened(|_| None));
+        });
+        assert!(opened.expect("opened").is_empty(), "nothing left to open");
+        assert_eq!(reports, 1, "the dropped link is reported once");
+
+        let mut fields = vec!["running", "android.intent.action.SEND_MULTIPLE"];
+        let documents: Vec<String> = (0..=MAX_OPENED_ITEMS)
+            .map(|n| format!("content://com.example.notes/doc/{n}"))
+            .collect();
+        fields.extend(documents.iter().map(String::as_str));
+        let mut opened = None;
+        let reports =
+            reports_in(|| opened = Some(opening(&fields).opened(|uri| Some(OpenedFile::new(uri)))));
+        assert_eq!(opened.expect("opened").files.len(), MAX_OPENED_ITEMS);
+        assert_eq!(reports, 1, "the document past the room is reported once");
+
+        // An over-long link takes no room: beside 62 kept links both
+        // documents fit, and only the link is reported.
+        let mut links: Vec<String> = (0..MAX_OPENED_ITEMS - 2)
+            .map(|n| format!("notes:///note/{n}"))
+            .collect();
+        links.push(long);
+        let mut opened = None;
+        let reports = reports_in(|| {
+            opened = Some(
+                Opening {
+                    links,
+                    documents: vec![Document::Content("content://notes/doc/1".to_owned()); 2],
+                    launch: Launch::Cold,
+                }
+                .opened(|uri| Some(OpenedFile::new(uri))),
+            );
+        });
+        let opened = opened.expect("opened");
+        assert_eq!(
+            (opened.urls.len(), opened.files.len()),
+            (MAX_OPENED_ITEMS - 2, 2),
+            "no document dropped while a slot is free"
+        );
+        assert_eq!(reports, 1, "the over-long link is reported once");
     }
 
     /// A `VIEW` intent's data opens as a link, a custom scheme's or a

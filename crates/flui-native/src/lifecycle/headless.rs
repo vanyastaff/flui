@@ -138,8 +138,8 @@ impl HeadlessHostEvents {
 
     /// The operating system opened URLs or files with the application, as a
     /// link, a launch argument or a document does: the application's handler
-    /// hears them ([`AppHandler::opened`](crate::AppHandler::opened)), bounded
-    /// as every host bounds them ([`Opened::new`]). Nothing happens once the
+    /// hears them ([`AppHandler::opened`](crate::AppHandler::opened)), as the
+    /// caller bounded them ([`Opened::bounded`]). Nothing happens once the
     /// platform is gone, and an empty `opened` reports nothing.
     pub fn open(&self, opened: Opened) {
         if let Some(app) = self.app.upgrade() {
