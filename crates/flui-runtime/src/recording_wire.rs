@@ -39,9 +39,9 @@ use flui_platform::keyboard::{
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenSqueeze, PenSqueezePhase, PenTool, PointerButton,
+    PanZoomTransform, PenOrientation, PenTool, PointerButton,
     PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRevision,
+    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
@@ -791,22 +791,6 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(zoom.modifiers),
                 })
             }
-            PointerEvent::Revise(revision) => Self::Revise {
-                pointer: (&revision.pointer).try_convert_into()?,
-                sample: (&revision.sample).convert_into(),
-            },
-            PointerEvent::PenSqueeze(squeeze) => Self::PenSqueeze {
-                pointer: (&squeeze.pointer).try_convert_into()?,
-                t: squeeze.time.as_nanos(),
-                phase: match squeeze.phase {
-                    PenSqueezePhase::Began => rec::SqueezePhase::Began,
-                    PenSqueezePhase::Changed => rec::SqueezePhase::Changed,
-                    PenSqueezePhase::Ended => rec::SqueezePhase::Ended,
-                    PenSqueezePhase::Cancelled => rec::SqueezePhase::Cancelled,
-                    _ => return Err(unmirrored("PenSqueezePhase")),
-                },
-                hover: squeeze.hover.as_ref().map(rec::Sample::convert),
-            },
             PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)?),
             PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)?),
             _ => return Err(unmirrored("PointerEvent")),
@@ -916,31 +900,6 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 )
                 .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
-            rec::PointerEvent::Revise { pointer, sample } => Self::Revise(PointerRevision::new(
-                pointer.try_convert_into()?,
-                sample.try_convert_into()?,
-            )),
-            rec::PointerEvent::PenSqueeze {
-                pointer,
-                t,
-                phase,
-                hover,
-            } => {
-                let mut squeeze = PenSqueeze::new(
-                    pointer.try_convert_into()?,
-                    EventTime::from_nanos(t),
-                    match phase {
-                        rec::SqueezePhase::Began => PenSqueezePhase::Began,
-                        rec::SqueezePhase::Changed => PenSqueezePhase::Changed,
-                        rec::SqueezePhase::Ended => PenSqueezePhase::Ended,
-                        rec::SqueezePhase::Cancelled => PenSqueezePhase::Cancelled,
-                    },
-                );
-                if let Some(hover) = hover {
-                    squeeze = squeeze.with_hover(hover.try_convert_into()?);
-                }
-                Self::PenSqueeze(squeeze)
-            }
             rec::PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change(change)?),
             rec::PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change(change)?),
         })

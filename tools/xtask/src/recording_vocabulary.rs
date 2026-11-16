@@ -127,11 +127,6 @@ const RECORDED: &[Recorded] = &[
         "CancelReason",
     ),
     repo(
-        "PenSqueezePhase",
-        "crates/flui-platform/src/pointer/mod.rs",
-        "PenSqueezePhase",
-    ),
-    repo(
         "ScrollUnit",
         "crates/flui-platform/src/pointer/scroll.rs",
         "ScrollUnit",

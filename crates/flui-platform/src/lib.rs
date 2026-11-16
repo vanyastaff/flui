@@ -190,10 +190,10 @@ pub use opened::{
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
-    PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform,
+    PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
     PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRevision, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
+    PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
     ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
 };
 pub use preferences::{

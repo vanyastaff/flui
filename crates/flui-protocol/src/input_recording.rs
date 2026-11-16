@@ -721,29 +721,6 @@ pub struct PanZoom {
     pub modifiers: Vec<String>,
 }
 
-/// A pen squeeze's phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[expect(
-    clippy::exhaustive_enums,
-    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
-)]
-pub enum SqueezePhase {
-    /// The `began` pen squeeze phase.
-    #[cfg_attr(feature = "serde", serde(rename = "began"))]
-    Began,
-    /// The `changed` pen squeeze phase.
-    #[cfg_attr(feature = "serde", serde(rename = "changed"))]
-    Changed,
-    /// The `ended` pen squeeze phase.
-    #[cfg_attr(feature = "serde", serde(rename = "ended"))]
-    Ended,
-    /// The `cancelled` pen squeeze phase.
-    #[cfg_attr(feature = "serde", serde(rename = "cancelled"))]
-    Cancelled,
-}
-
 /// A pointer device appearing or disappearing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -834,30 +811,6 @@ pub enum PointerEvent {
     /// A trackpad smart-zoom.
     #[cfg_attr(feature = "serde", serde(rename = "smart_zoom"))]
     SmartZoom(SmartZoom),
-    /// A pointer's earlier sample was revised.
-    #[cfg_attr(feature = "serde", serde(rename = "revise"))]
-    Revise {
-        /// The pointer the event belongs to.
-        pointer: PointerInfo,
-        /// The revised sample.
-        sample: Sample,
-    },
-    /// A pen squeeze.
-    #[cfg_attr(feature = "serde", serde(rename = "pen_squeeze"))]
-    PenSqueeze {
-        /// The pointer the event belongs to.
-        pointer: PointerInfo,
-        /// The event time, in nanoseconds.
-        t: u64,
-        /// The squeeze's phase.
-        phase: SqueezePhase,
-        /// The pen's hover sample, when reported.
-        #[cfg_attr(
-            feature = "serde",
-            serde(default, skip_serializing_if = "Option::is_none")
-        )]
-        hover: Option<Sample>,
-    },
     /// A pointer device appeared.
     #[cfg_attr(feature = "serde", serde(rename = "device_added"))]
     DeviceAdded(DeviceChange),

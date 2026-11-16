@@ -23,9 +23,9 @@ use flui_platform::keyboard::{
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenSqueeze, PenSqueezePhase, PenTool, PointerButton,
+    PanZoomTransform, PenOrientation, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRevision,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
     PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
     ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
 };
@@ -159,20 +159,6 @@ fn pan_zoom(phase: PanZoomPhase) -> InputRecord {
     pointer_event(PointerEvent::PanZoom(
         PanZoomEvent::new(touch(), at(15), position(7.0, 8.0), phase)
             .with_modifiers(Modifiers::META),
-    ))
-}
-
-fn squeeze(phase: PenSqueezePhase) -> InputRecord {
-    pointer_event(PointerEvent::PenSqueeze(
-        PenSqueeze::new(
-            info(
-                PointerKind::Pen { tool: PenTool::Tip },
-                PointerRole::Primary,
-            ),
-            at(16),
-            phase,
-        )
-        .with_hover(rich_sample(16)),
     ))
 }
 
@@ -510,10 +496,6 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
             SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
         ))),
-        ("PointerEvent", "Revise") => one(pointer_event(PointerEvent::Revise(
-            PointerRevision::new(touch(), rich_sample(40)),
-        ))),
-        ("PointerEvent", "PenSqueeze") => one(squeeze(PenSqueezePhase::Began)),
         ("PointerEvent", "DeviceAdded") => one(pointer_event(PointerEvent::DeviceAdded(
             PointerDeviceChange::new(
                 DeviceId::try_from(9_u64).expect("nonzero"),
@@ -557,10 +539,6 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("CancelReason", "InvalidInput") => one(cancel(CancelReason::InvalidInput)),
         ("CancelReason", "Claimed") => one(cancel(CancelReason::Claimed)),
         ("CancelReason", "Superseded") => one(cancel(CancelReason::Superseded)),
-        ("PenSqueezePhase", "Began") => one(squeeze(PenSqueezePhase::Began)),
-        ("PenSqueezePhase", "Changed") => one(squeeze(PenSqueezePhase::Changed)),
-        ("PenSqueezePhase", "Ended") => one(squeeze(PenSqueezePhase::Ended)),
-        ("PenSqueezePhase", "Cancelled") => one(squeeze(PenSqueezePhase::Cancelled)),
         ("ScrollUnit", "Lines") => one(scroll(ScrollUnit::Lines, ScrollPrecision::Notched, None)),
         ("ScrollUnit", "Pixels") => one(scroll(ScrollUnit::Pixels, ScrollPrecision::Unknown, None)),
         ("ScrollUnit", "Pages") => one(scroll(ScrollUnit::Pages, ScrollPrecision::Notched, None)),

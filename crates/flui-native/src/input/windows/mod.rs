@@ -1253,8 +1253,7 @@ mod raw {
         }
     }
 
-    /// When `event` happened; `None` for a revision, whose time names the
-    /// reading it replaces.
+    /// When `event` happened; `None` for a variant not named here.
     fn pointer_time(event: &flui_platform::pointer::PointerEvent) -> Option<EventTime> {
         use flui_platform::pointer::{ButtonChange, PointerEvent};
         Some(match event {
@@ -1269,9 +1268,9 @@ mod raw {
             | PointerEvent::ScrollInertiaCancel(signal) => signal.time,
             PointerEvent::Scroll(scroll) => scroll.time,
             PointerEvent::PanZoom(pan_zoom) => pan_zoom.time,
-            PointerEvent::PenSqueeze(squeeze) => squeeze.time,
+            PointerEvent::SmartZoom(zoom) => zoom.time,
             PointerEvent::DeviceAdded(change) | PointerEvent::DeviceRemoved(change) => change.time,
-            // A revision names the reading it replaces; the vocabulary may grow.
+            // A variant the vocabulary adds has no known time until it is named here.
             _ => return None,
         })
     }
