@@ -11,7 +11,7 @@
 // boundary, rather than for the whole crate (see `lib.rs`).
 #![expect(unsafe_code)]
 
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -73,17 +73,17 @@ impl SyncClipboard for IOSClipboard {
         host_text(string.to_string())
     }
 
-    fn write_now(&self, write: ClipboardWrite) {
+    fn write_now(&self, write: ClipboardWrite) -> ClipboardWritten {
         let Some(pasteboard) = Self::pasteboard() else {
-            tracing::warn!("clipboard write dropped: UIPasteboard is main-thread-only");
-            return;
+            tracing::warn!("clipboard write refused: UIPasteboard is main-thread-only");
+            return Err(ClipboardError::Unavailable);
         };
         let string = NSString::from_str(write.as_text());
         if !write.is_concealed() {
             // SAFETY: as above — main thread established, `setString:` is the
             // documented setter.
             unsafe { pasteboard.setString(Some(&string)) };
-            return;
+            return Ok(());
         }
         // A concealed write stays on this device: iOS keeps no clipboard
         // history, and `UIPasteboardOptionLocalOnly` keeps the item off the
@@ -106,6 +106,7 @@ impl SyncClipboard for IOSClipboard {
             );
             pasteboard.setItems_options(&items, &options);
         }
+        Ok(())
     }
 
     fn concealment(&self) -> Concealment {

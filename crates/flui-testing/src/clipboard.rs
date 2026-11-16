@@ -9,7 +9,9 @@
 //! [`refuse`](ScriptedClipboard::refuse) makes the provider refuse, as a host
 //! without a clipboard does, and
 //! [`fail_reads_with`](ScriptedClipboard::fail_reads_with) makes reads fail as
-//! a host that cannot reach its clipboard does.
+//! a host that cannot reach its clipboard does, and
+//! [`fail_writes_with`](ScriptedClipboard::fail_writes_with) refuses writes as
+//! a host does whose clipboard another application holds.
 //! [`answer_concealment`](ScriptedClipboard::answer_concealment) sets what
 //! the host does with a concealed write, and
 //! [`is_concealed`](ScriptedClipboard::is_concealed) tells whether the text
@@ -19,7 +21,7 @@ use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported,
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, Unsupported,
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
 };
 
@@ -39,6 +41,7 @@ struct State {
     /// [`Concealment::Honored`].
     concealment: Option<Concealment>,
     failure: Option<ClipboardError>,
+    write_failure: Option<ClipboardError>,
     reads: usize,
     hold: bool,
     held: Vec<Resolver<ClipboardRead>>,
@@ -126,6 +129,18 @@ impl ScriptedClipboard {
         self.state.borrow_mut().failure = None;
     }
 
+    /// Refuse every later write with `error`, leaving the clipboard as it
+    /// was, as a host answers when another application holds the clipboard
+    /// past its patience, until [`stop_failing_writes`](Self::stop_failing_writes).
+    pub fn fail_writes_with(&self, error: ClipboardError) {
+        self.state.borrow_mut().write_failure = Some(error);
+    }
+
+    /// Take later writes again.
+    pub fn stop_failing_writes(&self) {
+        self.state.borrow_mut().write_failure = None;
+    }
+
     /// How many reads reached this clipboard. A handle shares one read among
     /// the readers that ask while it is in flight, so a burst of pastes
     /// counts once.
@@ -173,6 +188,7 @@ impl fmt::Debug for ScriptedClipboard {
             .field("text", &state.text)
             .field("concealed", &state.concealed)
             .field("failure", &state.failure)
+            .field("write_failure", &state.write_failure)
             .field("reads", &state.reads)
             .field("held_reads", &state.held.len())
             .field("refusal", &state.refusal)
@@ -200,10 +216,20 @@ impl ClipboardBackend for Backend {
         let _ = answer.resolve(text);
     }
 
-    fn write(&self, write: ClipboardWrite) {
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         let mut state = self.state.borrow_mut();
-        state.concealed = write.is_concealed();
-        state.text = Some(Arc::<str>::from(write.into_text()));
+        // A refused write leaves the clipboard as it was.
+        let written = state.write_failure.map_or_else(
+            || {
+                state.concealed = write.is_concealed();
+                state.text = Some(Arc::<str>::from(write.into_text()));
+                Ok(())
+            },
+            Err,
+        );
+        drop(state);
+        // A retired owner has nobody left to tell.
+        let _ = answer.resolve(written);
     }
 
     fn concealment(&self) -> Concealment {

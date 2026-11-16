@@ -7,7 +7,8 @@
 //! working where the system clipboard is out of reach. Before the page wrote
 //! anything, a refusal answers its reason: [`ClipboardError::Denied`] for a
 //! permission, [`ClipboardError::Unavailable`] otherwise. A write goes to
-//! `navigator.clipboard.writeText()` and to that fallback.
+//! `navigator.clipboard.writeText()` and to that fallback, and answers when
+//! the browser's promise settles.
 
 // The page has one thread, so the clipboard claims `Send`/`Sync` by hand: the
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -18,7 +19,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
+    capability::Resolver,
 };
 use parking_lot::Mutex;
 use wasm_bindgen_futures::JsFuture;
@@ -107,17 +109,37 @@ impl NativeClipboard for WebClipboard {
         });
     }
 
-    fn write(&self, write: ClipboardWrite) {
+    /// Answered when the browser's promise settles: `Ok` once the system
+    /// clipboard holds the text, the refusal otherwise
+    /// ([`ClipboardError::Denied`] for a permission). Either way the page's
+    /// own clipboard holds it, which the page's next refused read answers.
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         if write.is_concealed() {
             degraded_once(&self.degraded);
         }
         let text = write.into_text();
-        if let Some(clipboard) = system_clipboard("writeText") {
-            // The promise settles later; a refused write still leaves the
-            // fallback, which the next refused read answers.
-            let _ = clipboard.write_text(&text);
-        }
+        let promise = system_clipboard("writeText").map(|clipboard| clipboard.write_text(&text));
         *self.fallback.lock() = Some(Arc::from(text));
+        let Some(promise) = promise else {
+            // No system clipboard here (an insecure context): only this page
+            // can paste the text.
+            let _ = answer.resolve(Err(ClipboardError::Unavailable));
+            return;
+        };
+        wasm_bindgen_futures::spawn_local(async move {
+            let written = match JsFuture::from(promise).await {
+                Ok(_) => Ok(()),
+                Err(refusal) => {
+                    tracing::debug!(
+                        ?refusal,
+                        "the browser refused a clipboard write; this page still pastes it"
+                    );
+                    Err(refusal_error(&refusal))
+                }
+            };
+            // A retired owner has nobody left to answer.
+            let _ = answer.resolve(written);
+        });
     }
 
     /// The Clipboard API has no way to mark an entry: a concealed write is

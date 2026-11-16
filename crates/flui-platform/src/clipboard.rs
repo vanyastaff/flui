@@ -1,7 +1,7 @@
-//! The clipboard's vocabulary (ADR-0152 §5 and §6): what a read of the
-//! clipboard or of the primary selection answers, the text shared rather
-//! than copied per reader, or why there is none; and what a write asks of
-//! the host.
+//! The clipboard's vocabulary (ADR-0152 §5 and §6, ADR-0336): what a read of
+//! the clipboard or of the primary selection answers, the text shared rather
+//! than copied per reader, or why there is none; what a write asks of the
+//! host, and whether the host took it.
 
 use std::sync::Arc;
 
@@ -12,24 +12,33 @@ use std::sync::Arc;
 /// allocation, however large.
 pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 
-/// Why a clipboard or primary-selection read has no answer.
+/// The answer to one clipboard write (ADR-0336): `Ok(())` once the clipboard
+/// holds the written text, or why the host could not put it there. A refused
+/// write leaves the clipboard as it was, or empty where a concealed write
+/// could not be marked (ADR-0152 §6).
+pub type ClipboardWritten = Result<(), ClipboardError>;
+
+/// Why a clipboard or primary-selection read has no answer, or a clipboard
+/// write did not reach the clipboard.
 ///
 /// A clipboard that holds no text, or only data in another format, is no
 /// error: its read answers `Ok(None)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum ClipboardError {
-    /// The host could not reach the clipboard: another application holds
-    /// it open, the display connection is gone, or the selection's owner
-    /// left during the transfer.
+    /// The host could not reach the clipboard: another application held it
+    /// open past the host's patience, the display connection is gone, or the
+    /// selection's owner left during the transfer.
     #[error("the clipboard could not be reached")]
     Unavailable,
-    /// The user or the platform refused this application the read: a
-    /// browser's clipboard permission, or a mobile system reading for an
-    /// application without input focus.
-    #[error("reading the clipboard was denied")]
+    /// The user or the platform refused this application the clipboard: a
+    /// browser's clipboard permission, a mobile system reading for an
+    /// application without input focus, or a compositor that takes a
+    /// selection only under the serial of the user's input.
+    #[error("the clipboard was denied to this application")]
     Denied,
-    /// The clipboard's owner did not answer in time.
+    /// The clipboard's owner did not answer in time: a selection owner, or a
+    /// Win32 owner that renders its data only when it is asked.
     #[error("the clipboard's owner did not answer in time")]
     Timeout,
     /// The clipboard held text that is not valid in its declared encoding.

@@ -46,7 +46,9 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, capability::Resolver};
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, capability::Resolver,
+};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use web_time::Instant;
@@ -123,8 +125,8 @@ impl Generation {
 
 /// What the handle asks of the thread.
 pub(super) enum Command {
-    /// Own the clipboard with this write.
-    Write(ClipboardWrite),
+    /// Own the clipboard with this write, and answer whether it owned.
+    Write(ClipboardWrite, Resolver<ClipboardWritten>),
     /// Own the primary selection with the application's offer, whose text
     /// the owner thread answers.
     Offer(Generation),
@@ -383,6 +385,10 @@ struct Selection {
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
     pending: Option<Content>,
+    /// The answers owed to the clipboard writes waiting for their timestamp:
+    /// the pending one's, and those of the writes it replaced, which the
+    /// selection then holds the application's newer text for.
+    written: Vec<Resolver<ClipboardWritten>>,
     /// The writes' clock appends the server has not stamped yet: only the
     /// last one's time is the pending write's.
     clocks: usize,
@@ -415,6 +421,7 @@ impl Selection {
             destinations: [first, second, third, fourth],
             owned: None,
             pending: None,
+            written: Vec::new(),
             clocks: 0,
             readers: Vec::new(),
             after_write: Vec::new(),
@@ -529,9 +536,21 @@ impl Selection {
         failure.resume();
     }
 
-    /// The thread ends: every read still waiting is abandoned, each drop
-    /// contained, so one whose abandonment panics leaves the others
-    /// abandoned too, and the first failure goes on.
+    /// The pending write owned the selection or lost it: answer every write
+    /// waiting for it. A delivery that panics leaves the others answered,
+    /// and the first failure goes on.
+    fn answer_writes(&mut self, written: ClipboardWritten) {
+        let mut failure = FirstPanic::new();
+        for answer in std::mem::take(&mut self.written) {
+            // A retired owner has nobody left to answer.
+            failure.contain(|| answer.resolve(written));
+        }
+        failure.resume();
+    }
+
+    /// The thread ends: every read and write still waiting is abandoned,
+    /// each drop contained, so one whose abandonment panics leaves the
+    /// others abandoned too, and the first failure goes on.
     fn abandon(&mut self) {
         let mut failure = FirstPanic::new();
         let waiting = std::mem::take(&mut self.readers);
@@ -540,6 +559,9 @@ impl Selection {
             .chain(std::mem::take(&mut self.after_write))
         {
             failure.contain(|| drop(reader));
+        }
+        for answer in std::mem::take(&mut self.written) {
+            failure.contain(|| drop(answer));
         }
         failure.resume();
     }
@@ -848,7 +870,8 @@ impl Selections {
     /// Carry out `command`; `false` once it asks the thread to end.
     fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
         match command {
-            Command::Write(write) => {
+            Command::Write(write, answer) => {
+                self.clipboard.written.push(answer);
                 self.claim(Name::Clipboard, Content::Text(Encodings::new(write)))?;
             }
             Command::Offer(offer) => self.claim(Name::Primary, Content::Offered(offer))?,
@@ -980,8 +1003,9 @@ impl Selections {
             .get_selection_owner(selection.atom)?
             .reply()?
             .owner;
-        if owner == window {
+        let written = if owner == window {
             selection.owned = Some(Owned { content, time });
+            Ok(())
         } else {
             // A client took it at a later time than ours.
             selection.owned = None;
@@ -989,12 +1013,17 @@ impl Selections {
             if let Content::Offered(offer) = content {
                 self.notice.lose(offer);
             }
-        }
+            Err(ClipboardError::Unavailable)
+        };
         // The reads that waited for the write.
         let (connection, window, _, selection) = self.split(name);
         selection.readers.append(&mut selection.after_write);
-        selection.serve(connection, window)?;
-        self.settle_asks()
+        let served = selection.serve(connection, window);
+        let settled = served.and_then(|()| self.settle_asks());
+        // The writes' answers go last: a delivery that panics leaves the
+        // reads above served and the connection's state settled.
+        self.split(name).3.answer_writes(written);
+        settled
     }
 
     /// Another client took a selection the window owned, unless the window

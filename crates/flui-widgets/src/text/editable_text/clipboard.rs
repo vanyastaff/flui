@@ -8,9 +8,9 @@ use std::{
 
 use flui_interaction::ClipboardHandle;
 use flui_interaction::focus::{FocusAttachment, FocusNode};
-use flui_platform::ClipboardRead;
 use flui_platform::capability::Abandoned;
 use flui_platform::text_store::OwnerCalls;
+use flui_platform::{ClipboardRead, ClipboardWritten};
 use flui_view::EventContext;
 
 use super::{CompositionCommit, EditObserver};
@@ -83,13 +83,45 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
         if selected.is_empty() {
             return ActionOutcome::NotPerformed;
         }
-        clipboard.write_text(selected);
-        if *intent == CopySelectionTextIntent::Cut {
-            // Replacing the selection with nothing deletes it and leaves the
-            // caret at its start.
-            self.edits.around(|| controller.insert_str(""));
+        let written = clipboard.write_text(selected);
+        match intent {
+            // A copy has nothing to undo when the write fails.
+            CopySelectionTextIntent::Copy => drop(written),
+            // A cut deletes only what the clipboard took (ADR-0336).
+            CopySelectionTextIntent::Cut => written.on_complete(self.cut_answer(controller)),
         }
         ActionOutcome::Performed
+    }
+}
+
+impl ClipboardTextAction {
+    /// What a cut does once the clipboard answers its write: deletes the
+    /// selection it wrote, if the clipboard took it, the field still admits a
+    /// cut, and the field still drives the controller it drove, with the text
+    /// and the selection the cut wrote. A refused or abandoned write deletes
+    /// nothing, so a cut the clipboard could not take loses no text.
+    fn cut_answer(
+        &self,
+        controller: TextEditingController,
+    ) -> impl FnMut(Result<ClipboardWritten, Abandoned>) + 'static {
+        let authority = self.clone();
+        let edits = self.edits.clone();
+        let text = controller.text();
+        let selection = controller.selection();
+        move |written| {
+            if written != Ok(Ok(())) {
+                return;
+            }
+            let unchanged = authority.enabled()
+                && authority.controller().is_same_controller(&controller)
+                && controller.selection() == selection
+                && controller.text() == text;
+            if unchanged {
+                // Replacing the selection with nothing deletes it and leaves
+                // the caret at its start.
+                edits.around(|| controller.insert_str(""));
+            }
+        }
     }
 }
 

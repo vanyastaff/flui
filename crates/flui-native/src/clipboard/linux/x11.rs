@@ -33,7 +33,9 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
 use std::thread::JoinHandle;
 
-use flui_platform::{ClipboardRead, ClipboardWrite, Concealment, capability::Resolver};
+use flui_platform::{
+    ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, capability::Resolver,
+};
 use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
@@ -195,8 +197,11 @@ impl host::NativeClipboard for X11Clipboard {
         self.send(Command::Read(Name::Clipboard, answer));
     }
 
-    fn write(&self, write: ClipboardWrite) {
-        self.send(Command::Write(write));
+    /// Answered once the clipboard thread owns the selection with the write,
+    /// or another client took it first; a thread that has ended drops the
+    /// answer, which abandons the write.
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
+        self.send(Command::Write(write, answer));
     }
 
     /// A concealed write is offered with KDE's password-manager hint, which

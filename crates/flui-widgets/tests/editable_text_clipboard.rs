@@ -95,6 +95,43 @@ pub(crate) fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_an
     assert_eq!(controller.text(), "secret", "cut deleted nothing");
 }
 
+/// A cut deletes the selection once the clipboard answers that it took the
+/// text, and a cut whose write the clipboard refuses (another application
+/// held it) keeps the text.
+///
+/// Fails without the change: the cut deleted the selection inside the
+/// chord, whether the clipboard took it or not.
+pub(crate) fn a_cut_deletes_only_what_the_clipboard_took() {
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, _node) = mount_field(&controller, |field| field);
+    let cut = |harness: &crate::common::harness::Harness| {
+        harness
+            .focus_manager()
+            .dispatch_key_event(&chord("x", command()))
+            .is_handled()
+    };
+
+    harness
+        .clipboard()
+        .fail_writes_with(flui_platform::ClipboardError::Unavailable);
+    controller.set_selection(0, 3);
+    assert!(cut(&harness), "cut consumes the chord");
+    harness.tick();
+    assert_eq!(controller.text(), "abc", "a refused cut deletes nothing");
+    assert_eq!(harness.clipboard().text(), None);
+
+    harness.clipboard().stop_failing_writes();
+    assert!(cut(&harness), "cut consumes the chord");
+    assert_eq!(
+        controller.text(),
+        "abc",
+        "the cut waits for the clipboard's answer, which settles at the next owner turn"
+    );
+    harness.tick();
+    assert_eq!(controller.text(), "");
+    assert_eq!(harness.clipboard().text().as_deref(), Some("abc"));
+}
+
 pub(crate) fn select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit()
  {
     crate::common::cases::run_cases(

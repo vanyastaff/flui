@@ -14,7 +14,7 @@ use flui_platform::capability::{
     Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
     PendingCompletions, Resolver,
 };
-use flui_platform::{ClipboardError, ClipboardRead};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::rust_connection::RustConnection;
@@ -23,7 +23,7 @@ use super::X11Clipboard;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE};
 use crate::host::{NativeClipboard, NativePrimarySelection};
 use crate::owner::linux::x11::LoopClipboard as _;
-use crate::testing::clipboard::a_concealed_write_stays_out_of_history;
+use crate::testing::clipboard::{a_concealed_write_stays_out_of_history, write_unobserved};
 
 /// How long a read may take before the case fails.
 const STEP: Duration = Duration::from_secs(10);
@@ -138,11 +138,11 @@ fn the_clipboard_crosses_between_connections() {
     let first = clipboard();
     let second = clipboard();
 
-    first.write_text("from the first".to_owned());
+    write_unobserved(&first, ClipboardWrite::text("from the first".to_owned()));
     assert_eq!(answers.read(&first).as_deref(), Some("from the first"));
     assert_eq!(answers.read(&second).as_deref(), Some("from the first"));
 
-    second.write_text("от второго".to_owned());
+    write_unobserved(&second, ClipboardWrite::text("от второго".to_owned()));
     // The second owns it once its write took: until then a read of the first
     // may still answer its own text.
     let deadline = Instant::now() + STEP;
@@ -168,7 +168,7 @@ fn a_large_selection_crosses_in_chunks() {
         .chain("конец".chars())
         .collect();
 
-    owner.write_text(text.clone());
+    write_unobserved(&owner, ClipboardWrite::text(text.clone()));
     assert_eq!(answers.read(&owner).as_deref(), Some(text.as_str()));
     assert_eq!(answers.read(&reader).as_deref(), Some(text.as_str()));
 }
@@ -217,11 +217,11 @@ fn a_read_after_a_write_answers_the_write() {
     };
     let answers = Answers::new();
     let clipboard = clipboard();
-    clipboard.write_text("before".to_owned());
+    write_unobserved(&clipboard, ClipboardWrite::text("before".to_owned()));
     assert_eq!(answers.read(&clipboard).as_deref(), Some("before"));
     for round in 0..20 {
         let text = format!("after {round}");
-        clipboard.write_text(text.clone());
+        write_unobserved(&clipboard, ClipboardWrite::text(text.clone()));
         assert_eq!(answers.read(&clipboard), Some(Arc::from(text)));
     }
 }
@@ -815,7 +815,7 @@ fn a_concealed_write_offers_the_password_manager_hint() {
         Some((hint, CONCEALED_HINT_VALUE.to_vec()))
     );
 
-    clipboard.write_text("plain".to_owned());
+    write_unobserved(&clipboard, ClipboardWrite::text("plain".to_owned()));
     assert_eq!(answers.read(&clipboard).as_deref(), Some("plain"));
     assert!(
         !targets().contains(&hint),
@@ -840,7 +840,7 @@ fn an_offer_ends_with_its_thread() {
     offer_primary(&owner, text);
     assert!(owner.owns(), "the offer is the selection");
 
-    owner.write_text("copied".to_owned());
+    write_unobserved(&owner, ClipboardWrite::text("copied".to_owned()));
     let poster = OwnerPoster::new(|_| panic!("the owner's queue failed"));
     let source = CompletionSource::new(poster, PendingCompletions::new());
     let (_read, answer) = source.pending::<ClipboardRead>();
@@ -1024,4 +1024,30 @@ fn an_answer_that_is_not_the_form_asked_for_is_passed_over() {
         let reader = clipboard();
         assert_eq!(answers.read(&reader).as_deref(), expected, "{case}");
     }
+}
+
+/// A write answers once the clipboard's thread owns the selection with it,
+/// and a write that a newer one replaced before it owned shares the newer
+/// one's answer: no write is left unanswered (ADR-0336).
+#[test]
+fn a_clipboard_write_answers_once_it_owns_the_selection() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let clipboard = clipboard();
+    let owner = crate::testing::clipboard::SettlingOwner::new();
+    let (mut first, answer) = owner.pending::<flui_platform::ClipboardWritten>();
+    NativeClipboard::write(&clipboard, ClipboardWrite::text("replaced"), answer);
+    let (mut second, answer) = owner.pending::<flui_platform::ClipboardWritten>();
+    NativeClipboard::write(&clipboard, ClipboardWrite::text("owned"), answer);
+    for written in [&mut first, &mut second] {
+        assert_eq!(
+            owner
+                .settle_within(written, STEP)
+                .expect("the write is answered in time")
+                .expect("the write is answered, not abandoned"),
+            Ok(())
+        );
+    }
+    assert_eq!(Answers::new().read(&clipboard).as_deref(), Some("owned"));
 }

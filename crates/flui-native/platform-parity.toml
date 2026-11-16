@@ -706,7 +706,7 @@ name = 'Clipboard and drag and drop'
 id = "plain-text-clipboard"
 feature = 'Plain-text clipboard'
 status = { windows = "partial", macos = "partial", wayland = "yes", x11 = "yes", ios = "partial", android = "partial", web = "partial", headless = "yes" }
-note = "Wayland reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13; X11 owns and reads `CLIPBOARD` on a connection of its own, run between two clipboards on Xvfb; Android reads and writes `ClipboardManager` through JNI, type-checked, no device run; the Web reads `navigator.clipboard` asynchronously, unrun in a browser, and falls back to its own writes"
+note = "Every write answers whether the clipboard took it (ADR-0336). Windows reads and writes on a clipboard thread of its own, retrying a clipboard another process holds until its patience runs out, so neither a held clipboard nor an owner that renders late holds the owner thread, run on Windows 11 (`clipboard::windows::tests`); Wayland reads and writes its seats' selection through `wl_data_device`, run between two clients of Weston 13; X11 owns and reads `CLIPBOARD` on a connection of its own, run between two clipboards on Xvfb; Android reads and writes `ClipboardManager` through JNI, type-checked, no device run; the Web reads `navigator.clipboard` asynchronously, unrun in a browser, and falls back to its own writes; macOS, iOS and Android still read on the owner thread, which an item another application provides lazily holds while it answers ([gaps](gaps.md#clipboard-is-broken-on-two-environments))"
 
 [[group.section.row]]
 id = "rich-clipboard-images-html-files"

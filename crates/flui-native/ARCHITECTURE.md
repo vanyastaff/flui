@@ -538,8 +538,8 @@ trait depends on `flui-platform` instead.
   platform, and `[package.metadata.flui.modules]` lists the four as
   `features`: `cargo xtask module-dag` holds a platform file to its own model,
   `owner/`, `version/` and other features' models. The models are
-  `clipboard::lock` (the process-wide lock every Win32 clipboard session
-  runs under), `drag::offers` (the offer table every data-transfer source mints its
+  `clipboard::patience` (the schedule on which the Win32 clipboard tries
+  again to open a clipboard another process holds), `drag::offers` (the offer table every data-transfer source mints its
   ids in, `TransferUri`,
   a URI list as the hosts that read paths or URIs write it, and what a media
   type offers and its bytes carry, shared
@@ -2517,38 +2517,56 @@ creates its message-only window; the row `platform_identity_exhaustion_acquires_
 retries an exhausted platform admission and checks that the thread's COM
 apartment and the message-only windows are unchanged.
 
-### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
+### The Win32 clipboard is served by a thread of its own
 
-`WindowsClipboard` has no single owning thread: any thread may read or
-write. Opening with a `NULL` owner, as FLUI used to,
-does not exclude other threads of the process, since all `NULL` openers count
-as one owner (see "Win32 clipboard: cross-thread sessions" in
-[`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+Every `WindowsClipboard` read and write is a request to one `flui-clipboard`
+thread per process (ADR-0336 §3), started with the first request and never
+stopped. The owner thread only queues, into a channel bounded at
+`MAX_WAITING`; a request past it is refused `Unavailable` at once. The thread
+owns one message-only window (`HWND_MESSAGE` parent) and is the only place
+`ClipboardSession` opens the clipboard, always with that window as the owner,
+serving the requests in the order they were made, so a read after a write
+answers what the write left. Each answer goes to its request's resolver after
+the clipboard is closed again; a job or a delivery that panics is contained on
+the thread, which abandons that request (its resolver drops) and serves the
+rest.
 
-`ClipboardSession` therefore opens with one message-only window
-(`HWND_MESSAGE` parent), created lazily on the first session and never
-destroyed. The window lives on a dedicated `flui-clipboard-owner` thread whose
-only job is `GetMessageW`/`DispatchMessageW`; every message goes to
-`DefWindowProcW`. The owner must be pumped because `EmptyClipboard` in any
-process *sends* `WM_DESTROYCLIPBOARD` to the current owner and waits for it.
+- **Two waits are another process's.** `OpenClipboard` fails while another
+  window holds the clipboard (clipboard managers and `rdpclip.exe` open it
+  after every change): the request tries again on `clipboard::patience`'s
+  schedule and is refused `Unavailable` when its patience runs out (ADR-0336
+  §2). `GetClipboardData` of text its owner renders on demand waits for that
+  owner's `WM_RENDERFORMAT` answer, measured at the owner's own delay and at
+  thirty seconds, Win32's bound, for one that never answers, which answers
+  `Timeout`. Both waits happen on the clipboard thread, never on the owner's.
+- **The thread pumps while it waits.** Between attempts it waits in
+  `MsgWaitForMultipleObjectsEx` on its wake event and its message queue and
+  dispatches what arrives: another process's `EmptyClipboard` *sends*
+  `WM_DESTROYCLIPBOARD` to the current owner and waits for it.
+- **The owner window shuts other openers out.** Win32 refuses a concurrent
+  `OpenClipboard` from any other owner, `NULL` included; with a `NULL` owner
+  every `NULL` opener of the process counts as the same owner, so another
+  thread's `EmptyClipboard` could free a handle a read is scanning (see "Win32
+  clipboard: cross-thread sessions" in
+  [`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+  Since one thread opens every session, FLUI's own sessions never overlap and
+  need no process-wide lock.
+- **No COM.** The thread reads with `GetClipboardData`, which needs no
+  apartment; `OleGetClipboard` would tie its data object to the calling
+  thread's apartment.
 
-Rejected: reusing the owner thread's loop. It exists only on the Win32
-backend, not while a headless test drives the process, and
-not before `run`. A session on a worker thread would also block on a
-`SendMessage` to the UI thread, which deadlocks whenever the UI thread waits
-on that worker. A thread per process costs one idle stack and removes all of
-this.
+Rejected: reusing the owner thread's loop, which waits on another process for
+as long as it takes (above) and exists only on the Win32 backend, not while a
+headless test drives the process and not before `run`; and a bounded wait on
+the owner thread for a worker, which still freezes the owner for the bound and
+cannot cancel the worker's `GetClipboardData`.
 
-The process-wide `clipboard::lock` stays: `OpenClipboard` does not exclude other threads that
-open with the same owner window, so it serializes every `WindowsClipboard` session.
-`OpenClipboard(NULL)` also leaves `SetClipboardData` without an owner to
-record, which Win32 documents as liable to fail; with an owner it is on the
-documented path. If the window cannot be created, sessions fall back to a
-`NULL` owner and log an error.
-
-Test: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
-(fails with a `NULL` owner). The owner thread's message pump is not covered by
-a test.
+Tests (`clipboard::windows::tests`, on Windows):
+`a_write_and_a_read_while_the_clipboard_is_held_for_a_moment_land_once_it_is_let_go`,
+`a_clipboard_held_past_the_patience_refuses_the_write`,
+`a_read_of_text_rendered_late_never_holds_the_caller`,
+`a_burst_of_clipboard_writes_is_answered_in_full` and
+`a_null_owner_open_on_another_thread_fails_while_a_session_is_open`.
 
 ### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
 

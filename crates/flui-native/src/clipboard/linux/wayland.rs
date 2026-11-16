@@ -41,7 +41,8 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_platform::{
-    ClipboardError, ClipboardRead, ClipboardWrite, Concealment, capability::Resolver,
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment,
+    capability::Resolver,
 };
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_callback::{self, WlCallback};
@@ -353,11 +354,18 @@ impl NativeClipboard for SeatClipboard {
         Concealment::HintOnly
     }
 
-    fn write(&self, write: ClipboardWrite) {
+    /// Answered at once: `Ok` once the seat's selection is set to the
+    /// write's source (the compositor may still cancel it for a newer one),
+    /// [`ClipboardError::Denied`] with no user input to set it under (the
+    /// compositor takes a selection only under an input's serial), and
+    /// [`ClipboardError::Unavailable`] when the source could not be made or
+    /// set. A refused write is still held in this process, which its own
+    /// reads answer.
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         let concealed = write.is_concealed();
         let text: Arc<str> = write.into_text().into();
         let last = self.shared.last_input.latest();
-        let previous = self.shared.state.with(|state| {
+        let outcome = self.shared.state.with(|state| {
             let State { owned, .. } = state;
             let devices = &self.shared.devices;
             let set = |source: &WlDataSource, seat: &WlSeat, serial: u32| {
@@ -403,7 +411,7 @@ impl NativeClipboard for SeatClipboard {
                         source.destroy();
                     }
                 }
-                return None;
+                return (None, Ok(()));
             }
             let source = last.as_ref().and_then(|input| {
                 let source = create(&text)?;
@@ -413,18 +421,23 @@ impl NativeClipboard for SeatClipboard {
                 }
                 Some((input.seat.clone(), source, input.serial))
             });
-            if source.is_none() {
-                tracing::debug!(
-                    "no user input to set the selection under: the text is held in this process"
-                );
-            }
+            let written = match (&source, &last) {
+                (Some(_), _) => Ok(()),
+                (None, None) => {
+                    tracing::debug!(
+                        "no user input to set the selection under: the text is held in this process"
+                    );
+                    Err(ClipboardError::Denied)
+                }
+                (None, Some(_)) => Err(ClipboardError::Unavailable),
+            };
             let (seat, source, serial) = match source {
                 Some((seat, source, serial)) => (Some(seat), Some(source), Some(serial)),
                 None => (None, None, None),
             };
             // Only this seat's earlier selection is replaced: another seat
             // keeps the source it reads.
-            owned.set(
+            let previous = owned.set(
                 seat,
                 Owned {
                     text,
@@ -432,11 +445,21 @@ impl NativeClipboard for SeatClipboard {
                     serial,
                     superseded: Vec::new(),
                 },
-            )
+            );
+            (previous, written)
         });
-        if let Some(previous) = previous.flatten() {
-            previous.release();
-        }
+        let written = match outcome {
+            Some((previous, written)) => {
+                if let Some(previous) = previous {
+                    previous.release();
+                }
+                written
+            }
+            // The loop that held the selection state has retired.
+            None => Err(ClipboardError::Unavailable),
+        };
+        // A retired owner has nobody left to answer.
+        let _ = answer.resolve(written);
     }
 }
 

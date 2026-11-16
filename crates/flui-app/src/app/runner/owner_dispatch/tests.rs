@@ -2206,7 +2206,13 @@ fn platform_replacement_contains_reentrant_retirement() {
         ) {
             drop(answer);
         }
-        fn write(&self, _: flui_platform::ClipboardWrite) {}
+        fn write(
+            &self,
+            _: flui_platform::ClipboardWrite,
+            answer: flui_platform::capability::Resolver<flui_platform::ClipboardWritten>,
+        ) {
+            drop(answer);
+        }
         fn concealment(&self) -> flui_platform::Concealment {
             flui_platform::Concealment::Honored
         }

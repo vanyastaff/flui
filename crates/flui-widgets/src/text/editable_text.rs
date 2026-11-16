@@ -359,7 +359,7 @@ pub(super) fn source_offset_for_masked_offset(
 /// | Intent | Enabled when | Does |
 /// |---|---|---|
 /// | Copy | a clipboard is installed, the field is not obscured, and the selection is not empty | writes the selection; the selection stays |
-/// | Cut | as Copy, and the field is enabled | writes the selection, then deletes it |
+/// | Cut | as Copy, and the field is enabled | writes the selection, then deletes it at the owner turn the clipboard answers it took the text, if the field and its text are as the cut left them; a write the clipboard refused deletes nothing |
 /// | Paste | a clipboard is installed and the field is enabled | commits an active IME composition, keeping its text, then replaces the selection with the clipboard's text, line breaks removed |
 ///
 /// A disabled action leaves the key unconsumed, so an obscured field's

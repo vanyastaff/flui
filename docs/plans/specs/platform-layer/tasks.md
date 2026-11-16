@@ -5880,6 +5880,40 @@ graph LR
   Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
   (`docs/gaps.md`); кнопки примера не нажимались.
 
+- [ ] **LY122** — ветка `native/win32-clipboard-contention`, на ревью; строки в таблице на `main`
+  ещё нет, поэтому здесь только запись.
+  Подтверждено до правки на Windows 11: буфер, который другой поток держит открытым 100 мс, читается
+  как `Unavailable` за 2 мс, а запись теряется молча (после неё буфер держит старый текст); чтение
+  текста, который владелец рисует по запросу (`SetClipboardData(format, NULL)`) с задержкой 3 с,
+  держит читающий поток 3,0 с, а владелец, который не отвечает, — 30,0 с, после чего
+  `GetClipboardData` падает с `ERROR_TIMEOUT`. На этой машине `msrdc.exe` (WSLg) читает каждое
+  изменение буфера, не глядя на маркеры исключения, и держит буфер, пока владелец рисует.
+  Построено (ADR-0336): запись отвечает — `ClipboardWritten`, `ClipboardBackend::write` и
+  `NativeClipboard::write` берут `Resolver`, `ClipboardHandle::write` возвращает `Completion`;
+  отвечают все хосты (X11 — когда владеет выделением, записи, которые новая заменила до владения,
+  получают её ответ; Wayland — `Denied` без ввода, под который ставить выделение; веб — по
+  обещанию браузера; AppKit, UIKit, Android, память, отсутствующий буфер — сразу). Буфер Win32
+  обслуживает свой поток `flui-clipboard` с окном-владельцем: поток владельца только кладёт запрос
+  в канал на `MAX_WAITING`; занятый буфер повторяется по расписанию `clipboard::patience` (4 мс,
+  удвоение до 64 мс, терпение 500 мс от приёма запроса, затем `Unavailable`), между попытками поток
+  ждёт в `MsgWaitForMultipleObjectsEx` и прокачивает сообщения; `ERROR_TIMEOUT` чтения —
+  `Timeout`; паника задания или доставки сдерживается на потоке. Процессная блокировка
+  `clipboard::lock` удалена: сессии открывает один поток. Вырезание в `EditableText` удаляет
+  выделение только после ответа `Ok` и только если поле и текст те же.
+  Тесты, в скобках результат без исправления: `a_write_and_a_read_while_the_clipboard_is_held_for_a_moment_land_once_it_is_let_go`
+  (терпение 0: запись `Err(Unavailable)`), `a_read_of_text_rendered_late_never_holds_the_caller`
+  (вызывающий ждёт чтения: возврат через 1,52 с вместо мгновенного; без повтора — `Unavailable`
+  из-за `msrdc.exe`), `a_clipboard_held_past_the_patience_refuses_the_write`,
+  `a_burst_of_clipboard_writes_is_answered_in_full`, тесты расписания в `clipboard::patience`;
+  `a_clipboard_write_answers_once_it_owns_the_selection` (X11); `a_refused_write_answers_its_refusal`
+  (`flui-testing`); `a_cut_deletes_only_what_the_clipboard_took` (`flui-widgets`).
+  Класс: перетаскивание OLE читает `HGLOBAL` источника с проверкой размера до копии
+  (`drag::windows::read_global`), а `GetData` к другому процессу идёт через модальный цикл COM,
+  который прокачивает сообщения потока; не измерено. AppKit, UIKit и Android читают на потоке
+  владельца — записано в `docs/gaps.md` и в строке паритета.
+  Не запущено и не компилировалось здесь: macOS, iOS, Android, wasm32 (правки
+  `clipboard/apple/{macos,ios}.rs`, `clipboard/android.rs`, `clipboard/web.rs` прочитаны).
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

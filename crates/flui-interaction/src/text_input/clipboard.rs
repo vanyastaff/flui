@@ -13,7 +13,7 @@ use std::{fmt, rc::Rc};
 use flui_platform::capability::{
     Capability, Completion, CompletionSource, ProviderContext, Resolver,
 };
-use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
+use flui_platform::{ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
 
 use super::shared_read::SharedRead;
 
@@ -47,8 +47,10 @@ pub trait ClipboardBackend: 'static {
     /// Replace the clipboard's text with `write`'s, kept out of the
     /// clipboard's history and cloud sync when it is
     /// [`concealed`](ClipboardWrite::concealed) as far as
-    /// [`concealment`](Self::concealment) says (ADR-0152 §6).
-    fn write(&self, write: ClipboardWrite);
+    /// [`concealment`](Self::concealment) says (ADR-0152 §6), and answer
+    /// `answer` once the clipboard holds it or the host gave up
+    /// (ADR-0336). Dropping `answer` unanswered abandons the write.
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>);
 
     /// What this host does with a concealed write. Constant for a backend.
     fn concealment(&self) -> Concealment;
@@ -85,14 +87,26 @@ impl ClipboardHandle {
     /// [`concealed`](ClipboardWrite::concealed) write is kept out of the
     /// clipboard's history and cloud sync as far as
     /// [`concealment`](Self::concealment) says (ADR-0152 §6).
-    pub fn write(&self, write: ClipboardWrite) {
+    ///
+    /// The completion settles at an owner turn once the clipboard holds the
+    /// text, or with the [`ClipboardError`](flui_platform::ClipboardError)
+    /// the host gave up with: another application held the clipboard past
+    /// the host's patience, a concealed write could not be marked, the
+    /// platform refused the write (ADR-0336). A caller that has nothing to
+    /// undo when a write fails (a copy) may drop it; one that does (a cut,
+    /// which deletes what it wrote) waits for it.
+    pub fn write(&self, write: ClipboardWrite) -> Completion<ClipboardWritten> {
         self.reads.0.changed();
-        self.backend.write(write);
+        let (completion, answer) = self.completions.pending();
+        // The backend may be an application's: a panic in it drops the
+        // resolver, which abandons the write.
+        self.backend.write(write, answer);
+        completion
     }
 
     /// Replace the clipboard's text: `write(ClipboardWrite::text(text))`.
-    pub fn write_text(&self, text: impl Into<String>) {
-        self.write(ClipboardWrite::text(text));
+    pub fn write_text(&self, text: impl Into<String>) -> Completion<ClipboardWritten> {
+        self.write(ClipboardWrite::text(text))
     }
 
     /// What this host does with a [`concealed`](ClipboardWrite::concealed)

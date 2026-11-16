@@ -258,6 +258,10 @@ fn capability_seam() {
                 capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
             ),
             (
+                "capability_seam::a_refused_write_answers_its_refusal",
+                capability_seam::a_refused_write_answers_its_refusal as fn(),
+            ),
+            (
                 "capability_seam::a_concealed_write_reaches_the_host_marked",
                 capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
             ),
