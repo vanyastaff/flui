@@ -280,10 +280,13 @@ impl<B: RasterBackend> RasterExecutor<B> {
         if let Some(level) = self.shared.take_trim() {
             first.contain(|| self.backend.reclaim(level));
         }
-        while let Some(message) = self
-            .lifecycle
-            .as_ref()
-            .and_then(|queue| queue.try_recv().ok())
+        // A call the executor died during ends the turn's work at the next
+        // step: the stop drains what is left (ADR-0305 §9).
+        while self.shared.health() != ExecutorHealth::Died
+            && let Some(message) = self
+                .lifecycle
+                .as_ref()
+                .and_then(|queue| queue.try_recv().ok())
         {
             outcome.commands += 1;
             outcome.settled += match message {
@@ -316,7 +319,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 }
             };
         }
-        let mut device_moved = self.recover_device(&mut first);
+        let mut device_moved =
+            self.shared.health() != ExecutorHealth::Died && self.recover_device(&mut first);
         for index in 0..self.slots.len() {
             // An executor that died while a render held a slot renders nothing
             // more once that render returns: the owner gave its windows up, and
@@ -749,7 +753,12 @@ impl<B: RasterBackend> RasterExecutor<B> {
     /// Apply slot `index`'s pending changes and render its pending frame;
     /// answers how many settlements it wrote.
     fn service(&mut self, index: usize, first: &mut FirstPanic) -> usize {
-        let Self { backend, slots, .. } = self;
+        let Self {
+            backend,
+            slots,
+            shared,
+            ..
+        } = self;
         let Some(slot) = slots.get_mut(index).and_then(Option::as_mut) else {
             return 0;
         };
@@ -881,7 +890,15 @@ impl<B: RasterBackend> RasterExecutor<B> {
             report_each([resize_report, textures_report], first);
             return 0;
         };
-        let (verdict, render_failure, surface_loss, render_report) = render(backend, slot, &frame);
+        // A call before the render that the executor died during (a resize or a
+        // texture upload that wedged) does not reach the window the owner gave
+        // up: the frame settles failed, in its slot's order (ADR-0305 §9).
+        let (verdict, render_failure, surface_loss, render_report) =
+            if shared.health() == ExecutorHealth::Died {
+                (RasterVerdict::Failed, None, SurfaceLoss::Kept, None)
+            } else {
+                render(backend, slot, &frame)
+            };
         let discarded_render = if failure.is_none() {
             failure = render_failure;
             None

@@ -13,7 +13,7 @@ use std::{
 use flui_engine::{
     DETACH_DEADLINE, DeviceHealth, EngineError, ExecutorFailure, ExecutorHandle, ExecutorHealth,
     RasterCommand, RasterExecutor, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
-    SlotConfig, SlotId, SlotPhase, SlotSettlement, SlotTarget,
+    SlotChange, SlotConfig, SlotId, SlotPhase, SlotSettlement, SlotTarget,
     testing::{ScriptedAnswer, ScriptedSlots, SlotCall},
 };
 use flui_foundation::{
@@ -420,9 +420,14 @@ fn a_frame_queued_behind_a_wedged_render_settles_after_it() {
         ],
         "the slot's frames settle in the order they were sent"
     );
-    // The stop settled the wedged slot's queued frame last, so the dead
-    // executor has done all it will: it rendered nothing for the slot the
-    // owner gave up.
+    // The stop's own detach of the given-up slot ends the dead executor's
+    // work on it: whatever it did to that slot's frame is done by then.
+    eventually("detached the given-up slot", || {
+        thread
+            .sender
+            .record(other.slot)
+            .is_none_or(|record| record.phase == SlotPhase::Detached)
+    });
     thread
         .sender
         .drain_settlements(other.slot, &mut other_settled);
@@ -430,6 +435,76 @@ fn a_frame_queued_behind_a_wedged_render_settles_after_it() {
         other_settled,
         Vec::new(),
         "a dead executor renders no frame after the held render returns"
+    );
+}
+
+/// An executor that dies while a slot's resize is wedged does not render
+/// that slot's frame once the resize returns: the frame settles failed, and
+/// the window the owner gave up gets no present (ADR-0305 §9).
+///
+/// Red-check: without the health check before the render in `service`, the
+/// frame renders and settles presented.
+#[test]
+fn a_frame_whose_resize_the_executor_died_during_is_not_rendered() {
+    let thread = spawn();
+    let busy = attach(&thread.sender);
+    let resized = attach(&thread.sender);
+    let other = attach(&thread.sender);
+    // The thread is held in another slot's render while the resize and its
+    // frame queue, so one service takes both.
+    let render = thread.backend.hold_next_render();
+    thread.sender.send(frame(busy, 1)).expect("accepted");
+    assert!(
+        render.began_within(PATIENCE),
+        "the thread starts the render"
+    );
+    let SendReceipt::Configured(generation) = thread
+        .sender
+        .send(RasterCommand::Configure {
+            slot: resized.slot,
+            change: SlotChange::Size(DeviceSize::new(16, 16)),
+        })
+        .expect("accepted")
+    else {
+        panic!("a positive size mints a generation");
+    };
+    let resized = Attached {
+        generation,
+        ..resized
+    };
+    thread.sender.send(frame(resized, 1)).expect("accepted");
+    let resize = thread.backend.hold_next_resize();
+    render.release();
+    assert!(
+        resize.began_within(PATIENCE),
+        "the thread starts the resize"
+    );
+    let waited = Duration::from_millis(50);
+    assert_eq!(
+        thread.handle.detach(&thread.sender, other.slot, waited),
+        Err(ExecutorFailure::Wedged { waited })
+    );
+    resize.release();
+    let mut settled = Vec::new();
+    eventually("settled the resized slot's frame", || {
+        thread.sender.drain_settlements(resized.slot, &mut settled);
+        !settled.is_empty()
+    });
+    assert_eq!(
+        settled
+            .iter()
+            .map(|settlement| (settlement.epoch, settlement.verdict))
+            .collect::<Vec<_>>(),
+        vec![(epoch(1), RasterVerdict::Failed)],
+        "the frame settles failed"
+    );
+    assert!(
+        thread
+            .backend
+            .renders()
+            .iter()
+            .all(|(slot, _)| *slot != resized.slot),
+        "the dead executor presents nothing to the slot"
     );
 }
 
