@@ -1574,7 +1574,8 @@ fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
 /// A surface whose resize panics gets one retry, however its frames settle:
 /// the first frame that settles stale on it is retried, and any other that
 /// meets the panic on it (a frame queued behind the first, or the retry) is
-/// refused, until a frame settles without a panic.
+/// refused, a frame held when the slot's panic was taken counted as one that
+/// met it, until a frame settles any other way than a panicked render.
 ///
 /// Red-check: drop the surface's record and a frame
 /// queued behind the first is retried too.

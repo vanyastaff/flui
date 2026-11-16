@@ -2040,6 +2040,10 @@ impl RasterHost {
                 SlotTurn::Clean
             }
         };
+        // A frame drawn after a panicked one of this drain was drawn over its
+        // image, which may be torn or miss an upload: it does not move the
+        // base either.
+        let mut torn = false;
         for settlement in &settlements {
             let Some(slot) = placed.slots.get_mut(&address) else {
                 break;
@@ -2053,7 +2057,8 @@ impl RasterHost {
                 continue;
             };
             let frame = slot.pending.remove(at);
-            let tainted = frame.tainted;
+            torn |= settlement.panicked;
+            let forget = frame.tainted || torn;
             let verdict = Self::settle_one(
                 placed,
                 address,
@@ -2062,7 +2067,7 @@ impl RasterHost {
                 turned(settlement),
             )
             .unwrap_or(SubmitVerdict::Failed);
-            if tainted && let Some(slot) = placed.slots.get_mut(&address) {
+            if forget && let Some(slot) = placed.slots.get_mut(&address) {
                 slot.base.forget();
             }
             into.push(flui_runtime::sink::FrameSettlement::new(
