@@ -1249,13 +1249,13 @@ impl RasterHost {
             caught.resume();
             return SlotTurn::Clean;
         }
-        let settled = Self::take_slot_failure(placed, address);
         // The turn's own panic (a retired scene's `Drop`, a trim, a device
-        // rebuild) goes to the window that turned it, for its report.
+        // rebuild) goes to the window that turned it, for its report, before
+        // the slot's failure is logged: a log that panics is the later one.
         if let Some(slot) = placed.slots.get_mut(&address) {
             slot.panic.absorb(caught);
         }
-        settled
+        Self::take_slot_failure(placed, address)
     }
 
     /// Settle what the executor left for `address`'s slot: a refusal is
@@ -1881,7 +1881,11 @@ impl RasterHost {
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
         let Some(verdict) = Self::settle_one(placed, address, frame, settled, turned) else {
-            tracing::error!(?epoch, "raster host: an inline frame settled nothing");
+            if let Some(slot) = placed.slots.get_mut(&address) {
+                let _logged = slot.panic.contain(move || {
+                    tracing::error!(?epoch, "raster host: an inline frame settled nothing");
+                });
+            }
             return SubmitVerdict::Failed;
         };
         verdict
