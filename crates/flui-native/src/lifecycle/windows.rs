@@ -196,8 +196,9 @@ mod host_events {
     use crate::owner::app_delivery::AppDelivery;
     use crate::owner::notices::NoticeChannel;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use crate::owner::windows::WindowIdentity;
     use crate::owner::windows::broadcast::Subscriber;
-    use crate::owner::windows::control::{OwnerLifecycle, OwnerQueue};
+    use crate::owner::windows::control::{OwnerLifecycle, OwnerQueue, PostRefusal};
 
     /// Posted by the pool thread that waits on the low-memory event.
     pub(super) const LOW_MEMORY: u32 = WM_APP + 2;
@@ -217,6 +218,8 @@ mod host_events {
         memory: RefCell<Option<LowMemoryWait>>,
         /// The owner thread's queue the low-memory wait posts its report to.
         queue: OwnerQueue,
+        /// What the receiver's low-memory report names.
+        identity: WindowIdentity,
         /// The timer that ends a low-memory hold could not be set and is retried.
         rearm_timer_owed: Cell<bool>,
     }
@@ -241,6 +244,9 @@ mod host_events {
                 session_notification: Cell::new(None),
                 memory: RefCell::new(None),
                 queue,
+                // The receiver's low-memory report names this host, so a
+                // handle the system gave another window is left alone.
+                identity: WindowIdentity::admit(WindowIdentity::source(), || ()).0,
                 rearm_timer_owed: Cell::new(false),
             }
         }
@@ -401,6 +407,12 @@ mod host_events {
             }
         }
 
+        /// The parameters a [`LOW_MEMORY`] report for this host carries.
+        #[cfg(test)]
+        pub(super) fn low_memory_parameters_for_test(&self) -> (usize, isize) {
+            self.identity.halves()
+        }
+
         /// Stand in for the pool thread that waits on the system's event: whether
         /// the signal woke the owner (and so is followed by [`LOW_MEMORY`]).
         #[cfg(test)]
@@ -433,7 +445,7 @@ mod host_events {
                     tracing::warn!(%error, "session lock and unlock notices are unavailable");
                 }
             }
-            match LowMemoryWait::start(receiver, self.queue.clone()) {
+            match LowMemoryWait::start(receiver, self.queue.clone(), self.identity) {
                 Ok(wait) => *self.memory.borrow_mut() = Some(wait),
                 Err(error) => tracing::warn!(%error, "low-memory notices are unavailable"),
             }
@@ -470,7 +482,7 @@ mod host_events {
             if self.rearm_timer_owed.get() {
                 self.arm_rearm_timer(hwnd);
             }
-            if message == LOW_MEMORY {
+            if message == LOW_MEMORY && self.identity.halves() == (wparam.0, lparam.0) {
                 self.low_memory(hwnd);
                 return Some(LRESULT(0));
             }
@@ -544,14 +556,18 @@ mod host_events {
         /// Where the report goes: the owner thread's queue, and the owner's
         /// next turn when the queue refuses it.
         queue: OwnerQueue,
+        /// The host the report names.
+        identity: WindowIdentity,
     }
 
     impl LowMemoryShared {
         /// The system's event fired: a new episode is reported to the owner.
         fn signaled(&self) {
             if self.watch.lock().on_signal() {
-                self.queue
-                    .post(HWND(self.receiver as *mut _), LOW_MEMORY, 0, 0);
+                // A receiver that is gone was detached: no host hears it.
+                let _: Result<(), PostRefusal> =
+                    self.queue
+                        .post(HWND(self.receiver as *mut _), LOW_MEMORY, self.identity);
             }
         }
     }
@@ -581,13 +597,18 @@ mod host_events {
     }
 
     impl LowMemoryWait {
-        fn start(receiver: HWND, queue: OwnerQueue) -> windows::core::Result<Self> {
+        fn start(
+            receiver: HWND,
+            queue: OwnerQueue,
+            identity: WindowIdentity,
+        ) -> windows::core::Result<Self> {
             // SAFETY: creating the event takes a plain enum value.
             let event = unsafe { CreateMemoryResourceNotification(LowMemoryResourceNotification)? };
             let shared = Box::new(LowMemoryShared {
                 watch: Mutex::new(MemoryWatch::armed()),
                 receiver: receiver.0 as isize,
                 queue,
+                identity,
             });
             let mut wait = Self {
                 event,

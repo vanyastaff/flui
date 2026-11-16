@@ -37,7 +37,8 @@ fn hosted_receiver_of(signal: &Arc<OwnerSignal>) -> (Receiver, Rc<HostEvents>, R
 
 fn low_memory_is_reported_once_per_hold() {
     let (receiver, host, heard, _run) = hosted_receiver();
-    let report = || receiver.send_with_for_test(LOW_MEMORY, 0, 0);
+    let (low, high) = host.low_memory_parameters_for_test();
+    let report = || receiver.send_with_for_test(LOW_MEMORY, low, high);
     let critical = SystemNotice::MemoryPressure(MemoryPressureLevel::Critical);
 
     assert!(

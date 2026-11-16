@@ -89,6 +89,10 @@ struct State {
     quit: bool,
     /// Windows whose work waits for an owner turn.
     window_wakes: Vec<WindowWake>,
+    /// Work that runs code the owner does not own (a message the queue
+    /// refused, sent to its window), run once the turn released its state
+    /// ([`OwnerSignal::run_outside_turn`]).
+    outside_turn: Vec<WindowWake>,
     /// Window opens other threads asked for, oldest first, waiting for an
     /// owner turn; at most [`OPEN_LANE_CAPACITY`].
     opens: VecDeque<QueuedOpen>,
@@ -113,7 +117,10 @@ impl State {
     /// Whether work the owner runs before the application's turn waits: a
     /// window's work, a window open, an exit-policy request.
     fn has_owner_work(&self) -> bool {
-        !self.window_wakes.is_empty() || !self.opens.is_empty() || self.reevaluate_exit
+        !self.window_wakes.is_empty()
+            || !self.outside_turn.is_empty()
+            || !self.opens.is_empty()
+            || self.reevaluate_exit
     }
 }
 
@@ -155,6 +162,7 @@ impl OwnerSignal {
                 active: false,
                 quit: false,
                 window_wakes: Vec::new(),
+                outside_turn: Vec::new(),
                 opens: VecDeque::new(),
                 reevaluate_exit: false,
                 opens_windows: false,
@@ -427,6 +435,46 @@ impl OwnerSignal {
         }
     }
 
+    /// Ask for an owner turn that runs `work` once the turn has released its
+    /// state, as a message taken from the queue would run: `work` reaches code
+    /// the owner does not own (a window procedure), so a modal loop it opens
+    /// still gets owner turns. A caller coalesces its own requests; each one
+    /// runs once.
+    #[cfg(any(target_os = "windows", test))]
+    pub(crate) fn run_outside_turn(&self, work: WindowWake) {
+        {
+            let mut state = self.state.lock();
+            if !state.accepting {
+                return;
+            }
+            state.outside_turn.push(work);
+        }
+        if let Err(error) = self.schedule() {
+            self.state
+                .lock()
+                .unreported_window_post
+                .get_or_insert_with(|| error.to_string());
+        }
+    }
+
+    /// Run what waits for the turn's state to be released, each item apart;
+    /// once one of them stops the owner, the rest are dropped unrun.
+    fn run_outside_turn_work(&self) {
+        let work = std::mem::take(&mut self.state.lock().outside_turn);
+        for item in work {
+            if self.accepting() {
+                contain_owner_callback(|| item());
+            }
+            contain_owner_callback(|| drop(item));
+        }
+    }
+
+    /// How many items wait to run outside a turn.
+    #[cfg(all(test, target_os = "windows"))]
+    pub(crate) fn outside_turn_len_for_test(&self) -> usize {
+        self.state.lock().outside_turn.len()
+    }
+
     /// The wake for a window's work in an owner turn of its own: `resume`
     /// runs there. It holds the signal weakly, so a queued turn never keeps
     /// the loop alive; `resume` holds its window weakly for the same reason.
@@ -593,6 +641,8 @@ impl OwnerTurn<'_> {
                 signal.run_exit_reevaluation();
                 signal.run_window_wakes();
                 signal.state.lock().active = false;
+                // A turn a message sent here asks for nests and runs.
+                signal.run_outside_turn_work();
                 signal.rearm();
                 return false;
             }

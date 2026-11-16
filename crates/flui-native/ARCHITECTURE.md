@@ -2540,28 +2540,40 @@ private event; fallback delivery resumes when FLUI regains its loop.
 
 Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
-another thread raised for a window, a close the handler granted behind a running
-method, the fullscreen hotkey's toggle, the exit policy's request and the
-low-memory report. Each goes through `OwnerQueue::post`. A post the thread's
-queue refuses (it holds the posted-message quota) is handed to the owner
-signal, which inherits the event fallback above; the owner's next turn sends
-the message, which on the owner thread calls the window procedure past the full
-queue, and the procedure answers it as it answers the posted one. So every such
-message names its window by identity in its parameters, and nothing is logged
-where a post is asked for. A hidden or minimized window's frame request is
-posted at most once until the window takes it (`FramePost`), as Win32 folds a
-painted window's invalidations into one `WM_PAINT`, so a burst of wakes is one
-frame and cannot fill the queue.
+another thread raised for a window, a close (granted behind a running method,
+commanded from another thread, or asked by a wrapper dropped off its thread),
+the fullscreen hotkey's toggle, the exit policy's request and the low-memory
+report. Each goes through `OwnerQueue::post`, and names its window by identity
+in its parameters, which the procedure checks. A post to a handle that is no
+window of the owner thread is refused (`PostRefusal`). A post the thread's
+queue refuses for its quota is handed to the owner signal, which inherits the
+event fallback above: once the next owner turn has released its state
+(`OwnerSignal::run_outside_turn`), the message is sent, which on the owner
+thread calls the window procedure past the full queue, so the procedure answers
+it as it answers the posted one and a modal loop it opens still gets owner
+turns. A send checks again that the handle is the owner thread's window, so it
+never waits on another thread. Nothing is logged where a post is asked for.
 
-`failed_native_posts_still_deliver_owner_turns_and_quit` refuses posts both ways:
-by injection into the owner signal's own post (worker admission, reentrant
-continuation and quit through the actual native loop), and by filling the
-thread's queue to its quota, under which a thousand frame requests on a hidden
-window from a worker are one frame, a delivery a worker raised reaches the
-window, and closing the last window still ends the loop.
-`a_burst_of_frame_requests_on_a_hidden_window_is_one_frame` shows the folding
-with posts accepted, and `host_event_sources` shows a refused low-memory report
-sent from the owner's turn.
+Each kind of work a window posts from any thread is posted at most once until
+the window takes it (`WindowPost`): a burst of wakes is one frame request
+(`FramePost`, as Win32 folds a painted window's invalidations into one
+`WM_PAINT`) and a burst of deliveries one `DELIVER_QUEUED`, so neither can
+fill the queue, and a refused burst is one item for the owner's turn. Two
+posts stay outside `OwnerQueue` because their refusal loses nothing: a system
+character the queue refuses back after a keydown runs its default at once, and
+a drag start the owner window cannot take is refused to its caller with
+`DragError`.
+
+`failed_native_posts_still_deliver_owner_turns_and_quit` injects refusal into
+the owner signal's own post (worker admission, reentrant continuation and quit
+through the actual native loop). `window_posts_under_a_full_queue` fills the
+thread's queue to its quota: a thousand frame requests on a hidden window from
+a worker are one frame, a delivery a worker raised reaches the window, and the
+last window closed by a command or by a posted close still ends the loop.
+`a_burst_of_deliveries_from_another_thread_is_one_post_and_one_debt` and
+`a_burst_of_frame_requests_on_a_hidden_window_is_one_frame` show the folding,
+and `host_event_sources` shows a refused low-memory report sent from the
+owner's turn.
 
 ### Native Win32 delivers admitted idle deadlines through live window paints
 

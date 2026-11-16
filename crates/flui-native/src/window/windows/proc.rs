@@ -66,7 +66,7 @@ use crate::owner::hwnd_affinity::ContextLedger;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::owner::windows::HostDisplays;
-use crate::owner::windows::control::{OwnerPreferences, OwnerQueue};
+use crate::owner::windows::control::{OwnerPreferences, OwnerQueue, PostRefusal};
 use crate::owner::windows::modal_loop::MODAL_DEADLINE_TIMER;
 use crate::owner::windows::{
     WindowHooks, WindowIdentity, WindowMessages, WindowStep, window_destroyed, window_step,
@@ -95,39 +95,92 @@ pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
 /// delivers what waits in the window's FIFO when it takes the message.
 pub(crate) const DELIVER_QUEUED: u32 = WM_APP + 5;
 
-/// A window's frame requests, from any thread.
-///
-/// A window that is shown and not minimized is invalidated, and Win32 folds
-/// every invalidation before its paint into one `WM_PAINT`. Win32 paints
-/// neither a hidden window nor a minimized one, whose client area is empty:
-/// those get [`REQUEST_FRAME`] posted, at most one until the window takes it,
-/// so a burst of wakes is one frame there too and never fills the thread's
-/// queue. Their frame is what earns a deferred window its reveal, and what
-/// polls the tasks woken while nobody sees the window. A post the queue
-/// refuses runs from the owner's next turn ([`OwnerQueue`]).
+/// One kind of work a window posts to itself from any thread, posted at most
+/// once until the window takes it: a burst of asks is one message, and one
+/// item for the owner's turn when the queue refuses it ([`OwnerQueue`]).
 #[derive(Clone)]
-pub(crate) struct FramePost {
-    /// The handle as an integer: only queried, invalidated and posted to.
+pub(crate) struct WindowPost {
+    /// The handle as an integer: only posted to, never dereferenced.
     hwnd: isize,
     identity: WindowIdentity,
+    message: u32,
     /// Set from a post until the window takes it.
     posted: Arc<AtomicBool>,
     queue: OwnerQueue,
 }
 
-impl FramePost {
-    pub(crate) fn new(hwnd: HWND, identity: WindowIdentity, queue: OwnerQueue) -> Self {
+impl WindowPost {
+    pub(crate) fn new(
+        hwnd: HWND,
+        identity: WindowIdentity,
+        message: u32,
+        queue: OwnerQueue,
+    ) -> Self {
         Self {
             hwnd: hwnd.0 as isize,
             identity,
+            message,
             posted: Arc::new(AtomicBool::new(false)),
             queue,
         }
     }
 
+    /// Post the message unless one waits for the window already.
+    pub(crate) fn ask(&self) {
+        if self.posted.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let posted = self
+            .queue
+            .post(HWND(self.hwnd as *mut _), self.message, self.identity);
+        if posted.is_err() {
+            // No window of the owner thread takes it: nothing waits.
+            self.posted.store(false, Ordering::Release);
+        }
+    }
+
+    /// The window took the message: an ask from here on posts again. Called
+    /// before the work runs, so an ask the work makes is not folded into it.
+    fn taken(&self) {
+        self.posted.store(false, Ordering::Release);
+    }
+}
+
+impl std::fmt::Debug for WindowPost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowPost")
+            .field("hwnd", &self.hwnd)
+            .field("message", &self.message)
+            .field("posted", &self.posted.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+/// A window's frame requests, from any thread.
+///
+/// A window that is shown and not minimized is invalidated, and Win32 folds
+/// every invalidation before its paint into one `WM_PAINT`. Win32 paints
+/// neither a hidden window nor a minimized one, whose client area is empty:
+/// those get [`REQUEST_FRAME`] posted through a [`WindowPost`], so a burst of
+/// wakes is one frame there too and never fills the thread's queue. Their
+/// frame is what earns a deferred window its reveal, and what polls the tasks
+/// woken while nobody sees the window.
+///
+/// The visibility is read without holding the window: one hidden or restored
+/// on its thread between the read and the request gets one frame request of
+/// the other kind as well, an invalidation nothing paints or a posted frame
+/// beside its paint. That costs at most one extra frame, never a lost one.
+#[derive(Clone, Debug)]
+pub(crate) struct FramePost(WindowPost);
+
+impl FramePost {
+    pub(crate) fn new(hwnd: HWND, identity: WindowIdentity, queue: OwnerQueue) -> Self {
+        Self(WindowPost::new(hwnd, identity, REQUEST_FRAME, queue))
+    }
+
     /// Ask for a frame of the window.
     pub(crate) fn request(&self) {
-        let hwnd = HWND(self.hwnd as *mut _);
+        let hwnd = HWND(self.0.hwnd as *mut _);
         // SAFETY: plain queries of a window handle with no pointer arguments,
         // legal from any thread; for a window that is already gone they
         // answer false, which leaves nothing to paint.
@@ -136,56 +189,57 @@ impl FramePost {
             // SAFETY: as above; an invalidation of a window that closed
             // meanwhile fails and draws nothing.
             let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
-        } else if !self.posted.swap(true, Ordering::AcqRel) {
-            let (low, high) = self.identity.halves();
-            self.queue.post(hwnd, REQUEST_FRAME, low, high);
+        } else {
+            self.0.ask();
         }
     }
 
-    /// The window took the posted request: a request from here on is
-    /// posted again.
+    /// The window took the posted request.
     fn taken(&self) {
-        self.posted.store(false, Ordering::Release);
-    }
-}
-
-impl std::fmt::Debug for FramePost {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FramePost")
-            .field("hwnd", &self.hwnd)
-            .field("posted", &self.posted.load(Ordering::Relaxed))
-            .finish_non_exhaustive()
+        self.0.taken();
     }
 }
 
 /// The owner turn a window's delivery asks for when another thread raises
-/// something for it: a posted [`DELIVER_QUEUED`] naming this window.
-pub(crate) fn deliver_queued_turn(
-    hwnd: HWND,
-    identity: WindowIdentity,
-    queue: OwnerQueue,
-) -> crate::owner::signal::WindowWake {
-    let (low, high) = identity.halves();
-    // The handle as an integer: only posted to, never dereferenced.
-    let raw = hwnd.0 as isize;
-    Arc::new(move || queue.post(HWND(raw as *mut _), DELIVER_QUEUED, low, high))
+/// something for it: a [`DELIVER_QUEUED`] naming this window, posted once
+/// until the window delivers what waits in its FIFO.
+pub(crate) fn deliver_queued_turn(deliveries: WindowPost) -> crate::owner::signal::WindowWake {
+    Arc::new(move || deliveries.ask())
 }
 
 pub(crate) use crate::owner::windows::WindowRef;
 
+/// Close the window `hwnd` and `identity` name, without asking the veto, in a
+/// turn of the owner thread: a posted [`CLOSE_WINDOW`], sent from the owner's
+/// next turn when the queue is full.
+///
+/// # Errors
+///
+/// What [`OwnerQueue::post`] refuses: no window of the owner thread has the
+/// handle, which is then closed already.
+pub(crate) fn post_close(
+    queue: &OwnerQueue,
+    hwnd: HWND,
+    identity: WindowIdentity,
+) -> Result<(), PostRefusal> {
+    queue.post(hwnd, CLOSE_WINDOW, identity)
+}
+
 /// The close of a `WM_CLOSE` the handler grants after it was asked behind a
-/// running method: a posted [`CLOSE_WINDOW`] naming this window, which the
-/// owner thread takes once the method returned.
+/// running method ([`post_close`]), which the owner thread takes once the
+/// method returned.
 fn granted_close(
     hwnd: HWND,
     identity: WindowIdentity,
     queue: OwnerQueue,
 ) -> impl FnOnce() + Send + 'static {
-    let (low, high) = identity.halves();
     // The handle as an integer: it is only posted to, never dereferenced, so
     // it may travel with the queued request.
     let raw = hwnd.0 as isize;
-    move || queue.post(HWND(raw as *mut _), CLOSE_WINDOW, low, high)
+    move || {
+        // A window that is gone is closed already.
+        let _: Result<(), PostRefusal> = post_close(&queue, HWND(raw as *mut _), identity);
+    }
 }
 
 /// The window context a [`WindowRef`] names: the owner declares the
@@ -236,6 +290,9 @@ pub(crate) struct WindowContext {
     pub(crate) queue: OwnerQueue,
     /// The window's frame requests, shared with its wrappers' surfaces.
     pub(crate) frame_post: FramePost,
+    /// The window's requests to deliver what other threads raised for it,
+    /// shared with its delivery.
+    pub(crate) deliveries: WindowPost,
     /// The platform's monitors: a DPI change invalidates their snapshot.
     pub displays: Arc<dyn HostDisplays>,
     /// Per-window callbacks for event delivery, shared with the features the
@@ -1288,6 +1345,7 @@ impl WindowProc {
                     if let Some(ctx) = ctx
                         && ctx.identity.halves() == (wparam.0, lparam.0)
                     {
+                        ctx.deliveries.taken();
                         let delivery = Arc::clone(&ctx.delivery);
                         delivery.deliver_queued();
                     }
@@ -2675,8 +2733,8 @@ impl WindowContext {
         if is_repeat || self.config.fullscreen_hotkey != Some(virtual_key) {
             return;
         }
-        let (low, high) = self.identity.halves();
-        self.queue.post(hwnd, TOGGLE_FULLSCREEN, low, high);
+        // A window that closed meanwhile toggles nothing.
+        let _: Result<(), PostRefusal> = self.queue.post(hwnd, TOGGLE_FULLSCREEN, self.identity);
     }
 }
 

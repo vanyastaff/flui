@@ -2,70 +2,119 @@
 //! the thread's message queue refuses the post.
 
 use crate::owner::signal::OwnerSignal;
+use crate::owner::windows::WindowIdentity;
 use std::sync::{Arc, Weak};
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
-    UI::WindowsAndMessaging::{PostMessageW, SendMessageW},
+    Foundation::{ERROR_NOT_ENOUGH_QUOTA, HWND, LPARAM, WPARAM},
+    System::Threading::GetCurrentThreadId,
+    UI::WindowsAndMessaging::{GetWindowThreadProcessId, PostMessageW, SendMessageW},
 };
 
 /// The owner thread's message queue, as the windows that thread created post
 /// their work to it from any thread: a frame of a window nothing paints, the
-/// deliveries another thread raised, a close the handler granted, the exit
+/// deliveries another thread raised, a close, the fullscreen toggle, the exit
 /// policy, a system notice a pool thread heard.
 ///
 /// The queue refuses a post once it holds the thread's posted-message quota
 /// (`ERROR_NOT_ENOUGH_QUOTA`, ten thousand messages by default). Such a post
 /// is not lost: the owner signal, whose own wake falls back on a kernel event
 /// when its post is refused too, runs an owner turn that sends the message
-/// instead. An owner turn runs on the thread that created the window, so the
-/// send calls the window procedure directly, past the full queue, and the
-/// procedure answers it as it answers the posted one. A message therefore
-/// names what it acts on in its parameters (the window's identity), never by
-/// pointer. Once the owner stopped accepting work, neither way runs it.
+/// instead, once the turn released its state
+/// ([`OwnerSignal::run_outside_turn`]). An owner turn runs on the thread that
+/// created the window, so the send calls the window procedure directly, past
+/// the full queue, and the procedure answers it as it answers the posted one.
+/// Every message names its window by identity ([`WindowIdentity::halves`]),
+/// so a handle the system gave another window is left alone. Once the owner
+/// stopped accepting work, neither way runs it.
+///
+/// A caller coalesces its own posts (one until the window takes it), so a
+/// refused burst is one item for the owner's turn.
 ///
 /// Nothing is logged where a post is asked for: the asker may hold borrows a
 /// `tracing` subscriber takes again.
 #[derive(Clone)]
 pub(crate) struct OwnerQueue {
     signal: Weak<OwnerSignal>,
+    /// The owner thread's Win32 id: only its windows are posted to.
+    thread: u32,
+}
+
+/// Why a post reached no window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PostRefusal {
+    /// The handle names no window of the owner thread: the window closed, or
+    /// the system gave its handle to a window of another thread.
+    NotOwnerWindow,
+    /// The queue was full and the owner no longer takes work.
+    OwnerGone,
 }
 
 impl OwnerQueue {
-    /// The queue of the owner thread behind `signal`.
+    /// The queue of the owner thread behind `signal`; made on that thread.
     pub(crate) fn new(signal: Weak<OwnerSignal>) -> Self {
-        Self { signal }
+        Self {
+            signal,
+            // SAFETY: a query of the calling thread's id.
+            thread: unsafe { GetCurrentThreadId() },
+        }
     }
 
-    /// Post `message` with `wparam` and `lparam` to `hwnd`, a window the owner
-    /// thread created; refused, send it from the owner's next turn.
-    pub(crate) fn post(&self, hwnd: HWND, message: u32, wparam: usize, lparam: isize) {
+    /// Post `message`, naming `identity`, to `hwnd`, a window of the owner
+    /// thread; when the queue is full, send it from the owner's next turn.
+    ///
+    /// # Errors
+    ///
+    /// [`PostRefusal::NotOwnerWindow`] when `hwnd` is no window of the owner
+    /// thread, [`PostRefusal::OwnerGone`] when the queue is full and the owner
+    /// has stopped.
+    pub(crate) fn post(
+        &self,
+        hwnd: HWND,
+        message: u32,
+        identity: WindowIdentity,
+    ) -> Result<(), PostRefusal> {
+        if !owned_by(hwnd, self.thread) {
+            return Err(PostRefusal::NotOwnerWindow);
+        }
+        let (wparam, lparam) = identity.halves();
         // SAFETY: `PostMessageW` takes a window handle and plain integers by
         // value, from any thread, and dereferences nothing; a handle that
         // closed meanwhile only makes it fail.
-        if unsafe { PostMessageW(Some(hwnd), message, WPARAM(wparam), LPARAM(lparam)) }.is_ok() {
-            return;
-        }
-        let Some(signal) = self.signal.upgrade() else {
-            return;
-        };
-        // The handle as an integer: only sent to, never dereferenced.
-        let raw = hwnd.0 as isize;
-        signal.run_for_window(Arc::new(move || {
-            // SAFETY: an owner turn runs on the thread that created the
-            // window, so the send runs its procedure on that thread, with
-            // plain integers and no pointer. A handle that closed since makes
-            // the call fail, and the parameters name the window, so a handle
-            // the system gave another window is left alone by the procedure.
-            unsafe {
-                SendMessageW(
-                    HWND(raw as *mut _),
-                    message,
-                    Some(WPARAM(wparam)),
-                    Some(LPARAM(lparam)),
-                )
+        let refusal =
+            match unsafe { PostMessageW(Some(hwnd), message, WPARAM(wparam), LPARAM(lparam)) } {
+                Ok(()) => return Ok(()),
+                Err(refusal) => refusal,
             };
+        if refusal.code() != ERROR_NOT_ENOUGH_QUOTA.to_hresult() {
+            return Err(PostRefusal::NotOwnerWindow);
+        }
+        let signal = self.signal.upgrade().ok_or(PostRefusal::OwnerGone)?;
+        if !signal.accepting() {
+            return Err(PostRefusal::OwnerGone);
+        }
+        // The handle as an integer: only sent to, never dereferenced.
+        let (raw, thread) = (hwnd.0 as isize, self.thread);
+        signal.run_outside_turn(Arc::new(move || {
+            let hwnd = HWND(raw as *mut _);
+            // A handle the system gave a window of another thread since would
+            // make the send wait on that thread: it is left alone.
+            if owned_by(hwnd, thread) {
+                // SAFETY: the window is of this, the owner, thread, so the
+                // send runs its procedure here, with plain integers and no
+                // pointer; the parameters name the window.
+                unsafe { SendMessageW(hwnd, message, Some(WPARAM(wparam)), Some(LPARAM(lparam))) };
+            }
         }));
+        Ok(())
     }
+}
+
+/// Whether `hwnd` is a live window of the thread `thread`.
+fn owned_by(hwnd: HWND, thread: u32) -> bool {
+    // SAFETY: a query of a window handle by value, with no out-pointer; a
+    // handle that names no window answers 0.
+    let owner = unsafe { GetWindowThreadProcessId(hwnd, None) };
+    owner != 0 && owner == thread
 }
 
 /// The owner thread's queue as a test fills it.

@@ -59,9 +59,9 @@ use windows::{
 const WAKE: u32 = WM_APP + 19;
 mod queue;
 mod wake;
-pub(crate) use queue::OwnerQueue;
 #[cfg(test)]
 pub(crate) use queue::testing;
+pub(crate) use queue::{OwnerQueue, PostRefusal};
 /// Asks the owner to consult the exit policy; see [`ExitPolicyRequest`].
 const EXIT_POLICY: u32 = WM_APP + 20;
 const OWNER_CLASS: PCWSTR = w!("FLUIOwnerSignalWindow");
@@ -262,6 +262,8 @@ pub(crate) struct ExitPolicyRequest {
     address: Arc<Mutex<Option<isize>>>,
     pending: Arc<AtomicBool>,
     queue: OwnerQueue,
+    /// The owner window's identity, which the message names.
+    identity: WindowIdentity,
 }
 
 impl ExitPolicyRequest {
@@ -275,10 +277,16 @@ impl ExitPolicyRequest {
         };
         // Read under the lock `OwnerControl::close` takes the address out
         // under before destroying the window, so it names the live owner
-        // window; the post never runs the procedure synchronously, and the
-        // owner's signal, which a refused post falls back on, is closed
-        // before that window is destroyed.
-        self.queue.post(HWND(raw as *mut _), EXIT_POLICY, 0, 0);
+        // window; the post never runs the procedure synchronously.
+        if self
+            .queue
+            .post(HWND(raw as *mut _), EXIT_POLICY, self.identity)
+            .is_err()
+        {
+            // No owner window takes it: nothing is queued, and the next
+            // request posts again.
+            self.pending.store(false, Ordering::Release);
+        }
     }
 }
 
@@ -584,6 +592,7 @@ impl OwnerGate {
             address: Arc::clone(&self.address),
             pending: Arc::clone(&self.exit_policy_pending),
             queue: self.queue.clone(),
+            identity: self.identity,
         }
     }
 
@@ -829,7 +838,10 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 quit_owner_loop(&signal, &turn);
             }
             return LRESULT(0);
-        } else if message == EXIT_POLICY && !pointer.is_null() {
+        } else if message == EXIT_POLICY
+            && !pointer.is_null()
+            && (*pointer).identity.halves() == (wparam.0, lparam.0)
+        {
             let context = &*pointer;
             context.exit_policy_pending.store(false, Ordering::Release);
             let signal = Arc::clone(&context.signal);
