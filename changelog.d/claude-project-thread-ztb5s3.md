@@ -30,5 +30,5 @@
 - A UI runtime starts in the lifecycle its window opens in: over a window that opens hidden,
   unfocused or paused, `UpdateScheduler::lifecycle_state` starts there (frames disabled when
   hidden or paused) instead of `Resumed`, and its listeners no longer hear a start-up change no
-  window made. A window installed beside others delivers the change it makes to the application's
-  lifecycle at once, and a focused one takes the focus from its siblings.
+  window made. The headless host's `open_window` reports the new window as it opened, as a
+  native host does, so a focused new window makes the first one `Inactive`.

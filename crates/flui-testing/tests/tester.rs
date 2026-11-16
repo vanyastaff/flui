@@ -818,6 +818,23 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
     );
 }
 
+/// A window opened beside the focused one takes the focus, as a native host
+/// reports it once the window is installed: the first window steps down to
+/// `Inactive`.
+#[test]
+fn opening_a_second_window_makes_the_first_inactive() {
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_view::AppLifecycleState::Inactive;
+
+    let (view, opened) = notebook(false);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    host.attach(&view).expect("the notebook mounts");
+    let _ = host.pump(Duration::ZERO);
+    opened.borrow_mut().lifecycle.clear();
+    host.open_window(HeadlessWindow::new(100, 100));
+    assert_eq!(opened.borrow().lifecycle, [Inactive]);
+}
+
 #[test]
 fn showing_an_unfocused_window_leaves_it_unfocused() {
     use flui_view::AppLifecycleState::Inactive;

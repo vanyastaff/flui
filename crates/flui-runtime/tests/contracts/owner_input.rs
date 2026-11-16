@@ -553,14 +553,16 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     let hidden: Rc<dyn flui_platform::PlatformWindow> =
         Rc::new(flui_runtime::testing::TestWindow::new().visible(false));
     let hidden = runtime.assemble_presentation(hidden);
-    runtime.install_presentation(hidden);
+    let hidden = runtime.install_presentation(hidden);
+    runtime.synchronize_window_snapshot(hidden, WindowExecutionState::Running, false, false);
     assert_eq!(*observed.borrow(), [Inactive, Resumed]);
     runtime.update_window_visibility(id, false);
     assert_eq!(*observed.borrow(), [Inactive, Resumed, Inactive, Hidden]);
     let focused: Rc<dyn flui_platform::PlatformWindow> =
         Rc::new(flui_runtime::testing::TestWindow::new().focused(true));
     let focused = runtime.assemble_presentation(focused);
-    runtime.install_presentation(focused);
+    let focused = runtime.install_presentation(focused);
+    runtime.synchronize_window_snapshot(focused, WindowExecutionState::Running, true, true);
     assert_eq!(
         *observed.borrow(),
         [Inactive, Resumed, Inactive, Hidden, Inactive, Resumed],

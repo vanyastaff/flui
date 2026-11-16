@@ -67,11 +67,13 @@ execution state and `onWindowFocusChanged` focus, and the state comes from
 host's lifecycle when the presentation enters the forest: in `UiRuntime::construct` for the primary
 one and in `install_presentation` for every later one, before a root mounts and anything can
 subscribe; it runs no user code. `UiRuntime::seed_runtime_lifecycle` then sets the scheduler to
-the aggregate of the primary at construction, before anything subscribes. A later presentation
-changes the aggregate like any window change: `install_presentation` delivers it through a
-reconcile pass, and a focused new window takes the focus from its siblings as
-`update_window_focus` does. The reconcile pass therefore always has a previous state; an empty
-source is a broken invariant (`expect("BUG: …")`), not a branch.
+the aggregate of the primary at construction, before anything subscribes. Installing a later
+presentation stays a pure publication that runs no user code; the change it makes to the
+aggregate and to its siblings reaches observers when the host delivers the window's `Snapshot`
+observation next, inside the owner's turn, where a panicking observer is contained as on any
+window change. Every host does so: flui-app's window installation and the headless host's
+`open_window`. The reconcile pass therefore always has a previous state; an empty source is a
+broken invariant (`expect("BUG: …")`), not a branch.
 
 ### §3 Every change walks the ladder
 
@@ -109,13 +111,15 @@ panic cannot skip removal.
 
 ### Confirmation
 
-- flui-runtime's `lifecycle_derivation_matrix` pins the derivation truth table, the ladders up,
-  down and into `Detached` (`every_ladder_walks_each_state_between_its_ends`) and the four ladders
-  out of `Detached`.
+- flui-runtime's `lifecycle_derivation_matrix` pins the derivation truth table, checks every pair
+  of states for a ladder of ring neighbours that ends at its target and passes nothing more active
+  than both ends, and pins exact ladders up, down, into and out of `Detached`.
 - flui-testing's `tester::hiding_the_window_hides_the_application_and_showing_it_resumes` pins
-  `[Inactive, Hidden]` for a subscriber of a mounted window.
+  `[Inactive, Hidden]` for a subscriber of a mounted window, and
+  `tester::opening_a_second_window_makes_the_first_inactive` pins the headless host's snapshot of
+  an installed window.
 - flui-runtime's `owner_input` table: `a_runtime_starts_in_its_window_lifecycle` pins the seeded
-  scheduler and a second window installed hidden or focused, and
+  scheduler and the snapshots of a second window opened hidden or focused, and
   `window_observations_update_only_the_target_runtime_lifecycle` pins the scheduler's climb from
   `Paused` through `Hidden` and `Inactive`.
 

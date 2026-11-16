@@ -1801,12 +1801,24 @@ impl HeadlessHost {
         );
         let id = self.ui_runtime.install_presentation(presentation);
         install_window_control(&self.ui_runtime, id, &window);
+        let seed = window.state();
         self.secondary.push(SecondaryWindow {
             text_store_host,
             id,
             window,
             accessibility,
         });
+        // The window reports itself as it opened, as a native host does once
+        // it is installed: the change it makes to the application's lifecycle
+        // is delivered in the owner's turn.
+        self.observe(
+            id,
+            flui_runtime::owner::WindowObservation::Snapshot {
+                execution: seed.execution,
+                focused: seed.focused,
+                visible: seed.is_seen(),
+            },
+        );
         HeadlessWindowId(id)
     }
 

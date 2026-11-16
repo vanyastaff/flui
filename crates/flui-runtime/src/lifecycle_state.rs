@@ -179,9 +179,9 @@ mod lifecycle_derivation_tests {
         );
     }
 
-    /// Every ladder between two live states, and every ladder into `Detached`,
-    /// walks each state in between and passes none more active than both
-    /// ends.
+    /// Every ladder walks each state between its ends on the ring and passes
+    /// none more active than both of them; the table pins exact ladders up,
+    /// down and into `Detached`.
     fn every_ladder_walks_each_state_between_its_ends() {
         use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
         let cases: [(AppLifecycleState, AppLifecycleState, &[AppLifecycleState]); 7] = [
@@ -195,6 +195,47 @@ mod lifecycle_derivation_tests {
         ];
         for (old, new, expected) in cases {
             assert_eq!(lifecycle_ladder(old, new), expected, "{old:?} -> {new:?}");
+        }
+
+        // Every pair, the empty ladder included: each step is a neighbour of
+        // the one before on the ring, the ladder ends at its target, and no
+        // step is more active than both ends.
+        let activity = |state| match state {
+            Detached => 0,
+            Paused => 1,
+            Hidden => 2,
+            Inactive => 3,
+            Resumed => 4,
+        };
+        let position = |state| {
+            AppLifecycleState::ALL
+                .iter()
+                .position(|&s| s == state)
+                .expect("BUG: every state is in ALL")
+        };
+        let ring = AppLifecycleState::ALL.len();
+        for old in AppLifecycleState::ALL {
+            for new in AppLifecycleState::ALL {
+                let steps = lifecycle_ladder(old, new);
+                if old == new {
+                    assert!(steps.is_empty(), "{old:?} -> {new:?}: {steps:?}");
+                    continue;
+                }
+                assert_eq!(steps.last(), Some(&new), "{old:?} -> {new:?}: {steps:?}");
+                let mut previous = old;
+                for &step in &steps {
+                    let apart = (position(step) + ring - position(previous)) % ring;
+                    assert!(
+                        apart == 1 || apart == ring - 1,
+                        "{old:?} -> {new:?}: {previous:?} then {step:?} in {steps:?}"
+                    );
+                    assert!(
+                        activity(step) <= activity(old).max(activity(new)),
+                        "{old:?} -> {new:?}: {step:?} is more active than both ends"
+                    );
+                    previous = step;
+                }
+            }
         }
     }
 
