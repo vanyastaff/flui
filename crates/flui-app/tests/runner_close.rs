@@ -1334,7 +1334,8 @@ struct LifetimeRoot {
 
 struct LifetimeRootState {
     seen: LifetimeSeen,
-    _watch: Option<flui_platform::capability::WindowCloseWatch>,
+    /// Held for its drop, which detaches the listener.
+    watch: Option<flui_platform::capability::WindowCloseWatch>,
 }
 
 impl StatefulView for LifetimeRoot {
@@ -1343,7 +1344,7 @@ impl StatefulView for LifetimeRoot {
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         LifetimeRootState {
             seen: self.seen.clone(),
-            _watch: None,
+            watch: None,
         }
     }
 }
@@ -1357,7 +1358,7 @@ impl ViewState<LifetimeRoot> for LifetimeRootState {
             .expect("the root is in a window");
         let disposed = Rc::clone(&self.seen.disposed);
         let told = Rc::clone(&self.seen.disposed_when_told);
-        self._watch = Some(lifetime.on_close(move || {
+        self.watch = Some(lifetime.on_close(move || {
             told.replace(Some(disposed.get()));
         }));
         self.seen.lifetime.replace(Some(lifetime));

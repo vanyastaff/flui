@@ -22975,22 +22975,20 @@ impl Eq for flui::services::system::dialog::PickedFile
 impl PartialEq for flui::services::system::dialog::PickedFile
 impl core::fmt::Debug for flui::services::system::dialog::PickedFile
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::PickedFile
-pub fn flui::services::system::dialog::PickedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::services::system::dialog::PickedFile::path(&self) -> &std::path::Path
+pub fn flui::services::system::dialog::PickedFile::try_new(path: impl Into<std::path::PathBuf>) -> Option<Self>
 pub struct flui::services::system::dialog::Picks { .. }
 impl Clone for flui::services::system::dialog::Picks
 impl Eq for flui::services::system::dialog::Picks
-impl IntoIterator for flui::services::system::dialog::Picks { type IntoIter = alloc::vec::into_iter::IntoIter<flui::services::system::dialog::PickedFile>; type Item = flui::services::system::dialog::PickedFile; }
+impl IntoIterator for flui::services::system::dialog::Picks { type IntoIter = core::iter::adapters::chain::Chain<core::iter::sources::once::Once<flui::services::system::dialog::PickedFile>, alloc::vec::into_iter::IntoIter<flui::services::system::dialog::PickedFile>>; type Item = flui::services::system::dialog::PickedFile; }
 impl PartialEq for flui::services::system::dialog::Picks
 impl core::fmt::Debug for flui::services::system::dialog::Picks
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::Picks
 impl<'a> IntoIterator for &'a flui::services::system::dialog::Picks { type IntoIter = core::iter::adapters::chain::Chain<core::iter::sources::once::Once<&'a flui::services::system::dialog::PickedFile>, core::slice::iter::Iter<'a, flui::services::system::dialog::PickedFile>>; type Item = &'a flui::services::system::dialog::PickedFile; }
 pub fn flui::services::system::dialog::Picks::first(&self) -> &flui::services::system::dialog::PickedFile
-pub fn flui::services::system::dialog::Picks::into_vec(self) -> Vec<flui::services::system::dialog::PickedFile>
 pub fn flui::services::system::dialog::Picks::is_empty(&self) -> bool
 pub fn flui::services::system::dialog::Picks::iter(&self) -> impl Iterator<Item = &flui::services::system::dialog::PickedFile>
 pub fn flui::services::system::dialog::Picks::len(&self) -> usize
-pub fn flui::services::system::dialog::Picks::one(first: flui::services::system::dialog::PickedFile) -> Self
 pub fn flui::services::system::dialog::Picks::try_new(picks: Vec<flui::services::system::dialog::PickedFile>) -> Option<Self>
 #[non_exhaustive] pub struct flui::services::system::dialog::SaveRequest
 field flui::services::system::dialog::SaveRequest::accept_label: Option<String> // at 4

@@ -6594,7 +6594,7 @@ GPU-память простаивающего или невидимого окн
   если сброс пришёл раньше); у сценарного двойника — `RequestTicket`; Android-бэкенд положит туда
   `ResultTicket` (ADR-0340). `WindowRef::lifetime()` — `WindowLifetime` (`is_closed`,
   `on_close` → `WindowCloseWatch`); runtime держит `WindowCloser` в презентации и закрывает его в
-  начале закрытия (`stop_presentation_after_failure`, путь runner'а и headless-хоста), брошенный
+  начале закрытия функцией `begin_close`, которую зовёт каждый путь (окно одно, последнее окно runtime, headless-хост), брошенный
   closer закрывает сам. Диалог в полёте отвечает `Err(WindowClosed)`, handle закрытого окна
   отвечает `WindowClosed`, не спрашивая бэкенд. Открытие отвечает `Option<Picks>` — непустым
   списком (`Picks::try_new`); несколько выборов при одиночном запросе, успех портала без `uris` или
@@ -6620,7 +6620,12 @@ GPU-память простаивающего или невидимого окн
   `flui-platform`; `a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it`
   в `flui-testing` (снятие без `unschedule` оставляет `NotReached`).
   Сброшенный `RequestTicket` слышат и наблюдатели скрипта (`on_answer`) — как запрос, кончившийся
-  без ответа. Проверки: Windows — clippy `--all-features --all-targets -D warnings` на
+  без ответа; при раскрутке потока вторая паника наблюдателя отдаётся `discard_payload`.
+  `PickedFile::try_new` принимает только абсолютный путь без NUL; портал отвечает на `%00`
+  `MalformedAnswer`. После независимого чтения: `a_last_window_close_tells_its_providers_before_the_tree_goes`
+  в `flui-app` (`runner_close`; закрытие последнего окна runner'ом без `begin_close` — провайдеры
+  слышат закрытие только после `dispose`), `a_backend_that_panics_while_showing_leaves_the_window_free`
+  (страж строится после вызова бэкенда — окно остаётся `Busy`). Проверки: Windows — clippy `--all-features --all-targets -D warnings` на
   `flui-platform`, `flui-runtime`, `flui-system`, `flui-testing`, `flui-app`, `flui-sdk`, `flui`;
   nextest этих четырёх крейтов (443 из 444; `trybuild_ui` `flui-platform` падает на этом хосте вне
   диффа: ни один `.stderr` не цитирует изменённый файл), `doc-strict`, `checks`, `expectations`;

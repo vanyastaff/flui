@@ -344,10 +344,10 @@ A UI runtime outlives each of its windows but one, so a provider that answers a 
 cannot take "the runtime retired" as the end of the window. `WindowRef::lifetime` is the
 window's `WindowLifetime`: `is_closed`, and `on_close`, whose `WindowCloseWatch` runs a
 listener once when the window closes. The runtime keeps the window's `WindowCloser` in the
-presentation and closes it when the presentation's close begins (the runner's close and the
-headless host's alike), before its state drops; a closer dropped unclosed closes too. A
-listener that panics does not keep the window open. The file dialogs end their dialog there
-(ADR-0344).
+presentation and closes it when the presentation's close begins, before its state drops, from
+the one function every close path calls (`begin_close`: a window closed alone, the last window
+of a runtime, the headless host's close); a closer dropped unclosed closes too. A listener that
+panics does not keep the window open. The file dialogs end their dialog there (ADR-0344).
 
 What a service's own error does not name is `SystemFailure`: an OS error code, a portal's
 response code, a bus failure, or an answer outside the system's contract. `LaunchError::Failed`
