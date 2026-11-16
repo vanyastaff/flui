@@ -236,34 +236,56 @@ pub(crate) fn a_frame_in_flight_bounds_the_owners_sleep() {
 
 /// Work that reached a presentation at its in-flight limit without demand on its clock (a tree
 /// dirtied after the gated pump, whose wake the gate held back) is asked for by the settlement
-/// that frees a place (ADR-0305 §5).
+/// that frees a place (ADR-0305 §5), unless a dropped frame's backoff still runs or the device
+/// rebuild was given up: those presentations attempt no frame, and their deadline or a new
+/// rebuild wakes them.
 pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
-    // A presentation whose device rebuild was given up attempts no frames, so it is not woken.
-    for abandoned in [false, true] {
+    #[derive(Debug, Clone, Copy)]
+    enum Hold {
+        Nothing,
+        BackoffRunning,
+        BackoffOver,
+        DeviceAbandoned,
+    }
+    for (hold, wakes) in [
+        (Hold::Nothing, true),
+        (Hold::BackoffRunning, false),
+        (Hold::BackoffOver, true),
+        (Hold::DeviceAbandoned, false),
+    ] {
         let mut ui_runtime = mount_box();
-        let mut sink =
-            ScriptedSink::new(|_, _| SubmitVerdict::Queued).holding(std::num::NonZeroUsize::MIN);
-        assert!(!ui_runtime.render_frame(&mut sink), "the frame is queued");
-        let [epoch] = sink.epochs[..] else {
-            panic!("one frame was submitted, got {:?}", sink.epochs);
-        };
+        // Two frames fill the sink; the older one's settlement frees a place without showing
+        // the current tree, so it leaves an armed backoff in place.
+        let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued)
+            .holding(std::num::NonZeroUsize::new(2).expect("BUG: two is not zero"));
+        let [(older, _), _] = queue_two_frames(&ui_runtime, &mut sink);
         let primary = ui_runtime.presentations.primary();
+        assert!(primary.frames_in_flight().is_saturated(), "{hold:?}");
         ui_runtime.mark_needs_full_repaint_for(primary);
         ui_runtime.mark_rendered();
-        if abandoned {
-            primary.replace_device_recovery(Some(
-                crate::frame_failure::DeviceRecovery::Abandoned { attempts: 1 },
-            ));
+        let now = primary.clock().now();
+        match hold {
+            Hold::Nothing => {}
+            Hold::BackoffRunning => {
+                primary.arm_failure_retry(now + std::time::Duration::from_secs(60));
+            }
+            Hold::BackoffOver => primary.arm_failure_retry(now),
+            Hold::DeviceAbandoned => {
+                primary.replace_device_recovery(Some(
+                    crate::frame_failure::DeviceRecovery::Abandoned { attempts: 1 },
+                ));
+            }
         }
         assert!(
             primary.clock().demand_mask().is_empty() && !ui_runtime.needs_redraw(),
-            "the dirt carries no clock demand and no wake"
+            "{hold:?}: the dirt carries no clock demand and no wake"
         );
-        assert_eq!(settle(&mut ui_runtime, epoch), Settled::Applied);
+        assert_eq!(settle(&mut ui_runtime, older), Settled::Applied, "{hold:?}");
         assert_eq!(
             ui_runtime.needs_redraw(),
-            !abandoned,
-            "the freed place asks for the dirty tree's frame, unless its device was given up"
+            wakes,
+            "{hold:?}: the freed place asks for the dirty tree's frame unless the presentation \
+             may attempt none"
         );
     }
 }

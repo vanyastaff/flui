@@ -2019,6 +2019,12 @@ impl PresentationState {
         self.failure_retry.get().at
     }
 
+    /// Whether a dropped frame's wait still runs at `now`. A wait whose end has passed holds
+    /// nothing, even before a frame attempt ends it ([`Self::admit_failure_retry`]).
+    pub(crate) fn failure_backoff_holds(&self, now: Instant) -> bool {
+        self.failure_retry_at().is_some_and(|at| now < at)
+    }
+
     /// End the wait now for a key or button press, unless one already did
     /// since the wait last ran out. Returns whether it ended.
     pub(crate) fn retry_failure_early(&self) -> bool {

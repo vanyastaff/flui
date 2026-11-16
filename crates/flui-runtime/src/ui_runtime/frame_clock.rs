@@ -522,8 +522,9 @@ impl UiRuntime {
                 // for again.
                 let frame_work = match presentation.failure_retry_at() {
                     // A presentation whose sink holds as many frames as it may produces none
-                    // until a settlement frees a place, which wakes the loop unless a backoff or an
-                    // abandoned device holds the presentation, whose own deadline or rebuild does.
+                    // until a settlement frees a place. That settlement wakes the loop unless a
+                    // backoff still runs or the device was abandoned; the backoff's deadline
+                    // (counted below once the sink frees a place) or a new rebuild wakes it then.
                     _ if presentation.frames_in_flight().is_saturated() => false,
                     _ if presentation.device_abandoned() => false,
                     Some(at) => presentation.clock().now() >= at,

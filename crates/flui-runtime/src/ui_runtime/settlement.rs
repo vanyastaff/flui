@@ -313,7 +313,7 @@ impl UiRuntime {
                     self.mark_needs_full_repaint_for(producer);
                 }
                 self.wake_frame();
-            } else if producer.failure_retry_at().is_none()
+            } else if !producer.failure_backoff_holds(producer.clock().now())
                 && !producer.device_abandoned()
                 && !producer.frames_in_flight().is_saturated()
                 && producer.has_frame_work()
