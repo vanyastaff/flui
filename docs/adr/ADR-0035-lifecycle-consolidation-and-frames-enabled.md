@@ -69,9 +69,12 @@ state. A UI runtime derives the scheduler state from its live presentations: any
   `ServicesBinding._generateStateTransitions` walking `dart:ui`'s declaration order (`detached,
   resumed, inactive, hidden, paused`). Leaving `Detached` enters from the `Paused` side instead
   (**Amended by** [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md)).
-  An unobserved presentation is `None`, and its first notification goes straight to the target,
-  as in Flutter's nullable-previous-state branch.
-- Scheduler listeners see the UI runtime aggregate, not the local ladder. A paused or hidden host
+  A presentation is created in the state its window snapshot and the host's lifecycle give, as
+  Flutter starts from `PlatformDispatcher.initialLifecycleState`, so its first change ladders
+  like every later one: a window hidden from `Resumed` passes through `Inactive`.
+- Scheduler listeners see the UI runtime aggregate, not the local ladder. The aggregate walks the
+  same ladder, one step per round, toward the aggregate as it stands at that step, so a listener
+  sees each state in between and never one more active than both ends: a paused or hidden host
   cannot transiently enable frames or attach resources while a presentation synchronizes.
 - Local facts and the next ladder step commit before user callbacks; input cancellation
   precedes lifecycle callbacks; binding observers see committed local and aggregate state.

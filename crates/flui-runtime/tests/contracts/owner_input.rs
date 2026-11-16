@@ -581,7 +581,8 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
     }
     assert_eq!(
         *installed[0].1.lock().expect("observations"),
-        [Inactive, Hidden, Paused, Resumed]
+        [Inactive, Hidden, Paused, Hidden, Inactive, Resumed],
+        "the application climbs back through each state, as it stepped down"
     );
     assert!(
         installed[1]

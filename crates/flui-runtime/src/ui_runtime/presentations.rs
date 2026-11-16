@@ -205,6 +205,7 @@ impl UiRuntime {
             presentation.window_id(),
             presentation.hit_test_handle(),
         );
+        self.seed_lifecycle(&presentation);
         self.presentations.install(presentation);
         presentation_id
     }

@@ -19,3 +19,11 @@
   `HeadlessBinding`, `BuildCapabilities`, `MountOptions`, `MountOwners`, `Mounted`, `widgets`,
   `storage`, `replay`, `a11y` and `render_snapshot`. Use `Tester`,
   `flui::testing::find` and `Tester::inspect_render`.
+
+### Fixed
+
+- A window hidden from `Resumed` passes through `Inactive` before `Hidden`, for its lifecycle
+  subscribers and the scheduler's lifecycle listeners alike: a presentation now starts in the
+  state its window snapshot gives instead of none, and the application's aggregate lifecycle
+  walks the same ladder one state at a time (`Paused` back to `Resumed` climbs through `Hidden`
+  and `Inactive`).

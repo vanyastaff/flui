@@ -802,7 +802,11 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
     let mut t = Tester::mount(view);
     opened.borrow_mut().lifecycle.clear();
     t.set_window_visible(false);
-    assert_eq!(opened.borrow().lifecycle.last(), Some(&Hidden));
+    assert_eq!(
+        opened.borrow().lifecycle,
+        [Inactive, Hidden],
+        "hidden, the window steps down through Inactive"
+    );
     t.set_window_visible(true);
     assert!(
         opened
