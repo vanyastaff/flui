@@ -31,7 +31,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::ManualClock;
 use flui_protocol::method::{
     ElementActionability, InputInject, InputRelease, InspectRender, InspectWidgets,
     SemanticsLocate, SemanticsRead,
@@ -431,7 +430,7 @@ impl Tester {
 
     /// The clock the application reads: frames, gesture deadlines and timers.
     #[must_use]
-    pub fn clock(&self) -> &ManualClock {
+    pub fn clock(&self) -> &crate::HostClock {
         self.host.clock()
     }
 
