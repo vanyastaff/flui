@@ -1,5 +1,5 @@
-//! `Completion<T>`: the one owner-thread result type for what the operating
-//! system finishes later (ADR-0152 §2, item 5).
+//! `Completion<T>`: the owner-thread result type for what the OS finishes later
+//! (ADR-0152 §2, item 5); a request its caller can call off wraps it (ADR-0344).
 
 use std::{
     cell::RefCell,

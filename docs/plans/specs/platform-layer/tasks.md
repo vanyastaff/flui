@@ -6690,7 +6690,62 @@ GPU-память простаивающего или невидимого окн
   `input/apple`, `owner/apple/macos/content_view`, `display/android`, `window/android`,
   `owner/android`, `text/android`, `drag/android`, `display/web`, `tests/wasm32` прочитаны, не
   скомпилированы); тесты X11 и Wayland на сервере — на CI.
-
+- [x] **LY143** — ветка `system/dialog-lifetime`, решение — ADR-0344. Находки подтверждены на
+  `main` @ `f5c8254ae` чтением кода: `DialogError::WindowClosed` не строился нигде, `show` не
+  смотрел на окно; `Request.Close` не звал никто, единственный конец — уход runtime; тест одного
+  диалога на окно брал `handle.clone()`; двойник пропускал `Some(vec![])`, портал читал успех без
+  `uris` как отмену; `Failed { code }` получал `0` и ответ портала `2`, `Ended` launcher'а
+  превращался в `NoHandler`. Построено: `FileDialogs::open`/`save` отдают `Dialog<T>`
+  (`on_complete`, `poll`, `into_future`); диалог жив, пока его держат, сброс снимает системный
+  диалог и освобождает окно. `FileDialogBackend` возвращает `DialogHold` (`DialogHold::new(keep)`),
+  который handle роняет при любом конце диалога (ответ, сброс, закрытие окна, уход runtime); у
+  портала это страж, будящий задачу запроса, которая зовёт `Request.Close` (или не делает вызов,
+  если сброс пришёл раньше); у сценарного двойника — `RequestTicket`; Android-бэкенд положит туда
+  `ResultTicket` (ADR-0340). `WindowRef::lifetime()` — `WindowLifetime` (`is_closed`,
+  `on_close` → `WindowCloseWatch`); runtime держит `WindowCloser` в презентации и закрывает его в
+  начале закрытия функцией `begin_close`, которую зовёт каждый путь (окно одно, последнее окно runtime, headless-хост), брошенный
+  closer закрывает сам. Диалог в полёте отвечает `Err(WindowClosed)`, handle закрытого окна
+  отвечает `WindowClosed`, не спрашивая бэкенд. Открытие отвечает `Option<Picks>` — непустым
+  списком (`Picks::try_new`); несколько выборов при одиночном запросе, успех портала без `uris` или
+  с пустым списком, несколько файлов у сохранения — `Failed(SystemFailure::MalformedAnswer)`.
+  `flui_platform::SystemFailure` (`Os`, `PortalResponse`, `Bus`, `MalformedAnswer`) заменил число в
+  `LaunchError::Failed` и `DialogError::Failed`; ответ портала `2` у launcher'а —
+  `PortalResponse(2)`, не `NoHandler`. Сценарный примитив: `Script::receive_with_ticket` и
+  `RequestTicket`, сброс которого снимает ждущий или запланированный запрос, убирает его ответ с
+  таймлайна и считает в `Script::withdrawn`. Ядро `Platform::prompt_for_paths` (без окна, без
+  вызывающих) не тронуто: его снимает запись `docs/gaps.md` о файловых диалогах.
+  Тесты (в скобках — откат, который их роняет): `a_dialog_ends_with_its_window` (слушатель
+  закрытия окна не кончает диалог); `a_dialog_ends_when_its_window_begins_to_close` (окно не
+  закрывает `WindowCloser` в начале закрытия: основное headless-окно не удаляется);
+  `a_dropped_dialog_is_dismissed_and_frees_its_window` (страж `Dialog` ничего не делает);
+  `a_window_shows_one_dialog_at_a_time` (правило на handle, а не на runtime);
+  `several_picks_for_a_single_pick_request_are_a_malformed_answer` (проверки числа выборов нет);
+  `picks_are_never_empty_and_keep_their_order`; `a_dialog_error_carries_its_unsupported`;
+  на Linux против подставного портала `a_dropped_dialog_closes_its_portal_request_and_frees_the_window`
+  (запрос без `Dismissal`: `Close` не приходит) и расширенные
+  `the_dialogs_reach_the_file_chooser_and_answer_its_picks` (успех без `uris`, пустой список, два
+  файла у сохранения, ответ `2`) и `the_launcher_reaches_the_open_uri_and_trash_portals` (ответ `2`
+  — `PortalResponse(2)`); `a_window_closes_once_and_tells_only_the_watches_still_held` в
+  `flui-platform`; `a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it`
+  в `flui-testing` (снятие без `unschedule` оставляет `NotReached`).
+  Сброшенный `RequestTicket` слышат и наблюдатели скрипта (`on_answer`) — как запрос, кончившийся
+  без ответа; при раскрутке потока вторая паника наблюдателя отдаётся `discard_payload`.
+  `PickedFile::try_new` принимает только абсолютный путь без NUL; портал отвечает на `%00`
+  `MalformedAnswer`. После независимого чтения: `a_last_window_close_tells_its_providers_before_the_tree_goes`
+  в `flui-app` (`runner_close`; закрытие последнего окна runner'ом без `begin_close` — провайдеры
+  слышат закрытие только после `dispose`), `a_backend_that_panics_while_showing_leaves_the_window_free`
+  (страж строится после вызова бэкенда — окно остаётся `Busy`). Проверки: Windows — clippy `--all-features --all-targets -D warnings` на
+  `flui-platform`, `flui-runtime`, `flui-system`, `flui-testing`, `flui-app`, `flui-sdk`, `flui`;
+  nextest этих четырёх крейтов (443 из 444; `trybuild_ui` `flui-platform` падает на этом хосте вне
+  диффа: ни один `.stderr` не цитирует изменённый файл), `doc-strict`, `checks`, `expectations`;
+  откаты выше прогнаны по одному классу за раз. WSL Ubuntu 24.04 — clippy и `cargo doc -D warnings`
+  `flui-system`, `flui-platform`; `cargo test -p flui-system` с подставным порталом (28 из 28),
+  откат `Dismissal` роняет `a_dropped_dialog_closes_its_portal_request_and_frees_the_window`.
+  Не запущено: настоящий `xdg-desktop-portal` на рабочем столе (закрытие диалога GTK по
+  `Request.Close`); сборки macOS, iOS, Android и wasm32 не нужны — правки в коде, общем для всех
+  целей, и в Linux-only портале. Строка закрыта: прогонов на устройствах не остаётся, кроме
+  портала на рабочем столе, который уже отмечен в строке `open-save-and-folder-dialogs` паритета
+  («run against a stand-in portal»).
 - [x] **LY120** — ветка `platform/drag-request`. Находка подтверждена на `main` @ `f5c8254ae`:
   поля `OsDragRequest` открыты, конструктора нет, тесты хостов собирали запросы без
   тождественного представления; хосты (Win32, Wayland, X11, Web) молча отбрасывали представления

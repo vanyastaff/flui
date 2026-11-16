@@ -143,6 +143,7 @@ mod regional;
 mod storage;
 mod surface_target;
 mod system_chrome;
+mod system_failure;
 mod target_platform;
 pub mod testing;
 mod text_input;
@@ -214,6 +215,7 @@ pub use surface_target::{
     DisplayConnection, DxgiFrameStatistics, RedrawRequester, SurfaceTarget, SwapChainStatistics,
 };
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
+pub use system_failure::SystemFailure;
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
