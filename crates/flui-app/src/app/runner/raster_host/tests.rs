@@ -1352,13 +1352,11 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
 /// A frame held when the owner took a panic of its slot settles with its
 /// base forgotten, since its settlement may have lost the mark that pairs it
 /// with the panic: the window's next frame draws in full. A frame that
-/// replaces a tainted one inherits the taint, and on the same surface the
-/// retry it owed, as it
-/// inherits its damage.
+/// replaces a tainted one inherits the taint, at any size, as it inherits
+/// its damage.
 ///
 /// Red-check: move the base for a tainted frame, or drop the taint with the
-/// replaced frame, and the base shows the last frame; drop the retry with
-/// it, or keep it at another size, and the replacement holds the wrong one.
+/// replaced frame, and the base shows the last frame.
 #[test]
 fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
     // (the size the replacing frame is measured at, if one replaces)
@@ -1382,7 +1380,6 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                         .pending
                     {
                         held.tainted = true;
-                        held.retrying = true;
                     }
                 })
                 .expect("the host is idle");
@@ -1408,13 +1405,10 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
                         .as_ref()
                         .and_then(|placed| placed.slots.get(&address()))
                         .and_then(|slot| slot.pending.last())
-                        .is_some_and(|held| held.tainted && held.retrying == (size == SIZE))
+                        .is_some_and(|held| held.tainted)
                 })
                 .expect("the host is idle");
-            assert!(
-                carried,
-                "{size:?}: the replacement inherits the taint, and the retry on the same surface"
-            );
+            assert!(carried, "{size:?}: the replacement inherits the taint");
             2
         } else {
             taint(&shared);
@@ -1575,4 +1569,63 @@ fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(settled, ThreadSettled::NotPresented);
+}
+
+/// A surface whose resize panics gets one retry, however its frames settle:
+/// the first frame that settles stale on it is retried, and any other that
+/// meets the panic on it (a frame queued behind the first, or the retry) is
+/// refused, until a frame settles without a panic.
+///
+/// Red-check: drop the surface's record and a frame
+/// queued behind the first is retried too.
+#[test]
+fn a_surface_whose_resize_panics_gets_one_retry() {
+    let (mut host, _slots) = host();
+    let shown = TestScene::new(AT).publication().scene.id();
+    let placed = host.placed.as_mut().expect("placed");
+    let surface = flui_layer::SurfaceKey {
+        size: SIZE,
+        generation: flui_foundation::SurfaceGeneration::ZERO,
+    };
+    let frame = |epoch: u64| super::PendingFrame {
+        epoch: {
+            let mut at = flui_foundation::FrameEpoch::ZERO;
+            for _ in 0..epoch {
+                at = at.next();
+            }
+            at
+        },
+        shown,
+        key: surface,
+        tainted: false,
+    };
+    let settle = |placed: &mut super::Placed, epoch: u64, turned: super::SlotTurn| {
+        RasterHost::settle_one(
+            placed,
+            address(),
+            frame(epoch),
+            Some(flui_engine::RasterVerdict::SurfaceStale),
+            turned,
+        )
+    };
+    // The first frame on the surface whose resize panicked is retried.
+    assert_eq!(
+        settle(placed, 1, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::SurfaceStale)
+    );
+    // One queued behind it, and the retry, meet the panic again: refused.
+    assert_eq!(
+        settle(placed, 2, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::Refused)
+    );
+    assert_eq!(
+        settle(placed, 3, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::Refused)
+    );
+    // A frame that settles without a panic ends the surface's retry.
+    let _clean = settle(placed, 4, super::SlotTurn::Clean);
+    assert_eq!(
+        settle(placed, 5, super::SlotTurn::Panicked),
+        Some(SubmitVerdict::SurfaceStale)
+    );
 }

@@ -548,11 +548,13 @@ struct HostSlot {
     /// size the device refused waits for the window's next size, not its
     /// pace.
     wanted: Option<DeviceSize>,
-    /// The surface the slot's next frame is the retry on, after a frame
-    /// measured on it settled stale because its resize or upload panicked:
-    /// a frame on that surface that meets a panic again is not retried, and
-    /// a frame on another surface is no one's retry.
-    retrying_panic: Option<SurfaceKey>,
+    /// The surface a frame of the slot last settled stale on because its
+    /// resize or upload panicked, until a frame settles otherwise: the first
+    /// such frame is retried, and another on that surface is refused, the
+    /// size's or the driver's failure rather than the moment's. Kept by
+    /// surface, not by frame, so a frame queued behind the panicked one and
+    /// the retry count as one retry, in whatever order they settle.
+    stale_panic: Option<SurfaceKey>,
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
@@ -572,10 +574,6 @@ struct PendingFrame {
     shown: flui_layer::SceneVersionId,
     /// The surface it was measured on.
     key: SurfaceKey,
-    /// Whether it is the retry of a frame whose resize or upload panicked. A
-    /// frame that replaces it on the same size and surface generation
-    /// inherits it.
-    retrying: bool,
     /// Whether the owner took a panic of the slot while the frame was held:
     /// its settlement may have lost the mark that pairs it with the panic,
     /// so its settlement forgets the base and the next frame draws in full.
@@ -906,7 +904,7 @@ impl RasterHost {
                 display,
                 visibility: SlotVisibility::Shown,
                 wanted: None,
-                retrying_panic: None,
+                stale_panic: None,
                 available: true,
                 restore: RestorePace::default(),
                 panic: caught,
@@ -1814,9 +1812,6 @@ impl RasterHost {
             size: surface,
             generation,
         };
-        // Whatever this frame becomes, it is the only retry the last one
-        // asked for, and only on the surface the retry is owed on.
-        let retrying = slot.retrying_panic.take() == Some(key);
         let stamp = FrameStamp::new(address, epoch, generation);
         let damage = slot.base.damage_for(&publication, key);
         let shown = publication.scene.id();
@@ -1851,7 +1846,6 @@ impl RasterHost {
             epoch,
             shown,
             key,
-            retrying,
             tainted: false,
         };
         if placed.executor.inline().is_none() {
@@ -1892,13 +1886,14 @@ impl RasterHost {
             .expect("BUG: `configure` found the slot");
         let verdict = match receipt {
             SendReceipt::Replaced(replaced) => {
-                // The replacement inherits what the replaced frame owed, as
-                // it inherits its damage: its taint, and, on the same surface,
-                // that it is the one retry a panicked resize or upload asked for.
-                if let Some(held) = slot.pending.iter().find(|held| held.epoch == replaced) {
-                    frame.tainted |= held.tainted;
-                    // The retry is owed for the surface it was measured on.
-                    frame.retrying |= held.retrying && held.key == frame.key;
+                // The replacement inherits the replaced frame's taint, as it
+                // inherits its damage.
+                if slot
+                    .pending
+                    .iter()
+                    .any(|held| held.epoch == replaced && held.tainted)
+                {
+                    frame.tainted = true;
                 }
                 slot.pending.retain(|held| held.epoch != replaced);
                 SubmitVerdict::QueuedReplacing(replaced)
@@ -1922,12 +1917,7 @@ impl RasterHost {
         settled: Option<RasterVerdict>,
         turned: SlotTurn,
     ) -> Option<SubmitVerdict> {
-        let PendingFrame {
-            shown,
-            key,
-            retrying,
-            ..
-        } = frame;
+        let PendingFrame { shown, key, .. } = frame;
         let id = placed.slots.get(&address)?.slot;
         // No surface the GPU takes, or no size it draws at: the frame is
         // refused, and nothing until the window's next change (or a rebuilt
@@ -1949,20 +1939,16 @@ impl RasterHost {
                 // A command before the frame panicked (a resize, an upload)
                 // and the frame settled otherwise: what it became stands, so
                 // a stale surface is retried and applies what is still
-                // pending. Once: a retry whose resize panics again is the
-                // size's or the driver's failure, not the moment's; the
-                // window's next change tries it again.
-                // A frame on the surface a retry is already owed on (one
-                // queued behind the panicked frame) is that panic met again.
-                Some(RasterVerdict::SurfaceStale)
-                    if retrying || slot.retrying_panic == Some(key) =>
-                {
-                    slot.retrying_panic = None;
+                // pending. Once per surface: another frame on it that meets
+                // the panic again (the retry, or one queued behind the first)
+                // is the size's or the driver's failure, not the moment's,
+                // and the window's next change tries it again.
+                Some(RasterVerdict::SurfaceStale) if slot.stale_panic == Some(key) => {
                     SubmitVerdict::Refused
                 }
                 Some(verdict) => {
                     let verdict = Self::verdict(&mut slot.base, verdict, shown, key);
-                    slot.retrying_panic = (verdict == SubmitVerdict::SurfaceStale).then_some(key);
+                    slot.stale_panic = (verdict == SubmitVerdict::SurfaceStale).then_some(key);
                     verdict
                 }
             };
@@ -1971,6 +1957,8 @@ impl RasterHost {
             slot.base.forget();
             return Some(verdict);
         }
+        // A frame that settled without a panic ends the surface's retry.
+        slot.stale_panic = None;
         if stuck {
             slot.base.forget();
             return Some(SubmitVerdict::Refused);
