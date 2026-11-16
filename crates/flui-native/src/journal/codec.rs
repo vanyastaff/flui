@@ -2858,7 +2858,12 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
             .transpose()?,
         visible,
         occluded,
-        focus: flui_platform::WindowFocus::reported(focused, active),
+        // A hidden window stands nowhere, as `WindowState::successor` publishes it.
+        focus: if visible {
+            flui_platform::WindowFocus::reported(focused, active)
+        } else {
+            flui_platform::WindowFocus::Inactive
+        },
         title,
         constraints: SizeConstraints::new(
             constraints

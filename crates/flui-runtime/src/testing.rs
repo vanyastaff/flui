@@ -269,10 +269,12 @@ impl PlatformWindow for TestWindow {
         let extent = self.logical_size;
         flui_platform::WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
             .with_visible(self.visible)
-            .with_focus(flui_platform::WindowFocus::reported(
-                self.focused,
-                self.focused,
-            ))
+            // A hidden window stands nowhere, as a host publishes it.
+            .with_focus(if self.focused && self.visible {
+                flui_platform::WindowFocus::Focused
+            } else {
+                flui_platform::WindowFocus::Inactive
+            })
             .with_metrics(
                 flui_foundation::geometry::WindowMetrics::try_new(
                     self.physical_size,

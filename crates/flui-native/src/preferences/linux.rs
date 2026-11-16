@@ -38,7 +38,7 @@ struct Observation {
     accepted: SystemPreferences,
     /// The portal's `color-scheme`, kept beside the host-wide snapshot because
     /// brightness is presentation-specific (ADR-0172): each window reports it
-    /// through the window state's `appearance`.
+    /// through the window state's `brightness`.
     appearance: Brightness,
 }
 
