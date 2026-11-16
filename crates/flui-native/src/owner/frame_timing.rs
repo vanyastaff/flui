@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress};
 use flui_platform::{EventTime, FramePresented, FrameRequest};
 use parking_lot::Mutex;
 
@@ -89,9 +90,16 @@ pub(crate) fn rebased_at(
 /// request of the window carries it (`FrameRequest::presented`).
 ///
 /// Any thread reports: the presenting thread (a swap chain's statistics), the platform's own
-/// callback thread (Metal's presented handler) or the owner (a compositor's event). The newest
-/// report wins; a report no later than one kept or already carried is a repeat or out of order,
-/// and is dropped, so the times a window's requests carry never run backwards.
+/// callback thread (Metal's presented handler) or the owner (a compositor's event). Each report
+/// names the frame it describes (`FramePresented::frame`), and that name decides what it is:
+///
+/// - a frame of a presentation other than the one whose frame the window's newest present carried
+///   ([`presenting`](Self::presenting)) belongs to what the window no longer shows, and the report
+///   is dropped; a window that presented nothing reports nothing;
+/// - a frame no newer than the frame of a report kept or already carried (a repeat, or a report
+///   that arrived after a later frame's) is dropped, and so is a frame shown before the time of
+///   such a report, so neither the frames nor the times a window's requests carry run backwards;
+/// - the newest report wins.
 ///
 /// A stamp ahead of the event clock's reading when the report arrives is measured with error,
 /// and how far decides what it is:
@@ -115,13 +123,41 @@ const REPORT_LEAD: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Default)]
 struct Reported {
+    /// The presentation whose frame the window's newest present carried.
+    presenting: Option<PresentationAddress>,
     /// The newest report no request has carried yet.
     pending: Option<FramePresented>,
-    /// The time of the newest report a request carried.
-    carried: Option<EventTime>,
+    /// The frame and time of the newest report kept or carried, of the presentation the window
+    /// presents.
+    newest: Option<(FrameEpoch, EventTime)>,
+}
+
+/// Why a report was dropped, named by the trace that says so once the lock is released.
+#[derive(Clone, Copy, Debug)]
+enum Dropped {
+    /// Of a presentation the window does not present now.
+    Elsewhere,
+    /// Of a frame no newer than one reported, or shown before it.
+    Stale,
 }
 
 impl PresentationReports {
+    /// The window is about to present `frame`, `None` for a present that shows no frame of the
+    /// window. A frame of another presentation than the reports kept so far were of moves the
+    /// window to it: what was kept of the old one is forgotten.
+    pub(crate) fn presenting(&self, frame: Option<FrameStamp>) {
+        let Some(frame) = frame else {
+            return;
+        };
+        let mut reported = self.0.lock();
+        if reported.presenting != Some(frame.address) {
+            *reported = Reported {
+                presenting: Some(frame.address),
+                ..Reported::default()
+            };
+        }
+    }
+
     /// The platform showed a frame.
     pub(crate) fn report(&self, presented: FramePresented) {
         self.report_read_at(presented, EventTime::now());
@@ -139,24 +175,37 @@ impl PresentationReports {
             );
             return;
         }
-        let mut reported = self.0.lock();
-        let newest = reported
-            .pending
-            .map(|pending| pending.at)
-            .max(reported.carried);
-        if newest.is_none_or(|newest| presented.at > newest) {
-            reported.pending = Some(presented);
+        let dropped = {
+            let mut reported = self.0.lock();
+            if reported.presenting != Some(presented.frame.address) {
+                Some(Dropped::Elsewhere)
+            } else if reported
+                .newest
+                .is_some_and(|(epoch, at)| presented.frame.epoch <= epoch || presented.at < at)
+            {
+                Some(Dropped::Stale)
+            } else {
+                reported.pending = Some(presented);
+                reported.newest = Some((presented.frame.epoch, presented.at));
+                None
+            }
+        };
+        if let Some(dropped) = dropped {
+            tracing::trace!(
+                target: "flui.present",
+                epoch = presented.frame.epoch.get(),
+                at_ns = presented.at.as_nanos(),
+                ?dropped,
+                "a presentation report is dropped"
+            );
         }
     }
 
     /// `request`, carrying the newest report no request carried yet.
     pub(crate) fn carried_by(&self, request: FrameRequest) -> FrameRequest {
-        let mut reported = self.0.lock();
-        match reported.pending.take() {
-            Some(presented) => {
-                reported.carried = Some(presented.at);
-                request.presented(presented)
-            }
+        let presented = self.0.lock().pending.take();
+        match presented {
+            Some(presented) => request.presented(presented),
             None => request,
         }
     }
@@ -183,40 +232,95 @@ mod tests {
             "past the timeline's end"
         );
     }
+    /// Frame `epoch` of presentation `presentation`.
+    fn frame(presentation: usize, epoch: u64) -> FrameStamp {
+        FrameStamp::new(
+            PresentationAddress {
+                ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
+                presentation_id: flui_foundation::PresentationId::new(presentation),
+            },
+            FrameEpoch::from_raw(epoch),
+            flui_foundation::SurfaceGeneration::ZERO.next(),
+        )
+    }
 
-    /// The request after a report carries its stamp.
-    fn carried(reports: &PresentationReports) -> Option<u64> {
+    /// The reports of a window whose newest present carried a frame of presentation 1.
+    fn presenting_first() -> PresentationReports {
+        let reports = PresentationReports::default();
+        reports.presenting(Some(frame(1, 0)));
+        reports
+    }
+
+    /// The frame and stamp the request after a report carries.
+    fn carried(reports: &PresentationReports) -> Option<(u64, u64)> {
         reports
             .carried_by(FrameRequest::new(EventTime::from_nanos(1)))
             .presented
-            .map(|presented| presented.at.as_nanos())
+            .map(|presented| (presented.frame.epoch.get(), presented.at.as_nanos()))
     }
 
-    /// The newest report reaches the next request, once, with its own stamp; a repeat and an
-    /// older report do not.
+    /// The newest report reaches the next request, once, with its own frame and stamp; a repeat,
+    /// a report of an older frame and one shown before a report kept do not.
     #[test]
     fn a_presentation_report_rides_the_next_request() {
         let at = EventTime::from_nanos;
-        let shown = |nanos| FramePresented::new(at(nanos));
+        let shown = |epoch, nanos| FramePresented::new(frame(1, epoch), at(nanos));
 
-        let reports = PresentationReports::default();
+        let reports = presenting_first();
         assert_eq!(carried(&reports), None, "nothing reported");
 
-        reports.report_read_at(shown(20), at(30));
-        reports.report_read_at(shown(30), at(30));
-        reports.report_read_at(shown(25), at(30));
-        assert_eq!(carried(&reports), Some(30), "the newest report");
+        reports.report_read_at(shown(1, 20), at(30));
+        reports.report_read_at(shown(3, 30), at(30));
+        reports.report_read_at(shown(2, 25), at(30));
+        assert_eq!(carried(&reports), Some((3, 30)), "the newest frame");
         assert_eq!(carried(&reports), None, "carried once");
 
-        reports.report_read_at(shown(30), at(40));
-        reports.report_read_at(shown(28), at(40));
-        assert_eq!(carried(&reports), None, "a repeat and an older report");
-
-        reports.report_read_at(shown(45), at(40));
+        reports.report_read_at(shown(3, 30), at(40));
+        reports.report_read_at(shown(2, 35), at(40));
+        reports.report_read_at(shown(4, 29), at(40));
         assert_eq!(
             carried(&reports),
-            Some(45),
+            None,
+            "a repeat, an older frame, and a newer frame shown before the one carried"
+        );
+
+        reports.report_read_at(shown(5, 30), at(40));
+        assert_eq!(
+            carried(&reports),
+            Some((5, 30)),
+            "a later frame shown at the refresh of the one carried: the earlier was replaced"
+        );
+
+        reports.report_read_at(shown(6, 45), at(40));
+        assert_eq!(
+            carried(&reports),
+            Some((6, 45)),
             "a stamp ahead of the reading, carried as it is"
+        );
+    }
+
+    /// A report names the presentation whose frame it was: one of a presentation the window no
+    /// longer presents is dropped, and so is any report before the window presented a frame;
+    /// moving to another presentation forgets what was kept of the old one.
+    #[test]
+    fn a_report_of_a_presentation_the_window_left_is_dropped() {
+        let at = EventTime::from_nanos;
+        let reports = PresentationReports::default();
+        reports.report_read_at(FramePresented::new(frame(1, 1), at(10)), at(20));
+        assert_eq!(carried(&reports), None, "nothing presented yet");
+
+        reports.presenting(Some(frame(1, 1)));
+        reports.presenting(None);
+        reports.report_read_at(FramePresented::new(frame(1, 7), at(10)), at(20));
+        reports.presenting(Some(frame(2, 1)));
+        assert_eq!(carried(&reports), None, "the old presentation's report");
+
+        reports.report_read_at(FramePresented::new(frame(1, 8), at(30)), at(40));
+        reports.report_read_at(FramePresented::new(frame(2, 1), at(25)), at(40));
+        assert_eq!(
+            carried(&reports),
+            Some((1, 25)),
+            "the new presentation's first frame, though older than the old one's"
         );
     }
 
@@ -226,7 +330,7 @@ mod tests {
     fn a_report_stamped_far_ahead_does_not_outrank_the_reports_after_it() {
         const SECOND: u64 = 1_000_000_000;
         let at = EventTime::from_nanos;
-        let shown = |nanos| FramePresented::new(at(nanos));
+        let shown = |epoch, nanos| FramePresented::new(frame(1, epoch), at(nanos));
         let now = 5 * SECOND;
 
         for (stamp, why) in [
@@ -234,17 +338,17 @@ mod tests {
             (now + 3600 * SECOND, "a stamp on another clock's epoch"),
             (now + SECOND + 1, "just past the lead"),
         ] {
-            let reports = PresentationReports::default();
-            reports.report_read_at(shown(stamp), at(now));
-            reports.report_read_at(shown(now - 1_000), at(now));
-            assert_eq!(carried(&reports), Some(now - 1_000), "{why}");
+            let reports = presenting_first();
+            reports.report_read_at(shown(1, stamp), at(now));
+            reports.report_read_at(shown(2, now - 1_000), at(now));
+            assert_eq!(carried(&reports), Some((2, now - 1_000)), "{why}");
         }
 
-        let reports = PresentationReports::default();
-        reports.report_read_at(shown(now + SECOND), at(now));
+        let reports = presenting_first();
+        reports.report_read_at(shown(1, now + SECOND), at(now));
         assert_eq!(
             carried(&reports),
-            Some(now + SECOND),
+            Some((1, now + SECOND)),
             "at the lead: carried with its stamp"
         );
     }
@@ -257,12 +361,12 @@ mod tests {
     fn a_stream_of_stamps_that_lead_the_clock_reaches_every_request() {
         const REFRESH: u64 = 16_666_667;
         let at = EventTime::from_nanos;
-        let reports = PresentationReports::default();
-        for frame in 1..=5_u64 {
-            let arrives = 1_000_000_000 + frame * REFRESH;
+        let reports = presenting_first();
+        for epoch in 1..=5_u64 {
+            let arrives = 1_000_000_000 + epoch * REFRESH;
             let stamp = arrives + 2 * REFRESH;
-            reports.report_read_at(FramePresented::new(at(stamp)), at(arrives));
-            assert_eq!(carried(&reports), Some(stamp), "frame {frame}");
+            reports.report_read_at(FramePresented::new(frame(1, epoch), at(stamp)), at(arrives));
+            assert_eq!(carried(&reports), Some((epoch, stamp)), "frame {epoch}");
         }
     }
 

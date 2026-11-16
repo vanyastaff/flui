@@ -1,8 +1,8 @@
 //! What a host reports when it asks for a frame, and what it learned about the frames it showed.
 
-use core::time::Duration;
+use flui_foundation::FrameStamp;
 
-use crate::EventTime;
+use crate::{EventTime, RefreshPeriod};
 
 /// A request for one frame, on the event timeline of [`EventTime`].
 ///
@@ -11,12 +11,15 @@ use crate::EventTime;
 /// backend's own reading of that clock when the request was admitted where the platform reports
 /// none, and [`target_present`](Self::target_present) is `None` unless the platform names when
 /// this frame will be shown. Neither is a prediction. [`presented`](Self::presented) is the
-/// newest earlier frame of the window that the platform reported on the screen since the window's
-/// last request, so a request and the input before it are measured on one timeline.
+/// platform's newest report, since the window's last request, of an earlier frame shown, naming
+/// that frame (ADR-0346), so a request and the input before it are measured on one timeline.
 ///
 /// # Examples
 ///
 /// ```
+/// use flui_foundation::{
+///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
+/// };
 /// use flui_platform::{EventTime, FramePresented, FrameRequest};
 ///
 /// let vsync = EventTime::from_nanos(16_000_000);
@@ -26,7 +29,12 @@ use crate::EventTime;
 /// assert_eq!(request.target_present, Some(shown));
 /// assert_eq!(FrameRequest::new(vsync).target_present, None);
 ///
-/// let earlier = FramePresented::new(EventTime::from_nanos(9_000_000));
+/// let address = PresentationAddress {
+///     ui_runtime_id: UiRuntimeId::new(1),
+///     presentation_id: PresentationId::new(1),
+/// };
+/// let frame = FrameStamp::new(address, FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO.next());
+/// let earlier = FramePresented::new(frame, EventTime::from_nanos(9_000_000));
 /// let request = FrameRequest::new(vsync).presented(earlier);
 /// assert_eq!(request.presented, Some(earlier));
 /// ```
@@ -37,8 +45,8 @@ pub struct FrameRequest {
     pub vsync: EventTime,
     /// When the platform says this frame will be shown, if it says.
     pub target_present: Option<EventTime>,
-    /// The newest earlier frame the platform reported shown since the window's last request, if
-    /// it reported one. A window whose capabilities say it reports no presentation
+    /// The platform's newest report, since the window's last request, of an earlier frame shown,
+    /// if it made one. A window whose capabilities say it reports no presentation
     /// ([`WindowCapabilities::reports_presentation`](crate::WindowCapabilities::reports_presentation))
     /// never fills it.
     pub presented: Option<FramePresented>,
@@ -79,6 +87,16 @@ impl From<EventTime> for FrameRequest {
 
 /// The platform's report that a frame presented into a window reached the screen.
 ///
+/// [`frame`](Self::frame) names the frame the report describes: the stamp the raster side handed
+/// the window's surface target with that frame's present
+/// ([`SurfaceTarget::pre_present_notify`](crate::SurfaceTarget::pre_present_notify)), which the
+/// host carried to the platform's answer for that present (a DXGI present number, the feedback of
+/// a Wayland commit, a Metal drawable's handler). A report is never matched to a frame by when it
+/// arrived: with two or three presents in flight, or a present the display dropped, the frame shown
+/// is not the newest one presented, so a host that cannot tell which present was shown reports
+/// nothing. A present that shows no frame of the window (a scene lent outside its frames) is never
+/// reported.
+///
 /// [`at`](Self::at) is the instant the display started showing the frame (the refresh it was
 /// latched for), as the operating system measured it, rebased onto the event epoch: it compares
 /// with an input event's [`EventTime`] without conversion, so the time from an input to the frame
@@ -89,39 +107,50 @@ impl From<EventTime> for FrameRequest {
 ///
 /// ```
 /// use core::time::Duration;
-/// use flui_platform::{EventTime, FramePresented};
+/// use flui_foundation::{
+///     FrameEpoch, FrameStamp, PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
+/// };
+/// use flui_platform::{EventTime, FramePresented, RefreshPeriod};
 ///
+/// let address = PresentationAddress {
+///     ui_runtime_id: UiRuntimeId::new(1),
+///     presentation_id: PresentationId::new(1),
+/// };
+/// let frame = FrameStamp::new(address, FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO.next());
 /// let tap = EventTime::from_nanos(1_000_000);
-/// let shown = FramePresented::new(EventTime::from_nanos(25_000_000))
-///     .with_refresh(Duration::from_micros(16_667));
+/// let period = RefreshPeriod::try_from(Duration::from_micros(16_667)).expect("60 Hz");
+/// let shown = FramePresented::new(frame, EventTime::from_nanos(25_000_000)).refresh(period);
+/// assert_eq!(shown.frame, frame);
 /// assert_eq!(shown.at.saturating_duration_since(tap), Duration::from_millis(24));
-/// assert_eq!(shown.refresh, Some(Duration::from_micros(16_667)));
+/// assert_eq!(shown.refresh, Some(period));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FramePresented {
+    /// The frame shown: the stamp its present carried.
+    pub frame: FrameStamp,
     /// When the display started showing the frame.
     pub at: EventTime,
-    /// The display's refresh interval when it showed the frame, where the platform reports one
-    /// that is fixed; `None` for a variable or unknown rate.
-    pub refresh: Option<Duration>,
+    /// The display's refresh period when it showed the frame, where the platform reports a fixed
+    /// one that is a cadence; `None` for a variable or unknown rate.
+    pub refresh: Option<RefreshPeriod>,
 }
 
 impl FramePresented {
-    /// A frame shown at `at`, at an unknown refresh rate.
+    /// Frame `frame` shown at `at`, at an unknown refresh rate.
     #[must_use]
-    pub const fn new(at: EventTime) -> Self {
-        Self { at, refresh: None }
+    pub const fn new(frame: FrameStamp, at: EventTime) -> Self {
+        Self {
+            frame,
+            at,
+            refresh: None,
+        }
     }
 
-    /// The same report with the display's refresh interval; a zero interval is an unknown one.
+    /// The same report with the display's refresh period.
     #[must_use]
-    pub const fn with_refresh(mut self, refresh: Duration) -> Self {
-        self.refresh = if refresh.is_zero() {
-            None
-        } else {
-            Some(refresh)
-        };
+    pub const fn refresh(mut self, refresh: RefreshPeriod) -> Self {
+        self.refresh = Some(refresh);
         self
     }
 }

@@ -15,8 +15,12 @@
     )
 )]
 
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
 use std::time::Duration;
+
+use flui_foundation::FrameStamp;
+use flui_platform::{DxgiShown, DxgiStatistics, RefreshPeriod};
 
 use crate::input::assembly::counter_nanos;
 
@@ -75,13 +79,13 @@ struct SyncPoint {
     ticks: u64,
 }
 
-/// A present a swap chain's frame statistics newly report shown, with the counter reading it
-/// was read at: both on the performance counter, as time since its zero.
+/// Where a present the statistics newly name shown lies on the performance counter, with the
+/// counter reading it was read at: both as time since the counter's zero.
 ///
 /// The two are handed on as they are. What a stamp ahead of the reading means is decided where
 /// every host's reports pass (`PresentationReports`), not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ShownPresent {
+pub(crate) struct Placed {
     /// When the refresh it was shown at began.
     pub(crate) shown_at: Duration,
     /// When the statistics were read.
@@ -92,31 +96,149 @@ pub(crate) struct ShownPresent {
     pub(crate) refresh: Option<Duration>,
 }
 
-/// What a window's swap chain statistics last reported, so each read names only what is new.
+/// A frame the statistics newly name shown: the frame its present carried, where it lies on the
+/// counter, and the refresh period, where the measured one is a cadence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ShownPresent {
+    /// The frame the shown present carried.
+    pub(crate) frame: FrameStamp,
+    /// When the refresh it was shown at began.
+    pub(crate) shown_at: Duration,
+    /// When the statistics were read.
+    pub(crate) read_at: Duration,
+    /// The measured refresh period, `None` until two reports measure one or where it is no
+    /// cadence ([`RefreshPeriod`]).
+    pub(crate) refresh: Option<RefreshPeriod>,
+}
+
+/// How many presents of a swap chain a window keeps the frame of until its statistics name one
+/// shown: DXGI's largest buffer count, so no present a swap chain can hold is forgotten.
+const PRESENTS_KEPT: usize = 16;
+
+/// The frames of a swap chain's presents, by the number DXGI gives each present, from the one
+/// about to be made until the statistics name it or a later one shown.
+///
+/// DXGI numbers a swap chain's presents from its creation and names a shown present by that
+/// number (`PresentCount`), so a report goes to the frame its own present carried, not to the
+/// newest one made: with presents in flight the shown one is older, and one the display skipped
+/// is never named. A count of presents made that went back is a new swap chain: its numbers name
+/// none of the presents kept. A count at `u32::MAX` numbers no next present, so that one present
+/// is not kept.
+#[derive(Debug, Default)]
+struct PresentFrames {
+    /// Presents made with a frame and not yet named shown, oldest first.
+    in_flight: VecDeque<(u32, FrameStamp)>,
+    /// The presents the swap chain had made before the newest one kept.
+    made: Option<u32>,
+}
+
+impl PresentFrames {
+    /// The swap chain made `made` presents before the present about to be: whether it is a swap
+    /// chain other than the one the kept presents were made on, which forgets them.
+    fn before_present(&mut self, made: u32) -> bool {
+        let remade = self.made.is_some_and(|before| made < before);
+        if remade {
+            self.in_flight.clear();
+        }
+        self.made = Some(made);
+        remade
+    }
+
+    /// The present about to be, numbered after the `made` before it, shows `frame`.
+    fn presenting(&mut self, made: u32, frame: FrameStamp) {
+        let Some(number) = made.checked_add(1) else {
+            return;
+        };
+        if self.in_flight.len() == PRESENTS_KEPT {
+            self.in_flight.pop_front();
+        }
+        self.in_flight.push_back((number, frame));
+    }
+
+    /// The frame of present `number`, named shown; it and the presents before it leave, shown or
+    /// skipped. `None` for a present made without a frame, before the oldest kept, or not made.
+    fn shown(&mut self, number: u32) -> Option<FrameStamp> {
+        let position = self
+            .in_flight
+            .iter()
+            .position(|&(kept, _)| kept == number)?;
+        let (_, frame) = self.in_flight.drain(..=position).next_back()?;
+        Some(frame)
+    }
+}
+
+/// What a window's swap chain statistics last reported, so each read names only what is new, and
+/// the frames of the presents in flight, so each report names the frame it describes.
 ///
 /// The renderer reads the statistics before every present, and a display that shows one present
 /// per refresh answers several reads with the same present. Only a read naming another present
 /// and another refresh is a new report: a repeat would replace a report that measured the period
 /// with one that measures none. A break in the statistics (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`,
 /// after a mode change or a move to another output) forgets the last refresh, so no period is
-/// measured across it.
+/// measured across it; a new swap chain forgets it too.
 #[derive(Debug, Default)]
 pub(crate) struct PresentTracker {
     last: Option<SyncPoint>,
+    frames: PresentFrames,
 }
 
 impl PresentTracker {
+    /// What the counters read before the present of `frame` (`None` for a present that shows no
+    /// frame) report, with the counter reading `now` they were read at: the frame a newly shown
+    /// present carried, or `None` when nothing new is shown, the shown present carried no frame
+    /// kept, or the statistics broke off. Then the present about to be is kept with its frame.
+    pub(crate) fn observe(
+        &mut self,
+        read: DxgiStatistics,
+        frame: Option<FrameStamp>,
+        now: u64,
+        frequency: NonZeroU64,
+    ) -> Option<ShownPresent> {
+        if self.frames.before_present(read.last_present_count) {
+            self.last = None;
+        }
+        let shown = match read.shown {
+            DxgiShown::Present(shown) => self
+                .read(
+                    shown.present_count,
+                    shown.sync_refresh_count,
+                    shown.sync_qpc_time,
+                    now,
+                    frequency,
+                )
+                .and_then(|placed| {
+                    Some(ShownPresent {
+                        frame: self.frames.shown(shown.present_count)?,
+                        shown_at: placed.shown_at,
+                        read_at: placed.read_at,
+                        refresh: placed
+                            .refresh
+                            .and_then(|period| RefreshPeriod::try_from(period).ok()),
+                    })
+                }),
+            DxgiShown::Disjoint => {
+                self.disjoint();
+                None
+            }
+            _ => None,
+        };
+        if let Some(frame) = frame {
+            self.frames.presenting(read.last_present_count, frame);
+        }
+        shown
+    }
+
     /// The present a read names shown (`PresentCount`, `SyncRefreshCount`, `SyncQPCTime`),
     /// with the counter reading `now` it was read at; `None` for a read that names the present or
     /// the refresh the last one did, or names nothing shown yet (a zero or negative counter time).
-    pub(crate) fn read(
+    fn read(
         &mut self,
         present: u32,
         sync_refresh: u32,
         sync_ticks: i64,
         now: u64,
         frequency: NonZeroU64,
-    ) -> Option<ShownPresent> {
+    ) -> Option<Placed> {
         if self
             .last
             .is_some_and(|last| last.present == present || last.refresh == sync_refresh)
@@ -137,7 +259,7 @@ impl PresentTracker {
             refresh: sync_refresh,
             ticks,
         });
-        Some(ShownPresent {
+        Some(Placed {
             shown_at: to_duration(ticks),
             read_at: to_duration(now),
             refresh,
@@ -145,7 +267,7 @@ impl PresentTracker {
     }
 
     /// The statistics broke off: the next report measures no period from the ones before.
-    pub(crate) fn disjoint(&mut self) {
+    fn disjoint(&mut self) {
         self.last = None;
     }
 }
@@ -213,6 +335,112 @@ mod tests {
             .read(2, 2, 1_800_000, 1_900_000, MHZ_10)
             .expect("a swap chain made again");
         assert_eq!(remade.refresh, None, "a refresh count that went back");
+    }
+
+    /// The frame of the `epoch`-th frame of one presentation, on its first surface.
+    fn frame(epoch: u64) -> FrameStamp {
+        use flui_foundation::{
+            FrameEpoch, PresentationAddress, PresentationId, SurfaceGeneration, UiRuntimeId,
+        };
+        FrameStamp::new(
+            PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(1),
+            },
+            FrameEpoch::from_raw(epoch),
+            SurfaceGeneration::ZERO.next(),
+        )
+    }
+
+    /// The counters read before a present: `made` presents before it, and the statistics naming
+    /// present `shown` at refresh `refresh`, `refresh` periods of 166_667 ticks after tick 1_000_000.
+    fn counters(made: u32, shown: Option<(u32, u32)>) -> DxgiStatistics {
+        DxgiStatistics::new(
+            made,
+            shown.map_or(DxgiShown::Nothing, |(present, refresh)| {
+                DxgiShown::Present(flui_platform::DxgiFrameStatistics::new(
+                    present,
+                    refresh,
+                    1_000_000 + i64::from(refresh) * 166_667,
+                ))
+            }),
+        )
+    }
+
+    /// Each report names the frame its own present carried: with two presents in flight the
+    /// statistics name the older, a present the display skipped is never reported, a present
+    /// made without a frame reports nothing, and a swap chain made again numbers none of the old
+    /// one's presents.
+    #[test]
+    fn a_shown_present_reports_the_frame_its_present_carried() {
+        const NOW: u64 = 100_000_000;
+        let mut tracker = PresentTracker::default();
+        let mut observe = |read, carried: Option<u64>| {
+            tracker
+                .observe(read, carried.map(frame), NOW, MHZ_10)
+                .map(|shown| shown.frame.epoch.get())
+        };
+        assert_eq!(observe(counters(0, None), Some(1)), None, "present 1");
+        assert_eq!(observe(counters(1, None), Some(2)), None, "present 2");
+        assert_eq!(
+            observe(counters(2, Some((1, 10))), Some(3)),
+            Some(1),
+            "two presents in flight: the first is shown"
+        );
+        assert_eq!(
+            observe(counters(3, Some((3, 11))), Some(4)),
+            Some(3),
+            "present 2 skipped: present 3 shown"
+        );
+        assert_eq!(
+            observe(counters(4, Some((2, 12))), None),
+            None,
+            "the skipped present is never reported"
+        );
+        assert_eq!(
+            observe(counters(5, Some((5, 13))), Some(6)),
+            None,
+            "present 5 carried no frame"
+        );
+        assert_eq!(
+            observe(counters(0, Some((6, 14))), Some(7)),
+            None,
+            "a new swap chain's number 6 is none of the old chain's"
+        );
+        assert_eq!(observe(counters(1, Some((1, 20))), Some(8)), Some(7));
+    }
+
+    /// A period the reports measure outside a cadence (an hour between two refreshes counted one
+    /// apart) is no refresh period in the report.
+    #[test]
+    fn a_measured_period_outside_a_cadence_is_no_refresh() {
+        const HOUR: u64 = 3_600 * 10_000_000;
+        const HOUR_TICKS: i64 = 3_600 * 10_000_000;
+        let read = |made, present, refresh, ticks| {
+            DxgiStatistics::new(
+                made,
+                DxgiShown::Present(flui_platform::DxgiFrameStatistics::new(
+                    present, refresh, ticks,
+                )),
+            )
+        };
+        let mut tracker = PresentTracker::default();
+        let _ = tracker.observe(counters(0, None), Some(frame(1)), 1, MHZ_10);
+        let _ = tracker.observe(counters(1, None), Some(frame(2)), 1, MHZ_10);
+        let first = tracker
+            .observe(read(2, 1, 10, 1_000), Some(frame(3)), 2_000, MHZ_10)
+            .expect("the first report");
+        assert_eq!(first.refresh, None, "one report measures no period");
+        let second = tracker
+            .observe(
+                read(3, 2, 11, 1_000 + HOUR_TICKS),
+                None,
+                2_000 + HOUR,
+                MHZ_10,
+            )
+            .expect("the second report");
+        assert_eq!(second.frame, frame(2));
+        assert_eq!(second.refresh, None, "an hour is no cadence");
     }
 
     /// A read naming the present or the refresh the last report named is no report: the one

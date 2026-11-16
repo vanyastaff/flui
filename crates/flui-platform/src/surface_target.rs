@@ -6,6 +6,7 @@
 //! instead: the window's raw handles and the pre-present notification, and
 //! nothing else of the window.
 
+use flui_foundation::FrameStamp;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 /// The surface of one window, as the thread that presents its frames holds
@@ -63,13 +64,21 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// host whose window system has no such protocol returns at once, and says
     /// so where it implements this.
     ///
+    /// `frame` is the stamp of the frame this present shows, `None` for a
+    /// present that shows no frame of the window (a scene lent outside its
+    /// frames). A host whose window reports presentation carries it with the
+    /// present to the platform's answer for that present, and the report
+    /// names it ([`FramePresented::frame`](crate::FramePresented::frame)); a
+    /// present without a frame is never reported. A host whose window reports
+    /// none ignores it.
+    ///
     /// `statistics` is what the presenter read from its swap chain about the
     /// frames it presented before this one, for a host whose platform reports
     /// presentation there and nowhere the host can reach on its own (DXGI on
     /// Windows): the host turns it into the window's
     /// [`FrameRequest::presented`](crate::FrameRequest::presented). A presenter
     /// that reads nothing passes [`SwapChainStatistics::None`].
-    fn pre_present_notify(&self, statistics: SwapChainStatistics);
+    fn pre_present_notify(&self, frame: Option<FrameStamp>, statistics: SwapChainStatistics);
 }
 
 /// The platform's connection to its window system, which the one GPU instance
@@ -104,13 +113,62 @@ pub enum SwapChainStatistics {
     /// The presenter read nothing.
     #[default]
     None,
-    /// A DXGI swap chain's `GetFrameStatistics`.
-    Dxgi(DxgiFrameStatistics),
-    /// A DXGI swap chain's statistics broke off
-    /// (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: a mode change, a move to
-    /// another output): the next statistics do not compare with the earlier
-    /// ones.
-    DxgiDisjoint,
+    /// A DXGI swap chain's counters.
+    Dxgi(DxgiStatistics),
+}
+
+/// What a presenter read from a DXGI swap chain before a present: how many
+/// presents the swap chain made before this one, and what its frame
+/// statistics name shown.
+///
+/// The two share one numbering, the swap chain's presents counted from its
+/// creation: the present about to be made is number
+/// [`last_present_count`](Self::last_present_count) + 1, and a shown present's
+/// [`present_count`](DxgiFrameStatistics::present_count) is the number it was
+/// made with. So the host keeps the frame of each numbered present and reports
+/// a shown present as the frame it carried. A count lower than the one before
+/// is a new swap chain, whose numbers name none of the old one's presents.
+///
+/// ```
+/// use flui_platform::{DxgiFrameStatistics, DxgiShown, DxgiStatistics};
+///
+/// let read = DxgiStatistics::new(41, DxgiShown::Present(DxgiFrameStatistics::new(39, 1_201, 9_000_000)));
+/// assert_eq!(read.last_present_count, 41);
+/// assert!(matches!(read.shown, DxgiShown::Present(shown) if shown.present_count == 39));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DxgiStatistics {
+    /// `GetLastPresentCount`: how many presents the swap chain made before the
+    /// one about to be.
+    pub last_present_count: u32,
+    /// What `GetFrameStatistics` answered.
+    pub shown: DxgiShown,
+}
+
+impl DxgiStatistics {
+    /// The counters a presenter read, field by field in declaration order.
+    #[must_use]
+    pub const fn new(last_present_count: u32, shown: DxgiShown) -> Self {
+        Self {
+            last_present_count,
+            shown,
+        }
+    }
+}
+
+/// What a DXGI swap chain's `GetFrameStatistics` answered before a present.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DxgiShown {
+    /// No statistics: nothing shown yet, or the read failed.
+    Nothing,
+    /// The newest present the display showed.
+    Present(DxgiFrameStatistics),
+    /// The statistics broke off (`DXGI_ERROR_FRAME_STATISTICS_DISJOINT`: a
+    /// mode change, a move to another output): the next statistics do not
+    /// compare with the earlier ones.
+    Disjoint,
 }
 
 /// A DXGI swap chain's frame statistics, as `IDXGISwapChain::GetFrameStatistics`

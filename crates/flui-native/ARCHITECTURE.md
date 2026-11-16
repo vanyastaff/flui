@@ -1080,26 +1080,35 @@ trait depends on `flui-platform` instead.
     (destroyed when the last holder drops) and a clone of the connection. Its
     `pre_present_notify` arms the Wayland frame callback on the
     native Wayland host, and returns at once elsewhere. It is also where a
-    presentation report starts: the native Wayland target asks
-    `wp_presentation` for a feedback per commit, whose `presented` event the
+    presentation report starts, and every report names the frame the present
+    it describes carried (ADR-0346): the native Wayland target asks
+    `wp_presentation` for a feedback per commit of a frame, with the frame as
+    the feedback's user data (`PresentedCommit`), whose `presented` event the
     window rebases from the compositor's clock (`clock_id`) onto the event
     clock, and the Win32 target rebases the DXGI frame statistics the renderer
     read (`SwapChainStatistics::Dxgi`) from the performance counter, measuring
     the refresh period between two reports (`frame_timing::PresentTracker`:
-    a read naming the present or refresh already reported is no report, and
-    `SwapChainStatistics::DxgiDisjoint` forgets the last refresh). The
-    AppKit window reports from its view's backing layer, not the target:
+    a read naming the present or refresh already reported is no report,
+    `DxgiShown::Disjoint` forgets the last refresh, and each present's frame
+    is kept by its DXGI number until the statistics name it or a later one
+    shown, forgotten when the count of presents goes back, a new swap chain).
+    The AppKit window reports from its view's backing layer, not the target:
     `owner::apple::metal_layer::FluiMetalLayer` (from `makeBackingLayer`)
     is the `CAMetalLayer` wgpu takes as the view's root layer and gets every
     drawable from, and its `nextDrawable` adds a presented handler to each,
     which Metal calls on a thread of its own with the drawable's
     `presentedTime`, rebased from `CACurrentMediaTime` onto the event clock,
-    with the refresh of the window's display.
+    with the refresh of the window's display; the handler names the frame the
+    target's `pre_present_notify` wrote into the slot `nextDrawable` armed for
+    that drawable. The headless window keeps each present's frame until its
+    simulated window system shows or discards it.
     Each reports into the window's
     `frame_timing::PresentationReports`, which the `WindowDelivery` keeps and
     `dispatch_frame` empties into the next frame request
-    (`FrameRequest::presented`): the newest report wins, a report no later
-    than one kept or carried is dropped. A stamp ahead of the event clock's
+    (`FrameRequest::presented`): the newest report wins; a report of a frame
+    of another presentation than the window's newest present carried is
+    dropped, and so is one of a frame no newer than one kept or carried, or
+    shown before it. A stamp ahead of the event clock's
     reading when the report arrives (a rebase's error, a compositor that
     adds its display's latency) is carried with its stamp while it lies
     within `REPORT_LEAD`: the stamp is the phase of the refresh grid the
@@ -1109,8 +1118,9 @@ trait depends on `flui-platform` instead.
     of a frame, and the report is dropped: kept, a rebase saturated at the
     timeline's end would silence the window for good. Every host's reports
     pass there, and no host judges a stamp's lead itself: the Win32 window
-    hands on the swap chain's stamp and its counter reading as they are. The headless window reports what a test injects
-    (`HeadlessHostWindow::simulate_presented`). The web and X11 windows answer
+    hands on the swap chain's stamp and its counter reading as they are. The headless window reports the presents a test has its
+    simulated window system show (`HeadlessHostWindow::simulate_presented`,
+    `simulate_discarded`). The web and X11 windows answer
     `NotOnThisPlatform` (a browser names the frame's start, never its showing;
     an X11 present completes on the GPU driver's connection),
     and UIKit and the Activity

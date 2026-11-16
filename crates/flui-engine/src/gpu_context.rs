@@ -17,7 +17,9 @@
 
 use std::{cell::Cell, marker::PhantomData, sync::Arc};
 
-use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic};
+use flui_foundation::{
+    FrameStamp, geometry::DeviceSize, memory::MemoryPressureLevel, panic::FirstPanic,
+};
 use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::{DisplayColor, DisplayConnection, SurfaceTarget};
 use rustc_hash::FxHashMap;
@@ -960,10 +962,11 @@ impl GpuContext {
     fn render_window(
         &mut self,
         slot: SlotId,
+        frame: FrameStamp,
         scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
-        self.draw_window(slot, scene, WindowDraw::Frame(damage))
+        self.draw_window(slot, scene, WindowDraw::Frame { damage, frame })
     }
 
     /// Draw `scene` into window `slot` as `draw` asks and present it, as
@@ -1014,8 +1017,8 @@ impl GpuContext {
             painter.resize(size.0, size.1);
             let gpu = gpu_of(adapter, domain);
             match draw {
-                WindowDraw::Frame(damage) => {
-                    window.render(&gpu, &mut painter, &mut blit, scene, damage)
+                WindowDraw::Frame { damage, frame } => {
+                    window.render(&gpu, &mut painter, &mut blit, scene, damage, frame)
                 }
                 WindowDraw::Lent { reset_fonts } => {
                     window.render_lent(&gpu, &mut painter, &mut blit, scene, reset_fonts)
@@ -1343,6 +1346,7 @@ impl RasterBackend for GpuContext {
     fn render(
         &mut self,
         slot: SlotId,
+        frame: FrameStamp,
         scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
@@ -1351,7 +1355,7 @@ impl RasterBackend for GpuContext {
             return Err(EngineError::DeviceLost);
         }
         match self.slots.get(slot) {
-            Some(SurfaceSlot::Window(_)) => self.render_window(slot, scene, damage),
+            Some(SurfaceSlot::Window(_)) => self.render_window(slot, frame, scene, damage),
             Some(SurfaceSlot::Offscreen(_)) | None => {
                 self.render_slot(slot, scene.content())?;
                 Ok(PresentDisposition::Presented)
@@ -1409,8 +1413,11 @@ impl RasterBackend for GpuContext {
 /// them.
 #[derive(Clone, Copy)]
 enum WindowDraw {
-    /// A frame, repainting at least its damage.
-    Frame(DamageRegion),
+    /// A frame, repainting at least its damage, presented with its stamp.
+    Frame {
+        damage: DamageRegion,
+        frame: FrameStamp,
+    },
     /// A lent scene, in full, with the fonts it carries.
     Lent { reset_fonts: bool },
 }
@@ -1510,6 +1517,18 @@ mod tests {
                 None
             }
         }
+    }
+
+    /// The stamp of a frame a test draws straight into a window slot.
+    fn drawn_frame() -> FrameStamp {
+        FrameStamp::new(
+            PresentationAddress {
+                ui_runtime_id: UiRuntimeId::new(1),
+                presentation_id: PresentationId::new(1),
+            },
+            FrameEpoch::ZERO.next(),
+            SurfaceGeneration::ZERO.next(),
+        )
     }
 
     /// A frame of `tree` for the slot at `address`, stamped with `generation`.
@@ -2498,6 +2517,7 @@ mod tests {
                 context
                     .render_window(
                         slot,
+                        drawn_frame(),
                         &scene,
                         DamageRegion::Full(flui_layer::FullReason::FirstFrame)
                     )
@@ -2547,12 +2567,12 @@ mod tests {
         let scene = Scene::new(square_and_glyph());
         let full = DamageRegion::Full(flui_layer::FullReason::FirstFrame);
         assert!(matches!(
-            context.render_window(slot, &scene, full),
+            context.render_window(slot, drawn_frame(), &scene, full),
             Err(EngineError::SurfaceReplacementNeeded)
         ));
         assert!(
             matches!(
-                context.render_window(slot, &scene, full),
+                context.render_window(slot, drawn_frame(), &scene, full),
                 Ok(crate::raster::PresentDisposition::NotShown)
             ),
             "the slot holds no surface until its owner restores one"

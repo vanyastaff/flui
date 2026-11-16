@@ -2441,11 +2441,20 @@ mod toplevel {
 
     /// What a surface's presentation feedback reports to: the clock its
     /// times are on, and the window's reports, which its next frame request
-    /// carries. The user data of each `wp_presentation_feedback`.
+    /// carries.
     #[derive(Clone)]
     pub(crate) struct PresentedTo {
         time: PresentationTime,
         reports: PresentationReports,
+    }
+
+    /// One commit's presentation feedback: where it reports, and the frame
+    /// the commit shows, which its report names. The user data of each
+    /// `wp_presentation_feedback`, so a report goes to the frame of its own
+    /// commit, never to the newest one made.
+    pub(crate) struct PresentedCommit {
+        to: PresentedTo,
+        frame: flui_foundation::FrameStamp,
     }
 
     impl HasWindowHandle for WaylandSurface {
@@ -2512,18 +2521,29 @@ mod toplevel {
         /// compositor has shown this one, or the grace after which a present
         /// that never committed is given up (`frame::CALLBACK_GRACE`). Returns
         /// at once; one callback is out at a time. Where the compositor offers
-        /// `wp_presentation`, every present also asks when its commit is
-        /// shown ([`presented`]).
-        fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
+        /// `wp_presentation`, every present of a frame also asks when its
+        /// commit is shown ([`presented`]), with the frame the report will
+        /// name; a present that shows no frame asks nothing.
+        fn pre_present_notify(
+            &self,
+            frame: Option<flui_foundation::FrameStamp>,
+            _: flui_platform::SwapChainStatistics,
+        ) {
             if self.retirement.is_retired() {
                 return;
             }
             if let Some(presented) = &self.presentation {
-                let _feedback = presented.time.manager.feedback(
-                    &self.surface.0,
-                    &self.queue,
-                    presented.clone(),
-                );
+                presented.reports.presenting(frame);
+                if let Some(frame) = frame {
+                    let _feedback = presented.time.manager.feedback(
+                        &self.surface.0,
+                        &self.queue,
+                        PresentedCommit {
+                            to: presented.clone(),
+                            frame,
+                        },
+                    );
+                }
             }
             let now = Instant::now();
             {
@@ -3145,17 +3165,18 @@ mod toplevel {
         }
     }
 
-    impl Dispatch<WpPresentationFeedback, PresentedTo> for WaylandState {
-        /// A commit was shown: its time, on the compositor's presentation
-        /// clock, is rebased onto the event clock by its distance from a
-        /// reading of that clock, and reported with the output's refresh. A
-        /// discarded commit (another replaced it before a refresh) reports
-        /// nothing; the compositor destroys the feedback after either.
+    impl Dispatch<WpPresentationFeedback, PresentedCommit> for WaylandState {
+        /// A commit was shown: the frame it carried, at its time on the
+        /// compositor's presentation clock rebased onto the event clock by its
+        /// distance from a reading of that clock, and with the output's
+        /// refresh where it is a cadence. A discarded commit (another replaced
+        /// it before a refresh) reports nothing; the compositor destroys the
+        /// feedback after either.
         fn event(
             _: &mut Self,
             _: &WpPresentationFeedback,
             event: wp_presentation_feedback::Event,
-            presented_to: &PresentedTo,
+            commit: &PresentedCommit,
             _: &Connection,
             _: &QueueHandle<Self>,
         ) {
@@ -3171,14 +3192,18 @@ mod toplevel {
             };
             let (Some(shown), Some(now)) = (
                 presented::shown_at(tv_sec_hi, tv_sec_lo, tv_nsec),
-                presented_to.time.clock.now(),
+                commit.to.time.clock.now(),
             ) else {
                 return;
             };
-            // A zero refresh, a variable rate, is none (`FramePresented::with_refresh`).
-            let report = flui_platform::FramePresented::new(rebased(now, shown))
-                .with_refresh(std::time::Duration::from_nanos(u64::from(refresh)));
-            presented_to.reports.report(report);
+            let mut report = flui_platform::FramePresented::new(commit.frame, rebased(now, shown));
+            // A zero refresh, a variable rate, is none, as is one outside a cadence.
+            if let Ok(refresh) = flui_platform::RefreshPeriod::try_from(
+                std::time::Duration::from_nanos(u64::from(refresh)),
+            ) {
+                report = report.refresh(refresh);
+            }
+            commit.to.reports.report(report);
         }
     }
 

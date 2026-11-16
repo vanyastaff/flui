@@ -1483,6 +1483,28 @@ fn idle_tasks_run(target_present: Option<u64>) -> (usize, bool) {
     (ran.get(), clock.asked)
 }
 
+/// The platform's report that the first frame of `runtime`'s presentation was shown at `at`, on a
+/// display refreshing every `refresh` where it names one.
+fn shown_frame(
+    runtime: &UiRuntime,
+    at: flui_platform::EventTime,
+    refresh: Option<Duration>,
+) -> flui_platform::FramePresented {
+    let frame = flui_foundation::FrameStamp::new(
+        flui_foundation::PresentationAddress {
+            ui_runtime_id: runtime.id(),
+            presentation_id: runtime.presentation_id(),
+        },
+        flui_foundation::FrameEpoch::ZERO.next(),
+        flui_foundation::SurfaceGeneration::ZERO.next(),
+    );
+    let shown = flui_platform::FramePresented::new(frame, at);
+    match refresh.map(flui_platform::RefreshPeriod::try_from) {
+        Some(refresh) => shown.refresh(refresh.expect("a refresh period")),
+        None => shown,
+    }
+}
+
 /// How many of two idle tasks, each taking 20 ms of host time, run in a frame whose request names
 /// no present time, delivered 16 ms after an earlier frame whose request carried a report
 /// where `reported_ago` names one: a frame shown that long before the earlier frame's vsync, at
@@ -1490,6 +1512,24 @@ fn idle_tasks_run(target_present: Option<u64>) -> (usize, bool) {
 fn idle_tasks_after_a_presentation(
     reported_ago: Option<Duration>,
     refresh: Option<Duration>,
+) -> (usize, bool) {
+    idle_tasks_after_a_report(reported_ago, refresh, Whose::ThisPresentation)
+}
+
+/// Whose frame a presentation report names.
+#[derive(Clone, Copy)]
+enum Whose {
+    /// A frame of the presentation the request is delivered to.
+    ThisPresentation,
+    /// A frame of another presentation, as an incarnation the window no longer presents.
+    AnotherPresentation,
+}
+
+/// [`idle_tasks_after_a_presentation`], with the report naming a frame of `whose` presentation.
+fn idle_tasks_after_a_report(
+    reported_ago: Option<Duration>,
+    refresh: Option<Duration>,
+    whose: Whose,
 ) -> (usize, bool) {
     let host = ManualClock::new();
     host.advance(Duration::from_secs(1));
@@ -1499,10 +1539,9 @@ fn idle_tasks_after_a_presentation(
     if let Some(ago) = reported_ago {
         let at = crate::event_at(&host, earlier).as_nanos()
             - u64::try_from(ago.as_nanos()).expect("a test age fits");
-        let mut shown =
-            flui_platform::FramePresented::new(flui_platform::EventTime::from_nanos(at));
-        if let Some(refresh) = refresh {
-            shown = shown.with_refresh(refresh);
+        let mut shown = shown_frame(&runtime, flui_platform::EventTime::from_nanos(at), refresh);
+        if let Whose::AnotherPresentation = whose {
+            shown.frame.address.presentation_id = flui_foundation::PresentationId::new(99);
         }
         request = request.presented(shown);
     }
@@ -1551,11 +1590,11 @@ fn idle_tasks_in_a_frame_reached_late(late: Duration) -> usize {
                 host.advance(Duration::from_millis(20));
             });
     }
-    let shown = flui_platform::FramePresented::new(crate::event_at(
-        &host,
-        vsync + Duration::from_millis(1),
-    ))
-    .with_refresh(Duration::from_millis(10));
+    let shown = shown_frame(
+        &runtime,
+        crate::event_at(&host, vsync + Duration::from_millis(1)),
+        Some(Duration::from_millis(10)),
+    );
     let request = flui_platform::FrameRequest::new(crate::event_at(&host, vsync)).presented(shown);
     runtime.note_frame_request(runtime.presentation_id(), request);
     let _ = runtime.pump(&mut SampledClock(host.now()), &mut Sink);
@@ -1607,6 +1646,16 @@ fn a_presentation_report_bounds_the_idle_work_of_a_later_frame() {
         ),
         (2, true),
         "a report from twenty refreshes back bounds nothing: the window was idle, and the host's \
+         deadline stands"
+    );
+    assert_eq!(
+        idle_tasks_after_a_report(
+            Some(Duration::from_millis(5)),
+            Some(Duration::from_millis(10)),
+            Whose::AnotherPresentation,
+        ),
+        (2, true),
+        "a report naming another presentation's frame is no report of this one's: the host's \
          deadline stands"
     );
 }

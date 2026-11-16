@@ -123,7 +123,7 @@ mod cases {
             run_for(platform, Duration::from_millis(20)).expect("the loop turns");
             window
                 .surface_target()
-                .pre_present_notify(flui_platform::SwapChainStatistics::None);
+                .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
             let _ = present(window.as_ref());
             if done(&handler.calls()) {
                 return;

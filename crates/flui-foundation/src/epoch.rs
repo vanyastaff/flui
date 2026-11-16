@@ -83,6 +83,15 @@ macro_rules! epoch_counters {
                     Self(self.0 + 1)
                 }
 
+                /// The value whose raw counter is `value`, as
+                /// [`get`](Self::get) read it: what a recording that wrote
+                /// the counter reads back. Nothing checks that a counter ever
+                /// reached it.
+                #[must_use]
+                pub const fn from_raw(value: u64) -> Self {
+                    Self(value)
+                }
+
                 /// The raw counter value.
                 #[must_use]
                 pub const fn get(self) -> u64 {

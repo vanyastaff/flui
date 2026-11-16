@@ -92,7 +92,7 @@ impl Client {
         run_for(&self.platform, Duration::from_millis(10)).expect("the loop turns");
         self.window
             .surface_target()
-            .pre_present_notify(flui_platform::SwapChainStatistics::None);
+            .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
         let _ = present(self.window.as_ref());
         self.answers.settle();
     }

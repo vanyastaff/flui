@@ -348,8 +348,9 @@ struct KeptView(objc2::rc::Retained<objc2::runtime::AnyObject>);
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe impl Send for KeptView {}
 
-// SAFETY: a shared `MainRetainedView` hands out its view's address on the main
-// thread only (`MainRetainedView::view` takes a `MainThreadMarker`), and
+// SAFETY: a shared `MainRetainedView` hands out its view, or the view's address,
+// on the main thread only (`MainRetainedView::view` and `object` take a
+// `MainThreadMarker`), and
 // releases the view on the main thread only (see `KeptView`): no thread but the
 // main thread reaches the view through it.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -380,6 +381,16 @@ impl MainRetainedView {
         self.0
             .as_ref()
             .map(|kept| std::ptr::NonNull::from(&*kept.0).cast())
+    }
+
+    /// The kept view to message, on the main thread: `None` when no view was
+    /// kept.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn object(
+        &self,
+        _main: objc2::MainThreadMarker,
+    ) -> Option<&objc2::runtime::AnyObject> {
+        self.0.as_ref().map(|kept| &*kept.0)
     }
 }
 

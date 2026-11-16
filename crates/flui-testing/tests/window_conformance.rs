@@ -14,8 +14,7 @@ use flui_platform::{
     WindowMode, WindowState,
 };
 use flui_platform::{
-    Availability, EventTime, FramePresented, FrameRequest, WindowCapabilities, WindowCapability,
-    WindowOptions,
+    Availability, EventTime, FrameRequest, WindowCapabilities, WindowCapability, WindowOptions,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -233,7 +232,11 @@ impl raw_window_handle::HasDisplayHandle for BlockingSurface {
 }
 
 impl flui_platform::SurfaceTarget for BlockingSurface {
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
 }
@@ -251,6 +254,8 @@ struct Fixture {
     fault: Option<Fault>,
     /// What a window with [`Fault::DropsFactsWithABadReport`] keeps answering.
     kept: KeptSnapshot,
+    /// How many presents the fixture made into the window.
+    presents: u64,
 }
 
 impl Fixture {
@@ -295,6 +300,10 @@ enum Fault {
     /// The window's frame requests carry the platform's stamps on the
     /// platform's own clock, never rebased onto the event epoch.
     StampsFramesOffTheTimeline,
+    /// The window's presentation reports name a frame no present carried, as
+    /// a host that names a report after what it holds now rather than the
+    /// present the report describes.
+    NamesAnotherFrame,
     /// The window opened after the one under test closed reports the closed
     /// one's id, as a host that took a recycled handle for an id would.
     ReissuesAClosedId,
@@ -358,6 +367,7 @@ impl Fixture {
             handler,
             fault,
             kept,
+            presents: 0,
         }
     }
 }
@@ -480,11 +490,12 @@ impl WindowFixture for Fixture {
     /// simulated window system shows at once and reports where the window
     /// says it reports presentation; then the window's next frame.
     fn present_and_request_frame(&mut self) -> Option<FrameRequest> {
-        self.model
-            .surface_target()
-            .pre_present_notify(flui_platform::SwapChainStatistics::None);
-        self.mock()
-            .simulate_presented(FramePresented::new(EventTime::now()));
+        self.presents += 1;
+        self.model.surface_target().pre_present_notify(
+            Some(window_conformance::fixture_frame(self.presents)),
+            flui_platform::SwapChainStatistics::None,
+        );
+        let _shown = self.mock().simulate_presented(EventTime::now(), None);
         self.handler.take_calls();
         self.window.request_redraw();
         let request = self
@@ -503,6 +514,14 @@ impl WindowFixture for Fixture {
                 let platform_clock = request.vsync + std::time::Duration::from_secs(3600);
                 request.target_present = Some(request.vsync);
                 request.vsync = platform_clock;
+                request
+            }),
+            // A frame of another presentation than the fixture presents.
+            Some(Fault::NamesAnotherFrame) => request.map(|mut request| {
+                if let Some(presented) = request.presented.as_mut() {
+                    presented.frame.address.presentation_id =
+                        flui_foundation::PresentationId::new(2);
+                }
                 request
             }),
             _ => request,
@@ -693,6 +712,15 @@ fn a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught(
     );
 }
 
+/// A report that names a frame no present carried is caught, however well its
+/// time fits.
+fn a_window_whose_reports_name_another_frame_is_caught() {
+    assert_eq!(
+        caught(Fault::NamesAnotherFrame),
+        ["presentation_is_reported_exactly_when_claimed"]
+    );
+}
+
 fn a_window_whose_frame_stamps_are_off_the_timeline_is_caught() {
     assert_eq!(
         caught(Fault::StampsFramesOffTheTimeline),
@@ -795,6 +823,10 @@ fn window_conformance_checks() {
                 "a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught",
                 a_window_whose_presentation_reports_disagree_with_its_capabilities_is_caught
                     as fn(),
+            ),
+            (
+                "a_window_whose_reports_name_another_frame_is_caught",
+                a_window_whose_reports_name_another_frame_is_caught as fn(),
             ),
             (
                 "a_window_whose_frame_stamps_are_off_the_timeline_is_caught",

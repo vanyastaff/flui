@@ -1,6 +1,6 @@
 //! The executor's GPU-free seam (ADR-0305 §11).
 
-use flui_foundation::{geometry::DeviceSize, memory::MemoryPressureLevel};
+use flui_foundation::{FrameStamp, geometry::DeviceSize, memory::MemoryPressureLevel};
 use flui_layer::{DamageRegion, Scene, TextureUpdates};
 use flui_platform::DisplayColor;
 
@@ -74,7 +74,11 @@ pub trait RasterBackend {
     /// other frame and retirement is still applied.
     fn apply_textures(&mut self, slot: SlotId, updates: TextureUpdates) -> EngineResult<()>;
 
-    /// Render `scene` into `slot`, repainting at least `damage`.
+    /// Render `scene`, the frame `frame` stamps, into `slot`, repainting at
+    /// least `damage`. A window slot hands `frame` to its surface target with
+    /// the present
+    /// ([`SurfaceTarget::pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)),
+    /// so the window's report of the frame shown names it.
     ///
     /// # Errors
     /// The frame's render, submission or present error, which the executor
@@ -82,6 +86,7 @@ pub trait RasterBackend {
     fn render(
         &mut self,
         slot: SlotId,
+        frame: FrameStamp,
         scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition>;
@@ -174,10 +179,11 @@ impl<B: RasterBackend + ?Sized> RasterBackend for Box<B> {
     fn render(
         &mut self,
         slot: SlotId,
+        frame: FrameStamp,
         scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
-        (**self).render(slot, scene, damage)
+        (**self).render(slot, frame, scene, damage)
     }
 
     fn render_lent(

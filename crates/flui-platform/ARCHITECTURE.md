@@ -270,19 +270,26 @@ this one path (ADR-0151 §9).
   (`HandleError::NotSupported`). No window target implements it, since a
   target answers `Unavailable` once its window is gone.
 - **A frame request carries when earlier frames reached the screen, on the
-  event timeline.** `FrameRequest::presented` is a `FramePresented { at,
-  refresh }`: the instant the display started showing the newest earlier
-  frame the platform reported since the window's last request, an `EventTime`
-  like every input stamp, so input-to-photon time is a subtraction; never a
-  prediction (a platform that names when a frame is due fills
-  `target_present`). Whether a window reports at all is a capability,
+  event timeline, each report naming its frame (ADR-0346).**
+  `FrameRequest::presented` is a `FramePresented { frame, at, refresh }`: the
+  platform's newest report since the window's last request, naming the frame
+  shown by the `FrameStamp` its present carried, the instant the display
+  started showing it, an `EventTime` like every input stamp, so
+  input-to-photon time is a subtraction, and the display's period as a checked
+  `RefreshPeriod`; never a prediction (a platform that names when a frame is
+  due fills `target_present`). The raster side hands each present's stamp to
+  the target (`pre_present_notify(Option<FrameStamp>, SwapChainStatistics)`,
+  `None` for a present that shows no frame), and a host carries it to the
+  platform's answer for that present, never to "the newest present". Whether a
+  window reports at all is a capability,
   `WindowCapabilities::reports_presentation`, `Absent` with why not; no verb
   answers for it, so the capability holds its reason. Where the platform reports
   presentation only to whoever holds the swap chain (DXGI), the presenter
   hands the surface target what it read before each present
-  (`pre_present_notify(SwapChainStatistics)`, `DxgiFrameStatistics` in the
-  platform's own units), and the host rebases it; a presenter that reads
-  nothing passes `SwapChainStatistics::None`.
+  (`SwapChainStatistics::Dxgi(DxgiStatistics)`: the presents made so far,
+  which number the next, and `DxgiShown`, in the platform's own units), and
+  the host rebases it; a presenter that reads nothing passes
+  `SwapChainStatistics::None`.
 
 ## Mapping decisions
 

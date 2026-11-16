@@ -6927,6 +6927,58 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   которые уже есть на `main` и ломаются лишь на Windows; `xtask cross-typecheck` требует `zig` и
   идёт в CI.
 
+- [x] **LY116** — ветка `platform/presentation-identity`, решение — ADR-0346 (заменяет форму отчёта
+  и первое правило порядка из решения 6 ADR-0257 и форму `SwapChainStatistics` из решения 8).
+  Подтверждено на `main` @ `e166cabd3` чтением: `FramePresented { at, refresh: Option<Duration> }`
+  не называл кадра, `PresentationReports` упорядочивал отчёты только по времени, и ни один хост не
+  нёс тождество present до ответа платформы; `with_refresh` принимал любой ненулевой `Duration`.
+  Потребителя, который приписывал бы задержку не тому кадру, на `main` нет: часы кадра берут из
+  отчёта только фазу сетки обновлений, так что находка — недостающее тождество, а не неверная
+  атрибуция. Построено на тождестве, которое уже есть у кадра (ADR-0305 §4, #2675, #2677): отчёт
+  называет кадр штампом `FrameStamp`, с которым кадр ушёл в present, второго счётчика нет.
+  `RasterBackend::render` получает штамп кадра, слот окна передаёт его в
+  `SurfaceTarget::pre_present_notify(Option<FrameStamp>, SwapChainStatistics)` (`None` — сцена,
+  одолженная вне кадров, о ней не сообщают; повтор present после suboptimal — тот же штамп).
+  Хосты: Win32 хранит кадр каждого present по номеру DXGI (`GetLastPresentCount` + 1, не больше
+  16) и сообщает показанный present кадром, который нёс он сам; счёт, пошедший назад, — новая
+  цепочка, кадры забываются (`window::windows::frame_timing::PresentTracker::observe`). Wayland
+  кладёт кадр в user data фидбэка каждого commit (`PresentedCommit`), `discarded` молчит. AppKit:
+  `nextDrawable` взводит слот кадра в обработчике drawable, `pre_present_notify` на главном потоке
+  пишет кадр в слот последнего выданного drawable; drawable без кадра не сообщается. Headless
+  держит present-ы до показа (`simulate_presented(at, refresh)`, старейший) или сброса
+  (`simulate_discarded`). UIKit, Android, X11 и web отчётов не делают и кадр игнорируют.
+  Шов `PresentationReports` узнаёт из каждого present, чью презентацию показывает окно
+  (`presenting`), и отбрасывает отчёт о кадре другой презентации, о кадре не новее хранимого или
+  показанном раньше него. Runtime отбрасывает отчёт с чужим адресом до часов кадра и записи;
+  `HostInput::Frame` несёт `ShownFrame` (эпоха, поколение поверхности, время, период), адрес даёт
+  презентация, которой доставлен ввод. `refresh` — `Option<RefreshPeriod>`: период вне 1 мс–1 с
+  в отчёт не попадает. Протокол агента 0.16 (аддитивно, ADR-0342): необязательное поле `frame`
+  (`ShownFrameId { epoch, surface }`) в записи отчёта; запись 0.15 без кадра читается как
+  отсутствие отчёта. `FrameEpoch`/`SurfaceGeneration::from_raw` — для чтения записи.
+  Тесты (в скобках — какой откат их роняет): `a_shown_present_reports_the_frame_its_present_carried`
+  (модель DXGI: два present в полёте — показан первый; пропущенный не сообщается; present без
+  кадра; новая цепочка; падает, если сообщать новейший present или не забывать кадры старой
+  цепочки); `a_measured_period_outside_a_cadence_is_no_refresh` (час между обновлениями — не
+  период); `a_presentation_report_names_the_present_it_describes` (`tests/`, headless: два
+  present в полёте — запрос несёт первый, сброшенный пропускается); `a_report_of_a_presentation_the_window_left_is_dropped`
+  и `a_presentation_report_rides_the_next_request` (шов: без проверки адреса или эпохи падают);
+  `each_frame_reaches_the_backend_with_its_own_stamp` (`flui-engine`);
+  `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (новый случай: отчёт о кадре
+  другой презентации ничего не ограничивает; падает без проверки адреса в `note_frame_request`);
+  `a_presentation_and_the_input_before_it_are_on_one_timeline` (запись называет кадр, который
+  нарисовал касание); строка conformance `presentation_is_reported_exactly_when_claimed` теперь
+  требует, чтобы отчёт называл кадр фикстуры (`fixture_frame`), и
+  `a_window_whose_reports_name_another_frame_is_caught` показывает, что она ловит хост, который
+  называет чужой кадр. Прогон Windows 11 (2026-11-16, монитор 144 Гц): фикстура Win32 со своей
+  цепочкой DXGI — отчёт назвал present 2 кадром эпохи 2, период 6.946 мс, так что `PresentCount`
+  статистики и `GetLastPresentCount` нумеруют present-ы одинаково. Прогон Weston 13 headless
+  (WSL Ubuntu 24.04): `the_wayland_window_conforms` — отчёт назвал кадр своего commit, период
+  16.666666 мс.
+  Не запущено: путь тождества macOS на Mac — запись в строке паритета
+  `presentation-feedback-when-each-frame-reached-the-screen`. Только CI компилирует правки в
+  `owner/apple/metal_layer.rs`, `owner/apple/macos/content_view.rs`, `window/apple/{macos,ios,mod}.rs`,
+  `window/android.rs`, `window/web.rs`, `tests/appkit_window.rs`.
+
 ### Доведение до приёмки
 
 Аудит кода 2026-10-21 по каждому пункту выше дал порядок PR:

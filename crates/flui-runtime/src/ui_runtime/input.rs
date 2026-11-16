@@ -9,7 +9,7 @@ use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform::keyboard::KeyState;
 use flui_platform::pointer::{ButtonChange, PointerButton};
-use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput};
+use flui_platform::{DragDropEvent, EventTime, FrameRequest, PlatformInput, RefreshPeriod};
 use flui_rendering::binding::{RendererBinding as _, ViewHitTest};
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -1116,6 +1116,10 @@ impl UiRuntime {
     ///
     /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
     /// recorded; the verdicts the frame makes follow it when the pump ends.
+    /// A presentation report the request carries names the frame it describes
+    /// (ADR-0346): one naming another presentation's frame, an incarnation
+    /// the window no longer presents, is dropped, from the frame clock and the
+    /// recording alike.
     ///
     /// The command inbox is drained first. The frame applies what it holds
     /// (assistive requests among it) before it renders, so their rows precede
@@ -1128,6 +1132,19 @@ impl UiRuntime {
         )]
         let drained = catch_unwind(AssertUnwindSafe(|| self.drain_commands())).err();
         let recording = self.begin_recorded_input();
+        let mut request = request;
+        // A report names the frame it describes: one of another presentation (an incarnation
+        // this window no longer presents) is no report of this one's frames.
+        let address = flui_foundation::PresentationAddress {
+            ui_runtime_id: self.id,
+            presentation_id,
+        };
+        let foreign = request
+            .presented
+            .filter(|presented| presented.frame.address != address);
+        if foreign.is_some() {
+            request.presented = None;
+        }
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_request.set(Some(request));
             // The platform's report of an earlier frame shown: the
@@ -1137,7 +1154,7 @@ impl UiRuntime {
             {
                 presentation
                     .clock()
-                    .record_presentation(at, presented.refresh);
+                    .record_presentation(at, presented.refresh.map(RefreshPeriod::get));
             }
         }
         if recording {
@@ -1146,13 +1163,22 @@ impl UiRuntime {
                 crate::HostInput::Frame {
                     vsync: request.vsync,
                     target_present: request.target_present,
-                    presented: request.presented,
+                    presented: request.presented.map(crate::ShownFrame::from),
                 },
                 crate::owner::InputOutcome::Handled,
             );
         }
         if let Some(payload) = drained {
             resume_unwind(payload);
+        }
+        if let Some(foreign) = foreign {
+            // Last, with the presentation let go and the drain's failure resumed: a subscriber
+            // is user code.
+            tracing::debug!(
+                target: "flui.present",
+                epoch = foreign.frame.epoch.get(),
+                "a presentation report of another presentation's frame is dropped"
+            );
         }
     }
 
