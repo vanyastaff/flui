@@ -512,7 +512,7 @@ pub trait PlatformWindow {
     /// # Errors
     ///
     /// [`Unsupported`] exactly when the window's
-    /// [`WindowCapabilities::frame_rate_hint`](crate::WindowCapabilities::frame_rate_hint)
+    /// [`WindowCapabilities::frame_rate_hint`](crate::CapabilityParts::frame_rate_hint)
     /// is `Unavailable`: the window system takes no such request, or this
     /// operating system build lacks it ([`NotOnThisDevice`](crate::UnsupportedReason::NotOnThisDevice)).
     fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) -> Result<(), Unsupported>;

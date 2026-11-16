@@ -64,7 +64,7 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// [`Unsupported`](crate::Unsupported) with
 /// [`NotOnThisPlatform`](crate::UnsupportedReason::NotOnThisPlatform), which
 /// agrees with capabilities that leave
-/// [`frame_rate_hint`](crate::WindowCapabilities::frame_rate_hint) and
+/// [`frame_rate_hint`](crate::CapabilityParts::frame_rate_hint) and
 /// every input region kind ([`input_region`](crate::input_capabilities::InputCapabilities::input_region))
 /// `Unavailable`. Written inside an `impl PlatformWindow` block.
 ///

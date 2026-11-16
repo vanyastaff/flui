@@ -242,7 +242,7 @@ pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_pl
 /// frame is on: [`WindowFrame::System`](flui_platform::WindowFrame::System) or
 /// [`WindowFrame::None`](flui_platform::WindowFrame::None). A host that
 /// draws no title bar of the application's
-/// ([`WindowCapabilities::app_title_bar`](WindowCapabilities::app_title_bar)
+/// ([`WindowCapabilities::app_title_bar`](flui_platform::CapabilityParts::app_title_bar)
 /// `Unavailable`) has no third answer.
 #[cfg(any(windows, target_os = "macos", wayland_host))]
 pub(crate) const fn system_frame_or_none(decorated: bool) -> flui_platform::WindowFrame {

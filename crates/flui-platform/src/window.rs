@@ -104,7 +104,7 @@ pub struct WindowOptions {
     /// `visible: false`.
     pub reveal: WindowReveal,
     /// What frames the window. A desktop window that cannot take
-    /// [`WindowFrame::AppTitleBar`] ([`WindowCapabilities::app_title_bar`](crate::WindowCapabilities::app_title_bar))
+    /// [`WindowFrame::AppTitleBar`] ([`WindowCapabilities::app_title_bar`](crate::CapabilityParts::app_title_bar))
     /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
     /// mobile and web, retain their native frame policy.
     pub frame: WindowFrame,
@@ -121,7 +121,7 @@ pub struct WindowOptions {
     /// Initial outer position, relative to [`display`](Self::display); `None`
     /// lets the system place the window. A backend that cannot place a window
     /// at open ignores it, and says so through its
-    /// [`WindowCapabilities::places_at_open`](crate::WindowCapabilities::places_at_open).
+    /// [`WindowCapabilities::places_at_open`](crate::CapabilityParts::places_at_open).
     pub position: Option<Point<f64>>,
     /// The mode the window opens in. A backend that cannot enter it opens the
     /// window in [`WindowMode::Normal`], which its first snapshot shows.
@@ -528,7 +528,7 @@ impl From<WindowAppearance> for crate::Brightness {
 ///
 /// The vocabulary every host shares: each material is one every window
 /// system that has materials at all can draw, so a host whose
-/// [`WindowCapabilities::material`](crate::WindowCapabilities::material) is
+/// [`WindowCapabilities::material`](crate::CapabilityParts::material) is
 /// is available draws each of them. A material only one operating system
 /// has (Mica Alt and Acrylic on Windows, the `NSVisualEffectView` materials
 /// and Liquid Glass on macOS) is reached through that system's extension

@@ -79,7 +79,7 @@ pub struct ResolvedPlacement {
     pub display: DisplayId,
     /// The window's outer top-left, from the origin of that display's usable
     /// area in that display's logical pixels; `None` when the window cannot be
-    /// placed ([`places_at_open`](WindowCapabilities::places_at_open) is
+    /// placed ([`places_at_open`](crate::CapabilityParts::places_at_open) is
     /// `false`) or the placement carried no position.
     pub offset_in_display: Option<Point<f64>>,
     /// The content size in that display's logical pixels. The window's outer
@@ -318,7 +318,7 @@ impl WindowPlacement {
     /// - A minimized window opens maximized if it was maximized before, else
     ///   normal. A mode the window cannot enter (`capabilities`) becomes
     ///   normal.
-    /// - Without [`places_at_open`](WindowCapabilities::places_at_open) the
+    /// - Without [`places_at_open`](crate::CapabilityParts::places_at_open) the
     ///   position is not applied: size and mode still are.
     ///
     /// `None` when the placement describes no window (a size or scale that is

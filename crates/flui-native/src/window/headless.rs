@@ -1003,7 +1003,7 @@ impl HeadlessHostWindow {
     /// (`REPORT_LEAD`); and a time further ahead is no time of a frame, and
     /// the report is dropped. A closed window ignores it, as does one whose
     /// capabilities say its window system reports no presentation
-    /// ([`WindowCapabilities::reports_presentation`]).
+    /// ([`WindowCapabilities::reports_presentation`](flui_platform::CapabilityParts::reports_presentation)).
     pub fn simulate_presented(&self, presented: flui_platform::FramePresented) {
         {
             let state = self.state.borrow_mut();

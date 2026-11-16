@@ -162,7 +162,7 @@ pub(crate) mod mode {
 
 pub(crate) mod material {
     //! Which Windows builds draw a material behind a window: the one gate the
-    //! window's [`WindowCapabilities::material`](flui_platform::WindowCapabilities::material),
+    //! window's [`WindowCapabilities::material`](flui_platform::CapabilityParts::material),
     //! the `SetMaterial` command and `Win32Window::set_backdrop` all take, so
     //! none of them can disagree with another.
 
