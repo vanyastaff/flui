@@ -262,7 +262,7 @@ impl UiRuntime {
             frame_failure_detail: Cell::new(FrameFailureDetail::default()),
             _owner_affine: PhantomData,
         };
-        ui_runtime.seed_lifecycle(ui_runtime.presentations.primary());
+        ui_runtime.seed_runtime_lifecycle();
         Ok(ui_runtime)
     }
 

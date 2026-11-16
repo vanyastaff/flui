@@ -5,7 +5,7 @@
 use flui_scheduler::AppLifecycleState;
 
 // ============================================================================
-// Lifecycle derivation and ladder synthesis (see ADR-0035)
+// Lifecycle derivation and ladder synthesis (see ADR-0345)
 // ============================================================================
 
 /// Derives the [`AppLifecycleState`] from the two window

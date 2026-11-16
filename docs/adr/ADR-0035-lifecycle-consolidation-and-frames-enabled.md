@@ -7,6 +7,8 @@
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §1–§2, for §5's sentence
   "the first panic resumes after restoration and notification" only: a quit observer's panic is
   contained and reported, and resumes only when it is terminal. The rest of §5 stands.
+  [ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md)
+  for §4 whole.
 
 ## Context
 
@@ -60,32 +62,9 @@ The private action name describes that complete background owner operation.
 
 ### 4. Lifecycle facts are per presentation; the UI runtime aggregates
 
-Each presentation owns its native visibility/focus snapshot and its last delivered local
-state. A UI runtime derives the scheduler state from its live presentations: any visible and focused
-→ `Resumed`; otherwise any visible → `Inactive`; otherwise `Hidden`; an empty forest →
-`Detached`. Keyboard routing history does not manufacture native focus.
-
-- Local steps follow `lifecycle_ladder(old, new)`, a port of Flutter's
-  `ServicesBinding._generateStateTransitions` walking `dart:ui`'s declaration order (`detached,
-  resumed, inactive, hidden, paused`). Leaving `Detached` enters from the `Paused` side instead
-  (**Amended by** [ADR-0248](ADR-0248-leaving-detached-enters-from-paused.md)).
-  A presentation is created in the state its window snapshot and the host's lifecycle give, as
-  Flutter starts from `PlatformDispatcher.initialLifecycleState`, so its first change ladders
-  like every later one: a window hidden from `Resumed` passes through `Inactive`.
-- Scheduler listeners see the UI runtime aggregate, not the local ladder. The aggregate walks the
-  same ladder, one step per round, toward the aggregate as it stands at that step, so a listener
-  sees each state in between and never one more active than both ends: a paused or hidden host
-  cannot transiently enable frames or attach resources while a presentation synchronizes.
-- Local facts and the next ladder step commit before user callbacks; input cancellation
-  precedes lifecycle callbacks; binding observers see committed local and aggregate state.
-  Restoring a presentation re-dirties its own root and wakes a frame. Focus transfer cancels
-  the former presentation's active pointer sequences at once.
-- Observed `Detached` is reversible and only rejects input. Explicit stopping is a separate
-  terminal intent. Closing a presentation removes it from the aggregate, delivers `Detached`
-  while its tree is alive, then disposes it; an observer panic cannot skip removal.
-- Android feeds the same three signals as every other backend: `onStart`/`onStop` give visibility,
-  `onResume`/`onPause` the execution state and `onWindowFocusChanged` focus, and the ladder comes
-  from `derive_lifecycle_state`. Focus alone never walks to `Paused` (ADR-0237).
+[ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md)
+states the rule: lifecycle facts per presentation, the state a lifecycle starts in, the ladder
+every change walks and the aggregate the scheduler sees.
 
 ### 5. Platform quit reaches every UI runtime
 

@@ -416,11 +416,23 @@ impl UiRuntime {
         self.stop_presentation_after_failure(id, FirstPanic::new());
     }
 
+    /// Seed a new UI runtime: its primary presentation, then the scheduler's
+    /// aggregate from it, so the scheduler does not start from a state no
+    /// presentation was in (ADR-0345). Nothing has subscribed yet.
+    pub(super) fn seed_runtime_lifecycle(&self) {
+        self.seed_presentation_lifecycle(self.presentations.primary());
+        self.scheduler()
+            .handle_app_lifecycle_state_change(self.aggregate_lifecycle());
+    }
+
     /// Commit the lifecycle `presentation` starts in, before anything can
     /// subscribe: every later change is then a step down or up the ladder
     /// from a known state, so the first one a subscriber sees passes through
-    /// each state in between. Runs no user code.
-    pub(super) fn seed_lifecycle(&self, presentation: &crate::presentation::PresentationState) {
+    /// each state in between (ADR-0345). Runs no user code.
+    pub(super) fn seed_presentation_lifecycle(
+        &self,
+        presentation: &crate::presentation::PresentationState,
+    ) {
         let source = presentation.widgets().lifecycle_source();
         if source.current().is_none() {
             let seeded = source.commit(self.execution_lifecycle(presentation));

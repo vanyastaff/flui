@@ -521,6 +521,33 @@ fn pending_metrics_do_not_cross_ordered_operations() {
     }
 }
 
+/// A UI runtime over a window that opens hidden starts `Hidden`, its
+/// scheduler included: the snapshot that reports the window as it opened
+/// changes nothing, and showing it climbs from `Hidden`.
+fn a_runtime_starts_in_its_window_lifecycle() {
+    use flui_scheduler::AppLifecycleState::{Hidden, Inactive, Resumed};
+
+    let window = Rc::new(flui_runtime::testing::TestWindow::new().visible(false));
+    let runtime = UiRuntime::for_test_with_window(window);
+    assert_eq!(runtime.scheduler().lifecycle_state(), Hidden);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let callback_observed = Rc::clone(&observed);
+    runtime
+        .scheduler()
+        .add_lifecycle_state_listener(Rc::new(move |state| {
+            callback_observed.borrow_mut().push(state);
+        }));
+    let id = runtime.presentation_id();
+    runtime.synchronize_window_snapshot(id, WindowExecutionState::Running, false, false);
+    assert!(
+        observed.borrow().is_empty(),
+        "the window opened hidden: {:?}",
+        observed.borrow()
+    );
+    runtime.synchronize_window_snapshot(id, WindowExecutionState::Running, true, true);
+    assert_eq!(*observed.borrow(), [Inactive, Resumed]);
+}
+
 fn window_observations_update_only_the_target_runtime_lifecycle() {
     use flui_runtime::owner::WindowObservation;
     use flui_scheduler::AppLifecycleState::{Hidden, Inactive, Paused, Resumed};
@@ -1081,6 +1108,10 @@ fn owner_input_contract() {
             (
                 "window_observations_update_only_the_target_runtime_lifecycle",
                 window_observations_update_only_the_target_runtime_lifecycle as fn(),
+            ),
+            (
+                "a_runtime_starts_in_its_window_lifecycle",
+                a_runtime_starts_in_its_window_lifecycle as fn(),
             ),
             (
                 "keyboard_preserves_accepted_order_and_shares_the_callback_budget",
