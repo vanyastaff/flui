@@ -6607,23 +6607,30 @@ GPU-память простаивающего или невидимого окн
   `with_repeat`, `with_release` удалены, отпускание с повтором не строится (`compile_fail`-доктест
   `KeyState`). Мёртвая клавиша — `Key::Dead(Option<char>)` с акцентом, как он напечатан на клавише;
   генератор `key-vocabulary` не выпускает `Dead` в `NamedKey` (`carried_by_key`) и падает, если
-  keyboard-types его переименует (самотест). Акцент читают Windows (`WM_DEADCHAR`, его держит
-  `HeldKeys<Option<char>>` до отпускания), XKB (мёртвый keysym, `dead_accent`) и Android (карта
-  клавиш); DOM акцента не называет (`Key::Dead(None)`), AppKit и UIKit составляют мёртвые клавиши
-  размеченным текстом. Android составляет аппаратную мёртвую клавишу со следующей:
+  keyboard-types его переименует (самотест). Акцент читают Windows (`WM_DEADCHAR`), XKB (мёртвый
+  keysym, `dead_key`) и Android (карта клавиш); DOM акцента не называет (`Key::Dead(None)`), AppKit
+  и UIKit составляют мёртвые клавиши размеченным текстом. Отпускание называет то, что назвало
+  нажатие, на каждом хосте: один реестр `PressedAs` (бывший `UnplacedKeys`) держит клавишу без
+  кода и мёртвую клавишу до отпускания, что бы ни сделали с ней Shift, раскладка или compose;
+  повторное нажатие заменяет запись (Windows, XKB, AppKit, веб, Android;
+  `a_held_key_is_released_as_it_was_pressed`, без реестра отпускание мёртвой с Shift называет
+  другой акцент). Android составляет аппаратную мёртвую клавишу со следующей:
   `keys::DeadKeyComposer` (чистый, собирается для тестов на любом хосте) через
   `KeyCharacterMap.getDeadChar`; несоставимая пара печатает акцент и букву, модификатор акцент
-  держит, клавиша без текста и потеря фокуса сбрасывают, клавиша при композиции IME не участвует.
+  держит, клавиша без текста, аккорд Control или Meta (ярлык срабатывает), композиция IME и потеря
+  фокуса сбрасывают.
   Прокрутка несёт `ScrollEvent::inversion: ScrollInversion` (`Unknown`, `FromDevice`,
   `InvertedFromDevice`): macOS (`isDirectionInvertedFromDevice`), WebKit
   (`webkitDirectionInvertedFromDevice`) и Wayland (`wl_pointer.axis_relative_direction`, seat 9;
-  кадр, только останавливающий прокрутку, сохраняет её направление; журнал несёт направление
+  кадр, только останавливающий прокрутку, сохраняет её направление; журнал несёт инверсию
   строки прокрутки). `PointerEvent::Revise`, `PointerRevision`,
   `PointerEvent::PenSqueeze`, `PenSqueeze`, `PenSqueezePhase` и `Listener::on_pointer_revise`
   удалены: производителя не было ни у одного хоста; форма возврата (билет оценки, выданный хостом
   с чтением) — в `docs/gaps.md` («Input latency modes…»). Запись — формат 4 (`down`, `repeat`,
-  `unpaired`, `up`, ключ `dead`, `direction` прокрутки); протокол 0.16 — разрыв (ADR-0342),
-  `Break` получил список `removed` (`a_removal_breaking_lists_may_go`).
+  `unpaired`, `up`, ключ `dead`, `inversion` прокрутки); протокол 0.16 — разрыв (ADR-0342),
+  `Break` получил список `removed` полных путей схемы (`a_removal_breaking_lists_may_go`).
+  Имя `ScrollInversion` не совпадает с `ScrollDirection` вьюпорта; виджета-читателя пока нет
+  (первый — колесо слайдера, `docs/gaps.md`).
   Тесты, в скобках результат без исправления: `a_hardware_dead_key_composes_with_the_next_key`
   (без составителя нет типа — не собирается; со старым отображением `´`, `e` даёт `e`);
   `a_repeat_and_a_missing_release_are_kinds_of_key_down` и
