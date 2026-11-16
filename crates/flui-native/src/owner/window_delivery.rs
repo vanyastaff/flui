@@ -325,6 +325,11 @@ pub struct WindowDelivery {
     /// The native capture this delivery reports to, in builds that have one.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     journal: crate::journal::capture::Journal,
+    /// The owner thread's text store journal of the window, made by the first
+    /// journaled host handed out for it and shared by every later one, so
+    /// they agree on the focused store and issue each store key once.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    store_journal: OwnerSlot<Rc<crate::journal::store_capture::StoreJournal>>,
 }
 
 impl WindowDelivery {
@@ -378,7 +383,44 @@ impl WindowDelivery {
             journal: crate::journal::capture::Journal::open_stream(
                 flui_protocol::native_recording::Stream::Window,
             ),
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            store_journal: OwnerSlot::new(),
         }
+    }
+
+    /// `host`, journaling into this window's stream what its input method
+    /// does to the stores it serves; `host` itself when no capture was
+    /// installed as the window opened, or off the window's owner thread.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(crate) fn journaled_store_host(
+        &self,
+        host: Rc<dyn flui_platform::text_store::TextStoreHost>,
+    ) -> Rc<dyn flui_platform::text_store::TextStoreHost> {
+        if !self.journal.is_reporting() || !self.store_journal.is_owner_thread() {
+            return host;
+        }
+        if let Some(state) = self.store_journal.cloned() {
+            return crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, state);
+        }
+        let state = Rc::new(crate::journal::store_capture::StoreJournal::default());
+        if self.store_journal.replace(Rc::clone(&state)).is_err() {
+            // A journal only this host held would issue keys another host
+            // issues again: the window's stream says it ends here, and its
+            // stores go unjournaled.
+            self.journal_close(crate::journal::capture::Captured::Cut(
+                flui_protocol::native_recording::CutReason::StoreJournal,
+            ));
+            return host;
+        }
+        crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, state)
+    }
+
+    /// Journal a close request's answer, the close or the stream's cut, in the window's turn and
+    /// before the delivery acts on it. A sink that panics ends its capture and
+    /// does not stop the close.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    fn journal_close(&self, call: crate::journal::capture::Captured<'_>) {
+        contain_owner_callback(|| self.journal.record(call));
     }
 
     /// Call `hook` on the owner thread after each run of the window's FIFO,
@@ -735,6 +777,17 @@ impl WindowDelivery {
             .or_resume(()),
             Delivery::Closed => {
                 self.closed.store(true, Ordering::SeqCst);
+                #[cfg(all(debug_assertions, feature = "native-capture"))]
+                {
+                    use flui_protocol::native_recording::CloseCause;
+                    self.journal_close(crate::journal::capture::Captured::Closed(
+                        if self.close_granted.load(Ordering::SeqCst) {
+                            CloseCause::GrantedRequest
+                        } else {
+                            CloseCause::NoRequest
+                        },
+                    ));
+                }
                 call(&self.handler(), |handler| {
                     handler.closed();
                 })
@@ -744,13 +797,31 @@ impl WindowDelivery {
                 if self.close_granted.load(Ordering::SeqCst) {
                     // An earlier request was granted and the window is
                     // closing: there is nothing left to ask.
+                    #[cfg(all(debug_assertions, feature = "native-capture"))]
+                    self.journal_close(crate::journal::capture::Captured::CloseRequest {
+                        answer: flui_protocol::native_recording::CloseAnswer::Closing,
+                        queued: later.is_some(),
+                    });
                     if later.is_none() {
                         *self.close_answer.lock() = Some(CloseDecision::KeepOpen);
                     }
                     return None;
                 }
-                let decision = call(&self.handler(), |handler| handler.close_requested())
-                    .or_resume(CloseDecision::Close);
+                let called = call(&self.handler(), |handler| handler.close_requested());
+                #[cfg(all(debug_assertions, feature = "native-capture"))]
+                {
+                    use flui_protocol::native_recording::CloseAnswer;
+                    self.journal_close(crate::journal::capture::Captured::CloseRequest {
+                        answer: match &called {
+                            Called::Vacant => CloseAnswer::NoHandler,
+                            Called::Returned(CloseDecision::Close) => CloseAnswer::Close,
+                            Called::Returned(CloseDecision::KeepOpen) => CloseAnswer::KeepOpen,
+                            Called::Panicked(_) => CloseAnswer::Panicked,
+                        },
+                        queued: later.is_some(),
+                    });
+                }
+                let decision = called.or_resume(CloseDecision::Close);
                 if decision == CloseDecision::Close {
                     self.close_granted.store(true, Ordering::SeqCst);
                 }

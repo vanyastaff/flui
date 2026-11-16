@@ -22,6 +22,10 @@ type Matcher<R> = Rc<dyn Fn(&R) -> bool>;
 /// A script's standing answer.
 type Standing<R, A> = Rc<dyn Fn(&R) -> A>;
 
+/// What a double hears of each answer: the request, and the value it was
+/// answered with, or `None` when it ended unanswered.
+type Observer<R, A> = Rc<dyn Fn(&R, Option<&A>)>;
+
 /// The identity of a step or a waiting request within its scenario, from
 /// the scenario's mint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,6 +185,8 @@ struct ScriptCell<R: fmt::Debug + 'static, A: 'static> {
 struct ScriptState<R, A> {
     steps: VecDeque<Step<R, A>>,
     otherwise: Option<Standing<R, A>>,
+    /// Heard in the order they were added.
+    observers: Vec<Observer<R, A>>,
     holding: bool,
     /// Requests not answered yet, oldest first.
     waiting: VecDeque<Waiting<R, A>>,
@@ -247,6 +253,7 @@ where
             state: RefCell::new(ScriptState {
                 steps: VecDeque::new(),
                 otherwise: None,
+                observers: Vec::new(),
                 holding: false,
                 waiting: VecDeque::new(),
                 received: Vec::new(),
@@ -313,6 +320,47 @@ where
         drop(replaced);
     }
 
+    /// Hear every answer as it is given, however it is given (a step, a
+    /// delayed step, the standing answer, a release), with the request it
+    /// answers, before the script resolves the resolver the request came
+    /// with, so before its completion settles at a later owner turn:
+    /// `Some(value)`,
+    /// or `None` for a request that ends unanswered (abandoned, or
+    /// unexpected). A double keeps the state its answers imply here, in one
+    /// place, whoever wrote the answer. Adds an observer beside those added
+    /// before, which keep hearing and run first: a double's own observer
+    /// cannot be replaced by a test's. Each runs with no borrow of the
+    /// script held, its panic contained like the test's other code.
+    pub fn on_answer(&self, observe: impl Fn(&R, Option<&A>) + 'static) {
+        self.cell
+            .state
+            .borrow_mut()
+            .observers
+            .push(Rc::new(observe));
+    }
+
+    fn observers(&self) -> Vec<Observer<R, A>> {
+        self.cell.state.borrow().observers.clone()
+    }
+
+    /// Answer `request` through `resolver` with `value`, after every
+    /// observer heard it.
+    fn deliver(&self, request: &R, resolver: Resolver<A>, value: A, first: &mut FirstPanic) {
+        for observe in self.observers() {
+            first.contain(|| observe(request, Some(&value)));
+        }
+        // A retired owner has nobody left to tell.
+        let _ = resolver.resolve(value);
+    }
+
+    /// End `request` unanswered, after every observer heard it.
+    fn end_unanswered(&self, request: &R, resolver: Resolver<A>, first: &mut FirstPanic) {
+        for observe in self.observers() {
+            first.contain(|| observe(request, None));
+        }
+        drop(resolver);
+    }
+
     /// Answer what no step takes with a clone of `value`.
     pub fn otherwise_value(&self, value: A)
     where
@@ -343,11 +391,13 @@ where
                 .position(|waiting| matches!(waiting.until, Until::Released));
             position.and_then(|position| state.waiting.remove(position))
         };
-        released.is_some_and(|waiting| {
-            // A retired owner has nobody left to tell.
-            let _ = waiting.resolver.resolve(value);
-            true
-        })
+        let Some(waiting) = released else {
+            return false;
+        };
+        let mut first = FirstPanic::new();
+        self.deliver(&waiting.request, waiting.resolver, value, &mut first);
+        first.resume();
+        true
     }
 
     /// Answer every held request with what `answer` makes of it. Returns
@@ -364,7 +414,10 @@ where
             match first.contain(|| answer(&waiting.request)) {
                 Some(value) => {
                     answered += 1;
-                    let _ = waiting.resolver.resolve(value);
+                    let Waiting {
+                        request, resolver, ..
+                    } = waiting;
+                    self.deliver(&request, resolver, value, &mut first);
                 }
                 None => self.keep(waiting),
             }
@@ -379,7 +432,14 @@ where
     pub fn abandon_held(&self) -> usize {
         let released = self.cell.state.borrow_mut().take_released();
         let count = released.len();
-        drop(released);
+        let mut first = FirstPanic::new();
+        for Waiting {
+            request, resolver, ..
+        } in released
+        {
+            self.end_unanswered(&request, resolver, &mut first);
+        }
+        first.resume();
         count
     }
 
@@ -514,9 +574,7 @@ where
         let otherwise = self.cell.state.borrow().otherwise.clone();
         if let Some(otherwise) = otherwise {
             match first.contain(|| otherwise(&request)) {
-                Some(value) => {
-                    let _ = resolver.resolve(value);
-                }
+                Some(value) => self.deliver(&request, resolver, value, first),
                 None => self.hold_request(id, request, resolver),
             }
             return;
@@ -526,7 +584,7 @@ where
             script: self.cell.name,
             request: described,
         });
-        drop(resolver);
+        self.end_unanswered(&request, resolver, first);
     }
 
     fn hold_request(&self, id: EntryId, request: Rc<R>, resolver: Resolver<A>) {
@@ -606,18 +664,13 @@ where
         reply: Reply<R, A>,
         first: &mut FirstPanic,
     ) {
-        // A retired owner has nobody left to tell.
         match reply {
-            Reply::Value(value) => {
-                let _ = resolver.resolve(value);
-            }
+            Reply::Value(value) => self.deliver(&request, resolver, value, first),
             Reply::Computed(compute) => match first.contain(|| compute(&request)) {
-                Some(value) => {
-                    let _ = resolver.resolve(value);
-                }
+                Some(value) => self.deliver(&request, resolver, value, first),
                 None => self.hold_request(id, request, resolver),
             },
-            Reply::Abandon => drop(resolver),
+            Reply::Abandon => self.end_unanswered(&request, resolver, first),
         }
     }
 }

@@ -559,6 +559,62 @@ fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
     scenario.verify().expect("every request was answered");
 }
 
+/// A script's observer hears every answer before the caller's completion
+/// settles, whoever gave it: a step, a delayed step, the standing answer, a
+/// release; and hears `None` for a request that ends unanswered. An
+/// observer added later hears beside it rather than replacing it.
+#[test]
+fn a_scripts_observer_hears_every_answer_however_it_is_given() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    // Each capture's width, and whether it was answered `Ok`, `Err` or not.
+    let heard = Rc::new(RefCell::new(Vec::<(u32, Option<bool>)>::new()));
+    let log = Rc::clone(&heard);
+    camera.captures.on_answer(move |request, answer| {
+        if let CameraRequest::Capture { width } = request {
+            log.borrow_mut().push((*width, answer.map(Result::is_ok)));
+        }
+    });
+    let also_heard = Rc::new(std::cell::Cell::new(0_usize));
+    let counted = Rc::clone(&also_heard);
+    camera
+        .captures
+        .on_answer(move |_, _| counted.set(counted.get() + 1));
+    camera.captures.otherwise(|_| Ok(vec![]));
+    camera
+        .captures
+        .answer_next(Answer::value(Err(CaptureError::Busy)));
+    camera
+        .captures
+        .answer_next(Answer::value(Ok(vec![1])).after(Duration::from_millis(10)));
+    let stepped = land(handle.capture(1));
+    let delayed = land(handle.capture(2));
+    let standing = land(handle.capture(3));
+    camera.captures.hold();
+    let released = land(handle.capture(4));
+    let abandoned = land(handle.capture(5));
+    camera.captures.resume();
+    assert!(camera.captures.release_oldest(Ok(vec![])));
+    assert_eq!(camera.captures.abandon_held(), 1);
+    let _ = host.pump(Duration::from_millis(10));
+    assert_eq!(
+        *heard.borrow(),
+        [
+            (1, Some(false)),
+            (3, Some(true)),
+            (4, Some(true)),
+            (5, None),
+            (2, Some(true))
+        ]
+    );
+    assert_eq!(also_heard.get(), 5, "the later observer heard every answer");
+    for slot in [&stepped, &delayed, &standing, &released] {
+        assert!(taken(slot).is_some(), "every answered request settled");
+    }
+    assert_eq!(taken(&abandoned), Some(Err(Abandoned::ProviderDropped)));
+    scenario.verify().expect("every request was answered");
+}
+
 #[test]
 fn a_panicking_matcher_keeps_its_request_held() {
     let scenario = Scenario::new();

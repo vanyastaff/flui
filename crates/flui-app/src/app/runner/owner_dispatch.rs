@@ -297,17 +297,17 @@ impl RuntimeEvent {
     fn deliver(
         self,
         host: &super::InstalledHost,
+        #[cfg_attr(
+            not(any(test, target_os = "android", target_os = "ios")),
+            expect(
+                unused_variables,
+                reason = "only a restored primary surface, on a mobile host, needs its address"
+            )
+        )]
         address: flui_foundation::PresentationAddress,
         target: &flui_runtime::owner::PresentationDispatcher,
     ) -> Result<flui_runtime::owner::Delivery, flui_runtime::owner::DispatchError> {
         use flui_runtime::owner::{Delivery, InputOutcome, WindowObservation};
-        // The window focused last is where a URL the operating system opens
-        // for the whole application goes.
-        if matches!(self, Self::WindowFocus(true))
-            && let Some(routing) = super::host::current_open_routing()
-        {
-            routing.focused(address);
-        }
         let observation = match self {
             #[cfg(any(test, target_os = "android", target_os = "ios"))]
             Self::PrimarySurfaceRestored => {
