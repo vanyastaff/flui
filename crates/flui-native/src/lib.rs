@@ -952,7 +952,7 @@ pub fn android_platform(
 ) -> Result<
     (
         Box<dyn Platform>,
-        Option<flui_platform::capability::Activity>,
+        Option<std::rc::Rc<dyn flui_platform::capability::ActivityBridge>>,
     ),
     PlatformError,
 > {

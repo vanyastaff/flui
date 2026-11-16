@@ -46,7 +46,9 @@ pub(crate) mod java_view;
 mod launch;
 #[cfg(target_os = "android")]
 mod looper;
-#[cfg(any(target_os = "android", test))]
+// The panic boundary it runs posted work inside exists on Android and, for
+// its tests, on every native host; wasm32 has none.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
 pub(crate) mod main_thread;
 pub(crate) mod ndk;
 pub(crate) mod poll;
