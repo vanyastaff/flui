@@ -18,6 +18,7 @@ use crate::agent::browser::launch::{LaunchError, LaunchedBrowser};
 use crate::agent::browser::relay::Relay;
 use crate::agent::browser::{self, Dialect};
 use crate::agent::{self, Session};
+use crate::build::web_page::WebPage;
 use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
 use crate::config::{FluiConfig, HotReloadConfig};
 use crate::error::{CliError, CliResult, ResultExt};
@@ -1416,6 +1417,9 @@ struct BrowserSession {
     /// after the browser it drives.
     driving: Option<DrivenBrowser>,
     agent: Option<Session>,
+    /// What the build states in its page, from `flui.toml`; its base path is
+    /// the one the dev server serves under.
+    page: WebPage,
 }
 
 /// The browser `--agent` started and the relay that carries the session's
@@ -1440,8 +1444,10 @@ impl BrowserSession {
                 reason: "the agent reaches the page through the browser this command starts".into(),
             });
         }
+        let root = std::env::current_dir()?;
+        let page = crate::config::web_page(crate::config::nearest_project(&root)?.as_ref());
         Ok(Self {
-            root: std::env::current_dir()?,
+            root,
             browser,
             release,
             hot_reload,
@@ -1451,6 +1457,7 @@ impl BrowserSession {
             built: false,
             driving: None,
             agent,
+            page,
         })
     }
 
@@ -1505,8 +1512,9 @@ impl BrowserSession {
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
             .features(driver_feature)
+            // The page and the dev server name the same base path.
             .platform(Platform::Web {
-                target: "web".to_string(),
+                page: self.page.clone(),
             })
             .profile(if self.release {
                 Profile::Release
@@ -1615,8 +1623,12 @@ impl ReloadStrategy for BrowserSession {
             }
             return Ok(());
         }
-        let server = DevServer::start(self.output_dir(), self.options.port)
-            .context("start the dev server")?;
+        let server = DevServer::start(
+            self.output_dir(),
+            self.options.port,
+            self.page.base_href.clone(),
+        )
+        .context("start the dev server")?;
         let url = server.url();
         ui::emit(
             "run.web.serve",

@@ -706,7 +706,7 @@ fn declarations_admit_by_scheme_and_by_domain() {
     let declared = OpenDeclarations::new()
         .url_schemes(&["myapp", "https"])
         .associated_domains(&["Example.com"]);
-    let admit = |url: &str| declared.admit(&OpenedUrl::parse(url).expect("a URL"));
+    let admit = |url: &str| declared.admit(&OpenedUrl::parse(url).expect("a URL"), None);
     assert_eq!(admit("MyApp:///note/1"), Ok(()));
     assert_eq!(admit("https://EXAMPLE.com./note/1"), Ok(()));
     assert_eq!(
@@ -734,7 +734,7 @@ fn declarations_admit_by_scheme_and_by_domain() {
         Err(OpenUrlRefused::UndeclaredDomain { host: None })
     );
     assert_eq!(
-        OpenDeclarations::default().admit(&OpenedUrl::parse("myapp:///").expect("a URL")),
+        OpenDeclarations::default().admit(&OpenedUrl::parse("myapp:///").expect("a URL"), None),
         Err(OpenUrlRefused::UndeclaredScheme {
             scheme: "myapp".to_owned()
         }),

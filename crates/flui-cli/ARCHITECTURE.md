@@ -491,6 +491,66 @@ in it exists because a command calls it. Its artifact-selection tests live
 in `src/build/tests/` as unit modules; they build real Cargo fixtures and
 re-execute the test binary as a worker.
 
+### A web build writes its page; a project's own page is a named template
+
+`flui build web` writes `index.html`, `flui.js` and `flui.css` on every build
+(`build::web_page`, ADR-0255 decision 16). The page holds no inline script or
+style, so it runs under `script-src 'self'; style-src 'self'`: it links the
+stylesheet and loads `flui.js`, which imports and starts the module
+`wasm-bindgen` wrote. It names `[web] base_href` as its `<base href>`, a
+checked `BaseHref` (absolute, plain segments, no escape: it cannot name
+another site), states `[web] description` and `[web] theme_color` escaped for
+their context, and asks for `viewport-fit=cover`, which the host's safe area
+needs. The manifest a build writes for a project that keeps none and the one
+`flui platform add web` scaffolds come from one renderer
+(`web_page::manifest`), which writes JSON through `serde_json`.
+
+A project's page is never overridden in silence. An `index.html` in a
+project's web platform directory that `[web] page` does not name stops the
+build before anything compiles, with the two ways on: delete it, or name it
+as the page template. `[web] page`, a kept page and the project's manifest
+and icons are resolved against the directory of `flui.toml`, wherever the
+build runs from. A template holds `{{flui_module}}`, which becomes the script
+that starts the app (the build checks that it is there, not that it is
+outside a comment), and may hold `{{flui_base}}`, `{{flui_manifest}}`,
+`{{flui_stylesheet}}`, `{{flui_title}}`, `{{flui_description}}` and
+`{{flui_theme_color}}`. Placeholders are replaced in one pass, left to right,
+never inside a value the build put in, and values are escaped for HTML text
+and quoted attribute values only (not for a script, a style or an unquoted
+attribute), so a description that holds a placeholder's text stays
+text (`a_value_holding_a_placeholder_stays_text`). `[web] theme_color` is a
+`ThemeColor`, a hex colour or a CSS named colour from the list of CSS Color 4,
+checked when `flui.toml` loads.
+
+`flui run`'s server (`serve.rs`) serves the build under the same base path
+and answers a navigation to a path whose last segment has no extension (a
+trailing slash included) and that names no file with the page, which history
+routing needs. A navigation is a request whose `Sec-Fetch-Mode` is
+`navigate`, or, from a browser that sends none, whose `Accept` names HTML;
+a `fetch()` (`Sec-Fetch-Mode: cors`) is none. It serves nothing outside the
+build directory: the path is percent-decoded, a component that is not a plain
+name or that holds a backslash, a colon or a NUL is refused, and a file is
+opened only when its canonical path is still inside the directory and is
+spelled as the request spells it (so no type is decided on another case of a
+name). The `Host` check runs on a whole head with exactly one `Host`: a head
+that reaches `MAX_HEAD` without its end is 431, none or two `Host`s 400, and
+a `Host` other than the loopback (`localhost`, `127.0.0.1`, `[::1]`) 421,
+against a page whose name is rebound to 127.0.0.1; with the method check, it
+runs before any path's own answer, the reload poll's included. It serves at
+most `MAX_CONNECTIONS` connections at once, of which at most `MAX_POLLS`
+reload long polls; one poll past the second bound is answered at once with
+the current generation (a short poll, which the page asks again a second
+later). One connection past the first bound is answered 503 on a thread of
+its own, counted until it closes, at most `MAX_REFUSALS` at once for at most
+`REFUSAL` each, and past those closed unanswered, so the accepting thread
+never waits on a refused client; a refused client has its request bytes read
+before the close, so it reads the status. The page is served with the
+generation it is (`reload.js?generation=N`), which its first poll waits past,
+so a rebuild before that poll still reloads it. It cuts a request head off
+at `REQUEST_HEAD` however slowly it arrives, and sends
+`X-Content-Type-Options: nosniff`. A missing asset and a request that is not
+a navigation get a 404 (`dev_server_contract`).
+
 ## The watcher is dev-machine code
 
 `SourceWatcher` (`src/watch.rs`) watches files on the developer's machine;

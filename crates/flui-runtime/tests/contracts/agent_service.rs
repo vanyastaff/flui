@@ -828,6 +828,13 @@ fn native_header(form: &str) -> NativeLine {
     } }))
 }
 
+/// The wire form of `header` as a recording that joined its stream late gets it: marked so.
+fn joined_late(header: NativeLine) -> Value {
+    let mut value = serde_json::to_value(header).expect("a native line serializes");
+    value["header"]["joined_late"] = json!(true);
+    value
+}
+
 /// A native row; `notice` tells one apart from another.
 fn native_row(notice: &str) -> NativeLine {
     native(json!({ "row": { "row": "notice", "notice": notice } }))
@@ -956,16 +963,13 @@ fn a_native_recording_begins_each_stream_with_its_setup_and_streams_its_lines() 
             .filter(|(stream, _)| *stream == 0)
             .collect::<Vec<_>>(),
         [
-            (
-                0,
-                &json!({ "header": serde_json::to_value(native_header("redacted")).expect("json")["header"] })
-            ),
+            (0, &joined_late(native_header("redacted"))),
             (
                 0,
                 &json!({ "row": { "row": "notice", "notice": "session_unlocked" } })
             ),
         ],
-        "a stream begins with its header and setup, in the recording's form: {started:?}"
+        "a stream begins with its header, marked joined late, and setup, in the recording's form: {started:?}"
     );
     let second: Vec<&Value> = native_of(&started)
         .into_iter()
@@ -985,9 +989,7 @@ fn a_native_recording_begins_each_stream_with_its_setup_and_streams_its_lines() 
             .map(|(_, line)| line.to_string())
             .collect::<Vec<_>>(),
         [
-            serde_json::to_value(native_header("kept"))
-                .expect("json")
-                .to_string(),
+            joined_late(native_header("kept")).to_string(),
             json!({ "row": { "row": "notice", "notice": "session_locked" } }).to_string(),
         ],
         "{kept:?}"

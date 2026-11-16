@@ -28,6 +28,13 @@
 //! [signing.android]
 //! keystore = "keys/upload.jks"
 //! alias = "upload"
+//!
+//! # Optional: the path a web build is served from, its page's `<base href>`.
+//! [web]
+//! base_href = "/apps/demo/"
+//! description = "A FLUI application."
+//! theme_color = "#1a73e8"
+//! # page = "platforms/web/index.html"   # the project's own page template
 //! ```
 //!
 //! Unknown keys are ignored on load, so a file from an older version still
@@ -38,6 +45,7 @@ use crate::app_id::AppId;
 use crate::build::android_signing::AndroidReleaseKey;
 use crate::build::app_floor::{AppFloors, PlatformsConfig};
 use crate::build::app_version::AppVersion;
+use crate::build::web_page::{BaseHref, ThemeColor, WebPage};
 use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -61,6 +69,9 @@ pub(crate) struct FluiConfig {
     /// The keys a release package is signed with: `[signing.<environment>]`.
     #[serde(default, skip_serializing_if = "SigningConfig::is_empty")]
     pub(crate) signing: SigningConfig,
+    /// What a web build's page states: `[web] base_href`.
+    #[serde(default, skip_serializing_if = "WebConfig::is_default")]
+    pub(crate) web: WebConfig,
 }
 
 /// `[signing]`: the key each environment's release packages are signed
@@ -76,6 +87,45 @@ impl SigningConfig {
     fn is_empty(&self) -> bool {
         self.android.is_none()
     }
+}
+
+/// The web build's page.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) struct WebConfig {
+    /// The path the build is served from (`/apps/demo/`), which the page
+    /// names as its `<base href>`; the site's root when absent.
+    #[serde(default)]
+    pub(crate) base_href: BaseHref,
+    /// The page's `description` and the manifest's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
+    /// The browser chrome's colour (`theme-color`), a CSS colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) theme_color: Option<ThemeColor>,
+    /// The project's page template, relative to the project
+    /// (`platforms/web/index.html`); the generated page when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) page: Option<std::path::PathBuf>,
+}
+
+impl WebConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// What a web build of `project` describes (none: an in-repo example or a
+/// plain package) states in its page and manifest.
+#[must_use]
+pub(crate) fn web_page(project: Option<&Project>) -> WebPage {
+    project.map_or_else(WebPage::default, |Project { config, dir }| WebPage {
+        title: Some(config.app.name.clone()),
+        description: config.web.description.clone(),
+        theme_color: config.web.theme_color.clone(),
+        base_href: config.web.base_href.clone(),
+        template: config.web.page.clone(),
+        project: Some(dir.clone()),
+    })
 }
 
 impl FluiConfig {
@@ -134,14 +184,47 @@ impl FluiConfig {
 /// When `flui.toml` cannot be read or parsed, or a `[platforms]` table is
 /// refused ([`FluiConfig::floors`]).
 pub(crate) fn project_floors(root: &Path) -> CliResult<AppFloors> {
-    match root
-        .ancestors()
-        .map(|dir| dir.join("flui.toml"))
-        .find(|manifest| manifest.is_file())
-    {
-        Some(manifest) => FluiConfig::load_from(&manifest)?.floors(),
-        None => Ok(AppFloors::default()),
-    }
+    floors_of(nearest_config(root)?.as_ref())
+}
+
+/// The floors of the project `config` describes; FLUI's alone with none.
+///
+/// # Errors
+/// A `[platforms]` table is refused ([`FluiConfig::floors`]).
+pub(crate) fn floors_of(config: Option<&FluiConfig>) -> CliResult<AppFloors> {
+    config.map_or_else(|| Ok(AppFloors::default()), FluiConfig::floors)
+}
+
+/// The nearest `flui.toml` at or above `root`, the one `flui run` finds the
+/// project by; `None` when there is none (an in-repo example, a plain cargo
+/// package).
+///
+/// # Errors
+/// When `flui.toml` cannot be read or parsed.
+pub(crate) fn nearest_config(root: &Path) -> CliResult<Option<FluiConfig>> {
+    Ok(nearest_project(root)?.map(|project| project.config))
+}
+
+/// The project the nearest `flui.toml` at or above `root` describes: the
+/// file's contents and the directory it is in, which the project's own
+/// paths are relative to.
+pub(crate) struct Project {
+    pub(crate) config: FluiConfig,
+    pub(crate) dir: std::path::PathBuf,
+}
+
+/// The nearest project at or above `root` ([`nearest_config`]).
+///
+/// # Errors
+/// When `flui.toml` cannot be read or parsed.
+pub(crate) fn nearest_project(root: &Path) -> CliResult<Option<Project>> {
+    let Some(dir) = root.ancestors().find(|dir| dir.join("flui.toml").is_file()) else {
+        return Ok(None);
+    };
+    Ok(Some(Project {
+        config: FluiConfig::load_from(&dir.join("flui.toml"))?,
+        dir: dir.to_path_buf(),
+    }))
 }
 
 /// Host/worker hot reload layout.
@@ -354,7 +437,24 @@ mod tests {
             hot_reload: None,
             platforms: PlatformsConfig::default(),
             signing: SigningConfig::default(),
+            web: WebConfig::default(),
         }
+    }
+
+    #[test]
+    fn a_web_base_path_is_read_and_a_bad_one_refused() {
+        let with = |web: &str| {
+            format!("[app]\nname = \"a\"\nversion = \"0.1.0\"\nid = \"com.example.a\"\n{web}")
+        };
+        let read = toml::from_str::<FluiConfig>(&with("[web]\nbase_href = \"/apps/demo/\"\n"))
+            .expect("a base path");
+        assert_eq!(read.web.base_href.to_string(), "/apps/demo/");
+        let absent = toml::from_str::<FluiConfig>(&with("")).expect("no web table");
+        assert_eq!(absent.web.base_href, BaseHref::root());
+        assert!(
+            toml::from_str::<FluiConfig>(&with("[web]\nbase_href = \"apps\"\n")).is_err(),
+            "a base path that is not an absolute directory"
+        );
     }
 
     #[test]

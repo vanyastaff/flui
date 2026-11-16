@@ -126,7 +126,9 @@ impl OpeningWindow {
     }
 }
 
-/// Install `root` in `host`, the window `opening` opened.
+/// Install `root` in `host`, the window `opening` opened, as the run's main
+/// window or another (`is_main_window`: whether its runtime takes the opened URL for the
+/// application).
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -134,6 +136,7 @@ pub(super) fn install_desktop_window<V>(
     host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
     opening: OpeningWindow,
+    is_main_window: bool,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
     V: View + Clone + 'static,
@@ -165,8 +168,14 @@ where
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
     let scale_factor = geometry.scale;
-    let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
-        Ok(ui_runtime) => ui_runtime,
+    // The opened URLs its runtime took are on loan until the installation
+    // commits; a return before it is prepared gives them back.
+    let (ui_runtime, opened) = match super::host::build_lending_ui_runtime(
+        presentation_window,
+        scale_factor,
+        is_main_window,
+    ) {
+        Ok(built) => built,
         Err(e) => {
             tracing::error!(error = %e, "UiRuntime construction failed");
             return Err(crate::app::AppWindowError::Mount {
@@ -231,6 +240,7 @@ where
     );
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
+    installation.lend_opened(opened);
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
 

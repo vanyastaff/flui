@@ -15,9 +15,19 @@
 //!   unknown action name is dropped from a node's `actions`, and an unknown
 //!   error code reads as [`ErrorCode::Platform`](crate::ErrorCode::Platform).
 //! - A change that is not additive (a field renamed or removed, a name
-//!   respelled, an optional field made required, or an existing field given
-//!   a new meaning) is listed in [`BREAKING`] with the ADR that decided it and
-//!   the names it respelled; the test lets those names, and nothing else, go.
+//!   respelled, an optional field made required, an existing field given a
+//!   new meaning, or a variant or value added to a union whose reader has no
+//!   fallback for it and refuses it whole: a new native recording row, a new
+//!   close answer) is listed in
+//!   [`BREAKING`] with the ADR that decided it and the names it respelled; the
+//!   test lets those names, and nothing else, go. A union is open to a new
+//!   value or variant exactly when its reader reads an unknown one as a
+//!   fallback (a role, an action name, an error code, above, and a tree
+//!   diagnostic), whatever the union's shape: a string `enum`, a `oneOf` of
+//!   constants, or an internally, adjacently or externally tagged union. The
+//!   `wire_schema` test lists those unions by name with their readers, and the
+//!   published versions that added one before the test could see it
+//!   (ADR-0342).
 //!   After 1.0 it also bumps `major`, and that ADR supersedes ADR-0080. The
 //!   test sees only the schema's shape, so a new meaning is caught in review:
 //!   it goes under a new name instead, as `surface_rect` did beside `rect`.
@@ -69,7 +79,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 13);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 14);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +112,14 @@ pub const BREAKING: &[Break] = &[
         // A layer's handle names a retained boundary by slot, generation and lineage
         // (`l4.2:3@7`), where it named a node of a frame's flattened tree (`l4.37`): no name
         // is respelled, the handle has a new meaning, so an older client cannot read it.
+        renamed: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 14),
+        adr: "ADR-0342",
+        // The native recording's rows gain `store_focus`, `store_lock`, `close_request`,
+        // `closed` and `cut`: a `record_native` event carrying one does not read in an older
+        // client, which refuses the unknown row, so an app speaking 0.14 refuses older clients.
         renamed: &[],
     },
 ];
@@ -187,8 +205,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.13");
-        assert_eq!("0.13".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.14");
+        assert_eq!("0.14".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -210,10 +228,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.13"))
+            Some(serde_json::json!("0.14"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.13")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.14")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

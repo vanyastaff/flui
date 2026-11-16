@@ -20,6 +20,13 @@ export function placeholderLabel() {
     return document.querySelector('flui-a11y-placeholder')?.getAttribute('aria-label') ?? null;
 }
 export function activatePlaceholder() { document.querySelector('flui-a11y-placeholder').click(); }
+// The tag of what the window's semantics slot holds, and whether the slot is
+// the last of the hosts after the canvas.
+export function semanticsSlot() {
+    const slot = document.getElementById('flui-canvas')?.nextElementSibling?.nextElementSibling;
+    if (slot?.tagName !== 'FLUI-SEMANTICS') return null;
+    return [...slot.children].map(child => child.tagName.toLowerCase()).join(' ');
+}
 export function focusPlaceholder() { document.querySelector('flui-a11y-placeholder').focus(); }
 export function focusOutside() {
     const outside = document.createElement('button');
@@ -89,7 +96,8 @@ export function styleCanvas(style) { document.getElementById('flui-canvas').styl
 // The canvas, styled `canvasStyle`, inside a scrolling container styled `style`, below the
 // page's own content.
 export function scrolledCanvas(style, canvasStyle) {
-    document.getElementById('flui-canvas')?.remove();
+    const old = document.getElementById('flui-canvas');
+    (old?.closest('flui-view') ?? old)?.remove();
     document.getElementById('scroller')?.remove();
     const scroller = document.createElement('div');
     scroller.id = 'scroller';
@@ -136,6 +144,7 @@ export function fieldState(id) {
         end: field.selectionEnd, direction: field.selectionDirection,
         focused: document.activeElement === field,
         autocomplete: field.getAttribute("autocomplete"), inputmode: field.getAttribute("inputmode"),
+        fontSize: parseFloat(getComputedStyle(field).fontSize),
     } : null);
 }
 let held;
@@ -191,6 +200,8 @@ extern "C" {
     fn placeholder_label() -> Option<String>;
     #[wasm_bindgen(js_name = activatePlaceholder)]
     fn activate_placeholder();
+    #[wasm_bindgen(js_name = semanticsSlot)]
+    fn semantics_slot() -> Option<String>;
     #[wasm_bindgen(js_name = focusPlaceholder)]
     fn focus_placeholder();
     #[wasm_bindgen(js_name = focusOutside)]
@@ -345,12 +356,22 @@ fn the_tree_reaches_the_dom_once_the_placeholder_is_activated() {
     accessibility.publish(counter(0));
     assert!(!accessibility.is_active());
     assert_eq!(placeholder_label().as_deref(), Some("Enable accessibility"));
+    assert_eq!(
+        semantics_slot().as_deref(),
+        Some("flui-a11y-placeholder"),
+        "the placeholder stands in the last host after the canvas"
+    );
     assert_eq!(tree(), serde_json::Value::Null, "no tree before activation");
 
     activate_placeholder();
     assert!(accessibility.is_active());
     assert_eq!(*activations.lock().expect("the record"), [true]);
     assert_eq!(placeholder_label(), None, "the placeholder gave way");
+    assert_eq!(
+        semantics_slot().as_deref(),
+        Some("flui-semantics-host"),
+        "the semantics host stands in its place"
+    );
     assert_eq!(
         tree(),
         counter_in_dom(0),
@@ -933,6 +954,9 @@ struct FieldState {
     focused: bool,
     autocomplete: Option<String>,
     inputmode: Option<String>,
+    /// Its computed `font-size` in CSS pixels.
+    #[serde(rename = "fontSize")]
+    font_size: f64,
 }
 
 fn field(id: &str) -> Option<FieldState> {
@@ -997,6 +1021,11 @@ fn a_focused_text_field_is_edited_through_its_element() {
         (state.autocomplete.as_deref(), state.inputmode.as_deref()),
         (Some("email"), Some("email")),
         "filled and typed as an address"
+    );
+    assert!(
+        state.font_size >= 16.0,
+        "iOS Safari zooms into a focused field below 16 px: {}",
+        state.font_size
     );
     assert_eq!(super::edit_context_text(), None, "no editor on the canvas");
     assert!(super::editor().is_none(), "and none beside it");
@@ -1116,7 +1145,10 @@ async fn a_field_the_focus_moved_to_takes_the_hidden_editor_s_focus() {
     );
     accessibility.publish(form("ab", FIELD));
     super::wait(0).await;
-    assert!(super::editor().is_none(), "the hidden editor is gone");
+    assert!(
+        super::editor().is_some_and(|editor| !editor.focused && editor.value.is_empty()),
+        "the window's hidden editor stays, empty and without the focus"
+    );
     assert!(
         field("name").expect("the field").focused,
         "the field has the focus"

@@ -503,12 +503,12 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     let web_builder = WebBuilder::new(&workspace_root);
 
-    let floors = crate::config::project_floors(&workspace_root)?;
+    let project = crate::config::nearest_project(&workspace_root)?;
+    let floors = crate::config::floors_of(project.as_ref().map(|project| &project.config))?;
+    let page = crate::config::web_page(project.as_ref());
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .floors(floors)
-        .platform(Platform::Web {
-            target: "web".to_string(),
-        })
+        .platform(Platform::Web { page })
         .target(options.cargo_target())
         .profile(profile);
 

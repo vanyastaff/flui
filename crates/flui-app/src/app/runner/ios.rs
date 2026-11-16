@@ -131,6 +131,9 @@ fn drive_owner() {
     // its windows: this wake is the one a command asks for.
     super::owner_dispatch::apply_queued_window_commands(std::thread::current().id());
     super::host::drive_native_text_sizing();
+    // What an opened URL's loan returned is routed here, outside the
+    // destructor that returned it.
+    super::host::route_owed_opened_urls();
     if let Some(mut lease) = lease_controller() {
         lease
             .controller
@@ -312,8 +315,12 @@ where
     // 2. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
     let scale_factor = geometry.scale;
-    let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
-        Ok(ui_runtime) => ui_runtime,
+    let (ui_runtime, opened) = match super::host::build_lending_ui_runtime(
+        presentation_window,
+        scale_factor,
+        true, // the run's main window
+    ) {
+        Ok(built) => built,
         Err(error) => {
             tracing::error!(%error, "UiRuntime construction failed");
             return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
@@ -358,6 +365,7 @@ where
     let agent_window = super::dev_agents::vend(&ui_runtime, ui_runtime.presentation_id());
     let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Rc::clone(&window));
+    installation.lend_opened(opened);
     installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 

@@ -7,10 +7,12 @@
 //! form. From Android 10 a read answers `Ok(None)` unless the app has input
 //! focus, and from Android 13 the system shows its own notice on a read: both
 //! are the system's policy, not a failure. A failed call is logged; a read
-//! answers [`ClipboardError::Unavailable`], a write writes nothing.
+//! answers [`ClipboardError::Unavailable`], and a write writes nothing and
+//! answers it too. A write where the activity has no clipboard service
+//! answers [`ClipboardError::Gone`]: no retry gives it one.
 
 use android_activity::AndroidApp;
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, Concealment};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
 use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
@@ -124,14 +126,16 @@ impl SyncClipboard for AndroidClipboard {
         })
     }
 
-    fn write_now(&self, write: ClipboardWrite) {
+    fn write_now(&self, write: ClipboardWrite) -> ClipboardWritten {
         // Below the gate the write cannot carry the extra: it is an ordinary
         // one, as `concealment` says.
         let sensitive = write.is_concealed() && self.api.since::<ClipExtras>().is_some();
         let written = with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
-                return Ok(());
+                // The system has no clipboard service for this activity, and
+                // no retry will give it one.
+                return Ok(Err(ClipboardError::Gone));
             }
             let label = env.new_string("")?;
             let text = env.new_string(write.as_text())?;
@@ -154,15 +158,16 @@ impl SyncClipboard for AndroidClipboard {
                 jni_sig!("(Landroid/content/ClipData;)V"),
                 &[JValue::Object(&clip)],
             )?;
-            Ok(())
+            Ok(Ok(()))
         });
-        if let Err(error) = written {
+        written.unwrap_or_else(|error| {
             tracing::warn!(
                 target: "flui_native::android",
                 %error,
                 "clipboard write failed"
             );
-        }
+            Err(ClipboardError::Unavailable)
+        })
     }
 
     /// A concealed write carries `ClipDescription.EXTRA_IS_SENSITIVE`, which

@@ -21,6 +21,7 @@
 //! user code between those writes. Closure withdraws native routes before user
 //! cleanup; active leases retain their original host across TLS replacement.
 
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use flui_foundation::PresentationAddress;
@@ -61,6 +62,37 @@ pub(crate) enum RegistryError {
 #[derive(Debug, Default)]
 pub(crate) struct WindowRegistry {
     entries: Vec<(WindowId, PresentationAddress)>,
+    /// The windows whose presentation was removed, the most recent last and
+    /// at most [`RETIRED_WINDOWS_KEPT`]: a URL the platform addressed to one
+    /// while it closed is refused, not held for a window that never returns.
+    /// A host never issues an id twice (`WindowIdMint`), so an id here names
+    /// no later window.
+    retired: VecDeque<WindowId>,
+}
+
+/// How many closed windows the registry remembers. A report addressed to a
+/// window is made while the window is open; it reaches the runner after the
+/// close only from the platform's queue of opened reports waiting for the
+/// handler (`AppHandler::opened`), which holds fewer than this. An older id
+/// forgotten here names no installation either, so a URL for it is still
+/// refused, as a window that is not open.
+const RETIRED_WINDOWS_KEPT: usize = flui_platform::MAX_OPENED_ITEMS;
+
+/// Where what the operating system opened for an [`OpenTarget`] goes now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpenDestination {
+    /// The presentation that takes it.
+    Presentation(PresentationAddress),
+    /// No presentation yet: the window the target names is being installed,
+    /// or the application has no window.
+    Pending,
+    /// The window the target names has closed: nothing opens in it again.
+    Closed,
+    /// The window the target names has no presentation and no installation
+    /// under way: nobody announced it, or its installation failed. Decided
+    /// by the installed host, which knows the installations
+    /// (`InstalledHost::open_target`).
+    NotOpen,
 }
 
 impl WindowRegistry {
@@ -83,15 +115,34 @@ impl WindowRegistry {
     ) {
         self.entries.push((registration.id, address));
     }
+    /// Remove every mapping, each window remembered as closed.
     pub(crate) fn clear(&mut self) -> usize {
         let count = self.entries.len();
-        self.entries.clear();
+        for (id, _) in std::mem::take(&mut self.entries) {
+            self.retire(id);
+        }
         count
+    }
+
+    /// Remember `id` as closed, forgetting the oldest past
+    /// [`RETIRED_WINDOWS_KEPT`].
+    fn retire(&mut self, id: WindowId) {
+        if self.retired.len() == RETIRED_WINDOWS_KEPT {
+            self.retired.pop_front();
+        }
+        self.retired.push_back(id);
+    }
+
+    /// Whether `target` names a window and `window` is it, read before the
+    /// window is registered: the native identity stays in this file.
+    pub(crate) fn names_window(target: OpenTarget, window: &dyn PlatformWindow) -> bool {
+        matches!(target, OpenTarget::Window(_)) && Self::opens_in(target, window)
     }
 
     pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
+            retired: VecDeque::new(),
         }
     }
 
@@ -103,23 +154,30 @@ impl WindowRegistry {
             .map(|(_, address)| *address)
     }
 
-    /// The presentation what the operating system opened goes to
-    /// (`flui_platform::Opened`): the window's own for
-    /// [`OpenTarget::Window`], once it has one; for the application as a
-    /// whole, `active` (the window focused last) while it is still mapped,
-    /// else the window opened first. `None` while the target has no
-    /// presentation yet.
+    /// Where what the operating system opened goes (`flui_platform::Opened`):
+    /// the window's own presentation for [`OpenTarget::Window`], once it has
+    /// one, and [`OpenDestination::Closed`] once it closed; for the
+    /// application as a whole, `main` (the run's main window) while it is
+    /// mapped, and [`OpenDestination::Pending`] while it is not.
     pub(crate) fn open_target(
         &self,
         target: OpenTarget,
-        active: Option<PresentationAddress>,
-    ) -> Option<PresentationAddress> {
-        match target {
+        main: Option<PresentationAddress>,
+    ) -> OpenDestination {
+        let address = match target {
+            OpenTarget::Window(id) if self.retired.contains(&id) => {
+                return OpenDestination::Closed;
+            }
             OpenTarget::Window(id) => self.resolve(id),
-            OpenTarget::Application | _ => active
-                .filter(|address| self.contains_address(*address))
-                .or_else(|| self.entries.first().map(|(_, address)| *address)),
-        }
+            OpenTarget::Application | _ => main.filter(|address| self.contains_address(*address)),
+        };
+        address.map_or(OpenDestination::Pending, OpenDestination::Presentation)
+    }
+
+    /// The presentation registered first: the runner's one window on a
+    /// runner with no main-window controller.
+    pub(crate) fn first_address(&self) -> Option<PresentationAddress> {
+        self.entries.first().map(|(_, address)| *address)
     }
 
     /// Whether what the operating system opened for `target` goes to
@@ -168,6 +226,9 @@ impl WindowRegistry {
                 true
             }
         });
+        for (id, _) in &removed {
+            self.retire(*id);
+        }
         removed
     }
 }

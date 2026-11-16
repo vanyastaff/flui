@@ -112,6 +112,95 @@ impl Change {
     }
 }
 
+/// The soft keyboard as a page reports it: what the web window publishes as
+/// its inset and what the web text input reads to decide whether a tap on
+/// the focused field reopens the keyboard.
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod page {
+    use wasm_bindgen::{JsCast as _, JsValue};
+
+    use super::Frame;
+
+    /// `navigator.virtualKeyboard`, where the browser has it.
+    pub(crate) fn virtual_keyboard(window: &web_sys::Window) -> Option<web_sys::EventTarget> {
+        js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("virtualKeyboard"))
+            .ok()?
+            .dyn_into::<web_sys::EventTarget>()
+            .ok()
+    }
+
+    /// The keyboard's rectangle from `navigator.virtualKeyboard`, which the
+    /// browser reports only while the page has the keyboard overlay its content;
+    /// an empty one while it is hidden.
+    pub(crate) fn overlaid_keyboard(window: &web_sys::Window) -> Option<Frame> {
+        let keyboard = virtual_keyboard(window)?;
+        let overlays = js_sys::Reflect::get(&keyboard, &JsValue::from_str("overlaysContent"))
+            .ok()?
+            .as_bool()?;
+        if !overlays {
+            return None;
+        }
+        // The API gives a `DOMRect`; only its four sides are read.
+        let rect = js_sys::Reflect::get(&keyboard, &JsValue::from_str("boundingRect"))
+            .ok()
+            .filter(JsValue::is_object)?
+            .unchecked_into::<web_sys::DomRect>();
+        Some(Frame {
+            x: rect.x(),
+            y: rect.y(),
+            width: rect.width(),
+            height: rect.height(),
+        })
+    }
+
+    /// The layout viewport below the visual viewport, in client coordinates;
+    /// `None` while the page is zoomed in.
+    pub(crate) fn viewport_keyboard(window: &web_sys::Window) -> Option<Frame> {
+        let visual = window.visual_viewport()?;
+        if visual.scale() > 1.0 + 1e-3 {
+            return None;
+        }
+        let layout = window.document()?.document_element()?;
+        let bottom = visual.offset_top() + visual.height();
+        Some(Frame {
+            x: 0.0,
+            y: bottom,
+            width: f64::from(layout.client_width()),
+            height: f64::from(layout.client_height()) - bottom,
+        })
+    }
+
+    /// What the page knows of its soft keyboard now.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum KeyboardState {
+        /// The browser reports a keyboard over part of the page.
+        Shown,
+        /// The browser reports no keyboard.
+        Hidden,
+        /// Nothing the page reads says: an inset inferred from the visual
+        /// viewport is no report (Safari pans the visual viewport over a
+        /// field near the bottom and the inset reads zero with the keyboard
+        /// up, a keyboard that resizes the layout leaves none, a hardware
+        /// keyboard shows none).
+        Unknown,
+    }
+
+    /// The page's soft keyboard as the browser reports it: only
+    /// `navigator.virtualKeyboard`'s geometry, read while the page has the
+    /// keyboard overlay its content (the window asks for that while it
+    /// lives), where an empty rectangle is a hidden keyboard.
+    pub(crate) fn keyboard_state() -> KeyboardState {
+        let Some(frame) = web_sys::window().and_then(|window| overlaid_keyboard(&window)) else {
+            return KeyboardState::Unknown;
+        };
+        if frame.width > 0.0 && frame.height > 0.0 {
+            KeyboardState::Shown
+        } else {
+            KeyboardState::Hidden
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
