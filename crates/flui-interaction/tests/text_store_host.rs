@@ -143,6 +143,7 @@ fn composing_store() -> Rc<InMemoryTextStore> {
             text: "かな".to_owned(),
             cursor: Some((0, 0)),
         },
+        drop,
     );
     assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
     assert!(store.composition().is_some(), "test setup composes");

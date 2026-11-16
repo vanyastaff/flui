@@ -62,9 +62,19 @@ fn router(window: &'static str, built: &Built) -> Router<Page> {
     })
 }
 
+/// What bounding `urls` and `files` keeps ([`Opened::bounded`]).
+fn kept(
+    urls: impl IntoIterator<Item = String>,
+    files: impl IntoIterator<Item = OpenedFile>,
+    target: OpenTarget,
+    launch: Launch,
+) -> Opened {
+    Opened::bounded(urls, files, target, launch).0
+}
+
 /// What the operating system opens for the application as a whole.
 fn link(url: &str, launch: Launch) -> Opened {
-    Opened::new([url.to_owned()], [], OpenTarget::Application, launch)
+    kept([url.to_owned()], [], OpenTarget::Application, launch)
 }
 
 /// Whether `window` built `page`.
@@ -186,7 +196,7 @@ pub(crate) fn opened_files_reach_on_open_files() {
     });
     let run = HeadlessRun::start(application, router("main", &built));
     run.run_owner_turn();
-    run.open(Opened::new(
+    run.open(kept(
         [],
         ["/a.note", "/b.note"].map(OpenedFile::new),
         OpenTarget::Application,
@@ -208,7 +218,7 @@ pub(crate) fn a_panic_in_the_first_urls_navigation_does_not_lose_the_second() {
     let main = router("main", &built).on_unknown(|_| panic!("the unknown-route hook panics"));
     let run = HeadlessRun::start(Application::new().declares(DECLARES), main);
     run.run_owner_turn();
-    run.open(Opened::new(
+    run.open(kept(
         ["myapp:///nowhere".to_owned(), "myapp:///note/2".to_owned()],
         [],
         OpenTarget::Application,

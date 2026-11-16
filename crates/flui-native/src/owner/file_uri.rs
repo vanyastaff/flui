@@ -155,7 +155,7 @@ pub(crate) fn opened_by_urls(
             tracing::debug!("a file URL the platform opened names no path on this host");
         }
     }
-    Opened::new(links, files, target, launch)
+    super::opened::bounded(links, files, 0, target, launch)
 }
 
 /// The `file:` URI of `path`, an absolute Unix path: `file://` and the path

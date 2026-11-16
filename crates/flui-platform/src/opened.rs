@@ -36,26 +36,26 @@ pub struct Opened {
 }
 
 impl Opened {
-    /// What the operating system opened, bounded: an item past
-    /// [`MAX_OPENED_ITEMS`] (URLs first, then files) and a URL longer than
-    /// [`MAX_OPENED_URL_LEN`] bytes are dropped with a warning that says how
-    /// many, never read further.
-    #[must_use]
-    pub fn new(
+    /// What the operating system opened, bounded, and what bounding it
+    /// dropped: an item past [`MAX_OPENED_ITEMS`] (URLs first, then files)
+    /// and a URL longer than [`MAX_OPENED_URL_LEN`] bytes are dropped, never
+    /// read further, and counted. The host that bounds reports the count; the
+    /// value carries only what it kept.
+    #[must_use = "the overflow is the host's to report"]
+    pub fn bounded(
         urls: impl IntoIterator<Item = String>,
         files: impl IntoIterator<Item = OpenedFile>,
         target: OpenTarget,
         launch: Launch,
-    ) -> Self {
-        let mut too_long = 0_usize;
-        let mut over = 0_usize;
+    ) -> (Self, OpenedOverflow) {
+        let mut overflow = OpenedOverflow::default();
         let mut kept = 0_usize;
         let mut admit = |is_url_too_long: bool| {
             if is_url_too_long {
-                too_long += 1;
+                overflow.too_long += 1;
                 false
             } else if kept == MAX_OPENED_ITEMS {
-                over += 1;
+                overflow.past_limit += 1;
                 false
             } else {
                 kept += 1;
@@ -67,27 +67,39 @@ impl Opened {
             .filter(|url| admit(url.len() > MAX_OPENED_URL_LEN))
             .collect();
         let files: Vec<OpenedFile> = files.into_iter().filter(|_| admit(false)).collect();
-        if too_long > 0 || over > 0 {
-            tracing::warn!(
-                too_long,
-                over,
-                max_items = MAX_OPENED_ITEMS,
-                max_url_len = MAX_OPENED_URL_LEN,
-                "the operating system opened more than the application takes; the rest is dropped"
-            );
-        }
-        Self {
+        let opened = Self {
             urls,
             files,
             target,
             launch,
-        }
+        };
+        (opened, overflow)
     }
 
     /// Whether it carries neither a URL nor a file.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.urls.is_empty() && self.files.is_empty()
+    }
+}
+
+/// How many URLs and files bounding what was opened dropped, by reason
+/// ([`Opened::bounded`]). Each count is at most the number of items the
+/// operating system handed over.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OpenedOverflow {
+    /// URLs longer than [`MAX_OPENED_URL_LEN`] bytes.
+    pub too_long: usize,
+    /// URLs and files past the first [`MAX_OPENED_ITEMS`].
+    pub past_limit: usize,
+}
+
+impl OpenedOverflow {
+    /// Whether nothing was dropped.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.too_long == 0 && self.past_limit == 0
     }
 }
 

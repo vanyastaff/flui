@@ -98,7 +98,7 @@ impl HeadlessInputDevices {
 
     /// Switch the simulated system's keyboard layout to `name`, as a user
     /// switching layouts does: when the name moved, the registered keyboard
-    /// layout callback (`Platform::on_keyboard_layout_change`) is called, with
+    /// layout callback (`host::Input::on_keyboard_layout_change`) is called, with
     /// no lock of the platform held; its panic resumes here, the caller's
     /// frame, as a handler's does on the headless host. `false` once the
     /// platform is gone.

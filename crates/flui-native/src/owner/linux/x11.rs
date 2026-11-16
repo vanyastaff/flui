@@ -525,10 +525,10 @@ pub(crate) trait LoopInput {
     /// reports.
     fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError>;
 
-    /// [`Platform::keyboard_layout`].
+    /// The active keyboard layout's name; empty before a keymap came.
     fn keyboard_layout(&self) -> String;
 
-    /// [`Platform::on_keyboard_layout_change`].
+    /// Call `callback` on the owner thread each time the layout changes.
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut()>);
 }
 
