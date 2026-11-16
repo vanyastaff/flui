@@ -235,7 +235,14 @@ impl WindowsWindow {
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = crate::owner::windows::WindowIdentity::admit(
             crate::owner::windows::WindowIdentity::source(),
-            || Self::create_native(&options, &opening, displays.as_ref()),
+            || {
+                Self::create_native(
+                    &options,
+                    &opening,
+                    displays.as_ref(),
+                    &windows.system_scale_streak,
+                )
+            },
         );
         let (hwnd, requested, scale_factor, normal) = created?;
         Self::install_native(
@@ -269,6 +276,7 @@ impl WindowsWindow {
         options: &WindowOptions,
         opening: &flui_platform::OpeningGeometry,
         displays: &dyn crate::owner::windows::HostDisplays,
+        system_scale_streak: &std::cell::Cell<crate::display::scale::ScaleStreak>,
     ) -> Result<(HWND, Size<i32>, f64, Option<RECT>), OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
         // and takes no pointer arguments — always sound. `GetDpiForSystem`
@@ -282,12 +290,15 @@ impl WindowsWindow {
                 message: format!("Failed to get module handle: {e}"),
             })?;
 
-            // The system DPI over the base DPI, by the hosts' one rule; a
-            // refusal is reported here, with nothing borrowed.
-            let (system_scale, refused) = crate::display::scale::read_scale(
+            // The system DPI over the base DPI, by the hosts' one rule, against
+            // the set's one streak for it; a refusal is reported here, with
+            // nothing borrowed.
+            let mut streak = system_scale_streak.get();
+            let (system_scale, refused) = streak.read(
                 f64::from(GetDpiForSystem()) / f64::from(USER_DEFAULT_SCREEN_DPI),
                 "Win32 system DPI",
             );
+            system_scale_streak.set(streak);
             if let Some(refused) = refused {
                 refused.report();
             }
@@ -859,8 +870,8 @@ impl WindowsWindow {
     /// - a fullscreen window takes the size for the bounds it returns to.
     ///
     /// # Errors
-    /// [`ApplyError::Platform`] for a size or scale that is no size (a side
-    /// past the largest surface is clamped), before any call; [`ApplyError::Platform`] when
+    /// [`ApplyError::Platform`] for a side that is no size (a side past the
+    /// largest surface is clamped), before any call; [`ApplyError::Platform`] when
     /// Win32 refuses or fails the resize.
     fn set_inner_size(&self, size: Size<f64>) -> Result<(), ApplyError> {
         let scale = self.state.lock().scale_factor;

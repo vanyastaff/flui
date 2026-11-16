@@ -38,11 +38,19 @@ impl BufferScale {
     /// One device pixel per logical pixel.
     pub(crate) const ONE: Self = Self(DevicePixelRatio::ONE);
 
-    /// The scale a buffer is drawn at where the compositor names `told`;
-    /// `None` for one that is no positive finite number.
+    /// The scale a buffer is drawn at where the compositor names `told`,
+    /// lowered to [`Self::MAX`] past it; `None` for one that is no ratio a
+    /// screen can have below that (zero, negative, not a number, or under
+    /// [`DevicePixelRatio::MIN`]).
     pub(crate) fn try_new(told: f64) -> Option<Self> {
-        let told = DevicePixelRatio::try_new(told)?;
-        DevicePixelRatio::try_new(told.get().min(Self::MAX)).map(Self)
+        // Only a finite number past the cap is lowered to it: an infinity or
+        // a NaN is no scale, and is refused.
+        let capped = if told.is_finite() && told > Self::MAX {
+            Self::MAX
+        } else {
+            told
+        };
+        DevicePixelRatio::try_new(capped).map(Self)
     }
 
     /// Device pixels per logical pixel.
@@ -56,8 +64,10 @@ impl BufferScale {
     }
 
     /// This scale, lowered where `content` logical pixels drawn at it would
-    /// pass [`MAX_SURFACE_EXTENT`] device pixels on a side, so they fit;
-    /// this scale where the content is no size.
+    /// pass [`MAX_SURFACE_EXTENT`] device pixels on a side, so they fit, but
+    /// never below [`DevicePixelRatio::MIN`]: a content too long to fit at it
+    /// does not fit at all, and [`metrics`] publishes none; this scale where
+    /// the content is no size.
     pub(crate) fn fitted(self, content: Size<f64>) -> Self {
         let longest = content.width.max(content.height);
         if !(longest.is_finite() && longest > 0.0) {
@@ -67,7 +77,7 @@ impl BufferScale {
         if self.get() <= fits {
             return self;
         }
-        DevicePixelRatio::try_new(fits).map_or(self, Self)
+        DevicePixelRatio::try_new(fits.max(DevicePixelRatio::MIN.get())).map_or(self, Self)
     }
 }
 
@@ -307,18 +317,25 @@ mod tests {
                 None,
             ),
             (
+                "the longest content the smallest ratio fits",
+                true,
+                120,
+                (extent / DevicePixelRatio::MIN.get(), 1.0),
+                Some((max, 1, DevicePixelRatio::MIN.get())),
+            ),
+            (
+                "a configure too long to fit at the smallest ratio",
+                true,
+                120,
+                (1e6, 1.0),
+                None,
+            ),
+            (
                 "the largest configure at the largest scale",
                 true,
                 960,
                 (f64::from(i32::MAX), f64::from(i32::MAX)),
-                Some((max, max, extent / f64::from(i32::MAX))),
-            ),
-            (
-                "a sliver far longer than the cap's ratio",
-                true,
-                120,
-                (1e6, 1.0),
-                Some((max, 1, extent / 1e6)),
+                None,
             ),
             ("a size that is none", true, 120, (0.0, 300.0), None),
             (

@@ -1069,7 +1069,7 @@ pub(crate) mod hints {
     use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::{SizeConstraints, WindowExtent};
 
-    use crate::window::state::device_extent_rounded;
+    use crate::window::state::device_limits;
 
     /// The content sizes a window is held between, in device pixels.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1093,18 +1093,17 @@ pub(crate) mod hints {
                 max: held,
             };
         }
-        // The hosts' one extent rule, rounded as a limit rounds: a minimum up
-        // and a maximum down, so the content never ends outside the limits.
-        let device = |size: WindowExtent, round: fn(f64) -> f64| {
-            let side = |logical: f64| device_extent_rounded(logical, scale, round);
-            Some((
-                side(size.width())?.cast_signed(),
-                side(size.height())?.cast_signed(),
-            ))
-        };
+        // The hosts' one limit rule: a minimum up, a maximum down and never
+        // below the minimum.
+        let limits = device_limits(
+            constraints.min.map(WindowExtent::get),
+            constraints.max.map(WindowExtent::get),
+            scale,
+        );
+        let signed = |(width, height): (u32, u32)| (width.cast_signed(), height.cast_signed());
         SizeLimits {
-            min: constraints.min.and_then(|min| device(min, f64::ceil)),
-            max: constraints.max.and_then(|max| device(max, f64::floor)),
+            min: limits.min.map(signed),
+            max: limits.max.map(signed),
         }
     }
 
@@ -1179,6 +1178,34 @@ pub(crate) mod hints {
                     SizeLimits {
                         min: Some((151, 151)),
                         max: Some((750, 750)),
+                    },
+                ),
+                (
+                    "equal fractional limits hold the window at the minimum",
+                    SizeConstraints::try_new(
+                        Some(Size::new(100.3, 100.3)),
+                        Some(Size::new(100.3, 100.3)),
+                    )
+                    .expect("finite limits"),
+                    true,
+                    1.5,
+                    SizeLimits {
+                        min: Some((151, 151)),
+                        max: Some((151, 151)),
+                    },
+                ),
+                (
+                    "a maximum just above the minimum is not sent below it",
+                    SizeConstraints::try_new(
+                        Some(Size::new(100.3, 100.3)),
+                        Some(Size::new(100.4, 100.4)),
+                    )
+                    .expect("finite limits"),
+                    true,
+                    1.0,
+                    SizeLimits {
+                        min: Some((101, 101)),
+                        max: Some((101, 101)),
                     },
                 ),
                 (

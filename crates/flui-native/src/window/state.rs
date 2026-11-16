@@ -321,7 +321,9 @@ pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
 
 /// A window's logical side `logical` at `ratio` in whole device pixels, as
 /// every host hands a window extent to its window system or draws a surface
-/// of the window: snapped to the device grid, at least one pixel, and at most
+/// of the window: the one conversion every layer uses
+/// ([`flui_foundation::geometry::device_extent`]: snapped, at least one pixel),
+/// and at most
 /// [`MAX_SURFACE_EXTENT`](flui_platform::MAX_SURFACE_EXTENT), past which the
 /// side is clamped, since no host gives a window a larger surface. `None` for a
 /// side that is not finite or not positive.
@@ -330,16 +332,16 @@ pub(crate) fn device_extent(
     logical: f64,
     ratio: flui_foundation::geometry::DevicePixelRatio,
 ) -> Option<u32> {
-    device_extent_rounded(logical, ratio, flui_foundation::geometry::snap)
+    flui_foundation::geometry::device_extent(logical, ratio)
+        .map(|pixels| pixels.min(flui_platform::MAX_SURFACE_EXTENT))
 }
 
 /// [`device_extent`] with the device pixels rounded by `round` instead of
-/// snapped: a size limit rounds its minimum up and its maximum down, so the
-/// content never ends outside the logical limit. The range is the same: at
+/// snapped, as [`device_limits`] rounds a limit. The range is the same: at
 /// least one pixel, clamped at the largest surface, `None` for a side that is
 /// not finite or not positive.
-#[cfg(any(windows, x11_host, wayland_host, test))]
-pub(crate) fn device_extent_rounded(
+#[cfg(any(windows, x11_host, test))]
+fn device_extent_rounded(
     logical: f64,
     ratio: flui_foundation::geometry::DevicePixelRatio,
     round: fn(f64) -> f64,
@@ -357,6 +359,43 @@ pub(crate) fn device_extent_rounded(
     )]
     let pixels = pixels as u32;
     Some(pixels)
+}
+
+/// A window's content-size limits in device pixels, as every host hands them
+/// to its window system.
+#[cfg(any(windows, x11_host, test))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DeviceLimits {
+    /// The smallest content size, (width, height).
+    pub(crate) min: Option<(u32, u32)>,
+    /// The largest content size, never below `min` on either side.
+    pub(crate) max: Option<(u32, u32)>,
+}
+
+/// The logical limits `min` and `max` at `ratio` in device pixels, by the
+/// hosts' one rule: a minimum rounds up and a maximum down, so the content
+/// never ends outside the logical limits, each side at least a pixel and
+/// clamped at the largest surface; a limit with a side that is no size is no
+/// limit. Where rounding leaves the maximum below the minimum (both equal at a
+/// fractional ratio), the maximum is raised to it, so the pair is ordered by
+/// construction and the window is held at the minimum.
+#[cfg(any(windows, x11_host, test))]
+pub(crate) fn device_limits(
+    min: Option<flui_foundation::geometry::Size<f64>>,
+    max: Option<flui_foundation::geometry::Size<f64>>,
+    ratio: flui_foundation::geometry::DevicePixelRatio,
+) -> DeviceLimits {
+    let device = |size: flui_foundation::geometry::Size<f64>, round: fn(f64) -> f64| {
+        Some((
+            device_extent_rounded(size.width, ratio, round)?,
+            device_extent_rounded(size.height, ratio, round)?,
+        ))
+    };
+    let min = min.and_then(|size| device(size, f64::ceil));
+    let max = max
+        .and_then(|size| device(size, f64::floor))
+        .map(|max| min.map_or(max, |min: (u32, u32)| (max.0.max(min.0), max.1.max(min.1))));
+    DeviceLimits { min, max }
 }
 
 /// What a read of the cell answered.
@@ -1307,10 +1346,67 @@ mod mapping {
 
 #[cfg(test)]
 mod extent {
-    use flui_foundation::geometry::DevicePixelRatio;
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::MAX_SURFACE_EXTENT;
 
-    use super::device_extent;
+    use super::{DeviceLimits, device_extent, device_limits};
+
+    /// The limits every host hands its window system: a minimum up, a
+    /// maximum down, and the pair ordered by construction, so rounding never
+    /// sends a maximum below the minimum.
+    #[test]
+    fn device_limits_round_outward_and_stay_ordered() {
+        let ratio = |ratio: f64| DevicePixelRatio::try_new(ratio).expect("a positive ratio");
+        let square = |side: f64| Some(Size::new(side, side));
+        // (case, min, max, ratio, limits)
+        for (case, min, max, scale, limits) in [
+            (
+                "whole limits",
+                square(300.0),
+                square(900.0),
+                1.0,
+                (Some((300, 300)), Some((900, 900))),
+            ),
+            (
+                "a fractional ratio rounds outward",
+                square(100.3),
+                square(500.3),
+                1.5,
+                (Some((151, 151)), Some((750, 750))),
+            ),
+            (
+                "equal fractional limits hold the window at the minimum",
+                square(100.3),
+                square(100.3),
+                1.5,
+                (Some((151, 151)), Some((151, 151))),
+            ),
+            (
+                "a maximum just above the minimum is raised to it",
+                square(100.3),
+                square(100.4),
+                1.0,
+                (Some((101, 101)), Some((101, 101))),
+            ),
+            (
+                "a limit with a side that is no size is no limit",
+                Some(Size::new(f64::NAN, 10.0)),
+                square(100.0),
+                1.0,
+                (None, Some((100, 100))),
+            ),
+            ("no limits", None, None, 1.0, (None, None)),
+        ] {
+            assert_eq!(
+                device_limits(min, max, ratio(scale)),
+                DeviceLimits {
+                    min: limits.0,
+                    max: limits.1,
+                },
+                "{case}"
+            );
+        }
+    }
 
     /// The one logical-to-device extent: snapped, at least a pixel, clamped
     /// at the largest surface, and no extent for a side that is none.

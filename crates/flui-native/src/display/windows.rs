@@ -508,7 +508,7 @@ pub(crate) mod source {
         DXGI_HDR10, DXGI_SRGB, DXGI_WIDE_SDR, OutputColor, OutputColorSpace, QdcVirtualModeAware,
         SampledMonitor, display_color, display_period, resolve_display,
     };
-    use crate::display::scale::ScaleStreak;
+    use crate::display::scale::ScaleStreaks;
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
@@ -523,9 +523,9 @@ pub(crate) mod source {
         /// The handle-to-key pairs of the last sample, which resolve a window's
         /// nearest monitor.
         monitors: Mutex<Vec<SampledMonitor>>,
-        /// Whether the last monitor DPI read was refused, so a run of refusals
-        /// is reported once.
-        scale_streak: Mutex<ScaleStreak>,
+        /// Whether each monitor's last DPI read was refused, so a run of
+        /// refusals is reported once per monitor.
+        scale_streak: Mutex<ScaleStreaks<DisplayId>>,
         #[cfg(test)]
         samples: std::sync::atomic::AtomicUsize,
     }
@@ -600,7 +600,7 @@ pub(crate) mod source {
                 source: DisplaySource::new(),
                 build: WindowsBuild::read(),
                 monitors: Mutex::new(Vec::new()),
-                scale_streak: Mutex::new(ScaleStreak::default()),
+                scale_streak: Mutex::new(ScaleStreaks::default()),
                 #[cfg(test)]
                 samples: std::sync::atomic::AtomicUsize::new(0),
             }
@@ -640,10 +640,11 @@ pub(crate) mod source {
                 };
                 // The monitor's DPI over the base DPI, by the hosts' one rule;
                 // the streak's lock is let go before a refusal is reported.
-                let (ratio, refused) = self
-                    .scale_streak
-                    .lock()
-                    .read(f64::from(monitor.dpi) / 96.0, "Win32 monitor DPI");
+                let (ratio, refused) = self.scale_streak.lock().read(
+                    id,
+                    f64::from(monitor.dpi) / 96.0,
+                    "Win32 monitor DPI",
+                );
                 if let Some(refused) = refused {
                     refused.report();
                 }
@@ -674,6 +675,9 @@ pub(crate) mod source {
                     key,
                 });
             }
+            // A monitor this sample did not read takes its streak with it.
+            let read: Vec<DisplayId> = displays.iter().map(|display| display.id).collect();
+            self.scale_streak.lock().keep_only(&read);
             (displays, sampled)
         }
     }

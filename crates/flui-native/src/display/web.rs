@@ -1234,7 +1234,7 @@ pub(crate) mod source {
     use super::color_query::display_color;
     use super::refresh_estimate::RefreshEstimator;
     use super::screen_identity::RetainedScreens;
-    use crate::display::scale::{RefusedScale, ScaleStreak};
+    use crate::display::scale::{RefusedScale, ScaleStreaks};
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
 
@@ -1264,18 +1264,32 @@ pub(crate) mod source {
         /// first seen, taken as the display's own scale with the page at 100%.
         /// `None` until the first sample and after the screen changed.
         screen_ratio: Option<f64>,
-        /// Whether the last pixel ratio read was refused, so a run of
-        /// refusals is reported once.
-        scale_streak: ScaleStreak,
+        /// Whether each source's last pixel ratio read was refused, so a run
+        /// of refusals is reported once per source.
+        scale_streaks: ScaleStreaks<RatioSource>,
         /// The refusals of the last sample, reported once the state is let go.
         refused: Vec<RefusedScale>,
     }
 
+    /// Where the Web host reads a pixel ratio from.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum RatioSource {
+        /// `window.devicePixelRatio`, the page's own.
+        Page,
+        /// A `ScreenDetailed`'s `devicePixelRatio`, by the display it is.
+        Screen(DisplayId),
+    }
+
     impl State {
         /// The ratio `reported` gives by the hosts' one rule; a refusal that
-        /// starts a streak waits in `refused` to be reported.
-        fn read_scale(&mut self, reported: f64, what: &'static str) -> DevicePixelRatio {
-            let (ratio, refused) = self.scale_streak.read(reported, what);
+        /// starts a streak of `source` waits in `refused` to be reported.
+        fn read_scale(
+            &mut self,
+            source: RatioSource,
+            reported: f64,
+            what: &'static str,
+        ) -> DevicePixelRatio {
+            let (ratio, refused) = self.scale_streaks.read(source, reported, what);
             self.refused.extend(refused);
             ratio
         }
@@ -1349,7 +1363,7 @@ pub(crate) mod source {
                     details: None,
                     screens: RetainedScreens::new(),
                     screen_ratio: None,
-                    scale_streak: ScaleStreak::default(),
+                    scale_streaks: ScaleStreaks::default(),
                     refused: Vec::new(),
                 }),
             })
@@ -1416,6 +1430,15 @@ pub(crate) mod source {
                 Some(listed) => listed,
                 None => self.single_screen(state, &window, period)?,
             };
+            // A screen this sample did not read takes its streak with it.
+            let read: Vec<RatioSource> = std::iter::once(RatioSource::Page)
+                .chain(
+                    displays
+                        .iter()
+                        .map(|display| RatioSource::Screen(display.id)),
+                )
+                .collect();
+            state.scale_streaks.keep_only(&read);
             state.current = current;
             Ok(displays)
         }
@@ -1446,7 +1469,11 @@ pub(crate) mod source {
             let screen = window.screen().map_err(|_| PlatformError::Displays {
                 message: "the window has no screen".into(),
             })?;
-            let scale_factor = state.read_scale(window.device_pixel_ratio(), "devicePixelRatio");
+            let scale_factor = state.read_scale(
+                RatioSource::Page,
+                window.device_pixel_ratio(),
+                "devicePixelRatio",
+            );
             let device_scale = *state.screen_ratio.get_or_insert(scale_factor.get());
             let bounds = Bounds::new(
                 Point::new(0, 0),
@@ -1510,7 +1537,11 @@ pub(crate) mod source {
                         .find(|(screen, _)| is_primary(screen))
                         .map(|(_, id)| *id)
                 });
-            let window_scale = state.read_scale(window.device_pixel_ratio(), "devicePixelRatio");
+            let window_scale = state.read_scale(
+                RatioSource::Page,
+                window.device_pixel_ratio(),
+                "devicePixelRatio",
+            );
             let displays = listed
                 .iter()
                 .map(|(screen, id)| {
@@ -1520,7 +1551,11 @@ pub(crate) mod source {
                     let own_ratio = get(screen, "devicePixelRatio")
                         .and_then(|ratio| ratio.as_f64())
                         .map_or(DevicePixelRatio::ONE, |ratio| {
-                            state.read_scale(ratio, "ScreenDetailed devicePixelRatio")
+                            state.read_scale(
+                                RatioSource::Screen(*id),
+                                ratio,
+                                "ScreenDetailed devicePixelRatio",
+                            )
                         });
                     if Some(*id) == current {
                         // The screen the window is on reports the window's own pixel

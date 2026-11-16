@@ -491,8 +491,12 @@ fn a_hostile_scale_draws_no_gibibyte() {
         "at the largest scale"
     );
 
-    let side = device_extent(37.0, DevicePixelRatio::try_new(442.0).expect("a ratio"))
-        .expect("within the largest extent");
+    // The same 16 354 pixels a side, from a longer bar at the largest ratio.
+    let side = device_extent(
+        37.0 * 442.0 / DevicePixelRatio::MAX.get(),
+        DevicePixelRatio::MAX,
+    )
+    .expect("within the largest extent");
     assert_eq!(side, 16_354);
     assert!(
         Pixels::try_new(side, side).is_none(),

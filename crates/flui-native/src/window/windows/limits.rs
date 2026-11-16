@@ -14,7 +14,7 @@
 
 use flui_foundation::geometry::{DevicePixelRatio, Size};
 
-use crate::window::state::device_extent_rounded;
+use crate::window::state::device_limits;
 
 /// A size in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,37 +52,33 @@ impl TrackLimits {
         self.max.map_or(raised, |max| raised.component_min(max))
     }
 }
-/// The inner-size limits as outer sizes at `ratio`, the window's DPI over the base DPI.
-/// The inner-size limits as outer sizes at `ratio`, the window's DPI over the base DPI.
+
+/// The inner-size limits as outer sizes at `ratio`, the window's DPI over the
+/// base DPI.
 ///
-/// `frame` is the width and height the window's non-client area adds to its
-/// client area at that DPI. A minimum rounds up and a maximum rounds down, so
-/// the client area never ends outside the logical limits; a limit that is not
-/// finite is no limit. When rounding leaves the maximum below the minimum (a
-/// the base DPI.
+/// The limits in device pixels are the hosts' one limit rule's
+/// ([`device_limits`]): a minimum rounds up and a maximum down, a limit that
+/// is not finite is no limit, and a maximum that rounding leaves below the
+/// minimum is raised to it, so the window is pinned to the minimum. `frame`,
+/// the width and height the window's non-client area adds to its client area
+/// at that DPI, is then added to each.
 pub(crate) fn track_limits(
     min: Option<Size<f64>>,
     max: Option<Size<f64>>,
     ratio: DevicePixelRatio,
     frame: PixelSize,
 ) -> TrackLimits {
-    let outer = |size: Size<f64>, round: fn(f64) -> f64| {
-        let component = |logical: f64, frame: i32| {
-            // The hosts' one extent rule, rounded as a limit rounds: a limit
-            // past the largest surface is held at it, as a size is.
-            device_extent_rounded(logical, ratio, round)
-                .map(|device| device.cast_signed().saturating_add(frame))
-        };
-        Some(PixelSize::new(
-            component(size.width, frame.width)?,
-            component(size.height, frame.height)?,
-        ))
+    let limits = device_limits(min, max, ratio);
+    let outer = |(width, height): (u32, u32)| {
+        PixelSize::new(
+            width.cast_signed().saturating_add(frame.width),
+            height.cast_signed().saturating_add(frame.height),
+        )
     };
-    let min = min.and_then(|size| outer(size, f64::ceil));
-    let max = max
-        .and_then(|size| outer(size, f64::floor))
-        .map(|max| min.map_or(max, |min| max.component_max(min)));
-    TrackLimits { min, max }
+    TrackLimits {
+        min: limits.min.map(outer),
+        max: limits.max.map(outer),
+    }
 }
 
 /// The rectangle `WM_GETMINMAXINFO` carries, as the OS filled it in.
@@ -129,7 +125,9 @@ mod tests {
     /// rule: a DPI of zero, which Windows reports for a handle it cannot
     /// measure, is the base DPI.
     fn dpi(reported: u32) -> DevicePixelRatio {
-        crate::display::scale::read_scale(f64::from(reported) / 96.0, "test").0
+        crate::display::scale::ScaleStreak::default()
+            .read(f64::from(reported) / 96.0, "test")
+            .0
     }
 
     fn px(width: i32, height: i32) -> PixelSize {

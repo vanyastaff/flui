@@ -21,8 +21,9 @@ use crate::geometry::{DevicePoint, DeviceRect, DeviceSize, Point, Rect, Size};
 
 /// The ratio between device pixels and logical pixels.
 ///
-/// Finite and positive by construction: a zero, negative or non-finite ratio would turn every
-/// conversion into zero, a mirror image or NaN.
+/// Between [`Self::MIN`] and [`Self::MAX`] by construction: a zero, negative or non-finite
+/// ratio would turn every conversion into zero, a mirror image or NaN, and one far outside the
+/// range a screen can have turns a logical size into an infinite or vanishing one.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct DevicePixelRatio(f64);
 
@@ -30,10 +31,25 @@ impl DevicePixelRatio {
     /// One device pixel per logical pixel.
     pub const ONE: Self = Self(1.0);
 
-    /// The ratio, or `None` when `ratio` is zero, negative or not finite.
+    /// The smallest ratio: 1/32. A browser at its smallest zoom (25 %) on a screen of one
+    /// device pixel per logical pixel shows 1/4; the bound leaves that an order of magnitude of
+    /// room while a logical size over it stays finite (at most 32 times a device size).
+    pub const MIN: Self = Self(1.0 / 32.0);
+
+    /// The largest ratio: 32. The densest phone screens are 4 device pixels per logical pixel,
+    /// and a browser at its largest zoom (500 %) on one is 20; past 32 a device size over it is
+    /// a vanishing logical one. How fine a host draws a buffer is its own, lower, cap (the
+    /// Wayland host's `BufferScale::MAX`): this is the range a ratio can be, not a drawing
+    /// policy.
+    pub const MAX: Self = Self(32.0);
+
+    /// The ratio, or `None` when `ratio` is outside [`Self::MIN`]`..=`[`Self::MAX`] (zero,
+    /// negative and not finite included).
     #[must_use]
     pub fn try_new(ratio: f64) -> Option<Self> {
-        (ratio.is_finite() && ratio > 0.0).then_some(Self(ratio))
+        (Self::MIN.0..=Self::MAX.0)
+            .contains(&ratio)
+            .then_some(Self(ratio))
     }
 
     /// Device pixels per logical pixel.
@@ -123,6 +139,26 @@ pub fn device_rect_covering(rect: Rect, ratio: DevicePixelRatio) -> DeviceRect {
         DevicePoint::new(to_i32(device.left()), to_i32(device.top())),
         DevicePoint::new(to_i32(device.right()), to_i32(device.bottom())),
     )
+}
+
+/// A logical side of a surface at `ratio` in whole device pixels: snapped, and at least one
+/// pixel, so a side that is some size is never none; `None` for a side that is not finite or
+/// not positive. A side past what `u32` holds saturates; a host bounds it further by the
+/// largest surface it gives a window.
+#[must_use]
+pub fn device_extent(logical: f64, ratio: DevicePixelRatio) -> Option<u32> {
+    if !(logical.is_finite() && logical > 0.0) {
+        return None;
+    }
+    // Over a ratio in range the product is finite; `max` holds a sliver at a pixel.
+    let pixels = snap(ratio.to_device(logical)).max(1.0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "positive and whole; `as` saturates at u32::MAX, which is the intent"
+    )]
+    let pixels = pixels as u32;
+    Some(pixels)
 }
 
 /// The device-pixel size of a logical `size` at `ratio`: each extent snapped, never

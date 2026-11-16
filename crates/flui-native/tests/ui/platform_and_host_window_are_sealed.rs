@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_native::storage::DataStore;
 use flui_native::{
     AppHandler, HostWindow, NativeClipboard, NativePrimarySelection, OpenWindowError,
@@ -105,7 +105,7 @@ impl Platform for OutsidePlatform {
         WindowCapabilities::NONE
     }
 
-    fn window_frame_inset(&self, _: f64) -> Size<f64> {
+    fn window_frame_inset(&self, _: DevicePixelRatio) -> Size<f64> {
         Size::default()
     }
 

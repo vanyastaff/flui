@@ -5906,7 +5906,16 @@ graph LR
   (`ScaleStreak::read`: годное берётся, негодное — базовое отношение, первый отказ серии
   сообщается вне заимствований), им пользуются Win32 (DPI монитора, системы, пределов), macOS,
   iOS, Android (плотность дисплея и окна, дисплей больше не выпадает), Web, X11 `Xft.dpi`,
-  headless. Кодек записи держит число и отказывает в не-отношении при чтении; формат не менялся.
+  headless. Серия — на источник: `ScaleStreak` для одного (окно, системный DPI Win32,
+  `Xft.dpi`), `ScaleStreaks` по `DisplayId` для дисплеев выборки (ушедший дисплей сбрасывается).
+  `DevicePixelRatio` держит диапазон экрана `MIN..=MAX` (1/32…32), `InvalidMetrics::LogicalOverflow`
+  удалён как недостижимый, `BufferScale` Wayland снижает лишь конечное число выше своего
+  предела. Пределы размера — одна функция у шва `window::state::device_limits` (минимум вверх,
+  максимум вниз и не ниже минимума), её зовут Win32 и X11. Одно преобразование стороны
+  поверхности — `flui_foundation::geometry::device_extent`: им считают хосты и поверхность сцены
+  в `flui-runtime` (было `ceil`: 400,9 × 1,5 давало 602, хост — 601). Чистая часть вставок
+  Android — `window::activity_insets`, её тесты идут на Linux.
+  Кодек записи держит число и отказывает в числе вне диапазона при чтении; формат не менялся.
   Тесты, в скобках результат с откатом: `every_window_system_decides_the_mode_alike` (чтение
   Wayland без `fullscreen` — столбец Wayland); `every_backend_steps_a_turn_alike` (шаг X11 с
   вертикалью как у содержимого — столбец X11); `counter_ticks_become_nanoseconds_at_the_extremes`
@@ -5920,8 +5929,13 @@ graph LR
   краем); `a_reported_scale_is_taken_or_read_as_the_base_ratio_once_reported` (сообщение о
   каждом отказе — падает); `a_size_past_the_largest_surface_is_admitted` (Win32: старый
   `device_pair` — `OutOfRange`; обрезку здесь не отличить от предела Win32, её доказывают
-  таблица и headless). Строки, которые тип делает невозможными (NaN, ноль, бесконечность
-  масштаба), сняты из таблиц.
+  таблица и headless); `device_limits_round_outward_and_stay_ordered` и строки
+  `a_window_asks_the_limits_it_was_given` о равных и почти равных пределах (без подъёма
+  максимума — 150 при минимуме 151); `each_source_keeps_its_own_streak` (общая серия — второй
+  плохой источник не сообщён); `a_ratio_is_held_to_the_range_a_screen_can_have` (у, внутри и за
+  каждой границей); `a_surface_side_is_snapped_to_whole_device_pixels` (601, не 602). Строки,
+  которые тип делает невозможными (NaN, ноль, бесконечность, масштаб вне диапазона), сняты из
+  таблиц или переписаны на границы диапазона.
   Проверки: Windows — clippy `--affected --all-targets -D warnings`, `check --workspace`,
   nextest `flui-native`, `flui-platform`, `flui-app`, `flui-testing`, `flui-runtime` (кроме
   `an_intent_opens_its_link_or_documents`, `trybuild` и `the_driver_agent_contains_every_failure`,

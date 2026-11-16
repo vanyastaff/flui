@@ -24,7 +24,7 @@ pub(crate) mod sample {
         Headroom, RefreshPeriod,
     };
 
-    use crate::display::scale::{RefusedScale, ScaleStreak};
+    use crate::display::scale::{RefusedScale, ScaleStreaks};
     use crate::owner::android::ndk::{NdkFn, SetFrameRate, SymbolSource};
     use crate::version::gate::Gate;
     use crate::version::gate::android::AndroidApi;
@@ -116,9 +116,14 @@ pub(crate) mod sample {
         /// base ratio, with the refusal to report when it starts a streak.
         pub(crate) fn scale(
             &self,
-            streak: &mut ScaleStreak,
+            streaks: &mut ScaleStreaks<DisplayId>,
+            id: DisplayId,
         ) -> (DevicePixelRatio, Option<RefusedScale>) {
-            streak.read(f64::from(self.density_dpi) / 160.0, "Android densityDpi")
+            streaks.read(
+                id,
+                f64::from(self.density_dpi) / 160.0,
+                "Android densityDpi",
+            )
         }
 
         /// The snapshot entry for this display under `id` at `scale`; `None`
@@ -251,7 +256,7 @@ pub(crate) mod sample {
                 max_refresh_hz: Some(120.0),
                 color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             };
-            let (scale, refused) = healthy.scale(&mut ScaleStreak::default());
+            let (scale, refused) = healthy.scale(&mut ScaleStreaks::default(), id);
             assert!(refused.is_none());
             let info = healthy.info(id, scale).expect("a healthy display");
             assert_eq!(
@@ -291,8 +296,8 @@ pub(crate) mod sample {
                 density_dpi: 0,
                 ..external
             };
-            let mut streak = ScaleStreak::default();
-            let (scale, refused) = unscaled.scale(&mut streak);
+            let mut streaks = ScaleStreaks::default();
+            let (scale, refused) = unscaled.scale(&mut streaks, id);
             assert_eq!(scale, DevicePixelRatio::ONE);
             assert!(refused.is_some(), "the first refusal is reported");
             assert!(unscaled.info(id, scale).is_some());
@@ -517,7 +522,7 @@ pub(crate) mod source {
         ColorReport, DisplayColorReport, FrameRateRequests, HighestHdrSdrRatio, RawDisplay,
         max_refresh_hz, requested_frame_rate,
     };
-    use crate::display::scale::ScaleStreak;
+    use crate::display::scale::ScaleStreaks;
     use crate::display::source::DisplaySource;
     use crate::error::PlatformError;
     use crate::owner::android::ndk::{AChoreographer, RefreshRateWatch, SymbolSource};
@@ -640,7 +645,7 @@ pub(crate) mod source {
         cross_window_blur: AtomicBool,
         /// Whether the last density read was refused, so a run of refusals is
         /// reported once.
-        scale_streak: Mutex<ScaleStreak>,
+        scale_streak: Mutex<ScaleStreaks<DisplayId>>,
     }
 
     impl std::fmt::Debug for AndroidDisplays {
@@ -668,7 +673,7 @@ pub(crate) mod source {
                 activity: Mutex::new(None),
                 max_rate_changed: AtomicBool::new(false),
                 cross_window_blur: AtomicBool::new(false),
-                scale_streak: Mutex::new(ScaleStreak::default()),
+                scale_streak: Mutex::new(ScaleStreaks::default()),
             }
         }
     }
@@ -698,7 +703,7 @@ pub(crate) mod source {
                     };
                     // The streak's lock is let go before the next line; the
                     // refusal is reported once the sample is done.
-                    let (scale, refused) = raw.scale(&mut self.scale_streak.lock());
+                    let (scale, refused) = raw.scale(&mut self.scale_streak.lock(), id);
                     refusals.extend(refused);
                     let Some(info) = raw.info(id, scale) else {
                         continue;
@@ -711,6 +716,9 @@ pub(crate) mod source {
                     }
                     infos.push(info);
                 }
+                // A display this sample did not read takes its streak with it.
+                let read: Vec<DisplayId> = infos.iter().map(|info| info.id).collect();
+                self.scale_streak.lock().keep_only(&read);
                 if activity.is_none() {
                     missing_activity = Some(sample.activity_display_id);
                 }

@@ -1590,19 +1590,12 @@ impl<'a> PhaseStopwatch<'a> {
 }
 
 /// A logical extent in whole device pixels, for the surface a patch is
-/// applied against: an unbounded or non-finite extent is no surface.
+/// applied against, by the one conversion the hosts size the window's surface
+/// with (`flui_foundation::geometry::device_extent`), so the patch's surface is
+/// the window's: an unbounded or non-finite extent, or a ratio the pipeline
+/// holds outside a screen's range, is no surface.
 fn device_extent(logical: f64, device_pixel_ratio: f64) -> u32 {
-    let device = (logical * device_pixel_ratio).ceil();
-    if device.is_finite() && device > 0.0 {
-        // In range: checked finite and positive, and clamped below.
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "finite, positive and clamped to u32::MAX before the cast"
-        )]
-        let pixels = device.min(f64::from(u32::MAX)) as u32;
-        pixels
-    } else {
-        0
-    }
+    flui_foundation::geometry::DevicePixelRatio::try_new(device_pixel_ratio)
+        .and_then(|ratio| flui_foundation::geometry::device_extent(logical, ratio))
+        .unwrap_or(0)
 }

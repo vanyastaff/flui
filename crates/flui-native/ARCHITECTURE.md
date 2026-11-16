@@ -613,10 +613,14 @@ trait depends on `flui-platform` instead.
   scale an operating system reports, of a display or of a window (a DPI over
   the base DPI, a backing or content scale, a density, a pixel ratio,
   `Xft.dpi`), becomes a `DevicePixelRatio` once, where it enters, by the one
-  rule `display::scale::ScaleStreak::read`: a finite positive ratio is taken,
+  rule `display::scale::ScaleStreak::read`: a ratio in `DevicePixelRatio::MIN..=MAX` is taken,
   anything else reads as the base ratio, so the display or window still exists
   with a scale, and the first refusal of a run is handed back to be reported
   with nothing borrowed (`a_reported_scale_is_taken_or_read_as_the_base_ratio_once_reported`).
+  A streak is kept per source: one `ScaleStreak` where a host reads one (a
+  window, the Win32 system DPI, `Xft.dpi`), `ScaleStreaks` keyed by `DisplayId`
+  where it reads several displays in a sample, holding only the displays that
+  sample read (`each_source_keeps_its_own_streak`).
   Win32's `WM_DPICHANGED` of zero DPI is not a reading but a message naming
   none: the window keeps the DPI it has (`WindowScale::rescale`).
   `display::source::mapping` reads one table of cadences through the

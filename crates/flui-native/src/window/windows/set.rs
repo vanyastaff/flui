@@ -62,6 +62,9 @@ pub struct WindowSet {
     /// Why the machine's display tells no window when its frames reached the
     /// screen, read once with the platform; `None` where it tells.
     presentation: Option<CapabilityAbsence>,
+    /// Whether the last system DPI a window opened at was refused, so a run
+    /// of refusals is reported once.
+    pub(super) system_scale_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
 }
 
 /// The machine's DXGI adapters, each with the number of its outputs the
@@ -113,6 +116,7 @@ impl WindowSet {
             positions,
             material: material::gate(build),
             presentation: presentation_absence(&display_adapters()),
+            system_scale_streak: std::cell::Cell::default(),
         }
     }
 
@@ -178,6 +182,7 @@ impl std::fmt::Debug for WindowSet {
             .field("positions", &self.positions)
             .field("material", &self.material)
             .field("presentation", &self.presentation)
+            .field("system_scale_streak", &self.system_scale_streak.get())
             .finish()
     }
 }
