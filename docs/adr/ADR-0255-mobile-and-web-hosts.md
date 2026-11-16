@@ -17,7 +17,12 @@
 - **Superseded-by:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) for
   decision 6 only (its manifest lines that capability crates contribute through
   `[package.metadata.flui.capability]` declarations in marker-delimited blocks: the CLI writes the
-  manifest whole from `[package.metadata.flui.declares]`); its other manifest lines stand; and
+  manifest whole from `[package.metadata.flui.declares]`); its other manifest lines stand;
+  [ADR-0336](ADR-0336-the-web-accessibility-tree-is-a-dom-mirror-the-host-keeps-itself.md) for
+  decision 18's sentence that the Web's `PlatformAccessibility` "consumes `TreeUpdate` through
+  `accesskit_consumer`" (the host keeps the tree in a mirror of its own, ADR-0336 §1–§2); the rest
+  of decision 18 (the parallel ARIA DOM, one element per node, the lazy placeholder, the semantics
+  host last in the root) stands; and
   [ADR-0340](ADR-0340-the-android-activity-forwards-what-has-a-consumer-and-routes-results-by-token-and-epoch.md)
   for decision 2's list of forwarded callbacks, the shape of decision 8's `launch_for_result`, and
   the `windowSoftInputMode` sentence of decision 6 with its Confirmation row
@@ -435,7 +440,7 @@ text-input paths its platform requires.
   | `crates/flui-cli/src/build/ios_package.rs` | The plist keys of decision 14 |
   | `crates/flui-native/src/text/web.rs` | Font-size floor, `enterkeyhint`, the autofill policy, reuse of the semantic field |
   | `crates/flui-native/src/accessibility/`, `crates/flui-native/src/window/web.rs` | The semantics host and ARIA DOM; the history strategy, ownership of the root element |
-  | `crates/flui-cli/templates/platforms/web/index.html`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
+  | `crates/flui-cli/src/build/web_page.rs`, `crates/flui-cli/src/serve.rs` | A generated page with `<base>` and `viewport-fit`; a history fallback in the dev server |
 
 - Bad, because a packager other than `flui-cli` (cargo-apk, a hand-written Gradle project) must
   add the dex and the manifest itself; ADR-0247 item 1's "every packager ships the dex" no longer

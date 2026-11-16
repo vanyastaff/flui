@@ -57,14 +57,9 @@ impl UiRuntime {
     /// first frame). A refused URL leaves the stack unchanged.
     pub fn open_url(&self, presentation: PresentationId, url: &str) -> Result<(), OpenUrlRefused> {
         let url = OpenedUrl::parse(url)?;
-        let on_the_page = self
-            .page_origin
-            .borrow()
-            .as_ref()
-            .is_some_and(|origin| origin.same_origin(&url));
-        if !on_the_page {
-            self.open_declarations.get().admit(&url)?;
-        }
+        self.open_declarations
+            .get()
+            .admit(&url, self.page_origin.borrow().as_ref())?;
         let slot = self
             .presentations
             .get(presentation)

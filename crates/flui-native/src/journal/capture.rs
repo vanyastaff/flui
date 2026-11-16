@@ -23,6 +23,7 @@
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -31,7 +32,7 @@ use flui_platform::pointer::PointerKind;
 use flui_platform::{
     DisplaySnapshot, ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences, WindowState,
 };
-use flui_protocol::native_recording::Stream;
+use flui_protocol::native_recording::{CloseAnswer, CloseCause, CutReason, Stream};
 use parking_lot::{Mutex, ReentrantMutex};
 
 use crate::error::PlatformError;
@@ -40,6 +41,7 @@ use crate::input::assembly::{
     NativeDevice, NativeReading, NativeSurface, WheelReading,
 };
 use crate::input::assembly::{TouchpadFrame, ViewportReading};
+use crate::journal::store::{StoreFocus, StoreLock};
 
 /// One registry call, as a native recording holds it.
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +155,25 @@ pub enum Captured<'a> {
     Displays(Result<&'a DisplaySnapshot, &'a PlatformError>),
     /// A window published a snapshot that differs from the one before it.
     WindowState(&'a WindowState),
+    /// The window was told which text store its input method serves, or that
+    /// it serves none.
+    StoreFocus(Option<StoreFocus>),
+    /// The window's input method was granted a lock on a text store, and
+    /// made these calls in it.
+    StoreLock(&'a StoreLock),
+    /// The window system asked to close the window, and its handler answered.
+    CloseRequest {
+        /// What the handler answered.
+        answer: CloseAnswer,
+        /// The request waited behind a running method of the handler, or came
+        /// from another thread: the window system was told to keep the window.
+        queued: bool,
+    },
+    /// The source journals nothing from here: a sink drops what it reports
+    /// later.
+    Cut(CutReason),
+    /// The window closed: its handler heard `closed`.
+    Closed(CloseCause),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in
@@ -170,6 +191,10 @@ type Sink = Box<dyn FnMut(CaptureSource, Captured<'_>) + Send>;
 struct Session {
     sink: ReentrantMutex<RefCell<Option<Sink>>>,
     next_source: Mutex<Option<u32>>,
+    /// Whether the sink wants rows now, as its owner last said: a source
+    /// whose rows cost work to build (a text store lock) reads it and builds
+    /// nothing while it is `false`. A value, never a question to the sink.
+    wanted: Arc<AtomicBool>,
 }
 
 thread_local! {
@@ -208,21 +233,51 @@ impl Drop for CaptureGuard {
 /// `sink`, until the guard is dropped. A later capture replaces this one for
 /// registries created after it.
 pub fn capture(sink: impl FnMut(CaptureSource, Captured<'_>) + Send + 'static) -> CaptureGuard {
+    capture_wanting(sink, Arc::new(AtomicBool::new(true)))
+}
+
+/// [`capture`], whose sink wants rows only while `wanted` holds `true`: a
+/// source whose rows cost work to build (a text store lock, which copies
+/// text) builds and reports none while it is `false`. The sink's owner keeps
+/// `wanted` current; reading it takes no lock and runs no code of the sink's.
+pub fn capture_wanting(
+    sink: impl FnMut(CaptureSource, Captured<'_>) + Send + 'static,
+    wanted: Arc<AtomicBool>,
+) -> CaptureGuard {
     let session = Arc::new(Session {
         sink: ReentrantMutex::new(RefCell::new(Some(Box::new(sink)))),
         next_source: Mutex::new(Some(0)),
+        wanted,
     });
     INSTALLED.with(|installed| *installed.borrow_mut() = Arc::downgrade(&session));
     CaptureGuard { session }
 }
 
-/// A registry's link to the capture it reports to, if any.
-#[derive(Debug, Default)]
+/// A registry's link to the capture it reports to, if any. A clone reports
+/// to the same source: a window's text store host journals into its
+/// delivery's stream.
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Journal {
     session: Option<(Weak<Session>, CaptureSource)>,
 }
 
 impl Journal {
+    /// Whether a call recorded now would reach a capture.
+    pub(crate) fn is_reporting(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|(session, _)| session.strong_count() > 0)
+    }
+
+    /// Whether a call recorded now would reach a capture that wants it
+    /// ([`capture_wanting`]).
+    pub(crate) fn is_wanted(&self) -> bool {
+        self.session
+            .as_ref()
+            .and_then(|(session, _)| session.upgrade())
+            .is_some_and(|session| session.wanted.load(Ordering::Relaxed))
+    }
+
     /// The journal of a registry created now on `clock`, which it reports
     /// first: numbered within the installed capture, or reporting nowhere
     /// when none is installed or the capture has numbered every source it

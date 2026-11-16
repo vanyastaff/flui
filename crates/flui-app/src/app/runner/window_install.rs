@@ -81,6 +81,9 @@ pub(super) struct InstallationWindow {
     /// The window's agent, vended before the install, handed to the loop's
     /// hooks once it commits.
     agent: Option<flui_view::dev_agent::AgentWindow>,
+    /// The opened URLs its UI runtime took before the installation
+    /// committed: committed with it, given back by any other end.
+    opened: Option<super::opened::OpenedLoan>,
 }
 
 impl InstallationWindow {
@@ -90,6 +93,16 @@ impl InstallationWindow {
             closed: Arc::new(AtomicBool::new(false)),
             published: false,
             agent: None,
+            opened: None,
+        }
+    }
+
+    /// Hold `loan` until the installation ends, after what it holds already.
+    pub(super) fn lend(&mut self, loan: Option<super::opened::OpenedLoan>) {
+        match (&mut self.opened, loan) {
+            (Some(held), Some(loan)) => held.join(loan),
+            (held @ None, loan) => *held = loan,
+            (Some(_), None) => {}
         }
     }
 
@@ -99,14 +112,24 @@ impl InstallationWindow {
             .expect("BUG: live installation retains its native window")
     }
 
+    /// The native window, while the installation holds it.
+    pub(super) fn platform_window(&self) -> Option<&Rc<dyn PlatformWindow>> {
+        self.window.as_ref()
+    }
+
     pub(super) fn cancellation(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.closed)
     }
     pub(super) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
+    /// The installation committed: the window and the URLs opened into it
+    /// are the presentation's.
     pub(super) fn publish(&mut self) {
         self.published = true;
+        if let Some(loan) = self.opened.take() {
+            loan.commit();
+        }
     }
 
     pub(super) fn notify_opened(&mut self) {
@@ -118,6 +141,15 @@ impl InstallationWindow {
 
 impl Drop for InstallationWindow {
     fn drop(&mut self) {
+        // A loan ends first, as plain state: its URLs return for the owner's
+        // next turn, refused when the window was closed before the commit.
+        if let Some(loan) = self.opened.take() {
+            if self.closed.load(Ordering::Acquire) {
+                loan.window_closed();
+            } else {
+                drop(loan);
+            }
+        }
         let Some(window) = self.window.take() else {
             return;
         };
@@ -202,6 +234,13 @@ impl WindowInstall {
 
     pub(super) fn dev_agent(&mut self, agent: Option<flui_view::dev_agent::AgentWindow>) {
         self.window.agent = agent;
+    }
+
+    /// Own the loan of the opened URLs `build_lending_ui_runtime` opened into this
+    /// installation's UI runtime: committed when it commits, given back by
+    /// any other end of it.
+    pub(super) fn lend_opened(&mut self, loan: Option<super::opened::OpenedLoan>) {
+        self.window.lend(loan);
     }
 
     pub(super) fn frame_driver(
@@ -308,13 +347,6 @@ impl WindowInstall {
         });
         let seed = window.state();
         *seen.lock() = Some(seed.clone());
-        // A window that opens focused is the one focused last, as one that
-        // gains focus later is (`RuntimeEvent::WindowFocus`).
-        if seed.focused
-            && let Some(routing) = super::host::current_open_routing()
-        {
-            routing.focused(dispatcher.address);
-        }
         self.observe(WindowObservation::Snapshot {
             execution: seed.execution,
             focused: seed.focused,

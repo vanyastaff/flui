@@ -16,6 +16,7 @@ use super::display_host::DisplayHost;
 use super::host::APP_RUNTIME;
 use super::native_bindings::{NativeBindings, NativeInstallError, PreparedNativeWindow};
 use super::window_install::InstallationWindow;
+use crate::app::window_registry::{OpenDestination, WindowRegistry};
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub(super) enum InstallError {
@@ -201,6 +202,51 @@ impl InstalledHost {
     pub(in crate::app) fn has_pending_installs(&self) -> bool {
         !self.0.pending.borrow().is_empty() || !self.0.initializing.borrow().is_empty()
     }
+
+    /// Where what the operating system opened for `target` goes now: the
+    /// window registry's answer ([`WindowRegistry::open_target`]), with a
+    /// window that has no presentation told apart by whether its
+    /// installation is under way ([`OpenDestination::Pending`]) or not
+    /// ([`OpenDestination::NotOpen`]).
+    ///
+    /// [`WindowRegistry::open_target`]: crate::app::window_registry::WindowRegistry::open_target
+    pub(super) fn open_target(
+        &self,
+        target: flui_platform::OpenTarget,
+        main: Option<PresentationAddress>,
+    ) -> OpenDestination {
+        match self.0.native.open_target(target, main) {
+            OpenDestination::Pending if matches!(target, flui_platform::OpenTarget::Window(_)) => {
+                // The windows are platform code: asked with nothing borrowed.
+                let installing: Vec<Rc<dyn flui_platform::PlatformWindow>> = self
+                    .0
+                    .pending
+                    .borrow()
+                    .iter()
+                    .filter_map(|pending| pending.window.platform_window().cloned())
+                    .chain(
+                        self.0
+                            .initializing
+                            .borrow()
+                            .iter()
+                            .filter_map(|entry| entry.window.platform_window().cloned()),
+                    )
+                    .collect();
+                if installing
+                    .iter()
+                    .any(|window| WindowRegistry::names_window(target, window.as_ref()))
+                {
+                    OpenDestination::Pending
+                } else {
+                    OpenDestination::NotOpen
+                }
+            }
+            destination @ (OpenDestination::Presentation(_)
+            | OpenDestination::Pending
+            | OpenDestination::Closed
+            | OpenDestination::NotOpen) => destination,
+        }
+    }
 }
 
 impl HostState {
@@ -335,26 +381,51 @@ impl OwnerEffects for HostState {
             initializing.remove(index)
         };
         let mut first = FirstPanic::new();
+        // A panic in a lent URL's navigation fails this installation.
+        let mut navigation_panicked = false;
         if outcome == InitializationOutcome::Ready {
             // URLs that arrived before this presentation existed are queued
-            // ahead of its first frame, so its first Router opens on them.
+            // ahead of its first frame, so its first Router opens on them:
+            // on loan to the installation until it commits, like those its
+            // runtime took as it was built. Only this presentation's: what
+            // waits for another goes on the owner's turn, so no other
+            // window's navigation runs inside this installation.
             if self.is_current()
                 && recovery == RecoveryState::Healthy
                 && let Some(routing) = super::host::current_open_routing()
             {
-                first.contain(|| routing.deliver_held());
+                // The URLs' navigation is user code. Its panic fails this
+                // installation, its loan refuses the URLs for it, and the run
+                // goes on, as for a panic in a main window's installer
+                // (ADR-0339 §6): the payload is discarded, not resumed.
+                let mut lending = FirstPanic::new();
+                if let Some(loan) = lending.contain(|| routing.lend_to_installing(address)) {
+                    entry.window.lend(loan);
+                }
+                if let Some(payload) = lending.into_payload() {
+                    navigation_panicked = true;
+                    first.contain(|| {
+                        tracing::error!(
+                            ?address,
+                            "a URL's navigation panicked while its window was installed; the \
+                             installation fails"
+                        );
+                    });
+                    flui_foundation::panic::discard_payload(payload);
+                }
+                routing.request_turn_if_owed();
             }
             first.contain(|| entry.window.native().request_redraw());
-            if !first.is_held() && self.installation_is_live(&entry) {
+            if !navigation_panicked && !first.is_held() && self.installation_is_live(&entry) {
                 first.contain(|| self.native.installed(address));
             }
             // Native activation can close the window or tear down its host.
             // The development hook sees only a still-live installation and
             // may itself close it before the readiness receipt is settled.
-            if !first.is_held() && self.installation_is_live(&entry) {
+            if !navigation_panicked && !first.is_held() && self.installation_is_live(&entry) {
                 first.contain(|| entry.window.notify_opened());
             }
-            if !first.is_held() && self.installation_is_live(&entry) {
+            if !navigation_panicked && !first.is_held() && self.installation_is_live(&entry) {
                 entry.window.publish();
                 entry.result.set(Some(Ok(())));
                 return;

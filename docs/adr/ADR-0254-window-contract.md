@@ -4,6 +4,9 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0339](ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)
+  for §4's clause that the first instance hears a later launch after `reopen` whenever it shows no
+  window: only a launch that opens nothing asks for the reopen
 - **Superseded-by:** [ADR-0341](ADR-0341-an-admitted-command-is-bound-to-a-publication-of-the-windows-capabilities.md)
   for §2's binding of an `AdmittedCommand`, the variants of `AdmissionError` and the meaning of
   `ApplyError::Superseded` (here and in the Confirmation): the token carries the publication of the
