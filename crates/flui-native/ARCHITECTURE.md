@@ -2091,7 +2091,7 @@ commit a live composition and reset the keyboard's shift and page; it gives
 its focus to the canvas and takes it back inside the handler only when the
 page says the keyboard is hidden (Android's Back keeps the focus), from the
 same `navigator.virtualKeyboard` and visual-viewport reading the window's
-keyboard inset uses (`owner::web::keyboard_shown`), and not where the page
+keyboard inset uses (`window::keyboard::page::keyboard_shown`), and not where the page
 cannot tell. `navigator.virtualKeyboard.show()` shows nothing without
 `virtualkeyboardpolicy="manual"`, a policy under which no focus opens the
 keyboard by itself, so it is not used; a tap elsewhere or a drag leaves the

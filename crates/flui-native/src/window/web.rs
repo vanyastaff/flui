@@ -43,10 +43,12 @@ use flui_platform::{
 use crate::owner::web::listener::CanvasListener;
 use crate::owner::web::{
     Accepting, CanvasEditor, CanvasFocus, CanvasRef, CanvasRegistration, CanvasTimer, HostDisplays,
-    HostSlots, PointerCustody, overlaid_keyboard, viewport_keyboard, virtual_keyboard,
+    HostSlots, PointerCustody,
 };
 
 mod root;
+
+use crate::window::keyboard::page::{overlaid_keyboard, viewport_keyboard, virtual_keyboard};
 
 use root::PageRoot;
 

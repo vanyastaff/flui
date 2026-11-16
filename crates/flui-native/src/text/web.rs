@@ -460,10 +460,10 @@ mod input {
     use crate::owner::web::listener::{CanvasListener, viewport_listeners};
     use crate::owner::web::{
         Accepting, CanvasEditor, CanvasKeys, CanvasRef, EDITOR_FONT_SIZE, FocusedField,
-        keyboard_shown,
     };
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{document_text, scalar_spans};
+    use crate::window::keyboard::page::keyboard_shown;
 
     #[wasm_bindgen(inline_js = "
     export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
