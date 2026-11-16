@@ -137,7 +137,7 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
 }
 
 #[test]
-fn a_window_shows_one_dialog_at_a_time_whichever_widget_asks() {
+fn a_window_shows_one_dialog_at_a_time() {
     let (dialogs, plugin) = scripted();
     let mut host = HeadlessHost::with_plugin(HeadlessWindow::new(10, 10), &plugin);
     let [first_widget, second_widget] = acquire_twice_on::<FileDialogCapability>(&mut host);
@@ -374,7 +374,7 @@ fn a_backend_that_drops_its_answer_ends_the_dialog_and_frees_the_window() {
 }
 
 #[test]
-fn a_dialog_error_carries_its_unsupported_and_its_failure() {
+fn a_dialog_error_carries_its_unsupported() {
     use std::error::Error;
 
     use flui_platform::{Unsupported, UnsupportedReason};

@@ -114,7 +114,7 @@ dialog is neither `Unanswered` nor `NotReached`.
 - The compiler: a backend that returns no `DialogHold` does not build; `Picks` has no empty
   value; `SystemFailure` is the only payload of `Failed`.
 - Tests: `a_dialog_ends_with_its_window`, `a_dropped_dialog_is_dismissed_and_frees_its_window`,
-  `a_window_shows_one_dialog_at_a_time_whichever_widget_asks` and
+  `a_window_shows_one_dialog_at_a_time` and
   `several_picks_for_a_single_pick_request_are_a_malformed_answer` in `flui-system`'s
   `system_it`; `a_dropped_dialog_closes_its_portal_request_and_frees_the_window` and
   `the_dialogs_reach_the_file_chooser_and_answer_its_picks` against the stand-in portal on

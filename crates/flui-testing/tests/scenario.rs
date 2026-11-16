@@ -294,10 +294,13 @@ fn a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it(
     let (scheduled, ticket) = handle.capture_until_dropped(32);
     let scheduled = land(scheduled);
     drop(ticket);
-    let _ = host.pump(Duration::from_millis(500));
+    let _ = host.pump(Duration::ZERO);
     assert_eq!(taken(&held), Some(Err(Abandoned::ProviderDropped)));
     assert_eq!(taken(&scheduled), Some(Err(Abandoned::ProviderDropped)));
     assert_eq!(camera.captures.withdrawn(), 2);
+    scenario
+        .verify()
+        .expect("the withdrawn answer is off the timeline before its instant");
 
     // Answered, then the ticket dropped: nothing to withdraw.
     camera.captures.answer_next(Answer::value(Ok(vec![3])));
