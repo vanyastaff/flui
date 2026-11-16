@@ -28,10 +28,6 @@ pub(crate) struct Sample {
 
 impl Sample {
     /// Whether this sample was taken at `size`.
-    #[cfg_attr(
-        not(target_os = "android"),
-        expect(dead_code, reason = "off Android only the tests read the sample")
-    )]
     pub(crate) fn is_for(self, size: Size<i32>) -> bool {
         self.size == size
     }
@@ -90,6 +86,11 @@ mod tests {
             keyboard: [0, 0, 840, 0],
             system_gestures: [0, 63, 63, 63],
         };
+        assert!(
+            sample.is_for(size),
+            "a sample is for the size it was taken at"
+        );
+        assert!(!sample.is_for(Size::new(2400, 1080)), "and no other");
         let insets = sample
             .logical(size, ratio(2.625), None)
             .expect("a sample at its own size");

@@ -125,8 +125,9 @@ impl GeometryProjection {
 
 fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
     presentation.renderer().root_pipeline_owner().with(|owner| {
-        DevicePixelRatio::try_new(owner.device_pixel_ratio())
-            .expect("BUG: renderer accepted invalid pixel ratio")
+        DevicePixelRatio::try_new(owner.device_pixel_ratio()).expect(
+            "BUG: the pipeline holds only a ratio its typed setter took, or its initial 1.0",
+        )
     })
 }
 

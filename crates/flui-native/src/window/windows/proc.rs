@@ -208,9 +208,9 @@ pub(crate) struct WindowContext {
     ///
     /// [`CreatedWindow::scale`]: crate::owner::windows::CreatedWindow::scale
     pub(crate) scale: crate::owner::windows::WindowScale,
-    /// A `WM_DPICHANGED` naming a DPI of zero was refused and no valid one
-    /// came since: a sender that repeats it is reported once, not per message.
-    pub(crate) refusing_zero_dpi: std::cell::Cell<bool>,
+    /// Whether the last `WM_DPICHANGED` was refused (its DPI no ratio a screen
+    /// can have), so a sender that repeats one is reported once per run.
+    pub(crate) dpi_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<NativeMode>,
     /// Last known size (before minimization) for restore detection
@@ -1947,15 +1947,27 @@ impl WindowContext {
     pub(crate) fn change_dpi(&self, hwnd: HWND, dpi: u16, suggested: Option<RECT>) {
         use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
-        let Some(old_scale) = self.scale.rescale(u32::from(dpi)) else {
-            // Once per run of them: any process can send the message in a
-            // loop, and each warning is a call into the subscriber.
-            if !self.refusing_zero_dpi.replace(true) {
-                tracing::warn!("a DPI change to zero is ignored: the window keeps its scale");
+        // The DPI goes through the hosts' one scale rule before it is stored:
+        // any process can send the message, with any DPI, in a loop. One that
+        // is no ratio a screen can have is refused, reported once per run of
+        // them for this window (each report is a call into the subscriber,
+        // with nothing borrowed here), and the window keeps its scale.
+        let mut streak = self.dpi_streak.get();
+        let checked = streak.check(
+            crate::owner::windows::dpi_scale(u32::from(dpi)),
+            "WM_DPICHANGED",
+        );
+        self.dpi_streak.set(streak);
+        if let Err(refused) = checked {
+            if let Some(refused) = refused {
+                refused.report();
             }
             return;
-        };
-        self.refusing_zero_dpi.set(false);
+        }
+        let old_scale = self
+            .scale
+            .rescale(u32::from(dpi))
+            .expect("BUG: a DPI the scale rule took is one the window scale takes");
         let new_scale = self.scale.scale();
         tracing::info!(dpi, new_scale, "DPI changed");
         // The display's scale changed, so its snapshot entry did.

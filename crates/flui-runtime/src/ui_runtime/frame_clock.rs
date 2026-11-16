@@ -480,12 +480,18 @@ impl UiRuntime {
     ///
     /// Each window has its own scale (monitors differ), so the ratio reaches
     /// only the presentation whose window reported it; its siblings keep
-    /// theirs. Returns `false`, changing nothing, for a non-positive or
-    /// non-finite ratio, or when `id` names no
+    /// theirs. Returns `false`, changing nothing, for a ratio outside the range a
+    /// screen can have (`DevicePixelRatio::try_new` refuses it), or when `id` names no
     /// presentation this UI runtime hosts — for example, when its close was
     /// delivered before the scale change.
     pub fn set_device_pixel_ratio_for(&self, id: PresentationId, device_pixel_ratio: f64) -> bool {
-        if !self.set_pipeline_device_pixel_ratio_for(id, device_pixel_ratio) {
+        // The type's one rule refuses a ratio outside the range a screen can
+        // have before anything changes.
+        let Some(ratio) = flui_foundation::geometry::DevicePixelRatio::try_new(device_pixel_ratio)
+        else {
+            return false;
+        };
+        if !self.set_pipeline_device_pixel_ratio_for(id, ratio) {
             return false;
         }
         // Each step runs contained so the first failure is kept.
@@ -510,11 +516,8 @@ impl UiRuntime {
     pub(crate) fn set_pipeline_device_pixel_ratio_for(
         &self,
         id: PresentationId,
-        device_pixel_ratio: f64,
+        device_pixel_ratio: flui_foundation::geometry::DevicePixelRatio,
     ) -> bool {
-        if !device_pixel_ratio.is_finite() || device_pixel_ratio <= 0.0 {
-            return false;
-        }
         let Some(presentation) = self.presentations.get(id) else {
             return false;
         };

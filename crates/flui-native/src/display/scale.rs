@@ -27,23 +27,35 @@ pub(crate) struct ScaleStreak {
 }
 
 impl ScaleStreak {
-    /// The ratio `reported` gives: itself when it is finite and positive,
-    /// else the base ratio, with the refusal to report when it starts a
-    /// streak. `what` names the source in the report.
+    /// The ratio `reported` gives: itself when it is in the range a screen
+    /// can have, else the base ratio, with the refusal to report when it
+    /// starts a streak. `what` names the source in the report.
     pub(crate) fn read(
         &mut self,
         reported: f64,
         what: &'static str,
     ) -> (DevicePixelRatio, Option<RefusedScale>) {
+        match self.check(reported, what) {
+            Ok(ratio) => (ratio, None),
+            Err(refused) => (DevicePixelRatio::ONE, refused),
+        }
+    }
+
+    /// The same rule for a source that keeps the scale it has rather than
+    /// taking the base ratio (a window told its DPI changed): `Ok` with the
+    /// ratio `reported` gives when it is in range; `Err` otherwise, with the
+    /// refusal to report when it starts a streak.
+    pub(crate) fn check(
+        &mut self,
+        reported: f64,
+        what: &'static str,
+    ) -> Result<DevicePixelRatio, Option<RefusedScale>> {
         if let Some(ratio) = DevicePixelRatio::try_new(reported) {
             self.refusing = false;
-            return (ratio, None);
+            return Ok(ratio);
         }
         let first = !std::mem::replace(&mut self.refusing, true);
-        (
-            DevicePixelRatio::ONE,
-            first.then_some(RefusedScale { reported, what }),
-        )
+        Err(first.then_some(RefusedScale { reported, what }))
     }
 }
 

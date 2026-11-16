@@ -861,7 +861,7 @@ impl PresentationState {
     /// `device_pixel_ratio` of `None` keeps the pipeline's default of `1.0`.
     pub(crate) fn new(
         id: PresentationId,
-        device_pixel_ratio: Option<f64>,
+        device_pixel_ratio: Option<flui_foundation::geometry::DevicePixelRatio>,
         window: impl Into<PresentationWindow>,
         capabilities: RuntimeCapabilities<'_>,
     ) -> Self {

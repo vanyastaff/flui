@@ -621,8 +621,13 @@ trait depends on `flui-platform` instead.
   window, the Win32 system DPI, `Xft.dpi`), `ScaleStreaks` keyed by `DisplayId`
   where it reads several displays in a sample, holding only the displays that
   sample read (`each_source_keeps_its_own_streak`).
-  Win32's `WM_DPICHANGED` of zero DPI is not a reading but a message naming
-  none: the window keeps the DPI it has (`WindowScale::rescale`).
+  A scale a window is told after it opens (Win32's `WM_DPICHANGED`, Wayland's
+  `preferred_scale` and `preferred_buffer_scale`) goes through
+  `ScaleStreak::check` instead: one that is no ratio is refused, reported once
+  per run, and the window keeps the scale it has
+  (`a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale`). A ratio an
+  application hands the runtime is refused typed (`UiRuntimeError::PixelRatio`,
+  `set_device_pixel_ratio_for` answering `false`).
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate
@@ -1183,8 +1188,8 @@ trait depends on `flui-platform` instead.
   run of them in the window's turn, and reads again at the next invalidation
   (`a_refused_geometry_keeps_the_published_one_and_publishes_the_other_facts`;
   the conformance check `a_report_that_describes_no_window_publishes_nothing`
-  where a fixture can make its window system report one). The Win32 window keeps a DPI that is
-  never zero (`WindowScale`), and a `WM_DPICHANGED` naming zero changes
+  where a fixture can make its window system report one). The Win32 window keeps a DPI whose
+  ratio is in range (`WindowScale`), and a `WM_DPICHANGED` naming another changes
   nothing. The handler's `state_changed` is raised after the publish, outside
   the cell, only when the revision grew, and by one of two routes. A change
   the window system reported is announced from the host's own callback

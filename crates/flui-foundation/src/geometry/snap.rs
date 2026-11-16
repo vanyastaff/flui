@@ -44,12 +44,17 @@ impl DevicePixelRatio {
     pub const MAX: Self = Self(32.0);
 
     /// The ratio, or `None` when `ratio` is outside [`Self::MIN`]`..=`[`Self::MAX`] (zero,
-    /// negative and not finite included).
+    /// negative and not finite included). `const`, so a constant ratio is checked when it is
+    /// compiled: `match DevicePixelRatio::try_new(2.0) { Some(ratio) => ratio, None => panic!(..) }`
+    /// in a `const` item cannot fail at run time.
     #[must_use]
-    pub fn try_new(ratio: f64) -> Option<Self> {
-        (Self::MIN.0..=Self::MAX.0)
-            .contains(&ratio)
-            .then_some(Self(ratio))
+    pub const fn try_new(ratio: f64) -> Option<Self> {
+        // NaN fails both comparisons.
+        if ratio >= Self::MIN.0 && ratio <= Self::MAX.0 {
+            Some(Self(ratio))
+        } else {
+            None
+        }
     }
 
     /// Device pixels per logical pixel.
@@ -150,7 +155,8 @@ pub fn device_extent(logical: f64, ratio: DevicePixelRatio) -> Option<u32> {
     if !(logical.is_finite() && logical > 0.0) {
         return None;
     }
-    // Over a ratio in range the product is finite; `max` holds a sliver at a pixel.
+    // `max` holds a sliver at a pixel. A logical side near `f64::MAX` at a large ratio is
+    // infinite here, and the cast below saturates it at `u32::MAX`, the intent.
     let pixels = snap(ratio.to_device(logical)).max(1.0);
     #[expect(
         clippy::cast_possible_truncation,

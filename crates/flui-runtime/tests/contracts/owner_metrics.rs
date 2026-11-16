@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use flui_foundation::{
     PresentationAddress,
-    geometry::{EdgeInsets, Size},
+    geometry::{DevicePixelRatio, EdgeInsets, Size},
 };
 use flui_painting::TextSizing;
 use flui_runtime::owner::{OwnerEffects, OwnerHost, WindowObservation};
@@ -617,24 +617,39 @@ fn initial_inherited_scale_matches_the_renderer() {
             flui_widgets::SizedBox::new(20.0, 20.0)
         }
     }
-    for (supplied, accepted) in [
-        (2.0, 2.0),
-        (0.0, 1.0),
-        (-1.0, 1.0),
-        (f64::NAN, 1.0),
-        (f64::INFINITY, 1.0),
-    ] {
-        let mut runtime = UiRuntime::try_new(
-            crate::owner_publication::window(),
-            supplied,
-            RuntimeHostServices::new(
-                Arc::new(|| {}),
-                Arc::new(AtomicBool::new(false)),
-                &flui_painting::FontCollection::new(),
-                flui_scheduler::ClockSource::Platform,
-            ),
+    let fonts = flui_painting::FontCollection::new();
+    let services = || {
+        RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            &fonts,
+            flui_scheduler::ClockSource::Platform,
         )
-        .expect("runtime");
+    };
+    // A ratio outside the range a screen can have builds no runtime: the
+    // type's own check refuses it, typed.
+    for refused in [0.0, -1.0, f64::NAN, f64::INFINITY, 64.0, 1.0 / 64.0] {
+        assert!(
+            matches!(
+                UiRuntime::try_new(crate::owner_publication::window(), refused, services()),
+                Err(flui_runtime::ui_runtime::UiRuntimeError::PixelRatio)
+            ),
+            "{refused}"
+        );
+    }
+    // Each bound of the range builds one.
+    for bound in [DevicePixelRatio::MIN.get(), DevicePixelRatio::MAX.get()] {
+        assert!(
+            UiRuntime::try_new(crate::owner_publication::window(), bound, services()).is_ok(),
+            "{bound}"
+        );
+    }
+    // A ratio in range reaches the renderer and the inherited scale alike.
+    {
+        let accepted = 2.0;
+        let mut runtime =
+            UiRuntime::try_new(crate::owner_publication::window(), accepted, services())
+                .expect("runtime");
         let observed = Rc::new(Cell::new(0.0));
         runtime
             .attach_root_widget_with_size(&Reader(Rc::clone(&observed)), 800.0, 600.0)
@@ -772,7 +787,35 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         Some(&(Size::new(200.0, 100.0), 1.0)),
         "the host scale entry updates the real inherited consumer",
     );
-    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+    // Each bound of the range a screen can have is a ratio; set back to 1.0
+    // before any frame, so what follows sees the scale it had.
+    owner
+        .presentation_dispatcher(address)
+        .expect("window authority")
+        .test_callback(
+            Box::new(move |runtime| {
+                let id = address.presentation_id;
+                for bound in [DevicePixelRatio::MIN.get(), DevicePixelRatio::MAX.get()] {
+                    assert!(runtime.set_device_pixel_ratio_for(id, bound), "{bound}");
+                    assert_eq!(
+                        runtime.presentation_device_pixel_ratio_for_test(id),
+                        Some(bound)
+                    );
+                }
+                assert!(runtime.set_device_pixel_ratio_for(id, 1.0));
+            }),
+            &effects,
+        )
+        .expect("accept the bounds");
+    for invalid in [
+        0.0,
+        -1.0,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        64.0,
+        1.0 / 64.0,
+    ] {
         owner
             .presentation_dispatcher(address)
             .expect("window authority")

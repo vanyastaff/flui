@@ -142,6 +142,35 @@ pub(crate) mod sample {
         }
     }
 
+    /// The displays of one sample, each under the id `mint` gives it, with
+    /// their scales read by the hosts' one rule against `streaks`: the ones
+    /// listed (with the raw display each came from), and the refusals to
+    /// report once nothing is borrowed. Every display read keeps its streak,
+    /// listed or not (one with no size is read but not listed), and one this
+    /// sample did not read loses its own.
+    pub(crate) fn list<'a>(
+        displays: &'a [RawDisplay],
+        mut mint: impl FnMut(i32) -> Option<DisplayId>,
+        streaks: &mut ScaleStreaks<DisplayId>,
+    ) -> (Vec<(&'a RawDisplay, DisplayInfo)>, Vec<RefusedScale>) {
+        let mut listed = Vec::with_capacity(displays.len());
+        let mut read = Vec::with_capacity(displays.len());
+        let mut refusals = Vec::new();
+        for raw in displays {
+            let Some(id) = mint(raw.display_id) else {
+                continue;
+            };
+            let (scale, refused) = raw.scale(streaks, id);
+            read.push(id);
+            refusals.extend(refused);
+            if let Some(info) = raw.info(id, scale) {
+                listed.push((raw, info));
+            }
+        }
+        streaks.keep_only(&read);
+        (listed, refusals)
+    }
+
     /// The highest rate among `rates` that describes a cadence.
     pub(crate) fn max_refresh_hz(rates: impl IntoIterator<Item = f32>) -> Option<f32> {
         rates
@@ -242,6 +271,31 @@ pub(crate) mod sample {
         use flui_platform::{ColorGamut, DisplayKey, DisplayRegistry};
 
         use super::*;
+
+        /// A display read but not listed (it reports no size) keeps its
+        /// streak: a density that is none on it is reported on the first
+        /// sample, not on every one.
+        fn a_display_read_but_not_listed_keeps_its_streak() {
+            let registry = DisplayRegistry::new();
+            let broken = RawDisplay {
+                display_id: 3,
+                name: "Broken".into(),
+                width: 0,
+                height: 0,
+                density_dpi: 0,
+                refresh_hz: 60.0,
+                max_refresh_hz: None,
+                color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
+            };
+            let displays = [broken];
+            let mut streaks = ScaleStreaks::default();
+            let mut mint = |number| registry.mint(&DisplayKey::AndroidId(number)).ok();
+            let (listed, refused) = list(&displays, &mut mint, &mut streaks);
+            assert!(listed.is_empty(), "a display with no size is not listed");
+            assert_eq!(refused.len(), 1, "the first refusal is reported");
+            let (_, refused) = list(&displays, &mut mint, &mut streaks);
+            assert!(refused.is_empty(), "and only the first");
+        }
 
         fn a_display_without_size_is_not_described() {
             let registry = DisplayRegistry::new();
@@ -440,6 +494,10 @@ pub(crate) mod sample {
                 "android_display_table",
                 &[
                     (
+                        "a_display_read_but_not_listed_keeps_its_streak",
+                        a_display_read_but_not_listed_keeps_its_streak as fn(),
+                    ),
+                    (
                         "a_display_without_size_is_not_described",
                         a_display_without_size_is_not_described as fn(),
                     ),
@@ -519,7 +577,7 @@ pub(crate) mod source {
     use parking_lot::Mutex;
 
     use super::sample::{
-        ColorReport, DisplayColorReport, FrameRateRequests, HighestHdrSdrRatio, RawDisplay,
+        ColorReport, DisplayColorReport, FrameRateRequests, HighestHdrSdrRatio, RawDisplay, list,
         max_refresh_hz, requested_frame_rate,
     };
     use crate::display::scale::ScaleStreaks;
@@ -695,30 +753,25 @@ pub(crate) mod source {
                 let sample = sample(app, self.api).map_err(|error| PlatformError::Displays {
                     message: error.to_string(),
                 })?;
-                let mut infos = Vec::with_capacity(sample.displays.len());
+                // The streaks' lock is let go when `list` returns; the refusals
+                // are reported once the sample is done.
+                let (listed, refused) = list(
+                    &sample.displays,
+                    |number| self.source.mint(&DisplayKey::AndroidId(number)),
+                    &mut self.scale_streak.lock(),
+                );
+                refusals = refused;
+                let mut infos = Vec::with_capacity(listed.len());
                 let mut activity = None;
-                for raw in &sample.displays {
-                    let Some(id) = self.source.mint(&DisplayKey::AndroidId(raw.display_id)) else {
-                        continue;
-                    };
-                    // The streak's lock is let go before the next line; the
-                    // refusal is reported once the sample is done.
-                    let (scale, refused) = raw.scale(&mut self.scale_streak.lock(), id);
-                    refusals.extend(refused);
-                    let Some(info) = raw.info(id, scale) else {
-                        continue;
-                    };
+                for (raw, info) in listed {
                     if raw.display_id == sample.activity_display_id {
                         activity = Some(ActivityDisplay {
-                            id,
+                            id: info.id,
                             max_hz: raw.max_refresh_hz,
                         });
                     }
                     infos.push(info);
                 }
-                // A display this sample did not read takes its streak with it.
-                let read: Vec<DisplayId> = infos.iter().map(|info| info.id).collect();
-                self.scale_streak.lock().keep_only(&read);
                 if activity.is_none() {
                     missing_activity = Some(sample.activity_display_id);
                 }

@@ -38,20 +38,24 @@ impl BufferScale {
     /// One device pixel per logical pixel.
     pub(crate) const ONE: Self = Self(DevicePixelRatio::ONE);
 
-    /// The scale a buffer is drawn at where the compositor names `told`,
-    /// lowered to [`Self::MAX`] past it; `None` for one that is no ratio a
-    /// screen can have below that (zero, negative, not a number, or under
-    /// [`DevicePixelRatio::MIN`]).
+    /// The scale a buffer is drawn at where the compositor names `told`, a
+    /// ratio a screen can have, lowered to [`Self::MAX`] past it; `None` for
+    /// one that is no ratio a screen can have, which the window's events
+    /// refuse by the hosts' one rule before it gets here.
     pub(crate) fn try_new(told: f64) -> Option<Self> {
-        // Only a finite number past the cap is lowered to it: an infinity or
-        // a NaN is no scale, and is refused.
-        let capped = if told.is_finite() && told > Self::MAX {
-            Self::MAX
+        let ratio = DevicePixelRatio::try_new(told)?;
+        Some(if ratio.get() > Self::MAX {
+            Self::LARGEST
         } else {
-            told
-        };
-        DevicePixelRatio::try_new(capped).map(Self)
+            Self(ratio)
+        })
     }
+
+    /// [`Self::MAX`] as a buffer scale.
+    const LARGEST: Self = Self(match DevicePixelRatio::try_new(Self::MAX) {
+        Some(ratio) => ratio,
+        None => panic!("BUG: the largest buffer scale is a ratio a screen can have"),
+    });
 
     /// Device pixels per logical pixel.
     pub(crate) const fn get(self) -> f64 {
@@ -131,13 +135,18 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) 
     if !viewported {
         return BufferScale::ONE;
     }
-    told.fractional
-        .and_then(over_120)
-        .or_else(|| told.preferred.filter(|scale| *scale > 0).map(f64::from))
-        .or(told.output)
-        .and_then(BufferScale::try_new)
-        .unwrap_or(BufferScale::ONE)
-        .fitted(drawn)
+    // Each source in turn, the first that is a ratio a screen can have: one
+    // that is not falls back to the next, as one the compositor did not say.
+    [
+        told.fractional.and_then(over_120),
+        told.preferred.filter(|scale| *scale > 0).map(f64::from),
+        told.output,
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(BufferScale::try_new)
+    .unwrap_or(BufferScale::ONE)
+    .fitted(drawn)
 }
 
 #[cfg(test)]
@@ -193,31 +202,45 @@ mod tests {
                 told(Some(150), None, None),
                 1.25,
             ),
-            // A compositor names any scale: past the largest, the buffer
-            // is drawn at the largest.
+            // A compositor names any scale. Past the largest buffer scale
+            // and within the range a screen can have, the buffer is drawn at
+            // the largest; past the range it is no scale, and the next source
+            // is tried, as one the compositor did not say.
             (
-                "a fraction in the hundreds",
+                "a fraction past the buffer cap",
                 true,
-                told(Some(442 * 120), None, None),
+                told(Some(30 * 120), None, None),
                 BufferScale::MAX,
+            ),
+            (
+                "a fraction below the smallest falls back to the preferred",
+                true,
+                told(Some(1), Some(2), Some(3.0)),
+                2.0,
+            ),
+            (
+                "a fraction in the hundreds falls back to the output's",
+                true,
+                told(Some(442 * 120), None, Some(3.0)),
+                3.0,
             ),
             (
                 "the largest fraction the protocol carries",
                 true,
                 told(Some(u32::MAX), None, None),
-                BufferScale::MAX,
+                1.0,
             ),
             (
                 "the largest whole scale the protocol carries",
                 true,
                 told(None, Some(i32::MAX), None),
-                BufferScale::MAX,
+                1.0,
             ),
             (
                 "an output scale past the largest",
                 true,
                 told(None, None, Some(1e300)),
-                BufferScale::MAX,
+                1.0,
             ),
             (
                 "an infinite output scale",
@@ -235,8 +258,8 @@ mod tests {
     }
 
     /// A window publishes what the renderer can draw, whatever the
-    /// compositor says. Told a scale in the hundreds, a 400 by 300 window is
-    /// drawn at the largest scale, not 176 800 pixels across. A configure
+    /// compositor says. Told a scale past the buffer cap, a 400 by 300 window is
+    /// drawn at the largest buffer scale, not 12 000 pixels across. A configure
     /// whose content at the compositor's scale would pass the largest
     /// surface is drawn at the scale that fits it, so the window still
     /// draws and publishes metrics the renderer accepts. With no viewport
@@ -268,9 +291,9 @@ mod tests {
         let max = MAX_SURFACE_EXTENT.cast_signed();
         for (case, viewported, numerator, content, expected) in [
             (
-                "a scale in the hundreds",
+                "a scale past the buffer cap",
                 true,
-                442 * 120,
+                30 * 120,
                 (400.0, 300.0),
                 Some((3_200, 2_400, BufferScale::MAX)),
             ),

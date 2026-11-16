@@ -4305,7 +4305,7 @@ pub const flui::geometry::DevicePixelRatio::ONE: Self = _
 pub const fn flui::geometry::DevicePixelRatio::get(self) -> f64
 pub fn flui::geometry::DevicePixelRatio::to_device(self, logical: f64) -> f64
 pub fn flui::geometry::DevicePixelRatio::to_logical(self, device: f64) -> f64
-pub fn flui::geometry::DevicePixelRatio::try_new(ratio: f64) -> Option<Self>
+pub const fn flui::geometry::DevicePixelRatio::try_new(ratio: f64) -> Option<Self>
 pub type flui::geometry::DevicePoint = flui::geometry::Point<i32>
 pub type flui::geometry::DeviceRect = flui::geometry::Rect<i32>
 pub type flui::geometry::DeviceSize = flui::geometry::Size<i32>
@@ -19823,7 +19823,7 @@ pub fn flui::rendering::PipelineOwner::scene_staged(&self) -> bool // impl<Phase
 pub fn flui::rendering::PipelineOwner::seed_parent_data(&mut self, child_id: flui::foundation::RenderId, seed: flui_rendering::testing::parent_data::ParentDataSeed) // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::rendering::PipelineOwner::semantics_enabled(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::semantics_owner(&self) -> Option<&flui_semantics::owner::SemanticsOwner> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
-pub fn flui::rendering::PipelineOwner::set_device_pixel_ratio(&mut self, dpr: f64) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_device_pixel_ratio(&mut self, ratio: flui::geometry::DevicePixelRatio) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::set_on_need_visual_update<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::set_on_semantics_owner_created<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::set_on_semantics_owner_disposed<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
@@ -35771,6 +35771,7 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::UiRuntimeError
 impl core::fmt::Display for flui_runtime::ui_runtime::UiRuntimeError
 impl core::marker::StructuralPartialEq for flui_runtime::ui_runtime::UiRuntimeError
 variant flui_runtime::ui_runtime::UiRuntimeError::InteractionLane(flui_interaction::pointer::interaction_lane::InteractionDispatchError) // at 0
+variant flui_runtime::ui_runtime::UiRuntimeError::PixelRatio // at 1
 #[non_exhaustive] pub struct flui_runtime::ui_runtime::agent_record::NativeForms
 field flui_runtime::ui_runtime::agent_record::NativeForms::kept: bool // at 0
 field flui_runtime::ui_runtime::agent_record::NativeForms::redacted: bool // at 1

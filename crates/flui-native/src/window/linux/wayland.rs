@@ -1270,10 +1270,18 @@ mod toplevel {
         close_requested: bool,
         /// The outputs the surface is on, in the order entered.
         outputs: Vec<OutputName>,
-        /// The buffer scale the compositor prefers for the surface.
+        /// The buffer scale the compositor prefers for the surface, when it
+        /// is a ratio a screen can have (the hosts' one rule, at the event).
         preferred_scale: Option<i32>,
-        /// The fractional scale the compositor prefers, as a numerator over 120.
+        /// The fractional scale the compositor prefers, as a numerator over
+        /// 120, when it is a ratio a screen can have.
         fractional_scale: Option<u32>,
+        /// Whether the last preferred buffer scale was refused, so a run of
+        /// refusals is reported once.
+        preferred_streak: crate::display::scale::ScaleStreak,
+        /// Whether the last fractional scale was refused, so a run of
+        /// refusals is reported once.
+        fractional_streak: crate::display::scale::ScaleStreak,
         /// Who draws the frame, as the compositor last said.
         frame: Option<FrameDrawer>,
         /// The compositor answered the window's last frame request since the
@@ -2983,6 +2991,7 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             let mut told = record.protocol.lock();
+            let mut refused = None;
             match event {
                 wl_surface::Event::Enter { output } => {
                     if let Some(name) = output.data::<OutputName>()
@@ -2997,9 +3006,19 @@ mod toplevel {
                     }
                 }
                 wl_surface::Event::PreferredBufferScale { factor } => {
-                    told.preferred_scale = Some(factor);
+                    // By the hosts' one rule, as the fractional scale is.
+                    let checked = told
+                        .preferred_streak
+                        .check(f64::from(factor), "wl_surface preferred_buffer_scale");
+                    told.preferred_scale = checked.is_ok().then_some(factor);
+                    refused = checked.err().flatten();
                 }
                 _ => {}
+            }
+            // Reported with the lock let go: a subscriber is user code.
+            drop(told);
+            if let Some(refused) = refused {
+                refused.report();
             }
         }
     }
@@ -3193,7 +3212,21 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
-                record.protocol.lock().fractional_scale = Some(scale);
+                // By the hosts' one rule: a scale no screen has is not taken,
+                // so the window falls back to the next scale the compositor
+                // says, and a run of them is reported once, with the lock let
+                // go.
+                let refused = {
+                    let mut told = record.protocol.lock();
+                    let checked = told
+                        .fractional_streak
+                        .check(f64::from(scale) / 120.0, "wp_fractional_scale_v1");
+                    told.fractional_scale = checked.is_ok().then_some(scale);
+                    checked.err().flatten()
+                };
+                if let Some(refused) = refused {
+                    refused.report();
+                }
             }
         }
     }

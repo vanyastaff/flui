@@ -125,7 +125,7 @@ const DEFAULT_DPI: NonZeroU32 =
 
 impl WindowScale {
     /// A window at `dpi`.
-    pub(crate) fn new(dpi: NonZeroU32) -> Self {
+    fn new(dpi: NonZeroU32) -> Self {
         Self(Rc::new(Cell::new(dpi)))
     }
 
@@ -151,17 +151,19 @@ impl WindowScale {
         self.ratio().get()
     }
 
-    /// Its scale as a device pixel ratio: a DPI is never zero, so it is one.
+    /// Its scale as a device pixel ratio: the window holds only a DPI whose
+    /// ratio is in range ([`opening_dpi`] and [`Self::rescale`] take no other).
     pub(crate) fn ratio(&self) -> DevicePixelRatio {
         DevicePixelRatio::try_new(super::dpi_scale(self.dpi()))
-            .expect("BUG: a nonzero DPI over 96 is a finite positive ratio")
+            .expect("BUG: a window scale holds only a DPI whose ratio is in range")
     }
 
-    /// The window is now at `dpi`; answers the scale it was at. A DPI of zero
-    /// is no DPI (a `WM_DPICHANGED` whose sender made it up): the window keeps
-    /// the one it has, and the answer is `None`.
+    /// The window is now at `dpi`; answers the scale it was at. A DPI whose
+    /// ratio is no ratio a screen can have (zero, or past `DevicePixelRatio`'s
+    /// range, from a `WM_DPICHANGED` whose sender made it up) is not taken:
+    /// the window keeps the one it has, and the answer is `None`.
     pub(crate) fn rescale(&self, dpi: u32) -> Option<f64> {
-        let dpi = NonZeroU32::new(dpi)?;
+        let dpi = in_range(dpi)?;
         Some(super::dpi_scale(self.0.replace(dpi).get()))
     }
 }
@@ -169,14 +171,22 @@ impl WindowScale {
 /// The DPI a window opens at, from the DPI the system reports for it (0 when
 /// it reports none) and the scale it was placed at.
 pub(super) fn opening_dpi(reported_dpi: u32, placed_at: f64) -> NonZeroU32 {
-    if let Some(reported) = NonZeroU32::new(reported_dpi) {
+    if let Some(reported) = in_range(reported_dpi) {
         return reported;
     }
     let dpi = (placed_at * f64::from(USER_DEFAULT_SCREEN_DPI)).round();
     if dpi.is_finite() && dpi >= 1.0 && dpi <= f64::from(u16::MAX) {
-        // In range by the check above, and at least one.
-        NonZeroU32::new(dpi as u32).unwrap_or(DEFAULT_DPI)
+        // A whole number in `u16`'s range by the check above.
+        in_range(dpi as u32).unwrap_or(DEFAULT_DPI)
     } else {
         DEFAULT_DPI
     }
+}
+
+/// `dpi` when its ratio to the 96 of 100% is one a screen can have
+/// (`DevicePixelRatio::MIN..=MAX`, 3 to 3072); `None` for zero and every DPI
+/// past that range, which no window holds.
+fn in_range(dpi: u32) -> Option<NonZeroU32> {
+    NonZeroU32::new(dpi)
+        .filter(|dpi| DevicePixelRatio::try_new(super::dpi_scale(dpi.get())).is_some())
 }

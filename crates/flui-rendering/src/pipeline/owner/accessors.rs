@@ -1473,34 +1473,28 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Sets the device pixel ratio for subsequent paint passes.
     ///
     /// Called by the platform binding on surface creation and DPI
-    /// change. Non-finite or non-positive values are rejected (kept at
-    /// the previous ratio) — a zero or NaN DPR poisons every shaped
-    /// glyph and snapped hairline downstream.
-    pub fn set_device_pixel_ratio(&mut self, dpr: f64) {
-        if dpr.is_finite() && dpr > 0.0 {
-            self.device_pixel_ratio = dpr;
-            // Assistive technology reads bounds in physical pixels: the
-            // semantics owner republishes its root under the new scale, and
-            // the root is marked so a frame with nothing else dirty still
-            // runs the semantics pass that flushes it.
-            if let Some(owner) = self.semantics_owner.as_mut() {
-                #[expect(
-                    clippy::float_cmp,
-                    reason = "an unchanged ratio is bit-identical, not approximately equal"
-                )]
-                let changed = owner.device_pixel_ratio() != dpr;
-                owner.set_device_pixel_ratio(dpr);
-                if changed && let Some(root_id) = self.root_id {
-                    self.mark_needs_semantics(root_id);
-                }
+    /// change. The ratio is a [`DevicePixelRatio`], so it is in the range a
+    /// screen can have by its type, and the pipeline only ever holds a ratio
+    /// that type admitted (or its initial `1.0`).
+    ///
+    /// [`DevicePixelRatio`]: flui_foundation::geometry::DevicePixelRatio
+    pub fn set_device_pixel_ratio(&mut self, ratio: flui_foundation::geometry::DevicePixelRatio) {
+        let dpr = ratio.get();
+        self.device_pixel_ratio = dpr;
+        // Assistive technology reads bounds in physical pixels: the
+        // semantics owner republishes its root under the new scale, and
+        // the root is marked so a frame with nothing else dirty still
+        // runs the semantics pass that flushes it.
+        if let Some(owner) = self.semantics_owner.as_mut() {
+            #[expect(
+                clippy::float_cmp,
+                reason = "an unchanged ratio is bit-identical, not approximately equal"
+            )]
+            let changed = owner.device_pixel_ratio() != dpr;
+            owner.set_device_pixel_ratio(dpr);
+            if changed && let Some(root_id) = self.root_id {
+                self.mark_needs_semantics(root_id);
             }
-        } else {
-            tracing::warn!(
-                dpr,
-                "set_device_pixel_ratio: rejecting non-finite / non-positive \
-                 ratio; keeping {}",
-                self.device_pixel_ratio,
-            );
         }
     }
 

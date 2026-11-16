@@ -301,7 +301,9 @@ pub(crate) fn admit(
         host_time: now,
         constraints,
         dpr: presentation.pipeline().with(|owner| {
-            DevicePixelRatio::try_new(owner.device_pixel_ratio()).expect("BUG: accepted render DPR")
+            DevicePixelRatio::try_new(owner.device_pixel_ratio()).expect(
+                "BUG: the pipeline holds only a ratio its typed setter took, or its initial 1.0",
+            )
         }),
         policy,
         cohort,

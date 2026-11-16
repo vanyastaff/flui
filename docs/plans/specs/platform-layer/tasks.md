@@ -6035,6 +6035,18 @@ GPU-память простаивающего или невидимого окн
   поверхности — `flui_foundation::geometry::device_extent`: им считают хосты и поверхность сцены
   в `flui-runtime` (было `ceil`: 400,9 × 1,5 давало 602, хост — 601). Чистая часть вставок
   Android — `window::activity_insets`, её тесты идут на Linux.
+  Каждое число масштаба идёт одним из трёх путей. От ОС — через правило `display::scale`:
+  `read` (негодное — базовое отношение) у дисплеев и окон, `check` (негодное отвергнуто, прежний
+  масштаб остаётся) у `WM_DPICHANGED` Win32 и у событий `preferred_scale` и
+  `preferred_buffer_scale` Wayland; `wl_output` Wayland читается правилом при каждом принятии
+  состояния (`done` или логический размер, завершающий первое), `buffer_scale` при негодной
+  дроби берёт следующий источник по порядку; Android держит серии всех прочитанных дисплеев, а
+  не только перечисленных. От API — типизированный отказ: `UiRuntime::try_new` и
+  `with_capacity` — `UiRuntimeError::PixelRatio`, `set_device_pixel_ratio_for` — `false`,
+  `PipelineOwner::set_device_pixel_ratio` принимает `DevicePixelRatio`. Константы —
+  `DevicePixelRatio::try_new` стал `const`, `BufferScale::LARGEST` строится при компиляции.
+  Конвейер держит только отношение из типизированного сеттера, поэтому его чтение в рантайме —
+  `expect("BUG: …")`.
   Кодек записи держит число и отказывает в числе вне диапазона при чтении; формат не менялся.
   Тесты, в скобках результат с откатом: `every_window_system_decides_the_mode_alike` (чтение
   Wayland без `fullscreen` — столбец Wayland); `every_backend_steps_a_turn_alike` (шаг X11 с
@@ -6053,14 +6065,21 @@ GPU-память простаивающего или невидимого окн
   `a_window_asks_the_limits_it_was_given` о равных и почти равных пределах (без подъёма
   максимума — 150 при минимуме 151); `each_source_keeps_its_own_streak` (общая серия — второй
   плохой источник не сообщён); `a_ratio_is_held_to_the_range_a_screen_can_have` (у, внутри и за
-  каждой границей); `a_surface_side_is_snapped_to_whole_device_pixels` (601, не 602). Строки,
+  каждой границей); `a_surface_side_is_snapped_to_whole_device_pixels` (601, не 602);
+  `a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale` (Win32, DPI 1 и 4000: без
+  правила — паника в масштабе окна); `owner_metrics_contract` (64 и 1/64 — отказ, границы
+  приняты: с зажимом вместо отказа — падает); `a_scale_no_screen_has_reads_as_the_base_ratio`
+  (Wayland, масштаб 64: без правила — не базовое отношение); `a_display_read_but_not_listed_keeps_its_streak`
+  (серии только перечисленных — второй отказ сообщён снова); строка «a fraction below the
+  smallest falls back to the preferred» (первый источник без отката — 1, не 2). Строки,
   которые тип делает невозможными (NaN, ноль, бесконечность, масштаб вне диапазона), сняты из
   таблиц или переписаны на границы диапазона.
   Проверки: Windows — clippy `--affected --all-targets -D warnings`, `check --workspace`,
   nextest `flui-native`, `flui-platform`, `flui-app`, `flui-testing`, `flui-runtime` (кроме
   `an_intent_opens_its_link_or_documents`, `trybuild` и `the_driver_agent_contains_every_failure`,
   падающих на этом хосте вне диффа); WSL Ubuntu 24.04 — clippy `-p flui-native --all-targets
-  -D warnings`, `cargo test -p flui-native --lib` по изменённым модулям (79 из 79).
+  -D warnings` (и `--no-default-features`, `--features wayland`, `--features x11`), nextest
+  `-p flui-native --lib` под `xvfb-run` без `WAYLAND_DISPLAY` (794 из 794).
   Не запущено: сборки macOS, iOS, Android и wasm32 (правки `display/apple`, `window/apple`,
   `input/apple`, `owner/apple/macos/content_view`, `display/android`, `window/android`,
   `owner/android`, `text/android`, `drag/android`, `display/web`, `tests/wasm32` прочитаны, не

@@ -155,6 +155,10 @@ pub enum UiRuntimeError {
     /// The owner-local interaction lane could not be created.
     #[error("failed to create the ui_runtime interaction lane: {0}")]
     InteractionLane(#[from] flui_interaction::InteractionDispatchError),
+    /// The device pixel ratio is outside the range a screen can have
+    /// (`DevicePixelRatio::MIN..=MAX`).
+    #[error("the device pixel ratio is outside the range a screen can have")]
+    PixelRatio,
 }
 
 // ---------------------------------------------------------------------------

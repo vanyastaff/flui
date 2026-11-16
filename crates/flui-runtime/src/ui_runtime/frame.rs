@@ -1590,12 +1590,14 @@ impl<'a> PhaseStopwatch<'a> {
 }
 
 /// A logical extent in whole device pixels, for the surface a patch is
-/// applied against, by the one conversion the hosts size the window's surface
-/// with (`flui_foundation::geometry::device_extent`), so the patch's surface is
-/// the window's: an unbounded or non-finite extent, or a ratio the pipeline
-/// holds outside a screen's range, is no surface.
+/// applied against, snapped by the conversion the hosts share
+/// (`flui_foundation::geometry::device_extent`), so the patch's surface rounds
+/// as the window's does: an unbounded or non-finite extent is no surface. The
+/// largest surface is a host's policy, applied where it sizes the window, and
+/// the renderer refuses a surface past its device's limit; the runtime holds
+/// neither, so it does not clamp.
 fn device_extent(logical: f64, device_pixel_ratio: f64) -> u32 {
-    flui_foundation::geometry::DevicePixelRatio::try_new(device_pixel_ratio)
-        .and_then(|ratio| flui_foundation::geometry::device_extent(logical, ratio))
-        .unwrap_or(0)
+    let ratio = flui_foundation::geometry::DevicePixelRatio::try_new(device_pixel_ratio)
+        .expect("BUG: the pipeline holds only a ratio its typed setter took, or its initial 1.0");
+    flui_foundation::geometry::device_extent(logical, ratio).unwrap_or(0)
 }

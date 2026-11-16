@@ -186,10 +186,10 @@ fn screen_rects_follow_scale_and_round_outwards() {
 
 /// A screen point TSF asks about (`GetACPFromPoint`) maps to window-root
 /// logical pixels by the injected scale, for every pair of `i32` screen and
+/// origin coordinates: the difference of two extremes does not fit an `i32`,
 /// but is exact in `f64`. At the smallest ratio `DevicePixelRatio` admits,
-/// dividing by it grows the difference of two extremes 32 times, which stays
-/// finite: every screen point has a logical position.
-/// finite logical position has none at all.
+/// dividing by it grows that difference 32 times, which stays finite: every
+/// screen point has a logical position.
 #[test]
 fn screen_points_map_to_logical_client_points() {
     // Name, screen point, client origin, scale, logical point.

@@ -1573,6 +1573,38 @@ fn a_run_of_zero_dpi_messages_is_reported_once() {
     assert_eq!(after.load(Ordering::SeqCst), 1, "a new run is reported");
 }
 
+/// A `WM_DPICHANGED` whose DPI is no ratio a screen can have (1 and 4000,
+/// either side of `DevicePixelRatio`'s range), which any process can send, is
+/// refused by the hosts' one scale rule: the window keeps its scale, reports
+/// the run once, and takes the next DPI that is one.
+fn a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let scale = |window: &Rc<dyn HostWindow>| {
+        window
+            .state()
+            .metrics
+            .expect("a drawable window")
+            .scale()
+            .get()
+    };
+    let before = scale(&window);
+    let warnings = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(Warnings(Arc::clone(&warnings)), || {
+        for dpi in [1, 4000, 1, 4000] {
+            dpi_changed(&window, dpi, rect(&window));
+        }
+    });
+    assert_eq!(warnings.load(Ordering::SeqCst), 1, "one run, one warning");
+    assert_eq!(scale(&window), before, "the window keeps its scale");
+    window.request_redraw();
+    settle();
+    dpi_changed(&window, 144, rect(&window));
+    settle();
+    assert_eq!(scale(&window), 1.5, "and takes the next DPI that is one");
+}
+
 /// Activation is a fact of its own: a window whose keyboard focus went
 /// elsewhere (an owned popup, here none) is still the active one.
 fn activation_is_a_fact_apart_from_focus() {
@@ -2240,6 +2272,10 @@ fn native_window_commands() {
         (
             "a_dpi_change_announces_one_whole_snapshot",
             a_dpi_change_announces_one_whole_snapshot,
+        ),
+        (
+            "a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale",
+            a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale,
         ),
         (
             "a_run_of_zero_dpi_messages_is_reported_once",

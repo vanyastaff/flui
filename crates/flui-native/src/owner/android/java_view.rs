@@ -330,7 +330,7 @@ impl JavaView {
                 handle: None,
             }),
             composing: AtomicBool::new(false),
-            scale: AtomicU64::new(1.0_f64.to_bits()),
+            scale: AtomicU64::new(DevicePixelRatio::ONE.get().to_bits()),
         });
         let installing = Arc::clone(&view);
         view.app

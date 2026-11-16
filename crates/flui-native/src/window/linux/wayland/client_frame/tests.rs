@@ -483,7 +483,7 @@ fn a_hostile_scale_draws_no_gibibyte() {
         content: Size::new(37.0, 300.0),
         ..floating()
     };
-    let hostile = BufferScale::try_new(442.0).expect("a scale");
+    let hostile = BufferScale::try_new(DevicePixelRatio::MAX.get()).expect("a scale");
     let pixels = paint_header(&narrow, hostile, PLAIN).expect("drawn");
     assert_eq!(
         (pixels.width, pixels.height),
