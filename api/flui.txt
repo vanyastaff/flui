@@ -33258,6 +33258,7 @@ pub const fn flui_protocol::native_recording::Absence::name(self) -> &'static st
 variant flui_protocol::native_recording::Absence::NotOnThisDevice // at 1
 variant flui_protocol::native_recording::Absence::NotOnThisPlatform // at 0
 variant flui_protocol::native_recording::Absence::NotYetOnThisHost // at 2
+variant flui_protocol::native_recording::Absence::Withdrawn // at 3
 #[non_exhaustive] pub enum flui_protocol::native_recording::Action
 impl Clone for flui_protocol::native_recording::Action
 impl Copy for flui_protocol::native_recording::Action
