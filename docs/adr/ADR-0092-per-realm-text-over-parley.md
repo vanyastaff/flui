@@ -15,6 +15,7 @@
 - **Status:** Accepted (2026-10-01)
 - **Date:** 2026-09-25
 - **Revised:** 2026-10-11 — retired font-stack records retain immutable history links; their surviving clauses are owned here. Current per-painter atlas ownership is distinguished from proposed threaded raster placement.
+- **Revised:** 2026-11-16 — the call every runner site builds its UI runtime with is named as it now is, `build_lending_ui_runtime`, which also lends the window the opened URLs held for it (ADR-0339); the font-collection rule is unchanged.
 - **Superseded-by:** ADR-0114 for §10 step 4b's direction-only line alignment; other decisions remain in force.
 - **Superseded-by:** [ADR-0122](ADR-0122-validated-glyph-image.md) for §5's
   `GlyphImage` representation and admission only; the raster trait, font identity,
@@ -538,7 +539,7 @@ that wires what it adds.
      (`FontCollection::ptr_eq`, and a holder count of one per UI runtime), a UI runtime releases its
      context when it drops, a second presentation adds none, and the UI runtimes a runner builds get
      the runtime's collection (every runner site builds its UI runtime through flui-app's one
-     `build_ui_runtime`). That a face registered on the collection shapes in every context
+     `build_lending_ui_runtime`). That a face registered on the collection shapes in every context
      built from it is 2a's `a_face_registered_after_the_fork_shapes_in_every_ui_runtime`; with the
      UI runtimes' contexts proven to be built from that same collection, it is not repeated at the
      runtime level, which would need `parley` on the runtime's test build.
@@ -915,7 +916,7 @@ The gate 1 prototype exists on `spike/parley_atlas` (not merged). Everything bel
   `two_ui_runtimes_hold_contexts_over_the_one_collection_they_were_given`,
   `dropping_a_ui_runtime_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
   in flui-app, `isolated_windows_shape_over_the_runtimes_font_collection` (through
-  `build_ui_runtime`, the one call every runner site builds its UI runtime with) and the rows of
+  `build_lending_ui_runtime`, the one call every runner site builds its UI runtime with) and the rows of
   `font_collection_contract`: `the_runtime_launches_one_host_feed_for_every_ui_runtime` (repeated
   calls on one runtime return the collection the services own, one feed is launched for it,
   and it is host-fed once that feed runs, `testing::host_fed`) and

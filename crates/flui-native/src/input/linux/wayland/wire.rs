@@ -14,8 +14,7 @@ use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::keyboard::Modifiers;
 use flui_platform::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollDirection,
-    ScrollPrecision,
-    ScrollUnit,
+    ScrollPrecision, ScrollUnit,
 };
 use flui_platform::{EventTime, PlatformInput};
 use smallvec::SmallVec;
@@ -877,8 +876,8 @@ impl SeatAssembly {
         // Each axis event of a version 9 seat comes with its direction; a frame
         // that only stops a scroll keeps the direction it ran in. The vertical
         // axis speaks for the frame when both turned.
-        if let Some(inverted) = axes.inverted[Axis::Vertical.index()]
-            .or(axes.inverted[Axis::Horizontal.index()])
+        if let Some(inverted) =
+            axes.inverted[Axis::Vertical.index()].or(axes.inverted[Axis::Horizontal.index()])
         {
             state.direction = if inverted {
                 ScrollDirection::InvertedFromDevice

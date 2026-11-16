@@ -133,6 +133,19 @@ fn a_hardware_dead_key_composes_with_the_next_key() {
             &[Key::Dead(Some('´')), Key::character("e")],
         ),
         (
+            "a key the map gives no character drops the accent",
+            &[
+                Press(Accent('´')),
+                Press(MappedChar::Nothing),
+                Press(Text('e')),
+            ],
+            &[
+                Key::Dead(Some('´')),
+                Key::Named(NamedKey::Unidentified),
+                Key::character("e"),
+            ],
+        ),
+        (
             "a letter with no accent pending is itself",
             &[Press(Text('e')), Press(Text('e'))],
             &[Key::character("e"), Key::character("e")],

@@ -654,7 +654,8 @@ impl SelectionModel {
         if selected.text.is_empty() {
             return ActionOutcome::NotPerformed;
         }
-        clipboard.write_text(selected.text);
+        // A copy has nothing to undo when the write fails.
+        drop(clipboard.write_text(selected.text));
         ActionOutcome::Performed
     }
 

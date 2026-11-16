@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use flui_protocol::version::{BREAKING, Break};
+use flui_protocol::version::BREAKING;
 use flui_protocol::{
     ActionRequest, ErrorCode, ErrorObject, Event, Greeting, Hello, HelloReply, METHODS,
     MethodEffect, MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery,
@@ -218,7 +218,12 @@ impl Surface {
                 }
                 Value::Array(items) => {
                     for item in items {
-                        walk(item, &format!("{path}/*"), out);
+                        let in_union = path.ends_with("/oneOf") || path.ends_with("/anyOf");
+                        walk(
+                            item,
+                            &format!("{path}/{}", variant_segment(item, in_union)),
+                            out,
+                        );
                     }
                 }
                 _ => {}
@@ -235,22 +240,104 @@ impl Surface {
     }
 }
 
-/// What makes `newer` not additive to `older`: a property, enumerated string or
-/// method it lost, or a field it made required in a type `older` had. A method
-/// `change` renamed, old name then new, may go, and so may anything under a name it
-/// removed (a segment of the path, or the string itself).
-fn additivity_violations(older: &Value, newer: &Value, change: Option<&Break>) -> Vec<String> {
-    let (renamed, removed) = change.map_or((&[][..], &[][..]), |change| {
-        (change.renamed, change.removed)
+/// The path segment of an item of a schema array. A variant of a tagged union is named by its
+/// tag, so a variant added to a union is told apart from a field made required in one already
+/// there: an internally or adjacently tagged variant by its tag field and value
+/// (`row=store_lock`), an externally tagged one (an object of one required property, in a
+/// `oneOf`) by its name (`commit=commit`). Any other item is `*`, so an item inserted in the
+/// middle does not move the others; a unit variant is a constant, which the strings hold.
+fn variant_segment(item: &Value, in_union: bool) -> String {
+    let properties = item.get("properties").and_then(Value::as_object);
+    let required: Vec<&str> = item
+        .get("required")
+        .and_then(Value::as_array)
+        .map_or_else(Vec::new, |names| {
+            names.iter().filter_map(Value::as_str).collect()
+        });
+    let tagged = properties.and_then(|properties| {
+        properties.iter().find_map(|(name, property)| {
+            let value = property.get("const")?.as_str()?;
+            required
+                .contains(&name.as_str())
+                .then(|| format!("{name}={value}"))
+        })
     });
-    let (old, new) = (Surface::of(older), Surface::of(newer));
-    let under_removed = |item: &str| {
-        item.split(['/', '='])
-            .any(|segment| removed.contains(&segment))
+    let external = || {
+        let properties = properties?;
+        let [name] = required.as_slice() else {
+            return None;
+        };
+        (in_union && properties.len() == 1 && properties.contains_key(*name))
+            .then(|| format!("{name}={name}"))
     };
+    tagged.or_else(external).unwrap_or_else(|| "*".to_owned())
+}
+
+/// The name of the union a path is inside: the definition after the last `$defs`, or the
+/// top-level type the path starts at.
+fn union_name(path: &str) -> Option<&str> {
+    let segments: Vec<&str> = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    match segments.iter().rposition(|segment| *segment == "$defs") {
+        Some(at) => segments.get(at + 1).copied(),
+        None => segments.first().copied(),
+    }
+}
+
+/// The unions open to a new value or variant: those whose reader reads an unknown one as a
+/// fallback (`version.rs`, "The rule"; ADR-0342 §2). Each names its definition exactly, the
+/// source file of its reader and what in that file is the fallback, which
+/// `every_open_union_names_its_fallback` checks is there.
+const OPEN_UNIONS: &[(&str, &str, &str)] = &[
+    ("Role", "src/wire.rs", "serde(other)"),
+    ("ErrorCode", "src/error.rs", "serde(other)"),
+    ("TreeDiagnostic", "src/tree.rs", "serde(other)"),
+    ("ActionName", "src/tree.rs", "fn known_actions"),
+];
+
+/// The published versions that added a variant or a value before the check could see one (it
+/// named every array item `*` and checked strings for loss only), each with what it added. They
+/// were released, and older apps serve them; the list is closed, and a version after the check
+/// learned to see variants (ADR-0342 §3) is never added to it.
+const PUBLISHED_UNSEEN: &[(ProtocolVersion, &str)] = &[
+    (
+        ProtocolVersion::new(0, 7),
+        "the `announcement` event and its `EventKind`",
+    ),
+    (
+        ProtocolVersion::new(0, 8),
+        "the `non_finite` variant of `InspectValue`",
+    ),
+    (
+        ProtocolVersion::new(0, 9),
+        "`DeviceClass::Other` and `HandleKind::Recording`",
+    ),
+    (ProtocolVersion::new(0, 10), "`RecordLayer::Native`"),
+];
+
+/// What makes `newer` not additive to `older`: a property, enumerated string or method it
+/// lost, a field it made required in a type `older` had, or a value or variant it added to a
+/// union `older` had that is not among `open` (whatever its shape: an `enum` list, a `oneOf` of
+/// constants, an internally, adjacently or externally tagged union). A method `renamed` lists,
+/// old name then new, may go.
+///
+/// A new value or variant of a closed union is not additive (`version.rs`: an older reader
+/// refuses it, failing the whole message), so it passes only in a version `BREAKING` lists
+/// (`breaking`), which an app refuses to older clients (`ProtocolVersion::serves`). A new method
+/// is a new tool, which ADR-0080 makes additive: a client calls only the methods it knows.
+fn additivity_violations(
+    older: &Value,
+    newer: &Value,
+    renamed: &[(&str, &str)],
+    breaking: bool,
+    open: &[&str],
+) -> Vec<String> {
+    let (old, new) = (Surface::of(older), Surface::of(newer));
+    let is_open = |path: &str| union_name(path).is_some_and(|name| open.contains(&name));
     let lost = |a: &BTreeSet<String>, b: &BTreeSet<String>, what: &str| {
         a.difference(b)
-            .filter(|item| !under_removed(item))
             .map(|item| format!("{what} removed: {item}"))
             .collect::<Vec<_>>()
     };
@@ -265,32 +352,73 @@ fn additivity_violations(older: &Value, newer: &Value, change: Option<&Break>) -
                 })
             }),
     );
-    out.extend(
-        new.required
-            .difference(&old.required)
-            .filter(|path| {
-                // A field required in an alternative of a `oneOf` that no older alternative
-                // names is a new variant of an externally tagged enum (its tag is the field):
-                // older readers never meet it, so it is additive.
-                if let Some((alternative, field)) = path.rsplit_once("/required/")
-                    && alternative.contains("/*")
-                    && !old
-                        .properties
-                        .contains(&format!("{alternative}/properties/{field}"))
-                {
-                    return false;
-                }
-                // The type the field is required in: the path up to `required`, or up to the
-                // first erased index, whichever comes first.
-                let owner: Vec<&str> = path
-                    .split('/')
-                    .take_while(|segment| *segment != "required" && *segment != "*")
-                    .collect();
-                older.pointer(&owner.join("/")).is_some()
+    let mut added = BTreeSet::new();
+    for value in new.strings.difference(&old.strings) {
+        let Some((container, _)) = value.rsplit_once('=') else {
+            continue;
+        };
+        let union_existed = old.strings.iter().any(|known| {
+            known
+                .rsplit_once('=')
+                .is_some_and(|(at, _)| at == container)
+        });
+        if union_existed && container != "/methods" && !breaking && !is_open(container) {
+            added.insert(format!("value added: {value}"));
+        }
+    }
+    for path in new.required.difference(&old.required) {
+        let segments: Vec<&str> = path.split('/').collect();
+        // The type the field is required in: the path up to `required`, or up to the first
+        // erased index or variant, whichever comes first. A type `older` lacks changes nothing
+        // an older reader read.
+        let owner: Vec<&str> = segments
+            .iter()
+            .copied()
+            .take_while(|segment| {
+                *segment != "required" && *segment != "*" && !segment.contains('=')
             })
-            .map(|item| format!("field made required: {item}")),
-    );
+            .collect();
+        if older.pointer(&owner.join("/")).is_none() {
+            continue;
+        }
+        // A field of a tagged variant `older` lacks belongs to a variant added to the union.
+        if let Some(at) = segments.iter().position(|segment| segment.contains('=')) {
+            let tag = segments[at].split('=').next().unwrap_or_default();
+            let variant = segments[..=at].join("/");
+            if !old.required.contains(&format!("{variant}/required/{tag}")) {
+                let union = segments[..at].join("/");
+                if !breaking && !is_open(&union) {
+                    added.insert(format!("variant added: {variant}"));
+                }
+                continue;
+            }
+        }
+        out.push(format!("field made required: {path}"));
+    }
+    out.extend(added);
     out
+}
+
+/// The names of [`OPEN_UNIONS`].
+fn open_unions() -> Vec<&'static str> {
+    OPEN_UNIONS.iter().map(|(name, _, _)| *name).collect()
+}
+
+/// Each open union's reader holds the fallback the list names, so an entry cannot outlive it.
+#[test]
+fn every_open_union_names_its_fallback() {
+    for (name, file, fallback) in OPEN_UNIONS {
+        let source = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+            .unwrap_or_else(|error| panic!("reading {file}: {error}"));
+        assert!(
+            source.contains(&format!("enum {name}")) || source.contains(&format!("<{name}>")),
+            "{file} holds `{name}`"
+        );
+        assert!(
+            source.contains(fallback),
+            "{file} holds `{name}`'s fallback `{fallback}`"
+        );
+    }
 }
 
 fn published_versions() -> Vec<(ProtocolVersion, PathBuf)> {
@@ -318,9 +446,19 @@ fn every_published_schema_is_additive_to_the_next() {
         let [(older, older_path), (newer, newer_path)] = pair else {
             unreachable!("windows(2) yields pairs");
         };
-        let change = BREAKING.iter().find(|change| change.version == *newer);
-        let violations =
-            additivity_violations(&read_schema(older_path), &read_schema(newer_path), change);
+        let broke = BREAKING.iter().find(|change| change.version == *newer);
+        let renamed = broke.map_or(&[][..], |change| change.renamed);
+        let removed = broke.map_or(&[][..], |change| change.removed);
+        let violations = without_removed(
+            additivity_violations(
+                &read_schema(older_path),
+                &read_schema(newer_path),
+                renamed,
+                broke.is_some() || PUBLISHED_UNSEEN.iter().any(|(version, _)| version == newer),
+                &open_unions(),
+            ),
+            removed,
+        );
         assert!(
             violations.is_empty(),
             "protocol {newer} is not additive to {older}; list what it renamed or removed in \
@@ -328,6 +466,44 @@ fn every_published_schema_is_additive_to_the_next() {
             violations.join("\n")
         );
     }
+}
+
+/// `violations` less the losses under a name a break `removed`: a property, string or
+/// required field whose path has the name as one segment, or as the string itself.
+fn without_removed(violations: Vec<String>, removed: &[&str]) -> Vec<String> {
+    violations
+        .into_iter()
+        .filter(|violation| {
+            let Some(path) = violation
+                .strip_prefix("property removed: ")
+                .or_else(|| violation.strip_prefix("name removed: "))
+            else {
+                return true;
+            };
+            !path
+                .split(['/', '='])
+                .any(|segment| removed.contains(&segment))
+        })
+        .collect()
+}
+
+/// A loss a break lists as removed may go; anything else it lost, and anything it added
+/// to a closed union, still fails.
+#[test]
+fn a_removal_breaking_lists_may_go() {
+    let older = current_schema();
+    let mut removed = older.clone();
+    removed["Node"]["properties"]
+        .as_object_mut()
+        .expect("Node has properties")
+        .remove("focusable");
+    let violations = additivity_violations(&older, &removed, &[], false, &open_unions());
+    assert_eq!(violations, ["property removed: /Node/properties/focusable"]);
+    assert_eq!(
+        without_removed(violations.clone(), &["focusable"]),
+        [] as [String; 0]
+    );
+    assert_eq!(without_removed(violations, &["tooltip"]).len(), 1);
 }
 
 /// Protocol 0.4 published no method table: its operations were the agent endpoint's `op` names
@@ -354,40 +530,21 @@ fn protocol_0_5_renames_every_0_4_operation_into_the_method_table() {
     }
 }
 
-/// A break for the additivity check's own rows, renaming and removing what each names.
-const fn test_break(
-    renamed: &'static [(&'static str, &'static str)],
-    removed: &'static [&'static str],
-) -> Break {
-    Break {
-        version: PROTOCOL_VERSION,
-        adr: "ADR-0000",
-        renamed,
-        removed,
-    }
-}
-
-const RENAMED_TO_ENUMERATE: Break = test_break(&[("windows.list", "windows.enumerate")], &[]);
-const RENAMED_TO_A_MISSING_METHOD: Break = test_break(&[("windows.list", "windows.all")], &[]);
-const REMOVED_FOCUSABLE: Break = test_break(&[], &["focusable"]);
-const REMOVED_ANOTHER_FIELD: Break = test_break(&[], &["tooltip"]);
-
 /// The additivity check itself, against a schema changed the ways it must
 /// refuse (a field or method removed, a name respelled, a field made required)
-/// and the ways it must allow (a new field, type or definition, a listed rename
-/// or removal).
+/// and the ways it must allow (a new field, type or definition, a listed rename).
 #[test]
 fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_required_one() {
     let older = current_schema();
     assert_eq!(
-        additivity_violations(&older, &older, None),
+        additivity_violations(&older, &older, &[], false, &open_unions()),
         [] as [String; 0]
     );
 
     let mut added = older.clone();
     added["Node"]["properties"]["tooltip"] = serde_json::json!({"type": "string"});
     assert!(
-        additivity_violations(&older, &added, None).is_empty(),
+        additivity_violations(&older, &added, &[], false, &open_unions()).is_empty(),
         "a new optional field is additive"
     );
 
@@ -398,7 +555,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         "required": ["result"],
     });
     assert!(
-        additivity_violations(&older, &added_type, None).is_empty(),
+        additivity_violations(&older, &added_type, &[], false, &open_unions()).is_empty(),
         "a new response type does not change existing requests or replies"
     );
 
@@ -408,17 +565,8 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("Node has properties")
         .remove("focusable");
     assert_eq!(
-        additivity_violations(&older, &removed, None),
+        additivity_violations(&older, &removed, &[], false, &open_unions()),
         ["property removed: /Node/properties/focusable"]
-    );
-    assert!(
-        additivity_violations(&older, &removed, Some(&REMOVED_FOCUSABLE)).is_empty(),
-        "a removal BREAKING lists may go"
-    );
-    assert_eq!(
-        additivity_violations(&older, &removed, Some(&REMOVED_ANOTHER_FIELD)),
-        ["property removed: /Node/properties/focusable"],
-        "a removal BREAKING does not list is still refused"
     );
 
     let respelled = serde_json::from_str::<Value>(
@@ -428,11 +576,11 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
     )
     .expect("still JSON");
     assert!(
-        additivity_violations(&older, &respelled, None)
+        additivity_violations(&older, &respelled, &[], false, &open_unions())
             .iter()
             .any(|v| v.starts_with("name removed:") && v.ends_with("=shutting_down")),
         "{:?}",
-        additivity_violations(&older, &respelled, None)
+        additivity_violations(&older, &respelled, &[], false, &open_unions())
     );
 
     let mut required = older.clone();
@@ -441,23 +589,108 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("Node has required fields")
         .push(serde_json::json!("name"));
     assert_eq!(
-        additivity_violations(&older, &required, None),
+        additivity_violations(&older, &required, &[], false, &open_unions()),
         ["field made required: /Node/required/name"]
     );
 
-    let mut new_variant = older.clone();
-    new_variant["$defs"]["Key"]["oneOf"]
-        .as_array_mut()
-        .expect("a recorded key is a tagged enum")
-        .push(serde_json::json!({
+    // A union of each shape, closed and open: a value or variant added to a closed one is a
+    // break a `BREAKING` version may make, one added to an open one (its reader has a fallback)
+    // is additive, and a field made required in a variant already there is refused even in a
+    // breaking version.
+    let constant = |value: &str| serde_json::json!({"type": "string", "const": value});
+    let internal = |tag: &str, fields: &[&str]| {
+        let mut required = vec![serde_json::json!("row")];
+        required.extend(fields.iter().map(|field| serde_json::json!(field)));
+        serde_json::json!({
             "type": "object",
-            "properties": {"chord": {"type": "string"}},
-            "required": ["chord"],
-        }));
-    assert!(
-        additivity_violations(&older, &new_variant, None).is_empty(),
-        "a new variant of a tagged enum is additive: {:?}",
-        additivity_violations(&older, &new_variant, None)
+            "properties": {"row": {"type": "string", "const": tag}},
+            "required": required,
+        })
+    };
+    let external = |name: &str| {
+        serde_json::json!({
+            "type": "object",
+            "properties": {name: {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
+            "required": [name],
+        })
+    };
+    let defined = |name: &str, union: Value| serde_json::json!({"$defs": {name: union}});
+    let shapes: [(&str, Value, Value, &str); 4] = [
+        (
+            "a string enum",
+            serde_json::json!({"enum": ["close", "keep_open"]}),
+            serde_json::json!({"enum": ["close", "keep_open", "timeout"]}),
+            "value added: /$defs/{union}/enum=timeout",
+        ),
+        (
+            "a oneOf of constants",
+            serde_json::json!({"oneOf": [constant("close"), constant("keep_open")]}),
+            serde_json::json!({"oneOf": [constant("close"), constant("keep_open"), constant("timeout")]}),
+            "value added: /$defs/{union}/oneOf/*/const=timeout",
+        ),
+        (
+            "an internally tagged union",
+            serde_json::json!({"oneOf": [internal("reading", &["reading"])]}),
+            serde_json::json!({"oneOf": [internal("reading", &["reading"]), internal("closed", &["cause"])]}),
+            "variant added: /$defs/{union}/oneOf/row=closed",
+        ),
+        (
+            "an externally tagged union",
+            serde_json::json!({"oneOf": [constant("enabled"), external("preedit")]}),
+            serde_json::json!({"oneOf": [constant("enabled"), external("preedit"), external("commit")]}),
+            "variant added: /$defs/{union}/oneOf/commit=commit",
+        ),
+    ];
+    for (shape, older_union, newer_union, added) in shapes {
+        let (closed_old, closed_new) = (
+            defined("Closed", older_union.clone()),
+            defined("Closed", newer_union.clone()),
+        );
+        assert_eq!(
+            additivity_violations(&closed_old, &closed_new, &[], false, &["Opened"]),
+            [added.replace("{union}", "Closed")],
+            "{shape}: an addition to a closed union is not additive"
+        );
+        assert!(
+            additivity_violations(&closed_old, &closed_new, &[], true, &["Opened"]).is_empty(),
+            "{shape}: a version BREAKING lists may add to a closed union"
+        );
+        assert!(
+            additivity_violations(
+                &defined("Opened", older_union),
+                &defined("Opened", newer_union),
+                &[],
+                false,
+                &["Opened"]
+            )
+            .is_empty(),
+            "{shape}: an addition to a union whose reader has a fallback is additive"
+        );
+    }
+    let one = defined(
+        "Closed",
+        serde_json::json!({"oneOf": [internal("reading", &["reading"])]}),
+    );
+    let with_required = defined(
+        "Closed",
+        serde_json::json!({"oneOf": [internal("reading", &["reading", "cause"])]}),
+    );
+    assert_eq!(
+        additivity_violations(&one, &with_required, &[], true, &[]),
+        ["field made required: /$defs/Closed/oneOf/row=reading/required/cause"],
+        "a field made required in an existing variant is refused even in a breaking version"
+    );
+    // The open list names definitions exactly: a union whose name only ends in an open one's is
+    // closed.
+    assert_eq!(
+        additivity_violations(
+            &defined("XErrorCode", serde_json::json!({"enum": ["a"]})),
+            &defined("XErrorCode", serde_json::json!({"enum": ["a", "b"]})),
+            &[],
+            false,
+            &open_unions()
+        ),
+        ["value added: /$defs/XErrorCode/enum=b"]
     );
 
     let mut new_definition = older.clone();
@@ -467,7 +700,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         "required": ["window"],
     });
     assert!(
-        additivity_violations(&older, &new_definition, None).is_empty(),
+        additivity_violations(&older, &new_definition, &[], false, &open_unions()).is_empty(),
         "a new method's parameters do not change an existing method"
     );
 
@@ -480,16 +713,29 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("windows.list is a method");
     methods.insert("windows.enumerate".into(), row);
     assert_eq!(
-        additivity_violations(&older, &renamed, None),
+        additivity_violations(&older, &renamed, &[], false, &open_unions()),
         ["name removed: /methods=windows.list"],
         "a method renamed without a BREAKING entry is a removal"
     );
     assert!(
-        additivity_violations(&older, &renamed, Some(&RENAMED_TO_ENUMERATE)).is_empty(),
+        additivity_violations(
+            &older,
+            &renamed,
+            &[("windows.list", "windows.enumerate")],
+            false,
+            &open_unions()
+        )
+        .is_empty(),
         "a rename BREAKING lists may go"
     );
     assert_eq!(
-        additivity_violations(&older, &renamed, Some(&RENAMED_TO_A_MISSING_METHOD)),
+        additivity_violations(
+            &older,
+            &renamed,
+            &[("windows.list", "windows.all")],
+            false,
+            &open_unions()
+        ),
         ["name removed: /methods=windows.list"],
         "a rename to a method that does not exist is still a removal"
     );

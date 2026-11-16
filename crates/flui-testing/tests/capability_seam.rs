@@ -123,15 +123,15 @@ fn window() -> HeadlessWindow {
 }
 
 /// Where a test keeps what a completion settled with.
-type Settled = Rc<RefCell<Option<Result<ClipboardRead, Abandoned>>>>;
+type Settled<T = ClipboardRead> = Rc<RefCell<Option<Result<T, Abandoned>>>>;
 
 /// The text a read of `text` settles with.
 fn answered(text: &str) -> Arc<str> {
     Arc::from(text)
 }
 
-fn settle_into(completion: Completion<ClipboardRead>) -> Settled {
-    let settled = Settled::default();
+fn settle_into<T: 'static>(completion: Completion<T>) -> Settled<T> {
+    let settled = Settled::<T>::default();
     let sink = Rc::clone(&settled);
     completion.on_complete(move |outcome| {
         sink.replace(Some(outcome));
@@ -159,13 +159,184 @@ pub(crate) fn a_provider_refusal_reaches_the_widget_unchanged() {
 pub(crate) fn copy_and_paste_round_trip_through_the_headless_clipboard() {
     let mut host = HeadlessHost::new(window());
     let clipboard = acquire(&mut host).expect("the headless host provides a clipboard");
-    clipboard.write_text("copied");
+    let written = settle_into(clipboard.write_text("copied"));
     assert_eq!(host.clipboard().text().as_deref(), Some("copied"));
+    assert_eq!(*written.borrow(), None, "never inside write_text");
 
     let settled = settle_into(clipboard.read_text());
     assert_eq!(*settled.borrow(), None, "never inside read_text");
     let _ = host.pump(Duration::ZERO);
+    assert_eq!(*written.borrow(), Some(Ok(Ok(()))));
     assert_eq!(*settled.borrow(), Some(Ok(Ok(Some(answered("copied"))))));
+}
+
+/// A write the host refuses answers its refusal to the writer, at an owner
+/// turn, and leaves the clipboard as it was (ADR-0337).
+pub(crate) fn a_refused_write_answers_its_refusal() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    scripted.fail_writes_with(ClipboardError::Unavailable);
+    let clipboard = acquire(&mut host).expect("provided");
+    let written = settle_into(clipboard.write_text("refused"));
+    assert_eq!(*written.borrow(), None, "never inside write_text");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *written.borrow(),
+        Some(Ok(Err(ClipboardError::Unavailable)))
+    );
+    assert_eq!(scripted.text().as_deref(), Some("before"));
+}
+
+/// A write is a request the clipboard's write script answers: a step
+/// refuses the write it takes, and the standing answer takes the next onto
+/// the clipboard (ADR-0337).
+pub(crate) fn a_scripted_write_step_refuses_that_write_alone() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    scripted
+        .writes()
+        .answer_next(Answer::value(Err(ClipboardError::Unavailable)));
+    let clipboard = acquire(&mut host).expect("provided");
+    let refused = settle_into(clipboard.write_text("refused"));
+    let taken = settle_into(clipboard.write_text("taken"));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *refused.borrow(),
+        Some(Ok(Err(ClipboardError::Unavailable)))
+    );
+    assert_eq!(*taken.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(scripted.text().as_deref(), Some("taken"));
+    assert_eq!(scripted.writes().received(), 2);
+}
+
+/// Whatever answers a write `Ok` lands its text, in one place: a step, a
+/// delayed step and a released hold, as the standing answer does; and an
+/// `ApplicationOnly` answer keeps the text for this clipboard's reads.
+pub(crate) fn every_ok_answer_to_a_scripted_write_lands_its_text() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    let clipboard = acquire(&mut host).expect("provided");
+
+    scripted.writes().answer_next(Answer::value(Ok(())));
+    drop(clipboard.write(ClipboardWrite::text("stepped").concealed()));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(scripted.text().as_deref(), Some("stepped"));
+    assert!(
+        scripted.is_concealed(),
+        "the step's write is the clipboard's"
+    );
+
+    scripted
+        .writes()
+        .answer_next(Answer::value(Ok(())).after(Duration::from_millis(50)));
+    drop(clipboard.write_text("delayed"));
+    let _ = host.pump(Duration::from_millis(49));
+    assert_eq!(
+        scripted.text().as_deref(),
+        Some("stepped"),
+        "not before its answer"
+    );
+    let _ = host.pump(Duration::from_millis(1));
+    assert_eq!(scripted.text().as_deref(), Some("delayed"));
+
+    let hold = scripted.hold_writes();
+    drop(clipboard.write_text("held"));
+    assert_eq!(hold.held(), 1);
+    drop(hold);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(scripted.text().as_deref(), Some("held"));
+
+    scripted
+        .writes()
+        .answer_next(Answer::value(Err(ClipboardError::ApplicationOnly)));
+    let kept = settle_into(clipboard.write_text("kept"));
+    let read = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *kept.borrow(),
+        Some(Ok(Err(ClipboardError::ApplicationOnly)))
+    );
+    assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("kept"))))));
+}
+
+/// Reads and writes keep one order, as a host's clipboard serves them: a
+/// read asked after a held write waits for it and answers what it wrote; a
+/// read asked before it answers what was there; and writes land in the
+/// order they were asked, whichever answer comes first.
+pub(crate) fn the_scripted_clipboard_keeps_one_order_across_reads_and_writes() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    let clipboard = acquire(&mut host).expect("provided");
+
+    let earlier = settle_into(clipboard.read_text());
+    let hold = scripted.hold_writes();
+    drop(clipboard.write_text("written"));
+    let later = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*earlier.borrow(), Some(Ok(Ok(Some(answered("before"))))));
+    assert_eq!(
+        *later.borrow(),
+        None,
+        "a read after a held write waits for it"
+    );
+    drop(hold);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*later.borrow(), Some(Ok(Ok(Some(answered("written"))))));
+
+    // The first write answers late, the second at once: the second lands
+    // last, as it was asked last, and its completion settles only once its
+    // text has landed.
+    scripted
+        .writes()
+        .answer_next(Answer::value(Ok(())).after(Duration::from_millis(20)));
+    let first = settle_into(clipboard.write_text("first"));
+    let second = settle_into(clipboard.write_text("second"));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        scripted.text().as_deref(),
+        Some("written"),
+        "the first has not landed"
+    );
+    assert_eq!(
+        *second.borrow(),
+        None,
+        "the second's completion waits for its text"
+    );
+    let _ = host.pump(Duration::from_millis(20));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(scripted.text().as_deref(), Some("second"));
+    assert_eq!(*first.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(*second.borrow(), Some(Ok(Ok(()))));
+}
+
+/// A test's own observer on the write script hears beside the clipboard's,
+/// which keeps landing writes and letting reads through; and writes stay
+/// held while either of two holds lives.
+pub(crate) fn a_tests_observer_and_two_holds_leave_the_clipboard_serving() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    let heard = Rc::new(Cell::new(0_usize));
+    let counted = Rc::clone(&heard);
+    scripted
+        .writes()
+        .on_answer(move |_, _| counted.set(counted.get() + 1));
+    let clipboard = acquire(&mut host).expect("provided");
+    let first = scripted.hold_writes();
+    let second = scripted.hold_writes();
+    drop(clipboard.write_text("held"));
+    let read = settle_into(clipboard.read_text());
+    drop(first);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(second.held(), 1, "the other hold still holds the write");
+    assert_eq!(*read.borrow(), None, "the read waits for the held write");
+    drop(second);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(heard.get(), 1, "the test's observer heard the write");
+    assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("held"))))));
 }
 
 /// A concealed write reaches the host marked, pastes like any other, and an
@@ -179,14 +350,14 @@ pub(crate) fn a_concealed_write_reaches_the_host_marked() {
     scripted.answer_concealment(Concealment::HintOnly);
     assert_eq!(clipboard.concealment(), Concealment::HintOnly);
 
-    clipboard.write(ClipboardWrite::text("hunter2").concealed());
+    drop(clipboard.write(ClipboardWrite::text("hunter2").concealed()));
     assert_eq!(scripted.text().as_deref(), Some("hunter2"));
     assert!(scripted.is_concealed(), "the write reaches the host marked");
     let settled = settle_into(clipboard.read_text());
     let _ = host.pump(Duration::ZERO);
     assert_eq!(*settled.borrow(), Some(Ok(Ok(Some(answered("hunter2"))))));
 
-    clipboard.write_text("plain");
+    drop(clipboard.write_text("plain"));
     assert!(!scripted.is_concealed(), "an ordinary write is unmarked");
 }
 
@@ -203,7 +374,16 @@ impl ClipboardBackend for OtherThreadBackend {
             .expect("the owner is live");
     }
 
-    fn write(&self, _write: flui_platform::ClipboardWrite) {}
+    fn write(
+        &self,
+        _write: flui_platform::ClipboardWrite,
+        answer: Resolver<flui_platform::ClipboardWritten>,
+    ) {
+        std::thread::spawn(move || answer.resolve(Ok(())))
+            .join()
+            .expect("the OS thread")
+            .expect("the owner is live");
+    }
 
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Unavailable
@@ -383,7 +563,7 @@ pub(crate) fn a_read_after_a_write_never_joins_the_read_before_it() {
     // The host answers at once, but the answer settles at the owner's turn:
     // the earlier read is still in flight when the write lands.
     let before = settle_into(clipboard.read_text());
-    clipboard.write_text("after");
+    drop(clipboard.write_text("after"));
     let after = settle_into(clipboard.read_text());
     assert_eq!(scripted.reads_asked(), 2, "the write ends the sharing");
     let _ = host.pump(Duration::ZERO);
@@ -559,9 +739,11 @@ pub(crate) fn an_override_answers_in_place_of_the_built_in() {
         .build()
         .expect("one provider per tier");
     let mut host = HeadlessHost::with_capabilities(window(), registry);
-    acquire(&mut host)
-        .expect("provided")
-        .write_text("overridden");
+    drop(
+        acquire(&mut host)
+            .expect("provided")
+            .write_text("overridden"),
+    );
     assert_eq!(chosen.text().as_deref(), Some("overridden"));
     assert_eq!(built_in.text(), None);
 }

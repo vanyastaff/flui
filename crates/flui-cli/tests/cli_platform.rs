@@ -185,7 +185,6 @@ const SOURCES: &[&str] = &[
     "platforms/android/app/build.gradle.kts",
     "platforms/android/app/src/main/AndroidManifest.xml",
     "platforms/ios/README.md",
-    "platforms/web/index.html",
     "platforms/web/manifest.json",
     "platforms/web/icons/icon-192.png",
     "platforms/windows/.gitignore",

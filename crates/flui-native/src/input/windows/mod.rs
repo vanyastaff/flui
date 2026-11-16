@@ -649,13 +649,10 @@ impl InputWindows {
                         // Alt) instead of a character, on the layer the held
                         // modifiers select. Taking it now leaves nothing for a
                         // nested keydown during the callback to mistake for its own.
-                        let dead = (owns_burst && translated.is_none())
+                        let stroke = (owns_burst && translated.is_none())
                             .then(|| drain_dead_char(hwnd, msg))
-                            .flatten();
-                        let stroke = match dead {
-                            Some(accent) => raw::Keystroke::Dead(accent),
-                            None => raw::Keystroke::Text(translated),
-                        };
+                            .flatten()
+                            .unwrap_or(raw::Keystroke::Text(translated));
                         // The default a system keydown may skip also lives in
                         // the WM_SYSCHAR `TranslateMessage` queued for it:
                         // `DefWindowProcW` turns Alt+Space's into the system
@@ -797,6 +794,7 @@ mod keystroke_queue {
     //! for the keydown `window_proc` is handling, drained or held before user code
     //! sees the keydown.
 
+    use super::raw::Keystroke;
     use windows::Win32::{
         Foundation::{HWND, LPARAM, WPARAM},
         UI::WindowsAndMessaging::{
@@ -852,10 +850,10 @@ mod keystroke_queue {
     /// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
     /// itself lives in the kernel's dead-key state, which this does not touch.
     ///
-    /// `None` when there was none; otherwise the accent the message's
-    /// `wParam` names (the spacing character the layout prints on the key),
-    /// `Some(None)` for a unit that is no character on its own.
-    pub(super) fn drain_dead_char(hwnd: HWND, keydown: u32) -> Option<Option<char>> {
+    /// The dead keystroke, or `None` when there was none. It carries the accent the
+    /// message's `wParam` names (the spacing character the layout prints on the key), or
+    /// none for a unit that is no character on its own.
+    pub(super) fn drain_dead_char(hwnd: HWND, keydown: u32) -> Option<Keystroke> {
         let kind = if keydown == WM_SYSKEYDOWN {
             WM_SYSDEADCHAR
         } else {
@@ -867,12 +865,12 @@ mod keystroke_queue {
         // `PM_REMOVE` touches only this thread's own queue.
         unsafe {
             while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
-                found = Some(
+                found = Some(Keystroke::Dead(
                     u32::try_from(msg.wParam.0)
                         .ok()
                         .and_then(char::from_u32)
                         .filter(|accent| !accent.is_control()),
-                );
+                ));
             }
         }
         found

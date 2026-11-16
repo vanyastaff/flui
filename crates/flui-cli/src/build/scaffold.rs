@@ -30,9 +30,8 @@ const ANDROID_PROGUARD_RULES: &str =
 const IOS_README: &str = include_str!("../../templates/platforms/ios/README.md");
 const IOS_GITIGNORE: &str = include_str!("../../templates/platforms/ios/.gitignore");
 
-// Web
-const WEB_INDEX_HTML: &str = include_str!("../../templates/platforms/web/index.html");
-const WEB_MANIFEST_JSON: &str = include_str!("../../templates/platforms/web/manifest.json");
+// Web: the page is written by every build and the manifest is rendered by
+// `build::web_page`, the renderer a build uses for a project that keeps none.
 
 // Desktop
 const WINDOWS_GITIGNORE: &str = include_str!("../../templates/platforms/windows/.gitignore");
@@ -86,16 +85,6 @@ fn platform_templates(platform: &str) -> &'static [TemplateFile] {
             TemplateFile {
                 rel_path: ".gitignore",
                 content: IOS_GITIGNORE,
-            },
-        ],
-        "web" => &[
-            TemplateFile {
-                rel_path: "index.html",
-                content: WEB_INDEX_HTML,
-            },
-            TemplateFile {
-                rel_path: "manifest.json",
-                content: WEB_MANIFEST_JSON,
             },
         ],
         "windows" => &[TemplateFile {
@@ -198,6 +187,15 @@ pub(crate) fn scaffold_platform_plan(
                 ),
             },
         );
+    }
+    if platform_lower == "web" {
+        files.push(ScaffoldFile {
+            rel_path: std::path::PathBuf::from(crate::build::web_page::MANIFEST),
+            contents: crate::build::web_page::manifest(
+                params.app,
+                &crate::build::web_page::WebPage::default(),
+            ),
+        });
     }
     Ok(files)
 }

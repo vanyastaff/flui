@@ -4,12 +4,15 @@
 //!
 //! A recording is JSON Lines: one [`Header`] object, which names the [`Stream`] it journals,
 //! then one [`Row`] object per call — a reading, a coalesced batch, a device hot-plug, a
-//! capture loss; a system notice, a session end, a reopen; an input method's event; a read of
+//! capture loss; a system notice, a session end, a reopen; an input method's event, a lock it
+//! held on a text store, a close request and a close; a read of
 //! the system preferences or the displays; a window's snapshot. Rows hold the plain fields a
 //! backend copies out of its native event, so a Win32 or Apple recording replays through the
 //! shared decoder on any host. The header names the format's major version under
 //! [`VERSION_KEY`]; a reader skips unknown fields, and an unknown variant is a refusal, never a
-//! skipped row.
+//! skipped row. A recording is untrusted input: a reader refuses a line longer than
+//! [`MAX_LINE_BYTES`] before it parses it, a row past [`MAX_ROWS`] and a line that takes the
+//! recording past [`MAX_RECORDING_BYTES`].
 //!
 //! `flui-native` writes and replays these records; this module only declares them, so a
 //! reader such as the driver reads a recording without the core. The format is versioned by
@@ -316,7 +319,8 @@ vocabulary! {
         Registry => "registry",
         /// A loop's application delivery: system notices, session ends and reopens.
         App => "app",
-        /// A window's delivery: its input method's events.
+        /// A window's delivery: its input method's events and text store locks, its close
+        /// requests and its close.
         Window => "window",
         /// A platform's reads of the system: its preferences and displays.
         Platform => "platform",
@@ -395,6 +399,13 @@ pub struct Header {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub provenance: Option<String>,
+    /// The recording joined a live stream late: it begins with the stream's setup, not its
+    /// first row, so a row may name a text store whose focus or document it never saw.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub joined_late: bool,
     /// Every device the rows read, with the kinds they read it as.
     #[cfg_attr(feature = "serde", serde(default))]
     pub devices: Vec<Device>,
@@ -807,8 +818,8 @@ pub enum ImeEvent {
     Disabled,
 }
 
-/// What a window's input method did. Input methods that edit the focused text store
-/// directly, with no event, will be recorded as a store edit beside `Event`.
+/// What a window's input method did through an event. An input method that reads and edits the
+/// focused text store instead is recorded as [`Row::StoreFocus`] and [`Row::StoreLock`] rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
@@ -1635,6 +1646,398 @@ pub enum InsetCurve {
     SystemKeyboard,
 }
 
+vocabulary! {
+    /// What a window's handler answered when the window system asked to close the window.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum CloseAnswer {
+        /// The handler granted it: the window closes.
+        Close => "close",
+        /// The handler vetoed it (the application's close guard held it): the window stays
+        /// open.
+        KeepOpen => "keep_open",
+        /// An earlier request was granted and the window is closing: the handler was not asked.
+        Closing => "closing",
+        /// The window had let go of its handler: the window closes.
+        NoHandler => "no_handler",
+        /// The handler panicked while it answered: the panic went on and nothing was decided.
+        Panicked => "panicked",
+    }
+}
+
+vocabulary! {
+    /// Why a window closed.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum CloseCause {
+        /// Its handler granted a close request.
+        GrantedRequest => "granted_request",
+        /// Nobody was asked: the application's close command, or the system taking the window
+        /// away.
+        NoRequest => "no_request",
+    }
+}
+
+vocabulary! {
+    /// Why a writer stopped a recording ([`Row::Cut`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum CutReason {
+        /// The next row would have taken it past [`MAX_RECORDING_BYTES`].
+        Bytes => "bytes",
+        /// The next row would have taken it past [`MAX_ROWS`].
+        Rows => "rows",
+        /// The window's text store journal could not be kept (the process has no owner slot
+        /// left for it), so the window's stores are not journaled from here.
+        StoreJournal => "store_journal",
+    }
+}
+
+/// How many calls one [`StoreLock`] row holds; a session that makes more is recorded
+/// [`incomplete`](StoreLock::incomplete).
+pub const MAX_STORE_STEPS: usize = 256;
+
+/// How many bytes of text one [`StoreLock`] row holds, its opened document and every call's
+/// text together; a session that reads or writes more is recorded
+/// [`incomplete`](StoreLock::incomplete).
+pub const MAX_STORE_TEXT_BYTES: usize = 64 * 1024;
+
+/// How long one line of a native recording may be, in bytes, its newline excluded: a reader
+/// refuses a longer line before it parses it. A [`StoreLock`] row within its two bounds fits.
+pub const MAX_LINE_BYTES: usize = 1024 * 1024;
+
+/// How many rows one native recording may hold: a reader refuses the row past it.
+pub const MAX_ROWS: usize = 1 << 20;
+
+/// How many bytes one native recording may hold, its lines and their endings together: a reader
+/// refuses the line that would pass it, as it reads, before it parses or keeps that line. The two
+/// bounds above alone admit about a tebibyte held at once; the largest recording a device run has
+/// written is a few mebibytes, so this leaves room for long sessions and keeps what one read
+/// holds within what a test host and a CI runner have.
+pub const MAX_RECORDING_BYTES: usize = 64 * 1024 * 1024;
+
+vocabulary! {
+    /// The kind of lock an input method was granted on a text store.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum StoreLockKind {
+        /// Reads only.
+        Read => "read",
+        /// Reads and edits.
+        ReadWrite => "read_write",
+    }
+}
+
+vocabulary! {
+    /// Why a text store refused a call, by kind.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum StoreError {
+        /// A synchronous lock was unavailable.
+        SyncLockUnavailable => "sync_lock_unavailable",
+        /// The deferred-lock queue was full.
+        DeferredQueueFull => "deferred_queue_full",
+        /// An offset or range named no position in the document.
+        Offset => "offset",
+        /// The text must not be read out.
+        Protected => "protected",
+        /// The field had no layout for its text.
+        NoLayout => "no_layout",
+        /// The point missed the text.
+        PointOutside => "point_outside",
+        /// The field was gone.
+        Detached => "detached",
+    }
+}
+
+vocabulary! {
+    /// What a text field is for.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum InputPurpose {
+        /// Free text.
+        #[default]
+        Text => "text",
+        /// An email address.
+        Email => "email",
+        /// A web address.
+        Url => "url",
+        /// A telephone number.
+        Phone => "phone",
+        /// A whole number.
+        Number => "number",
+        /// A search query.
+        Search => "search",
+    }
+}
+
+/// A text store's standing properties, as the window was told to focus it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StoreStatus {
+    /// Its text must not be read out (a password field).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub protected: bool,
+    /// It holds one line.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub single_line: bool,
+    /// What it is for.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
+    pub purpose: InputPurpose,
+}
+
+/// The text store a window's input method was told to serve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StoreFocus {
+    /// The store, numbered within the recording each time the window is told to serve a store
+    /// it was not serving; never zero, never reused.
+    pub store: u64,
+    /// Its standing properties.
+    pub status: StoreStatus,
+}
+
+/// A composition in a text store: its span in UTF-16 code units, and whether the input method
+/// hides the caret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StoreComposition {
+    /// Its start and end.
+    pub range: [u64; 2],
+    /// The input method draws no caret.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub hides_caret: bool,
+}
+
+/// A text store's document: its text, its selection as anchor and active end in UTF-16 code
+/// units, and its composition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StoreDocument {
+    /// The text.
+    pub text: String,
+    /// The selection's anchor and active end.
+    pub selection: [u64; 2],
+    /// The composition, when one is in progress.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub composition: Option<StoreComposition>,
+}
+
+/// One call an input method made inside a lock on a text store, with the store's answer. An
+/// offset is in UTF-16 code units; a call the store refused names its error instead of an
+/// answer.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "call", rename_all = "snake_case"))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub enum StoreStep {
+    /// It read the document's length.
+    DocumentLen {
+        /// The length.
+        len: u64,
+    },
+    /// It read the text of `range`: the context of a reconversion or a surrounding-text query.
+    Text {
+        /// The range read.
+        range: [u64; 2],
+        /// The text answered.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        text: Option<String>,
+        /// Why the store refused.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        error: Option<StoreError>,
+    },
+    /// It read the selection.
+    Selection {
+        /// The anchor and active end answered.
+        selection: [u64; 2],
+    },
+    /// It read the composition.
+    Composition {
+        /// The composition answered; absent when none was in progress.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        composition: Option<StoreComposition>,
+    },
+    /// It asked which offset lies at a point, in window-root logical pixels. The answer
+    /// depends on the device's layout, so a replay keeps it and does not ask again.
+    IndexAtPoint {
+        /// The point.
+        point: [f64; 2],
+        /// A point inside a character's box answers its nearer edge.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
+        round_to_nearest_edge: bool,
+        /// A point outside every box answers the nearest offset.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
+        nearest_when_outside: bool,
+        /// The offset answered.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        index: Option<u64>,
+        /// Why the store refused.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        error: Option<StoreError>,
+    },
+    /// It replaced `range` with `text`.
+    Replace {
+        /// The range replaced.
+        range: [u64; 2],
+        /// The text put there.
+        text: String,
+        /// The edit's start, the replaced span's end and the inserted text's end.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        change: Option<[u64; 3]>,
+        /// Why the store refused.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        error: Option<StoreError>,
+    },
+    /// It replaced the selection with `text`.
+    InsertAtSelection {
+        /// The text put there.
+        text: String,
+        /// The edit's start, the replaced span's end and the inserted text's end.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        change: Option<[u64; 3]>,
+        /// Why the store refused.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        error: Option<StoreError>,
+    },
+    /// It set the selection.
+    SetSelection {
+        /// The anchor and active end.
+        selection: [u64; 2],
+        /// Why the store refused.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        error: Option<StoreError>,
+    },
+    /// It started, moved or ended the composition.
+    SetComposition {
+        /// The composition; absent to end it.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        composition: Option<StoreComposition>,
+        /// Why the store refused.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        error: Option<StoreError>,
+    },
+}
+
+/// One lock an input method was granted on a text store, and its calls inside it in order. A
+/// geometry read (a range's rect, the document's bounds) places the input method's window and
+/// changes nothing in the store, so it is not recorded.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StoreLock {
+    /// The store, as its [`StoreFocus`] numbered it.
+    pub store: u64,
+    /// The lock's kind.
+    pub kind: StoreLockKind,
+    /// The document as the lock found it, when the recording did not hold it yet: at the
+    /// first lock after the store was focused, and at the first after the application changed
+    /// it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub opened: Option<StoreDocument>,
+    /// The calls, at most [`MAX_STORE_STEPS`].
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Vec::is_empty")
+    )]
+    pub steps: Vec<StoreStep>,
+    /// Part of the session is missing: it made more calls than [`MAX_STORE_STEPS`] or carried
+    /// more text than [`MAX_STORE_TEXT_BYTES`], the store would not read its document out (a
+    /// protected field), or the input method's code panicked inside the lock. A replay refuses
+    /// the row.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub incomplete: bool,
+    /// The store was protected (a password field): one such row stands for every lock until a
+    /// lock finds it unprotected, and holds nothing derived from the field's content (no text,
+    /// range, offset, length or count of keys), so it has no `opened` and no `steps`; a replay
+    /// refuses it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub protected: bool,
+}
+
 /// One line of a native recording as a live stream of it carries it: the header first, then
 /// the rows, and a `gap` where the stream lost rows, which a replay stops at.
 ///
@@ -1784,6 +2187,53 @@ pub enum Row {
             serde(default, skip_serializing_if = "std::ops::Not::not")
         )]
         redacted: bool,
+    },
+    /// The window was told which text store its input method serves, or that it serves none
+    /// (a `window` recording).
+    StoreFocus {
+        /// The store; absent when none.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "Option::is_none")
+        )]
+        focus: Option<StoreFocus>,
+    },
+    /// The window's input method was granted a lock on a text store and read or edited it
+    /// through it (a `window` recording).
+    StoreLock {
+        /// The lock and its calls.
+        lock: StoreLock,
+        /// Its text was replaced before writing (ADR-0215 §5): replay refuses the row.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
+        redacted: bool,
+    },
+    /// The window system asked to close the window, and its handler answered (a `window`
+    /// recording).
+    CloseRequest {
+        /// What the handler answered.
+        answer: CloseAnswer,
+        /// The request was raised while a method of the handler ran, or off the window's
+        /// thread: the window system was told to keep the window at once, and the handler was
+        /// asked after the method returned.
+        #[cfg_attr(
+            feature = "serde",
+            serde(default, skip_serializing_if = "std::ops::Not::not")
+        )]
+        queued: bool,
+    },
+    /// The writer stopped here: no row follows, and the recording is whole up to it (any
+    /// stream).
+    Cut {
+        /// Why.
+        reason: CutReason,
+    },
+    /// The window closed: its handler heard `closed` (a `window` recording).
+    Closed {
+        /// Why.
+        cause: CloseCause,
     },
     /// The application read the system preferences (a `platform` recording).
     Preferences {

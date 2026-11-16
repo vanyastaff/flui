@@ -21,7 +21,13 @@ impl ClipboardBackend for Inert {
         let _ = answer.resolve(Ok(None));
     }
 
-    fn write(&self, _write: flui_platform::ClipboardWrite) {}
+    fn write(
+        &self,
+        _write: flui_platform::ClipboardWrite,
+        answer: Resolver<flui_platform::ClipboardWritten>,
+    ) {
+        let _ = answer.resolve(Ok(()));
+    }
 
     fn concealment(&self) -> flui_platform::Concealment {
         flui_platform::Concealment::Unavailable

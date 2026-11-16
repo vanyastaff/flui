@@ -1,24 +1,39 @@
 //! What the operating system opens an application with reaches it through
 //! the runner: a URL the application declared opens in the `Router` of the
-//! window it addresses, the window focused last when it addresses the
-//! application as a whole, and opened files reach `on_open_files`.
+//! window it addresses, the main window when it addresses the application as
+//! a whole, and opened files reach `on_open_files`.
 //!
 //! # Scenarios
 //!
 //! A link that launched the application, reported before its first window
-//! exists, opens the first window's Router on its page; with two windows a
-//! link goes to the one focused last; an undeclared scheme opens nothing;
-//! files reach the callback in order; a panic while the first of two URLs
-//! navigates does not lose the second.
+//! exists, opens the first window's Router on its page; a link for the
+//! application goes to the main window, whichever window has the focus, opened
+//! first or opened for a file; an undeclared scheme opens nothing; files reach
+//! the callback in order; a panic in a Router hook is held by the window's
+//! runtime, in an open window and in one the link reopens, and does not lose
+//! the next link.
+//!
+//! With no window: a link the application declares reopens its main window,
+//! whose Router opens on it, after the last window closed, in a resident run,
+//! and for the link that launched one; a burst opens one window; a link it
+//! does not declare opens none. A link for a window still to open never takes
+//! the place of the application's, one for a window that closed is refused
+//! as it arrives, and one that arrives as the application quits opens no
+//! window and is refused when the run ends. A link causes one opening of the
+//! main window, or rides the one under way, and is refused when it fails.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_app::app::{AppConfig, Application, ExitPolicy, WindowPolicy};
-use flui_app::testing::HeadlessRun;
+use flui_app::app::{
+    AppConfig, AppHandle, Application, CloseReason, CloseRequestHandler, CloseResponse, ExitPolicy,
+    WindowPolicy,
+};
+use flui_app::testing::{HeadlessRun, HeadlessRunHandle};
 use flui_native::HeadlessPlatform;
-use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
+use flui_platform::{Launch, OpenTarget, Opened, OpenedFile, PlatformWindow, WindowId};
 use flui_view::navigation::OpenDeclarations;
+use flui_view::{CloseGuard, PendingClose};
 use flui_widgets::prelude::*;
 use flui_widgets::{Router, SizedBox};
 
@@ -114,7 +129,7 @@ pub(crate) fn a_link_that_launched_the_app_opens_its_first_router_on_it() {
     drop(run);
 }
 
-pub(crate) fn a_link_goes_to_the_window_focused_last() {
+pub(crate) fn a_link_goes_to_the_main_window_whichever_window_is_focused() {
     let built = Built::default();
     let secondary = router("secondary", &built);
     let application = Application::new()
@@ -131,8 +146,9 @@ pub(crate) fn a_link_goes_to_the_window_focused_last() {
     let windows = run.open_windows();
     assert_eq!(windows.len(), 2, "both windows are open");
 
-    // Which headless window is which is the platform's order: the window
-    // that built the link's page names the one it reached.
+    // Whichever window has the focus, a link for the application opens in
+    // the main window (ADR-0339 §2): another window takes only links that
+    // address it.
     for window in &windows {
         window.simulate_focus(false);
     }
@@ -143,22 +159,14 @@ pub(crate) fn a_link_goes_to_the_window_focused_last() {
         run.run_owner_turn();
         run.open(link(&format!("myapp:///note/{id}"), Launch::Running));
         run.run_owner_turn();
-        let page = Page::Note { id };
-        let built_it = windows_that_built(&built, &page);
-        assert_eq!(
-            built_it.len(),
-            1,
-            "one window opened {page:?}: {built_it:?}"
-        );
-        reached.extend(built_it);
+        reached.extend(windows_that_built(&built, &Page::Note { id }));
         window.simulate_focus(false);
         run.run_owner_turn();
     }
-    reached.sort_unstable();
     assert_eq!(
         reached,
-        ["main", "secondary"],
-        "each link reached the window focused last"
+        ["main", "main"],
+        "each link reached the main window, whichever window was focused"
     );
     drop(run);
 }
@@ -224,6 +232,10 @@ pub(crate) fn a_panic_in_the_first_urls_navigation_does_not_lose_the_second() {
         built_page(&built, "main", &Page::Note { id: 2 }),
         "the second link opened: {:?}",
         built.borrow()
+    );
+    assert!(
+        run.is_running(),
+        "the open window's runtime held the hook's panic (ADR-0339 §6)"
     );
     drop(run);
 }
@@ -303,4 +315,805 @@ pub(crate) fn the_entry_functions_manifest_declares_what_a_run_opens() {
         !opens(Application::new(), "myapp:///note/3"),
         "once the entry returned, a run declares nothing"
     );
+}
+
+/// A resident run of `application` that declares [`DECLARES`] and keeps
+/// running with no window, whose main windows are [`router`]s named `main`.
+fn resident(built: &Built, application: Application) -> HeadlessRunHandle {
+    let built = Rc::clone(built);
+    HeadlessRun::start_resident(
+        application
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        move |_: &AppHandle| router("main", &built),
+    )
+}
+
+/// Run `count` owner turns.
+fn turns(run: &HeadlessRunHandle, count: usize) {
+    for _ in 0..count {
+        run.run_owner_turn();
+    }
+}
+
+pub(crate) fn a_link_with_no_window_reopens_the_main_window_on_it() {
+    let built = Built::default();
+    let run = resident(&built, Application::new());
+    turns(&run, 2);
+    assert!(
+        run.open_windows().is_empty(),
+        "a resident run starts with no window"
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 4);
+    assert_eq!(
+        run.open_windows().len(),
+        1,
+        "the link opened the main window"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the window opened on the link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "main", &INITIAL),
+        "the reopened window's Router opens on the link, never on its initial page: {:?}",
+        built.borrow()
+    );
+
+    // The last window closes and the application keeps running, as a macOS
+    // application does: the next link opens a window again.
+    for window in run.open_windows() {
+        assert!(window.simulate_close(), "the user closes the window");
+    }
+    turns(&run, 3);
+    assert!(run.open_windows().is_empty(), "the window closed");
+    assert!(run.is_running(), "an explicit quit keeps the run alive");
+    run.open(link("myapp:///note/4", Launch::Running));
+    turns(&run, 4);
+    assert_eq!(run.open_windows().len(), 1, "the next link opened a window");
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 4 }),
+        "the window opened on the next link: {:?}",
+        built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_that_launched_a_resident_app_opens_its_main_window_on_it() {
+    let built = Built::default();
+    let platform = HeadlessPlatform::new();
+    platform
+        .host_events()
+        .open(link("myapp:///note/3", Launch::Cold));
+    let factory_built = Rc::clone(&built);
+    let run = HeadlessRun::start_resident_on(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        move |_: &AppHandle| router("main", &factory_built),
+        platform,
+    );
+    turns(&run, 4);
+    assert_eq!(
+        run.open_windows().len(),
+        1,
+        "the link opened the main window"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the window opened on the link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "main", &INITIAL),
+        "its Router opens on the link: {:?}",
+        built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_no_declaration_admits_opens_no_window() {
+    let built = Built::default();
+    let run = resident(&built, Application::new());
+    turns(&run, 2);
+    run.open(link("other:///note/3", Launch::Running));
+    run.open(link("https://example.com/note/3", Launch::Running));
+    run.open(link("not a url", Launch::Running));
+    turns(&run, 4);
+    assert!(
+        run.open_windows().is_empty(),
+        "a link the application does not open shows no window"
+    );
+    assert!(built.borrow().is_empty(), "nothing was built");
+    drop(run);
+}
+
+pub(crate) fn a_burst_of_links_with_no_window_opens_one_window_on_the_last() {
+    let built = Built::default();
+    let run = resident(&built, Application::new());
+    turns(&run, 2);
+    // Nine links near the longest an opened URL may be, all before the
+    // window can open: the window opens on the last whatever came before.
+    let host = "a".repeat(8000);
+    for id in 21..=29 {
+        run.open(link(&format!("myapp://{host}/note/{id}"), Launch::Running));
+    }
+    turns(&run, 4);
+    assert_eq!(run.open_windows().len(), 1, "one window for the burst");
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 29 }),
+        "the window shows the last link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "main", &INITIAL),
+        "never its initial page: {:?}",
+        built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |app: &AppHandle| {
+            *ready.borrow_mut() = Some(app.clone());
+        }),
+    );
+    turns(&run, 2);
+    // A window the platform names that no installation in this run opens.
+    let elsewhere = WindowId::try_from_raw(999).expect("a nonzero id");
+    let ((), log) = flui_testing::capture(|| {
+        run.open(link("myapp:///note/3", Launch::Running));
+        run.open(kept(
+            ["myapp:///note/4".to_owned()],
+            [],
+            OpenTarget::Window(elsewhere),
+            Launch::Running,
+        ));
+        run.run_owner_turn();
+    });
+    assert_eq!(
+        log.count_containing("its window is not open"),
+        1,
+        "the link for a window nobody opens is refused as it arrives: {log}"
+    );
+    // The application shows its main window itself, as it may on any turn.
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    drop(
+        app.request_show_main_window()
+            .expect("the run accepts the show"),
+    );
+    turns(&run, 4);
+    assert_eq!(run.open_windows().len(), 1, "one main window opened");
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the application's link opened in its first window: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "main", &Page::Note { id: 4 }),
+        "another window's link never opens here: {:?}",
+        built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_for_a_closed_window_is_refused_as_it_arrives() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let secondary = router("secondary", &built);
+    let application = Application::new()
+        .declares(DECLARES)
+        .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit))
+        .on_ready(move |_| {
+            drop(
+                flui_app::open_window(AppConfig::new(), WindowPolicy::Isolated, secondary)
+                    .expect("an isolated window opens on the headless platform"),
+            );
+        });
+    let run = HeadlessRun::start(application, router("main", &built));
+    turns(&run, 2);
+    let windows = run.open_windows();
+    assert_eq!(windows.len(), 2, "both windows are open");
+    let closed = PlatformWindow::id(&windows[1]);
+    assert!(windows[1].simulate_close(), "the user closes one window");
+    turns(&run, 3);
+    assert_eq!(run.open_windows().len(), 1, "one window is left");
+
+    let ((), log) = flui_testing::capture(|| {
+        run.open(kept(
+            ["myapp:///note/5".to_owned()],
+            [],
+            OpenTarget::Window(closed),
+            Launch::Running,
+        ));
+        turns(&run, 3);
+        drop(run);
+    });
+    assert_eq!(
+        log.count_containing("its window closed"),
+        1,
+        "the link is refused as it arrives: {log}"
+    );
+    assert_eq!(
+        log.count_containing("the run ended"),
+        0,
+        "nothing waits for the closed window until the run ends: {log}"
+    );
+    assert!(
+        !built_page(&built, "main", &Page::Note { id: 5 }),
+        "the window left never opens another window's link: {:?}",
+        built.borrow()
+    );
+}
+
+pub(crate) fn a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |app: &AppHandle| {
+            *ready.borrow_mut() = Some(app.clone());
+        }),
+    );
+    turns(&run, 2);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let ((), log) = flui_testing::capture(|| {
+        app.request_quit().expect("the run accepts its quit");
+        run.open(link("myapp:///note/3", Launch::Running));
+        turns(&run, 4);
+        assert!(
+            run.open_windows().is_empty(),
+            "a link that arrives as the application quits opens no window"
+        );
+        drop(run);
+    });
+    assert_eq!(
+        log.count_containing("the run ended"),
+        1,
+        "the link is refused when the run ends: {log}"
+    );
+    assert!(built.borrow().is_empty(), "nothing was built");
+}
+
+pub(crate) fn a_panic_in_on_open_files_ends_the_run_and_refuses_the_link() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let run = resident(
+        &built,
+        Application::new().on_open_files(|_: &[OpenedFile]| panic!("the files callback panics")),
+    );
+    turns(&run, 2);
+    let ((), log) = flui_testing::capture(|| {
+        run.open(kept(
+            ["myapp:///note/3".to_owned()],
+            [OpenedFile::new("/a.note")],
+            OpenTarget::Application,
+            Launch::Running,
+        ));
+        turns(&run, 4);
+        assert!(
+            !run.is_running(),
+            "the callback's panic ends the run (ADR-0258 §4)"
+        );
+        assert!(run.open_windows().is_empty(), "no window opens as it ends");
+        let report = run.join().expect("the run reports its end");
+        assert!(
+            matches!(&report.exit, flui_app::testing::RunExit::Panicked { message } if message == "the files callback panics"),
+            "the run ends with the callback's panic: {:?}",
+            report.exit
+        );
+    });
+    assert_eq!(
+        log.count_containing("the run ended"),
+        1,
+        "the link that came with the files is refused as the run ends, not left waiting: {log}"
+    );
+}
+
+/// A run with its main window closed and the run going on, the window's
+/// renderer kept so a test can refuse the next window's GPU slot.
+fn closed_main_window(built: &Built) -> (HeadlessRunHandle, flui_app::testing::StandInRenderer) {
+    let run = HeadlessRun::start(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        router("main", built),
+    );
+    turns(&run, 2);
+    let window = run.open_windows().pop().expect("the main window opened");
+    let renderer = run.renderer(&window).expect("it renders with a stand-in");
+    assert!(window.simulate_close(), "the user closes it");
+    turns(&run, 3);
+    assert!(run.open_windows().is_empty(), "no window is left");
+    built.borrow_mut().clear();
+    (run, renderer)
+}
+
+pub(crate) fn a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let fail = Rc::new(std::cell::Cell::new(false));
+    let attempts = Rc::new(std::cell::Cell::new(0_u32));
+    let (failing, counted, factory_built) =
+        (Rc::clone(&fail), Rc::clone(&attempts), Rc::clone(&built));
+    let run = HeadlessRun::start_resident(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        move |_: &AppHandle| {
+            counted.set(counted.get() + 1);
+            // The main window fails before its UI runtime is built, so no
+            // loan exists: as a platform that refuses the window does.
+            assert!(!failing.get(), "the main window cannot be built");
+            router("main", &factory_built)
+        },
+    );
+    turns(&run, 2);
+    fail.set(true);
+    let ((), log) = flui_testing::capture(|| {
+        run.open(link("myapp:///note/3", Launch::Running));
+        turns(&run, 30);
+    });
+    assert_eq!(attempts.get(), 1, "the link caused one opening: {log}");
+    assert_eq!(
+        log.count_containing("its window could not be opened"),
+        1,
+        "and is refused once that opening failed: {log}"
+    );
+    assert!(run.open_windows().is_empty(), "no window is open");
+    drop(run);
+}
+
+pub(crate) fn a_link_goes_to_the_main_window_not_a_window_its_files_open() {
+    let built = Built::default();
+    let document_built = Rc::clone(&built);
+    let run = resident(
+        &built,
+        Application::new().on_open_files(move |_: &[OpenedFile]| {
+            // The application opens a document window for the file in the
+            // batch the link came in.
+            drop(
+                flui_app::open_window(
+                    AppConfig::new(),
+                    WindowPolicy::Isolated,
+                    router("document", &document_built),
+                )
+                .expect("an isolated window opens on the headless platform"),
+            );
+        }),
+    );
+    turns(&run, 2);
+    run.open(kept(
+        ["myapp:///note/3".to_owned()],
+        [OpenedFile::new("/a.note")],
+        OpenTarget::Application,
+        Launch::Running,
+    ));
+    turns(&run, 6);
+    assert_eq!(
+        run.open_windows().len(),
+        2,
+        "the document and the main window"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the main window opened on the link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "document", &Page::Note { id: 3 }),
+        "the document window never took it: {:?}",
+        built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let (run, renderer) = closed_main_window(&built);
+    // Every window is refused its GPU slot, as on a host whose device cannot
+    // draw the window: the link causes one opening, and then it is refused.
+    let ((), log) = flui_testing::capture(|| {
+        renderer.refuse_next_window();
+        run.open(link("myapp:///note/3", Launch::Running));
+        for _ in 0..30 {
+            renderer.refuse_next_window();
+            run.run_owner_turn();
+        }
+    });
+    assert_eq!(
+        log.count_containing("GPU init failed"),
+        1,
+        "the link caused one opening of the main window: {log}"
+    );
+    assert_eq!(
+        log.count_containing("its window could not be opened"),
+        1,
+        "and is refused once that opening failed: {log}"
+    );
+    assert!(run.open_windows().is_empty(), "no window is open");
+    assert!(built.borrow().is_empty(), "nothing was built");
+    drop(run);
+}
+
+pub(crate) fn a_link_goes_to_the_main_window_never_a_hidden_helper() {
+    let built = Built::default();
+    let opening = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&opening);
+    let helper_built = Rc::clone(&built);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |_| {
+            *ready.borrow_mut() = Some(
+                flui_app::open_window(
+                    AppConfig::new(),
+                    WindowPolicy::Isolated,
+                    router("helper", &helper_built),
+                )
+                .expect("an isolated window opens on the headless platform"),
+            );
+        }),
+    );
+    turns(&run, 3);
+    let address = opening
+        .borrow_mut()
+        .as_mut()
+        .expect("on_ready opened the helper")
+        .try_result()
+        .expect("the helper's opening is answered")
+        .expect("the helper opened");
+    // The helper is the window opened first, and the application hides it.
+    let helper = flui_app::app::window_handle(address).expect("the helper's handle");
+    helper.hide().expect("the helper takes the hide");
+    turns(&run, 3);
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 4);
+    assert_eq!(
+        run.open_windows().len(),
+        2,
+        "the link reopened the main window beside the helper"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the main window opened on the link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "helper", &Page::Note { id: 3 }),
+        "the helper never took it: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !helper.state().expect("the helper is open").visible,
+        "the helper stays hidden"
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_restores_the_minimized_window_it_opens_in() {
+    let built = Built::default();
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |app: &AppHandle| {
+            *ready.borrow_mut() = Some(app.clone());
+        }),
+    );
+    turns(&run, 2);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let mut shown = app
+        .request_show_main_window()
+        .expect("the run accepts the show");
+    turns(&run, 3);
+    let address = shown
+        .try_result()
+        .expect("the show is answered")
+        .expect("the main window opened");
+    let window = flui_app::app::window_handle(address).expect("the main window's handle");
+    window
+        .set_mode(flui_platform::WindowMode::Minimized)
+        .expect("the window takes the minimize");
+    turns(&run, 3);
+    assert_eq!(
+        window.state().expect("open").mode,
+        flui_platform::WindowMode::Minimized,
+        "the window is minimized"
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 3);
+    assert_ne!(
+        window.state().expect("open").mode,
+        flui_platform::WindowMode::Minimized,
+        "the link restores the window it opened in"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "{:?}",
+        built.borrow()
+    );
+    drop(run);
+}
+
+pub(crate) fn a_link_shows_the_hidden_window_it_opens_in() {
+    let built = Built::default();
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let run = resident(
+        &built,
+        Application::new().on_ready(move |app: &AppHandle| {
+            *ready.borrow_mut() = Some(app.clone());
+        }),
+    );
+    turns(&run, 2);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let mut shown = app
+        .request_show_main_window()
+        .expect("the run accepts the show");
+    turns(&run, 3);
+    let address = shown
+        .try_result()
+        .expect("the show is answered")
+        .expect("the main window opened");
+    let window = flui_app::app::window_handle(address).expect("the main window's handle");
+    // A tray application hides its only window and keeps running.
+    window.hide().expect("the window takes the hide");
+    turns(&run, 3);
+    assert!(
+        !window.state().expect("open").visible,
+        "the window is hidden"
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 3);
+    assert!(
+        window.state().expect("open").visible,
+        "the link shows the window it opened in"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "{:?}",
+        built.borrow()
+    );
+
+    window.hide().expect("the window takes the hide");
+    turns(&run, 3);
+    run.open(link("other:///note/4", Launch::Running));
+    turns(&run, 3);
+    assert!(
+        !window.state().expect("open").visible,
+        "a link the application does not open shows nothing"
+    );
+    drop(run);
+}
+
+/// A root that hands out its window's close guard.
+#[derive(Clone, StatefulView)]
+struct Guarded {
+    guard: Rc<RefCell<Option<CloseGuard>>>,
+}
+
+struct GuardedState {
+    guard: Rc<RefCell<Option<CloseGuard>>>,
+}
+
+impl StatefulView for Guarded {
+    type State = GuardedState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        GuardedState {
+            guard: Rc::clone(&self.guard),
+        }
+    }
+}
+
+impl ViewState<Guarded> for GuardedState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.guard.replace(ctx.close_guard());
+    }
+
+    fn build(&self, _view: &Guarded, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// A resident run with no main window, whose only window keeps itself open
+/// for a quit, so the quit is deferred on its recorded close; the user then
+/// clicks the application's Dock icon. `resolve` decides the recorded close.
+fn reopen_during_a_deferred_quit(resolve: impl FnOnce(PendingClose)) -> (HeadlessRunHandle, Built) {
+    let built = Built::default();
+    let guard = Rc::new(RefCell::new(None));
+    let handle = Rc::new(RefCell::new(None));
+    let ready = Rc::clone(&handle);
+    let root = Guarded {
+        guard: Rc::clone(&guard),
+    };
+    let platform = HeadlessPlatform::new();
+    let events = platform.host_events();
+    let factory_built = Rc::clone(&built);
+    let run = HeadlessRun::start_resident_on(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit))
+            .on_ready(move |app: &AppHandle| {
+                *ready.borrow_mut() = Some(app.clone());
+                let keeps_open_for_a_quit = CloseRequestHandler::new(|request| {
+                    if request.reason() == CloseReason::Program {
+                        CloseResponse::KeepOpen
+                    } else {
+                        CloseResponse::Close
+                    }
+                });
+                drop(
+                    flui_app::open_window(
+                        AppConfig::new().close_request_handler(keeps_open_for_a_quit),
+                        WindowPolicy::Isolated,
+                        root,
+                    )
+                    .expect("an isolated window opens on the headless platform"),
+                );
+            }),
+        move |_: &AppHandle| router("main", &factory_built),
+        platform,
+    );
+    turns(&run, 2);
+    assert_eq!(run.open_windows().len(), 1, "the guarded window is open");
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    app.request_quit().expect("the run accepts its quit");
+    turns(&run, 2);
+    let pending = guard
+        .borrow()
+        .as_ref()
+        .expect("the guarded root mounted")
+        .pending()
+        .expect("the quit waits on the recorded close");
+    events.reopen();
+    turns(&run, 3);
+    assert_eq!(
+        run.open_windows().len(),
+        1,
+        "no main window opens while the quit is deferred"
+    );
+    resolve(pending);
+    turns(&run, 4);
+    (run, built)
+}
+
+pub(crate) fn a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned() {
+    let (run, built) = reopen_during_a_deferred_quit(|pending| {
+        pending.stay_open().expect("the record is the current one");
+    });
+    assert!(run.is_running(), "the abandoned quit leaves the run going");
+    assert_eq!(
+        run.open_windows().len(),
+        2,
+        "the main window the reopen asked for opened"
+    );
+    assert!(built_page(&built, "main", &INITIAL), "{:?}", built.borrow());
+    drop(run);
+}
+
+pub(crate) fn a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead() {
+    let (run, built) = reopen_during_a_deferred_quit(|pending| {
+        pending
+            .discard_and_close()
+            .expect("the record is the current one");
+    });
+    assert!(!run.is_running(), "the quit went ahead");
+    assert!(built.borrow().is_empty(), "no main window was built");
+    drop(run);
+}
+
+pub(crate) fn a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let fail = Rc::new(std::cell::Cell::new(false));
+    let attempts = Rc::new(std::cell::Cell::new(0_u32));
+    let handle = Rc::new(RefCell::new(None));
+    let (failing, counted, factory_built, ready) = (
+        Rc::clone(&fail),
+        Rc::clone(&attempts),
+        Rc::clone(&built),
+        Rc::clone(&handle),
+    );
+    let run = HeadlessRun::start_resident(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit))
+            .on_ready(move |app: &AppHandle| {
+                *ready.borrow_mut() = Some(app.clone());
+            }),
+        move |_: &AppHandle| {
+            counted.set(counted.get() + 1);
+            assert!(!failing.get(), "the main window cannot be built");
+            router("main", &factory_built)
+        },
+    );
+    turns(&run, 2);
+    fail.set(true);
+    let app = handle.borrow_mut().take().expect("on_ready ran");
+    let ((), log) = flui_testing::capture(|| {
+        // The application asks for its main window, and the link arrives
+        // while that opening is under way: the link is bound to it.
+        drop(
+            app.request_show_main_window()
+                .expect("the run accepts the show"),
+        );
+        run.open(link("myapp:///note/3", Launch::Running));
+        turns(&run, 30);
+    });
+    assert_eq!(
+        attempts.get(),
+        1,
+        "the link found an opening under way and caused none of its own: {log}"
+    );
+    assert_eq!(
+        log.count_containing("its window could not be opened"),
+        1,
+        "the link is refused once the opening it found failed: {log}"
+    );
+    assert!(run.open_windows().is_empty(), "no window is open");
+    drop(run);
+}
+
+pub(crate) fn a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime()
+ {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let factory_built = Rc::clone(&built);
+    let run = HeadlessRun::start_resident(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        move |_: &AppHandle| {
+            router("main", &factory_built).on_unknown(|_| panic!("the unknown-route hook panics"))
+        },
+    );
+    turns(&run, 2);
+    // The link reopens the main window, whose Router finds no route for it
+    // and whose hook panics: user code in the window's navigation, held by
+    // that window's UI runtime as in a window already open.
+    let ((), log) = flui_testing::capture(|| {
+        run.open(link("myapp:///nowhere", Launch::Running));
+        turns(&run, 6);
+    });
+    assert_eq!(
+        log.count_containing("application callback panic contained"),
+        1,
+        "the window's runtime holds the hook's panic: {log}"
+    );
+    assert!(run.is_running(), "the run goes on: {log}");
+    assert_eq!(
+        run.open_windows().len(),
+        1,
+        "the window the link reopened stays: {log}"
+    );
+    assert!(
+        built_page(&built, "main", &INITIAL),
+        "its Router left its stack as it was: {:?}",
+        built.borrow()
+    );
+
+    run.open(link("myapp:///note/3", Launch::Running));
+    turns(&run, 3);
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the next link reaches the window: {:?}",
+        built.borrow()
+    );
+    drop(run);
 }

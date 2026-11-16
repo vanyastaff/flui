@@ -28,7 +28,9 @@ mod cases {
     use std::time::Instant;
 
     use flui_native::Platform as _;
-    use flui_native::testing::clipboard::a_concealed_write_stays_out_of_history;
+    use flui_native::testing::clipboard::{
+        a_concealed_write_stays_out_of_history, write_unobserved,
+    };
     use flui_native::testing::wayland::selection_offers_concealed_hint;
     use flui_platform::ClipboardWrite;
     use flui_testing::window_commands::AdmitAndApply as _;
@@ -58,7 +60,7 @@ mod cases {
     }
 
     fn write(client: &Client, text: &str) {
-        client.platform.clipboard().write_text(text.to_owned());
+        write_unobserved(&*client.platform.clipboard(), ClipboardWrite::text(text));
     }
 
     fn read(client: &Client) -> Option<std::sync::Arc<str>> {
@@ -100,10 +102,10 @@ mod cases {
         // must follow which source the compositor kept: the one it dropped
         // is never cancelled, and owning it would keep the first reading its
         // own text after the second client copies.
-        first
-            .platform
-            .clipboard()
-            .write(ClipboardWrite::text("concealed by the first").concealed());
+        write_unobserved(
+            &*first.platform.clipboard(),
+            ClipboardWrite::text("concealed by the first").concealed(),
+        );
         first.turn();
 
         let (said, heard) = mpsc::channel();

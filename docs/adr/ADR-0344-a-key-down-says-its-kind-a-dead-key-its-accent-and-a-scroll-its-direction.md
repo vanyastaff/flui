@@ -5,7 +5,7 @@
 - **Supersedes:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) §1 for a key event's
   state and repeat (they were private fields that had to agree), §2's keys bullet for `KeyRepeat`
   and a dead key as a `Named` key, and §3 for `KeyRepeat` among the flag enums
-- **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (the generated W3C
+- **Related:** [ADR-0342](ADR-0342-a-value-added-to-a-closed-union-breaks-the-agent-protocol.md) (a variant added to a closed union is a break), [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §4 (the generated W3C
   tables), [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the recording mirrors
   the vocabulary variant by variant), [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (the
   protocol schema a break is listed in)
@@ -101,15 +101,15 @@ not by pointer id and time; `docs/gaps.md` holds that shape.
 
 The recording's key state is `down`, `repeat`, `unpaired` or `up`, its key has a `dead` variant
 and its scroll an optional `direction`; the format is version 4 and refuses version 3. Protocol
-0.14 lists the removed names in `BREAKING`, which gains a `removed` list beside `renamed`.
+0.15 is a break (ADR-0342 §1 for the added variants) and lists the removed names in `BREAKING`, which gains a `removed` list beside `renamed`.
 
 ### Consequences
 
 - Good, because a release can no longer claim a repeat, and a consumer reads one field.
 - Good, because a hardware dead key on Android types the composed character, and a field gets
   the accent to show while it waits.
-- Bad, because every place that built a key event changed, and a 0.13 agent client is refused by
-  a 0.14 application.
+- Bad, because every place that built a key event changed, and a 0.14 agent client is refused by
+  a 0.15 application.
 - Neutral, because Windows, X11, Android and iOS report no direction: their
   scrolls say `Unknown` (`docs/gaps.md`).
 

@@ -512,7 +512,7 @@ pub(crate) struct AppRuntime {
     /// written what the application persisted and then resumed.
     pub(super) terminal: Option<Box<dyn std::any::Any + Send>>,
     /// What this host gives back on a memory-pressure notice: one receiver every
-    /// UI runtime it builds shares (`runner::host::build_ui_runtime`).
+    /// UI runtime it builds shares (`runner::host::build_lending_ui_runtime`).
     pub(super) host_memory: Arc<super::host_memory::HostMemory>,
     /// The run's window placements: where the host acquires the storage they
     /// are kept in, the windows that remember one and the writes still out
@@ -1413,7 +1413,7 @@ impl AppRuntime {
 
     /// Install the host's byte storage over `store`, or none, once, when the
     /// host starts: every UI runtime the runners and secondary windows build
-    /// afterwards takes this one (`runner::host::build_ui_runtime`). `None`
+    /// afterwards takes this one (`runner::host::build_lending_ui_runtime`). `None`
     /// replaces a storage an earlier run on this thread left, whose IO pool
     /// is gone. Its IO runs on this loop's execution services, resolved here
     /// if no runner resolved them yet, so install the host's executors first.

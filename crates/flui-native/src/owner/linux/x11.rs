@@ -772,9 +772,9 @@ pub(crate) trait LoopWindows: OpenWindows {
     /// destroyed once its handler is.
     fn release(&self);
 
-    /// Whether a window is open and shown. A later launch made while none is
-    /// asks the application to reopen; a window the application hid stays
-    /// hidden until it shows the window itself.
+    /// Whether a window is open and shown. A later launch that opens nothing,
+    /// made while none is, asks the application to reopen; a window the
+    /// application hid stays hidden until it shows the window itself.
     fn shows_any(&self) -> bool;
 
     /// Another instance of the application was launched and handed its
@@ -1145,22 +1145,21 @@ impl X11Loop {
         let Some(instance) = &self.instance else {
             return;
         };
-        // One launch at a time, each claimed only once the reopen before it
-        // ran: one waiting behind a handler that blocks stays withdrawable,
+        // One launch at a time, each answered before any handler it reaches
+        // runs: one waiting behind a handler that blocks stays withdrawable,
         // so its caller never runs on its own while this instance opens it.
+        // A launch that opens nothing asks an application that shows no
+        // window (one that outlives its last, or hid it) to reopen.
         while instance.has_waiting() {
-            // An application that shows no window (one that outlives its
-            // last, or hid it) is asked to reopen, as a Dock click asks on
-            // macOS.
-            if !self.windows.shows_any() {
-                self.app
-                    .reopen()
-                    .or_contain((), "a launch another instance forwarded");
-            }
             let Some((forwarded, delivery)) = instance.take_next() else {
                 break;
             };
-            if crate::owner::single_instance::hand_on(&self.app, forwarded.opened(), delivery) {
+            if crate::owner::single_instance::hand_on_forwarded(
+                &self.app,
+                forwarded.opened(),
+                delivery,
+                || self.windows.shows_any(),
+            ) {
                 self.windows.activate_forwarded(forwarded.token.as_deref());
             }
         }

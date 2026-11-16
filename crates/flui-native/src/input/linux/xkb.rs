@@ -340,16 +340,16 @@ mod meaning {
         '\u{2c7}', '\u{b8}', '\u{2db}', '\u{37a}',
     ];
 
-    /// Whether `keysym` is a dead key, and the accent it leaves pending:
-    /// `None` for no dead key, `Some(None)` for one whose accent has no
-    /// spacing form here (`dead_belowdot`, `dead_greek`, …).
+    /// The dead key `keysym` is, with the accent it leaves pending (none for
+    /// an accent with no spacing form here: `dead_belowdot`, `dead_greek`, …),
+    /// or `None` when it is no dead key.
     #[must_use]
-    pub fn dead_accent(keysym: u32) -> Option<Option<char>> {
+    pub fn dead_key(keysym: u32) -> Option<Key> {
         if !(DEAD_KEYS.0..=DEAD_KEYS.1).contains(&keysym) {
             return None;
         }
         let index = usize::try_from(keysym - DEAD_KEYS.0).ok()?;
-        Some(DEAD_ACCENTS.get(index).copied())
+        Some(Key::Dead(DEAD_ACCENTS.get(index).copied()))
     }
 
     /// What a key whose keysym is `keysym` means, given the text XKB says it
@@ -358,8 +358,8 @@ mod meaning {
     /// character (Ctrl+S types `0x13`) is no text.
     #[must_use]
     pub fn key_of(keysym: u32, text: &str) -> Key {
-        if let Some(accent) = dead_accent(keysym) {
-            return Key::Dead(accent);
+        if let Some(dead) = dead_key(keysym) {
+            return dead;
         }
         if let Some(named) = keysym_key(keysym) {
             return Key::Named(named);
@@ -999,7 +999,7 @@ mod keyboard {
             // SAFETY: the live compose state.
             match unsafe { (compose.api.xkb_compose_state_get_status)(state) } {
                 xkb_compose_status::XKB_COMPOSE_COMPOSING => {
-                    Some(Key::Dead(dead_accent(keysym).flatten()))
+                    Some(dead_key(keysym).unwrap_or(Key::Dead(None)))
                 }
                 xkb_compose_status::XKB_COMPOSE_COMPOSED => {
                     let mut buffer = [0 as c_char; 64];

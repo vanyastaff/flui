@@ -388,8 +388,12 @@ fn start_browser(executable: &Path, dialect: Dialect) -> (LaunchedBrowser, Box<d
 fn drives_a_page(executable: &Path, dialect: Dialect) {
     let site = tempfile::tempdir().expect("a site directory");
     std::fs::write(site.path().join("index.html"), APP_PAGE).expect("the page is written");
-    let server = crate::serve::DevServer::start(site.path().to_path_buf(), 0)
-        .expect("the dev server starts");
+    let server = crate::serve::DevServer::start(
+        site.path().to_path_buf(),
+        0,
+        crate::build::web_page::BaseHref::root(),
+    )
+    .expect("the dev server starts");
     let (browser, mut link) = start_browser(executable, dialect);
 
     let project = tempfile::tempdir().expect("a project directory");

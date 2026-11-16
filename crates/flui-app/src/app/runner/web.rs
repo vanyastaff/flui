@@ -68,7 +68,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0312 §6) was installed with the
-        // owner platform; the ui_runtime below takes it through `build_ui_runtime`.
+        // owner platform; the ui_runtime below takes it through `build_lending_ui_runtime`.
         //
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
@@ -96,8 +96,12 @@ where
         // DPR to the freshly built pipeline before returning.
         let geometry = super::window_install::SurfaceGeometry::of(window.as_ref());
         let scale_factor = geometry.scale;
-        let ui_runtime = match super::host::build_ui_runtime(presentation_window, scale_factor) {
-            Ok(ui_runtime) => ui_runtime,
+        let (ui_runtime, opened) = match super::host::build_lending_ui_runtime(
+            presentation_window,
+            scale_factor,
+            true, // the run's main window
+        ) {
+            Ok(built) => built,
             Err(error) => {
                 tracing::error!(%error, "UiRuntime construction failed");
                 return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
@@ -155,6 +159,7 @@ where
         let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         let size = geometry.physical;
         let mut installation = prepare_platform_ui_runtime(ui_runtime, std::rc::Rc::clone(&window));
+        installation.lend_opened(opened);
         installation.dev_agent(agent_window);
         // The canvas is a slot of the loop's raster executor (ADR-0305), placed
         // once the page's GPU context arrives: the owner thread cannot wait for

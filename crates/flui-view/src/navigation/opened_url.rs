@@ -314,15 +314,25 @@ impl OpenDeclarations {
         self.url_schemes
     }
 
-    /// Whether the application declared `url`: an `http` or `https` URL by
-    /// its host, any other by its scheme.
+    /// Whether the application opens `url`: one of `page_origin`, the page a
+    /// web application runs in, compared whole ([`OpenedUrl::same_origin`]);
+    /// else one it declared, an `http` or `https` URL by its host and any
+    /// other by its scheme. The one rule the UI runtime and the application
+    /// runner admit an opened URL by.
     ///
     /// # Errors
     ///
     /// [`OpenUrlRefused::UndeclaredDomain`] for a web URL whose host is not an
     /// associated domain, or that has none; [`OpenUrlRefused::UndeclaredScheme`]
     /// for any other scheme the application did not declare.
-    pub fn admit(&self, url: &OpenedUrl) -> Result<(), OpenUrlRefused> {
+    pub fn admit(
+        &self,
+        url: &OpenedUrl,
+        page_origin: Option<&OpenedUrl>,
+    ) -> Result<(), OpenUrlRefused> {
+        if page_origin.is_some_and(|origin| origin.same_origin(url)) {
+            return Ok(());
+        }
         let declared = |list: &[&str], value: &str| {
             list.iter()
                 .any(|entry| entry.trim_end_matches('.').eq_ignore_ascii_case(value))
