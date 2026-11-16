@@ -15,7 +15,15 @@
 //! separator, and the file it names is opened only when its canonical path
 //! is still inside the directory, so a symbolic link cannot lead out. A
 //! missing asset (a path whose last segment has an extension) and any
-//! request that is not a navigation get a 404, never the page.
+//! request that is not a navigation get a 404, never the page. A navigation
+//! is a request whose `Sec-Fetch-Mode` is `navigate`; from a browser that
+//! sends no `Sec-Fetch-Mode`, one whose `Accept` names HTML. A path names a
+//! file only as the file's name is spelled, whatever case the file system
+//! ignores. Only a `Host` of this machine's loopback (`localhost`,
+//! `127.0.0.1`, `[::1]`) is answered, so a page of another site whose name
+//! is rebound to 127.0.0.1 gets a 421; at most `MAX_CONNECTIONS` are served
+//! at once, and a request's head must arrive within `REQUEST_HEAD`. Every
+//! response is `nosniff`.
 //!
 //! Standard library only: a thread accepts, a thread per connection serves,
 //! and every response closes its connection. A browser fetching a dozen
@@ -25,10 +33,10 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::build::web_page::BaseHref;
 
@@ -72,6 +80,8 @@ struct Shared {
     changed: Condvar,
     lock: Mutex<()>,
     stop: AtomicBool,
+    /// The connections being served now, at most `MAX_CONNECTIONS`.
+    connections: AtomicUsize,
 }
 
 impl DevServer {
@@ -86,6 +96,7 @@ impl DevServer {
             changed: Condvar::new(),
             lock: Mutex::new(()),
             stop: AtomicBool::new(false),
+            connections: AtomicUsize::new(0),
         });
         let accept = {
             let shared = Arc::clone(&shared);
@@ -170,12 +181,32 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
             return;
         }
         let Ok(stream) = stream else { continue };
+        // Past the bound the connection is closed unanswered: a client that
+        // opens connections without end gets no thread for each.
+        if shared.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+            shared.connections.fetch_sub(1, Ordering::SeqCst);
+            continue;
+        }
         let shared = Arc::clone(shared);
-        let _ = thread::Builder::new()
+        let spawned = thread::Builder::new()
             .name("flui-dev-server-conn".into())
-            .spawn(move || {
-                let _ = serve_connection(stream, &shared);
+            .spawn({
+                let shared = Arc::clone(&shared);
+                move || {
+                    // Given back however the connection ends, a panic included.
+                    struct Held(Arc<Shared>);
+                    impl Drop for Held {
+                        fn drop(&mut self) {
+                            self.0.connections.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    let held = Held(shared);
+                    let _ = serve_connection(stream, &held.0);
+                }
             });
+        if spawned.is_err() {
+            shared.connections.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -204,9 +235,12 @@ struct Request {
     /// Path without the query string.
     path: String,
     query: String,
-    /// The browser is navigating to the path (`Sec-Fetch-Mode: navigate`, or
-    /// an `Accept` that names HTML), not fetching an asset.
+    /// The browser is navigating to the path, not fetching: its
+    /// `Sec-Fetch-Mode` is `navigate`, or, from a browser that sends no
+    /// `Sec-Fetch-Mode`, its `Accept` names HTML.
     navigation: bool,
+    /// The `Host` header, when the request has one.
+    host: Option<String>,
 }
 
 struct Response {
@@ -228,7 +262,11 @@ impl Response {
 /// Parse the request line and the headers that tell a navigation from an
 /// asset fetch. `None` for an empty read.
 fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
-    let mut reader = BufReader::new(stream.try_clone()?).take(MAX_HEAD as u64);
+    let deadline = Deadline {
+        stream: stream.try_clone()?,
+        until: Instant::now() + REQUEST_HEAD,
+    };
+    let mut reader = BufReader::new(deadline).take(MAX_HEAD as u64);
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
         return Ok(None);
@@ -238,7 +276,7 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
         return Ok(None);
     };
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    let mut navigation = false;
+    let (mut fetch_mode, mut accepts_html, mut host) = (None, false, None);
     let mut header = String::new();
     loop {
         header.clear();
@@ -247,25 +285,84 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
         }
         if let Some((name, value)) = header.split_once(':') {
             let value = value.trim();
-            navigation |= (name.eq_ignore_ascii_case("sec-fetch-mode")
-                && value.eq_ignore_ascii_case("navigate"))
-                || (name.eq_ignore_ascii_case("accept")
-                    && value
-                        .split(',')
-                        .any(|kind| kind.trim().starts_with("text/html")));
+            if name.eq_ignore_ascii_case("sec-fetch-mode") {
+                fetch_mode = Some(value.eq_ignore_ascii_case("navigate"));
+            } else if name.eq_ignore_ascii_case("accept") {
+                accepts_html = value
+                    .split(',')
+                    .any(|kind| kind.trim().starts_with("text/html"));
+            } else if name.eq_ignore_ascii_case("host") {
+                host = Some(value.to_owned());
+            }
         }
     }
     Ok(Some(Request {
         method: method.to_string(),
         path: path.to_string(),
         query: query.to_string(),
-        navigation,
+        // A browser that sends `Sec-Fetch-Mode` says what the request is; an
+        // older one is navigating when it asks for HTML.
+        navigation: fetch_mode.unwrap_or(accepts_html),
+        host,
     }))
+}
+
+/// How long a client has to send a request's head, all of it: a client
+/// that sends a byte at a time does not hold its connection for longer.
+const REQUEST_HEAD: Duration = Duration::from_secs(10);
+/// How many connections are served at once; one past them is closed.
+const MAX_CONNECTIONS: usize = 64;
+
+/// A stream whose reads end at `until`, however the bytes trickle in.
+struct Deadline {
+    stream: TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the request head took too long",
+            ));
+        }
+        self.stream.set_read_timeout(Some(left))?;
+        self.stream.read(buf)
+    }
+}
+
+/// Whether `host` (a `Host` header) names this machine's loopback, where the
+/// server listens: a page of another site that rebinds its name to
+/// 127.0.0.1 sends its own name, and is refused.
+fn is_loopback_host(host: &str) -> bool {
+    let name = if let Some(bracketed) = host.strip_prefix('[') {
+        bracketed.split(']').next().map(|name| format!("[{name}]"))
+    } else {
+        host.split(':').next().map(str::to_owned)
+    };
+    name.is_some_and(|name| {
+        matches!(
+            name.to_ascii_lowercase().as_str(),
+            "localhost" | "127.0.0.1" | "[::1]"
+        )
+    })
 }
 
 fn respond(request: &Request, shared: &Shared) -> Response {
     if request.method != "GET" && request.method != "HEAD" {
         return Response::text("405 Method Not Allowed", "GET or HEAD only\n");
+    }
+    if request
+        .host
+        .as_deref()
+        .is_some_and(|host| !is_loopback_host(host))
+    {
+        return Response::text(
+            "421 Misdirected Request",
+            "this server answers localhost only\n",
+        );
     }
     match request.path.as_str() {
         RELOAD_PATH => {
@@ -308,9 +405,15 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool) -> Response {
     let Some(relative) = safe_relative_path(request_path) else {
         return not_found();
     };
+    // Decided on the request, before `/` becomes `index.html`: a route ends
+    // in a segment with no extension, a trailing slash included.
+    let names_a_route = request_path
+        .rsplit('/')
+        .next()
+        .is_none_or(|segment| !segment.contains('.'));
     let (relative, body) = match read_inside(root, &relative) {
         Some(body) => (relative, body),
-        None if navigation && relative.extension().is_none() => {
+        None if navigation && names_a_route => {
             let page = PathBuf::from("index.html");
             match read_inside(root, &page) {
                 Some(body) => (page, body),
@@ -332,12 +435,15 @@ fn serve_file(root: &Path, request_path: &str, navigation: bool) -> Response {
     }
 }
 
-/// The bytes of the file `relative` names under `root`, when it is a file
-/// and its canonical path, every link followed, is still under `root`'s.
+/// The bytes of the file `relative` names under `root`, when it is a file,
+/// its canonical path, every link followed, is still under `root`'s, and it
+/// ends in `relative` as written: on a file system that ignores case,
+/// `/PKG/APP.JS` names no file, so a type is never decided on another
+/// spelling of the file's name.
 fn read_inside(root: &Path, relative: &Path) -> Option<Vec<u8>> {
     let root = root.canonicalize().ok()?;
     let file = root.join(relative).canonicalize().ok()?;
-    (file.starts_with(&root) && file.is_file())
+    (file.starts_with(&root) && file.ends_with(relative) && file.is_file())
         .then(|| std::fs::read(&file).ok())
         .flatten()
 }
@@ -428,7 +534,7 @@ fn inject_reload_script(html: &[u8]) -> Vec<u8> {
 fn write_response(stream: &mut TcpStream, response: &Response, head_only: bool) -> io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n",
         response.status,
         response.content_type,
         response.body.len()
@@ -447,17 +553,27 @@ mod tests {
         request(addr, method, target, "")
     }
 
+    /// What a browser's address bar or a link sends.
+    const NAVIGATION: &str =
+        "Accept: text/html,application/xhtml+xml,*/*;q=0.8\r\nSec-Fetch-Mode: navigate\r\n";
+
     /// A browser navigating to `target`, as its address bar or a link does.
     fn navigate(addr: SocketAddr, target: &str) -> (String, Vec<u8>) {
-        request(
-            addr,
-            "GET",
-            target,
-            "Accept: text/html,application/xhtml+xml,*/*;q=0.8\r\nSec-Fetch-Mode: navigate\r\n",
-        )
+        request(addr, "GET", target, NAVIGATION)
     }
 
     fn request(addr: SocketAddr, method: &str, target: &str, headers: &str) -> (String, Vec<u8>) {
+        request_to(addr, &addr.to_string(), method, target, headers)
+    }
+
+    /// A request whose `Host` header names `host`.
+    fn request_to(
+        addr: SocketAddr,
+        host: &str,
+        method: &str,
+        target: &str,
+        headers: &str,
+    ) -> (String, Vec<u8>) {
         let mut stream = TcpStream::connect(addr).expect("connect");
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
@@ -467,7 +583,7 @@ mod tests {
             .expect("request timeout");
         write!(
             stream,
-            "{method} {target} HTTP/1.1\r\nHost: x\r\n{headers}\r\n"
+            "{method} {target} HTTP/1.1\r\nHost: {host}\r\n{headers}\r\n"
         )
         .expect("request");
         read_response(&mut stream, method == "HEAD")
@@ -619,6 +735,7 @@ mod tests {
         assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
         assert!(head.contains("Content-Type: application/wasm"), "{head}");
         assert!(head.contains("Cache-Control: no-store"), "{head}");
+        assert!(head.contains("X-Content-Type-Options: nosniff"), "{head}");
         assert_eq!(body, b"\0asm");
         let (head, _) = get(server.addr, "GET", "/pkg/app.js?v=1");
         assert!(head.contains("Content-Type: text/javascript"), "{head}");
@@ -649,31 +766,108 @@ mod tests {
 
     fn a_navigation_to_a_route_gets_the_page_and_an_asset_never_does() {
         let (_dir, server) = fixture();
-        for route in ["/settings", "/settings/profile", "/a.b/c", "/pkg"] {
+        for route in [
+            "/settings",
+            "/settings/",
+            "/settings/profile/",
+            "/settings/profile",
+            "/a.b/c",
+            "/pkg",
+        ] {
             assert!(is_page(&navigate(server.addr, route)), "{route}");
         }
+        // A browser that sends no `Sec-Fetch-Mode` navigates when it asks for
+        // HTML.
+        let legacy = request(server.addr, "GET", "/settings", "Accept: text/html\r\n");
+        assert!(is_page(&legacy), "{}", legacy.0);
         let (head, _) = navigate(server.addr, "/settings/profile");
         assert!(head.contains("text/html"), "{head}");
-        // A fetch that is not a navigation, or a missing asset, is a 404.
-        for (target, navigation) in [
-            ("/settings/profile", false),
-            ("/missing.js", true),
-            ("/pkg/missing.wasm", true),
-            ("/settings/logo.png", true),
+        // A fetch that is not a navigation, or a missing asset, is a 404: a
+        // `fetch()` that asks for HTML says it is no navigation.
+        let fetch = "Accept: text/html\r\nSec-Fetch-Mode: cors\r\n";
+        for (target, headers) in [
+            ("/settings/profile", ""),
+            ("/settings/profile", fetch),
+            ("/missing.js", NAVIGATION),
+            ("/pkg/missing.wasm", NAVIGATION),
+            ("/settings/logo.png", NAVIGATION),
         ] {
-            let response = if navigation {
-                navigate(server.addr, target)
-            } else {
-                get(server.addr, "GET", target)
-            };
+            let response = request(server.addr, "GET", target, headers);
+            assert!(
+                response.0.starts_with("HTTP/1.1 404"),
+                "{target} {headers:?}: {}",
+                response.0
+            );
+        }
+        let (_, body) = navigate(server.addr, "/pkg/app.js");
+        assert_eq!(body, b"export default 1;", "a file is served as itself");
+        // Another spelling of a file's name is no file, whatever the file
+        // system makes of case.
+        for target in ["/PKG/APP.JS", "/INDEX.HTML", "/pkg/App.js"] {
+            let response = get(server.addr, "GET", target);
             assert!(
                 response.0.starts_with("HTTP/1.1 404"),
                 "{target}: {}",
                 response.0
             );
         }
-        let (_, body) = navigate(server.addr, "/pkg/app.js");
-        assert_eq!(body, b"export default 1;", "a file is served as itself");
+    }
+
+    fn a_request_for_another_host_is_refused() {
+        let (_dir, server) = fixture();
+        for host in [
+            "evil.example",
+            "evil.example:80",
+            "127.0.0.1.evil.example",
+            "[::2]",
+        ] {
+            let (head, _) = request_to(server.addr, host, "GET", "/pkg/app.js", "");
+            assert!(head.starts_with("HTTP/1.1 421"), "{host}: {head}");
+        }
+        for host in [
+            "localhost",
+            "LOCALHOST:4000",
+            "127.0.0.1",
+            "127.0.0.1:9",
+            "[::1]:9",
+        ] {
+            let (head, _) = request_to(server.addr, host, "GET", "/pkg/app.js", "");
+            assert!(head.starts_with("HTTP/1.1 200"), "{host}: {head}");
+        }
+    }
+
+    fn a_request_head_that_trickles_is_cut_off_at_its_deadline() {
+        let (_dir, server) = fixture();
+        let mut stream = TcpStream::connect(server.addr).expect("connect");
+        stream
+            .set_read_timeout(Some(REQUEST_HEAD + Duration::from_secs(10)))
+            .expect("a timeout");
+        let started = Instant::now();
+        // A byte now and then, never the end of the head.
+        let mut cut = false;
+        for _ in 0..40 {
+            if stream.write_all(b"G").is_err() {
+                cut = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+            let mut probe = [0_u8; 1];
+            stream
+                .set_nonblocking(true)
+                .expect("non-blocking for the probe");
+            let closed = matches!(stream.read(&mut probe), Ok(0));
+            stream.set_nonblocking(false).expect("blocking again");
+            if closed {
+                cut = true;
+                break;
+            }
+        }
+        assert!(cut, "the connection outlived its head's deadline");
+        assert!(
+            started.elapsed() < REQUEST_HEAD + Duration::from_secs(5),
+            "cut at the deadline, not per read: {:?}",
+            started.elapsed()
+        );
     }
 
     fn encoded_traversal_and_foreign_paths_are_404_even_for_a_navigation() {
@@ -772,6 +966,14 @@ mod tests {
             (
                 "a build served under its base path is reached only there",
                 a_build_served_under_its_base_path_is_reached_only_there,
+            ),
+            (
+                "a request for another host is refused",
+                a_request_for_another_host_is_refused,
+            ),
+            (
+                "a request head that trickles is cut off at its deadline",
+                a_request_head_that_trickles_is_cut_off_at_its_deadline,
             ),
             (
                 "serves files with their mime types and no caching",

@@ -10,7 +10,7 @@
 //! viewport with the three inside it. A page that supplies a `<canvas
 //! id="flui-canvas">` owns its layout: the two hosts follow the canvas as its
 //! next siblings, and when the window retires the canvas gets back
-//! everything the window wrote on it ([`PAGE_CANVAS_ATTRIBUTES`] and its
+//! everything the window wrote on it (`owner::web::CANVAS_ATTRIBUTES` and its
 //! inline style, restored through the CSSOM, which a Content Security Policy
 //! that refuses inline style attributes still allows).
 //!
@@ -32,7 +32,7 @@ use flui_foundation::geometry::EdgeInsets;
 use wasm_bindgen::{JsCast as _, JsValue};
 use web_sys::{Document, HtmlCanvasElement, HtmlElement};
 
-use crate::owner::web::HostSlots;
+use crate::owner::web::{CanvasWrites, HostSlots};
 
 /// The id a page gives its own canvas.
 const PAGE_CANVAS_ID: &str = "flui-canvas";
@@ -52,13 +52,6 @@ const SAFE_AREA_PADDING: [(&str, &str); 4] = [
     ("padding-left", "env(safe-area-inset-left, 0px)"),
 ];
 
-/// The attributes the window writes on a page's canvas, beside its inline
-/// style: the backing store's size in device pixels (`width`, `height`,
-/// `apply_backing_size`) and its focusability (`tabindex`). Every attribute
-/// the window writes on a page canvas is in this list, which retiring puts
-/// back as the page had it.
-const PAGE_CANVAS_ATTRIBUTES: [&str; 3] = ["width", "height", "tabindex"];
-
 /// One canvas window's elements in the page; see the module doc.
 pub(crate) struct PageRoot {
     canvas: HtmlCanvasElement,
@@ -70,13 +63,10 @@ pub(crate) struct PageRoot {
 enum Owner {
     /// The host made `root`, the canvas in it and the two hosts.
     Host { root: HtmlElement },
-    /// The page's canvas, and what it had before the window wrote to it:
-    /// each of [`PAGE_CANVAS_ATTRIBUTES`] (`None` where it had none) and its
-    /// inline style's text.
-    Page {
-        attributes: [Option<String>; PAGE_CANVAS_ATTRIBUTES.len()],
-        style: String,
-    },
+    /// The page's canvas: its attributes come back from the slots'
+    /// [`CanvasWrites`], and its inline style's text from here, `None` where
+    /// it had no `style` attribute at all.
+    Page { style: Option<String> },
 }
 
 impl PageRoot {
@@ -130,7 +120,7 @@ impl PageRoot {
         for (property, value) in [("display", "block"), ("width", "100%"), ("height", "100%")] {
             style.set_property(property, value)?;
         }
-        let slots = HostSlots::try_new(document)?;
+        let slots = HostSlots::try_new(document, &canvas)?;
         root.append_child(&canvas)?;
         root.append_child(&slots.text_input)?;
         root.append_child(&slots.semantics)?;
@@ -152,10 +142,11 @@ impl PageRoot {
             .parent_node()
             .ok_or_else(|| JsValue::from_str("the page's canvas is not in the document"))?;
         let owner = Owner::Page {
-            attributes: PAGE_CANVAS_ATTRIBUTES.map(|name| canvas.get_attribute(name)),
-            style: canvas.style().css_text(),
+            style: canvas
+                .get_attribute("style")
+                .map(|_| canvas.style().css_text()),
         };
-        let slots = HostSlots::try_new(document)?;
+        let slots = HostSlots::try_new(document, &canvas)?;
         parent.insert_before(&slots.text_input, canvas.next_sibling().as_ref())?;
         let placed = Self {
             canvas,
@@ -187,27 +178,30 @@ impl Drop for PageRoot {
     fn drop(&mut self) {
         match &self.owner {
             Owner::Host { root } => root.remove(),
-            Owner::Page { attributes, style } => {
+            Owner::Page { style } => {
                 self.slots.text_input.remove();
                 self.slots.semantics.remove();
-                for (name, value) in PAGE_CANVAS_ATTRIBUTES.iter().zip(attributes) {
-                    let restored = match value {
-                        Some(value) => self.canvas.set_attribute(name, value),
-                        None => self.canvas.remove_attribute(name),
-                    };
-                    if let Err(error) = restored {
-                        tracing::debug!(?error, name, "the page canvas kept the window's value");
-                    }
+                self.slots.canvas_writes.restore_all();
+                // Through the CSSOM, which a Content Security Policy that
+                // refuses inline style attributes allows; a canvas that had
+                // no `style` attribute gets none.
+                self.canvas
+                    .style()
+                    .set_css_text(style.as_deref().unwrap_or_default());
+                if style.is_none()
+                    && let Err(error) = self.canvas.remove_attribute("style")
+                {
+                    tracing::debug!(?error, "the page canvas kept a style attribute");
                 }
-                self.canvas.style().set_css_text(style);
             }
         }
     }
 }
 
 impl HostSlots {
-    /// The two hosts, not yet in the page.
-    fn try_new(document: &Document) -> Result<Self, JsValue> {
+    /// The two hosts for `canvas`, not yet in the page, and what the canvas
+    /// holds before the window writes to it.
+    fn try_new(document: &Document, canvas: &HtmlCanvasElement) -> Result<Self, JsValue> {
         let host = |tag: &str| -> Result<HtmlElement, JsValue> {
             let element: HtmlElement = document.create_element(tag)?.unchecked_into();
             element.style().set_property("display", "contents")?;
@@ -222,6 +216,7 @@ impl HostSlots {
             text_input,
             semantics: host(SEMANTICS_TAG)?,
             read_edges: std::rc::Rc::default(),
+            canvas_writes: std::rc::Rc::new(CanvasWrites::of(canvas)),
         })
     }
 

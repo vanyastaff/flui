@@ -1401,7 +1401,7 @@ impl BrowserSession {
             });
         }
         let root = std::env::current_dir()?;
-        let page = crate::config::web_page(crate::config::nearest_config(&root)?.as_ref());
+        let page = crate::config::web_page(crate::config::nearest_project(&root)?.as_ref());
         Ok(Self {
             root,
             browser,

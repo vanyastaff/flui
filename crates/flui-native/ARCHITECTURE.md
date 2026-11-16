@@ -1558,7 +1558,7 @@ browser's toolbars), holding the canvas, the text-input host
 order. A page that supplies `<canvas id="flui-canvas">` owns its layout: the
 two hosts are inserted after the canvas, and when the window retires the
 canvas gets back everything the window wrote on it: the attributes of one list
-(`PAGE_CANVAS_ATTRIBUTES`: `width`, `height`, `tabindex`) and its inline
+(`owner::web::CANVAS_ATTRIBUTES`: `width`, `height`, `tabindex`, `inputmode`, which every writer goes through, `CanvasWrites`) and its inline
 style, restored through the CSSOM, which a Content Security Policy that
 refuses inline style attributes allows. For the window's life the canvas has
 two more siblings, which selectors such as `canvas:last-child` see; they
@@ -1585,7 +1585,7 @@ keyboard's occlusion is. The bands are zero unless the page covers the display
 (`viewport-fit=cover`, which the page `flui build` writes asks for). They are
 read once and kept (`HostSlots::unsafe_edges`), since reading them is a style
 recalculation every state sample would pay, and read again after a window
-resize (a rotation among them) or a visual-viewport or scroll change.
+resize, a turn of the screen (`screen.orientation`'s `change`, or `orientationchange`: half a turn changes no size yet swaps the side bands) or a visual-viewport or scroll change.
 
 `a_window_takes_the_part_of_each_band_over_it` pins the intersection on
 Linux; the Node suite's `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
@@ -2040,26 +2040,35 @@ handler of a tap, and iOS Safari zooms the page into a focused field whose
 text is below 16 CSS pixels. Every element the host focuses for editing (the
 textarea, a semantics field) has `font-size: 16px`
 (`owner::web::EDITOR_FONT_SIZE`), and every focus the text input makes
-passes `preventScroll`. The textarea is focused in the `pointerup` handler of
-a touch or pen tap (a contact that travelled at most `TAP_SLOP`), after the
-canvas's input dispatched it: with a field served and its textarea unfocused
-(the user hid the keyboard), a tap on the field's box focuses it again and
-any other tap or a drag leaves it closed; with nothing served (and no
-`EditContext`), a textarea is focused provisionally, which the field that
-attaches next takes over with its focus, and which two animation frames
-without one remove, the focus going back to the canvas. A field attached
-outside a tap focuses its textarea only while the canvas has the page's
-focus (a desktop click focused it). `navigator.userActivation.isActive` is
-not used: it stays true for seconds after a tap, outside its handler. The
-headless-Chrome tests `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
+passes `preventScroll`. The window has one hidden editor for its whole life,
+as Flutter's web engine keeps one editing element: a field change rewrites
+its content and hints and leaves its focus, so the keyboard stays up from one
+field to the next, and a store released with no field after it gives the
+focus back to the canvas. In the `pointerup` handler of a touch or pen tap (a
+contact that travelled at most `TAP_SLOP`), after the canvas's input
+dispatched it: a tap on the served field's box opens the keyboard, the editor
+taking the focus again where iOS's hiding blurred it, and, where it kept the
+focus (Android's Back), through `navigator.virtualKeyboard.show()` or else a
+focus given to the canvas and taken back; a tap elsewhere or a drag leaves it.
+With nothing served (and no `EditContext`) the editor is focused with
+`inputmode="none"` and `aria-hidden`, which opens no keyboard and announces
+nothing; the field that attaches writes its hints, and two animation frames
+of that tap without one give the focus back. A field attached outside a tap
+focuses the editor only while the canvas has the page's focus.
+`navigator.userActivation.isActive` is not used: it stays true for seconds
+after a tap, outside its handler. The `EditContext` path writes the canvas's
+`inputmode` through `owner::web::CanvasWrites` and puts the page's value and
+the canvas's own `editContext` back when it lets the field go. The
+headless-Chrome tests (constructed events; the test driver has no trusted
+input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
 `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
-`a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone` (constructed
-events: the test driver has no trusted input) and
-`the_hidden_editor_states_each_purpose_and_enter_action` (the textarea's
-`inputmode`, `autocomplete` and `enterkeyhint` for each purpose, one line or
-many and a protected field) pin the rule; whether Safari on iOS and Chrome on
-Android open the keyboard is a device run (`platform-parity.toml`, "Input
-purpose and hints").
+`moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus`,
+`a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again`,
+`a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
+`a_page_canvas_gets_back_the_inputmode_and_the_style_it_had` and
+`the_hidden_editor_states_each_purpose_and_enter_action` pin the rule; whether
+Safari on iOS and Chrome on Android open the keyboard is a device run
+(`platform-parity.toml`, "Input purpose and hints").
 
 `the_purpose_picks_the_input_mode`,
 `a_key_of_the_input_method_is_marked_composing` and `mirror_text_table` pin

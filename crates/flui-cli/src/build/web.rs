@@ -78,7 +78,11 @@ impl WebBuilder {
         }
         // A page the project still keeps from before the page was generated
         // stops the build before anything compiles.
-        page_source(&self.workspace_root, web_platform_page(ctx)?)?;
+        let page = web_platform_page(ctx)?;
+        page_source(
+            page.project.as_deref().unwrap_or(&self.workspace_root),
+            page,
+        )?;
         let dir = &ctx.workspace_root;
         let target = cargo::select_target(dir, &ctx.target).await?;
         let mut args = vec!["build".to_string(), "--target".into(), WASM_TARGET.into()];
@@ -142,20 +146,21 @@ impl WebBuilder {
                     .map(|package| package.name.clone())
             })
             .unwrap_or_else(|| "FLUI".to_owned());
-        let html = match page_source(&self.workspace_root, page)? {
+        // The project's own files are where its `flui.toml` is.
+        let project = page.project.as_deref().unwrap_or(&self.workspace_root);
+        let html = match page_source(project, page)? {
             PageSource::Generated => web_page::render(&name, page),
-            PageSource::Template { path, text } => {
-                web_page::render_template(&text, &page.base_href).map_err(|error| {
+            PageSource::Template { path, text } => web_page::render_template(&text, &name, page)
+                .map_err(|error| {
                     BuildError::invalid_config(path.display().to_string(), error.to_string())
-                })?
-            }
+                })?,
         };
         let index = dist.join("index.html");
         std::fs::write(&index, html)?;
         std::fs::write(dist.join(web_page::BOOTSTRAP), web_page::bootstrap())?;
         std::fs::write(dist.join(web_page::STYLESHEET), web_page::stylesheet())?;
 
-        let web_dir = self.workspace_root.join("platforms").join("web");
+        let web_dir = project.join("platforms").join("web");
         let manifest = web_dir.join(web_page::MANIFEST);
         if manifest.is_file() {
             std::fs::copy(&manifest, dist.join(web_page::MANIFEST))?;
@@ -228,7 +233,7 @@ fn page_source(project: &Path, page: &web_page::WebPage) -> BuildResult<PageSour
         let text = std::fs::read_to_string(&path).map_err(|error| {
             BuildError::invalid_config("[web] page", format!("{}: {error}", path.display()))
         })?;
-        web_page::render_template(&text, &page.base_href)
+        web_page::render_template(&text, "", page)
             .map_err(|error| BuildError::invalid_config("[web] page", error.to_string()))?;
         return Ok(PageSource::Template { path, text });
     }

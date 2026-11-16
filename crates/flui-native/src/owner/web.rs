@@ -237,6 +237,82 @@ pub(crate) struct HostSlots {
     /// padding; `None` until read, and once a resize, an orientation change
     /// or a visual-viewport change may have moved them.
     pub(crate) read_edges: Rc<Cell<Option<flui_foundation::geometry::EdgeInsets>>>,
+    /// The canvas's attributes as the window found them, which every writer
+    /// goes through.
+    pub(crate) canvas_writes: Rc<CanvasWrites>,
+}
+
+/// Every attribute the window writes on its canvas, beside its inline style:
+/// the backing store's size in device pixels (`width`, `height`), its
+/// focusability (`tabindex`) and the keyboard an `EditContext` asks for
+/// (`inputmode`). A page canvas gets each back as the page had it.
+pub(crate) const CANVAS_ATTRIBUTES: [&str; 4] = ["width", "height", "tabindex", "inputmode"];
+
+/// What a canvas held before the window wrote to it (nothing, for a canvas
+/// the window made), and the one way a feature writes and restores
+/// [`CANVAS_ATTRIBUTES`] and the canvas's `editContext`.
+pub(crate) struct CanvasWrites {
+    canvas: web_sys::HtmlCanvasElement,
+    /// Each of [`CANVAS_ATTRIBUTES`] as found, `None` where absent.
+    attributes: [Option<String>; CANVAS_ATTRIBUTES.len()],
+    /// The canvas's `editContext` as found (`null` where none).
+    edit_context: wasm_bindgen::JsValue,
+}
+
+impl CanvasWrites {
+    /// What `canvas` holds now.
+    pub(crate) fn of(canvas: &web_sys::HtmlCanvasElement) -> Self {
+        use wasm_bindgen::JsValue;
+        Self {
+            canvas: canvas.clone(),
+            attributes: CANVAS_ATTRIBUTES.map(|name| canvas.get_attribute(name)),
+            edit_context: js_sys::Reflect::get(canvas, &JsValue::from_str("editContext"))
+                .ok()
+                .filter(|context| !context.is_undefined())
+                .unwrap_or(JsValue::NULL),
+        }
+    }
+
+    /// Write `name`, one of [`CANVAS_ATTRIBUTES`].
+    ///
+    /// # Errors
+    /// The browser refuses the attribute.
+    pub(crate) fn set(&self, name: &str, value: &str) -> Result<(), wasm_bindgen::JsValue> {
+        debug_assert!(
+            CANVAS_ATTRIBUTES.contains(&name),
+            "BUG: every canvas attribute the window writes is in CANVAS_ATTRIBUTES"
+        );
+        self.canvas.set_attribute(name, value)
+    }
+
+    /// Put `name` back as the canvas held it.
+    pub(crate) fn restore(&self, name: &str) {
+        let found = CANVAS_ATTRIBUTES
+            .iter()
+            .position(|listed| *listed == name)
+            .and_then(|at| self.attributes.get(at))
+            .and_then(Option::as_deref);
+        let restored = match found {
+            Some(value) => self.canvas.set_attribute(name, value),
+            None => self.canvas.remove_attribute(name),
+        };
+        if let Err(error) = restored {
+            tracing::debug!(?error, name, "the canvas kept the window's value");
+        }
+    }
+
+    /// Put every attribute back as the canvas held it.
+    pub(crate) fn restore_all(&self) {
+        for name in CANVAS_ATTRIBUTES {
+            self.restore(name);
+        }
+    }
+
+    /// The canvas's `editContext` as found, which the text input puts back
+    /// when it lets the canvas go.
+    pub(crate) fn found_edit_context(&self) -> &wasm_bindgen::JsValue {
+        &self.edit_context
+    }
 }
 
 /// One canvas window as its window-level positions are made for it

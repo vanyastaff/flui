@@ -756,6 +756,46 @@ impl WebWindow {
                 slots.forget_unsafe_edges();
                 sync.sync();
             }),
+        )?;
+        self.register_orientation_events(registration)
+    }
+
+    /// A turn of the screen half a circle (landscape left to landscape
+    /// right) changes no size, so no resize reports it, yet swaps the
+    /// left and right safe-area bands: `screen.orientation`'s `change`, or
+    /// the window's `orientationchange` where the browser has no
+    /// `screen.orientation`, reads them again.
+    fn register_orientation_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let browser =
+            web_sys::window().expect("BUG: window construction verified browser environment");
+        let orientation = browser
+            .screen()
+            .ok()
+            .and_then(|screen| {
+                js_sys::Reflect::get(&screen, &JsValue::from_str("orientation")).ok()
+            })
+            .and_then(|orientation| orientation.dyn_into::<web_sys::EventTarget>().ok());
+        let (target, kind) = orientation.as_ref().map_or_else(
+            || {
+                (
+                    AsRef::<web_sys::EventTarget>::as_ref(&browser),
+                    "orientationchange",
+                )
+            },
+            |orientation| (orientation, "change"),
+        );
+        let slots = self.slots.clone();
+        let publisher = self.publisher();
+        registration.listen(
+            target,
+            kind,
+            Rc::new(move |_: web_sys::Event| {
+                slots.forget_unsafe_edges();
+                publisher.publish();
+            }),
         )
     }
 

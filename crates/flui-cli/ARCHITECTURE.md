@@ -466,21 +466,37 @@ needs. The manifest a build writes for a project that keeps none and the one
 `flui platform add web` scaffolds come from one renderer
 (`web_page::manifest`), which writes JSON through `serde_json`.
 
-A project's page is never overridden in silence. An `index.html` in a project's web platform directory
-that `[web] page` does not name stops the build before anything compiles,
-with the two ways on: delete it, or name it as the page template. A template
-holds `{{flui_module}}`, which becomes the script that starts the app, and
-may hold `{{flui_base}}`, `{{flui_manifest}}` and `{{flui_stylesheet}}`; one
-without `{{flui_module}}` is refused (`a_project_page_is_never_overridden_in_silence`).
+A project's page is never overridden in silence. An `index.html` in a
+project's web platform directory that `[web] page` does not name stops the
+build before anything compiles, with the two ways on: delete it, or name it
+as the page template. `[web] page`, a kept page and the project's manifest
+and icons are resolved against the directory of `flui.toml`, wherever the
+build runs from. A template holds `{{flui_module}}`, which becomes the script
+that starts the app (the build checks that it is there, not that it is
+outside a comment), and may hold `{{flui_base}}`, `{{flui_manifest}}`,
+`{{flui_stylesheet}}`, `{{flui_title}}`, `{{flui_description}}` and
+`{{flui_theme_color}}`. Placeholders are replaced in one pass, left to right,
+never inside a value the build put in, and values are escaped for HTML text
+and attribute values, so a description that holds a placeholder's text stays
+text (`a_value_holding_a_placeholder_stays_text`). `[web] theme_color` is a
+`ThemeColor`, a hex colour or a CSS name, checked when `flui.toml` loads.
 
 `flui run`'s server (`serve.rs`) serves the build under the same base path
-and answers a navigation (`Sec-Fetch-Mode: navigate` or an HTML `Accept`) to
-a path that is no file with the page, which history routing needs. It serves
-nothing outside the build directory: the path is percent-decoded, a
-component that is not a plain name or that holds a backslash, a colon or a
-NUL is refused, and a file is opened only when its canonical path is still
-inside the directory. A missing asset and a request that is not a navigation
-get a 404 (`dev_server_contract`).
+and answers a navigation to a path whose last segment has no extension (a
+trailing slash included) and that names no file with the page, which history
+routing needs. A navigation is a request whose `Sec-Fetch-Mode` is
+`navigate`, or, from a browser that sends none, whose `Accept` names HTML;
+a `fetch()` (`Sec-Fetch-Mode: cors`) is none. It serves nothing outside the
+build directory: the path is percent-decoded, a component that is not a plain
+name or that holds a backslash, a colon or a NUL is refused, and a file is
+opened only when its canonical path is still inside the directory and is
+spelled as the request spells it (so no type is decided on another case of a
+name). It answers only a `Host` of the loopback (`localhost`, `127.0.0.1`,
+`[::1]`) and refuses another with 421, against a page whose name is rebound
+to 127.0.0.1; it serves at most `MAX_CONNECTIONS` connections at once, cuts
+a request head off at `REQUEST_HEAD` however slowly it arrives, and sends
+`X-Content-Type-Options: nosniff`. A missing asset and a request that is not
+a navigation get a 404 (`dev_server_contract`).
 
 ## The watcher is dev-machine code
 

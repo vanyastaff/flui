@@ -5416,22 +5416,27 @@ GPU-память простаивающего или невидимого окн
 - [x] **LY75** (закрыта: код и тесты в ветке `native/web-dom-root`; прогоны Safari iOS и Firefox
   записаны в `platform-parity.toml`, строка «Input purpose and hints») — атрибуты #2109
   (`3223e936d`). Скрытый textarea и поля дерева доступности получают `font-size: 16px`
-  (`owner::web::EDITOR_FONT_SIZE`); фокус текстового ввода всегда с `preventScroll`. Textarea
-  фокусируется в обработчике `pointerup` касания или пера, если это тап (путь не больше
-  `TAP_SLOP`): при обслуживаемом поле — только тап по рамке поля (клавиатура, скрытая
-  пользователем, открывается снова, прокрутка и тап мимо — нет); без поля и без `EditContext` —
-  временный textarea, который забирает поле, прикреплённое следующим (вместе с фокусом), а через
-  два кадра анимации без поля он убирается и фокус возвращается на canvas.
-  `navigator.userActivation.isActive` не используется: он истинен секунды после тапа, вне
-  обработчика. Тесты в headless Chrome (сконструированные события: у тест-драйвера нет
-  доверенного ввода из страницы): `a_textarea_serves_the_field_without_edit_context` и
+  (`owner::web::EDITOR_FONT_SIZE`); фокус текстового ввода всегда с `preventScroll`. У окна
+  один скрытый редактор на всю жизнь (как один editing element у Flutter web): смена поля
+  переписывает его текст и подсказки и не трогает фокус, так что клавиатура остаётся от поля к
+  полю; хранилище, отпущенное без следующего поля, отдаёт фокус canvas. В обработчике
+  `pointerup` касания или пера, если это тап (путь не больше `TAP_SLOP`): тап по рамке
+  обслуживаемого поля открывает клавиатуру (iOS: фокус снова; Android после Back, где фокус
+  остался: `navigator.virtualKeyboard.show()` или фокус на canvas и обратно), тап мимо и
+  прокрутка — нет; без поля и без `EditContext` редактор фокусируется с `inputmode="none"` и
+  `aria-hidden` (клавиатуры нет, экранный диктор поля не видит), поле, прикреплённое следом,
+  пишет свои подсказки, а два кадра этого тапа без поля (у каждого тапа свой билет) возвращают
+  фокус canvas. `inputmode` холста при `EditContext` пишется и возвращается через
+  `owner::web::CanvasWrites`, `editContext` холста возвращается прежний. Тесты в headless Chrome
+  (сконструированные события): `a_textarea_serves_the_field_without_edit_context`,
   `a_focused_text_field_is_edited_through_its_element` (размер шрифта),
   `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
   `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
+  `moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus`,
+  `a_tap_on_a_field_that_kept_its_focus_opens_the_keyboard_again`,
   `a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
-  `the_hidden_editor_states_each_purpose_and_enter_action` (таблица `inputmode`, `autocomplete`
-  и `enterkeyhint` скрытого textarea для каждого назначения, одной и многих строк и защищённого
-  поля, при прикреплении и при смене статуса). Только CI их собирает и запускает.
+  `a_page_canvas_gets_back_the_inputmode_and_the_style_it_had`,
+  `the_hidden_editor_states_each_purpose_and_enter_action`. Только CI их собирает и запускает.
 - [x] **LY76** (закрыта: зеркало ARIA на `main`, слот в корне и ADR в ветке
   `native/web-dom-root`; прогон с экранным диктором записан в `platform-parity.toml`, строка
   «Tree and actions») — #2032 (`16d7d2770`), #2099, #2109, #2119, #2120. Решение: дерево держит

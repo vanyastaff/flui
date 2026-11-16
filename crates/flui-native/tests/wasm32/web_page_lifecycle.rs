@@ -653,6 +653,18 @@ async fn web_window_reads_the_safe_area_from_the_viewport() {
     scale_canvas(0.5);
     assert_eq!(safe_area(), EdgeInsets::new(94.0, 0.0, 0.0, 0.0));
     scale_canvas(1.0);
+    // Turned half a circle, landscape left to landscape right: no size
+    // changes and nothing scrolls, yet the side bands swap.
+    set_safe_area(0.0, 47.0, 21.0, 0.0);
+    scroll_canvas_to(0.0);
+    assert_eq!(safe_area(), EdgeInsets::new(0.0, 47.0, 21.0, 0.0));
+    set_safe_area(0.0, 0.0, 21.0, 47.0);
+    fire_window("orientationchange", false);
+    assert_eq!(
+        safe_area(),
+        EdgeInsets::new(0.0, 0.0, 21.0, 47.0),
+        "the bands are read again on a turn of the screen"
+    );
     set_safe_area(0.0, 0.0, 0.0, 0.0);
     scroll_canvas_to(0.0);
     assert_eq!(safe_area(), EdgeInsets::ZERO);

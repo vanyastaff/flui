@@ -37,7 +37,7 @@
 
 use crate::app_id::AppId;
 use crate::build::app_floor::{AppFloors, PlatformsConfig};
-use crate::build::web_page::{BaseHref, WebPage};
+use crate::build::web_page::{BaseHref, ThemeColor, WebPage};
 use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -75,7 +75,7 @@ pub(crate) struct WebConfig {
     pub(crate) description: Option<String>,
     /// The browser chrome's colour (`theme-color`), a CSS colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) theme_color: Option<String>,
+    pub(crate) theme_color: Option<ThemeColor>,
     /// The project's page template, relative to the project
     /// (`platforms/web/index.html`); the generated page when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,16 +88,17 @@ impl WebConfig {
     }
 }
 
-/// What a web build of the project `config` describes (none: an in-repo
-/// example or a plain package) states in its page and manifest.
+/// What a web build of `project` describes (none: an in-repo example or a
+/// plain package) states in its page and manifest.
 #[must_use]
-pub(crate) fn web_page(config: Option<&FluiConfig>) -> WebPage {
-    config.map_or_else(WebPage::default, |config| WebPage {
+pub(crate) fn web_page(project: Option<&Project>) -> WebPage {
+    project.map_or_else(WebPage::default, |Project { config, dir }| WebPage {
         title: Some(config.app.name.clone()),
         description: config.web.description.clone(),
         theme_color: config.web.theme_color.clone(),
         base_href: config.web.base_href.clone(),
         template: config.web.page.clone(),
+        project: Some(dir.clone()),
     })
 }
 
@@ -175,11 +176,29 @@ pub(crate) fn floors_of(config: Option<&FluiConfig>) -> CliResult<AppFloors> {
 /// # Errors
 /// When `flui.toml` cannot be read or parsed.
 pub(crate) fn nearest_config(root: &Path) -> CliResult<Option<FluiConfig>> {
-    root.ancestors()
-        .map(|dir| dir.join("flui.toml"))
-        .find(|manifest| manifest.is_file())
-        .map(|manifest| FluiConfig::load_from(&manifest))
-        .transpose()
+    Ok(nearest_project(root)?.map(|project| project.config))
+}
+
+/// The project the nearest `flui.toml` at or above `root` describes: the
+/// file's contents and the directory it is in, which the project's own
+/// paths are relative to.
+pub(crate) struct Project {
+    pub(crate) config: FluiConfig,
+    pub(crate) dir: std::path::PathBuf,
+}
+
+/// The nearest project at or above `root` ([`nearest_config`]).
+///
+/// # Errors
+/// When `flui.toml` cannot be read or parsed.
+pub(crate) fn nearest_project(root: &Path) -> CliResult<Option<Project>> {
+    let Some(dir) = root.ancestors().find(|dir| dir.join("flui.toml").is_file()) else {
+        return Ok(None);
+    };
+    Ok(Some(Project {
+        config: FluiConfig::load_from(&dir.join("flui.toml"))?,
+        dir: dir.to_path_buf(),
+    }))
 }
 
 /// Host/worker hot reload layout.

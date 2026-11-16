@@ -120,6 +120,56 @@ pub(crate) const BOOTSTRAP: &str = "flui.js";
 /// The stylesheet the page links.
 pub(crate) const STYLESHEET: &str = "flui.css";
 
+/// A colour for the browser's chrome (`theme-color`, the manifest's
+/// `theme_color`): a hex colour (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`)
+/// or a CSS named colour (letters only), checked when `flui.toml` loads.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct ThemeColor(String);
+
+/// Why a theme colour was refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("`{0}` is not a hex colour (`#1a73e8`) or a CSS colour name (`teal`)")]
+pub(crate) struct InvalidThemeColor(String);
+
+impl ThemeColor {
+    /// `colour` as a theme colour.
+    ///
+    /// # Errors
+    /// [`InvalidThemeColor`] when it is neither a hex colour nor a name.
+    pub(crate) fn try_new(colour: impl Into<String>) -> Result<Self, InvalidThemeColor> {
+        let colour = colour.into();
+        let hex = colour.strip_prefix('#').is_some_and(|digits| {
+            matches!(digits.len(), 3 | 4 | 6 | 8) && digits.bytes().all(|b| b.is_ascii_hexdigit())
+        });
+        let named =
+            (1..=32).contains(&colour.len()) && colour.bytes().all(|b| b.is_ascii_alphabetic());
+        if hex || named {
+            Ok(Self(colour))
+        } else {
+            Err(InvalidThemeColor(colour))
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for ThemeColor {
+    type Error = InvalidThemeColor;
+
+    fn try_from(colour: String) -> Result<Self, Self::Error> {
+        Self::try_new(colour)
+    }
+}
+
+impl From<ThemeColor> for String {
+    fn from(colour: ThemeColor) -> Self {
+        colour.0
+    }
+}
+
 /// What a web build states about the application in its page and manifest:
 /// `flui.toml`'s `[app] name` and its `[web]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -129,16 +179,21 @@ pub(crate) struct WebPage {
     pub(crate) title: Option<String>,
     /// `[web] description`.
     pub(crate) description: Option<String>,
-    /// `[web] theme_color`, a CSS colour for the browser's chrome.
-    pub(crate) theme_color: Option<String>,
+    /// `[web] theme_color`.
+    pub(crate) theme_color: Option<ThemeColor>,
     /// `[web] base_href`.
     pub(crate) base_href: BaseHref,
     /// `[web] page`: the project's page template, relative to the project.
     pub(crate) template: Option<std::path::PathBuf>,
+    /// The directory of the `flui.toml` this was read from, which `template`,
+    /// a kept page and the project's manifest are resolved against; `None`
+    /// for a build with no `flui.toml`.
+    pub(crate) project: Option<std::path::PathBuf>,
 }
 
 /// A placeholder a project's page template holds, which the build replaces
-/// with the element the page needs.
+/// in one pass, never inside text it inserted: an element the page needs, or
+/// one of `flui.toml`'s values, escaped for HTML text and attribute values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Placeholder {
     /// `{{flui_base}}`: the `<base href>`.
@@ -147,13 +202,29 @@ pub(crate) enum Placeholder {
     Manifest,
     /// `{{flui_stylesheet}}`: the stylesheet link.
     Stylesheet,
-    /// `{{flui_module}}`: the script that starts the application; a template
-    /// without it is refused.
+    /// `{{flui_module}}`: the script that starts the application. A template
+    /// without it is refused; the build checks that it is there, not that it
+    /// is where a script runs (inside a comment, the application never
+    /// starts).
     Module,
+    /// `{{flui_title}}`: the application's name.
+    Title,
+    /// `{{flui_description}}`: `[web] description`, empty when absent.
+    Description,
+    /// `{{flui_theme_color}}`: `[web] theme_color`, empty when absent.
+    ThemeColor,
 }
 
 impl Placeholder {
-    const ALL: [Self; 4] = [Self::Base, Self::Manifest, Self::Stylesheet, Self::Module];
+    const ALL: [Self; 7] = [
+        Self::Base,
+        Self::Manifest,
+        Self::Stylesheet,
+        Self::Module,
+        Self::Title,
+        Self::Description,
+        Self::ThemeColor,
+    ];
 
     /// The text the template holds.
     pub(crate) const fn token(self) -> &'static str {
@@ -162,16 +233,22 @@ impl Placeholder {
             Self::Manifest => "{{flui_manifest}}",
             Self::Stylesheet => "{{flui_stylesheet}}",
             Self::Module => "{{flui_module}}",
+            Self::Title => "{{flui_title}}",
+            Self::Description => "{{flui_description}}",
+            Self::ThemeColor => "{{flui_theme_color}}",
         }
     }
 
-    /// The element the build puts in its place.
-    fn element(self, base: &BaseHref) -> String {
+    /// What the build puts in its place for the application named `title`.
+    fn value(self, title: &str, page: &WebPage) -> String {
         match self {
-            Self::Base => format!(r#"<base href="{base}">"#),
+            Self::Base => format!(r#"<base href="{}">"#, page.base_href),
             Self::Manifest => format!(r#"<link rel="manifest" href="{MANIFEST}">"#),
             Self::Stylesheet => format!(r#"<link rel="stylesheet" href="{STYLESHEET}">"#),
             Self::Module => format!(r#"<script type="module" src="{BOOTSTRAP}"></script>"#),
+            Self::Title => escape(title),
+            Self::Description => escape(page.description.as_deref().unwrap_or_default()),
+            Self::ThemeColor => escape(page.theme_color.as_ref().map_or("", ThemeColor::as_str)),
         }
     }
 }
@@ -185,72 +262,79 @@ pub(crate) enum InvalidTemplate {
     NoModule,
 }
 
-/// The page `template` makes for the build served from `base`: each
-/// placeholder replaced by its element.
+/// The page `template` makes for the application named `title`: each
+/// placeholder replaced in one pass, left to right, never inside a value it
+/// put in, so a value that holds a placeholder's text stays text.
 ///
 /// # Errors
 /// [`InvalidTemplate::NoModule`] when the template has no
 /// `{{flui_module}}`.
-pub(crate) fn render_template(template: &str, base: &BaseHref) -> Result<String, InvalidTemplate> {
+pub(crate) fn render_template(
+    template: &str,
+    title: &str,
+    page: &WebPage,
+) -> Result<String, InvalidTemplate> {
     if !template.contains(Placeholder::Module.token()) {
         return Err(InvalidTemplate::NoModule);
     }
-    Ok(Placeholder::ALL
-        .iter()
-        .fold(template.to_owned(), |page, placeholder| {
-            page.replace(placeholder.token(), &placeholder.element(base))
-        }))
+    let mut page_text = String::with_capacity(template.len() + 256);
+    let mut rest = template;
+    while let Some(start) = rest.find("{{flui_") {
+        let (before, from) = rest.split_at(start);
+        page_text.push_str(before);
+        if let Some(placeholder) = Placeholder::ALL
+            .into_iter()
+            .find(|placeholder| from.starts_with(placeholder.token()))
+        {
+            page_text.push_str(&placeholder.value(title, page));
+            rest = &from[placeholder.token().len()..];
+        } else {
+            // Not a placeholder: kept as written.
+            page_text.push_str("{{flui_");
+            rest = &from["{{flui_".len()..];
+        }
+    }
+    page_text.push_str(rest);
+    Ok(page_text)
 }
 
 /// The page of the application named `title`, from `page`'s description,
-/// theme colour and base path.
+/// theme colour and base path: the fixed skeleton's placeholders replaced in
+/// one pass ([`render_template`]).
 #[must_use]
 pub(crate) fn render(title: &str, page: &WebPage) -> String {
-    let title = escape(title);
-    let description = page
-        .description
-        .as_deref()
-        .map_or_else(String::new, |text| {
-            format!(
-                "\n    <meta name=\"description\" content=\"{}\">",
-                escape(text)
-            )
-        });
-    let theme = page
-        .theme_color
-        .as_deref()
-        .map_or_else(String::new, |colour| {
-            format!(
-                "\n    <meta name=\"theme-color\" content=\"{}\">",
-                escape(colour)
-            )
-        });
-    let template = format!(
+    let description = if page.description.is_some() {
+        "\n    <meta name=\"description\" content=\"{{flui_description}}\">"
+    } else {
+        ""
+    };
+    let theme = if page.theme_color.is_some() {
+        "\n    <meta name=\"theme-color\" content=\"{{flui_theme_color}}\">"
+    } else {
+        ""
+    };
+    let skeleton = format!(
         r#"<!DOCTYPE html>
 <!-- Written by `flui build` on every build; edits here are lost. -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    {base}
+    {{{{flui_base}}}}
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="{title}">
+    <meta name="apple-mobile-web-app-title" content="{{{{flui_title}}}}">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">{description}{theme}
-    <title>{title}</title>
-    {manifest}
-    {stylesheet}
+    <title>{{{{flui_title}}}}</title>
+    {{{{flui_manifest}}}}
+    {{{{flui_stylesheet}}}}
 </head>
 <body>
-    {module}
+    {{{{flui_module}}}}
 </body>
 </html>
-"#,
-        base = Placeholder::Base.token(),
-        manifest = Placeholder::Manifest.token(),
-        stylesheet = Placeholder::Stylesheet.token(),
-        module = Placeholder::Module.token(),
+"#
     );
-    render_template(&template, &page.base_href)
+    render_template(&skeleton, title, page)
         .expect("BUG: the generated page holds the module's placeholder")
 }
 
@@ -280,7 +364,7 @@ pub(crate) fn manifest(name: &str, page: &WebPage) -> String {
         "start_url": ".",
         "display": "standalone",
         "background_color": "#FFFFFF",
-        "theme_color": page.theme_color.as_deref().unwrap_or("#FFFFFF"),
+        "theme_color": page.theme_color.as_ref().map_or("#FFFFFF", ThemeColor::as_str),
     });
     if let Some(description) = &page.description {
         manifest["description"] = serde_json::Value::from(description.as_str());
@@ -330,7 +414,7 @@ mod tests {
     fn the_page_is_a_mount_point_and_a_loader_with_nothing_inline() {
         let mut described = page("/apps/demo/");
         described.description = Some("Cats & \"dogs\"".to_owned());
-        described.theme_color = Some("#123\"><script>".to_owned());
+        described.theme_color = Some(ThemeColor::try_new("#1a73e8").expect("a colour"));
         let html = render("Tom & \"Jerry\" <3", &described);
         for (part, what) in [
             (r#"<base href="/apps/demo/">"#, "the base"),
@@ -359,8 +443,8 @@ mod tests {
                 "the escaped description",
             ),
             (
-                r##"<meta name="theme-color" content="#123&quot;&gt;&lt;script&gt;">"##,
-                "the escaped theme colour",
+                r##"<meta name="theme-color" content="#1a73e8">"##,
+                "the theme colour",
             ),
         ] {
             assert!(html.contains(part), "{what}: {html}");
@@ -377,20 +461,75 @@ mod tests {
 
     #[test]
     fn a_template_gets_each_placeholder_and_needs_the_module() {
-        let template = "<head>{{flui_base}}{{flui_manifest}}{{flui_stylesheet}}</head>\
-                        <body><main></main>{{flui_module}}</body>";
-        let html = render_template(template, &BaseHref::try_new("/x/").expect("base"))
-            .expect("a template with the module");
+        let template = "<head>{{flui_base}}{{flui_manifest}}{{flui_stylesheet}}\
+                        <title>{{flui_title}}</title>{{flui_other}}</head>\
+                        <body data-d=\"{{flui_description}}\" data-t=\"{{flui_theme_color}}\">\
+                        {{flui_module}}</body>";
+        let mut described = page("/x/");
+        described.description = Some("A <b>".to_owned());
+        described.theme_color = Some(ThemeColor::try_new("teal").expect("a colour"));
+        let html = render_template(template, "T&T", &described).expect("a template");
         assert_eq!(
             html,
             "<head><base href=\"/x/\"><link rel=\"manifest\" href=\"manifest.json\">\
-             <link rel=\"stylesheet\" href=\"flui.css\"></head><body><main></main>\
+             <link rel=\"stylesheet\" href=\"flui.css\"><title>T&amp;T</title>{{flui_other}}</head>\
+             <body data-d=\"A &lt;b&gt;\" data-t=\"teal\">\
              <script type=\"module\" src=\"flui.js\"></script></body>"
         );
         assert_eq!(
-            render_template("<body></body>", &BaseHref::root()),
+            render_template("<body></body>", "T", &described),
             Err(InvalidTemplate::NoModule)
         );
+    }
+
+    /// A value of `flui.toml` that holds a placeholder's text stays text: the
+    /// page has its one module script and nothing breaks out of an attribute.
+    #[test]
+    fn a_value_holding_a_placeholder_stays_text() {
+        for placeholder in Placeholder::ALL {
+            let token = placeholder.token();
+            let mut described = page("/");
+            described.description = Some(token.to_owned());
+            let html = render(token, &described);
+            assert_eq!(
+                html.matches("<script").count(),
+                1,
+                "{token} in the name and description: {html}"
+            );
+            assert_eq!(html.matches("<base ").count(), 1, "{token}: {html}");
+            assert!(
+                html.contains(&format!("content=\"{token}\"")),
+                "{token} as text: {html}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_theme_colour_is_a_hex_colour_or_a_name() {
+        for accepted in [
+            "#fff",
+            "#ffff",
+            "#1a73e8",
+            "#1a73e8cc",
+            "teal",
+            "RebeccaPurple",
+        ] {
+            assert!(ThemeColor::try_new(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            "",
+            "#",
+            "#12",
+            "#12345",
+            "#ggg",
+            "1a73e8",
+            "red;",
+            "rgb(1,2,3)",
+            "#123\">",
+            "a b",
+        ] {
+            assert!(ThemeColor::try_new(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]
@@ -437,7 +576,7 @@ mod tests {
     fn the_manifest_names_the_application_and_escapes_what_it_is_given() {
         let mut described = page("/");
         described.description = Some("A \"quoted\" app".to_owned());
-        described.theme_color = Some("#123456".to_owned());
+        described.theme_color = Some(ThemeColor::try_new("#123456").expect("a colour"));
         let manifest: serde_json::Value =
             serde_json::from_str(&manifest("Demo \"x\"", &described)).expect("JSON");
         assert_eq!(manifest["name"], "Demo \"x\"");

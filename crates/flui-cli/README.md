@@ -480,8 +480,11 @@ from `flui.toml` is written when the project has none.
 A project that kept the page earlier versions scaffolded must choose: the
 build stops while that `index.html` exists, until it is deleted or named as
 the page template with `page` under `[web]`. A template holds
-`{{flui_module}}` where the app starts and may hold `{{flui_base}}`,
-`{{flui_manifest}}` and `{{flui_stylesheet}}`.
+`{{flui_module}}` where the app starts (outside a comment: the build checks
+only that it is there) and may hold `{{flui_base}}`, `{{flui_manifest}}`,
+`{{flui_stylesheet}}`, `{{flui_title}}`, `{{flui_description}}` and
+`{{flui_theme_color}}`, the last three escaped. `theme_color` is a hex colour
+or a CSS colour name. Paths under `[web]` are relative to `flui.toml`.
 
 `flui run` serves its build under the same base path, and answers a browser
 navigating to a path that is no file (a deep link into the app's routes) with
