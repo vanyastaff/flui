@@ -410,11 +410,11 @@ impl WindowInputs for InputWindows {
     fn press_kind(
         &self,
         window: WindowRef,
-        pointer: flui_platform::PointerId,
+        press: flui_platform::pointer::PressId,
     ) -> Option<flui_platform::pointer::PointerKind> {
         let input = self.of(window)?;
         let registry = input.registry.try_borrow().ok()?;
-        registry.origin(pointer).map(|origin| origin.kind)
+        registry.press_origin(press).map(|origin| origin.kind)
     }
 
     /// `None` too while the registry is borrowed by a message being decoded.

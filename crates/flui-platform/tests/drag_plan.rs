@@ -5,11 +5,13 @@ use std::sync::Arc;
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferOffer, DropFeedback, Mime, TransferActions, TransferFormat,
+    DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, TransferActions,
+    TransferFormat,
 };
 use flui_platform::drag::{
-    AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, IDENTITY_ESSENCE,
-    OsDragStart, OsOffer, OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
+    AllowedActions, DragError, DragMoment, DragReach, DragRequestError, DragSessionKey,
+    IDENTITY_ESSENCE, OsDragStart, OsDragTerms, OsOffer, OsSessionPlan, ProcessNonce,
+    plan_os_session, validate_session,
 };
 use flui_platform::{Unsupported, UnsupportedReason};
 
@@ -51,6 +53,75 @@ fn the_identity_survives_the_offer() {
     let key = key();
     let offer = offer_of(vec![key.representation()]);
     assert_eq!(DragSessionKey::from_offer(&offer), Some(key));
+}
+
+/// The terms of an OS session hold their rules as they are built: an action
+/// to advertise, every representation addressable, and the identity last and
+/// only there. Red-check: build the terms from the parts unchecked.
+#[test]
+fn os_drag_terms_refuse_what_no_os_session_may_offer() {
+    let text = || RepresentationDescriptor {
+        format: TransferFormat::Text,
+        declared_len: None,
+    };
+    let claimed = || RepresentationDescriptor {
+        format: custom(&format!("{IDENTITY_ESSENCE};session=9")),
+        declared_len: None,
+    };
+    let most = usize::from(u16::MAX);
+    for (name, serialized, allowed, expected) in [
+        ("text under copy", vec![text()], COPY, Ok(2)),
+        ("identity alone", Vec::new(), MOVE, Ok(1)),
+        (
+            "no action",
+            vec![text()],
+            TransferActions::empty(),
+            Err(DragRequestError::NoActions),
+        ),
+        (
+            "a claimed identity",
+            vec![text(), claimed()],
+            COPY,
+            Err(DragRequestError::ClaimsIdentity),
+        ),
+        (
+            "the last index taken by the identity",
+            vec![text(); most],
+            COPY,
+            Ok(most + 1),
+        ),
+        (
+            "past the last index",
+            vec![text(); most + 1],
+            COPY,
+            Err(DragRequestError::TooManyRepresentations),
+        ),
+    ] {
+        let key = key();
+        let terms = OsDragTerms::try_new(key, serialized, allowed);
+        assert_eq!(
+            terms
+                .as_ref()
+                .map(|terms| terms.representations().len())
+                .map_err(|error| *error),
+            expected,
+            "{name}"
+        );
+        if let Ok(terms) = terms {
+            let (last, identity) = terms.indexed().last().expect("the identity");
+            assert_eq!(
+                DragSessionKey::from_offer(&offer_of(vec![identity.clone()])),
+                Some(key),
+                "{name}: the identity is last"
+            );
+            assert_eq!(
+                usize::from(last.0),
+                terms.representations().len() - 1,
+                "{name}"
+            );
+            assert_eq!(terms.allowed(), allowed, "{name}");
+        }
+    }
 }
 
 #[test]
