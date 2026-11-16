@@ -1394,6 +1394,13 @@ impl AppRuntime {
 
     /// What the installed platform offers capability providers beyond the
     /// window, shared with every registry this host builds.
+    #[cfg_attr(
+        not(target_os = "android"),
+        expect(
+            dead_code,
+            reason = "only the Android host offers an Activity to install"
+        )
+    )]
     pub(super) fn host_bridge(&self) -> flui_platform::capability::HostBridge {
         self.host_bridge.clone()
     }

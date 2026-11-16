@@ -42,8 +42,13 @@ where
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
     // Before the platform, whose registries report only to a capture already installed.
     super::begin_native_journal(flui_native::journal::codec::Backend::Android);
-    let platform: Box<dyn Platform> =
+    let (platform, activity): (Box<dyn Platform>, _) =
         flui_native::android_platform(app).map_err(crate::app::LaunchError::from_platform)?;
+    // The Activity is offered to capability providers while this platform
+    // runs; the teardown takes it back with the clipboard. The one it
+    // displaces is dropped here, outside the composition-root borrow.
+    let host_bridge = APP_RUNTIME.with(|slot| slot.borrow().host_bridge());
+    drop(host_bridge.install_activity(activity));
 
     // The driver agent (ADR-0239), beside the application's own hooks, when
     // the launching intent named an endpoint (ADR-0288 §7). A driver that goes

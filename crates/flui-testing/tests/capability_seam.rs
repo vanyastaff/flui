@@ -785,6 +785,14 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
 
     fn cancel(&self, _token: flui_platform::capability::ResultToken) {}
 
+    fn take_data(
+        &self,
+        _token: flui_platform::capability::ResultToken,
+        _f: &mut dyn FnMut(flui_platform::capability::JniFrame),
+    ) -> bool {
+        false
+    }
+
     fn lend(&self, _f: &mut dyn FnMut(flui_platform::capability::JniFrame)) -> bool {
         false
     }

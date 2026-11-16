@@ -5039,9 +5039,11 @@ on the Java main thread, the only thread that passes it to `nativeWake`. The Jav
 and wakes and never waits for the owner; the lock guards the deques alone.
 
 A capability provider reaches the Activity through its context
-(`ProviderContext::activity`, ADR-0154 §9): `Platform::activity` answers it from the Android
-loop's `owner::android::result_bridge::ResultBridge`, `flui-app` installs it in the registry's
-`HostBridge` for the loop's life, and every other loop answers `None`. A request for a result is
+(`ProviderContext::activity`, ADR-0154 §9). It is the Android host's alone, so it is no position
+of the host table and no method of `Platform`: `android_platform` hands it out beside the
+platform, made from the Android loop's `owner::android::result_bridge::ResultBridge`, and
+`flui-app`'s Android runner installs it in the registry's `HostBridge` for the loop's life; on
+every other host the bridge offers none. A request for a result is
 identified by a `ResultToken` the bridge mints per call (`ResultTokenMint`, never reissued) and the
 loop's epoch, which `FluiHost.nextEpoch` gives each platform of the process; the provider names
 its purpose with a `ResultKey`. The provider fills an `Intent` the bridge made and lends it
@@ -5050,8 +5052,10 @@ posted to the Java main thread, where `FluiHost.launch` picks the request code A
 the start until `onStart` while the Activity is stopped, and refuses past `MAX_OPEN` open requests
 across the process. `FluiActivity.onSaveInstanceState` saves the started requests' codes and keys,
 and a recreated Activity whose process died restores them with epoch 0. `onActivityResult` queues
-the answer with its epoch, token and key, and the result `Intent` is held by a global reference,
-never read by the host: a provider reads only what it asked for through `JavaObject::with`. The
+the answer with its epoch, token and key. The result `Intent` never leaves the owner thread or the
+host: the router holds it by a global reference under the token of the request it settled, at
+most `MAX_HELD`, and the provider reads only what it asked for, once, through
+`Activity::take_data`; an `Intent` nobody takes is let go when the Activity ends. The
 pure model, `owner::android::activity_results::ResultRouter`, routes each drained `Answer`: one of
 this epoch settles the open request with its token once, and one for a token that is not open is
 stale; one of another epoch belongs to an earlier Activity, whose runtime ended with it, and waits,

@@ -492,14 +492,13 @@ impl AndroidLoop {
     /// matters most in the background.
     fn deliver_host_entries(&self) {
         let (entries, answers) = self.host_queue.take();
-        if !answers.is_empty() {
-            match &self.results {
-                Some(results) => results.answer(answers),
-                None => tracing::warn!(
-                    target: "flui_native::android",
-                    "answers to requests for results came to a loop that offers no Activity"
-                ),
-            }
+        if let Some(results) = &self.results {
+            results.answer(answers);
+        } else if !answers.is_empty() {
+            tracing::warn!(
+                target: "flui_native::android",
+                "answers to requests for results came to a loop that offers no Activity"
+            );
         }
         for entry in entries {
             let event = match entry {
@@ -1167,8 +1166,13 @@ impl host::Loop for AndroidLoop {
     fn request_exit_policy_reevaluation(&self) {
         // No exit policy is consulted, so there is nothing to re-evaluate.
     }
+}
 
-    fn activity(&self) -> Option<flui_platform::capability::Activity> {
+impl AndroidLoop {
+    /// The Activity a capability provider is offered (ADR-0154 §9); `None`
+    /// when `FluiHost` gave no epoch. Valid while this loop runs: once it
+    /// ends, the Activity refuses every request.
+    pub(crate) fn activity(&self) -> Option<flui_platform::capability::Activity> {
         self.results
             .as_ref()
             .map(super::result_bridge::ResultBridge::activity)

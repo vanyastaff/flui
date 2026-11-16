@@ -1531,11 +1531,6 @@ impl host::Loop for X11Loop {
             tracing::error!(%error, "an exit-policy request could not wake the X11 loop");
         }
     }
-
-    /// No Activity: Android's alone.
-    fn activity(&self) -> Option<flui_platform::capability::Activity> {
-        None
-    }
 }
 
 impl SessionLoop for X11Loop {

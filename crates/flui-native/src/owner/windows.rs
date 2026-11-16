@@ -1392,11 +1392,6 @@ impl host::Loop for WindowsLoop {
     fn request_exit_policy_reevaluation(&self) {
         self.owner_control.exit_policy_request().post();
     }
-
-    /// No Activity: Android's alone.
-    fn activity(&self) -> Option<flui_platform::capability::Activity> {
-        None
-    }
 }
 
 impl host::Services for WindowsLoop {

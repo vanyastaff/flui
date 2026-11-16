@@ -245,7 +245,7 @@ mod queue {
     use crate::owner::android::activity::with_activity;
     use crate::owner::android::activity_results::Answer;
     use crate::owner::android::java_view::strings;
-    use crate::owner::android::result_bridge::drain_answers;
+    use crate::owner::android::result_bridge::{HeldIntent, drain_answers};
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
 
@@ -374,7 +374,7 @@ mod queue {
         /// Every entry queued since the last call, oldest first, then every
         /// intent, and every answer to a request for a result; empty, with
         /// no JNI call, unless a wake came in between. Owner thread.
-        pub(crate) fn take(&self) -> (Vec<HostEntry>, Vec<Answer>) {
+        pub(crate) fn take(&self) -> (Vec<HostEntry>, Vec<Answer<HeldIntent>>) {
             if !self.inbox.pending.swap(false, Ordering::AcqRel) {
                 return (Vec::new(), Vec::new());
             }

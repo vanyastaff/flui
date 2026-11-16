@@ -926,11 +926,18 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// ```rust,ignore
 /// #[unsafe(no_mangle)]
 /// fn android_main(app: android_activity::AndroidApp) {
-///     let platform = flui_native::android_platform(app).expect("API level at FLUI's floor");
+///     let (platform, _activity) =
+///         flui_native::android_platform(app).expect("API level at FLUI's floor");
 ///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
 ///     let _ = platform.run(Rc::new(App::default()));
 /// }
 /// ```
+///
+/// Beside the platform comes the Activity it runs in, which the composition
+/// root offers capability providers (`ProviderContext::activity`, ADR-0154
+/// §9) while the platform runs; `None` when `FluiHost` could not be read for
+/// it. It is the Android host's alone, so it is no position of the host
+/// table and no method of [`Platform`].
 ///
 /// # Errors
 ///
@@ -942,10 +949,16 @@ pub fn headless_platform() -> Box<dyn Platform> {
 #[cfg(target_os = "android")]
 pub fn android_platform(
     app: android_activity::AndroidApp,
-) -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(HostPlatform::<hosts::android::Android>::try_new(
-        app,
-    )?))
+) -> Result<
+    (
+        Box<dyn Platform>,
+        Option<flui_platform::capability::Activity>,
+    ),
+    PlatformError,
+> {
+    let platform = HostPlatform::<hosts::android::Android>::try_new(app)?;
+    let activity = platform.owner().activity();
+    Ok((Box::new(platform), activity))
 }
 
 #[cfg(test)]

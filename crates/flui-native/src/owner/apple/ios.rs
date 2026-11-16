@@ -879,11 +879,6 @@ impl host::Loop for IOSLoop {
     fn request_exit_policy_reevaluation(&self) {
         // With no exit policy there is nothing to consult again.
     }
-
-    /// No Activity: Android's alone.
-    fn activity(&self) -> Option<flui_platform::capability::Activity> {
-        None
-    }
 }
 
 impl host::Services for IOSLoop {

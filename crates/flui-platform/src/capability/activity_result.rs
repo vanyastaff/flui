@@ -22,7 +22,7 @@
 //! whatever version it chooses, and the host lends it raw pointers for the
 //! length of one call ([`JniFrame`]).
 
-use std::{ffi::c_void, fmt, num::NonZeroU64, ptr::NonNull, rc::Rc, sync::Arc};
+use std::{ffi::c_void, fmt, num::NonZeroU64, ptr::NonNull, rc::Rc};
 
 use flui_foundation::{IdExhausted, IdMint};
 
@@ -252,75 +252,38 @@ impl IntentFrame {
     }
 }
 
-/// A Java object the host holds for a provider: a JNI global reference,
-/// valid on every thread until the last clone drops.
-#[derive(Clone)]
-pub struct JavaObject(Arc<dyn JavaReference>);
-
-/// How a host lends the object a [`JavaObject`] holds. A JNI global
-/// reference is valid on every thread, hence `Send + Sync`; the host deletes
-/// it when the value drops.
-pub trait JavaReference: Send + Sync + 'static {
-    /// Run `f` once with the calling thread attached to the VM and the
-    /// object lent in the frame; `false`, and `f` does not run, when the
-    /// thread cannot attach.
-    fn lend(&self, f: &mut dyn FnMut(JniFrame)) -> bool;
-}
-
-impl JavaObject {
-    /// The object `reference` holds.
-    #[must_use]
-    pub fn new(reference: impl JavaReference) -> Self {
-        Self(Arc::new(reference))
-    }
-
-    /// `f`'s answer, with the calling thread attached to the VM and the
-    /// object lent in the frame; `None`, and `f` does not run, when the
-    /// thread cannot attach.
-    pub fn with<R>(&self, f: impl FnOnce(JniFrame) -> R) -> Option<R> {
-        let mut f = Some(f);
-        let mut answer = None;
-        self.0.lend(&mut |frame| {
-            if let Some(f) = f.take() {
-                answer = Some(f(frame));
-            }
-        });
-        answer
-    }
-}
-
-impl fmt::Debug for JavaObject {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JavaObject").finish_non_exhaustive()
-    }
-}
-
-/// What a started activity answered.
-#[derive(Debug, Clone)]
+/// What a started activity answered: its code, and whether it carried an
+/// `Intent`.
+///
+/// The `Intent` stays with the host, on the owner thread, held for the
+/// request that received it; the provider reads it once with
+/// [`Activity::take_data`] under the request's token. Its extras come from
+/// another application: the provider reads only what it asked for and
+/// checks each size before it copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ActivityResult {
     code: ResultCode,
-    data: Option<JavaObject>,
+    data: bool,
 }
 
 impl ActivityResult {
-    /// The answer `code`, with the `Intent` it carried, if any.
+    /// The answer `code`, which carried an `Intent` when `data`.
     #[must_use]
-    pub fn new(code: ResultCode, data: Option<JavaObject>) -> Self {
+    pub const fn new(code: ResultCode, data: bool) -> Self {
         Self { code, data }
     }
 
     /// The code the activity finished with.
     #[must_use]
-    pub fn code(&self) -> ResultCode {
+    pub const fn code(&self) -> ResultCode {
         self.code
     }
 
-    /// The `Intent` the activity answered with, as the host holds it. Its
-    /// extras come from another application: the provider reads only what it
-    /// asked for and checks each size before it copies.
+    /// Whether the activity answered with an `Intent`, which the host holds
+    /// for [`Activity::take_data`].
     #[must_use]
-    pub fn data(&self) -> Option<&JavaObject> {
-        self.data.as_ref()
+    pub const fn has_data(&self) -> bool {
+        self.data
     }
 }
 
@@ -417,6 +380,11 @@ pub trait ActivityBridge: 'static {
     /// See [`Activity::cancel`].
     fn cancel(&self, token: ResultToken);
 
+    /// Run `f` once with the `Intent` the request `token` was answered with
+    /// lent in the frame, and let it go; `false`, and `f` does not run, when
+    /// the host holds none for `token`.
+    fn take_data(&self, token: ResultToken, f: &mut dyn FnMut(JniFrame)) -> bool;
+
     /// Run `f` once with the Activity lent in the frame; `false`, and `f`
     /// does not run, when the Activity has ended or the thread cannot
     /// attach.
@@ -498,6 +466,24 @@ impl Activity {
     /// gives is dropped; a token that is not open does nothing.
     pub fn cancel(&self, token: ResultToken) {
         self.0.cancel(token);
+    }
+
+    /// `f`'s answer, with the `Intent` the request `token` was answered with
+    /// lent in the frame, on the owner thread; the host lets the `Intent` go
+    /// after. `None`, and `f` does not run, when there is none to read: the
+    /// answer carried none ([`ActivityResult::has_data`]), it was taken
+    /// already, or the Activity ended. An `Intent` nobody takes is let go
+    /// when the Activity ends, and the host holds at most one for each
+    /// request it can have open.
+    pub fn take_data<R>(&self, token: ResultToken, f: impl FnOnce(JniFrame) -> R) -> Option<R> {
+        let mut f = Some(f);
+        let mut answer = None;
+        self.0.take_data(token, &mut |frame| {
+            if let Some(f) = f.take() {
+                answer = Some(f(frame));
+            }
+        });
+        answer
     }
 
     /// `f`'s answer, with the Activity lent in the frame on the owner thread:

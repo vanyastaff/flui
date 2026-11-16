@@ -26,9 +26,9 @@ mod runtime_local;
 mod window_ref;
 
 pub use activity_result::{
-    Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey,
-    JavaObject, JavaReference, JniFrame, MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN, ResultCode,
-    ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
+    Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey, JniFrame,
+    MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN, ResultCode, ResultKey, ResultOutcome, ResultRefused,
+    ResultRequest, ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};

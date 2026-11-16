@@ -2730,11 +2730,6 @@ mod event_loop {
             self.reevaluate.set(true);
             self.waker.wake();
         }
-
-        /// No Activity: Android's alone.
-        fn activity(&self) -> Option<flui_platform::capability::Activity> {
-            None
-        }
     }
 
     impl host::Services for WaylandLoop {

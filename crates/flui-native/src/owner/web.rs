@@ -862,11 +862,6 @@ impl host::Loop for WebLoop {
         // The page ends when its tab does: with no exit policy to ask, there
         // is nothing to re-evaluate.
     }
-
-    /// No Activity: Android's alone.
-    fn activity(&self) -> Option<flui_platform::capability::Activity> {
-        None
-    }
 }
 
 impl host::Services for WebLoop {

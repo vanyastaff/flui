@@ -627,11 +627,6 @@ impl host::Loop for HeadlessLoop {
         // `HeadlessExitReevaluation::drive` — see that method's doc.
         self.with_state(|state| state.exit_reevaluation_requested = true);
     }
-
-    /// No Activity: Android's alone.
-    fn activity(&self) -> Option<flui_platform::capability::Activity> {
-        None
-    }
 }
 
 impl host::Services for HeadlessLoop {

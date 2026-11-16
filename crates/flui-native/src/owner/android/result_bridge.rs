@@ -15,8 +15,8 @@ use std::rc::Rc;
 
 use android_activity::AndroidApp;
 use flui_platform::capability::{
-    Activity, ActivityBridge, CompletionSource, IntentFrame, JavaObject, JavaReference, JniFrame,
-    ResultKey, ResultRefused, ResultRequest, ResultToken,
+    Activity, ActivityBridge, CompletionSource, IntentFrame, JniFrame, ResultKey, ResultRefused,
+    ResultRequest, ResultToken,
 };
 use jni::objects::{JObject, JString};
 use jni::refs::Global;
@@ -26,10 +26,14 @@ use super::activity::with_activity;
 use super::activity_results::{ANSWER_NUMBERS, Answer, Purpose, ResultRouter, Routed, key_fits};
 use super::java_host::host_class;
 
+/// An answered `Intent`, held by a global reference on the owner thread
+/// until its provider takes it or the Activity ends.
+pub(crate) type HeldIntent = Global<JObject<'static>>;
+
 /// The running Activity's side of activity results.
 pub(crate) struct ResultBridge {
     app: AndroidApp,
-    router: RefCell<ResultRouter>,
+    router: RefCell<ResultRouter<HeldIntent>>,
 }
 
 impl std::fmt::Debug for ResultBridge {
@@ -80,7 +84,7 @@ impl ResultBridge {
     }
 
     /// Route what `FluiHost` answered since the last turn.
-    pub(crate) fn answer(&self, answers: Vec<Answer>) {
+    pub(crate) fn answer(&self, answers: Vec<Answer<HeldIntent>>) {
         for answer in answers {
             let (routed, delivery) = self.router.borrow_mut().answer(answer);
             delivery.deliver();
@@ -207,8 +211,27 @@ impl ActivityBridge for ResultBridge {
         }
     }
 
+    fn take_data(&self, token: ResultToken, f: &mut dyn FnMut(JniFrame)) -> bool {
+        // Taken out of the router first: the provider's closure runs with no
+        // borrow held, and the reference is deleted when it returns.
+        let Some(intent) = self.router.borrow_mut().take_data(token) else {
+            return false;
+        };
+        with_activity(&self.app, |env, _| {
+            let Some(lent) = frame(env, intent.as_obj()) else {
+                return Ok(false);
+            };
+            f(lent);
+            if env.exception_check() {
+                env.exception_clear();
+            }
+            Ok(true)
+        })
+        .unwrap_or(false)
+    }
+
     fn lend(&self, f: &mut dyn FnMut(JniFrame)) -> bool {
-        if self.router.borrow().admits() == Err(ResultRefused::ActivityEnded) {
+        if self.router.borrow().has_ended() {
             return false;
         }
         with_activity(&self.app, |env, activity| {
@@ -290,34 +313,12 @@ fn cancel_on_main_thread(app: &AndroidApp, epoch: i64, token: i64) {
     }
 }
 
-/// An object `FluiHost` handed over, held by a global reference.
-struct HeldObject(Global<JObject<'static>>);
-
-impl JavaReference for HeldObject {
-    fn lend(&self, f: &mut dyn FnMut(JniFrame)) -> bool {
-        let Ok(vm) = JavaVM::singleton() else {
-            return false;
-        };
-        vm.attach_current_thread(|env| -> jni::errors::Result<bool> {
-            let Some(lent) = frame(env, self.0.as_obj()) else {
-                return Ok(false);
-            };
-            f(lent);
-            if env.exception_check() {
-                env.exception_clear();
-            }
-            Ok(true)
-        })
-        .unwrap_or(false)
-    }
-}
-
 /// Every answer `FluiHost.drainAnswers` returns, read with each key's length
 /// checked before it is copied and each `Intent` held as it is, never read.
 pub(crate) fn drain_answers(
     env: &mut Env<'_>,
     activity: &JObject<'_>,
-) -> jni::errors::Result<Vec<Answer>> {
+) -> jni::errors::Result<Vec<Answer<HeldIntent>>> {
     use flui_platform::capability::{MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN};
     use jni::objects::{JLongArray, JObjectArray};
 
@@ -382,7 +383,7 @@ pub(crate) fn drain_answers(
             let held = if item.is_null() {
                 None
             } else {
-                Some(JavaObject::new(HeldObject(env.new_global_ref(&item)?)))
+                Some(env.new_global_ref(&item)?)
             };
             Ok((key, held))
         })?;

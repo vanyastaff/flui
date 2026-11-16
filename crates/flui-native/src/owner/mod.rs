@@ -255,13 +255,6 @@ impl OwnerPlatform {
         self.platform.clipboard()
     }
 
-    /// The Activity the platform runs in, on Android; `None` elsewhere. The
-    /// application offers it to capability providers (ADR-0154 §9).
-    #[must_use]
-    pub fn activity(&self) -> Option<flui_platform::capability::Activity> {
-        self.platform.activity()
-    }
-
     /// The host's primary selection, owner-local, where the platform has
     /// one: the application's primary selection provider builds its handles
     /// over it (ADR-0152).

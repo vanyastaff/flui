@@ -26,9 +26,8 @@ use std::collections::VecDeque;
 use std::num::NonZeroU64;
 
 use flui_platform::capability::{
-    ActivityResult, CompletionSource, JavaObject, MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN, Resolver,
-    ResultCode, ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken,
-    ResultTokenMint,
+    ActivityResult, CompletionSource, MAX_OPEN_REQUESTS, MAX_RESULT_KEY_LEN, Resolver, ResultCode,
+    ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
 };
 
 /// `FluiHost.ANSWER_RESULT`: `onActivityResult` answered the request.
@@ -40,19 +39,28 @@ pub(crate) const ANSWER_NOT_LAUNCHED: i64 = 2;
 pub(crate) const ANSWER_NUMBERS: usize = 4;
 /// The most answers of earlier Activities that wait for a reattachment.
 pub(crate) const MAX_EARLIER: usize = MAX_OPEN_REQUESTS;
+/// The most answered `Intent`s held for `take_data` at once: one for each
+/// request the Activity can have open. Past it the oldest is let go.
+pub(crate) const MAX_HELD: usize = MAX_OPEN_REQUESTS;
 
-/// What one request was answered with.
+/// What one request was answered with; `D` is the `Intent` as the host holds
+/// it.
 #[derive(Debug)]
-pub(crate) enum Reply {
+pub(crate) enum Reply<D> {
     /// The started activity's answer.
-    Result(ActivityResult),
+    Result {
+        /// The code it finished with.
+        code: ResultCode,
+        /// The `Intent` it answered with, if any.
+        data: Option<D>,
+    },
     /// Android refused to start it.
     NotLaunched,
 }
 
 /// One answer `FluiHost` queued.
 #[derive(Debug)]
-pub(crate) struct Answer {
+pub(crate) struct Answer<D> {
     /// The epoch of the Activity that took the request; 0 for a request
     /// restored from an earlier process.
     pub(crate) epoch: u64,
@@ -61,7 +69,7 @@ pub(crate) struct Answer {
     /// The request's key.
     pub(crate) key: Box<str>,
     /// What it was answered with.
-    pub(crate) reply: Reply,
+    pub(crate) reply: Reply<D>,
 }
 
 /// Whether `key` could be a [`ResultKey`]: what a drained key is held to
@@ -70,7 +78,7 @@ pub(crate) fn key_fits(key: &str) -> bool {
     !key.is_empty() && key.len() <= MAX_RESULT_KEY_LEN && key.bytes().all(|b| b.is_ascii_graphic())
 }
 
-impl Answer {
+impl<D> Answer<D> {
     /// The answers `FluiHost.drainAnswers` returned: [`ANSWER_NUMBERS`]
     /// numbers each, oldest first, with one key and one `Intent` (or none)
     /// each. Lengths that disagree are a defect of one side, which the
@@ -80,7 +88,7 @@ impl Answer {
     pub(crate) fn from_drained(
         numbers: &[i64],
         keys: Vec<Option<String>>,
-        data: Vec<Option<JavaObject>>,
+        data: Vec<Option<D>>,
     ) -> Vec<Self> {
         let (rows, rest) = numbers.as_chunks::<ANSWER_NUMBERS>();
         if !rest.is_empty() || rows.len() != keys.len() || rows.len() != data.len() {
@@ -99,10 +107,10 @@ impl Answer {
             .filter_map(|((&[epoch, token, kind, code], key), data)| {
                 let key = key.filter(|key| key_fits(key))?;
                 let reply = match kind {
-                    ANSWER_RESULT => Reply::Result(ActivityResult::new(
-                        ResultCode::from_raw(i32::try_from(code).ok()?),
+                    ANSWER_RESULT => Reply::Result {
+                        code: ResultCode::from_raw(i32::try_from(code).ok()?),
                         data,
-                    )),
+                    },
                     ANSWER_NOT_LAUNCHED => Reply::NotLaunched,
                     _ => {
                         tracing::warn!(
@@ -182,20 +190,31 @@ impl Delivery {
     }
 }
 
-/// The requests of one Activity, and the answers of earlier ones that wait
-/// for their key.
-pub(crate) struct ResultRouter {
+/// An earlier Activity's answer waiting for its key.
+struct Earlier<D> {
+    key: Box<str>,
+    code: ResultCode,
+    data: Option<D>,
+}
+
+/// The requests of one Activity, the answers of earlier ones that wait for
+/// their key, and the answered `Intent`s, of type `D`, held for
+/// [`take_data`](Self::take_data).
+pub(crate) struct ResultRouter<D> {
     /// This Activity's epoch, which `FluiHost.nextEpoch` minted.
     epoch: NonZeroU64,
     mint: ResultTokenMint,
     /// At most [`MAX_OPEN_REQUESTS`].
     open: Vec<Open>,
     /// Earlier Activities' answers, oldest first; at most [`MAX_EARLIER`].
-    earlier: VecDeque<(Box<str>, ActivityResult)>,
+    earlier: VecDeque<Earlier<D>>,
+    /// The `Intent` each answered request received, oldest first, until it
+    /// is taken; at most [`MAX_HELD`].
+    held: VecDeque<(ResultToken, D)>,
     ended: bool,
 }
 
-impl ResultRouter {
+impl<D> ResultRouter<D> {
     /// The router of the Activity whose epoch is `epoch`.
     pub(crate) fn new(epoch: NonZeroU64) -> Self {
         Self {
@@ -203,6 +222,7 @@ impl ResultRouter {
             mint: ResultTokenMint::new(),
             open: Vec::new(),
             earlier: VecDeque::new(),
+            held: VecDeque::new(),
             ended: false,
         }
     }
@@ -246,6 +266,18 @@ impl ResultRouter {
         Ok((token, ResultRequest::new(token, completion), resolver))
     }
 
+    /// The answer `code` for the request `token`, holding `data` under it.
+    fn settle(&mut self, token: ResultToken, code: ResultCode, data: Option<D>) -> ActivityResult {
+        let carried = data.is_some();
+        if let Some(data) = data {
+            if self.held.len() >= MAX_HELD {
+                drop(self.held.pop_front());
+            }
+            self.held.push_back((token, data));
+        }
+        ActivityResult::new(code, carried)
+    }
+
     /// Open a request for an activity this Activity is about to start under
     /// `key`; the caller hands Java its token with [`epoch`](Self::epoch).
     ///
@@ -280,13 +312,16 @@ impl ResultRouter {
     ) -> Result<(ResultRequest, Delivery), ResultRefused> {
         let (token, request, resolver) = self.take_token(completions)?;
         let mut delivery = Delivery::default();
-        match self
+        let waiting = self
             .earlier
             .iter()
-            .position(|(waiting, _)| **waiting == *key.as_str())
-            .and_then(|index| self.earlier.remove(index))
-        {
-            Some((_, result)) => delivery.push(resolver, Ok(result)),
+            .position(|earlier| *earlier.key == *key.as_str())
+            .and_then(|index| self.earlier.remove(index));
+        match waiting {
+            Some(earlier) => {
+                let outcome = Ok(self.settle(token, earlier.code, earlier.data));
+                delivery.push(resolver, outcome);
+            }
             None => self.open.push(Open {
                 token,
                 key,
@@ -298,7 +333,7 @@ impl ResultRouter {
     }
 
     /// Route `answer` to the request it answers.
-    pub(crate) fn answer(&mut self, answer: Answer) -> (Routed, Delivery) {
+    pub(crate) fn answer(&mut self, answer: Answer<D>) -> (Routed, Delivery) {
         let mut delivery = Delivery::default();
         if answer.epoch == self.epoch.get() {
             let index = self.open.iter().position(|open| {
@@ -309,13 +344,13 @@ impl ResultRouter {
             };
             let open = self.open.swap_remove(index);
             let outcome = match answer.reply {
-                Reply::Result(result) => Ok(result),
+                Reply::Result { code, data } => Ok(self.settle(open.token, code, data)),
                 Reply::NotLaunched => Err(ResultRefused::NotLaunched),
             };
             delivery.push(open.resolver, outcome);
             return (Routed::Settled, delivery);
         }
-        let Reply::Result(result) = answer.reply else {
+        let Reply::Result { code, data } = answer.reply else {
             // The earlier Activity's request never started; its runtime
             // ended with it, and nothing waits for a refusal.
             return (Routed::LetGo, delivery);
@@ -327,14 +362,27 @@ impl ResultRouter {
             // `remove`, not `swap_remove`: of two reattachments under one
             // key, the older receives the older answer.
             let open = self.open.remove(index);
-            delivery.push(open.resolver, Ok(result));
+            let outcome = Ok(self.settle(open.token, code, data));
+            delivery.push(open.resolver, outcome);
             return (Routed::Reattached, delivery);
         }
         if self.ended || self.earlier.len() >= MAX_EARLIER {
             return (Routed::LetGo, delivery);
         }
-        self.earlier.push_back((answer.key, result));
+        self.earlier.push_back(Earlier {
+            key: answer.key,
+            code,
+            data,
+        });
         (Routed::Waiting, delivery)
+    }
+
+    /// The `Intent` the request `token` was answered with, once; `None` when
+    /// it carried none, it was taken, it was let go past [`MAX_HELD`], or
+    /// the Activity ended.
+    pub(crate) fn take_data(&mut self, token: ResultToken) -> Option<D> {
+        let index = self.held.iter().position(|(held, _)| *held == token)?;
+        self.held.remove(index).map(|(_, data)| data)
     }
 
     /// End the open request `token` as [`ResultRefused::Cancelled`]; what it
@@ -347,9 +395,19 @@ impl ResultRouter {
         Some((open.purpose, delivery))
     }
 
+    /// Whether [`end`](Self::end) ran.
+    #[cfg_attr(
+        not(target_os = "android"),
+        expect(dead_code, reason = "the Android bridge lends no Activity once it ended")
+    )]
+    pub(crate) fn has_ended(&self) -> bool {
+        self.ended
+    }
+
     /// The Activity ended: every open request ends as
     /// [`ResultRefused::ActivityEnded`], later ones are refused, and the
-    /// earlier answers nobody reattached to are let go; how many were.
+    /// earlier answers nobody reattached to and the `Intent`s nobody took
+    /// are let go; how many earlier answers were.
     pub(crate) fn end(&mut self) -> (Delivery, usize) {
         self.ended = true;
         let mut delivery = Delivery::default();
@@ -358,6 +416,7 @@ impl ResultRouter {
         }
         let let_go = self.earlier.len();
         self.earlier.clear();
+        self.held.clear();
         (delivery, let_go)
     }
 
@@ -373,9 +432,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use flui_platform::capability::{
-        Abandoned, Completion, CompletionSource, JavaObject, JavaReference, JniFrame,
-        MAX_OPEN_REQUESTS, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions,
-        ResultCode, ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken,
+        Abandoned, Completion, CompletionSource, MAX_OPEN_REQUESTS, OwnerJob, OwnerPoster,
+        OwnerRetired, OwnerScope, PendingCompletions, ResultCode, ResultKey, ResultOutcome,
+        ResultRefused, ResultRequest, ResultToken,
     };
 
     use super::{
@@ -459,33 +518,33 @@ mod tests {
         }
     }
 
-    fn launch(router: &mut ResultRouter, owner: &Owner, key: ResultKey) -> Asked {
+    fn launch(router: &mut Router, owner: &Owner, key: ResultKey) -> Asked {
         Asked::of(router.open_launch(&owner.source, key).expect("admitted"))
     }
 
-    fn reattach(router: &mut ResultRouter, owner: &Owner, key: ResultKey) -> (Asked, Delivery) {
+    fn reattach(router: &mut Router, owner: &Owner, key: ResultKey) -> (Asked, Delivery) {
         let (request, delivery) = router.open_reattach(&owner.source, key).expect("admitted");
         (Asked::of(request), delivery)
     }
 
-    /// A Java object with nothing behind it: no thread attaches to lend it.
-    struct Unlent;
+    /// The `Intent` a test's answer carries: a name the router holds as it
+    /// would hold a JNI global reference.
+    type Held = &'static str;
 
-    impl JavaReference for Unlent {
-        fn lend(&self, _: &mut dyn FnMut(JniFrame)) -> bool {
-            false
-        }
-    }
+    /// The router a test drives.
+    type Router = ResultRouter<Held>;
 
-    fn result(epoch: u64, token: u64, key: ResultKey, code: ResultCode) -> Answer {
+    /// An answer of `code` for the request `token` of `epoch` under `key`,
+    /// carrying the `Intent` `"intent"`.
+    fn result(epoch: u64, token: u64, key: ResultKey, code: ResultCode) -> Answer<Held> {
         Answer {
             epoch,
             token,
             key: key.as_str().into(),
-            reply: Reply::Result(flui_platform::capability::ActivityResult::new(
+            reply: Reply::Result {
                 code,
-                Some(JavaObject::new(Unlent)),
-            )),
+                data: Some("intent"),
+            },
         }
     }
 
@@ -503,7 +562,7 @@ mod tests {
     #[test]
     fn an_answer_settles_the_request_its_token_names_once() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(7));
+        let mut router = Router::new(epoch(7));
         let mut first = launch(&mut router, &owner, PICK);
         let mut second = launch(&mut router, &owner, PICK);
         assert_ne!(first.token(), second.token(), "one token per call");
@@ -540,7 +599,7 @@ mod tests {
     #[test]
     fn a_refused_launch_and_a_cancel_each_end_their_request() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(1));
+        let mut router = Router::new(epoch(1));
         let mut refused = launch(&mut router, &owner, PICK);
         let (routed, delivery) = router.answer(Answer {
             epoch: 1,
@@ -580,7 +639,7 @@ mod tests {
     #[test]
     fn the_open_requests_are_bounded() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(1));
+        let mut router = Router::new(epoch(1));
         let mut open: Vec<Asked> = (1..MAX_OPEN_REQUESTS)
             .map(|_| launch(&mut router, &owner, PICK))
             .collect();
@@ -612,7 +671,7 @@ mod tests {
     #[test]
     fn an_earlier_activitys_answer_waits_for_its_key() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(2));
+        let mut router = Router::new(epoch(2));
         let mut ours = launch(&mut router, &owner, PICK);
         let (routed, _) = router.answer(result(1, ours.token().get(), PICK, ResultCode::Ok));
         assert_eq!(
@@ -661,7 +720,7 @@ mod tests {
     #[test]
     fn the_earlier_answers_that_wait_are_bounded() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(3));
+        let mut router = Router::new(epoch(3));
         for token in 0..MAX_EARLIER {
             let token = u64::try_from(token).expect("BUG: a small count");
             assert_eq!(
@@ -685,7 +744,7 @@ mod tests {
     #[test]
     fn the_end_refuses_every_open_request() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(4));
+        let mut router = Router::new(epoch(4));
         let mut launched = launch(&mut router, &owner, PICK);
         let (mut reattached, delivery) = reattach(&mut router, &owner, SHARE);
         delivery.deliver();
@@ -717,7 +776,7 @@ mod tests {
     #[test]
     fn an_answer_after_the_runtime_retired_reaches_nobody() {
         let owner = Owner::new();
-        let mut router = ResultRouter::new(epoch(5));
+        let mut router = Router::new(epoch(5));
         let mut request = launch(&mut router, &owner, PICK);
         owner.retire();
         assert!(matches!(
@@ -778,13 +837,13 @@ mod tests {
                 Some(long_key),
                 Some("test.share".to_owned()),
             ],
-            vec![Some(JavaObject::new(Unlent)), None, None, None, None],
+            vec![Some("intent"), None, None, None, None],
         );
         let read: Vec<_> = answers
             .iter()
             .map(|answer| {
                 let reply = match &answer.reply {
-                    Reply::Result(result) => Some((result.code(), result.data().is_some())),
+                    Reply::Result { code, data } => Some((*code, data.is_some())),
                     Reply::NotLaunched => None,
                 };
                 (answer.epoch, answer.token, &*answer.key, reply)
@@ -799,12 +858,54 @@ mod tests {
             ]
         );
         assert!(
-            Answer::from_drained(&[7, 1, ANSWER_RESULT], vec![None], vec![None]).is_empty(),
+            Answer::<Held>::from_drained(&[7, 1, ANSWER_RESULT], vec![None], vec![None]).is_empty(),
             "half an answer"
         );
         assert!(
-            Answer::from_drained(&[7, 1, ANSWER_RESULT, 0], vec![], vec![None]).is_empty(),
+            Answer::<Held>::from_drained(&[7, 1, ANSWER_RESULT, 0], vec![], vec![None]).is_empty(),
             "a key short"
         );
+    }
+
+    /// The `Intent` an answer carries stays with the router, under the token
+    /// of the request it settled (a reattachment's own, for an earlier
+    /// Activity's answer), and is taken once; at most `MAX_HELD` are held,
+    /// the oldest let go first, and the end lets every one go.
+    #[test]
+    fn an_answered_intent_is_taken_once_under_its_request() {
+        let owner = Owner::new();
+        let mut router = Router::new(epoch(6));
+        let mut asked = launch(&mut router, &owner, PICK);
+        router
+            .answer(result(6, asked.token().get(), PICK, ResultCode::Ok))
+            .1
+            .deliver();
+        owner.turn();
+        match asked.outcome() {
+            Some(Ok(Ok(result))) => assert!(result.has_data(), "the answer says it carried one"),
+            other => panic!("the answer: {other:?}"),
+        }
+        assert_eq!(router.take_data(asked.token()), Some("intent"));
+        assert_eq!(router.take_data(asked.token()), None, "taken once");
+
+        let _ = router.answer(result(1, 1, SHARE, ResultCode::Ok));
+        let (reattached, delivery) = reattach(&mut router, &owner, SHARE);
+        delivery.deliver();
+        assert_eq!(router.take_data(reattached.token()), Some("intent"));
+
+        let held: Vec<_> = (0..=super::MAX_HELD)
+            .map(|_| {
+                let asked = launch(&mut router, &owner, PICK);
+                router
+                    .answer(result(6, asked.token().get(), PICK, ResultCode::Ok))
+                    .1
+                    .deliver();
+                asked
+            })
+            .collect();
+        assert_eq!(router.take_data(held[0].token()), None, "the oldest let go");
+        assert_eq!(router.take_data(held[1].token()), Some("intent"));
+        let _ = router.end();
+        assert_eq!(router.take_data(held[2].token()), None, "the end lets go");
     }
 }

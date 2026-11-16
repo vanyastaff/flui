@@ -152,10 +152,6 @@ pub trait Loop: Sized + 'static {
 
     /// [`Platform::request_exit_policy_reevaluation`].
     fn request_exit_policy_reevaluation(&self);
-
-    /// [`Platform::activity`]: the Activity the loop runs in, on Android;
-    /// `None` on every other host, which has none.
-    fn activity(&self) -> Option<flui_platform::capability::Activity>;
 }
 
 /// What the host does for the application outside the closed list: the
