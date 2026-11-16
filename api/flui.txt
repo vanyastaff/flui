@@ -5374,7 +5374,7 @@ impl core::marker::StructuralPartialEq for flui::interaction::ClientToken
 pub trait flui::interaction::ClipboardBackend: 'static
 fn flui::interaction::ClipboardBackend::concealment(&self) -> flui::platform::Concealment
 fn flui::interaction::ClipboardBackend::read_text(&self, answer: flui::platform::capability::Resolver<flui::platform::ClipboardRead>)
-fn flui::interaction::ClipboardBackend::write(&self, write: flui::platform::ClipboardWrite)
+fn flui::interaction::ClipboardBackend::write(&self, write: flui::platform::ClipboardWrite, answer: flui::platform::capability::Resolver<flui::platform::ClipboardWritten>)
 pub enum flui::interaction::ClipboardCapability
 impl core::fmt::Debug for flui::interaction::ClipboardCapability
 impl flui::platform::capability::Capability for flui::interaction::ClipboardCapability { type Handle = flui::interaction::ClipboardHandle; }
@@ -5384,8 +5384,8 @@ impl core::fmt::Debug for flui::interaction::ClipboardHandle
 pub fn flui::interaction::ClipboardHandle::concealment(&self) -> flui::platform::Concealment
 pub fn flui::interaction::ClipboardHandle::new(backend: impl flui::interaction::ClipboardBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Self
 pub fn flui::interaction::ClipboardHandle::read_text(&self) -> flui::platform::capability::Completion<flui::platform::ClipboardRead>
-pub fn flui::interaction::ClipboardHandle::write(&self, write: flui::platform::ClipboardWrite)
-pub fn flui::interaction::ClipboardHandle::write_text(&self, text: impl Into<String>)
+pub fn flui::interaction::ClipboardHandle::write(&self, write: flui::platform::ClipboardWrite) -> flui::platform::capability::Completion<flui::platform::ClipboardWritten>
+pub fn flui::interaction::ClipboardHandle::write_text(&self, text: impl Into<String>) -> flui::platform::capability::Completion<flui::platform::ClipboardWritten>
 #[non_exhaustive] pub enum flui::interaction::Code
 impl Clone for flui::interaction::Code
 impl Copy for flui::interaction::Code
@@ -12014,6 +12014,7 @@ pub fn flui::platform::ClipboardWrite::concealed(self) -> Self
 pub fn flui::platform::ClipboardWrite::into_text(self) -> String
 pub fn flui::platform::ClipboardWrite::is_concealed(&self) -> bool
 pub fn flui::platform::ClipboardWrite::text(text: impl Into<String>) -> Self
+pub type flui::platform::ClipboardWritten = Result<(), flui::platform::ClipboardError>
 pub enum flui::platform::CloseDecision
 impl Clone for flui::platform::CloseDecision
 impl Copy for flui::platform::CloseDecision
@@ -36606,6 +36607,7 @@ pub fn flui_testing::clipboard::ScriptedClipboard::answer_concealment(&self, con
 pub fn flui_testing::clipboard::ScriptedClipboard::answer_held_reads(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::drop_held_reads(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::fail_reads_with(&self, error: flui::platform::ClipboardError)
+pub fn flui_testing::clipboard::ScriptedClipboard::fail_writes_with(&self, error: flui::platform::ClipboardError)
 pub fn flui_testing::clipboard::ScriptedClipboard::hold_reads(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::is_concealed(&self) -> bool
 pub fn flui_testing::clipboard::ScriptedClipboard::live_handles(&self) -> usize
@@ -36615,6 +36617,7 @@ pub fn flui_testing::clipboard::ScriptedClipboard::refuse(&self, refusal: flui::
 pub fn flui_testing::clipboard::ScriptedClipboard::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
 pub fn flui_testing::clipboard::ScriptedClipboard::set_text(&self, text: impl Into<String>)
 pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_reads(&self)
+pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_writes(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::text(&self) -> Option<String>
 pub struct flui_testing::host::HeadlessOsDrags { .. }
 impl Default for flui_testing::host::HeadlessOsDrags
