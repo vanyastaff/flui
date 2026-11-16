@@ -167,7 +167,6 @@ impl UiRuntime {
         if presentation.closing_requested.get() {
             return;
         }
-        let mut siblings = SiblingFailures::start(&self.lifecycle_passes, Some(id));
         presentation.window_execution.set(execution);
         if execution == flui_platform::WindowExecutionState::Detached {
             presentation.overlay_style.forget_delivery();
@@ -176,6 +175,7 @@ impl UiRuntime {
         presentation.window_focused.set(focused);
         let mut cancel = Vec::new();
         let mut first = FirstPanic::new();
+        let mut siblings = SiblingFailures::start(&self.lifecycle_passes, Some(id));
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
@@ -210,7 +210,6 @@ impl UiRuntime {
         if presentation.closing_requested.get() {
             return;
         }
-        let siblings = SiblingFailures::start(&self.lifecycle_passes, Some(id));
         let changed = presentation.window_execution.replace(state) != state;
         presentation.sync_haptics_visibility();
         self.reconcile_lifecycle(
@@ -219,7 +218,7 @@ impl UiRuntime {
             } else {
                 Vec::new()
             },
-            siblings,
+            SiblingFailures::start(&self.lifecycle_passes, Some(id)),
         );
     }
 
@@ -267,7 +266,6 @@ impl UiRuntime {
         if presentation.closing_requested.get() {
             return;
         }
-        let siblings = SiblingFailures::start(&self.lifecycle_passes, Some(id));
         let changed = presentation.window_visible.replace(visible) != visible;
         self.set_presentation_hidden(id, !visible);
         self.reconcile_lifecycle(
@@ -276,7 +274,7 @@ impl UiRuntime {
             } else {
                 Vec::new()
             },
-            siblings,
+            SiblingFailures::start(&self.lifecycle_passes, Some(id)),
         );
     }
 
@@ -491,12 +489,15 @@ impl UiRuntime {
     }
 
     pub(crate) fn stop_presentations_after_failure(&self, mut failure: FirstPanic) {
-        let siblings = SiblingFailures::start(&self.lifecycle_passes, None);
         self.host_lifecycle.set(HostLifecycle::Stopping);
         for presentation in self.presentations.iter() {
             begin_close(presentation, &mut failure);
         }
-        self.reconcile_lifecycle_after_failure(Vec::new(), failure, siblings);
+        self.reconcile_lifecycle_after_failure(
+            Vec::new(),
+            failure,
+            SiblingFailures::start(&self.lifecycle_passes, None),
+        );
     }
 
     /// Begin closing presentation `id` alone: it is told it is detached and
@@ -508,9 +509,12 @@ impl UiRuntime {
         mut failure: FirstPanic,
     ) {
         if let Some(presentation) = self.presentations.get(id) {
-            let siblings = SiblingFailures::start(&self.lifecycle_passes, None);
             begin_close(presentation, &mut failure);
-            self.reconcile_lifecycle_after_failure(Vec::new(), failure, siblings);
+            self.reconcile_lifecycle_after_failure(
+                Vec::new(),
+                failure,
+                SiblingFailures::start(&self.lifecycle_passes, None),
+            );
         } else if let Some(payload) = failure.into_payload() {
             resume_unwind(payload);
         }

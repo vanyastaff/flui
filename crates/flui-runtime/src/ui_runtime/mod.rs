@@ -233,8 +233,10 @@ pub struct UiRuntime {
     focus_coordinator: FocusCoordinator,
     host_lifecycle: Cell<HostLifecycle>,
     /// How many lifecycle passes are running, one inside another: a pass a
-    /// callback starts inside another attributes no failure to a sibling,
-    /// since the outer pass's own steps are still pending (ADR-0345 §2).
+    /// callback starts while another pass still has steps pending attributes
+    /// no failure to a sibling (ADR-0345 §2). A pass ends before it reports
+    /// its siblings' failures, so a report handler's pass is not counted
+    /// inside it.
     lifecycle_passes: Cell<u32>,
     /// Wall-clock origin for the production `raw_frame_time` computation, moved
     /// here from the retired `AppBinding`: frame times are UI runtime-relative.

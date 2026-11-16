@@ -86,8 +86,10 @@ it broke, as any binding notification does: its observers after the one that fai
 state. Every other step is the pass's own: the window's own presentation, the scheduler's
 aggregate and its listeners, a restored frame, a close, and the gesture pause of a sibling
 already hidden or paused, which is the interaction layer's code. So is every failure of a pass
-no window started (the host's lifecycle, a stop) and of a pass that a callback starts inside
-another, where the outer window's own steps are still pending: it fails the observation. flui-app
+no window started (the host's lifecycle, a stop) and of a pass that a callback starts while
+another pass still has steps pending, the outer window's own among them: it fails the
+observation. A pass ends before it reports its siblings' failures, so a report handler that
+changes a window starts a pass of its own, which attributes as any other. flui-app
 fails the window's installation with it, and `open_window` resumes it with the window open. The
 reconcile pass
 always has a previous state; an empty source is a broken invariant (`expect("BUG: …")`), not a
@@ -149,7 +151,9 @@ panic cannot skip removal.
   `headless_host::a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another`
   pins a panicking key-cancel and pointer-cancel handler of the window losing the focus, and
   flui-runtime's `a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own` pins a window's
-  own observer failure in a pass its key-cancel handler started as its own change's.
+  own observer failure in a pass its key-cancel handler started as its own change's, and
+  `a_report_handler_that_changes_a_window_starts_its_own_pass` pins a sibling's failure in a
+  pass a report handler started as reported against that sibling.
 
 ## Pros and cons of the options
 
