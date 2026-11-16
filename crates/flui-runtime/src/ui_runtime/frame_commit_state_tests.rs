@@ -267,7 +267,13 @@ pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
         match hold {
             Hold::Nothing => {}
             Hold::BackoffRunning => {
-                primary.arm_failure_retry(now + std::time::Duration::from_secs(60));
+                let deadline = now + std::time::Duration::from_secs(60);
+                primary.arm_failure_retry(deadline);
+                assert_eq!(
+                    ui_runtime.failure_retry_deadline(),
+                    None,
+                    "a saturated presentation waits for its settlement, not its deadline"
+                );
             }
             Hold::BackoffOver => {
                 primary.arm_failure_retry(now);
@@ -296,6 +302,21 @@ pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
             "{hold:?}: the freed place asks for the dirty tree's frame unless the presentation \
              may attempt none"
         );
+        if let Hold::BackoffRunning = hold {
+            assert_eq!(
+                ui_runtime.failure_retry_deadline(),
+                ui_runtime.presentations.primary().failure_retry_at(),
+                "the freed place gives the running backoff's deadline back to the host"
+            );
+            assert!(
+                ui_runtime
+                    .presentations
+                    .primary()
+                    .failure_retry_at()
+                    .is_some(),
+                "the older frame left the backoff"
+            );
+        }
     }
 }
 
