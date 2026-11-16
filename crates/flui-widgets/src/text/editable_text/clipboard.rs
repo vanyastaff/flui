@@ -87,7 +87,7 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
         match intent {
             // A copy has nothing to undo when the write fails.
             CopySelectionTextIntent::Copy => drop(written),
-            // A cut deletes only what the clipboard took (ADR-0336).
+            // A cut deletes only what the clipboard took (ADR-0337).
             CopySelectionTextIntent::Cut => written.on_complete(self.cut_answer(controller)),
         }
         ActionOutcome::Performed

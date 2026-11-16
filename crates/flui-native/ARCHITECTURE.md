@@ -2520,7 +2520,7 @@ apartment and the message-only windows are unchanged.
 ### The Win32 clipboard is served by a thread of its own
 
 Every `WindowsClipboard` read and write is a request to one `flui-clipboard`
-thread per process (ADR-0336 §3), started with the first request and never
+thread per process (ADR-0337 §3), started with the first request and never
 stopped. The owner thread only queues, into a channel bounded at
 `MAX_WAITING`; a request past it is refused `Unavailable` at once. The thread
 owns one message-only window (`HWND_MESSAGE` parent) and is the only place
@@ -2534,7 +2534,7 @@ rest.
 - **Two waits are another process's.** `OpenClipboard` fails while another
   window holds the clipboard (clipboard managers and `rdpclip.exe` open it
   after every change): the request tries again on `clipboard::patience`'s
-  schedule and is refused `Unavailable` when its patience runs out (ADR-0336
+  schedule and is refused `Unavailable` when its patience runs out (ADR-0337
   §2). `GetClipboardData` of text its owner renders on demand waits for that
   owner's `WM_RENDERFORMAT` answer, measured at the owner's own delay and at
   thirty seconds, Win32's bound, for one that never answers, which answers

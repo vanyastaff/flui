@@ -912,7 +912,7 @@ globals = [
     { item = "owner::apple::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
     { item = "owner::apple::macos::content_view::view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
     { item = "owner::apple::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
-    { item = "clipboard::windows::ClipboardThread::get::THREAD", grant = "ADR-0097", class = "process", reason = "the thread, with its message-only window, that opens the system clipboard for every read and write of the process (ADR-0336), started once per process" },
+    { item = "clipboard::windows::ClipboardThread::get::THREAD", grant = "ADR-0097", class = "process", reason = "the thread, with its message-only window, that opens the system clipboard for every read and write of the process (ADR-0337), started once per process" },
     { item = "window::apple::macos::delegate::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
     { item = "window::apple::macos::window_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window class, which the runtime holds once per process" },
     { item = "owner::windows::control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },

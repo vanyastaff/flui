@@ -1,4 +1,4 @@
-# ADR-0336: A clipboard write answers whether the clipboard took it, and Win32 serves its clipboard off the owner thread
+# ADR-0337: A clipboard write answers whether the clipboard took it, and Win32 serves its clipboard off the owner thread
 
 - **Status:** Accepted (2026-11-15)
 - **Date:** 2026-11-15

@@ -1,4 +1,4 @@
-//! The clipboard's vocabulary (ADR-0152 §5 and §6, ADR-0336): what a read of
+//! The clipboard's vocabulary (ADR-0152 §5 and §6, ADR-0337): what a read of
 //! the clipboard or of the primary selection answers, the text shared rather
 //! than copied per reader, or why there is none; what a write asks of the
 //! host, and whether the host took it.
@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// allocation, however large.
 pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 
-/// The answer to one clipboard write (ADR-0336): `Ok(())` once the clipboard
+/// The answer to one clipboard write (ADR-0337): `Ok(())` once the clipboard
 /// holds the written text, or why the host could not put it there. A refused
 /// write leaves the clipboard as it was, or empty where a concealed write
 /// could not be marked (ADR-0152 §6).

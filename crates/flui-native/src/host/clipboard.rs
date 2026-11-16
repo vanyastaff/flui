@@ -16,7 +16,7 @@ use flui_platform::{
 /// A read and a write answer through their [`Resolver`]: at once where the
 /// operating system answers on the owner thread (AppKit, UIKit, Android), from
 /// the clipboard's own thread on Win32, whose clipboard another process may
-/// hold or render late (ADR-0336), when the browser's promise settles on the
+/// hold or render late (ADR-0337), when the browser's promise settles on the
 /// web, when the selection is owned or read on X11 and Wayland. It never
 /// calls back into its caller.
 pub trait NativeClipboard {
@@ -30,7 +30,7 @@ pub trait NativeClipboard {
     /// [`concealment`](Self::concealment) says (ADR-0152 §6), and answer
     /// `answer`: `Ok(())` once the clipboard holds it, the
     /// [`ClipboardError`](flui_platform::ClipboardError) the host gave up with
-    /// otherwise (ADR-0336).
+    /// otherwise (ADR-0337).
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>);
 
     /// What this host does with a concealed write.

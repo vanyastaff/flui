@@ -2,7 +2,7 @@
 
 - **`flui-platform`**: `ClipboardWritten`, the answer to a clipboard write: `Ok(())` once the
   clipboard holds the text, or the `ClipboardError` the host gave up with
-  ([ADR-0336](/docs/adr/ADR-0336-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)).
+  ([ADR-0337](/docs/adr/ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)).
 - **`flui-testing`**: `ScriptedClipboard::fail_writes_with` and `stop_failing_writes`, which refuse
   writes as a host whose clipboard another application holds does.
 - **`flui-native`**: `testing::clipboard::SettlingOwner`, `write_unobserved` and `read_within`, for

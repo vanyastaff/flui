@@ -161,7 +161,7 @@ pub(crate) fn copy_and_paste_round_trip_through_the_headless_clipboard() {
 }
 
 /// A write the host refuses answers its refusal to the writer, at an owner
-/// turn, and leaves the clipboard as it was (ADR-0336).
+/// turn, and leaves the clipboard as it was (ADR-0337).
 pub(crate) fn a_refused_write_answers_its_refusal() {
     let mut host = HeadlessHost::new(window());
     let scripted = host.clipboard();

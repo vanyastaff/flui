@@ -1,5 +1,5 @@
 //! How long the Win32 clipboard keeps trying to open a clipboard another
-//! process holds, and how often (ADR-0336 §2).
+//! process holds, and how often (ADR-0337 §2).
 //!
 //! `OpenClipboard` fails while any other window holds the clipboard open,
 //! and clipboard managers, remote-desktop clients (`rdpclip.exe`) and

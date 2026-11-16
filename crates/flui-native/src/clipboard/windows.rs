@@ -1,4 +1,4 @@
-//! The Win32 clipboard, served by a thread of its own (ADR-0336).
+//! The Win32 clipboard, served by a thread of its own (ADR-0337).
 //!
 //! Every read and write is a request to the process's clipboard thread,
 //! which opens the clipboard with its own message-only window, serves the

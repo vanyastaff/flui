@@ -1028,7 +1028,7 @@ fn an_answer_that_is_not_the_form_asked_for_is_passed_over() {
 
 /// A write answers once the clipboard's thread owns the selection with it,
 /// and a write that a newer one replaced before it owned shares the newer
-/// one's answer: no write is left unanswered (ADR-0336).
+/// one's answer: no write is left unanswered (ADR-0337).
 #[test]
 fn a_clipboard_write_answers_once_it_owns_the_selection() {
     let Some(_server) = server() else {

@@ -82,7 +82,7 @@ process of their own. macOS and the mobile backends are lint-only in CI
 (`cross-typecheck`).
 
 The Win32 clipboard is opened only by its own thread, with its own owner
-window (ADR-0336): `OpenClipboard(NULL)` does not exclude other threads of the
+window (ADR-0337): `OpenClipboard(NULL)` does not exclude other threads of the
 same process, and a reader racing a writer on two threads was a use-after-free
 that aborted the process with `STATUS_HEAP_CORRUPTION`.
 
