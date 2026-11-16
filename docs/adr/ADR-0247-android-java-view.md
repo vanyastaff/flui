@@ -135,8 +135,8 @@ handwriting, and brings Gradle and AppCompat with it. The research note compares
   (`android_ime_adapter`: a keyboard's composition reaching the store in order across a frame
   transaction, the store composing what the view composes, an edit on a superseded snapshot
   dropped, a refused step, surrogate pairs, a protected field, the key rule, `EditorInfo`, the
-  editor actions, handwriting and the cursor anchor) and `shared::android_drag` in
-  `tests/android_drag.rs` (`android_drag_mapping`). `assert_backend_conforms` holds the Android
+  editor actions, handwriting and the cursor anchor) and the Android drag model in
+  `src/drag/android/clip/tests.rs` (`android_drag_mapping`). `assert_backend_conforms` holds the Android
   profiles: `a_key_during_composition_is_the_input_methods` with Android's key rule, and
   `outgoing_drag_is_delivered_as_claimed` with the view, below API 24 and without the view.
   `input_capabilities_contracts` states the outgoing drag per API level.
