@@ -3,7 +3,7 @@ use tokio::process::Command;
 
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts};
-use crate::build::util::{check_command_exists, process};
+use crate::build::util::{check_command_exists, environment, process};
 
 /// Builder for iOS platform (.app bundles via Xcode).
 #[derive(Debug, Default)]
@@ -18,25 +18,26 @@ impl IosBuilder {
 }
 
 impl IosBuilder {
-    pub(crate) fn validate_environment() -> BuildResult<()> {
+    /// Refuse an iOS build of the project in `workspace_root` that cannot run
+    /// here: no `xcodebuild`, or no iOS target the project's toolchain builds.
+    pub(crate) fn validate_environment(workspace_root: &Path) -> BuildResult<()> {
         // Check xcodebuild
         check_command_exists("xcodebuild")?;
 
-        // Check for iOS targets
-        let output = std::process::Command::new("rustup")
-            .args(["target", "list", "--installed"])
-            .output()?;
-
-        let installed_targets = String::from_utf8_lossy(&output.stdout);
-
-        // Check for at least one iOS target
-        if !installed_targets.contains("aarch64-apple-ios")
-            && !installed_targets.contains("x86_64-apple-ios")
-        {
-            return Err(BuildError::TargetNotInstalled {
-                target: "aarch64-apple-ios".to_string(),
-                install_cmd: "rustup target add aarch64-apple-ios".to_string(),
-            });
+        // At least one iOS target: a device's or a simulator's.
+        let mut any_buildable = false;
+        for triple in ["aarch64-apple-ios-sim", "x86_64-apple-ios"] {
+            if matches!(
+                environment::rust_target_support(workspace_root, triple)?,
+                environment::TargetSupport::Installed | environment::TargetSupport::FromSource
+            ) {
+                any_buildable = true;
+                break;
+            }
+        }
+        if !any_buildable {
+            // Refuses, naming the toolchain, unless the device target builds.
+            environment::require_rust_target(workspace_root, "aarch64-apple-ios")?;
         }
 
         crate::ui::debug("iOS environment validation passed".to_string());

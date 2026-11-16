@@ -1,8 +1,11 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
+use crate::app_id::AppId;
+use crate::build::android_signing::SigningKey;
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
+use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, Profile};
 use crate::build::util::{check_command_exists, environment, process};
 
 fn rust_target(abi: &str) -> &str {
@@ -20,10 +23,21 @@ fn rust_target(abi: &str) -> &str {
 pub(crate) struct AndroidBuilder {
     workspace_root: PathBuf,
     android_home: PathBuf,
+    /// The NDK this build resolved, which every `cargo ndk` call links with
+    /// and a Gradle project strips with.
     ndk_home: PathBuf,
     /// `JAVA_HOME` when set. Gradle needs it; the build-tools packager only
     /// needs a `java` for `apksigner`, from here or from `PATH`.
     java_home: Option<PathBuf>,
+}
+
+/// What a package states besides its code: its version and the key it is
+/// signed with, both from `flui.toml`.
+struct PackageFacts {
+    config: crate::config::FluiConfig,
+    version_code: u32,
+    version_name: String,
+    signing: SigningKey,
 }
 
 impl AndroidBuilder {
@@ -45,6 +59,48 @@ impl AndroidBuilder {
             java_home,
         })
     }
+
+    /// A `cargo ndk` command in the project, linking with the NDK this build
+    /// resolved.
+    fn cargo_ndk(&self) -> Command {
+        let mut command = Command::new("cargo");
+        command
+            .arg("ndk")
+            .envs(environment::ndk_env(&self.android_home, &self.ndk_home))
+            .current_dir(&self.workspace_root);
+        command
+    }
+
+    /// The version and the signing key a package built with `profile`
+    /// states, read from `flui.toml`.
+    ///
+    /// # Errors
+    ///
+    /// When `flui.toml` cannot be read, its version has no `versionCode`, or
+    /// the key cannot sign ([`SigningKey::for_build`]).
+    fn package_facts(&self, profile: Profile) -> BuildResult<PackageFacts> {
+        // flui.toml names the package either way, so a changed `[app] id`
+        // reaches the APK whichever packages it.
+        let config = crate::config::FluiConfig::load_from(&self.workspace_root.join("flui.toml"))
+            .map_err(|error| {
+            BuildError::Other(format!("flui.toml names the package: {error}"))
+        })?;
+        let version_code = config.app.version.android_version_code()?;
+        let version_name = config.app.version.android_version_name();
+        let signing = SigningKey::for_build(
+            profile,
+            config.signing.android.as_ref(),
+            &self.workspace_root,
+            &|name| std::env::var_os(name),
+            &crate::build::android_signing::path_kind,
+        )?;
+        Ok(PackageFacts {
+            config,
+            version_code,
+            version_name,
+            signing,
+        })
+    }
 }
 
 /// Scene plugin build/deploy methods for hot-reload workflow.
@@ -52,122 +108,178 @@ impl AndroidBuilder {
 /// These methods are separate from the build entry points because they
 /// operate on a scene plugin crate (cdylib), not the host application.
 impl AndroidBuilder {
-    /// Build a scene plugin crate as a cdylib `.so` for the given Android target.
+    /// Build the scene plugin crate `scene_crate` (a `cdylib`) for the ABI
+    /// `abi` and answer the library `cargo ndk` reports for it.
     ///
-    /// Returns the path to the compiled `.so` file in the target directory.
-    ///
-    /// # Arguments
-    ///
-    /// * `target` - Android target triple (e.g., "arm64-v8a")
-    /// * `scene_crate` - Package name of the scene crate
-    /// * `release` - Whether to build in release mode
+    /// `cargo ndk -o` copies the `cdylib` artifacts cargo reports for the
+    /// selected package, and only them, into `<dir>/<abi>/`, so the library
+    /// is that directory's one `.so` (beside `libc++_shared.so` when the
+    /// crate links it), never a file picked by its name from the target
+    /// directory.
     pub(crate) async fn build_scene_plugin(
         &self,
-        target: &str,
+        abi: &str,
         scene_crate: &str,
+        api_level: u32,
         release: bool,
     ) -> BuildResult<PathBuf> {
-        crate::ui::debug(format!(
-            "Building scene plugin '{scene_crate}' for {target}"
-        ));
-
-        let mut args = vec![
-            "ndk".to_string(),
-            "-t".to_string(),
-            target.to_string(),
-            "build".to_string(),
-            "-p".to_string(),
-            scene_crate.to_string(),
-        ];
-
-        if release {
-            args.push("--release".to_string());
+        crate::ui::debug(format!("Building scene plugin '{scene_crate}' for {abi}"));
+        let out_dir =
+            crate::build::util::cargo::target_directory(&self.workspace_root)?.join("flui-scene");
+        if out_dir.exists() {
+            std::fs::remove_dir_all(&out_dir)?;
         }
+        std::fs::create_dir_all(&out_dir)?;
 
-        process::run(Command::new("cargo").args(&args)).await?;
+        process::run(self.cargo_ndk().args(scene_build_args(
+            abi,
+            api_level,
+            &out_dir,
+            scene_crate,
+            release,
+        )))
+        .await?;
 
-        // Map cargo-ndk target name to Rust target triple
-        let rust_target = rust_target(target);
-
-        let profile_dir = if release { "release" } else { "debug" };
-
-        // Find the .so file — scene crates produce lib{name}.so, in the
-        // target-dir cargo uses, not necessarily the project's `target/`.
-        let target_dir = crate::build::util::cargo::target_directory(&self.workspace_root)?
-            .join(rust_target)
-            .join(profile_dir);
-
-        // Look for any .so file matching the scene crate's lib name
-        let so_path = std::fs::read_dir(&target_dir)
-            .map_err(|_| BuildError::path_not_found(target_dir.clone(), "target output dir"))?
-            .filter_map(std::result::Result::ok)
+        let abi_dir = out_dir.join(abi);
+        let libraries: Vec<PathBuf> = std::fs::read_dir(&abi_dir)
+            .map_err(|_| BuildError::path_not_found(abi_dir.clone(), "cargo ndk's output"))?
+            .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .find(|path| {
+            .filter(|path| {
                 path.extension().is_some_and(|ext| ext == "so")
-                    && path.file_name().is_some_and(|name| {
-                        let name = name.to_string_lossy();
-                        name.starts_with("lib") && name.contains("scene")
-                    })
+                    && path
+                        .file_name()
+                        .is_some_and(|name| name != "libc++_shared.so")
             })
-            .ok_or_else(|| {
-                BuildError::path_not_found(target_dir, "scene plugin .so not found in target dir")
-            })?;
+            .collect();
+        let [so_path] = libraries.as_slice() else {
+            return Err(BuildError::invalid_config(
+                scene_crate,
+                format!(
+                    "cargo ndk reported {} libraries for the scene crate in {}, not one; its \
+                     `[lib] crate-type` must include \"cdylib\"",
+                    libraries.len(),
+                    abi_dir.display()
+                ),
+            ));
+        };
 
         // A 16 KB-page device cannot `dlopen` a 4 KB-aligned plugin either.
-        if super::android_elf::needs_16_kb_pages(target) {
-            super::android_elf::check_page_alignment(&so_path)?;
+        if super::android_elf::needs_16_kb_pages(abi) {
+            super::android_elf::check_page_alignment(so_path)?;
         }
         crate::ui::debug(format!("Scene plugin built: {}", so_path.display()));
-        Ok(so_path)
+        Ok(so_path.clone())
     }
 
-    /// Push a compiled scene plugin `.so` to a connected Android device.
+    /// Push the scene plugin `so_path` to the device `serial` and copy it
+    /// into the files of the application `package`, as `lib_name`.
     ///
-    /// Uses `adb push` to `/data/local/tmp/` then `adb shell run-as` to copy
-    /// into the app's internal data directory (required by SELinux).
-    ///
-    /// # Arguments
-    ///
-    /// * `so_path` - Local path to the `.so` file
-    /// * `package` - Android package name (e.g., "com.vanya.flui.counter")
-    /// * `lib_name` - Library filename on device (e.g., "libflui_scene.so")
+    /// `adb push` to `/data/local/tmp/`, then `run-as` the application to
+    /// copy it into its own directory, where SELinux lets the app map it
+    /// ([`scene_push_commands`]).
     pub(crate) async fn push_scene_plugin(
         &self,
+        adb: &Path,
+        serial: &str,
         so_path: &Path,
-        package: &str,
+        package: &AppId,
         lib_name: &str,
     ) -> BuildResult<()> {
-        let so_str = so_path
-            .to_str()
-            .ok_or_else(|| BuildError::Other(format!("invalid path: {}", so_path.display())))?;
-
-        let tmp_path = format!("/data/local/tmp/{lib_name}");
-        let app_path = format!("/data/data/{package}/files/{lib_name}");
-
-        // Push to /data/local/tmp/
-        process::run(Command::new("adb").args(["push", so_str, &tmp_path])).await?;
-
-        // Copy into app's data directory (SELinux requires app_data_file context)
-        let cp_cmd = format!("cp {tmp_path} {app_path}");
-        process::run(Command::new("adb").args(["shell", "run-as", package, "sh", "-c", &cp_cmd]))
-            .await?;
-
-        crate::ui::debug(format!("Scene plugin pushed to device: {app_path}"));
+        for args in scene_push_commands(serial, so_path, package, lib_name) {
+            process::run(Command::new(adb).args(args)).await?;
+        }
+        crate::ui::debug(format!(
+            "Scene plugin pushed to {serial}: files/{lib_name} of {}",
+            package.android_package()
+        ));
         Ok(())
     }
 }
 
+/// The `cargo ndk` arguments that build the scene crate `scene_crate` for
+/// `abi` against `api_level` and copy its library into `out_dir`. The crate
+/// is named by its package name, which is how cargo-ndk finds its manifest.
+fn scene_build_args(
+    abi: &str,
+    api_level: u32,
+    out_dir: &Path,
+    scene_crate: &str,
+    release: bool,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "-t".into(),
+        abi.into(),
+        "--platform".into(),
+        api_level.to_string().into(),
+        "-o".into(),
+        out_dir.as_os_str().to_owned(),
+        "build".into(),
+        "-p".into(),
+        scene_crate.into(),
+        "--lib".into(),
+    ];
+    if release {
+        args.push("--release".into());
+    }
+    args
+}
+
+/// The two `adb` commands that put the scene plugin on the device `serial`.
+///
+/// `adb shell` joins the words after it with spaces and hands them to the
+/// device's shell, so each word is one the shell takes as it is: the paths
+/// are FLUI's own (`/data/local/tmp/<lib_name>`, `files/<lib_name>` under the
+/// directory `run-as` starts in) and the package is an [`AppId`], whose
+/// grammar holds no character a shell reads.
+fn scene_push_commands(
+    serial: &str,
+    so_path: &Path,
+    package: &AppId,
+    lib_name: &str,
+) -> [Vec<OsString>; 2] {
+    let staged = format!("/data/local/tmp/{lib_name}");
+    [
+        vec![
+            "-s".into(),
+            serial.into(),
+            "push".into(),
+            so_path.as_os_str().to_owned(),
+            staged.clone().into(),
+        ],
+        vec![
+            "-s".into(),
+            serial.into(),
+            "shell".into(),
+            "run-as".into(),
+            package.android_package().into(),
+            "cp".into(),
+            staged.into(),
+            format!("files/{lib_name}").into(),
+        ],
+    ]
+}
+
 impl AndroidBuilder {
-    pub(crate) fn validate_environment(&self, abi: &str) -> BuildResult<()> {
-        // Check cargo-ndk
+    /// Refuse a build with `profile` for `abi` that cannot run here, before
+    /// anything compiles: no `cargo ndk`, no JDK for `apksigner`, no Rust
+    /// target for the ABI, a version with no `versionCode`, a key that cannot
+    /// sign.
+    ///
+    /// # Errors
+    ///
+    /// The first of those refusals.
+    pub(crate) fn validate_environment(&self, abi: &str, profile: Profile) -> BuildResult<()> {
         check_command_exists("cargo")?;
 
-        // Try to find cargo-ndk
-        let cargo_ndk_ok = std::process::Command::new("cargo")
-            .args(["ndk", "--version"])
-            .output()
-            .is_ok_and(|output| output.status.success());
-
+        let cargo_ndk_ok = crate::proc::probe_stdout(
+            std::process::Command::new("cargo")
+                .args(["ndk", "--version"])
+                .envs(environment::ndk_env(&self.android_home, &self.ndk_home))
+                .current_dir(&self.workspace_root),
+            crate::proc::PROBE_TIMEOUT,
+        )
+        .is_some();
         if !cargo_ndk_ok {
             return Err(BuildError::ToolNotFound {
                 tool: "cargo-ndk".to_string(),
@@ -185,23 +297,29 @@ impl AndroidBuilder {
             });
         }
 
-        // Validate the compiler target cargo-ndk will actually use.
-        let output = std::process::Command::new("rustup")
-            .args(["target", "list", "--installed"])
-            .current_dir(&self.workspace_root)
-            .output()?;
+        // The compiler target cargo-ndk will actually use.
+        environment::require_rust_target(&self.workspace_root, rust_target(abi))?;
 
-        let installed_targets = String::from_utf8_lossy(&output.stdout);
-        let target = rust_target(abi);
-
-        if !installed_targets
-            .lines()
-            .any(|installed| installed.trim() == target)
+        // The packager without Gradle needs build-tools and an Android
+        // platform at FLUI's targetSdk: a missing one is named now, not after
+        // the native build. Gradle resolves its own.
+        let gradle_wrapper = if cfg!(target_os = "windows") {
+            "gradlew.bat"
+        } else {
+            "gradlew"
+        };
+        if !self
+            .workspace_root
+            .join("platforms")
+            .join("android")
+            .join(gradle_wrapper)
+            .exists()
         {
-            return Err(BuildError::TargetNotInstalled {
-                target: target.to_string(),
-                install_cmd: format!("rustup target add {target}"),
-            });
+            super::android_package::BuildTools::locate(&self.android_home, None)?;
+        }
+
+        if self.workspace_root.join("flui.toml").is_file() {
+            self.package_facts(profile)?;
         }
 
         crate::ui::debug("Android environment validation passed".to_string());
@@ -267,7 +385,6 @@ impl AndroidBuilder {
             // the `android_main` its `#[flui::main]` function writes, which `cargo ndk`
             // drops into `jniLibs/<abi>/lib<name>.so`.
             let mut args = vec![
-                "ndk",
                 "-t",
                 target.as_str(),
                 "--platform",
@@ -286,10 +403,9 @@ impl AndroidBuilder {
             }
 
             process::run(
-                Command::new("cargo")
+                self.cargo_ndk()
                     .args(&args)
-                    .envs(ctx.floors.cargo_env(rust_target(target)))
-                    .current_dir(&self.workspace_root),
+                    .envs(ctx.floors.cargo_env(rust_target(target))),
             )
             .await?;
 
@@ -322,13 +438,12 @@ impl AndroidBuilder {
         })
     }
 
+    /// Package the APK of `artifacts`, and say how it was signed.
     pub(crate) async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-    ) -> BuildResult<FinalArtifacts> {
-        crate::ui::debug("Building APK with Gradle...".to_string());
-
+    ) -> BuildResult<AndroidPackage> {
         let android_dir = self.workspace_root.join("platforms").join("android");
 
         let gradle_wrapper_name = if cfg!(target_os = "windows") {
@@ -343,35 +458,54 @@ impl AndroidBuilder {
                 "the Android platform is not scaffolded; run `flui platform add android`",
             ));
         }
-        // flui.toml names the package either way, so a changed `[app] id`
-        // reaches the APK whichever packages it.
-        let config = crate::config::FluiConfig::load_from(&self.workspace_root.join("flui.toml"))
-            .map_err(|error| {
-            BuildError::Other(format!("flui.toml names the package: {error}"))
-        })?;
+        let facts = self.package_facts(ctx.profile)?;
+        if facts.signing.is_debug_for_release() {
+            let _ = crate::ui::warning(format!(
+                "this release APK is signed with the debug key ({}), which a store refuses; \
+                 name the release key in flui.toml under [signing.android]",
+                facts.signing.keystore().display()
+            ));
+        }
         let declarations = self.declarations(ctx)?;
-        self.write_manifest(&config, &declarations)?;
+        self.write_manifest(&facts.config, &declarations)?;
+        // Both packagers write the same file, so a Gradle wrapper added later
+        // replaces the APK rather than leaving a second one beside it.
+        let output = ctx.output_dir.join(format!(
+            "{}-{}.apk",
+            facts.config.app.name,
+            ctx.profile.as_str()
+        ));
 
         // A Gradle wrapper in the project means the app has grown a Java or
         // Kotlin side and Gradle owns the APK; without one, the SDK's own
         // build-tools package the NativeActivity app directly.
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
-            return self
-                .package_with_build_tools(ctx, artifacts, &config, &declarations)
-                .await;
+            let apk = self
+                .package_with_build_tools(ctx, artifacts, &facts, &declarations, &output)
+                .await?;
+            return Ok(AndroidPackage {
+                apk,
+                signing: facts.signing.package_signing(),
+            });
         }
+        crate::ui::debug("Building APK with Gradle...".to_string());
         let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
             tool: "JAVA_HOME (Gradle needs a JDK)".to_string(),
             install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
         })?;
 
-        crate::build::gradle_project::state_project(
+        let command_properties = crate::build::gradle_project::state_project(
             &android_dir,
             &crate::build::gradle_project::GradleFacts {
                 min_sdk: ctx.floors.android_api(),
                 target_sdk: crate::build::platform_floor::ANDROID_TARGET_SDK,
-                application_id: config.app.id.android_package(),
+                application_id: facts.config.app.id.android_package(),
+                version_code: facts.version_code,
+                version_name: &facts.version_name,
+                ndk_path: &self.ndk_home,
+                profile: ctx.profile,
+                release_key: facts.signing.release_key(),
                 java_sources: &declarations
                     .android_java()
                     .map(|(_, path)| path.to_path_buf())
@@ -383,48 +517,80 @@ impl AndroidBuilder {
             },
         )?;
         let gradle_task = match ctx.profile {
-            crate::build::platform::Profile::Debug => "assembleDebug",
-            crate::build::platform::Profile::Release => "assembleRelease",
+            Profile::Debug => "assembleDebug",
+            Profile::Release => "assembleRelease",
         };
         process::run(
             Command::new(&gradle_wrapper_path)
+                .args(&command_properties)
                 .arg(gradle_task)
                 .env("JAVA_HOME", java_home)
                 .current_dir(&android_dir),
         )
         .await?;
 
-        // Find the APK
-        let apk_dir = android_dir
-            .join("app")
-            .join("build")
-            .join("outputs")
-            .join("apk")
-            .join(ctx.profile.as_str());
+        let apk_path = gradle_apk(
+            &android_dir
+                .join("app")
+                .join("build")
+                .join("outputs")
+                .join("apk")
+                .join(ctx.profile.as_str()),
+            ctx.profile,
+        )?;
+        std::fs::copy(&apk_path, &output)?;
+        let size_bytes = std::fs::metadata(&output)?.len();
+        crate::ui::debug(format!("APK copied to: {}", output.display()));
 
-        let apk_path = std::fs::read_dir(&apk_dir)?
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| path.extension().is_some_and(|ext| ext == "apk"))
-            .ok_or_else(|| BuildError::PathNotFound {
-                path: apk_dir.clone(),
-                context: "APK file not found in build output".to_string(),
-            })?;
-
-        let size_bytes = std::fs::metadata(&apk_path)?.len();
-
-        // Copy to output directory
-        let output_apk = ctx
-            .output_dir
-            .join(format!("flui-{}.apk", ctx.profile.as_str()));
-        std::fs::copy(&apk_path, &output_apk)?;
-
-        crate::ui::debug(format!("APK copied to: {}", output_apk.display()));
-
-        Ok(FinalArtifacts {
-            app_binary: output_apk,
-            size_bytes,
+        Ok(AndroidPackage {
+            apk: FinalArtifacts {
+                app_binary: output,
+                size_bytes,
+            },
+            signing: facts.signing.package_signing(),
         })
+    }
+}
+
+/// An APK the build delivered, and how it was signed.
+#[derive(Debug)]
+pub(crate) struct AndroidPackage {
+    /// The APK and its size.
+    pub(crate) apk: FinalArtifacts,
+    /// The key it was signed with.
+    pub(crate) signing: crate::build::android_signing::PackageSigning,
+}
+
+/// The APK the Gradle build of `profile` wrote in `apk_dir`: the module's
+/// `app-<profile>.apk`, which the Android Gradle plugin names
+/// `app-<profile>-unsigned.apk` when no signing config signs it.
+///
+/// Gradle leaves the outputs of earlier builds in place, so of the two names
+/// the newer file is this build's.
+///
+/// # Errors
+///
+/// [`BuildError::UnsignedApk`] when this build's APK is the unsigned one,
+/// [`BuildError::PathNotFound`] when there is neither.
+fn gradle_apk(apk_dir: &Path, profile: Profile) -> BuildResult<PathBuf> {
+    let signed = apk_dir.join(format!("app-{}.apk", profile.as_str()));
+    let unsigned = apk_dir.join(format!("app-{}-unsigned.apk", profile.as_str()));
+    let modified = |path: &Path| {
+        std::fs::metadata(path)
+            .ok()
+            .filter(std::fs::Metadata::is_file)
+            .and_then(|metadata| metadata.modified().ok())
+    };
+    match (modified(&signed), modified(&unsigned)) {
+        (Some(signed_at), Some(unsigned_at)) if unsigned_at > signed_at => {
+            Err(BuildError::UnsignedApk { apk: unsigned })
+        }
+        (Some(_), _) => Ok(signed),
+        (None, Some(_)) => Err(BuildError::UnsignedApk { apk: unsigned }),
+        (None, None) => Err(BuildError::PathNotFound {
+            path: signed,
+            context: "the APK Gradle should have written".to_string(),
+        }),
     }
 }
 
@@ -480,10 +646,10 @@ impl AndroidBuilder {
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-        config: &crate::config::FluiConfig,
+        facts: &PackageFacts,
         declarations: &crate::declarations::Declarations,
+        output: &Path,
     ) -> BuildResult<FinalArtifacts> {
-        let package = config.app.id.android_package();
         let manifest = super::android_manifest::path_in(&self.workspace_root);
         let dex: Vec<PathBuf> = declarations
             .android_dex()
@@ -502,31 +668,161 @@ impl AndroidBuilder {
                 (abi, lib.clone())
             })
             .collect();
-        let output =
-            ctx.output_dir
-                .join(format!("{}-{}.apk", config.app.name, ctx.profile.as_str()));
         let tools =
             super::android_package::BuildTools::locate(&self.android_home, self.java_home.clone())?;
         tools
             .package(&super::android_package::ApkSpec {
                 manifest: &manifest,
-                package,
+                package: facts.config.app.id.android_package(),
                 native_libs: &native_libs,
                 dex: &dex,
                 work_dir: &ctx.output_dir.join("apk-work"),
-                output: &output,
+                output,
                 min_sdk: ctx.floors.android_api(),
+                version_code: facts.version_code,
+                version_name: &facts.version_name,
+                signing: &facts.signing,
             })
             .await?;
-        let size_bytes = std::fs::metadata(&output)?.len();
+        let size_bytes = std::fs::metadata(output)?.len();
         crate::ui::debug(format!(
             "APK {} ({} entries)",
             output.display(),
-            super::android_package::archive_entries(&output)?.len()
+            super::android_package::archive_entries(output)?.len()
         ));
         Ok(FinalArtifacts {
-            app_binary: output,
+            app_binary: output.to_path_buf(),
             size_bytes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::Path;
+
+    use super::{gradle_apk, scene_build_args, scene_push_commands};
+    use crate::app_id::AppId;
+    use crate::build::error::BuildError;
+    use crate::build::platform::Profile;
+
+    fn strings(args: &[OsString]) -> Vec<String> {
+        args.iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// The scene plugin reaches the device a run names, and the application
+    /// directory by a `cp` whose every word is its own argument: `adb shell`
+    /// joins its words for the device's shell, so `sh -c "cp …"` arrived there
+    /// as `sh -c cp` with no operands.
+    #[test]
+    fn the_scene_plugin_is_copied_into_the_application_on_the_named_device() {
+        let package = AppId::try_new("com.example.notes").expect("an identifier");
+        let [push, copy] = scene_push_commands(
+            "emulator-5554",
+            Path::new("out/arm64-v8a/libnotes_scene.so"),
+            &package,
+            "libflui_scene.so",
+        );
+        assert_eq!(
+            strings(&push),
+            [
+                "-s",
+                "emulator-5554",
+                "push",
+                Path::new("out/arm64-v8a/libnotes_scene.so")
+                    .to_string_lossy()
+                    .as_ref(),
+                "/data/local/tmp/libflui_scene.so"
+            ]
+        );
+        assert_eq!(
+            strings(&copy),
+            [
+                "-s",
+                "emulator-5554",
+                "shell",
+                "run-as",
+                "com.example.notes",
+                "cp",
+                "/data/local/tmp/libflui_scene.so",
+                "files/libflui_scene.so"
+            ]
+        );
+    }
+
+    /// The scene crate is built against the application's floor and its
+    /// library copied where the build reads it, the crate named as
+    /// cargo-ndk finds it.
+    #[test]
+    fn the_scene_plugin_is_built_at_the_floor_into_its_own_directory() {
+        assert_eq!(
+            strings(&scene_build_args(
+                "x86_64",
+                26,
+                Path::new("scene-out"),
+                "notes-scene",
+                true
+            )),
+            [
+                "-t",
+                "x86_64",
+                "--platform",
+                "26",
+                "-o",
+                "scene-out",
+                "build",
+                "-p",
+                "notes-scene",
+                "--lib",
+                "--release"
+            ]
+        );
+    }
+
+    /// Gradle's APK is the signed one this build wrote: an unsigned APK, the
+    /// one the release build type writes without a signing config, is
+    /// refused, also when an older signed one is still there.
+    #[test]
+    fn a_gradle_apk_that_is_not_signed_is_refused() {
+        let dir = tempfile::tempdir().expect("apk dir");
+        let signed = dir.path().join("app-release.apk");
+        let unsigned = dir.path().join("app-release-unsigned.apk");
+        let write = |path: &Path, age_secs: u64| {
+            std::fs::write(path, b"PK").expect("apk");
+            let at = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+            std::fs::File::options()
+                .write(true)
+                .open(path)
+                .and_then(|file| file.set_modified(at))
+                .expect("modified time");
+        };
+        let mut failures = Vec::new();
+
+        if !matches!(
+            gradle_apk(dir.path(), Profile::Release),
+            Err(BuildError::PathNotFound { .. })
+        ) {
+            failures.push("no APK at all".to_owned());
+        }
+        write(&unsigned, 0);
+        match gradle_apk(dir.path(), Profile::Release) {
+            Err(BuildError::UnsignedApk { apk }) if apk == unsigned => {}
+            other => failures.push(format!("only the unsigned APK: {other:?}")),
+        }
+        write(&signed, 60);
+        match gradle_apk(dir.path(), Profile::Release) {
+            Err(BuildError::UnsignedApk { apk }) if apk == unsigned => {}
+            other => failures.push(format!("an older signed APK beside it: {other:?}")),
+        }
+        write(&signed, 0);
+        write(&unsigned, 60);
+        match gradle_apk(dir.path(), Profile::Release) {
+            Ok(apk) if apk == signed => {}
+            other => failures.push(format!("a newer signed APK: {other:?}")),
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 }

@@ -61,7 +61,16 @@ fn main() {
     match name.as_ref() {
         "adb" if args.first().is_some_and(|arg| arg == "devices") => println!("List of devices attached\nemulator-5554 device product:sdk model:Fixture device:sdk"),
         "adb" => println!("x86_64,arm64-v8a"),
-        "rustup" => println!("{}", env::var("FLUI_FIXTURE_INSTALLED_TARGETS").expect("installed targets")),
+        "rustc" if args.iter().any(|arg| arg == "target-libdir") => {
+            let target = args.iter().skip_while(|arg| *arg != "--target").nth(1).expect("a target");
+            let libraries = Path::new(&env::var_os("FLUI_FIXTURE_TARGET_LIBS").expect("target libraries")).join(target);
+            println!("{}", libraries.display());
+        }
+        "rustc" => {
+            let status = Command::new(env::var_os("FLUI_FIXTURE_REAL_RUSTC").expect("real rustc"))
+                .args(args).status().expect("rustc");
+            exit(status.code().unwrap_or(1));
+        }
         "java" => println!("openjdk version 21"),
         "google-chrome" => {
             std::fs::write(env::var("FLUI_FIXTURE_BROWSER_STARTED").expect("browser mark"), "").expect("browser mark");
@@ -69,7 +78,12 @@ fn main() {
         }
         "cargo" if args.first().is_some_and(|arg| arg == "ndk") => {
             if args.iter().any(|arg| arg == "--version") { println!("cargo-ndk 4.1.2"); }
-            else { eprintln!("ANDROID_NATIVE_BUILD_ARGS={args:?}"); exit(31); }
+            else {
+                eprintln!("ANDROID_NATIVE_BUILD_ARGS={args:?}");
+                eprintln!("ANDROID_NATIVE_BUILD_NDK={}", env::var("ANDROID_NDK_HOME").unwrap_or_default());
+                eprintln!("ANDROID_NATIVE_BUILD_SDK={}", env::var("ANDROID_HOME").unwrap_or_default());
+                exit(31);
+            }
         }
         "cargo" => {
             let status = Command::new(env::var_os("FLUI_FIXTURE_REAL_CARGO").expect("real Cargo"))
@@ -95,16 +109,40 @@ fn main() {
     );
     // A browser on the PATH, which the Linux discovery would start to read its
     // version; it records that it was started.
-    for tool in ["adb", "cargo", "rustup", "java", "google-chrome"] {
+    for tool in ["adb", "cargo", "rustc", "java", "google-chrome"] {
         std::fs::copy(
             &shim,
             tools.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)),
         )
         .expect("install fixture tool");
     }
+    // The toolchain has the libraries of both Android targets.
+    let target_libs = root.join("target-libs");
+    for target in ["aarch64-linux-android", "x86_64-linux-android"] {
+        std::fs::create_dir_all(target_libs.join(target)).expect("target libraries");
+    }
+    let real_rustc = which::which("rustc").expect("real rustc executable");
+    // Two NDK versions under the SDK and no ANDROID_NDK_HOME: the build resolves the
+    // newer by number (29 above 9, which sorts after it as text) and hands it
+    // to cargo-ndk, which would otherwise pick one itself.
     let sdk = root.join("sdk");
     let ndk = sdk.join("ndk").join("29.0.0");
     std::fs::create_dir_all(&ndk).expect("NDK fixture");
+    std::fs::create_dir_all(sdk.join("ndk").join("9.0.0")).expect("older NDK fixture");
+    // The packager without Gradle finds its build-tools and a platform at or
+    // above FLUI's targetSdk before anything compiles.
+    let build_tools = sdk.join("build-tools").join("99.0.0");
+    std::fs::create_dir_all(&build_tools).expect("build-tools fixture");
+    for tool in ["aapt2", "zipalign", "apksigner"] {
+        std::fs::write(
+            build_tools.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)),
+            b"",
+        )
+        .expect("build-tool fixture");
+    }
+    let platform = sdk.join("platforms").join("android-99");
+    std::fs::create_dir_all(&platform).expect("platform fixture");
+    std::fs::write(platform.join("android.jar"), b"").expect("android.jar fixture");
     let path = std::env::join_paths(std::iter::once(tools).chain(std::env::split_paths(
         &std::env::var_os("PATH").expect("PATH"),
     )))
@@ -119,10 +157,12 @@ fn main() {
         .env("CARGO_HOME", root.join("cargo-home"))
         .env("CARGO_NET_OFFLINE", "true")
         .env("CARGO_TARGET_DIR", app.join("target"))
-        .env("ANDROID_HOME", sdk)
-        .env("ANDROID_NDK_HOME", ndk)
+        .env("ANDROID_HOME", &sdk)
+        .env_remove("ANDROID_NDK_HOME")
+        .env_remove("RUSTC")
         .env_remove("JAVA_HOME")
-        .env("FLUI_FIXTURE_INSTALLED_TARGETS", "aarch64-linux-android\nx86_64-linux-android")
+        .env("FLUI_FIXTURE_TARGET_LIBS", &target_libs)
+        .env("FLUI_FIXTURE_REAL_RUSTC", real_rustc)
         .env(
             "FLUI_FIXTURE_REAL_CARGO",
             std::env::var_os("CARGO").expect("real Cargo"),
@@ -148,9 +188,21 @@ fn main() {
         !browser_started.exists(),
         "a device named by its serial is found without starting the installed browsers"
     );
+    let handed = |name: &str| {
+        stderr
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("ANDROID_NATIVE_BUILD_{name}=")))
+            .map(std::path::PathBuf::from)
+    };
+    assert_eq!(
+        handed("NDK"),
+        Some(ndk),
+        "cargo-ndk links with the NDK the build resolved: {stderr}"
+    );
+    assert_eq!(handed("SDK"), Some(sdk), "{stderr}");
 
+    std::fs::remove_dir_all(target_libs.join("x86_64-linux-android")).expect("uninstall target");
     let output = cli
-        .env("FLUI_FIXTURE_INSTALLED_TARGETS", "aarch64-linux-android")
         .output()
         .expect("Android run without the selected compiler target");
     let stderr = String::from_utf8_lossy(&output.stderr);

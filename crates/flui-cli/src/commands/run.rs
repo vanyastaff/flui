@@ -167,7 +167,7 @@ fn run_session(
     // own strategy.
     let selection = if let Project::Application { selected, .. } = &project {
         let root = std::env::current_dir().context("failed to resolve application directory")?;
-        let host = crate::build::DesktopBuilder::detect_host_target()?;
+        let host = crate::build::DesktopBuilder::detect_host_target(&root)?;
         require_one_instance(&root, &host, &selected.built_package(), agent.as_ref())?;
         selected.cargo_args()
     } else {
@@ -527,6 +527,50 @@ fn select_device<'d>(
                 "ambiguous; candidates: {}",
                 many.iter()
                     .map(|d| format!("{} ({})", d.name, d.id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }),
+    }
+}
+
+/// The device `flui run --scene` pushes its plugin to: the one `device`
+/// names, as [`resolve_target`] finds it, which must be an Android device, or
+/// else the one Android device `adb` sees online.
+fn scene_device(device: Option<&str>) -> CliResult<AndroidDevice> {
+    use super::devices::{Status, discover};
+    use crate::DevicePlatform;
+
+    if let Some(query) = device.map(str::trim).filter(|query| !query.is_empty()) {
+        return match resolve_target(Some(query))? {
+            Target::Android(device) => Ok(device),
+            other => Err(CliError::Unsupported {
+                what: other.label(),
+                reason: "`flui run --scene` pushes its plugin to an Android device".into(),
+            }),
+        };
+    }
+    let devices = discover(Some(DevicePlatform::Android), false).devices;
+    let online: Vec<&super::devices::Device> = devices
+        .iter()
+        .filter(|device| device.status == Status::Online)
+        .collect();
+    match online.as_slice() {
+        [device] => Ok(AndroidDevice {
+            serial: device.id.clone(),
+            name: device.name.clone(),
+        }),
+        [] => Err(CliError::DeviceNotFound {
+            name: "an online Android device".into(),
+            hint: "connect one or boot an emulator; `flui devices` lists what adb sees".into(),
+        }),
+        many => Err(CliError::DeviceNotFound {
+            name: "one Android device".into(),
+            hint: format!(
+                "{} are online ({}); name one with --device",
+                many.len(),
+                many.iter()
+                    .map(|device| device.id.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -1535,10 +1579,27 @@ fn environment_error(error: crate::build::error::BuildError) -> CliError {
         },
         BuildError::TargetNotInstalled {
             target,
+            toolchain,
             install_cmd,
         } => CliError::ToolNotFound {
-            tool: format!("Rust target {target}"),
-            suggestion: format!("install with: {install_cmd}"),
+            tool: format!("Rust target {target} in {toolchain}"),
+            suggestion: format!(
+                "install with: {install_cmd}, or build it from source with `[unstable] \
+                 build-std` in .cargo/config.toml and the `rust-src` component"
+            ),
+        },
+        error @ BuildError::BuildStdIgnored { .. } => CliError::ToolNotFound {
+            tool: "a toolchain that builds the target".into(),
+            suggestion: error.to_string(),
+        },
+        BuildError::AndroidPlatformMissing {
+            needed, installed, ..
+        } => CliError::ToolNotFound {
+            tool: format!(
+                "an Android platform at API {needed} or later (installed: {})",
+                crate::build::error::platform_levels(&installed)
+            ),
+            suggestion: format!("install with: sdkmanager \"platforms;android-{needed}\""),
         },
         BuildError::EnvVarError { var, reason } => CliError::ToolNotFound {
             tool: var,
@@ -1777,7 +1838,14 @@ impl AndroidSession {
         ));
         let builder = AndroidBuilder::new(&self.root).map_err(environment_error)?;
         builder
-            .validate_environment(abi)
+            .validate_environment(
+                abi,
+                if self.release {
+                    Profile::Release
+                } else {
+                    Profile::Debug
+                },
+            )
             .map_err(environment_error)?;
         let floors = crate::config::project_floors(&self.root)?;
         let driver_feature = self
@@ -1809,7 +1877,7 @@ impl AndroidSession {
                 });
             match result {
                 Ok(delivered) => {
-                    apk = Some(delivered.app_binary);
+                    apk = Some(delivered.apk.app_binary);
                     true
                 }
                 Err(error) => {
@@ -2700,14 +2768,32 @@ fn ensure_flui_project() -> CliResult<Project> {
 /// `AppConfig::dev_reload` detects the new `.so` via mtime polling and
 /// reloads it; the Android runner warns when the library is on the device but
 /// no hook is installed.
+///
+/// The plugin goes to the device `device` names (as `flui run --device`
+/// resolves it), or to the one Android device `adb` sees online, and into the
+/// application `package` names, or `flui.toml`'s `[app] id`.
 pub(crate) fn execute_scene(
     scene_crate: &str,
-    package: &str,
+    package: Option<&str>,
+    device: Option<&str>,
     target: &str,
     release: bool,
-    _verbose: bool,
 ) -> CliResult<()> {
     use crate::build::android::AndroidBuilder;
+
+    let workspace_root = std::env::current_dir()?;
+    let package = match package {
+        Some(package) => crate::app_id::AppId::try_new(package)?,
+        None => {
+            FluiConfig::load_from(&workspace_root.join("flui.toml"))
+                .context("flui.toml names the application (`[app] id`); or pass --package")?
+                .app
+                .id
+        }
+    };
+    let device = scene_device(device)?;
+    let adb = find_adb()?;
+    let api_level = crate::config::project_floors(&workspace_root)?.android_api();
 
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run --scene ").on_magenta().black())?;
@@ -2721,7 +2807,6 @@ pub(crate) fn execute_scene(
         "The app loads the plugin only if it installs `flui_hot_reload::ScenePluginHook`          with `AppConfig::dev_reload`",
     )?;
 
-    let workspace_root = std::env::current_dir()?;
     let builder = AndroidBuilder::new(&workspace_root).map_err(|e| CliError::BuildFailed {
         platform: "android".to_string(),
         details: e.to_string(),
@@ -2735,7 +2820,7 @@ pub(crate) fn execute_scene(
 
     let rt = tokio::runtime::Runtime::new()?;
     let so_path = rt
-        .block_on(builder.build_scene_plugin(target, scene_crate, release))
+        .block_on(builder.build_scene_plugin(target, scene_crate, api_level, release))
         .map_err(|e| CliError::BuildFailed {
             platform: "android".to_string(),
             details: e.to_string(),
@@ -2747,8 +2832,8 @@ pub(crate) fn execute_scene(
         style(so_path.display()).dim()
     ))?;
 
-    ui::step("Pushing to device...")?;
-    rt.block_on(builder.push_scene_plugin(&so_path, package, lib_name))
+    ui::step(format!("Pushing to {}...", device.name))?;
+    rt.block_on(builder.push_scene_plugin(&adb, &device.serial, &so_path, &package, lib_name))
         .map_err(|e| CliError::BuildFailed {
             platform: "android".to_string(),
             details: e.to_string(),
@@ -2756,28 +2841,28 @@ pub(crate) fn execute_scene(
     ui::success("Plugin pushed to device")?;
 
     // Watch scene crate src/ for changes
-    let scene_src = workspace_root
+    let primary = workspace_root
         .join("examples")
         .join(scene_crate.replace("flui-", ""))
         .join("src");
-
-    if !scene_src.exists() {
-        // Try alternative path pattern
-        let alt = workspace_root
-            .join("examples")
-            .join(scene_crate)
-            .join("src");
-        if !alt.exists() {
-            return Err(CliError::BuildFailed {
-                platform: "android".to_string(),
-                details: format!(
-                    "Scene crate src/ not found at {} or {}",
-                    scene_src.display(),
-                    alt.display()
-                ),
-            });
-        }
-    }
+    let alternative = workspace_root
+        .join("examples")
+        .join(scene_crate)
+        .join("src");
+    let scene_src = if primary.exists() {
+        primary
+    } else if alternative.exists() {
+        alternative
+    } else {
+        return Err(CliError::BuildFailed {
+            platform: "android".to_string(),
+            details: format!(
+                "Scene crate src/ not found at {} or {}",
+                primary.display(),
+                alternative.display()
+            ),
+        });
+    };
 
     ui::info(format!(
         "Watching {} for changes...",
@@ -2808,11 +2893,17 @@ pub(crate) fn execute_scene(
         let start = Instant::now();
         ui::step("Rebuilding scene plugin...")?;
 
-        match rt.block_on(builder.build_scene_plugin(target, scene_crate, release)) {
+        match rt.block_on(builder.build_scene_plugin(target, scene_crate, api_level, release)) {
             Ok(so) => {
                 let build_time = start.elapsed();
                 ui::step("Pushing to device...")?;
-                match rt.block_on(builder.push_scene_plugin(&so, package, lib_name)) {
+                match rt.block_on(builder.push_scene_plugin(
+                    &adb,
+                    &device.serial,
+                    &so,
+                    &package,
+                    lib_name,
+                )) {
                     Ok(()) => {
                         ui::success(format!("Updated in {:.2}s", build_time.as_secs_f64()))?;
                     }

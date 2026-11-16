@@ -194,7 +194,9 @@ a Unix terminal; elsewhere the loop still runs, driven by file changes and
 Ctrl-C.
 
 Android scene hot reload (rebuild and push a scene plugin without restarting
-the app): `flui run --scene --scene-crate <crate> --package <android.package>`.
+the app): `flui run --scene --scene-crate <crate>`. The plugin goes to the
+device `--device` names, or the one Android device online, and into the
+application `--package` names, or `flui.toml`'s `[app] id`.
 
 ## Driving an app from an agent
 
@@ -286,7 +288,7 @@ flui build macos --release                  # staged .app bundle
 flui build macos --universal                # arm64 + x86_64 binary fused with lipo (not bundled)
 flui build ios --simulator <UDID>           # native app for one simulator
 flui build ios --lib --universal            # XCFramework instead of an app
-flui build android --release                # signed APK, no Gradle needed
+flui build android --release                # APK signed with [signing.android], no Gradle needed
 flui build web --release
 flui build desktop --example counter   # inside the FLUI checkout
 flui build desktop --package my-app-host
@@ -299,9 +301,28 @@ starts. Every build ends with the artifact list and `Built in N.Ns`.
 
 An Android build compiles the project's `cdylib` with `cargo ndk` (the
 `android_main` that `#[flui::main]` writes in `src/lib.rs`) and packages it with the SDK's build-tools:
-`aapt2 link` on the scaffolded manifest, the library stored under
-`lib/<abi>/`, `zipalign`, and `apksigner` with the debug keystore in
-`~/.android` (created on first use). The result is
+`aapt2 link` on the scaffolded manifest (with the version from `[app] version`
+and `extractNativeLibs="false"`), the library stored under `lib/<abi>/`,
+`zipalign`, and `apksigner`. `cargo ndk` links with the NDK the build resolves
+(`ANDROID_NDK_HOME`, or the newest under the SDK's `ndk/`), and a Gradle
+project strips with the same one.
+
+The APK's `versionName` is `[app] version` and its `versionCode` is
+`major * 10000 + minor * 100 + patch`, so a minor or patch above 99 is
+refused. A debug build is signed with the debug keystore Android Studio uses
+(`ANDROID_USER_HOME`, else `.android` in your home; created on first use). A
+release build is signed with the key `flui.toml` names:
+
+```toml
+[signing.android]
+keystore = "keys/upload.jks"   # relative to flui.toml; keep it out of git
+alias = "upload"
+```
+
+with its passwords in `FLUI_ANDROID_KEYSTORE_PASSWORD` (and
+`FLUI_ANDROID_KEY_PASSWORD` when the key's differs); neither is written to a
+file or a command line. A release of an application that names no key is
+signed with the debug key, and the build says so: a store refuses it. The result is
 `<target-dir>/flui-out/<project>/android/<name>-<profile>.apk`, where
 `<target-dir>` is the one cargo uses (`target/` unless `CARGO_TARGET_DIR`,
 `build.target-dir` or an enclosing workspace says otherwise). When the project has a
