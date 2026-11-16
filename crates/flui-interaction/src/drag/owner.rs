@@ -12,8 +12,8 @@ use std::sync::Arc;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{DataTransferId, DragSessionId, PresentationId, UiRuntimeId};
 use flui_platform::data_transfer::{
-    DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationIndex, TransferActions,
-    TransferError, TransferPayload,
+    DataTransferOffer, DragTransport, DropFeedback, Mime, RepresentationDescriptor,
+    RepresentationIndex, TransferActions, TransferError, TransferPayload,
 };
 use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, OsDragEnd, OsDragRequest,
@@ -2060,9 +2060,9 @@ fn escalate(
         )
     };
     let (presentation, key, data, press) = request_parts;
-    let serialized = match plan.offer {
-        OsOffer::Full => data.descriptors(),
-        OsOffer::IdentityOnly => Vec::new(),
+    let (serialized, offered) = match plan.offer {
+        OsOffer::Full => first_of_each_type(data.descriptors()),
+        OsOffer::IdentityOnly => (Vec::new(), Vec::new()),
     };
     // Terms that cannot be offered refuse the OS session; the drag stays in
     // its window.
@@ -2072,7 +2072,7 @@ fn escalate(
         slot,
         id,
     };
-    let request = os_request(terms, data, press, session.clone());
+    let request = os_request(terms, data, offered, press, session.clone());
     let pending = PendingOsDrag {
         presentation,
         request,
@@ -2093,14 +2093,35 @@ fn escalate(
     Ok(true)
 }
 
+/// The serialized representations an OS session offers: the first of each
+/// media type, in offer order, since a transport offers each type once (a drag
+/// of two items with text offers the first item's). Returns them with the
+/// position each has among the drag's own representations.
+fn first_of_each_type(
+    descriptors: Vec<RepresentationDescriptor>,
+) -> (Vec<RepresentationDescriptor>, Vec<usize>) {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut kept: Vec<RepresentationDescriptor> = Vec::with_capacity(descriptors.len());
+    let mut positions = Vec::with_capacity(descriptors.len());
+    for (position, descriptor) in descriptors.into_iter().enumerate() {
+        if seen.insert(descriptor.format.essence().to_owned()) {
+            kept.push(descriptor);
+            positions.push(position);
+        }
+    }
+    (kept, positions)
+}
+
 fn os_request(
     terms: OsDragTerms,
     data: Rc<SessionData>,
+    offered: Vec<usize>,
     press: Option<PressId>,
     session: SessionRef,
 ) -> OsDragRequest {
-    // The identity is the terms' last representation.
-    let serialized = terms.representations().len() - 1;
+    // The identity is the terms' last representation, after the `offered`
+    // ones.
+    let serialized = offered.len();
     let end = OsEnd {
         session,
         reported: false,
@@ -2111,7 +2132,7 @@ fn os_request(
         Box::new(move |RepresentationIndex(index)| {
             let index = usize::from(index);
             match index.cmp(&serialized) {
-                std::cmp::Ordering::Less => data.serialized(index),
+                std::cmp::Ordering::Less => data.serialized(offered[index]),
                 std::cmp::Ordering::Equal => Ok(TransferPayload::Custom {
                     mime: Mime::new(flui_platform::drag::IDENTITY_ESSENCE),
                     bytes: Arc::from(Vec::new()),

@@ -32,7 +32,9 @@ use crate::owner::OpenWindowError;
 
 use crate::owner::OpenWindows;
 use crate::owner::headless::TextStoreHostFactory;
-use crate::owner::headless::{HeadlessLoop, HeadlessState, TrackedWindows, consult_exit_policy};
+use crate::owner::headless::{
+    HeadlessLoop, HeadlessState, HeldPresses, TrackedWindows, consult_exit_policy,
+};
 use crate::owner::window_delivery::{Publication, WindowDelivery};
 use crate::platform::HostPlatform;
 use crate::text::WindowTextInput;
@@ -200,7 +202,7 @@ impl TrackedWindows for HeadlessWindows {
             WindowDelivery::new(handler, input),
         );
 
-        window.drag = state.window_drag_source();
+        window.drag = state.window_drag_source(Arc::clone(&window.held));
         if let Some(signal) = state.owner_signal.upgrade() {
             window.delivery.resume_through_signal(&signal);
             let delivery = Arc::downgrade(&window.delivery);
@@ -456,6 +458,9 @@ pub struct HeadlessHostWindow {
     windows: Weak<HeadlessWindows>,
     /// The OS drag session this window can start, when the platform was given one.
     drag: Option<Arc<dyn flui_platform::drag::PlatformDragSource>>,
+    /// The presses the input injected into the window holds, which its drag
+    /// source checks a request's press against.
+    held: Arc<HeldPresses>,
     /// Carries a frame request made off the owner thread to the owner's next
     /// turn; `None` for a window opened with no owner signal.
     redraw: HeadlessRedraw,
@@ -908,6 +913,7 @@ impl HeadlessHostWindow {
             platform_state,
             windows,
             drag: None,
+            held: Arc::default(),
             redraw: HeadlessRedraw {
                 delivery: redraw_delivery,
                 retirement: redraw_retirement,
@@ -1064,6 +1070,7 @@ impl HeadlessHostWindow {
     /// Inject a platform input event for testing.
     /// Delivers to the window handler's `input`.
     pub fn inject_event(&self, event: PlatformInput) -> DispatchEventResult {
+        self.held.observe(&event);
         self.delivery.dispatch_input(event)
     }
 

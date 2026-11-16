@@ -2449,6 +2449,55 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
         assert!(identity.format.is_drag_identity(), "the identity is last");
     });
     in_lane(|f| {
+        // Two items offer text: the OS session offers each media type once,
+        // the first item's text, and serves the second item's HTML under the
+        // index the terms gave it.
+        let session = f.start_with(
+            desktop(),
+            AllowedActions::new(COPY, COPY),
+            None,
+            vec![
+                DragItem::new().with_text("first"),
+                DragItem::new()
+                    .with_text("second")
+                    .with_serialized(TransferFormat::Html, || {
+                        Ok(TransferPayload::Html("<b>second</b>".to_owned()))
+                    }),
+            ],
+        );
+        assert_eq!(moved(&session, 150.0), MoveOutcome::Escalating);
+        let mut request = enter_one(f);
+        let formats: Vec<_> = request
+            .terms
+            .representations()
+            .iter()
+            .map(|descriptor| descriptor.format.essence().to_owned())
+            .collect();
+        assert_eq!(
+            formats,
+            [
+                "text/plain",
+                "text/html",
+                flui_platform::drag::IDENTITY_ESSENCE
+            ],
+            "each media type once, the identity last"
+        );
+        assert!(
+            matches!(
+                (request.provider)(RepresentationIndex(0)),
+                Ok(TransferPayload::Text(text)) if text == "first"
+            ),
+            "the first item's text"
+        );
+        assert!(
+            matches!(
+                (request.provider)(RepresentationIndex(1)),
+                Ok(TransferPayload::Html(html)) if html == "<b>second</b>"
+            ),
+            "the second item's HTML under the second index"
+        );
+    });
+    in_lane(|f| {
         // A press released before the host entered the session takes the
         // session with it: no backend is asked to start from whatever press
         // holds the contact by then.

@@ -35,7 +35,7 @@ use parking_lot::Mutex;
 use crate::drag::offers::OfferTable;
 use crate::host::{self, Host};
 use crate::owner::headless::{
-    DragOver, HeadlessLoop, HeadlessState, OsDragSession, OsDrags, SimulatedOffers,
+    DragOver, HeadlessLoop, HeadlessState, HeldPresses, OsDragSession, OsDrags, SimulatedOffers,
 };
 use crate::owner::slot::OwnerSlot;
 use crate::platform::HostPlatform;
@@ -152,16 +152,23 @@ impl DragTransport for DragDouble {
 pub(crate) struct HeadlessDragSource {
     drags: Arc<Mutex<OsDrags>>,
     timing: OsDragStart,
+    /// The presses the window holds, as its injected input opened them.
+    held: Arc<HeldPresses>,
 }
 
 impl HeadlessDragSource {
-    /// The drag source of a window opened now in `state`'s system: none
-    /// until a test let the windows start sessions.
-    pub(crate) fn of(state: &HeadlessState) -> Option<Arc<dyn PlatformDragSource>> {
+    /// The drag source of a window opened now in `state`'s system, reading
+    /// the window's presses from `held`: none until a test let the windows
+    /// start sessions.
+    pub(crate) fn of(
+        state: &HeadlessState,
+        held: Arc<HeldPresses>,
+    ) -> Option<Arc<dyn PlatformDragSource>> {
         let timing = state.os_drag_start?;
         Some(Arc::new(Self {
             drags: Arc::clone(&state.drags),
             timing,
+            held,
         }))
     }
 }
@@ -172,8 +179,12 @@ impl PlatformDragSource for HeadlessDragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        // The press is not checked: the simulated system holds no presses of
-        // its own, and the test plays the session's pointer itself.
+        // A press the window no longer holds refuses, as on Windows: the
+        // session would start from a later press. A request no decoded press
+        // began starts from whatever the test plays.
+        if request.press().is_some_and(|press| !self.held.holds(press)) {
+            return Err(Unsupported::new(UnsupportedReason::Unavailable).into());
+        }
         let OsDragParts {
             terms,
             provider,

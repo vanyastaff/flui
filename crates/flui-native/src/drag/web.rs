@@ -46,10 +46,10 @@
 #[forbid(unsafe_code)]
 mod mapping {
     use flui_platform::data_transfer::{
-        DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex, TransferActions,
-        TransferFormat, TransferPayload,
+        DropFeedback, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
+        TransferPayload,
     };
-    use flui_platform::drag::OsDragProvider;
+    use flui_platform::drag::{OsDragProvider, OsDragTerms};
 
     use crate::drag::offers::{format_of, payload_of_bytes};
 
@@ -198,8 +198,8 @@ mod mapping {
     pub(super) struct ProviderPanicked;
 
     /// What a source stores at `dragstart`: the `DataTransfer` type and string of
-    /// each of `representations` that `provider` serves and the browser can
-    /// carry, in order. A representation the provider refuses is left out.
+    /// each representation of `terms` that `provider` serves and the browser
+    /// can carry, in order. A representation the provider refuses is left out.
     ///
     /// # Errors
     ///
@@ -207,24 +207,20 @@ mod mapping {
     /// reported here, and nothing after it is asked for. The caller still owns
     /// the session and ends it.
     pub(super) fn serve_stored(
-        representations: &[RepresentationDescriptor],
+        terms: &OsDragTerms,
         provider: &mut OsDragProvider,
     ) -> Result<Vec<(String, String)>, ProviderPanicked> {
         let mut out = Vec::new();
-        // A drag's terms keep every representation within an index
-        // (`OsDragTerms::try_new`).
-        for (index, descriptor) in (0..=u16::MAX).zip(representations) {
+        for (index, descriptor) in terms.indexed() {
             #[expect(
                 clippy::disallowed_methods,
                 reason = "ADR-0287: a drag provider's panic is reported as a failed transfer"
             )]
-            let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                provider(RepresentationIndex(index))
-            }));
+            let served = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(index)));
             match served {
                 Ok(Ok(payload)) => out.extend(stored(descriptor, &payload)),
                 Ok(Err(error)) => {
-                    tracing::debug!(%error, index, "a representation could not be served");
+                    tracing::debug!(%error, index = index.0, "a representation could not be served");
                 }
                 Err(payload) => {
                     // Discarded under containment (ADR-0281).
@@ -638,7 +634,7 @@ impl WebDragSource {
             self.refused.set(true);
             return false;
         };
-        let served = serve_stored(terms.representations(), &mut provider);
+        let served = serve_stored(&terms, &mut provider);
         contain_owner_callback(|| drop(provider));
         // A provider that panicked ends its session here, before the drag
         // is refused: no later `dragend` would reach it.

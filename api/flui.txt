@@ -14174,6 +14174,7 @@ impl core::fmt::Display for flui::platform::data_transfer::Mime
 impl core::hash::Hash for flui::platform::data_transfer::Mime
 impl core::marker::StructuralPartialEq for flui::platform::data_transfer::Mime
 pub fn flui::platform::data_transfer::Mime::as_str(&self) -> &str
+pub fn flui::platform::data_transfer::Mime::essence(&self) -> &str
 pub fn flui::platform::data_transfer::Mime::new(s: &str) -> Self
 reexport flui::platform::data_transfer::NullDragTransport => flui::platform::NullDragTransport
 pub struct flui::platform::data_transfer::RepresentationDescriptor
@@ -14214,6 +14215,7 @@ impl PartialEq for flui::platform::data_transfer::TransferFormat
 impl core::fmt::Debug for flui::platform::data_transfer::TransferFormat
 impl core::hash::Hash for flui::platform::data_transfer::TransferFormat
 impl core::marker::StructuralPartialEq for flui::platform::data_transfer::TransferFormat
+pub fn flui::platform::data_transfer::TransferFormat::essence(&self) -> &str
 pub fn flui::platform::data_transfer::TransferFormat::is_drag_identity(&self) -> bool
 variant flui::platform::data_transfer::TransferFormat::Custom { mime: flui::platform::data_transfer::Mime } // at 4
 variant flui::platform::data_transfer::TransferFormat::Html // at 1
@@ -14264,6 +14266,7 @@ impl core::fmt::Debug for flui::platform::drag::DragRequestError
 impl core::fmt::Display for flui::platform::drag::DragRequestError
 impl core::marker::StructuralPartialEq for flui::platform::drag::DragRequestError
 variant flui::platform::drag::DragRequestError::ClaimsIdentity // at 2
+variant flui::platform::drag::DragRequestError::DuplicateFormat // at 3
 variant flui::platform::drag::DragRequestError::NoActions // at 0
 variant flui::platform::drag::DragRequestError::TooManyRepresentations // at 1
 pub struct flui::platform::drag::DragSessionKey { .. }
