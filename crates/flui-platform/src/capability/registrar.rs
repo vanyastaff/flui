@@ -3,7 +3,7 @@
 
 use std::{any::Any, any::TypeId, fmt, rc::Rc};
 
-use super::{Capability, CapabilityProvider, ProviderContext};
+use super::{Capability, CapabilityId, CapabilityProvider, ProviderContext};
 use crate::Unsupported;
 
 /// A set of providers registered together: a capability crate's, or a
@@ -69,17 +69,17 @@ impl<C: Capability, P: CapabilityProvider<C>> ErasedProvider for Typed<C, P> {
 #[derive(Clone)]
 pub struct RegisteredProvider {
     capability: TypeId,
-    name: &'static str,
+    id: CapabilityId,
     provider: Rc<dyn ErasedProvider>,
 }
 
 impl RegisteredProvider {
-    /// `provider` for the capability `C`.
-    #[must_use]
-    pub fn new<C: Capability>(provider: impl CapabilityProvider<C>) -> Self {
+    /// `provider` for the capability `C`, with the [`CapabilityId`] minted
+    /// for it here.
+    fn new<C: Capability>(provider: impl CapabilityProvider<C>) -> Self {
         Self {
             capability: TypeId::of::<C>(),
-            name: C::NAME,
+            id: CapabilityId::mint(C::NAME),
             provider: Rc::new(Typed {
                 provider,
                 capability: std::marker::PhantomData,
@@ -96,24 +96,32 @@ impl RegisteredProvider {
     /// The capability's [`NAME`](Capability::NAME).
     #[must_use]
     pub fn name(&self) -> &'static str {
-        self.name
+        self.id.name()
+    }
+
+    /// The identity minted for this registration, which scopes what the
+    /// provider reaches through its context.
+    #[must_use]
+    pub fn id(&self) -> &CapabilityId {
+        &self.id
     }
 
     /// Ask the provider for a handle, boxed; the box holds the capability's
-    /// [`Handle`](Capability::Handle).
+    /// [`Handle`](Capability::Handle). The provider receives `ctx` scoped to
+    /// this registration's [`CapabilityId`].
     ///
     /// # Errors
     ///
     /// What the provider answers.
     pub fn provide(&self, ctx: &ProviderContext<'_>) -> Result<Box<dyn Any>, Unsupported> {
-        self.provider.provide(ctx)
+        self.provider.provide(&ctx.scoped(&self.id))
     }
 }
 
 impl fmt::Debug for RegisteredProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RegisteredProvider")
-            .field("name", &self.name)
+            .field("name", &self.id.name())
             .finish_non_exhaustive()
     }
 }

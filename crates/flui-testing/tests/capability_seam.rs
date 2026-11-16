@@ -15,8 +15,8 @@ use flui_interaction::{
 };
 use flui_platform::capability::scripted::{Answer, ScenarioFailure};
 use flui_platform::capability::{
-    Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
-    ProviderContext, Resolver,
+    Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, InvalidResultKey,
+    Plugin, ProviderContext, Resolver,
 };
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported, UnsupportedReason,
@@ -693,6 +693,22 @@ impl Plugin for ImpostorPlugin {
     }
 }
 
+/// Declares a capability whose name could not key an activity result.
+enum Unkeyed {}
+
+impl Capability for Unkeyed {
+    type Handle = ();
+    const NAME: &'static str = "two words";
+}
+
+struct UnkeyedPlugin;
+
+impl Plugin for UnkeyedPlugin {
+    fn register(&self, registrar: &mut CapabilityRegistrar) {
+        registrar.provide::<Unkeyed>(|_: &ProviderContext<'_>| Ok(()));
+    }
+}
+
 pub(crate) fn conflicting_registrations_fail_when_the_registry_is_built() {
     let built_in = || registry_registrar(|registrar| ScriptedClipboard::new().register(registrar));
     let two_plugins = CapabilityRegistry::builder()
@@ -719,6 +735,18 @@ pub(crate) fn conflicting_registrations_fail_when_the_registry_is_built() {
         shared_name,
         CapabilityConflict::SharedName {
             name: ClipboardCapability::NAME,
+        }
+    );
+
+    let unkeyed = CapabilityRegistry::builder()
+        .plugin(&UnkeyedPlugin)
+        .build()
+        .expect_err("a name that cannot key a result");
+    assert_eq!(
+        unkeyed,
+        CapabilityConflict::InvalidName {
+            name: "two words",
+            reason: InvalidResultKey::NotPrintable,
         }
     );
 }
@@ -980,4 +1008,78 @@ pub(crate) fn a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn() {
         "the claim made while the predecessor dropped holds the selection"
     );
     drop(first);
+}
+
+/// Whether a provider was offered an Activity when it was asked.
+enum ActivitySeen {}
+
+impl Capability for ActivitySeen {
+    type Handle = bool;
+    const NAME: &'static str = "test-activity-seen";
+}
+
+/// An Activity that refuses everything: only whether one is offered counts.
+struct EndedActivity;
+
+impl flui_platform::capability::ActivityBridge for EndedActivity {
+    fn bind(&self, _mint: flui_platform::capability::ResultMint) {}
+
+    fn launch_for_result(
+        &self,
+        _completions: &flui_platform::capability::CompletionSource,
+        _capability: &flui_platform::capability::CapabilityId,
+        _key: flui_platform::capability::RequestKey,
+        _intent: &mut dyn FnMut(flui_platform::capability::IntentFrame) -> bool,
+    ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
+    {
+        Err(flui_platform::capability::ResultRefused::ActivityEnded)
+    }
+
+    fn reattach(
+        &self,
+        _completions: &flui_platform::capability::CompletionSource,
+        _capability: &flui_platform::capability::CapabilityId,
+        _key: flui_platform::capability::RequestKey,
+    ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
+    {
+        Err(flui_platform::capability::ResultRefused::ActivityEnded)
+    }
+
+    fn take_data(
+        &self,
+        _capability: &flui_platform::capability::CapabilityId,
+        _data: flui_platform::capability::ResultData,
+        _f: &mut dyn FnMut(flui_platform::capability::JniFrame),
+    ) -> Result<(), flui_platform::capability::DataRefused> {
+        Err(flui_platform::capability::DataRefused::NotHeld)
+    }
+
+    fn lend(&self, _f: &mut dyn FnMut(flui_platform::capability::JniFrame)) -> bool {
+        false
+    }
+}
+
+/// A provider sees the Activity the composition root offers through the
+/// registry's host bridge at each acquisition: none before the host installs
+/// one, then the one installed, and none again once it is taken back.
+pub(crate) fn a_provider_sees_the_activity_the_host_offers() {
+    let host_bridge = flui_platform::capability::HostBridge::new();
+    let mut registrar = CapabilityRegistrar::new();
+    registrar.provide::<ActivitySeen>(|ctx: &ProviderContext<'_>| Ok(ctx.activity().is_some()));
+    let registry = CapabilityRegistry::builder()
+        .built_ins(registrar)
+        .host(host_bridge.clone())
+        .build()
+        .expect("one provider");
+    let seen = |registry: &CapabilityRegistry| {
+        let mut host = HeadlessHost::with_capabilities(window(), registry.clone());
+        acquire_capability::<ActivitySeen>(&mut host).expect("provided")
+    };
+
+    assert!(!seen(&registry), "no Activity before the host offers one");
+    let activity: Rc<dyn flui_platform::capability::ActivityBridge> = Rc::new(EndedActivity);
+    assert!(host_bridge.install_activity(Some(activity)).is_none());
+    assert!(seen(&registry), "the Activity the host offers");
+    assert!(host_bridge.install_activity(None).is_some());
+    assert!(!seen(&registry), "none once the host takes it back");
 }

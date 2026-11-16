@@ -125,9 +125,12 @@ impl HostPlatform<Android> {
         tracing::info!(api = %api, "Android API level");
         crate::version::gate::refuse_below_floor(api)?;
         crate::owner::android::java_host::verify(&app)?;
+        // The epoch of this platform's requests for results: a platform whose
+        // `FluiHost` cannot give one does not start.
+        let epoch = crate::owner::android::result_bridge::next_epoch(&app)?;
         Ok(Self::from_parts(
             |positions| positions,
-            |_| AndroidLoop::new::<Android>(app, library, api),
+            |_| AndroidLoop::new::<Android>(app, library, api, epoch),
         ))
     }
 }
