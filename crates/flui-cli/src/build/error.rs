@@ -111,6 +111,23 @@ pub(crate) enum BuildError {
     #[error("flui.toml: [app] {0}")]
     AppVersion(#[from] crate::build::app_version::AppVersionError),
 
+    /// The project builds the target's standard library from source, which
+    /// the toolchain's stable cargo ignores
+    #[error(
+        "Rust target '{target}' has no standard library in {toolchain}, and the project's \
+         `build-std` does not apply: it is an unstable cargo feature, which a stable toolchain \
+         ignores, so the build would fail finding `core`; use a nightly toolchain for the \
+         project (rust-toolchain.toml), or install the target with: {install_cmd}"
+    )]
+    BuildStdIgnored {
+        /// Rust target triple
+        target: String,
+        /// The toolchain looked at: its release and sysroot
+        toolchain: String,
+        /// Command to install the target
+        install_cmd: String,
+    },
+
     /// The SDK has no Android platform the APK can be linked against
     #[error(
         "the APK declares targetSdk {needed} (FLUI's, from platform-support.toml), so it links \

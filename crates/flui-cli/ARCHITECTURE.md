@@ -73,8 +73,19 @@ that differs is refused (`gradle_states_the_version_the_ndk_and_the_release_key_
 
 The NDK `flui build` resolves (`ANDROID_NDK_HOME`, else the highest version under the SDK's `ndk/`,
 compared by number) is exported as `ANDROID_NDK_HOME` and `ANDROID_HOME` on every `cargo ndk`
-call, the scene plugin's included, and written as `flui.ndkPath`, which the scaffolded script
-reads as its `ndkPath`; an `ndkVersion` or another `ndkPath` in the script is refused.
+call, the scene plugin's included, and passed to Gradle as `-Pflui.ndkPath`, which the scaffolded
+script reads as its `ndkPath`; an `ndkVersion` or another `ndkPath` in the script is refused. A
+relative `ANDROID_HOME` or `ANDROID_NDK_HOME` is made absolute once, against the directory the
+tool started in, so `cargo ndk` and Gradle get the same directory.
+
+Invariant: a build never writes this machine's or this build's values into the committed
+`platforms/android/gradle.properties`. That file holds the project's facts (floor, target,
+package, version), the same on every machine; the NDK, the Java sources and R8 rules of the linked
+crates (paths into this machine's cargo registry) and the release key go on the `gradlew` command
+line as `-Pflui.…`, and the scaffolded script reads each with a fallback, so a plain `./gradlew`
+still builds, with Gradle's own NDK and the debug key. A build leaves the scaffolded tree byte for
+byte as it was (`a_build_leaves_the_scaffolded_project_as_it_was`), and removes those properties
+from a file an older `flui build` wrote them into.
 
 Which key signs is decided once (`build/android_signing.rs`): a debug build signs with the debug
 keystore where the Android Gradle plugin keeps it (`ANDROID_USER_HOME`, `ANDROID_PREFS_ROOT` or
@@ -176,12 +187,12 @@ The base names `FluiActivity` with `hasCode`, `singleTop` and the back flag
 (`the_base_names_flui_activity_with_the_code_it_needs`); its class comes from the dex
 `flui-native` declares (`android.dex`, schema 2), which the packager without Gradle stores in the
 APK as `classes.dex` (then `classes2.dex`, … for further crates), and Gradle compiles the declared
-sources (`android.java`) from `flui.javaSources`, refusing a build script that does not read it
+sources (`android.java`) from `-Pflui.javaSources`, refusing a build script that does not read it
 (`libraries_and_dex_files_are_appended_where_the_platform_reads_them`,
 `gradle_compiles_the_java_sources_the_crates_declare`). No `javac` or `d8` runs on the SDK-tools
 path. The library checks the classes' protocol before it starts (ADR-0255 decision 5). The R8
 rules the crates declare (`android.proguard`; `flui-native` keeps `dev.flui.**`, which only native
-code names) reach a Gradle release as `flui.proguardFiles`, beside the app's own scaffolded
+code names) reach a Gradle release as `-Pflui.proguardFiles`, beside the app's own scaffolded
 `proguard-rules.pro`, and a script that does not read them is refused
 (`a_minified_release_keeps_what_the_crates_rules_keep`). The generated manifest and the
 scaffolded script have goldens (`the_generated_manifest_matches_its_golden`,

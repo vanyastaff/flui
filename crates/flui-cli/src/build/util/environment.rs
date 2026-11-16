@@ -22,8 +22,8 @@ pub(crate) fn get_env_var(name: &str) -> BuildResult<String> {
 /// Resolve `ANDROID_HOME` from environment or common paths
 pub(crate) fn resolve_android_home() -> BuildResult<PathBuf> {
     // Try environment variable first
-    if let Ok(android_home) = env::var("ANDROID_HOME") {
-        let path = PathBuf::from(android_home);
+    if let Some(android_home) = env::var_os("ANDROID_HOME").filter(|value| !value.is_empty()) {
+        let path = absolute_in(PathBuf::from(android_home), &env::current_dir()?);
         if path.exists() {
             crate::ui::debug(format!(
                 "Found ANDROID_HOME from environment: {}",
@@ -76,11 +76,24 @@ pub(crate) fn resolve_java_home() -> BuildResult<PathBuf> {
     Ok(path)
 }
 
+/// `path` as an absolute path: itself when absolute, joined to `cwd` (the
+/// directory the tool was started in) otherwise. A relative `ANDROID_HOME` or
+/// `ANDROID_NDK_HOME` is made absolute once, so `cargo ndk` (run from the
+/// project) and Gradle (resolving from `platforms/android/app`) are handed
+/// the same directory.
+pub(crate) fn absolute_in(path: PathBuf, cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
 /// Resolve Android NDK home (from `ANDROID_HOME/ndk`)
 pub(crate) fn resolve_ndk_home(android_home: &Path) -> BuildResult<PathBuf> {
     // Try ANDROID_NDK_HOME first
-    if let Ok(ndk_home) = env::var("ANDROID_NDK_HOME") {
-        let path = PathBuf::from(ndk_home);
+    if let Some(ndk_home) = env::var_os("ANDROID_NDK_HOME").filter(|value| !value.is_empty()) {
+        let path = absolute_in(PathBuf::from(ndk_home), &env::current_dir()?);
         if path.exists() {
             crate::ui::debug(format!(
                 "Found NDK from ANDROID_NDK_HOME: {}",
@@ -156,26 +169,69 @@ pub(crate) enum TargetSupport {
     /// The toolchain ships the target's standard library.
     Installed,
     /// Cargo builds it from source: the project's cargo configuration asks
-    /// for `build-std` and the toolchain has the `rust-src` component.
+    /// for `build-std`, the toolchain lets cargo use unstable features, and
+    /// it has the `rust-src` component.
     FromSource,
+    /// The project asks for `build-std`, but the toolchain is a stable one,
+    /// whose cargo ignores it: the build would fail finding `core`.
+    BuildStdIgnored,
     /// Neither: cargo cannot build for the target.
     Missing,
 }
 
+/// What a project's `build-std` means on the toolchain it selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BuildStd {
+    /// No cargo configuration the project reads asks for it.
+    NotConfigured,
+    /// It is asked for, but the toolchain's cargo ignores unstable features
+    /// ([`unstable_features_allowed`]).
+    Ignored,
+    /// It is asked for and honoured; it builds when the toolchain has the
+    /// standard library's sources (`rust-src`).
+    Honoured {
+        /// Whether `rust-src` is installed.
+        rust_src: bool,
+    },
+}
+
 impl TargetSupport {
     /// What the toolchain offers, from whether the target's library directory
-    /// exists, whether cargo is configured to build `std`, and whether the
-    /// toolchain has the standard library's sources.
+    /// exists and what the project's `build-std` means on it.
     #[must_use]
-    pub(crate) fn of(libraries_installed: bool, build_std: bool, rust_src: bool) -> Self {
-        if libraries_installed {
-            Self::Installed
-        } else if build_std && rust_src {
-            Self::FromSource
-        } else {
-            Self::Missing
+    pub(crate) fn of(libraries_installed: bool, build_std: BuildStd) -> Self {
+        match (libraries_installed, build_std) {
+            (true, _) => Self::Installed,
+            (false, BuildStd::Honoured { rust_src: true }) => Self::FromSource,
+            (false, BuildStd::Ignored) => Self::BuildStdIgnored,
+            (false, BuildStd::NotConfigured | BuildStd::Honoured { rust_src: false }) => {
+                Self::Missing
+            }
         }
     }
+}
+
+/// Whether cargo lets the toolchain whose `rustc -vV` says `version_verbose`
+/// use unstable features, as cargo decides it: a `nightly` or `dev` release,
+/// or `RUSTC_BOOTSTRAP=1` (`bootstrap`); `RUSTC_BOOTSTRAP=-1` makes even a
+/// nightly behave as stable.
+#[must_use]
+pub(crate) fn unstable_features_allowed(
+    version_verbose: &str,
+    bootstrap: Option<&std::ffi::OsStr>,
+) -> bool {
+    match bootstrap.and_then(std::ffi::OsStr::to_str) {
+        Some("1") => return true,
+        Some("-1") => return false,
+        _ => {}
+    }
+    version_verbose
+        .lines()
+        .find_map(|line| line.strip_prefix("release:"))
+        .is_some_and(|release| {
+            let release = release.trim();
+            release.ends_with("-nightly") || release.ends_with("-dev")
+        })
 }
 
 /// Refuse a build for `triple` that cargo cannot make with the Rust
@@ -202,6 +258,11 @@ pub(crate) fn require_rust_target(dir: &Path, triple: &str) -> BuildResult<()> {
             ));
             Ok(())
         }
+        TargetSupport::BuildStdIgnored => Err(BuildError::BuildStdIgnored {
+            target: triple.to_string(),
+            toolchain: toolchain_description(dir),
+            install_cmd: format!("rustup target add {triple}"),
+        }),
         TargetSupport::Missing => Err(BuildError::TargetNotInstalled {
             target: triple.to_string(),
             toolchain: toolchain_description(dir),
@@ -229,14 +290,25 @@ pub(crate) fn rust_target_support(dir: &Path, triple: &str) -> BuildResult<Targe
         env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
             .map(|home| PathBuf::from(home).join(".cargo"))
     });
-    let build_std = build_std_configured(dir, env::var_os("CARGO_UNSTABLE_BUILD_STD"), cargo_home);
-    let rust_src = build_std
-        && rustc_answer(dir, &["--print", "sysroot"])?.is_some_and(|sysroot| {
-            Path::new(&sysroot)
-                .join("lib/rustlib/src/rust/library/core")
-                .is_dir()
-        });
-    Ok(TargetSupport::of(false, build_std, rust_src))
+    if !build_std_configured(dir, env::var_os("CARGO_UNSTABLE_BUILD_STD"), cargo_home) {
+        return Ok(TargetSupport::of(false, BuildStd::NotConfigured));
+    }
+    let unstable_allowed = unstable_features_allowed(
+        &rustc_answer(dir, &["-vV"])?.unwrap_or_default(),
+        env::var_os("RUSTC_BOOTSTRAP").as_deref(),
+    );
+    let build_std = if unstable_allowed {
+        BuildStd::Honoured {
+            rust_src: rustc_answer(dir, &["--print", "sysroot"])?.is_some_and(|sysroot| {
+                Path::new(&sysroot)
+                    .join("lib/rustlib/src/rust/library/core")
+                    .is_dir()
+            }),
+        }
+    } else {
+        BuildStd::Ignored
+    };
+    Ok(TargetSupport::of(false, build_std))
 }
 
 /// Whether cargo builds `std` for a project in `dir`: `CARGO_UNSTABLE_BUILD_STD`
@@ -338,7 +410,10 @@ pub(crate) fn rust_host_triple(dir: &Path) -> BuildResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TargetSupport, build_std_configured, newest_version_dir};
+    use super::{
+        BuildStd, TargetSupport, absolute_in, build_std_configured, newest_version_dir,
+        unstable_features_allowed,
+    };
 
     /// A target is buildable when its libraries are installed, or when cargo
     /// builds `std` from the toolchain's sources; a `build-std` configuration
@@ -347,15 +422,56 @@ mod tests {
     #[test]
     fn a_target_is_buildable_from_its_libraries_or_from_source() {
         let mut failures = Vec::new();
-        for (libraries, build_std, rust_src, expected) in [
-            (true, false, false, TargetSupport::Installed),
-            (false, true, true, TargetSupport::FromSource),
-            (false, true, false, TargetSupport::Missing),
-            (false, false, true, TargetSupport::Missing),
+        for (libraries, build_std, expected) in [
+            (true, BuildStd::Ignored, TargetSupport::Installed),
+            (
+                false,
+                BuildStd::Honoured { rust_src: true },
+                TargetSupport::FromSource,
+            ),
+            (false, BuildStd::Ignored, TargetSupport::BuildStdIgnored),
+            (
+                false,
+                BuildStd::Honoured { rust_src: false },
+                TargetSupport::Missing,
+            ),
+            (false, BuildStd::NotConfigured, TargetSupport::Missing),
         ] {
-            let found = TargetSupport::of(libraries, build_std, rust_src);
+            let found = TargetSupport::of(libraries, build_std);
             if found != expected {
-                failures.push(format!("{libraries} {build_std} {rust_src}: {found:?}"));
+                failures.push(format!("{libraries} {build_std:?}: {found:?}"));
+            }
+        }
+        let stable = "rustc 1.100.0 (6b00bc388 2026-08-04)\nhost: x86_64-pc-windows-msvc\n\
+                      release: 1.100.0\n";
+        let nightly = "rustc 1.102.0-nightly (1a2b3c4d5 2026-11-10)\n\
+                       release: 1.102.0-nightly\n";
+        for (label, version, bootstrap, expected) in [
+            ("stable", stable, None, false),
+            ("nightly", nightly, None, true),
+            (
+                "a local dev toolchain",
+                "release: 1.102.0-dev\n",
+                None,
+                true,
+            ),
+            ("stable with RUSTC_BOOTSTRAP=1", stable, Some("1"), true),
+            (
+                "nightly with RUSTC_BOOTSTRAP=-1",
+                nightly,
+                Some("-1"),
+                false,
+            ),
+            (
+                "stable with RUSTC_BOOTSTRAP naming a crate",
+                stable,
+                Some("core"),
+                false,
+            ),
+        ] {
+            let found = unstable_features_allowed(version, bootstrap.map(std::ffi::OsStr::new));
+            if found != expected {
+                failures.push(format!("{label}: {found}"));
             }
         }
 
@@ -389,6 +505,19 @@ mod tests {
             failures.push("a workspace's .cargo/config.toml".to_owned());
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A relative SDK or NDK path is read against the directory the tool
+    /// started in, once; an absolute one is kept.
+    #[test]
+    fn a_relative_sdk_path_is_made_absolute_once() {
+        let cwd = std::env::temp_dir().join("project");
+        assert_eq!(
+            absolute_in(std::path::PathBuf::from("sdk/ndk/29"), &cwd),
+            cwd.join("sdk/ndk/29")
+        );
+        let absolute = std::env::temp_dir().join("ndk");
+        assert_eq!(absolute_in(absolute.clone(), &cwd), absolute);
     }
 
     /// The NDK and the build-tools are the highest version by number, so

@@ -21,15 +21,15 @@ impl DesktopBuilder {
         Self
     }
 
-    /// The host target triple of the toolchain in the current directory, from
+    /// The host target triple of the toolchain the project in `dir` selects, from
     /// `rustc -vV` under a deadline.
     ///
     /// # Errors
     ///
     /// When `rustc` cannot be started, fails, does not answer in time or
     /// names no host: a guessed triple would build for the wrong target.
-    pub(crate) fn detect_host_target() -> BuildResult<String> {
-        crate::build::util::environment::rust_host_triple(std::path::Path::new("."))
+    pub(crate) fn detect_host_target(dir: &std::path::Path) -> BuildResult<String> {
+        crate::build::util::environment::rust_host_triple(dir)
     }
 }
 
@@ -44,7 +44,7 @@ impl DesktopBuilder {
         let target = match &ctx.platform {
             crate::build::platform::Platform::Desktop { target } => match target {
                 Some(t) => t.clone(),
-                None => Self::detect_host_target()?,
+                None => Self::detect_host_target(&ctx.workspace_root)?,
             },
             _ => {
                 return Err(BuildError::InvalidPlatform {
@@ -184,7 +184,7 @@ impl DesktopBuilder {
             crate::build::platform::Platform::Desktop { target: None }
                 if cfg!(target_os = "linux") =>
             {
-                Self::detect_host_target().map(Some)
+                Self::detect_host_target(&ctx.workspace_root).map(Some)
             }
             _ => Ok(None),
         }

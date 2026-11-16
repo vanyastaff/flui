@@ -92,7 +92,7 @@ impl AndroidBuilder {
             config.signing.android.as_ref(),
             &self.workspace_root,
             &|name| std::env::var_os(name),
-            &Path::is_dir,
+            &crate::build::android_signing::path_kind,
         )?;
         Ok(PackageFacts {
             config,
@@ -438,11 +438,12 @@ impl AndroidBuilder {
         })
     }
 
+    /// Package the APK of `artifacts`, and say how it was signed.
     pub(crate) async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
-    ) -> BuildResult<FinalArtifacts> {
+    ) -> BuildResult<AndroidPackage> {
         let android_dir = self.workspace_root.join("platforms").join("android");
 
         let gradle_wrapper_name = if cfg!(target_os = "windows") {
@@ -480,9 +481,13 @@ impl AndroidBuilder {
         // build-tools package the NativeActivity app directly.
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
-            return self
+            let apk = self
                 .package_with_build_tools(ctx, artifacts, &facts, &declarations, &output)
-                .await;
+                .await?;
+            return Ok(AndroidPackage {
+                apk,
+                signing: facts.signing.package_signing(),
+            });
         }
         crate::ui::debug("Building APK with Gradle...".to_string());
         let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
@@ -490,7 +495,7 @@ impl AndroidBuilder {
             install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
         })?;
 
-        crate::build::gradle_project::state_project(
+        let command_properties = crate::build::gradle_project::state_project(
             &android_dir,
             &crate::build::gradle_project::GradleFacts {
                 min_sdk: ctx.floors.android_api(),
@@ -517,6 +522,7 @@ impl AndroidBuilder {
         };
         process::run(
             Command::new(&gradle_wrapper_path)
+                .args(&command_properties)
                 .arg(gradle_task)
                 .env("JAVA_HOME", java_home)
                 .current_dir(&android_dir),
@@ -536,11 +542,23 @@ impl AndroidBuilder {
         let size_bytes = std::fs::metadata(&output)?.len();
         crate::ui::debug(format!("APK copied to: {}", output.display()));
 
-        Ok(FinalArtifacts {
-            app_binary: output,
-            size_bytes,
+        Ok(AndroidPackage {
+            apk: FinalArtifacts {
+                app_binary: output,
+                size_bytes,
+            },
+            signing: facts.signing.package_signing(),
         })
     }
+}
+
+/// An APK the build delivered, and how it was signed.
+#[derive(Debug)]
+pub(crate) struct AndroidPackage {
+    /// The APK and its size.
+    pub(crate) apk: FinalArtifacts,
+    /// The key it was signed with.
+    pub(crate) signing: crate::build::android_signing::PackageSigning,
 }
 
 /// The APK the Gradle build of `profile` wrote in `apk_dir`: the module's

@@ -516,7 +516,7 @@ fn describe(dir: &Path, target: &Target) -> CliResult<Described> {
         file: format!("{crate_name}'s Cargo.toml"),
         reason,
     };
-    let host = crate::build::DesktopBuilder::detect_host_target()?;
+    let host = crate::build::DesktopBuilder::detect_host_target(dir)?;
     let platforms = ManifestKind::Android
         .targets()
         .iter()

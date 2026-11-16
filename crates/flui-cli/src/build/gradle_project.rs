@@ -1,5 +1,12 @@
-//! What `flui build` states in a Gradle project's `gradle.properties`, and
-//! the refusal of a second statement in `app/build.gradle.kts`.
+//! What `flui build` states for a Gradle project, and the refusal of a
+//! second statement in `app/build.gradle.kts`.
+//!
+//! The committed `gradle.properties` holds the project's facts, the same on
+//! every machine: the floor, the target, the package and the version. What
+//! is this machine's or this build's (the NDK, the crates' Java sources and
+//! R8 rules, the release key) goes on the `gradlew` command line as
+//! `-Pflui.…` ([`state_project`] answers those arguments), and the scaffolded
+//! script reads each with a fallback, so a plain `./gradlew` still builds.
 //!
 //! - The floor (ADR-0244 §10): `flui.toml` states it (`[platforms.android]
 //!   min`), and `flui build` writes it as `flui.minSdk`.
@@ -13,25 +20,25 @@
 //!   `flui run`.
 //!
 //! - The Java sources of the crates the application links (ADR-0255
-//!   decision 4, ADR-0307: `android.java`), written as `flui.javaSources`,
+//!   decision 4, ADR-0307: `android.java`), passed as `flui.javaSources`,
 //!   which the scaffolded script adds to its `main` source set: Gradle
 //!   compiles `FluiActivity` and the rest itself, where the packager without
 //!   Gradle packs the checked-in dex.
-//! - The R8 rules of those crates (ADR-0307: `android.proguard`), written as
+//! - The R8 rules of those crates (ADR-0307: `android.proguard`), passed as
 //!   `flui.proguardFiles`, which the scaffolded script adds to its release
 //!   build type's rules: a minified release keeps the classes native code
 //!   reaches by name.
 //!
 //! - The version (`[app] version`, [`AppVersion`](crate::build::app_version::AppVersion)),
 //!   written as `flui.versionCode` and `flui.versionName`.
-//! - The NDK the build resolved, written as `flui.ndkPath`, which the
+//! - The NDK the build resolved, passed as `flui.ndkPath`, which the
 //!   scaffolded script reads as its `ndkPath`, so Gradle strips the libraries
 //!   with the NDK `cargo ndk` linked them with.
-//! - The release key (`android_signing`), written as `flui.signing.storeFile`
-//!   and `flui.signing.keyAlias`, both empty when the build signs with the
+//! - The release key (`android_signing`), passed as `flui.signing.storeFile`
+//!   and `flui.signing.keyAlias`, both absent when the build signs with the
 //!   debug key; the scaffolded script's release build type signs with it,
 //!   its passwords read from the environment, or with the debug key when
-//!   the store file is empty.
+//!   no store file is passed.
 //!
 //! The scaffolded `app/build.gradle.kts` reads each property. A literal
 //! `minSdk`, `applicationId`, `versionCode` or `versionName` in the script
@@ -43,6 +50,7 @@
 //! release build of one that does not read `flui.signing.storeFile`, whose
 //! APK Gradle would leave unsigned.
 
+use std::ffi::OsString;
 use std::fmt::{Display, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -107,7 +115,10 @@ pub(crate) struct GradleFacts<'a> {
 /// Writes `facts` into the project's `gradle.properties`, after refusing a
 /// `minSdk` or `applicationId` in `app/build.gradle.kts` that neither reads
 /// its property nor states the same value.
-pub(crate) fn state_project(android_dir: &Path, facts: &GradleFacts<'_>) -> BuildResult<()> {
+pub(crate) fn state_project(
+    android_dir: &Path,
+    facts: &GradleFacts<'_>,
+) -> BuildResult<Vec<OsString>> {
     let script = android_dir.join("app").join("build.gradle.kts");
     let text = std::fs::read_to_string(&script).unwrap_or_default();
     if let Some(refusal) = refusal(&text, facts) {
@@ -122,11 +133,53 @@ pub(crate) fn state_project(android_dir: &Path, facts: &GradleFacts<'_>) -> Buil
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error.into()),
     };
-    let restated = restate_all(&text, facts)?;
+    let restated = restate_all(&text, facts);
     if restated != text {
         std::fs::write(&properties, restated)?;
     }
-    Ok(())
+    command_properties(facts)
+}
+
+/// The `-P` arguments of the `gradlew` call that carry what is this
+/// machine's or this build's, never written into `gradle.properties`, which
+/// is committed: the NDK, the Java sources and R8 rules of the crates linked
+/// (paths into this machine's cargo registry) and the release key. The
+/// scaffolded script reads each with a fallback, so a plain `./gradlew` still
+/// builds, with Gradle's own NDK and the debug key.
+///
+/// # Errors
+///
+/// Why the Java source directories or the R8 rules cannot be listed in one
+/// value: a path that holds the platform's path separator.
+fn command_properties(facts: &GradleFacts<'_>) -> BuildResult<Vec<OsString>> {
+    let property = |name: &str, value: &std::ffi::OsStr| {
+        let mut argument = OsString::from(format!("-P{name}="));
+        argument.push(value);
+        argument
+    };
+    let joined = |name: &str, paths: &[PathBuf]| {
+        std::env::join_paths(paths).map_err(|error| {
+            BuildError::Other(format!(
+                "the paths of `{name}` cannot be listed for Gradle: {error}"
+            ))
+        })
+    };
+    let mut arguments = vec![
+        property(NDK_PATH_PROPERTY, facts.ndk_path.as_os_str()),
+        property(
+            JAVA_SOURCES_PROPERTY,
+            &joined(JAVA_SOURCES_PROPERTY, facts.java_sources)?,
+        ),
+        property(
+            PROGUARD_FILES_PROPERTY,
+            &joined(PROGUARD_FILES_PROPERTY, facts.proguard_files)?,
+        ),
+    ];
+    if let Some((keystore, alias)) = facts.release_key {
+        arguments.push(property(SIGNING_STORE_PROPERTY, keystore.as_os_str()));
+        arguments.push(property(SIGNING_ALIAS_PROPERTY, alias.as_ref()));
+    }
+    Ok(arguments)
 }
 
 /// Why the build script `script` cannot be built with `facts`, if it cannot:
@@ -243,54 +296,31 @@ fn refusal(script: &str, facts: &GradleFacts<'_>) -> Option<String> {
     })
 }
 
-/// `text` (a `gradle.properties`) stating every property of `facts`.
-///
-/// # Errors
-///
-/// Why the Java source directories or the R8 rules cannot be listed in one
-/// property: a path that holds the platform's path separator.
-fn restate_all(text: &str, facts: &GradleFacts<'_>) -> BuildResult<String> {
+/// `text` (a `gradle.properties`) stating the project's facts of `facts`,
+/// which are the same on every machine and change only with `flui.toml`:
+/// the floor, the target, the package and the version. The properties a
+/// build passes on the command line ([`command_properties`]) are removed,
+/// since an older `flui build` wrote this machine's paths there.
+fn restate_all(text: &str, facts: &GradleFacts<'_>) -> String {
     let text = restate(text, PROPERTY, facts.min_sdk);
     let text = restate(&text, TARGET_PROPERTY, facts.target_sdk);
     let text = restate(&text, APPLICATION_ID_PROPERTY, facts.application_id);
-    let text = restate(
-        &text,
-        JAVA_SOURCES_PROPERTY,
-        paths_value(JAVA_SOURCES_PROPERTY, facts.java_sources)?,
-    );
-    let text = restate(
-        &text,
-        PROGUARD_FILES_PROPERTY,
-        paths_value(PROGUARD_FILES_PROPERTY, facts.proguard_files)?,
-    );
     let text = restate(&text, VERSION_CODE_PROPERTY, facts.version_code);
     let text = restate(&text, VERSION_NAME_PROPERTY, escaped(facts.version_name));
-    let text = restate(&text, NDK_PATH_PROPERTY, path_value(facts.ndk_path));
-    let (store_file, alias) = facts
-        .release_key
-        .map_or((String::new(), String::new()), |(keystore, alias)| {
-            (path_value(keystore), escaped(alias))
-        });
-    let text = restate(&text, SIGNING_STORE_PROPERTY, store_file);
-    Ok(restate(&text, SIGNING_ALIAS_PROPERTY, alias))
-}
-
-/// `paths` as the value of `property`, one `gradle.properties` value that
-/// Kotlin splits on `File.pathSeparator`, each written as [`path_value`]
-/// writes one.
-fn paths_value(property: &str, paths: &[PathBuf]) -> BuildResult<String> {
-    let joined = std::env::join_paths(paths).map_err(|error| {
-        BuildError::Other(format!(
-            "the paths of `{property}` cannot be listed for Gradle: {error}"
-        ))
-    })?;
-    Ok(path_value(Path::new(&joined)))
-}
-
-/// `path` as a `gradle.properties` value: `/`-separated, since a `\`
-/// escapes in that format, and otherwise as [`escaped`] writes text.
-fn path_value(path: &Path) -> String {
-    escaped(&path.to_string_lossy().replace('\\', "/"))
+    let machine = [
+        NDK_PATH_PROPERTY,
+        JAVA_SOURCES_PROPERTY,
+        PROGUARD_FILES_PROPERTY,
+        SIGNING_STORE_PROPERTY,
+        SIGNING_ALIAS_PROPERTY,
+    ];
+    let mut kept: String = text
+        .lines()
+        .filter(|line| !machine.iter().any(|property| states(line, property)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    kept.push('\n');
+    kept
 }
 
 /// `text` as a `gradle.properties` value Gradle reads back unchanged: a `\`
@@ -410,17 +440,18 @@ fn version_name_assignments(script: &str) -> Vec<Stated<String>> {
         .collect()
 }
 
-/// Every `ndkVersion`, and every `ndkPath` that does not read
-/// `flui.ndkPath`, in a Gradle build script, in order, written as
+/// Every `ndkVersion` in a Gradle build script, and every `ndkPath` of a
+/// script that does not read `flui.ndkPath` (the scaffolded one sets
+/// `ndkPath` from it when the build passes it), in order, written as
 /// `name = value`: each names an NDK other than the one the build resolved.
 fn ndk_assignments(script: &str) -> Vec<String> {
-    let read = format!("providers.gradleProperty(\"{NDK_PATH_PROPERTY}\").get()");
+    let reads_property = without_comments(script).contains(&format!("\"{NDK_PATH_PROPERTY}\""));
     let versions = assignments(script, "ndkVersion", None)
         .into_iter()
         .map(|value| format!("ndkVersion = {value}"));
     let paths = assignments(script, "ndkPath", None)
         .into_iter()
-        .filter(|value| value.replace(' ', "") != read)
+        .filter(|_| !reads_property)
         .map(|value| format!("ndkPath = {value}"));
     versions.chain(paths).collect()
 }
@@ -566,14 +597,21 @@ fn without_comments(script: &str) -> String {
 mod tests {
     use super::{
         GradleFacts, Path, PathBuf, Profile, Stated, application_id_assignments,
-        min_sdk_assignments, ndk_assignments, refusal, restate_all, state_project,
-        version_code_assignments, version_name_assignments,
+        command_properties, min_sdk_assignments, ndk_assignments, refusal, restate_all,
+        state_project, version_code_assignments, version_name_assignments,
     };
 
-    /// What every property below `flui.proguardFiles` states for [`facts`].
-    const STATED_AFTER_RULES: &str = "flui.versionCode=100\nflui.versionName=0.1.0\n\
-                                      flui.ndkPath=/sdk/ndk/29.0.14206865\n\
-                                      flui.signing.storeFile=\nflui.signing.keyAlias=\n";
+    /// What the version properties state for [`facts`], after the rest.
+    const STATED_VERSION: &str = "flui.versionCode=100\nflui.versionName=0.1.0\n";
+
+    /// The `-P` arguments `command_properties` gives `facts`, as text.
+    fn command_line(facts: &GradleFacts<'_>) -> Vec<String> {
+        command_properties(facts)
+            .expect("listed")
+            .into_iter()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect()
+    }
 
     fn facts() -> GradleFacts<'static> {
         GradleFacts {
@@ -621,10 +659,8 @@ mod tests {
                 "flui.applicationId=com.example.notes\nflui.targetSdk=36\nflui.minSdk=26\n",
             ),
         ] {
-            let found = restate_all(text, &facts()).expect("restated");
-            // No Java sources: the property is stated empty, after the rest.
-            let expected =
-                format!("{expected}flui.javaSources=\nflui.proguardFiles=\n{STATED_AFTER_RULES}");
+            let found = restate_all(text, &facts());
+            let expected = format!("{expected}{STATED_VERSION}");
             if found != expected {
                 failures.push(format!("{text:?}: {found:?}"));
             }
@@ -825,8 +861,8 @@ mod tests {
     }
 
     /// The Java source directories the linked crates declare reach Gradle as
-    /// one property it splits on `File.pathSeparator`, `/`-separated and with
-    /// every non-ASCII character escaped; a script that does not read them is
+    /// one command-line property it splits on `File.pathSeparator`, never in
+    /// the committed `gradle.properties`; a script that does not read them is
     /// refused, naming the Activity the APK would lack, while the scaffolded
     /// one reads them.
     #[test]
@@ -840,12 +876,15 @@ mod tests {
             java_sources: &sources,
             ..facts()
         };
-        let written = restate_all("", &declared).expect("restated");
         let expected = format!(
-            "flui.javaSources=/deps/flui-native/android/java{separator}\
-             /home/\\u0432\\u0430\\u043d\\u044f/other/java\n"
+            "-Pflui.javaSources=/deps/flui-native/android/java{separator}/home/ваня/other/java"
         );
-        assert!(written.contains(&format!("\n{expected}")), "{written}");
+        assert!(
+            command_line(&declared).contains(&expected),
+            "{:?}",
+            command_line(&declared)
+        );
+        assert!(!restate_all("", &declared).contains("javaSources"));
 
         let template = include_str!("../../templates/platforms/android/build.gradle.kts");
         assert_eq!(refusal(template, &declared), None);
@@ -878,12 +917,15 @@ mod tests {
             proguard_files: &rules,
             ..facts()
         };
-        let written = restate_all("", &declared).expect("restated");
         let expected = format!(
-            "\nflui.proguardFiles=/deps/flui-native/android/proguard-rules.pro{separator}\
-             /deps/other/rules.pro\n"
+            "-Pflui.proguardFiles=/deps/flui-native/android/proguard-rules.pro{separator}\
+             /deps/other/rules.pro"
         );
-        assert!(written.contains(&expected), "{written}");
+        assert!(
+            command_line(&declared).contains(&expected),
+            "{:?}",
+            command_line(&declared)
+        );
 
         let template = include_str!("../../templates/platforms/android/build.gradle.kts");
         assert_eq!(refusal(template, &declared), None);
@@ -915,11 +957,32 @@ mod tests {
             release_key: Some((Path::new("/keys/upload.jks"), "up\\load")),
             ..facts()
         };
-        let written = restate_all("", &release).expect("restated");
-        if !written.ends_with(
-            "flui.signing.storeFile=/keys/upload.jks\nflui.signing.keyAlias=up\\\\load\n",
-        ) {
-            failures.push(format!("the release key: {written}"));
+        let release_line = command_line(&release);
+        if !release_line.ends_with(&[
+            "-Pflui.signing.storeFile=/keys/upload.jks".to_owned(),
+            "-Pflui.signing.keyAlias=up\\load".to_owned(),
+        ]) || release_line.first().map(String::as_str)
+            != Some("-Pflui.ndkPath=/sdk/ndk/29.0.14206865")
+        {
+            failures.push(format!("the command line of a release: {release_line:?}"));
+        }
+        if command_line(&facts())
+            .iter()
+            .any(|argument| argument.contains("signing"))
+        {
+            failures.push("a debug build passes no release key".to_owned());
+        }
+        // An older `flui build` wrote this machine's paths into the committed
+        // file: they go, the project's facts stay.
+        let old = "flui.minSdk=26\nflui.ndkPath=/home/a/ndk\nflui.javaSources=/home/a/.cargo/x\n\
+                   flui.proguardFiles=\nflui.signing.storeFile=/home/a/k.jks\n\
+                   flui.signing.keyAlias=upload\n# kept\n";
+        let restated = restate_all(old, &release);
+        if restated
+            != "flui.minSdk=26\n# kept\nflui.targetSdk=36\nflui.applicationId=com.example.notes\n\
+                flui.versionCode=100\nflui.versionName=0.1.0\n"
+        {
+            failures.push(format!("an older file restated: {restated:?}"));
         }
         if refusal(template, &release).is_some() {
             failures.push("the scaffolded script refused for a release".to_owned());
@@ -958,8 +1021,8 @@ mod tests {
             (
                 "an NDK path of its own",
                 template.replace(
-                    "providers.gradleProperty(\"flui.ndkPath\").get()",
-                    "\"/opt/ndk\"",
+                    "fluiProperty(\"flui.ndkPath\").takeIf { it.isNotEmpty() }?.let { ndkPath = it }",
+                    "ndkPath = \"/opt/ndk\"",
                 ),
                 Some("`ndkPath = \"/opt/ndk\"`"),
                 facts(),
@@ -1009,5 +1072,65 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A release build with a key, the NDK and the crates' sources leaves the
+    /// project `flui platform add android` scaffolded byte for byte as it was:
+    /// what is this machine's or this build's goes on the command line, so
+    /// nothing a teammate checks out names another machine's paths.
+    #[test]
+    fn a_build_leaves_the_scaffolded_project_as_it_was() {
+        let project = tempfile::tempdir().expect("project");
+        crate::build::scaffold::scaffold_platform(
+            "android",
+            project.path(),
+            &crate::build::scaffold::ScaffoldParams {
+                app: "notes",
+                lib: "notes",
+                package: "com.example.notes",
+            },
+        )
+        .expect("scaffolded");
+        let android = project.path().join("platforms").join("android");
+        let tree = |dir: &Path| {
+            let mut files = std::collections::BTreeMap::new();
+            let mut pending = vec![dir.to_path_buf()];
+            while let Some(next) = pending.pop() {
+                for entry in std::fs::read_dir(&next)
+                    .expect("dir")
+                    .map(|e| e.expect("entry"))
+                {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else {
+                        files.insert(path.clone(), std::fs::read(&path).expect("file"));
+                    }
+                }
+            }
+            files
+        };
+        let before = tree(&android);
+        let sources = [PathBuf::from(
+            "/home/a/.cargo/registry/flui-native/android/java",
+        )];
+        let rules = [PathBuf::from(
+            "/home/a/.cargo/registry/flui-native/rules.pro",
+        )];
+        let build = GradleFacts {
+            min_sdk: 23,
+            profile: Profile::Release,
+            release_key: Some((Path::new("/home/a/keys/upload.jks"), "upload")),
+            java_sources: &sources,
+            proguard_files: &rules,
+            ..facts()
+        };
+        let command_line = state_project(&android, &build).expect("stated");
+        assert_eq!(
+            tree(&android),
+            before,
+            "the build changed a scaffolded file"
+        );
+        assert_eq!(command_line.len(), 5, "{command_line:?}");
     }
 }

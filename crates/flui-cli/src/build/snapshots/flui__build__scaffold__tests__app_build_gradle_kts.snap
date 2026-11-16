@@ -6,9 +6,19 @@ plugins {
     id("com.android.application")
 }
 
-// The release key `flui build` writes from flui.toml (`[signing.android]`) into
-// gradle.properties; empty when the application names none.
-val releaseKeystore = providers.gradleProperty("flui.signing.storeFile").get()
+// What is this machine's or this build's, `flui build` passes on the `gradlew`
+// command line (`-Pflui.…`), never in gradle.properties, which is committed. A
+// plain `./gradlew` runs without them: Gradle's own NDK, the debug key, and no
+// Java sources or R8 rules of the linked crates.
+fun fluiProperty(name: String): String = providers.gradleProperty(name).getOrElse("")
+
+// The release key flui.toml names (`[signing.android]`); empty without one.
+val releaseKeystore = fluiProperty("flui.signing.storeFile")
+
+// A password variable set to an empty string counts as unset, as `flui build`
+// counts it.
+fun passwordVariable(name: String) =
+    providers.environmentVariable(name).filter { it.isNotEmpty() }
 
 android {
     // The package of the app's own Java or Kotlin code: it stays when flui.toml's
@@ -16,9 +26,9 @@ android {
     namespace = "com.example.test_app"
     // `flui build` writes both properties into gradle.properties.
     compileSdk = providers.gradleProperty("flui.targetSdk").get().toInt()
-    // The NDK `cargo ndk` linked the libraries with, which `flui build` resolved
-    // and writes into gradle.properties: Gradle strips them with the same one.
-    ndkPath = providers.gradleProperty("flui.ndkPath").get()
+    // The NDK `cargo ndk` linked the libraries with, which `flui build` resolved:
+    // Gradle strips them with the same one.
+    fluiProperty("flui.ndkPath").takeIf { it.isNotEmpty() }?.let { ndkPath = it }
 
     defaultConfig {
         // `flui build` writes it from flui.toml (`[app] id`) into gradle.properties.
@@ -35,11 +45,11 @@ android {
         create("release") {
             if (releaseKeystore.isNotEmpty()) {
                 storeFile = file(releaseKeystore)
-                keyAlias = providers.gradleProperty("flui.signing.keyAlias").get()
+                keyAlias = fluiProperty("flui.signing.keyAlias")
                 // The passwords come from the environment, never from a file.
-                storePassword = providers.environmentVariable("FLUI_ANDROID_KEYSTORE_PASSWORD").orNull
-                keyPassword = providers.environmentVariable("FLUI_ANDROID_KEY_PASSWORD")
-                    .orElse(providers.environmentVariable("FLUI_ANDROID_KEYSTORE_PASSWORD"))
+                storePassword = passwordVariable("FLUI_ANDROID_KEYSTORE_PASSWORD").orNull
+                keyPassword = passwordVariable("FLUI_ANDROID_KEY_PASSWORD")
+                    .orElse(passwordVariable("FLUI_ANDROID_KEYSTORE_PASSWORD"))
                     .orNull
             }
         }
@@ -58,9 +68,8 @@ android {
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
-                // The rules of the crates the app links, FLUI's own among them: `flui build`
-                // writes their paths into gradle.properties.
-                *providers.gradleProperty("flui.proguardFiles").get()
+                // The rules of the crates the app links, FLUI's own among them.
+                *fluiProperty("flui.proguardFiles")
                     .split(File.pathSeparator)
                     .filter { it.isNotEmpty() }
                     .toTypedArray()
@@ -71,10 +80,9 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDirs("src/main/jniLibs")
-            // The Java sources of the crates the app links, FluiActivity's among
-            // them: `flui build` writes their directories into gradle.properties.
+            // The Java sources of the crates the app links, FluiActivity's among them.
             java.srcDirs(
-                providers.gradleProperty("flui.javaSources").get()
+                fluiProperty("flui.javaSources")
                     .split(File.pathSeparator)
                     .filter { it.isNotEmpty() }
             )

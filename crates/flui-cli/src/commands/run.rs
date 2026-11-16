@@ -167,7 +167,7 @@ fn run_session(
     // own strategy.
     let selection = if let Project::Application { selected, .. } = &project {
         let root = std::env::current_dir().context("failed to resolve application directory")?;
-        let host = crate::build::DesktopBuilder::detect_host_target()?;
+        let host = crate::build::DesktopBuilder::detect_host_target(&root)?;
         require_one_instance(&root, &host, &selected.built_package(), agent.as_ref())?;
         selected.cargo_args()
     } else {
@@ -1588,6 +1588,10 @@ fn environment_error(error: crate::build::error::BuildError) -> CliError {
                  build-std` in .cargo/config.toml and the `rust-src` component"
             ),
         },
+        error @ BuildError::BuildStdIgnored { .. } => CliError::ToolNotFound {
+            tool: "a toolchain that builds the target".into(),
+            suggestion: error.to_string(),
+        },
         BuildError::AndroidPlatformMissing {
             needed, installed, ..
         } => CliError::ToolNotFound {
@@ -1873,7 +1877,7 @@ impl AndroidSession {
                 });
             match result {
                 Ok(delivered) => {
-                    apk = Some(delivered.app_binary);
+                    apk = Some(delivered.apk.app_binary);
                     true
                 }
                 Err(error) => {

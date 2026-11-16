@@ -18,23 +18,26 @@ impl IosBuilder {
 }
 
 impl IosBuilder {
-    pub(crate) fn validate_environment() -> BuildResult<()> {
+    /// Refuse an iOS build of the project in `workspace_root` that cannot run
+    /// here: no `xcodebuild`, or no iOS target the project's toolchain builds.
+    pub(crate) fn validate_environment(workspace_root: &Path) -> BuildResult<()> {
         // Check xcodebuild
         check_command_exists("xcodebuild")?;
 
         // At least one iOS target: a device's or a simulator's.
         let mut any_buildable = false;
         for triple in ["aarch64-apple-ios-sim", "x86_64-apple-ios"] {
-            if environment::rust_target_support(Path::new("."), triple)?
-                != environment::TargetSupport::Missing
-            {
+            if matches!(
+                environment::rust_target_support(workspace_root, triple)?,
+                environment::TargetSupport::Installed | environment::TargetSupport::FromSource
+            ) {
                 any_buildable = true;
                 break;
             }
         }
         if !any_buildable {
             // Refuses, naming the toolchain, unless the device target builds.
-            environment::require_rust_target(Path::new("."), "aarch64-apple-ios")?;
+            environment::require_rust_target(workspace_root, "aarch64-apple-ios")?;
         }
 
         crate::ui::debug("iOS environment validation passed".to_string());

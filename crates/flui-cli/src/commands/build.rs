@@ -76,6 +76,9 @@ struct Artifact {
     path: PathBuf,
     /// Size on disk (the sum of contained files for a bundle/directory).
     size_bytes: u64,
+    /// How a package that is signed was signed: the APK's key, which a CI
+    /// job reads from `--json` before it ships a release.
+    signing: Option<crate::build::android_signing::PackageSigning>,
 }
 
 impl Artifact {
@@ -85,7 +88,14 @@ impl Artifact {
             label: None,
             path,
             size_bytes,
+            signing: None,
         }
+    }
+
+    /// The artifact, signed as `signing` says.
+    fn signed(mut self, signing: crate::build::android_signing::PackageSigning) -> Self {
+        self.signing = Some(signing);
+        self
     }
 
     /// Override the human-facing success line's description without
@@ -101,11 +111,15 @@ impl Artifact {
     }
 
     fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut json = serde_json::json!({
             "kind": self.kind,
             "path": self.path.display().to_string(),
             "size_bytes": self.size_bytes,
-        })
+        });
+        if let Some(signing) = self.signing {
+            json["signing"] = serde_json::json!(signing);
+        }
+        json
     }
 }
 
@@ -266,8 +280,11 @@ fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> C
                 }),
             );
             for artifact in &artifacts {
+                let signing = artifact
+                    .signing
+                    .map_or_default(|signing| format!(", {signing}"));
                 ui::success(format!(
-                    "{}: {} ({})",
+                    "{}: {} ({}{signing})",
                     artifact.display_kind(),
                     artifact.path.display(),
                     human_size(artifact.size_bytes)
@@ -394,16 +411,15 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Building APK...");
-    let final_artifacts = block_on(android_builder.build_platform(&ctx, &artifacts))
+    let package = block_on(android_builder.build_platform(&ctx, &artifacts))
         .context("failed to build APK")?;
 
     spinner.stop(format!("{} Android APK built", style("✓").green()));
 
-    Ok(vec![Artifact::new(
-        "apk",
-        final_artifacts.app_binary,
-        final_artifacts.size_bytes,
-    )])
+    Ok(vec![
+        Artifact::new("apk", package.apk.app_binary, package.apk.size_bytes)
+            .signed(package.signing),
+    ])
 }
 
 fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<Artifact>> {
@@ -456,7 +472,8 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating iOS environment...");
-    IosBuilder::validate_environment().context("iOS environment validation failed")?;
+    IosBuilder::validate_environment(&ctx.workspace_root)
+        .context("iOS environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building iOS Rust target...");
@@ -822,4 +839,29 @@ fn build_macos_universal(
     Ok(vec![
         Artifact::new("binary", fused, size_bytes).with_label("universal binary (not bundled)"),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Artifact;
+    use crate::build::android_signing::PackageSigning;
+
+    /// A `--json` result says how an APK was signed, so a CI job sees a
+    /// release signed with the debug key; an artifact that is not signed
+    /// carries no `signing` field.
+    #[test]
+    fn the_json_result_says_how_an_apk_was_signed() {
+        let apk =
+            Artifact::new("apk", "notes-release.apk".into(), 1).signed(PackageSigning::DebugKey);
+        assert_eq!(apk.to_json()["signing"], "debug-key");
+        let keyed = Artifact::new("apk", "notes-release.apk".into(), 1)
+            .signed(PackageSigning::ApplicationKey);
+        assert_eq!(keyed.to_json()["signing"], "application-key");
+        assert!(
+            Artifact::new("wasm", "app.wasm".into(), 1)
+                .to_json()
+                .get("signing")
+                .is_none()
+        );
+    }
 }

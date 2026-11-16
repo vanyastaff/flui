@@ -108,12 +108,52 @@ pub(crate) enum AndroidSigningError {
     PasswordUnset,
 }
 
+/// What a path names, as a [`SigningKey`] decision reads the file system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PathKind {
+    /// A regular file.
+    File,
+    /// A directory.
+    Directory,
+}
+
+/// What `path` names on this machine's file system, `None` when nothing.
+pub(crate) fn path_kind(path: &Path) -> Option<PathKind> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(if metadata.is_dir() {
+        PathKind::Directory
+    } else {
+        PathKind::File
+    })
+}
+
+/// How an APK was signed, as the build reports it in its text and in its
+/// `--json` result. No build reports an unsigned APK: it refuses one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PackageSigning {
+    /// The SDK user's debug key, which a store refuses.
+    DebugKey,
+    /// The release key `flui.toml` names.
+    ApplicationKey,
+}
+
+impl std::fmt::Display for PackageSigning {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::DebugKey => "signed with the debug key",
+            Self::ApplicationKey => "signed with the application's key",
+        })
+    }
+}
+
 impl SigningKey {
     /// The key a build with `profile` signs with.
     ///
     /// `release_key` is `flui.toml`'s `[signing.android]`, its keystore
-    /// relative to `project_dir`; `env` reads an environment variable and
-    /// `is_dir` whether a path is a directory, so a test states both.
+    /// relative to `project_dir`; `env` reads an environment variable (one
+    /// set to an empty string counts as unset) and `probe` the file system
+    /// ([`path_kind`]), so a test states both.
     ///
     /// # Errors
     ///
@@ -125,7 +165,7 @@ impl SigningKey {
         release_key: Option<&AndroidReleaseKey>,
         project_dir: &Path,
         env: &dyn Fn(&str) -> Option<OsString>,
-        is_dir: &dyn Fn(&Path) -> bool,
+        probe: &dyn Fn(&Path) -> Option<PathKind>,
     ) -> Result<Self, AndroidSigningError> {
         let release_key = match profile {
             Profile::Release => release_key,
@@ -133,7 +173,7 @@ impl SigningKey {
         };
         let Some(release_key) = release_key else {
             return Ok(Self::Debug {
-                keystore: debug_keystore(env, is_dir, cfg!(windows))?,
+                keystore: debug_keystore(env, probe, cfg!(windows))?,
                 for_release: profile == Profile::Release,
             });
         };
@@ -141,7 +181,7 @@ impl SigningKey {
             return Err(AndroidSigningError::EmptyAlias);
         }
         let keystore = project_dir.join(&release_key.keystore);
-        if !keystore.is_file() {
+        if probe(&keystore) != Some(PathKind::File) {
             return Err(AndroidSigningError::KeystoreMissing { keystore });
         }
         let set = |name: &str| env(name).is_some_and(|value| !value.is_empty());
@@ -176,6 +216,14 @@ impl SigningKey {
                 ..
             }
         )
+    }
+
+    /// How a package signed with this key is reported.
+    pub(crate) fn package_signing(&self) -> PackageSigning {
+        match self {
+            Self::Debug { .. } => PackageSigning::DebugKey,
+            Self::Release { .. } => PackageSigning::ApplicationKey,
+        }
     }
 
     /// The release keystore and alias a Gradle project's release signing
@@ -241,9 +289,10 @@ impl SigningKey {
 /// [`AndroidSigningError::NoUserHome`] when none of them is set.
 pub(crate) fn debug_keystore(
     env: &dyn Fn(&str) -> Option<OsString>,
-    is_dir: &dyn Fn(&Path) -> bool,
+    probe: &dyn Fn(&Path) -> Option<PathKind>,
     windows: bool,
 ) -> Result<PathBuf, AndroidSigningError> {
+    let is_dir = |path: &Path| probe(path) == Some(PathKind::Directory);
     let path = |name: &str| {
         env(name)
             .filter(|value| !value.is_empty())
@@ -313,8 +362,8 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        AndroidReleaseKey, AndroidSigningError, KEY_PASSWORD_ENV, STORE_PASSWORD_ENV, SigningKey,
-        debug_keystore,
+        AndroidReleaseKey, AndroidSigningError, KEY_PASSWORD_ENV, PackageSigning, PathKind,
+        STORE_PASSWORD_ENV, SigningKey, debug_keystore,
     };
     use crate::build::platform::Profile;
 
@@ -337,12 +386,12 @@ mod tests {
             |name| self.vars.get(name).map(OsString::from)
         }
 
-        fn is_dir(&self) -> impl Fn(&Path) -> bool + '_ {
-            |path| self.dirs.contains(path)
+        fn probe(&self) -> impl Fn(&Path) -> Option<PathKind> + '_ {
+            |path| self.dirs.contains(path).then_some(PathKind::Directory)
         }
 
         fn debug_keystore(&self, windows: bool) -> Result<PathBuf, AndroidSigningError> {
-            debug_keystore(&self.env(), &self.is_dir(), windows)
+            debug_keystore(&self.env(), &self.probe(), windows)
         }
     }
 
@@ -431,9 +480,8 @@ mod tests {
     /// key that cannot sign is refused before anything is packaged.
     #[test]
     fn a_release_is_signed_with_the_named_key_or_says_it_is_not() {
-        let project = tempfile::tempdir().expect("project");
-        let keystore = project.path().join("upload.jks");
-        std::fs::write(&keystore, b"a keystore").expect("keystore");
+        let project = Path::new("/project");
+        let keystore = project.join("upload.jks");
         let named = AndroidReleaseKey {
             keystore: PathBuf::from("upload.jks"),
             alias: "upload".to_owned(),
@@ -449,9 +497,9 @@ mod tests {
             SigningKey::for_build(
                 profile,
                 key,
-                project.path(),
+                project,
                 &|name| vars.get(name).map(OsString::from),
-                &|_| false,
+                &|path| (path == keystore).then_some(PathKind::File),
             )
         };
         let debug_keystore = PathBuf::from("/home/u/.android/debug.keystore");
@@ -523,6 +571,26 @@ mod tests {
                     .ends_with(&["--key-pass".into(), "env:FLUI_ANDROID_KEY_PASSWORD".into()]) => {}
             other => failures.push(format!("a key with its own password: {other:?}")),
         }
+        // An empty key password is unset, as the scaffolded Gradle script
+        // reads it: the key is opened with the keystore's password.
+        match sign(
+            Profile::Release,
+            Some(&named),
+            &[(STORE_PASSWORD_ENV, password), (KEY_PASSWORD_ENV, "")],
+        ) {
+            Ok(key)
+                if key.package_signing() == PackageSigning::ApplicationKey
+                    && key.apksigner_args().ends_with(&[
+                        "--key-pass".into(),
+                        "env:FLUI_ANDROID_KEYSTORE_PASSWORD".into(),
+                    ]) => {}
+            other => failures.push(format!("an empty key password: {other:?}")),
+        }
+        if sign(Profile::Release, None, &[]).map(|key| key.package_signing())
+            != Ok(PackageSigning::DebugKey)
+        {
+            failures.push("a release naming no key reports the debug key".to_owned());
+        }
         for (label, key, vars, expected) in [
             (
                 "no password",
@@ -544,7 +612,7 @@ mod tests {
                 },
                 vec![(STORE_PASSWORD_ENV, password)],
                 AndroidSigningError::KeystoreMissing {
-                    keystore: project.path().join("missing.jks"),
+                    keystore: project.join("missing.jks"),
                 },
             ),
             (
