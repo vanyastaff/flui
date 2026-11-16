@@ -647,8 +647,10 @@ impl RasterSender {
     /// if it does not. Settled first, it would fold the render's record and
     /// leave the render's own answer stale. A slot whose detach the owner sent
     /// settles nothing here: its frame leaves with its presentation, as the
-    /// executor's own detach drops it. The frames are dropped with no
-    /// borrow or lock held: a scene's destructor can be user code.
+    /// executor's own detach drops it; behind a render that never returns, it
+    /// stays in its inbox, as the context does, until the process exits. The
+    /// frames are dropped with no borrow or lock held: a scene's destructor
+    /// can be user code.
     fn settle_after_death(&self) {
         let mut failed: Vec<flui_layer::SceneSnapshot> = Vec::new();
         {

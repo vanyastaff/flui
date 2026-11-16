@@ -420,6 +420,17 @@ fn a_frame_queued_behind_a_wedged_render_settles_after_it() {
         ],
         "the slot's frames settle in the order they were sent"
     );
+    // The stop settled the wedged slot's queued frame last, so the dead
+    // executor has done all it will: it rendered nothing for the slot the
+    // owner gave up.
+    thread
+        .sender
+        .drain_settlements(other.slot, &mut other_settled);
+    assert_eq!(
+        other_settled,
+        Vec::new(),
+        "a dead executor renders no frame after the held render returns"
+    );
 }
 
 /// A turn's panic outside a slot's command (here the host's wake) is

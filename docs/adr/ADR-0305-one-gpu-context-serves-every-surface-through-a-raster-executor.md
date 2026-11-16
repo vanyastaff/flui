@@ -453,7 +453,8 @@ executor and slot.
   unsettled, as the executor's own detach drops it. A slot settles in order even then: the frame
   a wedged render holds settles only if that render returns, and a frame queued behind it in that
   slot settles `Failed` after it, so a late `Presented` never arrives for a frame whose record a
-  later settlement already folded.
+  later settlement already folded. A dead executor renders nothing after a held render returns:
+  its stop settles or drops what the inboxes hold.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no

@@ -318,6 +318,13 @@ impl<B: RasterBackend> RasterExecutor<B> {
         }
         let mut device_moved = self.recover_device(&mut first);
         for index in 0..self.slots.len() {
+            // An executor that died while a render held a slot renders nothing
+            // more once that render returns: the owner gave its windows up, and
+            // the stop that follows settles or drops what the inboxes hold
+            // (ADR-0305 §9).
+            if self.shared.health() == ExecutorHealth::Died {
+                break;
+            }
             outcome.settled += self.service(index, &mut first);
         }
         // A loss this turn's own frames met is published now, so the owner
