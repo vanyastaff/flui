@@ -40,6 +40,7 @@ fn composing_store() -> Rc<InMemoryTextStore> {
             text: "かな".to_owned(),
             cursor: Some((0, 0)),
         },
+        drop,
     );
     assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
     store
@@ -183,6 +184,7 @@ struct FailingStore {
     retirement_payload: RefCell<Option<Arc<AtomicBool>>>,
     fail_lock: Cell<bool>,
     refuse_sync: Cell<bool>,
+    refuse_async: Cell<bool>,
     on_status: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
@@ -196,6 +198,7 @@ impl FailingStore {
             retirement_payload: RefCell::new(None),
             fail_lock: Cell::new(false),
             refuse_sync: Cell::new(false),
+            refuse_async: Cell::new(false),
             on_status: RefCell::new(None),
         })
     }
@@ -217,6 +220,9 @@ impl TextStore for FailingStore {
         assert!(!self.fail_lock.take(), "lock request failure");
         if timing == LockTiming::Sync && self.refuse_sync.get() {
             return Err(TextStoreError::SyncLockUnavailable);
+        }
+        if timing == LockTiming::Async && self.refuse_async.get() {
+            return Err(TextStoreError::DeferredQueueFull);
         }
         self.inner.request_lock(grant, timing)
     }
@@ -437,6 +443,7 @@ fn a_refused_completion_reports_its_teardown_before_its_recovery(hwnd: HWND) {
                 text: "かな".to_owned(),
                 cursor: Some((0, 0)),
             },
+            drop,
         ),
         Ok(LockOutcome::Granted),
         "preedit applies"
@@ -639,6 +646,7 @@ fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND)
                 text: "かな".to_owned(),
                 cursor: Some((0, 0)),
             },
+            drop,
         ),
         Ok(LockOutcome::Granted),
         "preedit applies"
@@ -654,6 +662,36 @@ fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND)
         !tsf_sees_no_hidden_text(&associated_context(&services)),
         "the new document is protected"
     );
+    services.shutdown();
+}
+
+/// The same when the store also refuses the commit in place: the refusal is
+/// reported once, and the field keeps its composition.
+fn a_refused_commit_in_place_after_a_refused_termination_is_reported_once(hwnd: HWND) {
+    let services =
+        TextServices::activate(window_ref(hwnd), unscaled(), apartment()).expect("TSF activates");
+    let store = FailingStore::new("ab");
+    assert_eq!(
+        project_ime_event(
+            &*store.inner,
+            &ImeEvent::Preedit {
+                text: "かな".to_owned(),
+                cursor: Some((0, 0)),
+            },
+            drop,
+        ),
+        Ok(LockOutcome::Granted),
+        "preedit applies"
+    );
+    services.focus_store(Some(store.clone()));
+    let _composition = start_tsf_composition(&services, 2);
+    store.refuse_sync.set(true);
+    store.refuse_async.set(true);
+    let reports = crate::text::refusal::reports_in(|| store.inner.set_protected(true));
+    store.refuse_sync.set(false);
+    store.refuse_async.set(false);
+    assert_eq!(reports, 1, "the refused commit is reported once");
+    assert!(store.inner.composition().is_some(), "the field keeps it");
     services.shutdown();
 }
 
@@ -1221,6 +1259,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "protection change while composing, termination refused",
             a_protection_change_whose_termination_is_refused_commits_in_place,
+        ),
+        (
+            "protection change while composing, termination and commit refused",
+            a_refused_commit_in_place_after_a_refused_termination_is_reported_once,
         ),
         (
             "teardown with a panicking retirement and Pop diagnostic",

@@ -425,7 +425,7 @@ mod input {
     use flui_platform::text_store::{
         CompositionEnd, LockGrant, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreStatus, Utf16Offset,
-        Utf16Range, commit_composition_in_place,
+        Utf16Range,
     };
     use wasm_bindgen::{JsCast, prelude::*};
 
@@ -1068,7 +1068,7 @@ mod input {
                         CompositionEnd::Abandoned
                     };
                     if end != CompositionEnd::Committed {
-                        let _ = commit_composition_in_place(&*store);
+                        crate::text::refusal::commit_in_place(&*store);
                     }
                 }
             }
@@ -1138,7 +1138,7 @@ mod input {
                 // and selection with exact offsets, so the surface is made anew.
                 this.detach();
                 if composing {
-                    let _ = commit_composition_in_place(&*store);
+                    crate::text::refusal::commit_in_place(&*store);
                 }
                 this.attach(store);
             });

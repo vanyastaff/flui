@@ -68,6 +68,20 @@ pub(crate) mod host_queue;
 pub(crate) mod ime;
 #[cfg(any(wayland_host, x11_host, test))]
 pub(crate) mod linux;
+// Every host that commits a composition in place: TSF, the web and Android
+// mirrors, AppKit and UIKit, the Wayland text input.
+#[cfg(any(
+    windows,
+    target_arch = "wasm32",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    wayland_host,
+    x11_host,
+    test,
+    feature = "testing"
+))]
+pub(crate) mod refusal;
 pub(crate) mod sizing;
 pub(crate) mod web;
 #[cfg(any(windows, test, feature = "testing"))]

@@ -114,7 +114,6 @@ impl std::fmt::Debug for HeadlessWindows {
 struct Tracked {
     /// The open windows, in the order they opened: the last is topmost.
     windows: Vec<HeadlessHostWindow>,
-    active: Option<WindowId>,
     /// Whether the windows sit on one desktop and answer
     /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`](crate::HeadlessPlatform::with_window_placement)).
     placement: bool,
@@ -133,7 +132,6 @@ impl HeadlessWindows {
             deferred: crate::owner::slot::OwnerMap::new(),
             tracked: RefCell::new(Tracked {
                 windows: Vec::new(),
-                active: None,
                 placement: false,
                 capabilities: WindowCapabilities::ALL,
                 policy: HeadlessWindowPolicy::default(),
@@ -142,15 +140,12 @@ impl HeadlessWindows {
         }
     }
 
-    /// Stops tracking window `id`; another becomes active if it was.
+    /// Stops tracking window `id`.
     fn forget(&self, id: WindowId) {
-        {
-            let mut tracked = self.tracked.borrow_mut();
-            tracked.windows.retain(|window| window.id != id);
-            if tracked.active == Some(id) {
-                tracked.active = tracked.windows.first().map(|window| window.id);
-            }
-        }
+        self.tracked
+            .borrow_mut()
+            .windows
+            .retain(|window| window.id != id);
         // Let go of a deferred open's window outside the lock.
         drop(self.deferred.remove(&id));
     }
@@ -220,11 +215,7 @@ impl TrackedWindows for HeadlessWindows {
         }
         state.notices.mark_stale_on_wake(&window.window_state);
 
-        {
-            let mut tracked = self.tracked.borrow_mut();
-            tracked.windows.push(window.clone());
-            tracked.active = Some(window_id);
-        }
+        self.tracked.borrow_mut().windows.push(window.clone());
 
         Ok(Rc::new(window) as Rc<dyn HostWindow>)
     }
@@ -354,10 +345,6 @@ impl host::Window<HeadlessLoop> for HeadlessHostWindow {
         owner.with_state(|state| {
             TrackedWindows::open(Arc::clone(windows), state, platform_state, options, handler)
         })
-    }
-
-    fn active(_: &HeadlessLoop, windows: &HeadlessWindows) -> Option<WindowId> {
-        windows.tracked.borrow_mut().active
     }
 
     fn capabilities(_: &HeadlessLoop, windows: &HeadlessWindows) -> WindowCapabilities {

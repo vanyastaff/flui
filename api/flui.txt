@@ -12795,8 +12795,8 @@ impl Eq for flui::platform::Opened
 impl PartialEq for flui::platform::Opened
 impl core::fmt::Debug for flui::platform::Opened
 impl core::marker::StructuralPartialEq for flui::platform::Opened
+pub fn flui::platform::Opened::bounded(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> (Self, flui::platform::OpenedOverflow)
 pub fn flui::platform::Opened::is_empty(&self) -> bool
-pub fn flui::platform::Opened::new(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> Self
 #[non_exhaustive] pub struct flui::platform::OpenedFile { .. }
 field flui::platform::OpenedFile::path: std::path::PathBuf // at 0
 impl Clone for flui::platform::OpenedFile
@@ -12806,6 +12806,17 @@ impl core::fmt::Debug for flui::platform::OpenedFile
 pub fn flui::platform::OpenedFile::name(&self) -> Option<&str>
 pub fn flui::platform::OpenedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::platform::OpenedFile::try_from_descriptor(descriptor: std::os::fd::owned::OwnedFd, name: Option<String>) -> Result<Self>
+#[non_exhaustive] pub struct flui::platform::OpenedOverflow
+field flui::platform::OpenedOverflow::past_limit: usize // at 1
+field flui::platform::OpenedOverflow::too_long: usize // at 0
+impl Clone for flui::platform::OpenedOverflow
+impl Copy for flui::platform::OpenedOverflow
+impl Default for flui::platform::OpenedOverflow
+impl Eq for flui::platform::OpenedOverflow
+impl PartialEq for flui::platform::OpenedOverflow
+impl core::fmt::Debug for flui::platform::OpenedOverflow
+impl core::marker::StructuralPartialEq for flui::platform::OpenedOverflow
+pub const fn flui::platform::OpenedOverflow::is_empty(self) -> bool
 #[non_exhaustive] pub struct flui::platform::OpeningGeometry
 field flui::platform::OpeningGeometry::constraints: flui::platform::SizeConstraints // at 1
 field flui::platform::OpeningGeometry::content: flui::platform::WindowExtent // at 0
@@ -12884,7 +12895,6 @@ fn flui::platform::PlatformHaptics::play(&self, pattern: &flui::platform::haptic
 pub enum flui::platform::PlatformInput
 impl Clone for flui::platform::PlatformInput
 impl core::fmt::Debug for flui::platform::PlatformInput
-pub fn flui::platform::PlatformInput::as_drag_drop(&self) -> Option<&flui::platform::DragDropEvent>
 pub fn flui::platform::PlatformInput::as_ime(&self) -> Option<&flui::platform::ImeEvent>
 pub fn flui::platform::PlatformInput::as_keyboard(&self) -> Option<&flui::interaction::KeyEvent>
 pub fn flui::platform::PlatformInput::as_pointer(&self) -> Option<&flui::interaction::PointerEvent>
@@ -13328,9 +13338,6 @@ impl<'de> serde_core::de::Deserialize<'de> for flui::platform::TargetPlatform
 pub const fn flui::platform::TargetPlatform::as_str(self) -> &'static str
 pub const fn flui::platform::TargetPlatform::current() -> Self
 pub const fn flui::platform::TargetPlatform::is_apple(self) -> bool
-pub const fn flui::platform::TargetPlatform::is_desktop(self) -> bool
-pub const fn flui::platform::TargetPlatform::is_mobile(self) -> bool
-pub const fn flui::platform::TargetPlatform::is_touch_primary(self) -> bool
 variant flui::platform::TargetPlatform::Android // at 1
 variant flui::platform::TargetPlatform::Fuchsia // at 5
 variant flui::platform::TargetPlatform::Linux // at 2
@@ -15451,8 +15458,8 @@ pub const fn flui::platform::text_store::Utf16Range::is_empty(self) -> bool
 pub const fn flui::platform::text_store::Utf16Range::len(self) -> usize
 pub const fn flui::platform::text_store::Utf16Range::start(self) -> flui::platform::text_store::Utf16Offset
 pub const fn flui::platform::text_store::Utf16Range::try_new(start: flui::platform::text_store::Utf16Offset, end: flui::platform::text_store::Utf16Offset) -> Option<Self>
-pub fn flui::platform::text_store::commit_composition_in_place(store: &dyn flui::platform::TextStore) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
-pub fn flui::platform::text_store::project_ime_event(store: &dyn flui::platform::TextStore, event: &flui::platform::ImeEvent) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
+pub fn flui::platform::text_store::commit_composition_in_place(store: &dyn flui::platform::TextStore, late_refusal: impl FnOnce(flui::platform::text_store::TextStoreError) + 'static) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
+pub fn flui::platform::text_store::project_ime_event(store: &dyn flui::platform::TextStore, event: &flui::platform::ImeEvent, late_refusal: impl FnOnce(flui::platform::text_store::TextStoreError) + 'static) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
 pub mod flui::platform::text_store::utf16
 reexport flui::platform::text_store::utf16::OffsetError => flui::platform::text_store::OffsetError
 reexport flui::platform::text_store::utf16::Utf16Offset => flui::platform::text_store::Utf16Offset

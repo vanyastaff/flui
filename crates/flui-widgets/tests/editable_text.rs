@@ -457,7 +457,11 @@ pub(crate) mod native_actions {
             .post_frame_handle()
             .schedule(move |_| {
                 assert_eq!(
-                    project_ime_event(&*store, &flui_platform::ImeEvent::Commit("IME".into())),
+                    project_ime_event(
+                        &*store,
+                        &flui_platform::ImeEvent::Commit("IME".into()),
+                        drop
+                    ),
                     Ok(LockOutcome::Deferred)
                 );
                 panic!("leave the accepted grant queued before its commit anchor");
@@ -596,7 +600,11 @@ pub(crate) mod native_actions {
             .post_frame_handle()
             .schedule(move |_| {
                 assert_eq!(
-                    project_ime_event(&*store, &flui_platform::ImeEvent::Commit("IME".into())),
+                    project_ime_event(
+                        &*store,
+                        &flui_platform::ImeEvent::Commit("IME".into()),
+                        drop
+                    ),
                     Ok(LockOutcome::Deferred)
                 );
                 panic!("leave an accepted grant queued before its commit anchor");
@@ -1804,6 +1812,7 @@ pub(crate) mod text_store {
                 let outcome = flui_platform::text_store::project_ime_event(
                     &*field,
                     &flui_platform::ImeEvent::Commit("A".to_owned()),
+                    drop,
                 );
                 assert_eq!(outcome, Ok(LockOutcome::Deferred));
                 *observed_text.borrow_mut() = Some(observed_controller.text());
@@ -2019,6 +2028,7 @@ pub(crate) mod text_store {
                 *queued.borrow_mut() = Some(flui_platform::text_store::project_ime_event(
                     &*target,
                     &flui_platform::ImeEvent::Commit("東京".to_owned()),
+                    drop,
                 ));
             }));
         harness.swap_root(flui_widgets::SizedBox::square(10.0));

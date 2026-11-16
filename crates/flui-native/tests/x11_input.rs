@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
-use flui_native::Platform as _;
+use flui_native::testing::keyboard_layout;
 use flui_native::testing::x11::run_for;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{ButtonChange, PointerEvent};
@@ -99,9 +99,10 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
         .expect("the window activates");
     fixture.settle();
     assert!(fixture.window.state().focused, "the window has the focus");
-    fixture
-        .platform
-        .on_keyboard_layout_change(Box::new(|| panic!("the layout callback")));
+    keyboard_layout::on_change(
+        &fixture.platform,
+        Box::new(|| panic!("the layout callback")),
+    );
     handler.take_calls();
     let _restore = RestoreLayout;
     // The server switches the keymap; the loop does not turn before the key.
@@ -146,7 +147,7 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
         }
         assert!(std::time::Instant::now() < deadline, "no key came");
     }
-    assert_eq!(fixture.platform.keyboard_layout(), "German");
+    assert_eq!(keyboard_layout::current(&fixture.platform), "German");
     assert_eq!(
         keys(),
         [KeyState::Down, KeyState::Up],
@@ -154,7 +155,7 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
     );
     assert_eq!(raised, 1, "the callback's panic left the loop once");
     // The keymap goes back as the test ends: no callback panics at it.
-    fixture.platform.on_keyboard_layout_change(Box::new(|| {}));
+    keyboard_layout::on_change(&fixture.platform, Box::new(|| {}));
 }
 
 /// A second keyboard layout callback replaces the first, as on every host:
@@ -170,13 +171,14 @@ fn a_second_layout_callback_replaces_the_first() {
     let fixture = X11Fixture::open_with("layout callbacks", RecordingWindowHandler::new());
     let dropped = Rc::new(std::cell::Cell::new(false));
     let guard = OnDrop(Rc::clone(&dropped));
-    fixture
-        .platform
-        .on_keyboard_layout_change(Box::new(move || {
+    keyboard_layout::on_change(
+        &fixture.platform,
+        Box::new(move || {
             let _ = &guard;
-        }));
+        }),
+    );
     assert!(!dropped.get(), "the first callback is kept until replaced");
-    fixture.platform.on_keyboard_layout_change(Box::new(|| {}));
+    keyboard_layout::on_change(&fixture.platform, Box::new(|| {}));
     assert!(
         dropped.get(),
         "the first callback was kept beside the second"
@@ -837,7 +839,7 @@ fn xtest_keys_reach_the_focused_window() {
         downs.len(),
         "every key is released"
     );
-    assert_eq!(fixture.platform.keyboard_layout(), "English (US)");
+    assert_eq!(keyboard_layout::current(&fixture.platform), "English (US)");
 }
 
 /// A window shows the cursor it asks for, from the theme or the cursor
