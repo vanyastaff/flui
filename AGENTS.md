@@ -10,13 +10,35 @@ What the code doesn't tell you about FLUI, an open-source declarative UI framewo
   constraints-down layout; the rest is idiomatic Rust chosen on its merits, and code that
   differs from Flutter is usually deliberate (ADR-0027). Other frameworks (Flutter, Compose,
   SwiftUI, egui, Xilem, GPUI, …) are a checklist of edge cases, read with `gh` or a shallow
-  clone into the gitignored `.flutter/` / `.gpui/`.
+  clone into the gitignored `.flutter/` / `.gpui/`. What crosses over is a behaviour, pinned by
+  a behaviour test, and the defects their trackers record for it: code written from a reference
+  repeats the reference's known bugs unless they were on the checklist.
 - **Rules are types:** the compiler first, a clippy lint next, then a tool CI already runs or a
   test of the owning crate; an `xtask` gate is the last rung, admitted by its ADR (ADR-0303). An
-  exception is `#[expect(lint, reason = "…")]` at the site.
+  exception is `#[expect(lint, reason = "…")]` at the site. A mistake made twice gets its rung
+  or, where none fits, its row in "Current forms": patching each instance leaves the next
+  change to repeat it.
 - **The frame path is synchronous:** no `async` in build/layout/paint, no lock on per-node state
   touched in `perform_layout`/`paint`, none in a public signature.
 - **Layers, not micro-crates:** a feature inside a layer is a module; shared code moves down.
+
+## Code for the next reader
+
+The reader is a contributor who opens one file without the conversation that produced it. After
+0.2.0 every public name is published API, and a rename is a breaking change.
+
+- **A module is one concept behind a small surface**, its invariant held by a type (a newtype,
+  an RAII guard, a typestate) so that the wrong call does not compile. A new concept gets a
+  module beside the file it grew out of: a file several features edit is where parallel changes
+  collide, long before `xtask file-length` stops it at 3000 production lines.
+- **A name says what the thing is or does**, in the term its field already uses (the Rust API
+  Guidelines, W3C, the platform SDKs), and a new one does not repeat its module path. `util`,
+  `helpers`, `common`, `kit`, `Data`, `Info` and `Wrapper` name a bag, not a thing.
+- **A comment says what the code cannot:** the invariant, the reason, the unit, the ADR. It
+  describes the code as it stands, checked against it; the change that produced it belongs to
+  the commit message.
+- **The language is the pinned toolchain's** (`rust-toolchain.toml`): what is stable comes from
+  that release's notes, read rather than recalled.
 
 ## Recurring defects
 
@@ -56,7 +78,6 @@ and edits its row.
 | An application's test or a scenario that runs on every target | `flui_testing::Tester` (`flui::testing`) with `find` locators, acting through the window's agent | coordinates computed by hand, a `PointerScript` aimed at a node's bounds, root scopes (`MediaQuery`, `GestureArenaScope`, `FocusTreeRoot`) wrapped by the test |
 | A widget navigates, opens a dialog or pops its page | `Router::<R>::of(ctx)` and `PageHandle::of(ctx)` resolved in `build`, the handle moved into the callback; a dialog or menu is a `PopupRoute` pushed with `PageHandle::push_popup` (ADR-0330) | a navigator handle: `Navigator`, `NavigatorHandle` and `WidgetsApp::navigator` left the public API (ADR-0330 §4), and inside `flui-widgets` only the navigator, the Router and the menus' popup placement reach `NavigatorHandle` |
 | A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock | `HeadlessBinding::pump_frame`, which ADR-0083 removes |
-| Which crate may depend on which | `tier`, `order` and `reach` (ADR-0081) | reasoning from `layer = N`, which ADR-0081 removed |
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
 
@@ -111,9 +132,18 @@ conversation:
   edit `CHANGELOG.md`. A platform-support change updates `crates/flui-native/platform-parity.toml`
   and restates `docs/platform-parity.md` from it (✅ only
   after a run on that platform) and `docs/gaps.md`.
+- **One writer per file set.** A task is its own worktree, branch and PR, and two agents never
+  edit the same files. Work is set aside in a WIP commit: every worktree shares one stash stack,
+  and `git reset` or `checkout` in a checkout someone else may be using discards their work.
+  Builds queue through heli, so a delegated worker runs the checks of the crates it touched, in
+  the foreground and one at a time, and whoever coordinates runs the workspace-wide ones once.
+- **A sweep starts with one.** A workspace-wide change is carried through one crate first, with
+  its features, examples, shaders and tooling and its checks green, and then repeated across
+  the rest.
 - Commits are `area: what changed`. Pull-request CI executes Linux and wasm32 only; Windows,
   macOS, the iOS Simulator and an Android emulator run nightly on main
-  (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR.
+  (`nightly-platforms.yml`), so native and GPU changes are run locally before the PR. A red
+  `main` is fixed forward within the hour or reverted.
 - A job only main runs has a narrow form, which a pull request runs when its diff reaches what the
   job reads: a row of `ON_DEMAND` in `tools/xtask/src/change_scope/aggregator.rs`, decided by
   `cargo xtask affected` (ADR-0303 §9). `test-trybuild` runs when the diff touches a file a
@@ -163,6 +193,8 @@ host change needs `cargo heli nextest run -p flui-native` by hand.
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
 | Dependencies point down the tiers; an exception names the ADR that removes it | `xtask workspace`, `xtask reach` (ADR-0081) |
+| A crate that orders its modules in `[package.metadata.flui.modules]` imports only down that order; an exception names the ADR that removes it | `xtask module-dag` (ADR-0081 §5) |
+| A Rust source file has at most 3000 production lines; an entry that excuses a longer one carries its exact count and the ADR that removes it | `xtask file-length` (ADR-0081 §5) |
 | A Stable crate's public API names upstream types only as ADR-0089 §2 allows | `xtask api-closure` (CI `api-contracts` job, nightly rustdoc JSON; lane `full` only: `main` and the merge queue, not a pull request) |
 | Every item the facade reaches is in `api/flui.txt`, so a pull request that changes the facade's API carries the diff (`--write` restates it) | `xtask public-api` (CI `public-api` job, nightly rustdoc JSON; ADR-0324) |
 | A pull request that edits an expectation (the API snapshot, a `*.stderr`, a `*.snap`, a protocol schema, a perf baseline, an allowlist, a test, a `deny.toml` or `typos.toml` value) names each path and its reason under `## Expectations` in its body | `xtask expectations --body` (`expectations.yml`, on every pull request and every edit of its body; ADR-0331) |
@@ -201,7 +233,10 @@ New behavior has a test that fails without it, written through the public API fr
 `pub(crate)` modules and run on the Linux CI host; its `tests/` keeps the conformance table and the
 recordings of native traces. Every concrete `RenderBox`/`RenderSliver` has a
 `render_object_harness` row. Cases that differ only in input join an existing table test, and a
-crate's integration tests are modules of one `tests/main.rs`. Tests are cited by name in docs and ADRs: `rg` before renaming one.
+crate's integration tests are modules of one `tests/main.rs`. Tests are cited by name in docs
+and ADRs: `rg` before renaming one. A test reaches its assertion on every path
+(`let … else { return }` passes when the thing under test is missing), and a body stubbed so
+that it compiles leaves the task open.
 
 ## Before each push
 
@@ -232,8 +267,8 @@ with an answer you can point to in the code; the reviewers ask the same ones.
    own normalization.
 9. **Arithmetic.** No overflow in intermediate values, no non-finite geometry published, units,
    clocks and 0- versus 1-based indexes match.
-10. **The test fails without the fix.** Stash the fix, run the new test, see it fail; it goes
-    through the public API.
+10. **The test fails without the fix.** Take the fix out (a WIP commit, then the fix reverted in
+    the working tree), run the new test, see it fail; it goes through the public API.
 11. **Repository rules.** A generic-return call names its target type, a new `pub` item has a
     production caller or a named follow-up, no requirement or task IDs in code, `docs/gaps.md`
     and `crates/flui-native/platform-parity.toml` updated with a platform change.
@@ -298,6 +333,10 @@ would be embarrassed by, with the better shape. What this repository keeps getti
 - an edited expectation (the list `cargo xtask expectations` prints) whose line under
   `## Expectations` in the PR body does not say why the old one was wrong: a snapshot
   regenerated, a test removed or a baseline raised because the check was red;
+- a stub in place of the behaviour: an empty body, a default return, a test that returns before
+  its assertion;
+- a concept added to a file that already holds several, a name that says nothing, a comment
+  about the change instead of the code ("Code for the next reader");
 - the "Recurring defects" above, checked at each failure point alone, two in competition, and
   the next operation after containment ([matrix](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/signal-unwind-contract.ru.md));
 - `SliverGeometry { ..SliverGeometry::ZERO }` (drops `layout_extent`, `visible`), geometry from a

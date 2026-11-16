@@ -485,9 +485,7 @@ pub(super) fn feathered_src_transparency() {
 fn replay_canvas(painter: &mut WgpuPainter, canvas: flui_painting::Canvas) {
     let list = canvas.finish();
     let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-    for command in &list {
-        crate::dispatch::dispatch_command(command, &mut dispatcher);
-    }
+    crate::dispatch::dispatch_commands(&list, &mut dispatcher);
 }
 fn striped() -> Image {
     Image::from_rgba8(

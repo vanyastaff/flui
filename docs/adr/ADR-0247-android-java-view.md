@@ -5,7 +5,7 @@
 - **Superseded-by:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) for item 1's embedding of the dex
   in the library with `include_bytes!` and its "every packager ships that copy", item 2 except its
   first sentence (the in-memory and file loaders and the `hasCode="false"` manifest), and item 9;
-  [ADR-0349](ADR-0349-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md)
+  [ADR-0348](ADR-0348-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md)
   for everything else, item 6's input method rule rewritten (no generation, no restart on every
   text change, no edit dropped against the snapshot it raced).
 - **Amends:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the Android row of its

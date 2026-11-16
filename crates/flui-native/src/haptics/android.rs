@@ -3,7 +3,7 @@
 //!
 //! Semantic feedback goes to the decor view on the Java main thread, which
 //! owns the view hierarchy, so the call is posted and the owner never waits
-//! for it (ADR-0349 §2). One call waits at a time: a request made while it
+//! for it (ADR-0348 §2). One call waits at a time: a request made while it
 //! waits is `Suppressed` rather than queued to play late, and a request
 //! reports `Suppressed` while the view declines (an answer the Java thread
 //! publishes as it makes each call), the degradation table's outcome
@@ -424,7 +424,7 @@ impl Drop for Answering {
 
 /// Post `constant` to the decor view on the Java main thread, which owns it,
 /// without waiting: a busy Java thread, or one blocked on the native thread
-/// in a lifecycle callback, never stalls the owner (ADR-0349 §2). What
+/// in a lifecycle callback, never stalls the owner (ADR-0348 §2). What
 /// `performHapticFeedback` returns is published to `answers`, which the next
 /// request reports from.
 fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAnswers>) {

@@ -8,7 +8,7 @@
 //! - [`intent`]: what an intent the Activity receives opens, read from the
 //!   record `FluiHost` queues for it;
 //! - `java_view`: `FluiView`, the Java side, and the queue of what it
-//!   reported since the loop's last turn (ADR-0349);
+//!   reported since the loop's last turn (ADR-0348);
 //! - `activity`: the Activity reached through JNI, which every feature asks
 //!   through the same call;
 //! - `activity_results`: the requests the Activity takes for results and how

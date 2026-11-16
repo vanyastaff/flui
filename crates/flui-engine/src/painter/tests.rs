@@ -5,6 +5,7 @@ use flui_painting::BlendMode;
 
 use super::WgpuPainter;
 
+mod command_transform;
 mod image_boundary;
 mod solid_shader;
 mod vertex_alpha;

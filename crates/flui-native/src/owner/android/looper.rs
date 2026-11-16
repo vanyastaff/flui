@@ -148,7 +148,7 @@ pub struct ActivityRef {
     /// The Activity the window shows.
     pub(crate) app: AndroidApp,
     /// `FluiView`: the input method's editor, the drop target and the drag
-    /// source (ADR-0349).
+    /// source (ADR-0348).
     pub(crate) view: Arc<java_view::JavaView>,
     /// The device's API level.
     pub(crate) api: AndroidApi,
@@ -259,7 +259,7 @@ pub struct AndroidLoop {
     /// The Activity's requests for results, which providers reach through
     /// the bridge `android_platform` hands out.
     results: Rc<super::result_bridge::ResultBridge>,
-    /// `FluiView`, installed on the Java main thread at start (ADR-0349).
+    /// `FluiView`, installed on the Java main thread at start (ADR-0348).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
@@ -426,7 +426,7 @@ impl AndroidLoop {
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
-    /// owner thread (ADR-0349).
+    /// owner thread (ADR-0348).
     fn deliver_view_events(&self) {
         let events = self.java_view.take_events();
         if events.is_empty() {
@@ -1266,7 +1266,7 @@ impl host::Clipboard<AndroidLoop> for AndroidLoop {
     }
 }
 
-/// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0349), the
+/// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0348), the
 /// transport the host's [`AndroidHost::transfer`] made for the view.
 impl host::Drag<AndroidLoop> for AndroidLoop {
     fn data_transfer(owner: &AndroidLoop) -> Arc<dyn flui_platform::data_transfer::DragTransport> {
