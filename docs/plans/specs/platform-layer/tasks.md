@@ -6619,7 +6619,19 @@ GPU-память простаивающего или невидимого окн
   — `PortalResponse(2)`); `a_window_closes_once_and_tells_only_the_watches_still_held` в
   `flui-platform`; `a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it`
   в `flui-testing` (снятие без `unschedule` оставляет `NotReached`).
-  Проверки: PROGRESS_CHECKS.
+  Сброшенный `RequestTicket` слышат и наблюдатели скрипта (`on_answer`) — как запрос, кончившийся
+  без ответа. Проверки: Windows — clippy `--all-features --all-targets -D warnings` на
+  `flui-platform`, `flui-runtime`, `flui-system`, `flui-testing`, `flui-app`, `flui-sdk`, `flui`;
+  nextest этих четырёх крейтов (443 из 444; `trybuild_ui` `flui-platform` падает на этом хосте вне
+  диффа: ни один `.stderr` не цитирует изменённый файл), `doc-strict`, `checks`, `expectations`;
+  откаты выше прогнаны по одному классу за раз. WSL Ubuntu 24.04 — clippy и `cargo doc -D warnings`
+  `flui-system`, `flui-platform`; `cargo test -p flui-system` с подставным порталом (28 из 28),
+  откат `Dismissal` роняет `a_dropped_dialog_closes_its_portal_request_and_frees_the_window`.
+  Не запущено: настоящий `xdg-desktop-portal` на рабочем столе (закрытие диалога GTK по
+  `Request.Close`); сборки macOS, iOS, Android и wasm32 не нужны — правки в коде, общем для всех
+  целей, и в Linux-only портале. Строка закрыта: прогонов на устройствах не остаётся, кроме
+  портала на рабочем столе, который уже отмечен в строке `open-save-and-folder-dialogs` паритета
+  («run against a stand-in portal»).
 
 ## Отступление от порядка, решённое владельцем
 
