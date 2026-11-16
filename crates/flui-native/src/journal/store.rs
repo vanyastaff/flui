@@ -179,19 +179,27 @@ impl StoreStep {
     /// The call with its text replaced by `with`, and whether it carried any.
     #[must_use]
     pub fn redacted(&self, with: &str) -> (Self, bool) {
-        let mut step = self.clone();
-        let carried = match &mut step {
+        // Built anew, so the text it replaces is never copied.
+        let step = match self {
             Self::Text {
-                answer: Ok(text), ..
-            }
-            | Self::Replace { text, .. }
-            | Self::InsertAtSelection { text, .. } => {
-                with.clone_into(text);
-                true
-            }
-            _ => false,
+                range,
+                answer: Ok(_),
+            } => Self::Text {
+                range: *range,
+                answer: Ok(with.to_owned()),
+            },
+            Self::Replace { range, answer, .. } => Self::Replace {
+                range: *range,
+                text: with.to_owned(),
+                answer: *answer,
+            },
+            Self::InsertAtSelection { answer, .. } => Self::InsertAtSelection {
+                text: with.to_owned(),
+                answer: *answer,
+            },
+            other => return (other.clone(), false),
         };
-        (step, carried)
+        (step, true)
     }
 }
 
@@ -492,28 +500,28 @@ fn answer_from_wire<W, T>(
 
 /// An answer the schema writes as a value or an error.
 fn answer_to_wire<T, W>(
-    answer: &Result<T, StoreError>,
-    convert: impl FnOnce(&T) -> W,
+    answer: Result<T, StoreError>,
+    convert: impl FnOnce(T) -> W,
 ) -> (Option<W>, Option<StoreError>) {
     match answer {
         Ok(value) => (Some(convert(value)), None),
-        Err(error) => (None, Some(*error)),
+        Err(error) => (None, Some(error)),
     }
 }
 
-fn step_to_wire(step: &StoreStep) -> wire::StoreStep {
+fn step_to_wire(step: StoreStep) -> wire::StoreStep {
     match step {
-        StoreStep::DocumentLen(len) => wire::StoreStep::DocumentLen { len: units(*len) },
+        StoreStep::DocumentLen(len) => wire::StoreStep::DocumentLen { len: units(len) },
         StoreStep::Text { range, answer } => {
-            let (text, error) = answer_to_wire(answer, String::clone);
+            let (text, error) = answer_to_wire(answer, std::convert::identity);
             wire::StoreStep::Text {
-                range: range_to_wire(*range),
+                range: range_to_wire(range),
                 text,
                 error,
             }
         }
         StoreStep::Selection(selection) => wire::StoreStep::Selection {
-            selection: selection_to_wire(*selection),
+            selection: selection_to_wire(selection),
         },
         StoreStep::Composition(composition) => wire::StoreStep::Composition {
             composition: composition.map(composition_to_wire),
@@ -523,7 +531,7 @@ fn step_to_wire(step: &StoreStep) -> wire::StoreStep {
             mode,
             answer,
         } => {
-            let (index, error) = answer_to_wire(answer, |index| units(*index));
+            let (index, error) = answer_to_wire(answer, units);
             wire::StoreStep::IndexAtPoint {
                 point: [point.x, point.y],
                 round_to_nearest_edge: mode.round_to_nearest_edge,
@@ -537,24 +545,24 @@ fn step_to_wire(step: &StoreStep) -> wire::StoreStep {
             text,
             answer,
         } => {
-            let (change, error) = answer_to_wire(answer, |change| change_to_wire(*change));
+            let (change, error) = answer_to_wire(answer, change_to_wire);
             wire::StoreStep::Replace {
-                range: range_to_wire(*range),
-                text: text.clone(),
+                range: range_to_wire(range),
+                text,
                 change,
                 error,
             }
         }
         StoreStep::InsertAtSelection { text, answer } => {
-            let (change, error) = answer_to_wire(answer, |change| change_to_wire(*change));
+            let (change, error) = answer_to_wire(answer, change_to_wire);
             wire::StoreStep::InsertAtSelection {
-                text: text.clone(),
+                text,
                 change,
                 error,
             }
         }
         StoreStep::SetSelection { selection, answer } => wire::StoreStep::SetSelection {
-            selection: selection_to_wire(*selection),
+            selection: selection_to_wire(selection),
             error: answer.err(),
         },
         StoreStep::SetComposition {
@@ -652,19 +660,20 @@ const fn wire_is_edit(step: &wire::StoreStep) -> bool {
     )
 }
 
-pub(super) fn lock_to_wire(lock: &StoreLock) -> wire::StoreLock {
+/// `lock` as the schema holds it, its text moved rather than copied.
+pub(super) fn lock_to_wire(lock: StoreLock) -> wire::StoreLock {
     wire::StoreLock {
         store: lock.store.get(),
         kind: match lock.kind {
             LockKind::Read => wire::StoreLockKind::Read,
             LockKind::ReadWrite => wire::StoreLockKind::ReadWrite,
         },
-        opened: lock.opened.as_ref().map(|document| wire::StoreDocument {
-            text: document.text.clone(),
+        opened: lock.opened.map(|document| wire::StoreDocument {
+            text: document.text,
             selection: selection_to_wire(document.selection),
             composition: document.composition.map(composition_to_wire),
         }),
-        steps: lock.steps.iter().map(step_to_wire).collect(),
+        steps: lock.steps.into_iter().map(step_to_wire).collect(),
         incomplete: lock.incomplete,
         protected: lock.protected,
     }

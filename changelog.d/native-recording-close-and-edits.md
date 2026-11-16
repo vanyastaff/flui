@@ -6,5 +6,5 @@
 ### Changed
 
 - Agent protocol 0.13 is a breaking version: an app speaking it refuses a client of 0.12 or older, which cannot read the new native recording rows.
-- Writing a native recording that reaches the byte or row bound ends it with a `cut` row instead of producing a file its reader refuses.
+- A native recording that reaches the byte or row bound ends with a `cut` row, in what `NativeRecording::write` writes and in what the in-process `Recorder` holds, which keeps nothing after the cut, instead of a file its reader refuses. `flui record --native` writes its lines as they come and does not apply the bounds yet (`docs/gaps.md`).
 - Reading a native recording refuses a line longer than `MAX_LINE_BYTES` before parsing it, a recording of more than `MAX_ROWS` rows or `MAX_RECORDING_BYTES` bytes, a row after a `cut`, a text store focused twice, a lock on a store the recording never focused (unless it joined late), and close rows in an order no window writes, each with a typed error naming the line.

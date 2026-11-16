@@ -5098,7 +5098,11 @@ GPU-память простаивающего или невидимого окн
   которого доставка не пишет. Внутрипроцессный писатель (`NativeRecording::write`) пишет запись,
   которая помещается, целиком, иначе обрывает её на последней поместившейся строке строкой `cut`
   с причиной (место под `cut` держится, только если за строкой есть ещё одна; заголовок объявляет
-  только устройства записанных строк); replay обрезанной записи проигрывает всё до `cut` и
+  только устройства записанных строк) и не кодирует ничего после обрыва. `Recorder` держит ту же
+  границу по мере прихода строк (`CutBudget`): первую строку за границей заменяет `cut`, после неё
+  ничего не хранит, так что запись в памяти не больше, чем примет читатель. Строка длиннее
+  `MAX_LINE_BYTES` отказывается `LineTooLong` и тогда, когда граница режет многобайтовый символ
+  (длина проверяется до декодирования UTF-8); replay обрезанной записи проигрывает всё до `cut` и
   возвращает `Replayed::Cut` со строкой и причиной. `flui record --native` из `flui-cli` границ не
   соблюдает — записано в `docs/gaps.md` («Quality-bar partials with no entry»), строку спеки
   добавит координатор. Исчерпание owner-слотов окна — `cut` (`store_journal`). Протокол 0.13 — в
@@ -5120,6 +5124,7 @@ GPU-память простаивающего или невидимого окн
   `a_row_replayed_otherwise_is_a_divergence`, `a_native_recording_past_its_bounds_is_refused`,
   `a_store_lock_the_recording_joined_after_is_refused`, `close_rows_out_of_order_are_refused`,
   `a_recording_past_its_bound_is_written_cut`; с `native-capture` —
+  `a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
   `captured_store_locks_replay_to_the_document_they_left`,
   `a_protected_store_journals_nothing_of_its_content`,
   `a_protected_store_journals_one_row_whatever_was_typed`,

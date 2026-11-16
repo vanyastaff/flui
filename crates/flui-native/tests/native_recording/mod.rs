@@ -863,14 +863,25 @@ fn a_native_recording_past_its_bounds_is_refused() {
 
     let window =
         r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
-    let long = format!(
-        "{window}\n{{\"row\":\"reopen\",\"pad\":\"{}\"}}\n",
-        "x".repeat(MAX_LINE_BYTES)
-    );
-    assert!(matches!(
-        read_error(&long),
-        CodecError::LineTooLong { line: 2, limit } if limit == MAX_LINE_BYTES
-    ));
+    // A line past the bound is too long whatever it holds: a multi-byte character the bound
+    // cuts in two (both alignments of `é` against it) is no malformed line.
+    for (case, pad) in [
+        ("ASCII", "x".repeat(MAX_LINE_BYTES)),
+        ("two-byte characters", "é".repeat(MAX_LINE_BYTES / 2 + 1)),
+        (
+            "two-byte characters, shifted by one",
+            format!("x{}", "é".repeat(MAX_LINE_BYTES / 2 + 1)),
+        ),
+    ] {
+        let long = format!("{window}\n{{\"row\":\"reopen\",\"pad\":\"{pad}\"}}\n");
+        assert!(
+            matches!(
+                read_error(&long),
+                CodecError::LineTooLong { line: 2, limit } if limit == MAX_LINE_BYTES
+            ),
+            "{case}"
+        );
+    }
     let many = format!("{window}\n{}", "\n".repeat(MAX_ROWS + 1));
     assert!(matches!(
         read_error(&many),

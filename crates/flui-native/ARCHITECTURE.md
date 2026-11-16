@@ -4753,10 +4753,18 @@ live stream writes: a store focused twice, a lock on a store with no focus row,
 a lock before the recording holds its store's document, and close rows in an
 order no delivery writes (a second close, a request after the close, `closing`
 with nothing granted, a request after a grant, a cause that contradicts the
-requests). The in-process writers never write what their reader refuses:
+requests). The in-process writers never write what their reader refuses, and
+the recorder never holds more: `Recorder` counts each row's bytes and the rows
+as they arrive, under the rule `NativeRecording::write` applies (`CutBudget`),
+replaces the first row past either bound with a `cut` row naming why and keeps
+nothing its source reports after it, so a recording holds at most `MAX_ROWS`
+rows and `MAX_RECORDING_BYTES` of lines however long the capture runs.
 `NativeRecording::write` writes a recording that fits whole, and otherwise ends
-it at the last row that fits with room for a `cut` row naming why; a sink drops
-what a source reports after its cut. `flui record --native` in `flui-cli` writes
+it at the last row that fits with room for a `cut` row, encoding nothing past
+it, so a value the format does not mirror past the cut does not fail the write;
+a header that grew after the recorder's first row (a device it declares) can
+move that cut a few rows earlier. A line sink drops what a source reports after
+its cut. `flui record --native` in `flui-cli` writes
 lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
 recording replays every row before the cut and returns `Replayed::Cut` with its
 line and reason, never plain success. When a window's store journal cannot be
@@ -4774,6 +4782,7 @@ lock kind and protected emptiness are checked before any call is built
 `a_row_replayed_otherwise_is_a_divergence`,
 `a_store_lock_the_recording_joined_after_is_refused`,
 `close_rows_out_of_order_are_refused`, `a_recording_past_its_bound_is_written_cut`,
+`a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
 `captured_store_locks_replay_to_the_document_they_left`,
 `a_protected_store_journals_nothing_of_its_content`,
 `a_protected_store_journals_one_row_whatever_was_typed`,

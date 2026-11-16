@@ -13,7 +13,8 @@ use super::codec::{
     Backend, DisplayRead, Header, NativeRecording, PreferenceRead, ReadFailure, RecordedDisplay,
     RecordedWindowState, Row,
 };
-use super::store::StoreLock;
+use super::order::{CutBudget, line_bytes};
+use super::store::{StoreDocument, StoreLock};
 
 /// Whether a recorder keeps the text it journals (ADR-0215 §5).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,11 +58,11 @@ impl Recorder {
     pub fn with_privacy(backend: Backend, privacy: Privacy) -> Self {
         let journals: Arc<Mutex<Vec<NativeRecording>>> = Arc::default();
         let sink = Arc::clone(&journals);
-        let mut pseudonyms = Vec::new();
+        let mut folding = Vec::new();
         let guard = capture(move |source, call| {
             journal(
                 &mut sink.lock(),
-                &mut pseudonyms,
+                &mut folding,
                 backend,
                 privacy,
                 source,
@@ -94,10 +95,21 @@ impl Journals {
     }
 }
 
-/// Fold one captured call into the recording of its source.
+/// What a recorder keeps of one source beside its recording.
+struct Folding {
+    pseudonyms: Pseudonyms,
+    /// The bytes and rows the recording holds, from its first row on: the
+    /// header is final once setup ends.
+    budget: Option<CutBudget>,
+}
+
+/// Fold one captured call into the recording of its source. The recording
+/// holds rows while they fit the bounds its reader holds it to; the first
+/// that does not is replaced by a `cut` row, and nothing is kept after it, so
+/// a recording never holds more than a reader takes.
 fn journal(
     recordings: &mut Vec<NativeRecording>,
-    pseudonyms: &mut Vec<Pseudonyms>,
+    folding: &mut Vec<Folding>,
     backend: Backend,
     privacy: Privacy,
     source: CaptureSource,
@@ -110,7 +122,10 @@ fn journal(
             recordings.len(),
             "BUG: a capture numbers its sources in order"
         );
-        pseudonyms.push(Pseudonyms::default());
+        folding.push(Folding {
+            pseudonyms: Pseudonyms::default(),
+            budget: None,
+        });
         recordings.push(NativeRecording {
             header,
             rows: Vec::new(),
@@ -122,16 +137,31 @@ fn journal(
         // A source journals nothing after its cut.
         return;
     }
+    let folding = &mut folding[index];
     let setup = recording.rows.is_empty();
-    if let Some(row) = fold(
+    let Some(row) = fold(
         &mut recording.header,
         setup,
-        &mut pseudonyms[index],
+        &mut folding.pseudonyms,
         privacy,
         call,
-    ) {
-        recording.rows.push(row);
-    }
+    ) else {
+        return;
+    };
+    let header = &recording.header;
+    let budget = folding
+        .budget
+        .get_or_insert_with(|| CutBudget::after_header(line_bytes(header.to_wire())));
+    // Room is always kept for a `cut` row, so a cut always fits: a row that
+    // is one stands in for nothing after it.
+    let row = match row {
+        Row::Cut(_) => row,
+        row => match budget.admit(line_bytes(row.to_wire()), true) {
+            Ok(()) => row,
+            Err(reason) => Row::Cut(reason),
+        },
+    };
+    recording.rows.push(row);
 }
 
 /// The header a call that opens its source starts it with.
@@ -322,9 +352,11 @@ fn redacted_lock(lock: &StoreLock) -> (StoreLock, bool) {
             step
         })
         .collect();
-    let opened = lock.opened.clone().map(|mut document| {
-        REDACTED.clone_into(&mut document.text);
-        document
+    // Built anew, so the text it replaces is never copied.
+    let opened = lock.opened.as_ref().map(|document| StoreDocument {
+        text: REDACTED.to_owned(),
+        selection: document.selection,
+        composition: document.composition,
     });
     (
         StoreLock {

@@ -14,7 +14,7 @@
 //! header, unknown fields skipped and an unknown variant a typed error, never
 //! a skipped row.
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::num::{NonZeroU8, NonZeroU64};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
 pub use wire::{Backend, CloseAnswer, CloseCause, CutReason, FORMAT_VERSION, FailureKind, Stream};
 
-use super::order::{RowOrder, cut_point};
+use super::order::{CutBudget, RowOrder, read_bounded_line};
 use super::store::{self, RecordedStore, StoreDivergence, StoreFocus, StoreLock};
 use crate::error::PlatformError;
 
@@ -530,6 +530,19 @@ impl Row {
         row_to_wire(self).map_err(|error| error.at(0))
     }
 
+    /// This row as the wire holds it, a text store lock's text moved rather
+    /// than copied.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(super) fn into_wire(self) -> Result<wire::Row, CodecError> {
+        match self {
+            Self::StoreLock { lock, redacted } => Ok(wire::Row::StoreLock {
+                lock: store::lock_to_wire(lock),
+                redacted,
+            }),
+            row => row.to_wire(),
+        }
+    }
+
     /// The row's name in the schema, as a replay error names it.
     pub const fn name(&self) -> &'static str {
         match self {
@@ -843,20 +856,30 @@ impl NativeRecording {
     /// [`CodecError::Unmirrored`] for a value this format does not mirror,
     /// and [`CodecError::Io`] when the sink fails.
     pub fn write(&self, mut out: impl Write) -> Result<(), CodecError> {
-        let lines = self
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let line = index as u64 + 2;
-                let wire = row_to_wire(row).map_err(|error| error.at(line))?;
-                encode_line(line, &wire)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         // The header that declares every row's devices is the longest it can
         // be: what fits after it fits after the one that declares fewer.
         let longest = encode_line(1, &self.header_declaring(&self.rows)?)?.len();
-        let (kept, cut) = cut_point(longest, &lines);
+        let mut budget = CutBudget::after_header(longest);
+        // Each row is encoded only once the rows before it fit, so nothing
+        // past the cut is encoded, and no value there can fail the write.
+        let mut lines: Vec<Vec<u8>> = Vec::new();
+        let mut cut = None;
+        for (index, row) in self.rows.iter().enumerate() {
+            let number = index as u64 + 2;
+            let wire = row_to_wire(row).map_err(|error| error.at(number))?;
+            let line = encode_line(number, &wire)?;
+            let follows = index + 1 < self.rows.len();
+            if let Err(reason) = budget.admit(line.len(), follows) {
+                cut = Some(reason);
+                break;
+            }
+            lines.push(line);
+            if matches!(row, Row::Cut(_)) {
+                // The recorder cut it already: nothing after it is written.
+                break;
+            }
+        }
+        let kept = lines.len();
         let header = self.header_declaring(&self.rows[..kept])?;
         out.write_all(&encode_line(1, &header)?)?;
         for line in &lines[..kept] {
@@ -1181,30 +1204,6 @@ pub(super) fn invalid(what: impl Into<String>) -> DtoError {
 /// A schema variant this codec does not read, by its spelling.
 pub(super) fn unread(tag: &str) -> DtoError {
     DtoError::UnknownSpelling(tag.to_owned())
-}
-
-/// Read line `line` into `buffer`, replacing what it held: how many bytes
-/// were read, zero at the end. A line longer than [`wire::MAX_LINE_BYTES`]
-/// is refused once that many bytes and one more were read, so no longer line
-/// is ever held.
-fn read_bounded_line(
-    input: &mut impl BufRead,
-    buffer: &mut String,
-    line: u64,
-) -> Result<usize, CodecError> {
-    buffer.clear();
-    // The bound, its line ending ("\r\n") and one byte that shows it overran.
-    let most = u64::try_from(wire::MAX_LINE_BYTES)
-        .unwrap_or(u64::MAX)
-        .saturating_add(3);
-    let read = Read::take(&mut *input, most).read_line(buffer)?;
-    if buffer.trim_end_matches(['\n', '\r']).len() > wire::MAX_LINE_BYTES {
-        return Err(CodecError::LineTooLong {
-            line,
-            limit: wire::MAX_LINE_BYTES,
-        });
-    }
-    Ok(read)
 }
 
 /// A parse failure, with serde's unknown-variant refusal typed.
@@ -1877,7 +1876,7 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
             focus: focus.as_ref().map(store::focus_to_wire).transpose()?,
         },
         Row::StoreLock { lock, redacted } => wire::Row::StoreLock {
-            lock: store::lock_to_wire(lock),
+            lock: store::lock_to_wire(lock.clone()),
             redacted: *redacted,
         },
         Row::CloseRequest { answer, queued } => wire::Row::CloseRequest {

@@ -190,7 +190,7 @@ fn journal(
     }
     let kept = kept.filter(|_| wanted.kept);
     let redacted = redacted.filter(|_| wanted.redacted);
-    send(sink, stream, setup, kept.as_ref(), redacted.as_ref());
+    send(sink, stream, setup, kept, redacted);
 }
 
 /// Sends a row in the forms given, or counts it lost when one of them cannot be made.
@@ -198,11 +198,11 @@ fn send(
     sink: &mut impl LineSink,
     stream: u32,
     setup: bool,
-    kept: Option<&Row>,
-    redacted: Option<&Row>,
+    kept: Option<Row>,
+    redacted: Option<Row>,
 ) {
-    let made = |row: Option<&Row>| {
-        row.map(|row| row.to_wire().map(|row| wire::Line::Row(Box::new(row))))
+    let made = |row: Option<Row>| {
+        row.map(|row| row.into_wire().map(|row| wire::Line::Row(Box::new(row))))
             .transpose()
     };
     match (made(kept), made(redacted)) {

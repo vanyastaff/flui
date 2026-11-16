@@ -2655,9 +2655,65 @@ fn an_unchanged_document_is_not_written_again() {
     );
 }
 
+/// A live recording holds rows only while they fit the bounds its reader
+/// holds it to: the first row past them is replaced by one `cut` row, and
+/// nothing the window delivers after it is kept, so what a capture holds
+/// stays bounded however long it runs.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+fn a_live_recording_past_its_bound_holds_one_cut_and_nothing_after() {
+    use flui_native::journal::codec::{Backend, CutReason, Stream};
+    use flui_native::journal::recorder::{Privacy, Recorder};
+    use flui_protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES};
+
+    let recorder = Recorder::with_privacy(Backend::Headless, Privacy::KeepText);
+    let owner = run_keeping_owner(Box::new(HeadlessPlatform::new()), &AppLog::new());
+    let (window, _handler) = headless_window(&owner);
+    let commit = "x".repeat(MAX_LINE_BYTES - 128);
+    let past_the_bound = MAX_RECORDING_BYTES / commit.len() + 2;
+    let commit_all = |count: usize| {
+        for _ in 0..count {
+            window.inject_event(PlatformInput::Ime(ImeEvent::Commit(commit.clone())));
+        }
+    };
+    let held = |recorder: &Recorder| {
+        let journals = recorder.journals().snapshot();
+        let rows = &only(&journals, Stream::Window).rows;
+        let cuts = rows.iter().filter(|row| matches!(row, Row::Cut(_))).count();
+        (rows.len(), cuts, rows.last().cloned())
+    };
+    commit_all(past_the_bound);
+    let (rows, cuts, last) = held(&recorder);
+    assert!(
+        rows < past_the_bound,
+        "the rows past the bound were not kept"
+    );
+    assert_eq!(cuts, 1, "one cut stands for them");
+    assert_eq!(last, Some(Row::Cut(CutReason::Bytes)));
+    commit_all(4);
+    assert_eq!(
+        held(&recorder),
+        (rows, 1, last),
+        "nothing is kept after the cut"
+    );
+
+    let recordings = recorder.finish();
+    let recording = only(&recordings, Stream::Window);
+    let mut written = Vec::new();
+    recording
+        .write(&mut written)
+        .expect("a cut recording writes");
+    assert!(written.len() <= MAX_RECORDING_BYTES, "what it holds fits");
+    let read = NativeRecording::read(written.as_slice()).expect("and its reader reads it");
+    assert_eq!(read.rows, recording.rows, "written as it was held");
+}
+
 /// The capture cases of the streams beside a registry's.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
-pub(super) const CAPTURE_CASES: [(&str, fn()); 10] = [
+pub(super) const CAPTURE_CASES: [(&str, fn()); 11] = [
+    (
+        "a_live_recording_past_its_bound_holds_one_cut_and_nothing_after",
+        a_live_recording_past_its_bound_holds_one_cut_and_nothing_after,
+    ),
     (
         "the_host_is_told_of_a_focus_when_the_store_status_panics",
         the_host_is_told_of_a_focus_when_the_store_status_panics,
