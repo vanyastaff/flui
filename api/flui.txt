@@ -13185,6 +13185,7 @@ impl PartialEq for flui::platform::SessionEndSupport
 impl core::fmt::Debug for flui::platform::SessionEndSupport
 impl core::hash::Hash for flui::platform::SessionEndSupport
 impl core::marker::StructuralPartialEq for flui::platform::SessionEndSupport
+variant flui::platform::SessionEndSupport::Background { window: core::time::Duration } // at 3
 variant flui::platform::SessionEndSupport::Delay { max: core::time::Duration } // at 1
 variant flui::platform::SessionEndSupport::Hold // at 0
 variant flui::platform::SessionEndSupport::NotifyOnly // at 2

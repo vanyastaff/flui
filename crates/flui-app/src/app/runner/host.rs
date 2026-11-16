@@ -1253,10 +1253,7 @@ pub(crate) fn route_quit(route: impl Fn() + 'static) {
 /// Answer a quit the user or the system asked for (AppKit's Quit) with
 /// `route`.
 #[cfg_attr(
-    any(
-        target_arch = "wasm32",
-        all(not(test), any(target_os = "android", target_os = "ios"))
-    ),
+    any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
     expect(
         dead_code,
         reason = "only the desktop main window asks its presentations"
