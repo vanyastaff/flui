@@ -615,7 +615,12 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
-                    presentation.failure_retry_at(),
+                    // A presentation at its in-flight limit attempts no frame when its backoff
+                    // ends; the settlement that frees a place wakes it, and the in-flight floor
+                    // bounds the sleep until then (ADR-0305 §5).
+                    presentation
+                        .failure_retry_at()
+                        .filter(|_| !presentation.frames_in_flight().is_saturated()),
                     presentation.in_flight_floor(),
                 ]
             })

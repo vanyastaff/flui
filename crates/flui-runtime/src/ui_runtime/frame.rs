@@ -1357,7 +1357,7 @@ impl UiRuntime {
             return;
         }
         let late = self.presentations.iter().any(|presentation| {
-            !presentation.failure_backoff_holds(presentation.clock().now())
+            presentation.failure_retry_at().is_none()
                 // A presentation at its in-flight limit is woken by the settlement that frees a
                 // place (ADR-0305 §5).
                 && !presentation.frames_in_flight().is_saturated()

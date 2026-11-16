@@ -269,7 +269,16 @@ pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
             Hold::BackoffRunning => {
                 primary.arm_failure_retry(now + std::time::Duration::from_secs(60));
             }
-            Hold::BackoffOver => primary.arm_failure_retry(now),
+            Hold::BackoffOver => {
+                primary.arm_failure_retry(now);
+                // The ended backoff is no wake while the sink is full: no frame would follow.
+                assert!(
+                    ui_runtime
+                        .next_wake_excluding_agent_waits()
+                        .is_none_or(|wake| wake > now),
+                    "an ended backoff of a saturated presentation is no wake"
+                );
+            }
             Hold::DeviceAbandoned => {
                 primary.replace_device_recovery(Some(
                     crate::frame_failure::DeviceRecovery::Abandoned { attempts: 1 },
