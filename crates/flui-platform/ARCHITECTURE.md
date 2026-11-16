@@ -307,11 +307,88 @@ What only the host owns reaches a provider through its `ProviderContext`
 `HostBridge` the composition root fills for each run's host and `None`
 elsewhere. `capability::activity_result` holds that vocabulary and no JNI
 type: a request is identified by a `ResultToken` the host mints per call and
-named by a `RequestKey`, the acquiring capability's `NAME` and the provider's `ResultKey`, which outlives an Activity Android
+named by a `RequestKey`, the acquiring capability's `NAME` and the
+provider's `ResultKey` kept apart, which outlives an Activity Android
 replaces; it ends exactly once, with an `ActivityResult` or a typed
-`ResultRefused`; and the provider's own `jni` crate works on raw pointers the
+`ResultRefused`; an answer's `Intent` stays with the host until the provider
+hands its `ResultData` back, and a `ResultData` dropped unread releases it;
+and the provider's own `jni` crate works on raw pointers the
 host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
 made instead of handing the host a reference it would have to trust.
+
+### A capability's double is built from one scenario primitive
+
+`capability::scripted`, under the `scripted` feature (which `testing` turns on), is what every
+simulated provider is made of (ADR-0154 §10), in the contract because a capability crate may
+not depend on `flui-testing`. A `Scenario` is one `ManualClock` and one ledger of failures; on
+it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the platform changes
+(a permission, a `ServiceState`), and `Events<E>` per event stream.
+
+- **Owner-thread state.** Nothing in the primitive is `Send`: the answer of a script, a
+  track's value and a stream's event need not be, because `CompletionSource::pending` and
+  `Resolver::resolve` ask `Send` of nothing, and a resolver is `Send` exactly when its answer
+  is. The one value that crosses a thread is `FailureReport`, through which a `Send + Sync`
+  double reports into the ledger.
+- **A request is matched by its value.** A step is an `Expect<R>` (`any`, `exactly`, `when`)
+  with an `Answer` (`value`, `computed`, `abandon`, each optionally `after` a delay) or, with
+  `expect_held`, no answer until the test releases the request; a held step has no delay to
+  ignore. The earliest step that accepts a request answers it and is used up. A request type
+  fixes its answer type, so an open dialog cannot be answered with a save result.
+- **No answer nobody wrote.** A request no step and no standing answer (`otherwise`) takes is
+  `ScenarioFailure::Unexpected` and its resolver is dropped, so the caller's completion ends
+  `ProviderDropped`; a held request never answered, a step never used, a change the clock never
+  reached and an event after its stream's end are the other failures `Scenario::verify` lists.
+  A double keeps a standing answer only where it models the service's state (the clipboard's
+  text), never as a default.
+- **Debts outlive handles, and an unverified run fails.** A script dropped with a held request
+  or an unused step hands them to the scenario's ledger, every one before a panic of a request's
+  `Debug` is resumed. The scenario panics as its last clone drops when a failure is left that
+  no `verify` returned, unless the thread is already unwinding (ADR-0281), so a test that never
+  calls `verify` cannot pass with work undone. What `verify` returned is acknowledged by
+  position and identity, never by value: how far the owner-thread failures and the cross-thread
+  reports had been read, and the ids of the debts and scheduled changes it listed; a failure
+  recorded after it is new even when it equals one it returned.
+- **Reports from other threads are bounded.** A `FailureReport` keeps `MAX_REPORTS` and counts
+  the rest as one `ReportsDropped`; once the scenario has ended, `report` answers `false` and
+  nothing accumulates. A script keeps its first `MAX_RECORDED_REQUESTS` requests and counts
+  the rest.
+- **One driver holds the clock.** The scenario shows only `now()`; the `ManualClock` is the
+  `ScenarioDriver`'s, which `Scenario::drive` hands out once (a second is `AlreadyDriven`, so
+  two hosts never move each other's time). `ScenarioDriver::advance` moves the clock and applies
+  what fell due in one call, and nothing else can move it: `HeadlessHost::clock()` and
+  `Tester::clock()` hand out a `HostClock` that reads the time and advances only through the
+  driver, and every path of the host that moves time (`pump`, `advance`, a replayed recording or
+  pointer script) goes through it. `Scenario::next_due` is a deadline of the host's loop like a
+  gesture's: `time_to_next_frame` and `pump_until_settled` wait for it.
+- **Every answer is a `Completion`.** A script, a track's `changed` and a stream's `next`
+  answer through a `Resolver`, so an answer settles at an owner turn and never inside the call
+  that asked; no borrow is held while a matcher, a computed answer or a value's `Clone`,
+  `PartialEq`, `Debug` or `Drop` runs, so a caller that asks again from its answer finds the
+  script idle. When that code panics, the request it served stays held, every other request
+  is still answered and the first panic is resumed (`FirstPanic`). A stream ends once, with a
+  `StreamEnd`, and an ended stream answers its end to every later `next`.
+
+The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
+doubles are not, each for its contract's sake. `testing::FakeHaptics` answers synchronously
+through a window's trait object, with no completion to settle. `testing::ScriptedHttp` serves a
+`Send + Sync` client whose futures run off the owner thread (ADR-0280); a URL nobody scripted
+fails with `HttpError::Connect` naming it and, once `report_to` attaches the client to a
+scenario's `FailureReport` (the headless host's own client is attached), is that scenario's
+`Unexpected` failure too. `flui_testing::storage::MemoryStorage` is a store behind the
+`Send + Sync` storage contract: it keeps what was written and answers reads from it, so there
+is no request it could find unexpected.
+**Tests:** `deny_then_allow_then_revoke_at_three_seconds`,
+`a_request_nothing_answers_ends_its_completion_and_fails_the_run`,
+`a_step_answers_the_request_it_matches_not_the_next_one_in_line`,
+`a_delayed_answer_settles_at_the_first_turn_at_or_after_its_instant`,
+`an_event_stream_delivers_on_virtual_time_and_ends_once`,
+`a_script_dropped_with_debts_hands_them_to_the_scenario`,
+`a_scenario_dropped_unverified_with_debts_fails_the_test`,
+`a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest`,
+`a_scenario_drives_one_host_at_a_time`,
+`the_host_waits_for_a_scheduled_change_as_for_any_deadline`
+(`crates/flui-testing/tests/scenario.rs`);
+`an_owner_local_answer_settles_through_its_resolver` (`crates/flui-platform/tests/capability.rs`).
 
 ### A TSF-shaped pull store carries text input
 

@@ -209,7 +209,7 @@ impl Harness {
     /// there would only cost deadline-timing tests virtual time they did not
     /// ask to spend.
     fn advance_pointer_clock(&self) {
-        self.host.clock().advance(POINTER_SAMPLE_INTERVAL);
+        self.host.advance(POINTER_SAMPLE_INTERVAL);
     }
 
     /// Begin a new mouse contact at logical `(x, y)`, hit-testing the mounted

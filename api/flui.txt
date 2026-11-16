@@ -13892,25 +13892,20 @@ pub fn flui::platform::capability::Activity::cancel(&self, token: flui::platform
 pub fn flui::platform::capability::Activity::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey, intent: impl FnOnce(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 pub fn flui::platform::capability::Activity::new(bridge: alloc::rcs::rc::Rc<dyn flui::platform::capability::ActivityBridge>, capability: flui::platform::capability::ResultKey) -> Self
 pub fn flui::platform::capability::Activity::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-pub fn flui::platform::capability::Activity::take_data<R>(&self, token: flui::platform::capability::ResultToken, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
+pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultData, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
 pub fn flui::platform::capability::Activity::with_java<R>(&self, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
 pub trait flui::platform::capability::ActivityBridge: 'static
 fn flui::platform::capability::ActivityBridge::cancel(&self, token: flui::platform::capability::ResultToken)
 fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::lend(&self, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
 fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-fn flui::platform::capability::ActivityBridge::take_data(&self, token: flui::platform::capability::ResultToken, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
+fn flui::platform::capability::ActivityBridge::take_data(&self, data: flui::platform::capability::ResultData, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
 pub struct flui::platform::capability::ActivityResult { .. }
-impl Clone for flui::platform::capability::ActivityResult
-impl Copy for flui::platform::capability::ActivityResult
-impl Eq for flui::platform::capability::ActivityResult
-impl PartialEq for flui::platform::capability::ActivityResult
 impl core::fmt::Debug for flui::platform::capability::ActivityResult
-impl core::hash::Hash for flui::platform::capability::ActivityResult
-impl core::marker::StructuralPartialEq for flui::platform::capability::ActivityResult
-pub const fn flui::platform::capability::ActivityResult::code(&self) -> flui::platform::capability::ResultCode
-pub const fn flui::platform::capability::ActivityResult::has_data(&self) -> bool
-pub const fn flui::platform::capability::ActivityResult::new(code: flui::platform::capability::ResultCode, data: bool) -> Self
+pub fn flui::platform::capability::ActivityResult::code(&self) -> flui::platform::capability::ResultCode
+pub fn flui::platform::capability::ActivityResult::has_data(&self) -> bool
+pub fn flui::platform::capability::ActivityResult::new(code: flui::platform::capability::ResultCode, data: Option<flui::platform::capability::ResultData>) -> Self
+pub fn flui::platform::capability::ActivityResult::take_data(&mut self) -> Option<flui::platform::capability::ResultData>
 pub trait flui::platform::capability::Capability: 'static
 const flui::platform::capability::Capability::NAME: &'static str
 type flui::platform::capability::Capability::Handle: Clone + 'static
@@ -13933,7 +13928,7 @@ pub struct flui::platform::capability::CompletionSource { .. }
 impl Clone for flui::platform::capability::CompletionSource
 impl core::fmt::Debug for flui::platform::capability::CompletionSource
 pub fn flui::platform::capability::CompletionSource::new(poster: flui::platform::capability::OwnerPoster, pending: flui::platform::capability::PendingCompletions) -> Self
-pub fn flui::platform::capability::CompletionSource::pending<T: Send + 'static>(&self) -> (flui::platform::capability::Completion<T>, flui::platform::capability::Resolver<T>)
+pub fn flui::platform::capability::CompletionSource::pending<T: 'static>(&self) -> (flui::platform::capability::Completion<T>, flui::platform::capability::Resolver<T>)
 pub fn flui::platform::capability::CompletionSource::poster(&self) -> &flui::platform::capability::OwnerPoster
 pub struct flui::platform::capability::HostBridge { .. }
 impl Clone for flui::platform::capability::HostBridge
@@ -13970,7 +13965,7 @@ pub const fn flui::platform::capability::JniFrame::new(vm: core::ptr::non_null::
 pub const fn flui::platform::capability::JniFrame::object(&self) -> *mut core::ffi::c_void
 pub const fn flui::platform::capability::JniFrame::vm(&self) -> *mut core::ffi::c_void
 pub const flui::platform::capability::MAX_OPEN_REQUESTS: usize = 16
-pub const flui::platform::capability::MAX_REQUEST_KEY_LEN: usize
+pub const flui::platform::capability::MAX_OPEN_REQUESTS_PER_CAPABILITY: usize
 pub const flui::platform::capability::MAX_RESULT_KEY_LEN: usize = 64
 pub struct flui::platform::capability::OwnerJob(_)
 impl core::fmt::Debug for flui::platform::capability::OwnerJob
@@ -14025,17 +14020,16 @@ impl Copy for flui::platform::capability::RequestKey
 impl Eq for flui::platform::capability::RequestKey
 impl PartialEq for flui::platform::capability::RequestKey
 impl core::fmt::Debug for flui::platform::capability::RequestKey
-impl core::fmt::Display for flui::platform::capability::RequestKey
 impl core::hash::Hash for flui::platform::capability::RequestKey
 impl core::marker::StructuralPartialEq for flui::platform::capability::RequestKey
 pub const fn flui::platform::capability::RequestKey::capability(self) -> flui::platform::capability::ResultKey
 pub const fn flui::platform::capability::RequestKey::key(self) -> flui::platform::capability::ResultKey
 pub const fn flui::platform::capability::RequestKey::new(capability: flui::platform::capability::ResultKey, key: flui::platform::capability::ResultKey) -> Self
-pub fn flui::platform::capability::RequestKey::is_spelled(self, text: &str) -> bool
+pub fn flui::platform::capability::RequestKey::matches(self, capability: &str, key: &str) -> bool
 pub struct flui::platform::capability::Resolver<T> { .. }
 impl<T> Drop for flui::platform::capability::Resolver<T>
 impl<T> core::fmt::Debug for flui::platform::capability::Resolver<T>
-pub fn flui::platform::capability::Resolver::resolve(self, value: T) -> Result<(), flui::platform::capability::OwnerRetired> // impl<T: Send + 'static> flui::platform::capability::Resolver<T>
+pub fn flui::platform::capability::Resolver::resolve(self, value: T) -> Result<(), flui::platform::capability::OwnerRetired> // impl<T: 'static> flui::platform::capability::Resolver<T>
 pub enum flui::platform::capability::ResultCode
 impl Clone for flui::platform::capability::ResultCode
 impl Copy for flui::platform::capability::ResultCode
@@ -14049,6 +14043,14 @@ pub const fn flui::platform::capability::ResultCode::raw(self) -> i32
 variant flui::platform::capability::ResultCode::Canceled // at 1
 variant flui::platform::capability::ResultCode::Ok // at 0
 variant flui::platform::capability::ResultCode::Other(i32) // at 2
+pub struct flui::platform::capability::ResultData { .. }
+impl Drop for flui::platform::capability::ResultData
+impl core::fmt::Debug for flui::platform::capability::ResultData
+pub fn flui::platform::capability::ResultData::new(token: flui::platform::capability::ResultToken) -> (Self, flui::platform::capability::ResultDataHold)
+pub fn flui::platform::capability::ResultData::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultDataHold { .. }
+impl core::fmt::Debug for flui::platform::capability::ResultDataHold
+pub fn flui::platform::capability::ResultDataHold::is_released(&self) -> bool
 pub struct flui::platform::capability::ResultKey(_)
 impl Clone for flui::platform::capability::ResultKey
 impl Copy for flui::platform::capability::ResultKey
@@ -14058,6 +14060,7 @@ impl core::fmt::Debug for flui::platform::capability::ResultKey
 impl core::hash::Hash for flui::platform::capability::ResultKey
 impl core::marker::StructuralPartialEq for flui::platform::capability::ResultKey
 pub const fn flui::platform::capability::ResultKey::as_str(self) -> &'static str
+pub const fn flui::platform::capability::ResultKey::check(name: &str) -> Result<(), flui::platform::capability::InvalidResultKey>
 pub const fn flui::platform::capability::ResultKey::try_new(name: &'static str) -> Result<Self, flui::platform::capability::InvalidResultKey>
 pub type flui::platform::capability::ResultOutcome = Result<flui::platform::capability::ActivityResult, flui::platform::capability::ResultRefused>
 #[non_exhaustive] pub enum flui::platform::capability::ResultRefused
@@ -14114,6 +14117,143 @@ impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::capability
 pub fn flui::platform::capability::WindowRef::id(&self) -> flui::platform::WindowId
 pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>) -> Self
 pub fn flui::platform::capability::WindowRef::scale(&self) -> f64
+pub mod flui::platform::capability::scripted
+pub struct flui::platform::capability::scripted::AlreadyDriven;
+impl Clone for flui::platform::capability::scripted::AlreadyDriven
+impl Copy for flui::platform::capability::scripted::AlreadyDriven
+impl Eq for flui::platform::capability::scripted::AlreadyDriven
+impl PartialEq for flui::platform::capability::scripted::AlreadyDriven
+impl core::error::Error for flui::platform::capability::scripted::AlreadyDriven
+impl core::fmt::Debug for flui::platform::capability::scripted::AlreadyDriven
+impl core::fmt::Display for flui::platform::capability::scripted::AlreadyDriven
+impl core::marker::StructuralPartialEq for flui::platform::capability::scripted::AlreadyDriven
+pub struct flui::platform::capability::scripted::Answer<R, A> { .. }
+impl<R, A> core::fmt::Debug for flui::platform::capability::scripted::Answer<R, A>
+pub fn flui::platform::capability::scripted::Answer::abandon() -> Self // impl<R, A> flui::platform::capability::scripted::Answer<R, A>
+pub fn flui::platform::capability::scripted::Answer::after(self, delay: core::time::Duration) -> Self // impl<R, A> flui::platform::capability::scripted::Answer<R, A>
+pub fn flui::platform::capability::scripted::Answer::computed(compute: impl FnOnce(&R) -> A + 'static) -> Self // impl<R, A> flui::platform::capability::scripted::Answer<R, A>
+pub fn flui::platform::capability::scripted::Answer::value(value: A) -> Self // impl<R, A> flui::platform::capability::scripted::Answer<R, A>
+pub struct flui::platform::capability::scripted::EventSubscription<E> { .. }
+impl<E> core::fmt::Debug for flui::platform::capability::scripted::EventSubscription<E>
+pub fn flui::platform::capability::scripted::EventSubscription::next(&self, completions: &flui::platform::capability::CompletionSource) -> flui::platform::capability::Completion<flui::platform::capability::scripted::StreamItem<E>> // impl<E: 'static> flui::platform::capability::scripted::EventSubscription<E>
+pub fn flui::platform::capability::scripted::EventSubscription::queued(&self) -> usize // impl<E: 'static> flui::platform::capability::scripted::EventSubscription<E>
+pub struct flui::platform::capability::scripted::Events<E> { .. }
+impl<E> Clone for flui::platform::capability::scripted::Events<E>
+impl<E> core::fmt::Debug for flui::platform::capability::scripted::Events<E>
+pub fn flui::platform::capability::scripted::Events::emit(&self, event: E) // impl<E> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Events::emit_at(&self, at: core::time::Duration, event: E) // impl<E> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Events::end(&self, end: flui::platform::capability::scripted::StreamEnd) // impl<E> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Events::end_at(&self, at: core::time::Duration, end: flui::platform::capability::scripted::StreamEnd) // impl<E> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Events::name(&self) -> &'static str // impl<E> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Events::subscribe(&self) -> flui::platform::capability::scripted::EventSubscription<E> // impl<E> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub struct flui::platform::capability::scripted::Expect<R> { .. }
+impl<R> core::fmt::Debug for flui::platform::capability::scripted::Expect<R>
+pub fn flui::platform::capability::scripted::Expect::any() -> Self // impl<R: 'static> flui::platform::capability::scripted::Expect<R>
+pub fn flui::platform::capability::scripted::Expect::exactly(expected: R) -> Self // impl<R: PartialEq + core::fmt::Debug + 'static> flui::platform::capability::scripted::Expect<R>
+pub fn flui::platform::capability::scripted::Expect::when(label: &'static str, matches: impl Fn(&R) -> bool + 'static) -> Self // impl<R: 'static> flui::platform::capability::scripted::Expect<R>
+pub struct flui::platform::capability::scripted::FailureReport { .. }
+impl Clone for flui::platform::capability::scripted::FailureReport
+impl Default for flui::platform::capability::scripted::FailureReport
+impl core::fmt::Debug for flui::platform::capability::scripted::FailureReport
+pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure) -> bool
+pub const flui::platform::capability::scripted::MAX_RECORDED_REQUESTS: usize = 4096
+pub const flui::platform::capability::scripted::MAX_REPORTS: usize = 256
+pub struct flui::platform::capability::scripted::Scenario { .. }
+impl Clone for flui::platform::capability::scripted::Scenario
+impl Default for flui::platform::capability::scripted::Scenario
+impl core::fmt::Debug for flui::platform::capability::scripted::Scenario
+pub fn flui::platform::capability::scripted::Scenario::drive(&self) -> Result<flui::platform::capability::scripted::ScenarioDriver, flui::platform::capability::scripted::AlreadyDriven>
+pub fn flui::platform::capability::scripted::Scenario::events<E>(&self, name: &'static str) -> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Scenario::failure_report(&self) -> flui::platform::capability::scripted::FailureReport
+pub fn flui::platform::capability::scripted::Scenario::new() -> Self
+pub fn flui::platform::capability::scripted::Scenario::next_due(&self) -> Option<core::time::Duration>
+pub fn flui::platform::capability::scripted::Scenario::now(&self) -> core::time::Duration
+pub fn flui::platform::capability::scripted::Scenario::script<R, A>(&self, name: &'static str) -> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Scenario::service(&self, name: &'static str) -> flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
+pub fn flui::platform::capability::scripted::Scenario::track<T>(&self, name: &'static str, initial: T) -> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Scenario::verify(&self) -> Result<(), flui::platform::capability::scripted::ScenarioFailures>
+pub struct flui::platform::capability::scripted::ScenarioDriver { .. }
+impl Drop for flui::platform::capability::scripted::ScenarioDriver
+impl core::fmt::Debug for flui::platform::capability::scripted::ScenarioDriver
+pub fn flui::platform::capability::scripted::ScenarioDriver::advance(&self, dt: core::time::Duration) -> usize
+pub fn flui::platform::capability::scripted::ScenarioDriver::clock(&self) -> &flui::foundation::ManualClock
+pub fn flui::platform::capability::scripted::ScenarioDriver::scenario(&self) -> &flui::platform::capability::scripted::Scenario
+#[non_exhaustive] pub enum flui::platform::capability::scripted::ScenarioFailure
+impl Clone for flui::platform::capability::scripted::ScenarioFailure
+impl Eq for flui::platform::capability::scripted::ScenarioFailure
+impl PartialEq for flui::platform::capability::scripted::ScenarioFailure
+impl core::fmt::Debug for flui::platform::capability::scripted::ScenarioFailure
+impl core::fmt::Display for flui::platform::capability::scripted::ScenarioFailure
+impl core::marker::StructuralPartialEq for flui::platform::capability::scripted::ScenarioFailure
+variant flui::platform::capability::scripted::ScenarioFailure::AfterEnd { stream: &'static str, sent: String } // at 4
+variant flui::platform::capability::scripted::ScenarioFailure::NotReached { what: alloc::borrow::Cow<'static, str>, at: core::time::Duration } // at 3
+variant flui::platform::capability::scripted::ScenarioFailure::ReportsDropped { dropped: u64 } // at 5
+variant flui::platform::capability::scripted::ScenarioFailure::Unanswered { script: &'static str, request: String } // at 1
+variant flui::platform::capability::scripted::ScenarioFailure::Unconsumed { script: &'static str, step: alloc::borrow::Cow<'static, str> } // at 2
+variant flui::platform::capability::scripted::ScenarioFailure::Unexpected { script: &'static str, request: String } // at 0
+pub struct flui::platform::capability::scripted::ScenarioFailures(_)
+impl Clone for flui::platform::capability::scripted::ScenarioFailures
+impl Eq for flui::platform::capability::scripted::ScenarioFailures
+impl PartialEq for flui::platform::capability::scripted::ScenarioFailures
+impl core::error::Error for flui::platform::capability::scripted::ScenarioFailures
+impl core::fmt::Debug for flui::platform::capability::scripted::ScenarioFailures
+impl core::fmt::Display for flui::platform::capability::scripted::ScenarioFailures
+impl core::marker::StructuralPartialEq for flui::platform::capability::scripted::ScenarioFailures
+pub fn flui::platform::capability::scripted::ScenarioFailures::failures(&self) -> &[flui::platform::capability::scripted::ScenarioFailure]
+pub struct flui::platform::capability::scripted::Script<R: core::fmt::Debug + 'static, A: 'static> { .. }
+impl<R: core::fmt::Debug + 'static, A: 'static> Clone for flui::platform::capability::scripted::Script<R, A>
+impl<R: core::fmt::Debug + 'static, A: 'static> core::fmt::Debug for flui::platform::capability::scripted::Script<R, A>
+pub fn flui::platform::capability::scripted::Script::abandon_held(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::answer_next(&self, answer: flui::platform::capability::scripted::Answer<R, A>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::expect(&self, expect: flui::platform::capability::scripted::Expect<R>, answer: flui::platform::capability::scripted::Answer<R, A>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::expect_held(&self, expect: flui::platform::capability::scripted::Expect<R>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::held(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::hold(&self) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::name(&self) -> &'static str // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::otherwise(&self, answer: impl Fn(&R) -> A + 'static) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::otherwise_value(&self, value: A) where A: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::receive(&self, request: R, resolver: flui::platform::capability::Resolver<A>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::received(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::release_held(&self, answer: impl FnMut(&R) -> A) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::release_oldest(&self, value: A) -> bool // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::requests(&self) -> Vec<R> where R: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::resume(&self) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::scenario(&self) -> &flui::platform::capability::scripted::Scenario // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub enum flui::platform::capability::scripted::ServiceState
+impl Clone for flui::platform::capability::scripted::ServiceState
+impl Copy for flui::platform::capability::scripted::ServiceState
+impl Eq for flui::platform::capability::scripted::ServiceState
+impl PartialEq for flui::platform::capability::scripted::ServiceState
+impl core::fmt::Debug for flui::platform::capability::scripted::ServiceState
+impl core::marker::StructuralPartialEq for flui::platform::capability::scripted::ServiceState
+variant flui::platform::capability::scripted::ServiceState::Off(flui::platform::Unsupported) // at 1
+variant flui::platform::capability::scripted::ServiceState::On // at 0
+#[non_exhaustive] pub enum flui::platform::capability::scripted::StreamEnd
+impl Clone for flui::platform::capability::scripted::StreamEnd
+impl Copy for flui::platform::capability::scripted::StreamEnd
+impl Eq for flui::platform::capability::scripted::StreamEnd
+impl PartialEq for flui::platform::capability::scripted::StreamEnd
+impl core::fmt::Debug for flui::platform::capability::scripted::StreamEnd
+impl core::marker::StructuralPartialEq for flui::platform::capability::scripted::StreamEnd
+variant flui::platform::capability::scripted::StreamEnd::Finished // at 0
+variant flui::platform::capability::scripted::StreamEnd::Interrupted(flui::platform::Unsupported) // at 1
+pub enum flui::platform::capability::scripted::StreamItem<E>
+impl<E: Clone> Clone for flui::platform::capability::scripted::StreamItem<E>
+impl<E: Eq> Eq for flui::platform::capability::scripted::StreamItem<E>
+impl<E: PartialEq> PartialEq for flui::platform::capability::scripted::StreamItem<E>
+impl<E: PartialEq> core::marker::StructuralPartialEq for flui::platform::capability::scripted::StreamItem<E>
+impl<E: core::fmt::Debug> core::fmt::Debug for flui::platform::capability::scripted::StreamItem<E>
+variant flui::platform::capability::scripted::StreamItem::End(flui::platform::capability::scripted::StreamEnd) // at 1
+variant flui::platform::capability::scripted::StreamItem::Event(E) // at 0
+pub struct flui::platform::capability::scripted::Track<T> { .. }
+impl<T> Clone for flui::platform::capability::scripted::Track<T>
+impl<T> core::fmt::Debug for flui::platform::capability::scripted::Track<T>
+pub fn flui::platform::capability::scripted::Track::changed(&self, completions: &flui::platform::capability::CompletionSource) -> flui::platform::capability::Completion<T> // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Track::check(&self) -> Result<(), flui::platform::Unsupported> // impl flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
+pub fn flui::platform::capability::scripted::Track::get(&self) -> T // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Track::name(&self) -> &'static str // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Track::set(&self, value: T) // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
+pub fn flui::platform::capability::scripted::Track::set_at(&self, at: core::time::Duration, value: T) // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
 pub mod flui::platform::data_transfer
 reexport flui::platform::data_transfer::DataTransferOffer => flui::platform::DataTransferOffer
 reexport flui::platform::data_transfer::DragTransport => flui::platform::DragTransport
@@ -15185,6 +15325,7 @@ pub fn flui::platform::testing::ScriptedHttp::hold(&self, url: impl Into<String>
 pub fn flui::platform::testing::ScriptedHttp::new() -> Self
 pub fn flui::platform::testing::ScriptedHttp::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
 pub fn flui::platform::testing::ScriptedHttp::release(&self, url: &str)
+pub fn flui::platform::testing::ScriptedHttp::report_to(&self, report: flui::platform::capability::scripted::FailureReport)
 pub fn flui::platform::testing::ScriptedHttp::requests(&self) -> Vec<flui::platform::http::HttpRequest>
 pub fn flui::platform::testing::ScriptedHttp::requests_to(&self, url: &str) -> usize
 pub fn flui::platform::testing::ScriptedHttp::respond(&self, url: impl Into<String>, response: flui::platform::testing::ScriptedResponse)
@@ -15196,8 +15337,10 @@ impl flui::platform::launch::LauncherBackend for flui::platform::testing::Script
 pub fn flui::platform::testing::ScriptedLauncher::answer_next(&self, result: flui::platform::launch::LaunchResult)
 pub fn flui::platform::testing::ScriptedLauncher::hold(&self)
 pub fn flui::platform::testing::ScriptedLauncher::new() -> Self
+pub fn flui::platform::testing::ScriptedLauncher::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
 pub fn flui::platform::testing::ScriptedLauncher::release(&self, result: flui::platform::launch::LaunchResult) -> bool
 pub fn flui::platform::testing::ScriptedLauncher::requests(&self) -> Vec<flui::platform::testing::LaunchRequest>
+pub fn flui::platform::testing::ScriptedLauncher::script(&self) -> &flui::platform::capability::scripted::Script<flui::platform::testing::LaunchRequest, flui::platform::launch::LaunchResult>
 #[non_exhaustive] pub enum flui::platform::testing::ScriptedResponse
 impl Clone for flui::platform::testing::ScriptedResponse
 impl Eq for flui::platform::testing::ScriptedResponse
@@ -22953,16 +23096,22 @@ pub fn flui::services::system::testing::ScriptedFileDialogs::answer_next_open(&s
 pub fn flui::services::system::testing::ScriptedFileDialogs::answer_next_save(&self, result: flui::services::system::dialog::SaveResult)
 pub fn flui::services::system::testing::ScriptedFileDialogs::hold(&self)
 pub fn flui::services::system::testing::ScriptedFileDialogs::new() -> Self
+pub fn flui::services::system::testing::ScriptedFileDialogs::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedFileDialogs::open_script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::DialogRequest, flui::services::system::dialog::OpenResult>
 pub fn flui::services::system::testing::ScriptedFileDialogs::release_open(&self, result: flui::services::system::dialog::OpenResult) -> bool
 pub fn flui::services::system::testing::ScriptedFileDialogs::release_save(&self, result: flui::services::system::dialog::SaveResult) -> bool
 pub fn flui::services::system::testing::ScriptedFileDialogs::requests(&self) -> Vec<flui::services::system::testing::DialogRequest>
+pub fn flui::services::system::testing::ScriptedFileDialogs::save_script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::DialogRequest, flui::services::system::dialog::SaveResult>
 reexport flui::services::system::testing::ScriptedLauncher => flui::platform::testing::ScriptedLauncher
 pub struct flui::services::system::testing::ScriptedSystem { .. }
 impl Clone for flui::services::system::testing::ScriptedSystem
 impl Default for flui::services::system::testing::ScriptedSystem
 impl core::fmt::Debug for flui::services::system::testing::ScriptedSystem
 impl flui::platform::capability::Plugin for flui::services::system::testing::ScriptedSystem
+pub fn flui::services::system::testing::ScriptedSystem::dialogs(&self) -> &flui::services::system::testing::ScriptedFileDialogs
+pub fn flui::services::system::testing::ScriptedSystem::launcher(&self) -> &flui::platform::testing::ScriptedLauncher
 pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::platform::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
+pub fn flui::services::system::testing::ScriptedSystem::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
 pub mod flui::testing
 pub struct flui::testing::CommitBarrier { .. }
 impl Drop for flui::testing::CommitBarrier
@@ -22994,6 +23143,12 @@ pub fn flui::testing::Expectation::to_have_count(self, count: usize) // impl flu
 pub fn flui::testing::Expectation::to_have_name(self, name: &str) // impl flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::to_have_value(self, value: &str) // impl flui::testing::Expectation<'_>
 pub fn flui::testing::Expectation::within(self, timeout: core::time::Duration) -> Self // impl flui::testing::Expectation<'_>
+pub struct flui::testing::HostClock { .. }
+impl Clone for flui::testing::HostClock
+impl core::fmt::Debug for flui::testing::HostClock
+impl flui::foundation::MonotonicClock for flui::testing::HostClock
+pub fn flui::testing::HostClock::advance(&self, dt: core::time::Duration)
+pub fn flui::testing::HostClock::elapsed(&self) -> core::time::Duration
 #[non_exhaustive] pub struct flui::testing::InspectField
 field flui::testing::InspectField::default: Option<flui::testing::InspectValue> // at 4
 field flui::testing::InspectField::level: flui_protocol::inspect::InspectLevel // at 2
@@ -23305,7 +23460,7 @@ pub fn flui::testing::TestWindow::without_storage(self) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
 pub fn flui::testing::Tester::cancel_composition(&mut self)
-pub fn flui::testing::Tester::clock(&self) -> &flui::foundation::ManualClock
+pub fn flui::testing::Tester::clock(&self) -> &flui::testing::HostClock
 pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
 pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
@@ -35540,6 +35695,7 @@ impl core::fmt::Debug for flui_runtime::capability::CapabilityConflict
 impl core::fmt::Display for flui_runtime::capability::CapabilityConflict
 impl core::marker::StructuralPartialEq for flui_runtime::capability::CapabilityConflict
 variant flui_runtime::capability::CapabilityConflict::Duplicate { name: &'static str, tier: flui_runtime::capability::ProviderTier } // at 0
+variant flui_runtime::capability::CapabilityConflict::InvalidName { name: &'static str, reason: flui::platform::capability::InvalidResultKey } // at 2
 variant flui_runtime::capability::CapabilityConflict::SharedName { name: &'static str } // at 1
 pub struct flui_runtime::capability::CapabilityRegistry { .. }
 impl Clone for flui_runtime::capability::CapabilityRegistry
@@ -36739,6 +36895,14 @@ impl PartialEq for flui_testing::SceneReport
 impl core::fmt::Debug for flui_testing::SceneReport
 impl core::marker::StructuralPartialEq for flui_testing::SceneReport
 impl core::ops::arith::AddAssign for flui_testing::SceneReport
+#[non_exhaustive] pub enum flui_testing::clipboard::ClipboardRequest
+impl Clone for flui_testing::clipboard::ClipboardRequest
+impl Copy for flui_testing::clipboard::ClipboardRequest
+impl Eq for flui_testing::clipboard::ClipboardRequest
+impl PartialEq for flui_testing::clipboard::ClipboardRequest
+impl core::fmt::Debug for flui_testing::clipboard::ClipboardRequest
+impl core::marker::StructuralPartialEq for flui_testing::clipboard::ClipboardRequest
+variant flui_testing::clipboard::ClipboardRequest::ReadText // at 0
 pub struct flui_testing::clipboard::ScriptedClipboard { .. }
 impl Clone for flui_testing::clipboard::ScriptedClipboard
 impl Default for flui_testing::clipboard::ScriptedClipboard
@@ -36752,9 +36916,12 @@ pub fn flui_testing::clipboard::ScriptedClipboard::hold_reads(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::is_concealed(&self) -> bool
 pub fn flui_testing::clipboard::ScriptedClipboard::live_handles(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::new() -> Self
+pub fn flui_testing::clipboard::ScriptedClipboard::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui_testing::clipboard::ScriptedClipboard::reads(&self) -> &flui::platform::capability::scripted::Script<flui_testing::clipboard::ClipboardRequest, flui::platform::ClipboardRead>
 pub fn flui_testing::clipboard::ScriptedClipboard::reads_asked(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::refuse(&self, refusal: flui::platform::Unsupported)
 pub fn flui_testing::clipboard::ScriptedClipboard::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
+pub fn flui_testing::clipboard::ScriptedClipboard::service(&self) -> &flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
 pub fn flui_testing::clipboard::ScriptedClipboard::set_text(&self, text: impl Into<String>)
 pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_reads(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::text(&self) -> Option<String>
@@ -36786,6 +36953,14 @@ field flui_testing::host::StartedOsDrag::allowed: flui::interaction::drag::Trans
 field flui_testing::host::StartedOsDrag::representations: Vec<flui::platform::data_transfer::RepresentationDescriptor> // at 0
 impl Clone for flui_testing::host::StartedOsDrag
 impl core::fmt::Debug for flui_testing::host::StartedOsDrag
+#[non_exhaustive] pub enum flui_testing::primary_selection::PrimarySelectionRequest
+impl Clone for flui_testing::primary_selection::PrimarySelectionRequest
+impl Copy for flui_testing::primary_selection::PrimarySelectionRequest
+impl Eq for flui_testing::primary_selection::PrimarySelectionRequest
+impl PartialEq for flui_testing::primary_selection::PrimarySelectionRequest
+impl core::fmt::Debug for flui_testing::primary_selection::PrimarySelectionRequest
+impl core::marker::StructuralPartialEq for flui_testing::primary_selection::PrimarySelectionRequest
+variant flui_testing::primary_selection::PrimarySelectionRequest::ReadText // at 0
 pub struct flui_testing::primary_selection::ScriptedPrimarySelection { .. }
 impl Clone for flui_testing::primary_selection::ScriptedPrimarySelection
 impl Default for flui_testing::primary_selection::ScriptedPrimarySelection
@@ -36797,9 +36972,12 @@ pub fn flui_testing::primary_selection::ScriptedPrimarySelection::hold_reads(&se
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::is_claimed(&self) -> bool
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::live_handles(&self) -> usize
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::new() -> Self
+pub fn flui_testing::primary_selection::ScriptedPrimarySelection::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui_testing::primary_selection::ScriptedPrimarySelection::reads(&self) -> &flui::platform::capability::scripted::Script<flui_testing::primary_selection::PrimarySelectionRequest, flui::platform::ClipboardRead>
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::refuse(&self, refusal: flui::platform::Unsupported)
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::select(&self, text: impl Into<String>)
+pub fn flui_testing::primary_selection::ScriptedPrimarySelection::service(&self) -> &flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
 pub fn flui_testing::primary_selection::ScriptedPrimarySelection::text(&self) -> Option<String>
 #[non_exhaustive] pub enum flui_testing::recording::format::RecordingError
 impl From<core::io::error::Error> for flui_testing::recording::format::RecordingError

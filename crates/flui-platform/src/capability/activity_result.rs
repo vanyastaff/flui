@@ -22,17 +22,7 @@
 //! whatever version it chooses, and the host lends it raw pointers for the
 //! length of one call ([`JniFrame`]).
 
-use std::{
-    ffi::c_void,
-    fmt,
-    num::NonZeroU64,
-    ptr::NonNull,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{cell::Cell, ffi::c_void, fmt, num::NonZeroU64, ptr::NonNull, rc::Rc};
 
 use flui_foundation::{IdExhausted, IdMint};
 
@@ -323,13 +313,13 @@ impl ActivityResult {
 #[derive(Debug)]
 pub struct ResultData {
     token: ResultToken,
-    held: Arc<AtomicBool>,
+    held: Rc<Cell<bool>>,
 }
 
 /// The host's side of a [`ResultData`]: whether the provider still holds it.
 #[derive(Debug)]
 pub struct ResultDataHold {
-    held: Arc<AtomicBool>,
+    held: Rc<Cell<bool>>,
 }
 
 impl ResultData {
@@ -337,11 +327,11 @@ impl ResultData {
     /// host keeps to learn when the provider lets it go.
     #[must_use]
     pub fn new(token: ResultToken) -> (Self, ResultDataHold) {
-        let held = Arc::new(AtomicBool::new(true));
+        let held = Rc::new(Cell::new(true));
         (
             Self {
                 token,
-                held: Arc::clone(&held),
+                held: Rc::clone(&held),
             },
             ResultDataHold { held },
         )
@@ -356,7 +346,7 @@ impl ResultData {
 
 impl Drop for ResultData {
     fn drop(&mut self) {
-        self.held.store(false, Ordering::Release);
+        self.held.set(false);
     }
 }
 
@@ -365,7 +355,7 @@ impl ResultDataHold {
     /// releases the `Intent`.
     #[must_use]
     pub fn is_released(&self) -> bool {
-        !self.held.load(Ordering::Acquire)
+        !self.held.get()
     }
 }
 

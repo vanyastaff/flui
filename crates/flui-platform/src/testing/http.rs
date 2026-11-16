@@ -13,6 +13,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
+use crate::capability::scripted::{FailureReport, ScenarioFailure};
 use crate::capability::{CapabilityRegistrar, ProviderContext};
 use crate::http::{
     Headers, Http, HttpAuthority, HttpCapability, HttpClient, HttpError, HttpFuture, HttpRequest,
@@ -62,6 +63,9 @@ struct State {
     holding: Vec<String>,
     requests: Vec<HttpRequest>,
     abandoned: usize,
+    /// Where a request nobody scripted is reported, when the client is
+    /// attached to a scenario.
+    report: Option<FailureReport>,
 }
 
 fn lock_state(state: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -133,6 +137,17 @@ impl ScriptedHttp {
             .count()
     }
 
+    /// Report every later request for a URL nobody scripted into `report`
+    /// as [`ScenarioFailure::Unexpected`], beside the
+    /// [`HttpError::Connect`] its caller sees, so the scenario's
+    /// [`verify`](crate::capability::scripted::Scenario::verify) lists it
+    /// with the scripts' failures. The report may be written from any
+    /// thread, as this client's futures are polled.
+    pub fn report_to(&self, report: FailureReport) {
+        let replaced = lock_state(&self.state).report.replace(report);
+        drop(replaced);
+    }
+
     /// How many requests were dropped before they were answered.
     #[must_use]
     pub fn abandoned(&self) -> usize {
@@ -186,6 +201,7 @@ impl HttpClient for ScriptedHttp {
             pending.answered = true;
             let registered = state.held.remove(&pending.id);
             let scripted = state.scripts.get(&url).cloned();
+            let report = state.report.clone();
             drop(state);
             drop((waker, registered));
             Poll::Ready(match scripted {
@@ -195,9 +211,17 @@ impl HttpClient for ScriptedHttp {
                     ResponseBody::new(Script(Some(body)), limit),
                 )),
                 Some(ScriptedResponse::Fail(error)) => Err(error),
-                None => Err(HttpError::Connect {
-                    detail: format!("no scripted response for {url}"),
-                }),
+                None => {
+                    if let Some(report) = report {
+                        report.report(ScenarioFailure::Unexpected {
+                            script: "http",
+                            request: url.clone(),
+                        });
+                    }
+                    Err(HttpError::Connect {
+                        detail: format!("no scripted response for {url}"),
+                    })
+                }
             })
         }))
     }

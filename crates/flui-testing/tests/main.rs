@@ -33,8 +33,186 @@ mod a11y_query;
 mod async_driver;
 #[path = "background_work.rs"]
 mod background_work;
+
+#[test]
+fn background_work() {
+    run_table(
+        "background_work",
+        &[
+            (
+                "background_work::a_compute_job_answers_at_the_pump_that_runs_it",
+                background_work::a_compute_job_answers_at_the_pump_that_runs_it as fn(),
+            ),
+            (
+                "background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer",
+                background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer as fn(),
+            ),
+            (
+                "background_work::held_work_keeps_its_widget_loading_until_released",
+                background_work::held_work_keeps_its_widget_loading_until_released as fn(),
+            ),
+            (
+                "background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump",
+                background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump
+                    as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_skips_its_job",
+                background_work::a_dropped_task_skips_its_job as fn(),
+            ),
+            (
+                "background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump",
+                background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_cancelled_task_answers_cancelled",
+                background_work::a_cancelled_task_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_panicking_job_answers_panicked_on_the_owner_thread",
+                background_work::a_panicking_job_answers_panicked_on_the_owner_thread as fn(),
+            ),
+            (
+                "background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked",
+                background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked as fn(),
+            ),
+            (
+                "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
+                background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
+            ),
+            (
+                "background_work::a_task_cancelled_while_its_job_runs_answers_cancelled",
+                background_work::a_task_cancelled_while_its_job_runs_answers_cancelled as fn(),
+            ),
+            (
+                "background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock",
+                background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock
+                    as fn(),
+            ),
+            (
+                "background_work::a_future_whose_poll_panicked_is_kept_not_dropped",
+                background_work::a_future_whose_poll_panicked_is_kept_not_dropped as fn(),
+            ),
+            (
+                "background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends",
+                background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends
+                    as fn(),
+            ),
+        ],
+    );
+}
 #[path = "capability_seam.rs"]
 mod capability_seam;
+
+#[test]
+fn capability_seam() {
+    run_table(
+        "capability_seam",
+        &[
+            (
+                "capability_seam::a_runtime_with_no_provider_answers_not_registered",
+                capability_seam::a_runtime_with_no_provider_answers_not_registered as fn(),
+            ),
+            (
+                "capability_seam::a_provider_refusal_reaches_the_widget_unchanged",
+                capability_seam::a_provider_refusal_reaches_the_widget_unchanged as fn(),
+            ),
+            (
+                "capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard",
+                capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
+            ),
+            (
+                "capability_seam::a_concealed_write_reaches_the_host_marked",
+                capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
+            ),
+            (
+                "capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn",
+                capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn as fn(),
+            ),
+            (
+                "capability_seam::a_read_pending_when_its_runtime_drops_ends_as_owner_retired",
+                capability_seam::a_read_pending_when_its_runtime_drops_ends_as_owner_retired
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped",
+                capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
+            ),
+            (
+                "capability_seam::reads_asked_while_one_is_in_flight_share_its_answer",
+                capability_seam::reads_asked_while_one_is_in_flight_share_its_answer as fn(),
+            ),
+            (
+                "capability_seam::each_runtime_asks_for_its_own_read",
+                capability_seam::each_runtime_asks_for_its_own_read as fn(),
+            ),
+            (
+                "capability_seam::a_read_after_a_write_never_joins_the_read_before_it",
+                capability_seam::a_read_after_a_write_never_joins_the_read_before_it as fn(),
+            ),
+            (
+                "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
+                capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
+            ),
+            (
+                "capability_seam::a_provider_sees_the_activity_the_host_offers",
+                capability_seam::a_provider_sees_the_activity_the_host_offers as fn(),
+            ),
+            (
+                "capability_seam::scripted_reads_answer_in_order_before_the_clipboards_text",
+                capability_seam::scripted_reads_answer_in_order_before_the_clipboards_text
+                    as fn(),
+            ),
+            (
+                "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",
+                capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_dropped_handle_ends_its_subscription",
+                capability_seam::a_dropped_handle_ends_its_subscription as fn(),
+            ),
+            (
+                "capability_seam::conflicting_registrations_fail_when_the_registry_is_built",
+                capability_seam::conflicting_registrations_fail_when_the_registry_is_built
+                    as fn(),
+            ),
+            (
+                "capability_seam::an_override_answers_in_place_of_the_built_in",
+                capability_seam::an_override_answers_in_place_of_the_built_in as fn(),
+            ),
+            (
+                "capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner",
+                capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped",
+                capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
+            ),
+            (
+                "capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it",
+                capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",
+                capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_runtime_without_a_primary_selection_answers_not_registered",
+                capability_seam::a_runtime_without_a_primary_selection_answers_not_registered
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
+                capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
+                    as fn(),
+            ),
+        ],
+    );
+}
 #[path = "close_guard.rs"]
 mod close_guard;
 #[path = "controller_restart.rs"]
@@ -61,6 +239,35 @@ mod mount_bootstrap;
 mod multi_presentation_clock;
 #[path = "owner_local_write_paths.rs"]
 mod owner_local_write_paths;
+
+#[test]
+fn owner_local_write_paths() {
+    run_table(
+        "owner_local_write_paths",
+        &[
+            (
+                "owner_local_write_paths::nested_writer_source_inside_an_event_ctx",
+                owner_local_write_paths::nested_writer_source_inside_an_event_ctx as fn(),
+            ),
+            (
+                "owner_local_write_paths::nested_write_panics_inside_an_event_ctx",
+                owner_local_write_paths::nested_write_panics_inside_an_event_ctx,
+            ),
+            (
+                "owner_local_write_paths::listener_writes_through_a_captured_writer_source",
+                owner_local_write_paths::listener_writes_through_a_captured_writer_source,
+            ),
+            (
+                "owner_local_write_paths::status_listener_writes_through_a_captured_writer_source",
+                owner_local_write_paths::status_listener_writes_through_a_captured_writer_source,
+            ),
+            (
+                "owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source",
+                owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source,
+            ),
+        ],
+    );
+}
 #[path = "owner_scope.rs"]
 mod owner_scope;
 mod ownership_table;
@@ -74,6 +281,8 @@ mod recording_vocabulary;
 mod runtime_driver;
 #[path = "runtime_input_lifecycle.rs"]
 mod runtime_input_lifecycle;
+#[path = "scenario.rs"]
+mod scenario;
 #[path = "scripts.rs"]
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
@@ -127,35 +336,6 @@ fn headless_frame_driver_matrix() {
             ("headless_host::a_single_paint_panic_redraws_without_input", headless_host::a_single_paint_panic_redraws_without_input as fn()),
             ("headless_host::a_pointer_move_does_not_bypass_the_backoff", headless_host::a_pointer_move_does_not_bypass_the_backoff as fn()),
             ("headless_host::a_failure_streak_past_thirty_three_keeps_the_one_second_cap", headless_host::a_failure_streak_past_thirty_three_keeps_the_one_second_cap as fn()),
-        ],
-    );
-}
-
-#[test]
-fn owner_local_write_paths() {
-    run_table(
-        "owner_local_write_paths",
-        &[
-            (
-                "owner_local_write_paths::nested_writer_source_inside_an_event_ctx",
-                owner_local_write_paths::nested_writer_source_inside_an_event_ctx as fn(),
-            ),
-            (
-                "owner_local_write_paths::nested_write_panics_inside_an_event_ctx",
-                owner_local_write_paths::nested_write_panics_inside_an_event_ctx,
-            ),
-            (
-                "owner_local_write_paths::listener_writes_through_a_captured_writer_source",
-                owner_local_write_paths::listener_writes_through_a_captured_writer_source,
-            ),
-            (
-                "owner_local_write_paths::status_listener_writes_through_a_captured_writer_source",
-                owner_local_write_paths::status_listener_writes_through_a_captured_writer_source,
-            ),
-            (
-                "owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source",
-                owner_local_write_paths::post_frame_callback_writes_through_a_captured_writer_source,
-            ),
         ],
     );
 }
@@ -237,179 +417,6 @@ fn background_work_callback_keeps_its_captures() {
         output.status.success(),
         "the child aborted: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn capability_seam() {
-    run_table(
-        "capability_seam",
-        &[
-            (
-                "capability_seam::a_runtime_with_no_provider_answers_not_registered",
-                capability_seam::a_runtime_with_no_provider_answers_not_registered as fn(),
-            ),
-            (
-                "capability_seam::a_provider_refusal_reaches_the_widget_unchanged",
-                capability_seam::a_provider_refusal_reaches_the_widget_unchanged as fn(),
-            ),
-            (
-                "capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard",
-                capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
-            ),
-            (
-                "capability_seam::a_concealed_write_reaches_the_host_marked",
-                capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
-            ),
-            (
-                "capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn",
-                capability_seam::an_answer_from_another_thread_settles_at_an_owner_turn as fn(),
-            ),
-            (
-                "capability_seam::a_read_pending_when_its_runtime_drops_ends_as_owner_retired",
-                capability_seam::a_read_pending_when_its_runtime_drops_ends_as_owner_retired
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped",
-                capability_seam::a_read_whose_answer_is_dropped_ends_as_provider_dropped as fn(),
-            ),
-            (
-                "capability_seam::reads_asked_while_one_is_in_flight_share_its_answer",
-                capability_seam::reads_asked_while_one_is_in_flight_share_its_answer as fn(),
-            ),
-            (
-                "capability_seam::each_runtime_asks_for_its_own_read",
-                capability_seam::each_runtime_asks_for_its_own_read as fn(),
-            ),
-            (
-                "capability_seam::a_read_after_a_write_never_joins_the_read_before_it",
-                capability_seam::a_read_after_a_write_never_joins_the_read_before_it as fn(),
-            ),
-            (
-                "capability_seam::a_failed_read_reaches_every_reader_that_joined_it",
-                capability_seam::a_failed_read_reaches_every_reader_that_joined_it as fn(),
-            ),
-            (
-                "capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again",
-                capability_seam::an_abandoned_read_abandons_its_joiners_and_the_next_read_asks_again
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_dropped_handle_ends_its_subscription",
-                capability_seam::a_dropped_handle_ends_its_subscription as fn(),
-            ),
-            (
-                "capability_seam::conflicting_registrations_fail_when_the_registry_is_built",
-                capability_seam::conflicting_registrations_fail_when_the_registry_is_built
-                    as fn(),
-            ),
-            (
-                "capability_seam::an_override_answers_in_place_of_the_built_in",
-                capability_seam::an_override_answers_in_place_of_the_built_in as fn(),
-            ),
-            (
-                "capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner",
-                capability_seam::a_capture_panicking_at_teardown_reaches_the_runtime_owner
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped",
-                capability_seam::a_provider_after_a_teardown_failure_is_kept_not_dropped as fn(),
-            ),
-            (
-                "capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it",
-                capability_seam::a_primary_read_after_a_release_never_joins_the_read_before_it
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current",
-                capability_seam::a_primary_claim_is_asked_lazily_and_released_only_while_current
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_runtime_without_a_primary_selection_answers_not_registered",
-                capability_seam::a_runtime_without_a_primary_selection_answers_not_registered
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn",
-                capability_seam::a_claim_whose_predecessor_panics_as_it_drops_is_withdrawn
-                    as fn(),
-            ),
-            (
-                "capability_seam::a_provider_sees_the_activity_the_host_offers",
-                capability_seam::a_provider_sees_the_activity_the_host_offers as fn(),
-            ),
-        ],
-    );
-}
-
-#[test]
-fn background_work() {
-    run_table(
-        "background_work",
-        &[
-            (
-                "background_work::a_compute_job_answers_at_the_pump_that_runs_it",
-                background_work::a_compute_job_answers_at_the_pump_that_runs_it as fn(),
-            ),
-            (
-                "background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer",
-                background_work::on_complete_keeps_the_work_and_runs_once_with_its_answer as fn(),
-            ),
-            (
-                "background_work::held_work_keeps_its_widget_loading_until_released",
-                background_work::held_work_keeps_its_widget_loading_until_released as fn(),
-            ),
-            (
-                "background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump",
-                background_work::run_background_runs_held_work_and_its_answer_settles_at_the_pump
-                    as fn(),
-            ),
-            (
-                "background_work::a_dropped_task_skips_its_job",
-                background_work::a_dropped_task_skips_its_job as fn(),
-            ),
-            (
-                "background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump",
-                background_work::a_dropped_task_drops_its_parked_future_at_the_next_pump as fn(),
-            ),
-            (
-                "background_work::a_cancelled_task_answers_cancelled",
-                background_work::a_cancelled_task_answers_cancelled as fn(),
-            ),
-            (
-                "background_work::a_panicking_job_answers_panicked_on_the_owner_thread",
-                background_work::a_panicking_job_answers_panicked_on_the_owner_thread as fn(),
-            ),
-            (
-                "background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked",
-                background_work::a_panicking_log_of_a_panicked_job_still_answers_panicked as fn(),
-            ),
-            (
-                "background_work::a_refused_spawn_answers_refused_at_the_next_pump",
-                background_work::a_refused_spawn_answers_refused_at_the_next_pump as fn(),
-            ),
-            (
-                "background_work::a_task_cancelled_while_its_job_runs_answers_cancelled",
-                background_work::a_task_cancelled_while_its_job_runs_answers_cancelled as fn(),
-            ),
-            (
-                "background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock",
-                background_work::a_replaced_waker_that_cancels_as_it_drops_does_not_deadlock
-                    as fn(),
-            ),
-            (
-                "background_work::a_future_whose_poll_panicked_is_kept_not_dropped",
-                background_work::a_future_whose_poll_panicked_is_kept_not_dropped as fn(),
-            ),
-            (
-                "background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends",
-                background_work::work_handed_to_on_complete_is_cancelled_when_its_runtime_ends
-                    as fn(),
-            ),
-        ],
     );
 }
 
