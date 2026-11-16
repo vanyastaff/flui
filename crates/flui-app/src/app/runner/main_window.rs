@@ -1117,6 +1117,14 @@ where
                         .upgrade()
                         .is_some_and(|ingress| ingress.request_native_show())
                 });
+                let asked = Arc::downgrade(&ingress);
+                super::host::route_quit_asked(move || {
+                    asked
+                        .upgrade()
+                        .map_or(flui_native::QuitAnswer::Quit, |ingress| {
+                            ingress.platform_quit_asked()
+                        })
+                });
                 // The driver agent (ADR-0239), beside the application's own hooks,
                 // when launched with an endpoint; a driver that goes under
                 // `EXIT_ON_DISCONNECT` quits past every close guard.

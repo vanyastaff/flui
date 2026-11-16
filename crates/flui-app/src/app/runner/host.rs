@@ -1084,6 +1084,8 @@ type Bootstrap =
 #[derive(Default)]
 pub(crate) struct AppRoutes {
     quit: Option<Rc<dyn Fn()>>,
+    /// Answers a quit the user or the system asked for.
+    quit_asked: Option<Rc<dyn Fn() -> flui_native::QuitAnswer>>,
     /// Answers whether the main window's controller took the reopen.
     reopen: Option<Rc<dyn Fn() -> bool>>,
     exit_policy: Option<Rc<dyn Fn() -> bool>>,
@@ -1132,6 +1134,22 @@ pub(super) fn current_open_routing() -> Option<Rc<super::opened::OpenRouting>> {
 /// Send the platform's quit to `route`.
 pub(crate) fn route_quit(route: impl Fn() + 'static) {
     set_route(|routes| &mut routes.quit, Rc::new(route) as Rc<dyn Fn()>);
+}
+
+/// Answer a quit the user or the system asked for (AppKit's Quit) with
+/// `route`.
+#[cfg_attr(
+    any(
+        target_arch = "wasm32",
+        all(not(test), any(target_os = "android", target_os = "ios"))
+    ),
+    expect(dead_code, reason = "only the desktop main window asks its presentations")
+)]
+pub(super) fn route_quit_asked(route: impl Fn() -> flui_native::QuitAnswer + 'static) {
+    set_route(
+        |routes| &mut routes.quit_asked,
+        Rc::new(route) as Rc<dyn Fn() -> flui_native::QuitAnswer>,
+    );
 }
 
 /// Send the user's reopen (AppKit's Dock click) to `route`, which answers
@@ -1441,6 +1459,22 @@ impl flui_native::AppHandler for RunnerHandler {
                 quit();
             }
         });
+    }
+
+    /// The quit the user or the system asked for is the quit the application
+    /// asks for itself ([`AppHandle::request_quit`](crate::app::AppHandle::request_quit)):
+    /// every presentation is asked on the owner's next turn, and the
+    /// application quits once none refuses. A run with no main window to ask
+    /// through quits at once; a failure keeps it running.
+    fn quit_asked(&self, _: &flui_native::OwnerPlatform) -> flui_native::QuitAnswer {
+        contained(
+            flui_native::QuitAnswer::KeepRunning,
+            "application quit question",
+            || {
+                self.route(|routes| routes.quit_asked.clone())
+                    .map_or(flui_native::QuitAnswer::Quit, |asked| asked())
+            },
+        )
     }
 
     fn reopen(&self, _: &flui_native::OwnerPlatform) {
