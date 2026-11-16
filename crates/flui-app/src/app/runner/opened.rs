@@ -566,7 +566,7 @@ impl Drop for OpenRouting {
 /// URLs opened into the UI runtime of a window whose installation has not
 /// committed: a guard the installation owns from the moment the URLs leave
 /// the hold. [`commit`](Self::commit) makes them the window's;
-/// [`end`](Self::end) or the guard's drop returns them, and the owner's
+/// [`window_closed`](Self::window_closed) or the guard's drop returns them, and the owner's
 /// next turn routes them ([`OpenRouting::route_owed`]).
 ///
 /// Its drop only moves state and asks the owner for a turn: it runs no
