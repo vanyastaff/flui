@@ -90,9 +90,9 @@ mod picker {
     use std::rc::Rc;
 
     use flui_sdk::platform::capability::{
-        Activity, ActivityResult, Capability, CompletionSource, IntentFrame, InvalidResultKey,
-        JniFrame, ProviderContext, ResultCode, ResultData, ResultKey, ResultOutcome, ResultRefused,
-        ResultRequest, ResultTicket, ResultToken,
+        Activity, ActivityResult, Capability, CompletionSource, DataRefused, IntentFrame,
+        InvalidResultKey, JniFrame, ProviderContext, ResultCode, ResultData, ResultKey,
+        ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultToken,
     };
     use flui_sdk::platform::{Unsupported, UnsupportedReason};
 
@@ -163,8 +163,9 @@ mod picker {
                         let data: Option<ResultData> = answer.take_data();
                         let read = data
                             .and_then(|data| {
-                                activity
-                                    .take_data(data, |frame: JniFrame| !frame.object().is_null())
+                                let taken: Result<bool, DataRefused> = activity
+                                    .take_data(data, |frame: JniFrame| !frame.object().is_null());
+                                taken.ok()
                             })
                             .unwrap_or(false);
                         Picked::Answered {

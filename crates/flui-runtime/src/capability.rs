@@ -140,7 +140,7 @@ impl CapabilityRegistry {
     /// What the running host offers providers beyond the window, which every
     /// acquisition's [`ProviderContext`] reads.
     #[must_use]
-    pub fn host(&self) -> &HostBridge {
+    pub(crate) fn host(&self) -> &HostBridge {
         &self.host
     }
 }
@@ -385,7 +385,6 @@ impl CapabilitySource for PresentationCapabilities {
             &self.completions,
             &self.locals,
             self.registry.host(),
-            name,
             window,
         );
         self.registry.acquire(capability, name, &ctx)

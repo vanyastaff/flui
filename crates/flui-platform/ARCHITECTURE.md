@@ -324,7 +324,12 @@ What only the host owns reaches a provider through its `ProviderContext`
 (ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
 `window()`, and `activity()`, the running Android Activity, read from the
 `HostBridge` the composition root fills for each run's host and `None`
-elsewhere. `capability::activity_result` holds that vocabulary and no JNI
+elsewhere. The Activity is scoped by the `CapabilityId` the registrar minted
+for the provider's registration, which only its `RegisteredProvider` puts in
+the context, so no caller names another capability by its string; the
+values the host hands providers (`ResultTicket`, `ResultData`,
+`ActivityResult`, `ResultRequest`) are made only with the `ResultMint`
+`HostBridge::install_activity` hands the bridge. `capability::activity_result` holds that vocabulary and no JNI
 type: a request is identified by a `ResultToken` the host mints per call and
 named by a `RequestKey`, the acquiring capability's `NAME` and the
 provider's `ResultKey` kept apart, which outlives an Activity Android

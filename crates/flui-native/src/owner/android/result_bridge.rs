@@ -21,8 +21,8 @@ use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
 use flui_platform::capability::{
-    ActivityBridge, CompletionSource, IntentFrame, JniFrame, RequestKey, ResultData, ResultRefused,
-    ResultRequest, ResultToken,
+    ActivityBridge, CapabilityId, CompletionSource, DataRefused, IntentFrame, JniFrame, RequestKey,
+    ResultData, ResultMint, ResultRefused, ResultRequest, ResultToken,
 };
 use jni::objects::{JObject, JString};
 use jni::refs::Global;
@@ -31,9 +31,7 @@ use parking_lot::Mutex;
 use web_time::Instant;
 
 use super::activity::with_activity;
-use super::activity_results::{
-    ANSWER_NUMBERS, Answer, Carried, EarlierOpen, Purpose, ResultRouter, Routed,
-};
+use super::activity_results::{ANSWER_NUMBERS, Answer, Carried, Issuer, ResultRouter, Routed};
 use super::java_host::host_class;
 use super::main_thread::{self, PostFailure};
 use crate::PlatformError;
@@ -177,11 +175,14 @@ impl ResultBridge {
                 ),
             }
         }
+        self.reconcile();
         self.release();
     }
 
-    /// End the requests whose tickets their providers let go, as a cancel
-    /// does, finishing the activities they started.
+    /// End the requests whose tickets their providers let go, as cancelled,
+    /// and cancel the activities they started on the Java side, which frees
+    /// their places there at once. A dropped ticket wakes the owner, so this
+    /// runs at the turn after the drop.
     fn release(&self) {
         let (finish, delivery) = {
             let mut router = self.router.borrow_mut();
@@ -194,43 +195,15 @@ impl ResultBridge {
         }
     }
 
-    /// How many requests of earlier Activities `FluiHost` still holds, under
-    /// `key`'s capability and in all, for a launch's bounds. A read that
-    /// fails counts none: the Java side holds its own bound, and answers a
-    /// launch past it as too many.
-    fn earlier_open(&self, key: RequestKey) -> EarlierOpen {
-        let epoch = self.epoch();
-        let counted = with_activity(&self.app, |env, activity| {
-            env.with_local_frame(4, |env| {
-                let class = host_class(env, activity)?;
-                let capability = env.new_string(key.capability().as_str())?;
-                let counts = env
-                    .call_static_method(
-                        &class,
-                        jni_str!("earlierOpen"),
-                        jni_sig!("(JLjava/lang/String;)[I"),
-                        &[JValue::Long(epoch), JValue::Object(&capability)],
-                    )?
-                    .l()?;
-                let counts = jni::objects::JIntArray::cast_local(env, counts)?;
-                let mut read = [0; 2];
-                counts.get_region(env, 0, &mut read)?;
-                Ok(read)
-            })
-        });
-        match counted {
-            Ok([capability, total]) => EarlierOpen {
-                capability: usize::try_from(capability).unwrap_or(0),
-                total: usize::try_from(total).unwrap_or(0),
-            },
-            Err(error) => {
-                tracing::warn!(
-                    target: "flui_native::android",
-                    %error,
-                    "FluiHost's earlier requests could not be counted"
-                );
-                EarlierOpen::default()
-            }
+    /// Hold every key's waiting reattachments to the answers `FluiHost` still
+    /// counts to come under it, so none waits for an answer that will not
+    /// come.
+    fn reconcile(&self) {
+        let keys = self.router.borrow().reattached_keys();
+        for key in keys {
+            let still_to_come = self.still_to_come(key);
+            let delivery = self.router.borrow_mut().reconcile(key, still_to_come);
+            delivery.deliver();
         }
     }
 
@@ -272,11 +245,11 @@ impl ResultBridge {
         );
     }
 
-    /// Whether `FluiHost` still holds a request of an earlier Activity under
-    /// `key` that has not been answered, or an answer not drained. A read
-    /// that fails says yes: the reattachment then waits, and ends with the
-    /// Activity at the latest.
-    fn still_to_come(&self, key: RequestKey) -> bool {
+    /// How many answers `FluiHost` counts still to come under `key` for
+    /// earlier Activities (`FluiHost.stillToCome`: waiting to start, started,
+    /// answered and not drained). A read that fails counts without bound:
+    /// reattachments then wait, and end with the Activity at the latest.
+    fn still_to_come(&self, key: RequestKey) -> usize {
         let epoch = self.epoch();
         with_activity(&self.app, |env, activity| {
             env.with_local_frame(4, |env| {
@@ -286,17 +259,17 @@ impl ResultBridge {
                 env.call_static_method(
                     &class,
                     jni_str!("stillToCome"),
-                    jni_sig!("(JLjava/lang/String;Ljava/lang/String;)Z"),
+                    jni_sig!("(JLjava/lang/String;Ljava/lang/String;)I"),
                     &[
                         JValue::Long(epoch),
                         JValue::Object(&capability),
                         JValue::Object(&name),
                     ],
                 )?
-                .z()
+                .i()
             })
         })
-        .unwrap_or(true)
+        .map_or(usize::MAX, |count| usize::try_from(count).unwrap_or(0))
     }
 }
 
@@ -311,16 +284,26 @@ fn frame(env: &Env<'_>, object: &JObject<'_>) -> Option<JniFrame> {
 }
 
 impl ActivityBridge for ResultBridge {
+    fn bind(&self, mint: ResultMint) {
+        // A dropped ticket or `ResultData` wakes the owner, whose turn ends
+        // the request; the drop itself records and wakes, nothing more.
+        let signal = Weak::clone(&self.hand_offs.signal);
+        let wake: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(signal) = signal.upgrade() {
+                let _ = signal.wake();
+            }
+        });
+        self.router.borrow_mut().bind(Issuer { mint, wake });
+    }
+
     fn launch_for_result(
         &self,
         completions: &CompletionSource,
+        capability: &CapabilityId,
         key: RequestKey,
         intent: &mut dyn FnMut(IntentFrame) -> bool,
     ) -> Result<ResultRequest, ResultRefused> {
-        let earlier = self.earlier_open(key);
-        self.router
-            .borrow_mut()
-            .admits(key.capability(), Some(earlier))?;
+        self.router.borrow_mut().admits(capability)?;
         // The provider fills the Intent with no borrow held: its closure may
         // reach this bridge again.
         let made = with_activity(&self.app, |env, activity| {
@@ -362,7 +345,7 @@ impl ActivityBridge for ResultBridge {
         let request =
             self.router
                 .borrow_mut()
-                .open_launch(completions, key, earlier, Instant::now())?;
+                .open_launch(completions, capability, key, Instant::now())?;
         let token = request.token();
         let (app, epoch) = (self.app.clone(), self.epoch());
         let (taken, failed) = (Arc::clone(&self.hand_offs), Arc::clone(&self.hand_offs));
@@ -389,35 +372,30 @@ impl ActivityBridge for ResultBridge {
     fn reattach(
         &self,
         completions: &CompletionSource,
+        capability: &CapabilityId,
         key: RequestKey,
     ) -> Result<ResultRequest, ResultRefused> {
-        self.router.borrow_mut().admits(key.capability(), None)?;
+        if self.router.borrow().has_ended() {
+            return Err(ResultRefused::ActivityEnded);
+        }
         let still_to_come = self.still_to_come(key);
         let (request, delivery) =
             self.router
                 .borrow_mut()
-                .open_reattach(completions, key, still_to_come)?;
+                .open_reattach(completions, capability, key, still_to_come)?;
         delivery.deliver();
         Ok(request)
     }
 
-    fn cancel(&self, token: ResultToken) {
-        let cancelled = self.router.borrow_mut().cancel(token);
-        let Some((purpose, delivery)) = cancelled else {
-            return;
-        };
-        delivery.deliver();
-        if purpose == Purpose::Launched {
-            self.post_cancel(token);
-        }
-    }
-
-    fn take_data(&self, data: ResultData, f: &mut dyn FnMut(JniFrame)) -> bool {
+    fn take_data(
+        &self,
+        capability: &CapabilityId,
+        data: ResultData,
+        f: &mut dyn FnMut(JniFrame),
+    ) -> Result<(), DataRefused> {
         // Taken out of the router first: the provider's closure runs with no
         // borrow held, and the reference is deleted when it returns.
-        let Some(intent) = self.router.borrow_mut().take_data(data) else {
-            return false;
-        };
+        let intent = self.router.borrow_mut().take_data(capability, data)?;
         with_activity(&self.app, |env, _| {
             let Some(lent) = frame(env, intent.as_obj()) else {
                 return Ok(false);
@@ -428,7 +406,10 @@ impl ActivityBridge for ResultBridge {
             }
             Ok(true)
         })
-        .unwrap_or(false)
+        .ok()
+        .filter(|lent| *lent)
+        .map(drop)
+        .ok_or(DataRefused::NotLent)
     }
 
     fn lend(&self, f: &mut dyn FnMut(JniFrame)) -> bool {

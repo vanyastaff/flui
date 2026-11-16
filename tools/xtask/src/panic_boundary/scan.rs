@@ -573,7 +573,97 @@ pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
     };
     collector.visit_file(&file.ast);
     collector.destructors();
+    let mut posts = MainThreadPosts {
+        rel: &file.rel,
+        item: String::new(),
+        findings: Vec::new(),
+    };
+    posts.visit_file(&file.ast);
+    collector.out.findings.extend(posts.findings);
     collector.out
+}
+
+/// Every [`JAVA_MAIN_THREAD`] identifier in a build that is not a test,
+/// wherever it is written: a method or path call, a function value, an
+/// import, or the tokens of a macro call or a `macro_rules!` body, which syn
+/// leaves unparsed. Only the posting module's `fn post` may name it.
+struct MainThreadPosts<'f> {
+    rel: &'f str,
+    /// The top-level item being read, which a finding names.
+    item: String,
+    findings: Vec<Finding>,
+}
+
+impl MainThreadPosts<'_> {
+    fn found(&mut self, at: Span) {
+        self.findings.push(Finding {
+            file: self.rel.to_owned(),
+            line: line(at),
+            what: format!("{JAVA_MAIN_THREAD} in {}", self.item),
+            kind: Problem::Unguarded,
+            detail: format!(
+                "a closure posted to Android's Java main thread outside `fn post` of \
+                 `{JAVA_MAIN_THREAD_POSTER}`, which runs it inside the boundary and reports \
+                 every exit but success"
+            ),
+        });
+    }
+
+    fn tokens(&mut self, tokens: TokenStream) {
+        for token in tokens {
+            match token {
+                TokenTree::Ident(ident) if ident == JAVA_MAIN_THREAD => {
+                    self.found(ident.span());
+                }
+                TokenTree::Group(group) => self.tokens(group.stream()),
+                _ => {}
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for MainThreadPosts<'_> {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        for item in &file.items {
+            if !built(item_attrs(item)) {
+                continue;
+            }
+            let (name, is_post) = match item {
+                Item::Fn(function) => {
+                    let name = function.sig.ident.unraw().to_string();
+                    let is_post = name == "post";
+                    (format!("fn {name}"), is_post)
+                }
+                Item::Macro(mac) => (
+                    mac.ident.as_ref().map_or_else(
+                        || "a macro call".to_owned(),
+                        |name| format!("macro_rules! {name}"),
+                    ),
+                    false,
+                ),
+                Item::Mod(module) => (format!("mod {}", module.ident), false),
+                Item::Impl(_) => ("an impl".to_owned(), false),
+                Item::Use(_) => ("a use".to_owned(), false),
+                _ => ("an item".to_owned(), false),
+            };
+            if is_post && self.rel.ends_with(JAVA_MAIN_THREAD_POSTER) {
+                continue;
+            }
+            self.item = name;
+            self.visit_item(item);
+        }
+    }
+
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        if ident == JAVA_MAIN_THREAD {
+            self.found(ident.span());
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.tokens(mac.tokens.clone());
+        visit::visit_macro(self, mac);
+    }
 }
 
 /// The first pass: what the file's `use` items bind, and whether a binding
@@ -691,24 +781,6 @@ struct Collector<'f> {
 }
 
 impl Collector<'_> {
-    /// A post to Android's Java main thread, named `what` at `line`: a
-    /// finding anywhere but the posting module.
-    fn java_main_thread(&mut self, line: usize, what: String) {
-        if self.rel.ends_with(JAVA_MAIN_THREAD_POSTER) {
-            return;
-        }
-        self.finding(
-            line,
-            what,
-            Problem::Unguarded,
-            format!(
-                "a closure posted to Android's Java main thread outside \
-                 `{JAVA_MAIN_THREAD_POSTER}`, which runs it inside the boundary and reports \
-                 every exit but success"
-            ),
-        );
-    }
-
     fn finding(&mut self, line: usize, what: String, kind: Problem, detail: String) {
         self.out.findings.push(Finding {
             file: self.rel.to_owned(),
@@ -1194,32 +1266,6 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         }
     }
 
-    /// `AndroidApp::run_on_java_main_thread` named as a path: called in the
-    /// path form, or taken as a function value.
-    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-        if let Some(last) = path.path.segments.last()
-            && last.ident == JAVA_MAIN_THREAD
-        {
-            self.java_main_thread(line(last.ident.span()), segments(&path.path).join("::"));
-        }
-        visit::visit_expr_path(self, path);
-    }
-
-    /// A `use` that names it, renamed or not.
-    fn visit_use_tree(&mut self, tree: &'ast syn::UseTree) {
-        let named = match tree {
-            syn::UseTree::Name(name) => Some(&name.ident),
-            syn::UseTree::Rename(rename) => Some(&rename.ident),
-            _ => None,
-        };
-        if let Some(ident) = named
-            && ident == JAVA_MAIN_THREAD
-        {
-            self.java_main_thread(line(ident.span()), format!("use {JAVA_MAIN_THREAD}"));
-        }
-        visit::visit_use_tree(self, tree);
-    }
-
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let Expr::Path(path) = strip(&call.func) {
             let callee = segments(&path.path);
@@ -1246,9 +1292,6 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if call.method == JAVA_MAIN_THREAD {
-            self.java_main_thread(line(call.method.span()), format!(".{JAVA_MAIN_THREAD}"));
-        }
         if GCD_METHODS.iter().any(|gcd| call.method == gcd) {
             self.closure_entry(
                 format!(".{}", call.method),

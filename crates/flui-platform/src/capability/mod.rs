@@ -33,10 +33,11 @@ pub mod scripted;
 mod window_ref;
 
 pub use activity_result::{
-    Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey, JniFrame,
-    MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY, MAX_RESULT_KEY_LEN, RequestKey,
-    ResultCode, ResultData, ResultDataHold, ResultKey, ResultOutcome, ResultRefused, ResultRequest,
-    ResultTicket, ResultTicketHold, ResultToken, ResultTokenMint,
+    Activity, ActivityBridge, ActivityResult, CapabilityId, DataRefused, HostBridge, IntentFrame,
+    InvalidResultKey, JniFrame, MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY,
+    MAX_RESULT_KEY_LEN, RequestKey, ResultCode, ResultData, ResultDataHold, ResultKey, ResultMint,
+    ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultTicketHold, ResultToken,
+    ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
@@ -100,21 +101,22 @@ pub struct ProviderContext<'a> {
     completions: &'a CompletionSource,
     locals: &'a RuntimeLocals,
     host: &'a HostBridge,
-    capability: &'static str,
+    /// The capability being provided: set by its [`RegisteredProvider`] as
+    /// it calls the provider, never by the context's maker.
+    capability: Option<&'a CapabilityId>,
     window: Option<WindowRef>,
 }
 
 impl<'a> ProviderContext<'a> {
-    /// The context a UI runtime hands the provider of the capability named
-    /// `capability`: `host` is what the running host offers beyond the
-    /// window.
+    /// The context a UI runtime hands a provider: `host` is what the running
+    /// host offers beyond the window. The capability it is scoped to is the
+    /// one whose [`RegisteredProvider`] the context is handed to.
     #[must_use]
     pub fn new(
         owner: &'a OwnerPoster,
         completions: &'a CompletionSource,
         locals: &'a RuntimeLocals,
         host: &'a HostBridge,
-        capability: &'static str,
         window: Option<WindowRef>,
     ) -> Self {
         Self {
@@ -122,18 +124,31 @@ impl<'a> ProviderContext<'a> {
             completions,
             locals,
             host,
-            capability,
+            capability: None,
             window,
+        }
+    }
+
+    /// This context, scoped to `capability`.
+    pub(crate) fn scoped<'s>(&'s self, capability: &'s CapabilityId) -> ProviderContext<'s> {
+        ProviderContext {
+            owner: self.owner,
+            completions: self.completions,
+            locals: self.locals,
+            host: self.host,
+            capability: Some(capability),
+            window: self.window.clone(),
         }
     }
 
     /// The running Android Activity, which starts activities for results
     /// ([`Activity::launch_for_result`]) keyed under the acquiring
     /// capability; `None` on every other platform, between two Activities,
-    /// and for a capability whose name is not a [`ResultKey`].
+    /// for a capability whose name is not a [`ResultKey`], and for a context
+    /// not handed through a [`RegisteredProvider`].
     #[must_use]
     pub fn activity(&self) -> Option<Activity> {
-        self.host.activity(self.capability)
+        self.host.activity(self.capability?)
     }
 
     /// A poster that runs a closure on the owner thread; it may be cloned and

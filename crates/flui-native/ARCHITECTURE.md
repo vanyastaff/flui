@@ -5084,18 +5084,23 @@ the bridge of the Android loop's `owner::android::result_bridge::ResultBridge`, 
 Android runner installs the bridge in the registry's `HostBridge` for the loop's life. Every
 Android platform has one: the epoch its requests carry, which `FluiHost.nextEpoch` gives each
 platform of the process, is read before the platform starts, and one that cannot be read refuses
-the start. The `Activity` a provider gets is scoped by the acquiring capability's `NAME`, which
-the registry holds unique and to the `ResultKey` rule (`CapabilityConflict::InvalidName`), so a
-request's `RequestKey` is two parts, the capability and the provider's key, kept and compared
-apart in Rust, in Java and in the saved state. A request is a `ResultToken` the bridge mints per
-call (`ResultTokenMint`, never reissued) and the epoch. The provider fills an `Intent` the bridge
-made and lends it (`IntentFrame`), so no reference flows from a provider's JNI code into the
+the start. The `Activity` a provider gets is scoped by the `CapabilityId` its registration minted
+(compared by address, so no caller names another capability by its string); the capability's
+name, which the registry holds unique and to the `ResultKey` rule
+(`CapabilityConflict::InvalidName`), keys requests across Activities, so a request's `RequestKey`
+is two parts, the capability's name and the provider's key, kept and compared apart in Rust, in
+Java and in the saved state. Installing the bridge hands it its `ResultMint`
+(`ActivityBridge::bind`), the only maker of the tickets, data, results and requests it hands
+providers. A request is a `ResultToken` the bridge mints per call (`ResultTokenMint`, never
+reissued, so a token is also its request's age) and the epoch. The provider fills an `Intent` the
+bridge made and lends it (`IntentFrame`), so no reference flows from a provider's JNI code into the
 host.
 
 Every closure the host sends to Android's Java main thread goes through
-`owner::android::main_thread::post` (or `run`, for a step whose only report is its failure), which
-runs it inside `os_entry` and reports each exit but success; `cargo xtask panic-boundary` flags a
-call of `run_on_java_main_thread` anywhere else. android-activity keeps work it cannot deliver
+`owner::android::main_thread::post` (or `run`, for a step whose only report is its failure, which
+calls `post`), which runs it inside `os_entry` and reports each exit but success; `cargo xtask
+panic-boundary` refuses the identifier `run_on_java_main_thread` anywhere else in a build, the
+tokens of macro calls and `macro_rules!` bodies included. android-activity keeps work it cannot deliver
 rather than dropping it, so the dropped-unrun report may never come on Android: a launch reports
 `taken` from its body, and one the Java main thread has not taken within `HAND_OFF_LIMIT` ends as
 `HandOffFailed` at that deadline, which the loop's poll waits for (`LoopTurn::hand_off_deadline`);
@@ -5103,7 +5108,9 @@ a failed or panicked hand-off ends it at once. There `FluiHost.launch` picks the
 Android sees from the range it keeps for the host (`FIRST_HOST_CODE..=LAST_HOST_CODE`, within 16
 bits; an application's own codes below it pass through untouched), holds the start until
 `onStart` while the Activity is stopped, and answers `ANSWER_TOO_MANY` past `MAX_OPEN` open
-requests across the process. `FluiActivity.onSaveInstanceState` saves the started requests' codes
+requests across the process or `MAX_OPEN_PER_CAPABILITY` of one capability's, every Activity's
+counted; `FluiHost.cancel` takes a started request off at once and parks its code until Android's
+answer for it, which reaches nobody. `FluiActivity.onSaveInstanceState` saves the started requests' codes
 and key parts, and a recreated Activity restores them, with epoch 0 when its process died, before
 `NativeActivity.onCreate` starts `android_main`, so `FluiHost.stillToCome` already knows them when
 a provider reattaches. `onActivityResult` queues the answer with its epoch, token and key parts.
@@ -5115,22 +5122,26 @@ cannot be read still settles this Activity's request by its token; one of a kind
 the library does not know settles it as `AnswerUnreadable`, and one whose `Intent` the host could
 not keep as `DataLost` with its code, each logged: every record taken off the queue ends a request
 or is reported. The result `Intent` never leaves the owner thread or the host: the router holds it
-by a global reference under its request's token, and the provider reads it once by handing the
-answer's `ResultData` to `Activity::take_data`. A `ResultData` dropped unread (a completion nobody
-receives, a retired runtime, a provider that went) releases it, which the router sweeps. A request
-lives while its provider holds its `ResultTicket`; dropped, the router's sweep ends it as
-`Cancelled` and hands a started activity's token back to be finished, so an answer goes to the
-oldest reattachment whose provider still waits. Open requests, held `Intent`s and, for a launch,
-what earlier Activities left (the requests `FluiHost.earlierOpen` counts and the answers waiting
-here) count against `MAX_OPEN_REQUESTS` and, per capability, `MAX_OPEN_REQUESTS_PER_CAPABILITY`,
-which `FluiHost.MAX_OPEN_PER_CAPABILITY` holds across the process too, so one provider cannot keep
-the others from asking across a recreation, and none accepted is ever let go to make room.
+by a global reference under its request's token and capability, and that capability's provider
+reads it once by handing the answer's `ResultData` to `Activity::take_data`. A `ResultData`
+dropped unread (a completion nobody receives, a retired runtime, a provider that went) releases
+it, which the router sweeps. A request lives while its provider holds its `ResultTicket`; the drop
+records the release and wakes the owner through its signal, and that turn's sweep ends it as
+`Cancelled` and posts `FluiHost.cancel` for a started activity. Each count has one owner:
+`FluiHost` counts what it holds (waiting, started, answered and not drained) against `MAX_OPEN`
+and `MAX_OPEN_PER_CAPABILITY`; the router counts only what Java no longer holds (drained `Intent`s
+not taken, earlier answers waiting, launches the Java main thread has not taken). Reattachments
+under a key wait only while `FluiHost.stillToCome` (waiting, started, or answered and not drained
+under the key) counts an answer for each; each turn the bridge holds them to it
+(`ResultRouter::reconcile`).
 
 The pure model, `owner::android::activity_results::ResultRouter`, routes each drained `Answer`:
 one of this epoch settles the open request with its token once, and one for a token that is not
-open is stale; one of another epoch belongs to an earlier Activity, whose runtime ended with it,
-and waits, at most `MAX_EARLIER`, for `Activity::reattach` under its key, which answers
-`NothingPending` when nothing waits and nothing is to come. At the loop's exit every open request
+open is stale; one of another epoch belongs to an earlier Activity, whose runtime ended with it:
+whatever it says, it ends the oldest reattachment still waiting under its key (oldest by token),
+or waits, at most `MAX_EARLIER`, oldest first by its arrival sequence, for `Activity::reattach`
+under its key, which answers `NothingPending` when nothing waits and nothing more is to come. No
+rule depends on a request's place in a list. At the loop's exit every open request
 ends as `ResultRefused::ActivityEnded` and later ones are refused; the router resolves nothing
 under its own borrow (`Delivery`). Its tests run on every native host beside it
 (`an_answer_settles_the_request_its_token_names_once`,

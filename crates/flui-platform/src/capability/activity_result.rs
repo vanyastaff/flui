@@ -275,7 +275,7 @@ impl IntentFrame {
 /// asked for and checks each size before it copies. Dropping the result, or
 /// its `ResultData`, unread lets the host release the `Intent`: a result
 /// nobody receives (a dropped completion, a retired runtime, a provider that
-/// went) holds nothing.
+/// went) holds nothing. Only the host makes one ([`ResultMint::result`]).
 #[derive(Debug)]
 pub struct ActivityResult {
     code: ResultCode,
@@ -283,12 +283,6 @@ pub struct ActivityResult {
 }
 
 impl ActivityResult {
-    /// The answer `code`, with the `Intent` it carried as `data`.
-    #[must_use]
-    pub fn new(code: ResultCode, data: Option<ResultData>) -> Self {
-        Self { code, data }
-    }
-
     /// The code the activity finished with.
     #[must_use]
     pub fn code(&self) -> ResultCode {
@@ -308,12 +302,32 @@ impl ActivityResult {
     }
 }
 
+/// The identity of the mint that made a value: compared by address, so a
+/// value one Activity's host handed out is told apart from another's.
+#[derive(Clone)]
+struct MintIdentity(Rc<()>);
+
+impl MintIdentity {
+    fn is(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl fmt::Debug for MintIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("MintIdentity")
+    }
+}
+
 /// The provider's side of something the host keeps for it under a token:
-/// dropping it tells the host, which reads [`Released`]. Owner thread.
-#[derive(Debug)]
+/// dropping it records the release and wakes the host, which reads
+/// [`Released`] at its next owner turn. Owner thread; the drop runs no
+/// user code and no JNI.
 struct Holder {
     token: ResultToken,
+    mint: MintIdentity,
     held: Rc<Cell<bool>>,
+    wake: Rc<dyn Fn()>,
 }
 
 /// The host's side of a [`Holder`].
@@ -321,12 +335,14 @@ struct Holder {
 struct Released(Rc<Cell<bool>>);
 
 impl Holder {
-    fn new(token: ResultToken) -> (Self, Released) {
+    fn new(token: ResultToken, mint: MintIdentity, wake: Rc<dyn Fn()>) -> (Self, Released) {
         let held = Rc::new(Cell::new(true));
         (
             Self {
                 token,
+                mint,
                 held: Rc::clone(&held),
+                wake,
             },
             Released(held),
         )
@@ -336,6 +352,15 @@ impl Holder {
 impl Drop for Holder {
     fn drop(&mut self) {
         self.held.set(false);
+        (self.wake)();
+    }
+}
+
+impl fmt::Debug for Holder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Holder")
+            .field("token", &self.token)
+            .finish_non_exhaustive()
     }
 }
 
@@ -346,7 +371,9 @@ impl Released {
 }
 
 /// The `Intent` one answer carried, held by the host until this value is
-/// handed to [`Activity::take_data`] or dropped.
+/// handed to [`Activity::take_data`] or dropped. Only the host makes one
+/// ([`ResultMint::data`]), so a provider holds only the data the host handed
+/// it.
 #[derive(Debug)]
 pub struct ResultData(Holder);
 
@@ -355,14 +382,6 @@ pub struct ResultData(Holder);
 pub struct ResultDataHold(Released);
 
 impl ResultData {
-    /// The `Intent` the host holds for the request `token`, and the side the
-    /// host keeps to learn when the provider lets it go.
-    #[must_use]
-    pub fn new(token: ResultToken) -> (Self, ResultDataHold) {
-        let (holder, released) = Holder::new(token);
-        (Self(holder), ResultDataHold(released))
-    }
-
     /// The request whose answer carried it.
     #[must_use]
     pub fn token(&self) -> ResultToken {
@@ -380,14 +399,14 @@ impl ResultDataHold {
 }
 
 /// A provider's claim on one open request: while it lives, the request waits
-/// for its answer; dropped, the request ends as a cancel does
-/// ([`Activity::cancel`]): an activity it started is finished, a
-/// reattachment stops waiting, and its place counts against the bounds no
-/// more. A provider that wants the answer keeps it, in its state or in the
-/// closure its completion calls; whatever a retired runtime or provider
-/// owned goes with it.
+/// for its answer; dropped, the request ends as cancelled: an activity it
+/// started is finished, a reattachment stops waiting, and the host frees its
+/// place. Dropping it is the one way to cancel. A provider that wants the
+/// answer keeps it, in its state or in the closure its completion calls;
+/// whatever a retired runtime or provider owned goes with it. Only the host
+/// makes one ([`ResultMint::ticket`]).
 #[derive(Debug)]
-#[must_use = "dropping the ticket ends its request"]
+#[must_use = "dropping the ticket cancels its request"]
 pub struct ResultTicket(Holder);
 
 /// The host's side of a [`ResultTicket`]: whether the provider still holds
@@ -396,14 +415,7 @@ pub struct ResultTicket(Holder);
 pub struct ResultTicketHold(Released);
 
 impl ResultTicket {
-    /// The claim on the request `token`, and the side the host keeps to
-    /// learn when the provider lets it go.
-    pub fn new(token: ResultToken) -> (Self, ResultTicketHold) {
-        let (holder, released) = Holder::new(token);
-        (Self(holder), ResultTicketHold(released))
-    }
-
-    /// The request it claims, for [`Activity::cancel`].
+    /// The request it claims.
     #[must_use]
     pub fn token(&self) -> ResultToken {
         self.0.token
@@ -419,15 +431,98 @@ impl ResultTicketHold {
     }
 }
 
+/// What makes the values a host hands a provider: [`ResultTicket`],
+/// [`ResultData`], [`ActivityResult`] and [`ResultRequest`]. It has no
+/// public constructor: a host receives one when the composition root offers
+/// its bridge ([`HostBridge::install_activity`], [`ActivityBridge::bind`]),
+/// so no provider makes the values it then hands back to the host.
+#[derive(Clone)]
+pub struct ResultMint {
+    identity: MintIdentity,
+}
+
+impl ResultMint {
+    fn new() -> Self {
+        Self {
+            identity: MintIdentity(Rc::new(())),
+        }
+    }
+
+    /// The ticket of the request `token`, whose drop calls `wake`, and the
+    /// side the host keeps to learn when the provider lets it go.
+    pub fn ticket(
+        &self,
+        token: ResultToken,
+        wake: Rc<dyn Fn()>,
+    ) -> (ResultTicket, ResultTicketHold) {
+        let (holder, released) = Holder::new(token, self.identity.clone(), wake);
+        (ResultTicket(holder), ResultTicketHold(released))
+    }
+
+    /// The `Intent` held for the request `token`, whose drop calls `wake`,
+    /// and the side the host keeps to learn when the provider lets it go.
+    #[must_use]
+    pub fn data(&self, token: ResultToken, wake: Rc<dyn Fn()>) -> (ResultData, ResultDataHold) {
+        let (holder, released) = Holder::new(token, self.identity.clone(), wake);
+        (ResultData(holder), ResultDataHold(released))
+    }
+
+    /// The answer `code`, with the `Intent` it carried as `data`.
+    #[must_use]
+    pub fn result(&self, code: ResultCode, data: Option<ResultData>) -> ActivityResult {
+        ActivityResult { code, data }
+    }
+
+    /// The request `ticket` claims, answered through `completion`.
+    pub fn request(
+        &self,
+        ticket: ResultTicket,
+        completion: Completion<ResultOutcome>,
+    ) -> ResultRequest {
+        ResultRequest { ticket, completion }
+    }
+
+    /// Whether this mint made `data`: data another Activity's host handed
+    /// out names a token of that Activity, not of this one.
+    #[must_use]
+    pub fn made(&self, data: &ResultData) -> bool {
+        self.identity.is(&data.0.mint)
+    }
+}
+
+impl fmt::Debug for ResultMint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ResultMint")
+    }
+}
+
+/// Why the host does not lend an `Intent` to [`Activity::take_data`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
+#[non_exhaustive]
+pub enum DataRefused {
+    /// The data was handed to another capability: a provider reads only the
+    /// `Intent`s of its own requests.
+    #[error("the Intent belongs to another capability's request")]
+    OtherCapability,
+    /// The host holds no `Intent` for it: another Activity's host handed it
+    /// out, or the Activity has ended.
+    #[error("the host holds no Intent for this data")]
+    NotHeld,
+    /// The thread could not reach Java to lend it.
+    #[error("the Intent could not be lent")]
+    NotLent,
+}
+
 /// Why a request has no [`ActivityResult`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum ResultRefused {
-    /// As many requests are open, or answered with an `Intent` not taken
-    /// yet, as the Activity holds ([`MAX_OPEN_REQUESTS`]), as one capability
-    /// holds ([`MAX_OPEN_REQUESTS_PER_CAPABILITY`]), or as the host
-    /// holds across the process; one must end first.
-    #[error("as many activity requests are open as the Activity holds")]
+    /// The host holds as many requests as it holds: across the process
+    /// [`MAX_OPEN_REQUESTS`] not yet answered, or [`MAX_OPEN_REQUESTS_PER_CAPABILITY`]
+    /// of one capability's, an earlier Activity's included; or as many
+    /// answered `Intent`s nobody took yet, or launches not yet handed to
+    /// Android. One must end first.
+    #[error("as many activity requests are open as the host holds")]
     TooManyOpen,
     /// The Activity minted its last token.
     #[error("the Activity has no token left for another request")]
@@ -445,7 +540,7 @@ pub enum ResultRefused {
     /// panicked, or the work it posted to Android's main thread was dropped.
     #[error("the host could not hand the request to Android")]
     HandOffFailed,
-    /// The provider cancelled the request ([`Activity::cancel`]).
+    /// The provider dropped the request's [`ResultTicket`].
     #[error("the request was cancelled")]
     Cancelled,
     /// No earlier Activity's answer under the key waits, and none is still
@@ -472,20 +567,59 @@ pub enum ResultRefused {
     AnswerUnreadable,
 }
 
-/// The most requests one [`Activity`] holds open at once across every
-/// capability, reattachments and answered `Intent`s not taken yet included;
-/// one more is refused as [`ResultRefused::TooManyOpen`].
+/// The most requests the host holds not yet answered across the process,
+/// every capability and Activity together; one more is refused as
+/// [`ResultRefused::TooManyOpen`].
 pub const MAX_OPEN_REQUESTS: usize = 16;
 
-/// The most of [`MAX_OPEN_REQUESTS`] one capability holds, so one provider
-/// that never takes its data cannot keep the others from asking.
+/// The most of [`MAX_OPEN_REQUESTS`] one capability holds, and the most
+/// answered `Intent`s of one capability nobody took yet, so one provider
+/// cannot keep the others from asking.
 pub const MAX_OPEN_REQUESTS_PER_CAPABILITY: usize = MAX_OPEN_REQUESTS / 2;
 
 /// What a request answers with.
 pub type ResultOutcome = Result<ActivityResult, ResultRefused>;
 
-/// A request's key as the host keeps it: the capability that took it, whose
-/// [`NAME`](super::Capability::NAME) the registry holds unique, and the
+/// The identity of one registered capability, minted as its provider is
+/// registered ([`CapabilityRegistrar::provide`](super::CapabilityRegistrar::provide)):
+/// its name, and an identity compared by address, so no caller names
+/// another capability by its string. An [`Activity`] is scoped by one.
+#[derive(Clone)]
+pub struct CapabilityId(Rc<CapabilityName>);
+
+/// What a [`CapabilityId`] names; its allocation is the identity.
+struct CapabilityName {
+    name: &'static str,
+}
+
+impl CapabilityId {
+    pub(crate) fn mint(name: &'static str) -> Self {
+        Self(Rc::new(CapabilityName { name }))
+    }
+
+    /// The capability's [`NAME`](super::Capability::NAME).
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        self.0.name
+    }
+}
+
+impl PartialEq for CapabilityId {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for CapabilityId {}
+
+impl fmt::Debug for CapabilityId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("CapabilityId").field(&self.0.name).finish()
+    }
+}
+
+/// A request's key as the host keeps it across Activities: the name of the
+/// capability that took it, which the registry holds unique, and the
 /// provider's [`ResultKey`]. Two providers cannot receive each other's
 /// answers by choosing the same key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -523,21 +657,17 @@ impl RequestKey {
 }
 
 /// A request the [`Activity`] took: its [`ResultTicket`], and the completion
-/// its answer settles. Dropping it, or its ticket, ends the request.
+/// its answer settles. Dropping it, or its ticket, cancels the request. Only
+/// the host makes one ([`ResultMint::request`]).
 #[derive(Debug)]
-#[must_use = "dropping the request ends it"]
+#[must_use = "dropping the request cancels it"]
 pub struct ResultRequest {
     ticket: ResultTicket,
     completion: Completion<ResultOutcome>,
 }
 
 impl ResultRequest {
-    /// The request `ticket` claims, answered through `completion`.
-    pub fn new(ticket: ResultTicket, completion: Completion<ResultOutcome>) -> Self {
-        Self { ticket, completion }
-    }
-
-    /// The request's token, for [`Activity::cancel`].
+    /// The request's token.
     #[must_use]
     pub fn token(&self) -> ResultToken {
         self.ticket.token()
@@ -552,8 +682,13 @@ impl ResultRequest {
 
 /// What a host implements to offer its [`Activity`]. Owner thread only.
 pub trait ActivityBridge: 'static {
-    /// Take a request under `key`, whose `Intent` `intent` fills, and start
-    /// it; see [`Activity::launch_for_result`].
+    /// The mint the host makes what it hands providers with; the
+    /// composition root's [`HostBridge::install_activity`] calls it once,
+    /// before the Activity is offered.
+    fn bind(&self, mint: ResultMint);
+
+    /// Take a request of `capability` under `key`, whose `Intent` `intent`
+    /// fills, and start it; see [`Activity::launch_for_result`].
     ///
     /// # Errors
     ///
@@ -561,6 +696,7 @@ pub trait ActivityBridge: 'static {
     fn launch_for_result(
         &self,
         completions: &CompletionSource,
+        capability: &CapabilityId,
         key: RequestKey,
         intent: &mut dyn FnMut(IntentFrame) -> bool,
     ) -> Result<ResultRequest, ResultRefused>;
@@ -573,15 +709,23 @@ pub trait ActivityBridge: 'static {
     fn reattach(
         &self,
         completions: &CompletionSource,
+        capability: &CapabilityId,
         key: RequestKey,
     ) -> Result<ResultRequest, ResultRefused>;
 
-    /// See [`Activity::cancel`].
-    fn cancel(&self, token: ResultToken);
-
     /// Run `f` once with the `Intent` `data` names lent in the frame, and let
-    /// it go; `false`, and `f` does not run, when the host holds none for it.
-    fn take_data(&self, data: ResultData, f: &mut dyn FnMut(JniFrame)) -> bool;
+    /// it go, when `capability`'s request received it; see
+    /// [`Activity::take_data`].
+    ///
+    /// # Errors
+    ///
+    /// What [`Activity::take_data`] refuses.
+    fn take_data(
+        &self,
+        capability: &CapabilityId,
+        data: ResultData,
+        f: &mut dyn FnMut(JniFrame),
+    ) -> Result<(), DataRefused>;
 
     /// Run `f` once with the Activity lent in the frame; `false`, and `f`
     /// does not run, when the Activity has ended or the thread cannot
@@ -592,24 +736,18 @@ pub trait ActivityBridge: 'static {
 /// The running Android Activity, as one capability's provider reaches it.
 ///
 /// Owner thread only (`!Send`), cheap to clone. Its requests are keyed under
-/// the capability that acquired it, so two capabilities' keys never meet. It
-/// is valid while the Activity runs; once it ended, every request is refused
-/// as [`ResultRefused::ActivityEnded`] and [`with_java`](Self::with_java)
-/// answers `None`.
+/// the capability that acquired it, so two capabilities' requests never
+/// meet. It is valid while the Activity runs; once it ended, every request
+/// is refused as [`ResultRefused::ActivityEnded`] and
+/// [`with_java`](Self::with_java) answers `None`.
 #[derive(Clone)]
 pub struct Activity {
     bridge: Rc<dyn ActivityBridge>,
-    capability: ResultKey,
+    capability: CapabilityId,
+    name: ResultKey,
 }
 
 impl Activity {
-    /// The Activity `bridge` offers, as the capability named `capability`
-    /// reaches it.
-    #[must_use]
-    pub fn new(bridge: Rc<dyn ActivityBridge>, capability: ResultKey) -> Self {
-        Self { bridge, capability }
-    }
-
     /// Start the activity of the `Intent` that `intent` fills, and hear its
     /// answer through the returned request's completion.
     ///
@@ -620,7 +758,8 @@ impl Activity {
     /// started: a request taken while it is stopped waits for its `onStart`.
     /// The completion settles at an owner turn with the answer, or with the
     /// [`ResultRefused`] that says why there is none; it settles once, and
-    /// every request ends.
+    /// every request ends. Dropping the request's [`ResultTicket`] cancels
+    /// it.
     ///
     /// `key` names the request's purpose within this capability: if the
     /// Activity ends before the answer, the request ends as
@@ -642,51 +781,60 @@ impl Activity {
         let mut intent = Some(intent);
         self.bridge.launch_for_result(
             completions,
-            RequestKey::new(self.capability, key),
+            &self.capability,
+            RequestKey::new(self.name, key),
             &mut |frame| intent.take().is_some_and(|intent| intent(frame)),
         )
     }
 
     /// The next answer to a request an earlier Activity took under `key`:
     /// settled at the next owner turn when one is waiting, else when it
-    /// arrives.
+    /// arrives. Of several reattachments under one key, the oldest still
+    /// held receives the oldest answer.
     ///
     /// # Errors
     ///
     /// [`ResultRefused::NothingPending`] when no earlier answer under `key`
-    /// waits and none is still to come, so a provider that reattaches as it
-    /// starts holds nothing when there is nothing to hear;
-    /// [`ResultRefused::TooManyOpen`], [`ResultRefused::TokensExhausted`]
-    /// and, once the Activity ended, [`ResultRefused::ActivityEnded`].
+    /// waits and none is still to come for another reattachment, so a
+    /// provider that reattaches as it starts holds nothing when there is
+    /// nothing to hear; [`ResultRefused::TokensExhausted`] and, once the
+    /// Activity ended, [`ResultRefused::ActivityEnded`].
     pub fn reattach(
         &self,
         completions: &CompletionSource,
         key: ResultKey,
     ) -> Result<ResultRequest, ResultRefused> {
-        self.bridge
-            .reattach(completions, RequestKey::new(self.capability, key))
-    }
-
-    /// End the request `token` as [`ResultRefused::Cancelled`]. An activity
-    /// it started is finished (`finishActivity`), and the answer it still
-    /// gives is dropped; a token that is not open does nothing.
-    pub fn cancel(&self, token: ResultToken) {
-        self.bridge.cancel(token);
+        self.bridge.reattach(
+            completions,
+            &self.capability,
+            RequestKey::new(self.name, key),
+        )
     }
 
     /// `f`'s answer, with the `Intent` `data` names lent in the frame, on the
-    /// owner thread; the host lets the `Intent` go after. `None`, and `f`
-    /// does not run, when the Activity has ended. An `Intent` counts against
-    /// the bounds until its [`ResultData`] is taken here or dropped.
-    pub fn take_data<R>(&self, data: ResultData, f: impl FnOnce(JniFrame) -> R) -> Option<R> {
+    /// owner thread; the host lets the `Intent` go after. An `Intent` counts
+    /// against the bounds until its [`ResultData`] is taken here or dropped.
+    ///
+    /// # Errors
+    ///
+    /// [`DataRefused::OtherCapability`] when `data` was handed to another
+    /// capability's request, [`DataRefused::NotHeld`] when this Activity's
+    /// host holds no `Intent` for it, and [`DataRefused::NotLent`]; `f` does
+    /// not run.
+    pub fn take_data<R>(
+        &self,
+        data: ResultData,
+        f: impl FnOnce(JniFrame) -> R,
+    ) -> Result<R, DataRefused> {
         let mut f = Some(f);
         let mut answer = None;
-        self.bridge.take_data(data, &mut |frame| {
-            if let Some(f) = f.take() {
-                answer = Some(f(frame));
-            }
-        });
-        answer
+        self.bridge
+            .take_data(&self.capability, data, &mut |frame| {
+                if let Some(f) = f.take() {
+                    answer = Some(f(frame));
+                }
+            })?;
+        answer.ok_or(DataRefused::NotLent)
     }
 
     /// `f`'s answer, with the Activity lent in the frame on the owner thread:
@@ -715,9 +863,9 @@ impl fmt::Debug for Activity {
 /// What the host hands a UI runtime's providers beyond the window: the
 /// running Activity's bridge, while one runs (ADR-0154 §9).
 ///
-/// Owner-local and shared: the application installs what each run's host
-/// offers, and every [`ProviderContext`](super::ProviderContext) reads it
-/// at acquisition.
+/// Owner-local and shared: the composition root installs what each run's
+/// host offers, and a provider's context reads it at acquisition, scoped by
+/// the capability the registrar minted for that provider.
 #[derive(Clone, Default)]
 pub struct HostBridge {
     activity: Rc<std::cell::RefCell<Option<Rc<dyn ActivityBridge>>>>,
@@ -731,25 +879,30 @@ impl HostBridge {
     }
 
     /// Offer the Activity `activity` bridges from now on, `None` for none;
-    /// the one offered before is returned, for the caller to drop outside
-    /// its own borrows.
+    /// a new bridge receives its [`ResultMint`] first. The one offered before
+    /// is returned, for the caller to drop outside its own borrows.
     #[must_use = "the displaced Activity is dropped by the caller, outside its borrows"]
     pub fn install_activity(
         &self,
         activity: Option<Rc<dyn ActivityBridge>>,
     ) -> Option<Rc<dyn ActivityBridge>> {
+        if let Some(bridge) = &activity {
+            bridge.bind(ResultMint::new());
+        }
         self.activity.replace(activity)
     }
 
-    /// The Activity offered now, as the capability named `capability`
-    /// reaches it; `None` when none is offered, or when `capability` is not
-    /// a [`ResultKey`] (printable ASCII, at most [`MAX_RESULT_KEY_LEN`]
-    /// bytes), since its requests could not be keyed.
-    #[must_use]
-    pub fn activity(&self, capability: &'static str) -> Option<Activity> {
-        let capability = ResultKey::try_new(capability).ok()?;
+    /// The Activity offered now, as the capability `capability` reaches it;
+    /// `None` when none is offered, or when its name is not a [`ResultKey`],
+    /// since its requests could not be keyed.
+    pub(crate) fn activity(&self, capability: &CapabilityId) -> Option<Activity> {
+        let name = ResultKey::try_new(capability.name()).ok()?;
         let bridge = self.activity.borrow().clone()?;
-        Some(Activity::new(bridge, capability))
+        Some(Activity {
+            bridge,
+            capability: capability.clone(),
+            name,
+        })
     }
 }
 

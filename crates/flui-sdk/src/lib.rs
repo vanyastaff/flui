@@ -112,6 +112,7 @@ pub mod platform {
         pub use flui_platform::capability::CapabilityRegistrar;
         pub use flui_platform::capability::Completion;
         pub use flui_platform::capability::CompletionSource;
+        pub use flui_platform::capability::DataRefused;
         pub use flui_platform::capability::IntentFrame;
         pub use flui_platform::capability::InvalidResultKey;
         pub use flui_platform::capability::JniFrame;

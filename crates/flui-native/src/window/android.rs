@@ -225,7 +225,8 @@ impl AndroidWindow {
         let capture = Arc::downgrade(&self.insets);
         let live = Arc::downgrade(&self.geometry_live);
         let signal = self.owner_signal.clone();
-        let (unsampled, unsampled_signal) = (capture.clone(), signal.clone());
+        let (unsampled, unsampled_live, unsampled_signal) =
+            (capture.clone(), live.clone(), signal.clone());
         crate::owner::android::main_thread::post(
             &self.app,
             "the window's insets sample",
@@ -246,9 +247,16 @@ impl AndroidWindow {
                 Ok(())
             },
             // A sample that never finished answers none, so the query does
-            // not wait for ever.
+            // not wait for ever; a window whose geometry is gone, as on
+            // success, takes no answer.
             move |failure: crate::owner::android::main_thread::PostFailure| {
                 tracing::warn!(?failure, "the window's insets were not sampled");
+                if !unsampled_live
+                    .upgrade()
+                    .is_some_and(|live| live.load(Ordering::Acquire))
+                {
+                    return;
+                }
                 if let Some(capture) = unsampled.upgrade() {
                     capture.lock().query = insets::Query::Ready(None);
                 }

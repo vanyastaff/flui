@@ -840,9 +840,12 @@ impl Capability for ActivitySeen {
 struct EndedActivity;
 
 impl flui_platform::capability::ActivityBridge for EndedActivity {
+    fn bind(&self, _mint: flui_platform::capability::ResultMint) {}
+
     fn launch_for_result(
         &self,
         _completions: &flui_platform::capability::CompletionSource,
+        _capability: &flui_platform::capability::CapabilityId,
         _key: flui_platform::capability::RequestKey,
         _intent: &mut dyn FnMut(flui_platform::capability::IntentFrame) -> bool,
     ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
@@ -853,20 +856,20 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
     fn reattach(
         &self,
         _completions: &flui_platform::capability::CompletionSource,
+        _capability: &flui_platform::capability::CapabilityId,
         _key: flui_platform::capability::RequestKey,
     ) -> Result<flui_platform::capability::ResultRequest, flui_platform::capability::ResultRefused>
     {
         Err(flui_platform::capability::ResultRefused::ActivityEnded)
     }
 
-    fn cancel(&self, _token: flui_platform::capability::ResultToken) {}
-
     fn take_data(
         &self,
+        _capability: &flui_platform::capability::CapabilityId,
         _data: flui_platform::capability::ResultData,
         _f: &mut dyn FnMut(flui_platform::capability::JniFrame),
-    ) -> bool {
-        false
+    ) -> Result<(), flui_platform::capability::DataRefused> {
+        Err(flui_platform::capability::DataRefused::NotHeld)
     }
 
     fn lend(&self, _f: &mut dyn FnMut(flui_platform::capability::JniFrame)) -> bool {

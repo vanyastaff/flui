@@ -6094,7 +6094,10 @@ GPU-память простаивающего или невидимого окн
   `None`). Activity — только Android-хоста: это не позиция таблицы хоста и не метод `Platform`,
   `android_platform` отдаёт `AndroidStart` — платформу и мост Activity; мост есть у каждой
   Android-платформы (эпоха читается до старта, и без неё старт отказывает). Activity привязана к
-  имени возможности, которая её взяла; реестр проверяет `NAME` по правилу `ResultKey`
+  `CapabilityId`, который регистратор чеканит при регистрации провайдера (сравнение по адресу:
+  чужую возможность строкой не назвать); `HostBridge` держит только корень композиции, и
+  установка моста отдаёт ему `ResultMint` — только им делаются билеты, данные, результаты и
+  запросы. Реестр проверяет `NAME` по правилу `ResultKey`
   (`CapabilityConflict::InvalidName`). `RequestKey` — две части, `NAME` возможности и ключ
   провайдера, которые хранятся и сравниваются раздельно в Rust, Java и сохранённом состоянии, так
   что две возможности не получают ответы друг друга. `Activity::launch_for_result` одалживает провайдеру
@@ -6106,19 +6109,26 @@ GPU-память простаивающего или невидимого окн
   `IntentNotMade`, `NotLaunched`, `HandOffFailed`, `Cancelled`, `NothingPending`,
   `ActivityEnded`. Каждое замыкание на Java main thread идёт через
   `owner::android::main_thread::post`: тело внутри `os_entry`, отчёт о каждом выходе, кроме
-  успеха (ошибка JNI, паника, замыкание выброшено); `xtask panic-boundary` отмечает
-  `run_on_java_main_thread` вне этого модуля. Неудачная передача кончает запрос `HandOffFailed`
+  успеха (ошибка JNI, паника, замыкание выброшено); `xtask panic-boundary` отказывает
+  идентификатору `run_on_java_main_thread` вне `fn post` этого модуля, токены макросов и тела
+  `macro_rules!` включительно. Неудачная передача кончает запрос `HandOffFailed`
   сразу, а не взятая Java main thread за `HAND_OFF_LIMIT` — к этому сроку, которого ждёт poll
   цикла. Ответный `Intent` не покидает хост и owner-поток: провайдер читает его один раз, отдав
-  `ResultData` ответа в `Activity::take_data`; `ResultData`, выброшенный непрочитанным, отпускает
-  `Intent`. Запрос живёт, пока провайдер держит его `ResultTicket`; выброшенный билет кончает
-  запрос как отмена (начатая activity завершается, переприсоединение перестаёт ждать, место
-  освобождается), и ответ получает старейшее живое переприсоединение по ключу. Открытые
-  запросы, удерживаемые `Intent` и, для запуска, оставленное прежними Activity
-  (`FluiHost.earlierOpen` и ответы, ждущие здесь) считаются в `MAX_OPEN_REQUESTS` и, на
-  возможность, в `MAX_OPEN_REQUESTS_PER_CAPABILITY`; Java держит ту же границу на возможность
-  (`MAX_OPEN_PER_CAPABILITY`) по всему процессу, поэтому ничего принятого не вытесняется и один
-  провайдер не закрывает запросы остальным и после пересоздания. Очереди Java (записи, интенты,
+  `ResultData` ответа в `Activity::take_data` (чужой возможности — отказ
+  `DataRefused::OtherCapability`); `ResultData`, выброшенный непрочитанным, отпускает `Intent`.
+  Запрос живёт, пока провайдер держит его `ResultTicket`; выброс билета — единственная отмена:
+  он отмечает и будит owner, а ход owner кончает запрос `Cancelled` и просит Java отменить
+  начатую activity, что сразу снимает её с открытых запросов Java. Возраст — поле: токен
+  (`ResultTokenMint`) у переприсоединения, порядковый номер прибытия у раннего ответа; ответ
+  получает старейшее живое переприсоединение по ключу, от места в списке ничего не зависит. У
+  каждого счёта один владелец: `FluiHost` считает то, что держит (ждущие старта, начатые,
+  отвеченные и не выбранные), против `MAX_OPEN` и `MAX_OPEN_PER_CAPABILITY` по всему процессу;
+  Rust — только то, чего у Java уже нет (выбранные и не взятые `Intent`, ждущие ранние ответы,
+  запуски, не взятые Java main thread). Сколько ответов ещё придёт под ключом — одно
+  определение (`FluiHost.stillToCome`, `WAITING` включительно); переприсоединения ждут, только
+  пока оно считает ответ на каждое, и каждый ход мост держит их в этой границе
+  (`ResultRouter::reconcile`); любая ранняя запись под ключом (отказ Java и нечитаемая
+  включительно) кончает ждущее переприсоединение с типизированным исходом. Очереди Java (записи, интенты,
   ответы) читаются до того, как `FluiHost` их отпускает (`peek…`/`commit…`), каждая запись
   отдельно, исключение неудачного чтения сбрасывается до следующего вызова JNI: неудачное чтение
   ничего не теряет, нечитаемая запись пропускается и очередь не держит; ответ неизвестного вида
@@ -6134,16 +6144,17 @@ GPU-память простаивающего или невидимого окн
   потребителя — в «Чего нет в этой серии» со своими функциями.
   Тесты: `an_answer_settles_the_request_its_token_names_once`,
   `each_launch_that_is_not_answered_ends_with_its_reason`,
-  `the_open_requests_and_untaken_intents_are_bounded`, `an_intent_nobody_receives_is_released`,
+  `the_untaken_intents_and_unhanded_launches_are_bounded`, `an_intent_nobody_receives_is_released`,
   `an_earlier_activitys_answer_waits_for_its_key` (с маршрутизацией без сравнения эпохи падает:
   ответ прежней Activity закрывает свой запрос с тем же числом токена; ключи `("a", "b/c")` и
   `("a/b", "c")` не совпадают), `a_reattachment_with_nothing_pending_holds_nothing`,
   `the_earlier_answers_that_wait_are_bounded`, `the_end_refuses_every_open_request`,
-  `an_answered_intent_is_taken_once_under_its_request`,
+  `an_answered_intent_is_taken_once_by_its_capability`,
   `answers_are_read_as_the_java_classes_lay_them_out` (нечитаемые записи в начале, середине и
   конце), `a_reattachment_let_go_leaves_the_answer_to_the_one_still_waiting`,
-  `a_ticket_let_go_frees_its_place_and_finishes_its_launch`,
-  `an_earlier_activitys_requests_count_for_their_capability`,
+  `a_ticket_let_go_wakes_the_owner_and_cancels_its_launch`,
+  `the_oldest_reattachment_receives_the_answer_whatever_ended_before`,
+  `every_earlier_record_ends_a_waiting_reattachment`,
   `every_answer_taken_off_the_queue_ends_its_request`,
   `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`,
   `posted_work_reports_every_exit_but_success`, `a_report_that_panics_is_contained`,

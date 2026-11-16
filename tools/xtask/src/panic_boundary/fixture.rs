@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 39] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -42,14 +42,32 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 39] = [
     (APPLE, "Lookalike::dealloc", Unguarded),
     (APPLE, "Finalized::drop", Unguarded),
     (ANDROID, "Java_dev_flui_Planted_run", Unguarded),
-    (ANDROID, ".run_on_java_main_thread", Unguarded),
-    (ANDROID, "AndroidApp::run_on_java_main_thread", Unguarded),
     (
         ANDROID,
-        "android_activity::AndroidApp::run_on_java_main_thread",
+        "run_on_java_main_thread in fn post_bare",
         Unguarded,
     ),
-    (ANDROID, "use run_on_java_main_thread", Unguarded),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_by_path",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_by_value",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_in_a_macro",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in macro_rules! post_later",
+        Unguarded,
+    ),
+    (POSTER, "run_on_java_main_thread in fn run", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
     (IDENTITY_FILE, "struct ContainedIvars", Identity),
@@ -62,6 +80,7 @@ const WINDOWS: &str = "fixture/src/feature/windows.rs";
 const APPLE: &str = "fixture/src/feature/apple.rs";
 const ANDROID: &str = "fixture/src/feature/android.rs";
 const IDENTITY_FILE: &str = "fixture/src/feature/identity.rs";
+const POSTER: &str = "fixture/src/owner/android/main_thread.rs";
 const SECOND_MODULE: &str = "fixture/src/feature/panic_boundary.rs";
 
 /// The crate.
@@ -84,7 +103,7 @@ const FILES: [(&str, &str); 12] = [
         "fixture/src/owner/android.rs",
         "pub(crate) mod main_thread;\n",
     ),
-    ("fixture/src/owner/android/main_thread.rs", POSTER_FILE),
+    (POSTER, POSTER_FILE),
     ("fixture/src/owner/panic_boundary.rs", BOUNDARY),
     ("fixture/src/feature.rs", FEATURE),
     (WINDOWS, WINDOWS_FILE),
@@ -489,8 +508,17 @@ fn post_by_value(app: &AndroidApp) {
     post(app, Box::new(|| {}));
 }
 
-// planted: an import that renames it
-use android_activity::AndroidApp::run_on_java_main_thread as post_later;
+// planted: the post inside a macro call, whose tokens syn leaves unparsed
+fn post_in_a_macro(app: &AndroidApp) {
+    let _ = format!("{:?}", app.run_on_java_main_thread(Box::new(|| {})));
+}
+
+// planted: the post in a `macro_rules!` body
+macro_rules! post_later {
+    ($app:expr) => {
+        $app.run_on_java_main_thread(Box::new(|| {}))
+    };
+}
 "#;
 
 const POSTER_FILE: &str = r#"
@@ -503,7 +531,7 @@ pub(crate) fn post(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
     }));
 }
 
-// silent: the path form, in the posting module
+// planted: the posting module itself, outside its one posting function
 pub(crate) fn run(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
     AndroidApp::run_on_java_main_thread(app, Box::new(move || {
         os_entry("run", (), AfterPanic::Answer(|()| ()), body)

@@ -53,8 +53,11 @@ public class FluiActivity extends NativeActivity {
             FluiHost.restore(savedInstanceState);
         }
         super.onCreate(savedInstanceState);
-        // After `NativeActivity.onCreate`, which sets its own mode, and before
-        // the window's first layout.
+        // `NativeActivity.onCreate` has just set this same mode
+        // (`SOFT_INPUT_STATE_UNSPECIFIED | SOFT_INPUT_ADJUST_RESIZE`). It is
+        // set again here, beside the edge-to-edge setup that relies on it, so
+        // the mode the inset handling needs is FLUI's own statement and not
+        // an inherited default; it changes nothing on today's levels.
         getWindow().setSoftInputMode(SOFT_INPUT_MODE);
         if (Build.VERSION.SDK_INT >= DECOR_DOES_NOT_FIT_FROM_API) {
             Api30.edgeToEdge(getWindow());

@@ -150,9 +150,10 @@ mod measured {
     };
     // The Android Activity a provider starts activities for results through.
     use flui_sdk::platform::capability::{
-        Activity as _, ActivityResult as _, IntentFrame as _, InvalidResultKey as _, JniFrame as _,
-        ResultCode as _, ResultData as _, ResultKey as _, ResultOutcome as _, ResultRefused as _,
-        ResultRequest as _, ResultTicket as _, ResultToken as _,
+        Activity as _, ActivityResult as _, DataRefused as _, IntentFrame as _,
+        InvalidResultKey as _, JniFrame as _, ResultCode as _, ResultData as _, ResultKey as _,
+        ResultOutcome as _, ResultRefused as _, ResultRequest as _, ResultTicket as _,
+        ResultToken as _,
     };
     use flui_sdk::platform::{
         AdmissionError as _, Brightness as _, ClipboardError as _, DurationScale as _,
@@ -673,6 +674,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::capability::CapabilityRegistrar;",
         "pub use flui_platform::capability::Completion;",
         "pub use flui_platform::capability::CompletionSource;",
+        "pub use flui_platform::capability::DataRefused;",
         "pub use flui_platform::capability::IntentFrame;",
         "pub use flui_platform::capability::InvalidResultKey;",
         "pub use flui_platform::capability::JniFrame;",

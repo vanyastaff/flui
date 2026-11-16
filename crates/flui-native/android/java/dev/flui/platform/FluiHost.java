@@ -14,8 +14,10 @@ import android.util.Log;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The contract between this dex and the native library (ADR-0255 decision 5),
@@ -183,6 +185,12 @@ public final class FluiHost {
 
     /** Started requests by their request code. Guarded by {@link #LOCK}. */
     private static final HashMap<Integer, Request> STARTED = new HashMap<>();
+
+    /**
+     * The codes of started requests the library cancelled, until Android answers for them: not
+     * counted as open, not reused. Guarded by {@link #LOCK}.
+     */
+    private static final HashSet<Integer> CANCELLED = new HashSet<>();
 
     /** Requests taken while their Activity was stopped, oldest first. Guarded by {@link #LOCK}. */
     private static final ArrayDeque<Waiting> WAITING = new ArrayDeque<>();
@@ -381,7 +389,7 @@ public final class FluiHost {
         Request request = new Request(epoch, token, capability, key);
         synchronized (LOCK) {
             if (STARTED.size() + WAITING.size() + ANSWERS.size() >= MAX_OPEN
-                    || openUnder(capability, 0, false) >= MAX_OPEN_PER_CAPABILITY) {
+                    || openUnder(capability) >= MAX_OPEN_PER_CAPABILITY) {
                 Log.w(TAG, "as many activity requests are open as FLUI holds; this one is refused");
                 ANSWERS.add(new Answer(request, ANSWER_TOO_MANY, 0, null));
                 request = null;
@@ -400,7 +408,7 @@ public final class FluiHost {
     private static void start(Activity activity, Intent intent, Request request) {
         int code;
         synchronized (LOCK) {
-            code = freeCode(STARTED, nextCode);
+            code = freeCode(STARTED, CANCELLED, nextCode);
             if (code > 0) {
                 nextCode = code == LAST_HOST_CODE ? FIRST_HOST_CODE : code + 1;
                 STARTED.put(code, request);
@@ -424,16 +432,17 @@ public final class FluiHost {
 
     /**
      * The first request code from {@code next} on, through {@link #LAST_HOST_CODE} and then from
-     * {@link #FIRST_HOST_CODE}, that {@code started} does not hold; {@code 0} when every code of
-     * the host's range is held. A code only tells Android's answer apart while its request is
-     * started; the library matches the answer by epoch and token.
+     * {@link #FIRST_HOST_CODE}, that neither {@code started} nor {@code cancelled} holds; {@code 0}
+     * when every code of the host's range is held. A code only tells Android's answer apart while
+     * its request is started, or its cancelled activity has not answered yet; the library matches
+     * the answer by epoch and token.
      */
-    static int freeCode(Map<Integer, ?> started, int next) {
+    static int freeCode(Map<Integer, ?> started, Set<Integer> cancelled, int next) {
         int first = next < FIRST_HOST_CODE || next > LAST_HOST_CODE ? FIRST_HOST_CODE : next;
         int count = LAST_HOST_CODE - FIRST_HOST_CODE + 1;
         for (int step = 0; step < count; step++) {
             int code = FIRST_HOST_CODE + (first - FIRST_HOST_CODE + step) % count;
-            if (!started.containsKey(code)) {
+            if (!started.containsKey(code) && !cancelled.contains(code)) {
                 return code;
             }
         }
@@ -457,7 +466,8 @@ public final class FluiHost {
         }
         Request request;
         synchronized (LOCK) {
-            request = STARTED.remove(code);
+            // A cancelled request's answer frees its code and reaches nobody.
+            request = CANCELLED.remove(code) ? null : STARTED.remove(code);
         }
         if (request != null) {
             answer(new Answer(request, ANSWER_RESULT, resultCode, data));
@@ -466,8 +476,10 @@ public final class FluiHost {
 
     /**
      * The library cancelled its request {@code token} of the platform {@code epoch}; Java main
-     * thread. One still waiting to start is forgotten; a started one is finished, and the
-     * answer it then gives reaches the library, which drops it as answered.
+     * thread. One still waiting to start is forgotten; a started one is finished and leaves the
+     * open requests at once, so its place counts no more: its code is parked in {@link
+     * #CANCELLED} until Android's answer for it comes, which is then dropped, so the code is not
+     * reused before.
      */
     static void cancel(Activity activity, long epoch, long token) {
         int finish = 0;
@@ -484,6 +496,10 @@ public final class FluiHost {
                     break;
                 }
             }
+            if (finish != 0) {
+                STARTED.remove(finish);
+                CANCELLED.add(finish);
+            }
         }
         if (finish != 0) {
             activity.finishActivity(finish);
@@ -491,61 +507,41 @@ public final class FluiHost {
     }
 
     /**
-     * Whether a request of another platform than {@code epoch} under {@code capability}'s
-     * {@code key} has not been answered, or its answer has not been drained; any thread. A
-     * reattachment under that key then waits for it. {@link FluiActivity} restores the saved
-     * requests before the library starts, so none is missed here.
+     * How many answers are still to come under {@code capability}'s {@code key} for platforms
+     * other than {@code epoch}: requests waiting to start, started, or answered and not drained,
+     * whatever the answer; any thread. This is the one definition the library holds its
+     * reattachments to: at most this many wait under the key. {@link FluiActivity} restores the
+     * saved requests before the library starts, so none is missed here.
      */
-    static boolean stillToCome(long epoch, String capability, String key) {
+    static int stillToCome(long epoch, String capability, String key) {
         synchronized (LOCK) {
+            int count = 0;
+            for (Waiting waiting : WAITING) {
+                count += waiting.request.isEarlierUnder(epoch, capability, key) ? 1 : 0;
+            }
             for (Request request : STARTED.values()) {
-                if (request.isEarlierUnder(epoch, capability, key)) {
-                    return true;
-                }
+                count += request.isEarlierUnder(epoch, capability, key) ? 1 : 0;
             }
             for (Answer answer : ANSWERS) {
-                if (answer.request.isEarlierUnder(epoch, capability, key)) {
-                    return true;
-                }
+                count += answer.request.isEarlierUnder(epoch, capability, key) ? 1 : 0;
             }
-            return false;
+            return count;
         }
     }
 
-    /**
-     * How many requests of platforms other than {@code epoch} are open, waiting to start, started
-     * or answered but not drained: under {@code capability} first, then in all; any thread. The
-     * library counts them against its bounds with its own Activity's, so an earlier Activity's
-     * requests still count for their capability after a recreation.
-     */
-    static int[] earlierOpen(long epoch, String capability) {
-        synchronized (LOCK) {
-            return new int[] {openUnder(capability, epoch, true), openUnder(null, epoch, true)};
-        }
-    }
-
-    /**
-     * How many requests are open under {@code capability}, or under any when it is {@code null};
-     * of platforms other than {@code epoch} only when {@code earlierOnly}. Under {@link #LOCK}.
-     */
-    private static int openUnder(String capability, long epoch, boolean earlierOnly) {
+    /** How many requests are open under {@code capability}, of every platform. Under {@link #LOCK}. */
+    private static int openUnder(String capability) {
         int count = 0;
         for (Request request : STARTED.values()) {
-            count += counts(request, capability, epoch, earlierOnly) ? 1 : 0;
+            count += request.capability.equals(capability) ? 1 : 0;
         }
         for (Waiting waiting : WAITING) {
-            count += counts(waiting.request, capability, epoch, earlierOnly) ? 1 : 0;
+            count += waiting.request.capability.equals(capability) ? 1 : 0;
         }
         for (Answer answer : ANSWERS) {
-            count += counts(answer.request, capability, epoch, earlierOnly) ? 1 : 0;
+            count += answer.request.capability.equals(capability) ? 1 : 0;
         }
         return count;
-    }
-
-    private static boolean counts(
-            Request request, String capability, long epoch, boolean earlierOnly) {
-        return (capability == null || request.capability.equals(capability))
-                && (!earlierOnly || request.epoch != epoch);
     }
 
     /** {@link FluiActivity#onStart}: the requests waiting for {@code activity} start. */
