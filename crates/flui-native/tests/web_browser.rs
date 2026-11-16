@@ -276,7 +276,11 @@ export function keyboardShows() { return shows; }
 let editorFocuses = 0;
 export function countEditorFocus() {
     editorFocuses = 0;
-    editor().addEventListener('focus', () => { editorFocuses += 1; });
+    const area = editor();
+    if (!area.dataset.counted) {
+        area.dataset.counted = 'yes';
+        area.addEventListener('focus', () => { editorFocuses += 1; });
+    }
 }
 export function editorFocusCount() { return editorFocuses; }
 // Resolve after `count` animation frames.
@@ -1580,7 +1584,7 @@ fn a_tap_focuses_an_editor_the_field_attached_after_it_takes_over() {
     blur_all();
     touch_stroke(5.0, 5.0, 5.0, 5.0);
     assert_eq!(page_focus(), "editor", "focused in the tap's handler");
-    assert_eq!(editor_hints(), r#"["none",null,null]"#, "no keyboard yet");
+    assert_eq!(editor_hints(), r#"["none","off",null]"#, "no keyboard yet");
     assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
     let store = InMemoryTextStore::new("ab");
     canvas.host.focus_store(Some(as_store(&store)));
@@ -1605,7 +1609,7 @@ async fn a_tap_no_field_follows_gives_the_focus_back_to_the_canvas() {
     blur_all();
     touch_stroke(200.0, 100.0, 200.0, 100.0);
     assert_eq!(page_focus(), "editor");
-    assert_eq!(editor_hints(), r#"["none",null,null]"#, "no keyboard");
+    assert_eq!(editor_hints(), r#"["none","off",null]"#, "no keyboard");
     js_sys::futures::JsFuture::from(frames(1))
         .await
         .expect("a frame");
