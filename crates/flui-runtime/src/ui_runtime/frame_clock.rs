@@ -571,7 +571,8 @@ impl UiRuntime {
     /// needs the platform loop to wake at, if any — the min over every
     /// presentation's own armed gesture-arena
     /// deadline observation (e.g. a long-press hold or a double-tap give-up)
-    /// and every dropped frame's retry deadline (see
+    /// and every dropped frame's retry deadline but that of a presentation at
+    /// its in-flight limit, which its settlement wakes (ADR-0305 §5; see
     /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP)), and the
     /// earliest deadline an owner-local task sleeps until.
     /// This getter runs no extension query or diagnostics and is safe while
