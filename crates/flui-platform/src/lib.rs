@@ -181,7 +181,7 @@ pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
-pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
+pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use locale::{InvalidLocale, Locale};
 pub use opened::{
@@ -190,11 +190,11 @@ pub use opened::{
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform,
-    PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
+    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision,
+    ScrollUnit, SmartZoomEvent,
 };
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,

@@ -27,7 +27,7 @@ use flui_painting::{
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_platform::TargetPlatform;
-use flui_platform::keyboard::{ImeComposition, Key, KeyRepeat, KeyState, Modifiers, NamedKey};
+use flui_platform::keyboard::{ImeComposition, Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::text_store::{OwnerCalls, TextInputPurpose};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::layer::LayerLink;
@@ -1381,7 +1381,7 @@ impl EditableTextState {
             // edit before the first failure is resumed.
             let mut calls = OwnerCalls::new();
             // A key ends a touch's handles.
-            if event.state() == KeyState::Down
+            if matches!(event.state, KeyState::Down(_))
                 && let Some(handles) = handles.upgrade()
             {
                 calls.run(|| {
@@ -2584,7 +2584,8 @@ fn build_key_handler(
         if !focus_node.can_request_focus() {
             return KeyEventResult::Ignored;
         }
-        if event.state() != KeyState::Down || event.composition == ImeComposition::Active {
+        if !matches!(event.state, KeyState::Down(_)) || event.composition == ImeComposition::Active
+        {
             return KeyEventResult::Ignored;
         }
         let modifiers = command_modifiers(event.modifiers);
@@ -2739,7 +2740,7 @@ fn build_key_handler(
                 // `Down` events, not one Down followed by held state) must
                 // not resubmit on every tick — the key is still consumed
                 // (`Handled`), just without calling the callback again.
-                if event.repeat() == KeyRepeat::First {
+                if event.state != KeyState::Down(KeyPress::AutoRepeat) {
                     let text = controller.text();
                     drop(controller);
                     writer.write(|ctx| callback(ctx, &text));

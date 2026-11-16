@@ -370,7 +370,7 @@ fn a_drag_from_a_point_presses_there_and_moves_by_the_offset() {
 /// key, and `^` for each of Control and Shift held.
 fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
     use flui_interaction::KeyEventResult;
-    use flui_platform::keyboard::{Key, KeyRepeat, KeyState, Modifiers};
+    use flui_platform::keyboard::{Key, KeyPress, KeyState, Modifiers};
 
     let log = Rc::new(std::cell::RefCell::new(Vec::new()));
     let heard = Rc::clone(&log);
@@ -378,10 +378,10 @@ fn key_log() -> (Tester, Rc<std::cell::RefCell<Vec<String>>>) {
         flui_widgets::Focus::new(SizedBox::new(40.0, 40.0))
             .autofocus(true)
             .on_key_event(move |_ctx, event| {
-                let state = match (event.state(), event.repeat()) {
-                    (KeyState::Down, KeyRepeat::AutoRepeat) => "repeat",
-                    (KeyState::Down, _) => "down",
-                    _ => "up",
+                let state = match event.state {
+                    KeyState::Down(KeyPress::AutoRepeat) => "repeat",
+                    KeyState::Down(_) => "down",
+                    KeyState::Up => "up",
                 };
                 let key = match &event.key {
                     Key::Named(named) => named.as_str().to_owned(),

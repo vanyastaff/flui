@@ -10,7 +10,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use flui_protocol::version::BREAKING;
+use flui_protocol::version::{BREAKING, Break};
 use flui_protocol::{
     ActionRequest, ErrorCode, ErrorObject, Event, Greeting, Hello, HelloReply, METHODS,
     MethodEffect, MotionRequest, MotionState, Node, PROTOCOL_VERSION, ProtocolVersion, ReadQuery,
@@ -237,11 +237,20 @@ impl Surface {
 
 /// What makes `newer` not additive to `older`: a property, enumerated string or
 /// method it lost, or a field it made required in a type `older` had. A method
-/// `renamed` lists, old name then new, may go.
-fn additivity_violations(older: &Value, newer: &Value, renamed: &[(&str, &str)]) -> Vec<String> {
+/// `change` renamed, old name then new, may go, and so may anything under a name it
+/// removed (a segment of the path, or the string itself).
+fn additivity_violations(older: &Value, newer: &Value, change: Option<&Break>) -> Vec<String> {
+    let (renamed, removed) = change.map_or((&[][..], &[][..]), |change| {
+        (change.renamed, change.removed)
+    });
     let (old, new) = (Surface::of(older), Surface::of(newer));
+    let under_removed = |item: &str| {
+        item.split(['/', '='])
+            .any(|segment| removed.contains(&segment))
+    };
     let lost = |a: &BTreeSet<String>, b: &BTreeSet<String>, what: &str| {
         a.difference(b)
+            .filter(|item| !under_removed(item))
             .map(|item| format!("{what} removed: {item}"))
             .collect::<Vec<_>>()
     };
@@ -260,6 +269,17 @@ fn additivity_violations(older: &Value, newer: &Value, renamed: &[(&str, &str)])
         new.required
             .difference(&old.required)
             .filter(|path| {
+                // A field required in an alternative of a `oneOf` that no older alternative
+                // names is a new variant of an externally tagged enum (its tag is the field):
+                // older readers never meet it, so it is additive.
+                if let Some((alternative, field)) = path.rsplit_once("/required/")
+                    && alternative.contains("/*")
+                    && !old
+                        .properties
+                        .contains(&format!("{alternative}/properties/{field}"))
+                {
+                    return false;
+                }
                 // The type the field is required in: the path up to `required`, or up to the
                 // first erased index, whichever comes first.
                 let owner: Vec<&str> = path
@@ -298,16 +318,13 @@ fn every_published_schema_is_additive_to_the_next() {
         let [(older, older_path), (newer, newer_path)] = pair else {
             unreachable!("windows(2) yields pairs");
         };
-        let renamed = BREAKING
-            .iter()
-            .find(|change| change.version == *newer)
-            .map_or(&[][..], |change| change.renamed);
+        let change = BREAKING.iter().find(|change| change.version == *newer);
         let violations =
-            additivity_violations(&read_schema(older_path), &read_schema(newer_path), renamed);
+            additivity_violations(&read_schema(older_path), &read_schema(newer_path), change);
         assert!(
             violations.is_empty(),
-            "protocol {newer} is not additive to {older}; list what it renamed in BREAKING with \
-             its ADR, or restore:\n{}",
+            "protocol {newer} is not additive to {older}; list what it renamed or removed in \
+             BREAKING with its ADR, or restore:\n{}",
             violations.join("\n")
         );
     }
@@ -337,21 +354,40 @@ fn protocol_0_5_renames_every_0_4_operation_into_the_method_table() {
     }
 }
 
+/// A break for the additivity check's own rows, renaming and removing what each names.
+const fn test_break(
+    renamed: &'static [(&'static str, &'static str)],
+    removed: &'static [&'static str],
+) -> Break {
+    Break {
+        version: PROTOCOL_VERSION,
+        adr: "ADR-0000",
+        renamed,
+        removed,
+    }
+}
+
+const RENAMED_TO_ENUMERATE: Break = test_break(&[("windows.list", "windows.enumerate")], &[]);
+const RENAMED_TO_A_MISSING_METHOD: Break = test_break(&[("windows.list", "windows.all")], &[]);
+const REMOVED_FOCUSABLE: Break = test_break(&[], &["focusable"]);
+const REMOVED_ANOTHER_FIELD: Break = test_break(&[], &["tooltip"]);
+
 /// The additivity check itself, against a schema changed the ways it must
 /// refuse (a field or method removed, a name respelled, a field made required)
-/// and the ways it must allow (a new field, type or definition, a listed rename).
+/// and the ways it must allow (a new field, type or definition, a listed rename
+/// or removal).
 #[test]
 fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_required_one() {
     let older = current_schema();
     assert_eq!(
-        additivity_violations(&older, &older, &[]),
+        additivity_violations(&older, &older, None),
         [] as [String; 0]
     );
 
     let mut added = older.clone();
     added["Node"]["properties"]["tooltip"] = serde_json::json!({"type": "string"});
     assert!(
-        additivity_violations(&older, &added, &[]).is_empty(),
+        additivity_violations(&older, &added, None).is_empty(),
         "a new optional field is additive"
     );
 
@@ -362,7 +398,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         "required": ["result"],
     });
     assert!(
-        additivity_violations(&older, &added_type, &[]).is_empty(),
+        additivity_violations(&older, &added_type, None).is_empty(),
         "a new response type does not change existing requests or replies"
     );
 
@@ -372,8 +408,17 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("Node has properties")
         .remove("focusable");
     assert_eq!(
-        additivity_violations(&older, &removed, &[]),
+        additivity_violations(&older, &removed, None),
         ["property removed: /Node/properties/focusable"]
+    );
+    assert!(
+        additivity_violations(&older, &removed, Some(&REMOVED_FOCUSABLE)).is_empty(),
+        "a removal BREAKING lists may go"
+    );
+    assert_eq!(
+        additivity_violations(&older, &removed, Some(&REMOVED_ANOTHER_FIELD)),
+        ["property removed: /Node/properties/focusable"],
+        "a removal BREAKING does not list is still refused"
     );
 
     let respelled = serde_json::from_str::<Value>(
@@ -383,11 +428,11 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
     )
     .expect("still JSON");
     assert!(
-        additivity_violations(&older, &respelled, &[])
+        additivity_violations(&older, &respelled, None)
             .iter()
             .any(|v| v.starts_with("name removed:") && v.ends_with("=shutting_down")),
         "{:?}",
-        additivity_violations(&older, &respelled, &[])
+        additivity_violations(&older, &respelled, None)
     );
 
     let mut required = older.clone();
@@ -396,8 +441,23 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("Node has required fields")
         .push(serde_json::json!("name"));
     assert_eq!(
-        additivity_violations(&older, &required, &[]),
+        additivity_violations(&older, &required, None),
         ["field made required: /Node/required/name"]
+    );
+
+    let mut new_variant = older.clone();
+    new_variant["$defs"]["Key"]["oneOf"]
+        .as_array_mut()
+        .expect("a recorded key is a tagged enum")
+        .push(serde_json::json!({
+            "type": "object",
+            "properties": {"chord": {"type": "string"}},
+            "required": ["chord"],
+        }));
+    assert!(
+        additivity_violations(&older, &new_variant, None).is_empty(),
+        "a new variant of a tagged enum is additive: {:?}",
+        additivity_violations(&older, &new_variant, None)
     );
 
     let mut new_definition = older.clone();
@@ -407,7 +467,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         "required": ["window"],
     });
     assert!(
-        additivity_violations(&older, &new_definition, &[]).is_empty(),
+        additivity_violations(&older, &new_definition, None).is_empty(),
         "a new method's parameters do not change an existing method"
     );
 
@@ -420,17 +480,16 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         .expect("windows.list is a method");
     methods.insert("windows.enumerate".into(), row);
     assert_eq!(
-        additivity_violations(&older, &renamed, &[]),
+        additivity_violations(&older, &renamed, None),
         ["name removed: /methods=windows.list"],
         "a method renamed without a BREAKING entry is a removal"
     );
     assert!(
-        additivity_violations(&older, &renamed, &[("windows.list", "windows.enumerate")])
-            .is_empty(),
+        additivity_violations(&older, &renamed, Some(&RENAMED_TO_ENUMERATE)).is_empty(),
         "a rename BREAKING lists may go"
     );
     assert_eq!(
-        additivity_violations(&older, &renamed, &[("windows.list", "windows.all")]),
+        additivity_violations(&older, &renamed, Some(&RENAMED_TO_A_MISSING_METHOD)),
         ["name removed: /methods=windows.list"],
         "a rename to a method that does not exist is still a removal"
     );

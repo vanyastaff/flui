@@ -142,6 +142,11 @@ const RECORDED: &[Recorded] = &[
         "ScrollPhase",
     ),
     repo(
+        "ScrollDirection",
+        "crates/flui-platform/src/pointer/scroll.rs",
+        "ScrollDirection",
+    ),
+    repo(
         "PanZoomPhase",
         "crates/flui-platform/src/pointer/pan_zoom.rs",
         "PanZoomPhase",
@@ -158,9 +163,9 @@ const RECORDED: &[Recorded] = &[
         "Location",
     ),
     repo(
-        "KeyRepeat",
+        "KeyPress",
         "crates/flui-platform/src/keyboard/mod.rs",
-        "KeyRepeat",
+        "KeyPress",
     ),
     repo(
         "ImeComposition",

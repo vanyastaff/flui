@@ -196,10 +196,11 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
 /// Whether `event` is the press of Escape that cancels a drag: its first
 /// press, while no input method composes.
 fn is_escape_press(event: &flui_platform::keyboard::KeyEvent) -> bool {
-    use flui_platform::keyboard::{ImeComposition, Key, KeyRepeat, NamedKey};
-    event.state() == KeyState::Down
-        && event.repeat() == KeyRepeat::First
-        && event.composition == ImeComposition::Inactive
+    use flui_platform::keyboard::{ImeComposition, Key, KeyPress, NamedKey};
+    matches!(
+        event.state,
+        KeyState::Down(KeyPress::First | KeyPress::Unpaired)
+    ) && event.composition == ImeComposition::Inactive
         && event.key == Key::Named(NamedKey::Escape)
 }
 
@@ -216,10 +217,13 @@ fn pointer_pressed(event: &PointerEvent) -> bool {
 /// repeat) or a pointer button pressed. Only these try a dropped frame before
 /// its backoff ends.
 fn is_discrete_press(input: &PlatformInput) -> bool {
-    use flui_platform::keyboard::KeyRepeat;
+    use flui_platform::keyboard::KeyPress;
     match input {
         PlatformInput::Keyboard(event) => {
-            event.state() == KeyState::Down && event.repeat() == KeyRepeat::First
+            matches!(
+                event.state,
+                KeyState::Down(KeyPress::First | KeyPress::Unpaired)
+            )
         }
         PlatformInput::Pointer(event) => pointer_pressed(event),
         PlatformInput::PointerFrame(frame) => frame.events().iter().any(pointer_pressed),
@@ -232,9 +236,11 @@ fn is_discrete_press(input: &PlatformInput) -> bool {
 /// The back button (X1) going down or up in `event`, and when.
 fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
     let (state, button, time) = match event {
-        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
-            (KeyState::Down, press.button(), press.sample.time)
-        }
+        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => (
+            KeyState::Down(flui_platform::keyboard::KeyPress::First),
+            press.button(),
+            press.sample.time,
+        ),
         PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
             (KeyState::Up, release.button(), release.sample.time)
         }

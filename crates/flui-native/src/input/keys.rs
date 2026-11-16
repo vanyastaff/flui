@@ -691,23 +691,8 @@ pub(crate) mod adapter {
     //! are converted here into the owned FLUI contract; pointer input never passes
     //! through upstream event values.
 
-    use flui_platform::{
-        EventTime,
-        keyboard::{
-            Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
-        },
-    };
+    use flui_platform::keyboard::{Code, Location, Modifiers, NamedKey};
     use keyboard_types as upstream;
-
-    pub(crate) fn keyboard_input(
-        event: upstream::KeyboardEvent,
-        observed_ns: u64,
-    ) -> flui_platform::PlatformInput {
-        flui_platform::PlatformInput::Keyboard(key_event(
-            &event,
-            EventTime::from_nanos(observed_ns),
-        ))
-    }
 
     pub(crate) fn modifiers(value: upstream::Modifiers) -> Modifiers {
         use upstream::Modifiers as Up;
@@ -734,50 +719,26 @@ pub(crate) mod adapter {
             .fold(Modifiers::NONE, |set, (_, to)| set | to)
     }
 
-    fn named_key(value: upstream::NamedKey) -> NamedKey {
+    pub(crate) fn named_key(value: upstream::NamedKey) -> NamedKey {
         match value.to_string().as_str() {
             "Hyper" | "Super" => NamedKey::Meta,
             spelling => NamedKey::from_w3c(spelling).unwrap_or(NamedKey::Unidentified),
         }
     }
 
-    fn code(value: upstream::Code) -> Code {
+    pub(crate) fn code(value: upstream::Code) -> Code {
         Code::from_w3c(&value.to_string()).unwrap_or(Code::Unidentified)
     }
 
     /// keyboard-types' location, variant by variant: a variant keyboard-types
     /// adds does not compile until it is named here.
-    fn location(value: upstream::Location) -> Location {
+    pub(crate) fn location(value: upstream::Location) -> Location {
         match value {
             upstream::Location::Standard => Location::Standard,
             upstream::Location::Left => Location::Left,
             upstream::Location::Right => Location::Right,
             upstream::Location::Numpad => Location::Numpad,
         }
-    }
-
-    fn key_event(event: &upstream::KeyboardEvent, time: EventTime) -> KeyEvent {
-        let state = match event.state {
-            upstream::KeyState::Down => KeyState::Down,
-            upstream::KeyState::Up => KeyState::Up,
-        };
-        let key = match &event.key {
-            upstream::Key::Character(text) => Key::character(text.as_str()),
-            upstream::Key::Named(value) => Key::Named(named_key(*value)),
-        };
-        KeyEvent::new(state, key, code(event.code), time)
-            .with_location(location(event.location))
-            .with_modifiers(modifiers(event.modifiers))
-            .with_repeat(if event.repeat {
-                KeyRepeat::AutoRepeat
-            } else {
-                KeyRepeat::First
-            })
-            .with_composition(if event.is_composing {
-                ImeComposition::Active
-            } else {
-                ImeComposition::Inactive
-            })
     }
 
     // The upstream key events are not FLUI's, so integration tests cannot
@@ -811,29 +772,6 @@ pub(crate) mod adapter {
             );
         }
 
-        fn a_key_event_keeps_every_field() {
-            let upstream = upstream::KeyboardEvent {
-                state: upstream::KeyState::Down,
-                key: upstream::Key::Character("q".to_owned()),
-                code: upstream::Code::KeyQ,
-                location: upstream::Location::Left,
-                modifiers: upstream::Modifiers::ALT,
-                repeat: true,
-                is_composing: true,
-            };
-            let flui_platform::PlatformInput::Keyboard(event) = keyboard_input(upstream, 19) else {
-                panic!("keyboard adapter produces keyboard input")
-            };
-            assert_eq!(event.state(), KeyState::Down);
-            assert_eq!(event.key, Key::character("q"));
-            assert_eq!(event.code, Code::KeyQ);
-            assert_eq!(event.location, Location::Left);
-            assert_eq!(event.modifiers, Modifiers::ALT);
-            assert_eq!(event.repeat(), KeyRepeat::AutoRepeat);
-            assert_eq!(event.composition, ImeComposition::Active);
-            assert_eq!(event.time, EventTime::from_nanos(19));
-        }
-
         #[test]
         fn keyboard_adapter_contract() {
             crate::table_test::run_table(
@@ -844,10 +782,6 @@ pub(crate) mod adapter {
                         every_named_key_and_code_round_trips_through_keyboard_types,
                     ),
                     ("legacy_meta_names_are_meta", legacy_meta_names_are_meta),
-                    (
-                        "a_key_event_keeps_every_field",
-                        a_key_event_keeps_every_field,
-                    ),
                 ],
             );
         }
@@ -931,7 +865,7 @@ mod mapping {
     /// What the keyboard-types adapter of the Android host reads
     /// for a key whose location keyboard-types numbers `number`.
     #[cfg(target_os = "android")]
-    fn keyboard_types(number: u32, code: Code) -> Location {
+    fn keyboard_types(number: u32) -> Location {
         use keyboard_types as upstream;
 
         let location = [
@@ -943,24 +877,7 @@ mod mapping {
         .into_iter()
         .find(|location| *location as u32 == number)
         .expect("BUG: a row numbers a location keyboard-types names");
-        let event = upstream::KeyboardEvent {
-            state: upstream::KeyState::Down,
-            key: upstream::Key::Character("x".to_owned()),
-            code: code
-                .as_str()
-                .parse()
-                .expect("BUG: keyboard-types names the code"),
-            location,
-            modifiers: upstream::Modifiers::empty(),
-            repeat: false,
-            is_composing: false,
-        };
-        let flui_platform::PlatformInput::Keyboard(event) =
-            super::adapter::keyboard_input(event, 0)
-        else {
-            panic!("the keyboard adapter produces keyboard input")
-        };
-        event.location
+        super::adapter::location(location)
     }
 
     #[test]
@@ -977,11 +894,7 @@ mod mapping {
             );
             assert_eq!(location_of_number(key.number), key.location, "DOM: {case}");
             #[cfg(target_os = "android")]
-            assert_eq!(
-                keyboard_types(key.number, code),
-                key.location,
-                "Android: {case}"
-            );
+            assert_eq!(keyboard_types(key.number), key.location, "Android: {case}");
         }
         // A location the DOM may number later, and a character no key typed
         // (Win32's Alt+numpad text), are where every other key is.

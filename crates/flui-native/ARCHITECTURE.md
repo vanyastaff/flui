@@ -1615,10 +1615,20 @@ rotation and resume additionally require a device run.
 
 Android printable keyboard keys come from the input device's `KeyCharacterMap`
 using the event's native meta-state. Physical codes and named keys keep their
-existing translation. A dead key remains `NamedKey::Dead`; unavailable maps
-retain the legacy US keycode fallback, including Shift and Caps Lock. A successful
-map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
-pins the projection, while actual layout and Shift mapping require live input.
+existing translation. Unavailable maps retain the legacy US keycode fallback,
+including Shift and Caps Lock. A successful map reporting no character remains
+unidentified. `android_native_key_map_preserves_logical_keys` pins the projection,
+while actual layout and Shift mapping require live input.
+
+A hardware dead key is composed here, because a native activity receives the raw
+key events and no `TextView` key listener composes them. Its map entry
+(`COMBINING_ACCENT` with the spacing accent) reports `Key::Dead(Some(accent))` and
+leaves the accent pending in `keys::DeadKeyComposer`; the next character key's first
+press types `KeyCharacterMap.getDeadChar(accent, base)`, or the accent and the
+character when the pair composes nothing, so no keystroke is lost. A modifier keeps
+the accent, a named key that types nothing and focus loss drop it, and a key the
+input method passes on during a composition feeds nothing
+(`a_hardware_dead_key_composes_with_the_next_key`, over a stand-in key map).
 
 ### Web subscriptions belong to one actual canvas registration
 
@@ -4606,8 +4616,7 @@ was not read for: a device the OS reset or removed is seen at the press that
 starts a sequence and at the lift, exit or cancel that ends it (a reset
 cancels its sequences) (`the_device_is_queried_for_every_event_but_a_move`).
 
-Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
-estimated properties to revise, so the backend never emits `Revise`.
+A `MotionEvent` carries no estimated properties to revise.
 A run on a device held the translation (see the
 native recording section below).
 

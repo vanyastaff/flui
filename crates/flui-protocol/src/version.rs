@@ -17,7 +17,7 @@
 //! - A change that is not additive (a field renamed or removed, a name
 //!   respelled, an optional field made required, or an existing field given
 //!   a new meaning) is listed in [`BREAKING`] with the ADR that decided it and
-//!   the names it respelled; the test lets those names, and nothing else, go.
+//!   the names it respelled or removed; the test lets those names, and nothing else, go.
 //!   After 1.0 it also bumps `major`, and that ADR supersedes ADR-0080. The
 //!   test sees only the schema's shape, so a new meaning is caught in review:
 //!   it goes under a new name instead, as `surface_rect` did beside `rect`.
@@ -69,7 +69,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 13);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 14);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,12 +78,16 @@ pub struct Break {
     pub version: ProtocolVersion,
     /// The ADR that decided the break.
     pub adr: &'static str,
-    /// The names it respelled, old then new. Nothing else may differ from the version before.
+    /// The names it respelled, old then new.
     pub renamed: &'static [(&'static str, &'static str)],
+    /// The schema names it removed: a variant, a property or a type, matched as one segment of
+    /// a schema path. Nothing but these and `renamed` may differ from the version before.
+    pub removed: &'static [&'static str],
 }
 
 /// The versions that are not additive to the one before it, by their schema or by a value
-/// given a new meaning, each with the ADR that decided the break and exactly what it renamed.
+/// given a new meaning, each with the ADR that decided the break and exactly what it renamed or
+/// removed.
 pub const BREAKING: &[Break] = &[
     Break {
         version: ProtocolVersion::new(0, 5),
@@ -95,6 +99,7 @@ pub const BREAKING: &[Break] = &[
             ("act", "semantics.act"),
             ("motion", "motion.set"),
         ],
+        removed: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 11),
@@ -103,6 +108,22 @@ pub const BREAKING: &[Break] = &[
         // (`l4.2:3@7`), where it named a node of a frame's flattened tree (`l4.37`): no name
         // is respelled, the handle has a new meaning, so an older client cannot read it.
         renamed: &[],
+        removed: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 14),
+        adr: "ADR-0344",
+        // A recorded key's state says whether it repeated or has no release, so its `repeat`
+        // and `unreleased` flags went; the pointer revision and the pen squeeze, which no host
+        // produced, left the input vocabulary.
+        renamed: &[],
+        removed: &[
+            "repeat",
+            "unreleased",
+            "revise",
+            "pen_squeeze",
+            "SqueezePhase",
+        ],
     },
 ];
 
@@ -187,8 +208,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.13");
-        assert_eq!("0.13".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.14");
+        assert_eq!("0.14".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -210,10 +231,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.13"))
+            Some(serde_json::json!("0.14"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.13")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.14")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

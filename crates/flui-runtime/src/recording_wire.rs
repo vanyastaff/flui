@@ -34,16 +34,15 @@ use flui_platform::data_transfer::{
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::input_regions::{CaptionButton, InputRegionKind, ResizeEdge};
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, Location, Modifiers,
-    NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton,
-    PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
-    PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
+    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
+    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
+    ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    TangentialPressure, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, FramePresented, GestureParts, HourCycle, ImeEvent,
@@ -755,6 +754,14 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                             })
                         })
                         .transpose()?,
+                    direction: match scroll.direction {
+                        ScrollDirection::Unknown => None,
+                        ScrollDirection::FromDevice => Some(rec::ScrollDirection::FromDevice),
+                        ScrollDirection::InvertedFromDevice => {
+                            Some(rec::ScrollDirection::InvertedFromDevice)
+                        }
+                        _ => return Err(unmirrored("ScrollDirection")),
+                    },
                     modifiers: modifiers_dto(scroll.modifiers),
                 })
             }
@@ -859,6 +866,13 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                     rec::ScrollPrecision::Notched => ScrollPrecision::Notched,
                     rec::ScrollPrecision::Precise => ScrollPrecision::Precise,
                 })
+                .with_direction(match scroll.direction {
+                    None => ScrollDirection::Unknown,
+                    Some(rec::ScrollDirection::FromDevice) => ScrollDirection::FromDevice,
+                    Some(rec::ScrollDirection::InvertedFromDevice) => {
+                        ScrollDirection::InvertedFromDevice
+                    }
+                })
                 .with_modifiers(modifiers(&scroll.modifiers)?);
                 if let Some(phase) = scroll.phase {
                     event = event.with_phase(match phase {
@@ -913,13 +927,16 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
 impl TryConvert<&KeyEvent> for rec::KeyEvent {
     fn try_convert(event: &KeyEvent) -> Result<Self> {
         Ok(Self {
-            state: match event.state() {
-                KeyState::Down => rec::KeyState::Down,
+            state: match event.state {
+                KeyState::Down(KeyPress::First) => rec::KeyState::Down,
+                KeyState::Down(KeyPress::AutoRepeat) => rec::KeyState::Repeat,
+                KeyState::Down(KeyPress::Unpaired) => rec::KeyState::Unpaired,
                 KeyState::Up => rec::KeyState::Up,
             },
             key: match &event.key {
                 Key::Character(text) => rec::Key::Character(text.as_str().to_owned()),
                 Key::Named(named) => rec::Key::Named(named.as_str().to_owned()),
+                Key::Dead(accent) => rec::Key::Dead(*accent),
                 _ => return Err(unmirrored("Key")),
             },
             code: event.code.as_str().to_owned(),
@@ -930,9 +947,7 @@ impl TryConvert<&KeyEvent> for rec::KeyEvent {
                 Location::Numpad => rec::Location::Numpad,
             },
             modifiers: modifiers_dto(event.modifiers),
-            repeat: event.repeat() == KeyRepeat::AutoRepeat,
             composing: event.composition == ImeComposition::Active,
-            unreleased: event.release() == KeyRelease::Never,
             t: event.time.as_nanos(),
         })
     }
@@ -945,12 +960,15 @@ impl TryConvert<rec::KeyEvent> for KeyEvent {
             rec::Key::Named(name) => {
                 Key::Named(NamedKey::from_w3c(&name).ok_or(WireError::UnknownSpelling(name))?)
             }
+            rec::Key::Dead(accent) => Key::Dead(accent),
         };
         let code = Code::from_w3c(&event.code)
             .ok_or_else(|| WireError::UnknownSpelling(event.code.clone()))?;
         Ok(Self::new(
             match event.state {
-                rec::KeyState::Down => KeyState::Down,
+                rec::KeyState::Down => KeyState::Down(KeyPress::First),
+                rec::KeyState::Repeat => KeyState::Down(KeyPress::AutoRepeat),
+                rec::KeyState::Unpaired => KeyState::Down(KeyPress::Unpaired),
                 rec::KeyState::Up => KeyState::Up,
             },
             key,
@@ -964,20 +982,10 @@ impl TryConvert<rec::KeyEvent> for KeyEvent {
             rec::Location::Numpad => Location::Numpad,
         })
         .with_modifiers(modifiers(&event.modifiers)?)
-        .with_repeat(if event.repeat {
-            KeyRepeat::AutoRepeat
-        } else {
-            KeyRepeat::First
-        })
         .with_composition(if event.composing {
             ImeComposition::Active
         } else {
             ImeComposition::Inactive
-        })
-        .with_release(if event.unreleased {
-            KeyRelease::Never
-        } else {
-            KeyRelease::Follows
         }))
     }
 }

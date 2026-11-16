@@ -16,12 +16,13 @@ pub mod keyboard {
 }
 
 pub use cursor_icon::CursorIcon;
-pub use keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, InputValueError, PanZoomEvent, PanZoomPhase,
     PanZoomTransform, PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId,
     PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent, SmartZoomEvent,
+    PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollDirection, ScrollEvent,
+    SmartZoomEvent,
 };
 
 /// The interaction clock: `clock`'s current reading on the event timeline

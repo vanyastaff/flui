@@ -18,16 +18,15 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::keyboard::{
-    Code, ImeComposition, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, Location, Modifiers,
-    NamedKey,
+    Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton,
-    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
-    PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
-    ScrollPrecision, ScrollUnit, SmartZoomEvent, TangentialPressure, Twist,
+    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtons, PointerCancel,
+    PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
+    PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
+    Pressure, ScrollDelta, ScrollDirection, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit,
+    SmartZoomEvent, TangentialPressure, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, FramePresented, GesturePreferences, HourCycle, ImeEvent,
@@ -162,29 +161,28 @@ fn pan_zoom(phase: PanZoomPhase) -> InputRecord {
     ))
 }
 
-fn key(state: KeyState, key: Key, location: Location, repeat: KeyRepeat) -> InputRecord {
+fn key(state: KeyState, key: Key, location: Location) -> InputRecord {
     platform(PlatformInput::Keyboard(
         KeyEvent::new(state, key, Code::KeyA, at(17))
             .with_location(location)
             .with_modifiers(Modifiers::ALT | Modifiers::FN_LOCK)
-            .with_repeat(repeat)
             .with_composition(ImeComposition::Active),
     ))
 }
 
 fn plain_key(state: KeyState) -> InputRecord {
-    key(
-        state,
-        Key::Named(NamedKey::Enter),
-        Location::Standard,
-        KeyRepeat::First,
-    )
+    key(state, Key::Named(NamedKey::Enter), Location::Standard)
 }
 
 fn composing_key(composition: ImeComposition) -> InputRecord {
     platform(PlatformInput::Keyboard(
-        KeyEvent::new(KeyState::Down, Key::character("é"), Code::Quote, at(18))
-            .with_composition(composition),
+        KeyEvent::new(
+            KeyState::Down(KeyPress::First),
+            Key::character("é"),
+            Code::Quote,
+            at(18),
+        )
+        .with_composition(composition),
     ))
 }
 
@@ -437,7 +435,7 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             ])
             .expect("not empty"),
         ))),
-        ("PlatformInput", "Keyboard") => one(plain_key(KeyState::Down)),
+        ("PlatformInput", "Keyboard") => one(plain_key(KeyState::Down(KeyPress::First))),
         ("PlatformInput", "Ime") => one(ime(ImeEvent::Enabled)),
         ("PlatformInput", "DragDrop") | ("DragDropEvent", "Entered") => {
             one(entered(TransferFormat::Text))
@@ -554,6 +552,23 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("ScrollPrecision", "Precise") => {
             one(scroll(ScrollUnit::Pixels, ScrollPrecision::Precise, None))
         }
+        ("ScrollDirection", direction) => {
+            let direction = match direction {
+                "Unknown" => ScrollDirection::Unknown,
+                "FromDevice" => ScrollDirection::FromDevice,
+                "InvertedFromDevice" => ScrollDirection::InvertedFromDevice,
+                _ => return None,
+            };
+            one(pointer_event(PointerEvent::Scroll(
+                ScrollEvent::new(
+                    touch(),
+                    at(14),
+                    position(5.0, 6.0),
+                    ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, -3.0).expect("finite"),
+                )
+                .with_direction(direction),
+            )))
+        }
         ("ScrollPhase", phase) => {
             let phase = match phase {
                 "Began" => ScrollPhase::Began,
@@ -578,13 +593,28 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("PanZoomPhase", "End") => one(pan_zoom(PanZoomPhase::End)),
         ("PanZoomPhase", "Cancelled") => one(pan_zoom(PanZoomPhase::Cancelled)),
         ("Key", "Character") => one(key(
-            KeyState::Down,
+            KeyState::Down(KeyPress::AutoRepeat),
             Key::character("ß"),
             Location::Left,
-            KeyRepeat::AutoRepeat,
         )),
-        ("Key", "Named") => one(plain_key(KeyState::Down)),
-        ("KeyState", "Down") => one(plain_key(KeyState::Down)),
+        ("Key", "Named") => one(plain_key(KeyState::Down(KeyPress::First))),
+        ("Key", "Dead") => Some(vec![
+            key(
+                KeyState::Down(KeyPress::First),
+                Key::Dead(Some('´')),
+                Location::Standard,
+            ),
+            key(KeyState::Up, Key::Dead(None), Location::Standard),
+        ]),
+        ("KeyPress", "First") => one(plain_key(KeyState::Down(KeyPress::First))),
+        ("KeyPress", "AutoRepeat") => one(plain_key(KeyState::Down(KeyPress::AutoRepeat))),
+        ("KeyPress", "Unpaired") => one(platform(PlatformInput::Keyboard(KeyEvent::new(
+            KeyState::Down(KeyPress::Unpaired),
+            Key::character("é"),
+            Code::Unidentified,
+            at(18),
+        )))),
+        ("KeyState", "Down") => one(plain_key(KeyState::Down(KeyPress::First))),
         ("KeyState", "Up") => one(plain_key(KeyState::Up)),
         ("Location", location) => {
             let location = match location {
@@ -595,29 +625,11 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
                 _ => return None,
             };
             one(key(
-                KeyState::Down,
+                KeyState::Down(KeyPress::First),
                 Key::Named(NamedKey::Shift),
                 location,
-                KeyRepeat::First,
             ))
         }
-        ("KeyRepeat", "First") => one(plain_key(KeyState::Down)),
-        ("KeyRepeat", "AutoRepeat") => one(key(
-            KeyState::Down,
-            Key::Named(NamedKey::ArrowDown),
-            Location::Standard,
-            KeyRepeat::AutoRepeat,
-        )),
-        ("KeyRelease", "Follows") => one(plain_key(KeyState::Down)),
-        ("KeyRelease", "Never") => one(platform(PlatformInput::Keyboard(
-            KeyEvent::new(
-                KeyState::Down,
-                Key::character("é"),
-                Code::Unidentified,
-                at(18),
-            )
-            .with_release(KeyRelease::Never),
-        ))),
         ("ImeComposition", "Inactive") => one(composing_key(ImeComposition::Inactive)),
         ("ImeComposition", "Active") => one(composing_key(ImeComposition::Active)),
         ("ImeEvent", "Enabled") => one(ime(ImeEvent::Enabled)),

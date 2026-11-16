@@ -21,7 +21,7 @@
 
 /// The input recording format's major version. It changes only with an incompatible change;
 /// unknown fields are skipped within one version.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_recording";
@@ -641,12 +641,35 @@ pub struct Scroll {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub phase: Option<ScrollPhase>,
+    /// Whether the platform reversed the device's direction, when it says.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub direction: Option<ScrollDirection>,
     /// The held modifiers, by name.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Vec::is_empty")
     )]
     pub modifiers: Vec<String>,
+}
+
+/// Whether a scroll's delta is the device's or the reverse of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
+)]
+pub enum ScrollDirection {
+    /// The `from_device` direction.
+    #[cfg_attr(feature = "serde", serde(rename = "from_device"))]
+    FromDevice,
+    /// The `inverted_from_device` direction (natural scrolling).
+    #[cfg_attr(feature = "serde", serde(rename = "inverted_from_device"))]
+    InvertedFromDevice,
 }
 
 /// A trackpad pan-zoom gesture's phase.
@@ -834,9 +857,12 @@ pub enum Key {
     /// A named key; its W3C name.
     #[cfg_attr(feature = "serde", serde(rename = "named"))]
     Named(String),
+    /// A dead key; the accent it leaves pending, when the platform says.
+    #[cfg_attr(feature = "serde", serde(rename = "dead"))]
+    Dead(Option<char>),
 }
 
-/// Whether a key went down or up.
+/// Whether a key went down, repeated or came up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -845,9 +871,15 @@ pub enum Key {
     reason = "a pinned mirror of the runtime's vocabulary, converted arm by arm: a new variant is a format version, and a `_` arm would drop recorded input"
 )]
 pub enum KeyState {
-    /// The `down` key state.
+    /// The `down` key state: a first press.
     #[cfg_attr(feature = "serde", serde(rename = "down"))]
     Down,
+    /// The `repeat` key state: an auto-repeat of a held key.
+    #[cfg_attr(feature = "serde", serde(rename = "repeat"))]
+    Repeat,
+    /// The `unpaired` key state: a key-down no repeat or release follows.
+    #[cfg_attr(feature = "serde", serde(rename = "unpaired"))]
+    Unpaired,
     /// The `up` key state.
     #[cfg_attr(feature = "serde", serde(rename = "up"))]
     Up,
@@ -881,7 +913,7 @@ pub enum Location {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct KeyEvent {
-    /// Whether the key went down or up.
+    /// Whether the key went down, repeated or came up.
     pub state: KeyState,
     /// The logical key.
     pub key: Key,
@@ -895,24 +927,12 @@ pub struct KeyEvent {
         serde(default, skip_serializing_if = "Vec::is_empty")
     )]
     pub modifiers: Vec<String>,
-    /// Whether the event is an auto-repeat.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "std::ops::Not::not")
-    )]
-    pub repeat: bool,
     /// Whether an input method composition was active.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub composing: bool,
-    /// Whether the key's release is never delivered.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "std::ops::Not::not")
-    )]
-    pub unreleased: bool,
     /// The event time, in nanoseconds.
     pub t: u64,
 }
@@ -1525,7 +1545,7 @@ impl Key {
                 REDACTED.clone_into(text);
                 true
             }
-            Self::Named(_) => false,
+            Self::Named(_) | Self::Dead(_) => false,
         }
     }
 }

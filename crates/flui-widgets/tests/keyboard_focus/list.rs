@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use flui_interaction::KeyEventResult;
-use flui_platform::keyboard::{Key, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Key, KeyPress, KeyState, NamedKey};
 use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 use flui_view::ViewExt;
 use flui_widgets::{
@@ -49,7 +49,7 @@ fn list_app(
                 event.key,
                 Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)
             );
-            if arrow && event.state() == KeyState::Down {
+            if arrow && matches!(event.state, KeyState::Down(_)) {
                 arrows.set(arrows.get() + 1);
                 return KeyEventResult::Handled;
             }
@@ -148,9 +148,8 @@ pub(crate) fn list_keyboard_navigation() {
     app.pump();
     for _ in 0..30 {
         let repeat = super::key(
-            KeyState::Down,
+            KeyState::Down(KeyPress::AutoRepeat),
             Key::Named(NamedKey::PageDown),
-            KeyRepeat::AutoRepeat,
         );
         let _ = app.enter_owner_scope(|| manager.dispatch_key_event(&repeat));
         app.pump();
@@ -388,7 +387,7 @@ fn sliver_app(count: usize, scroll: &ScrollController) -> (LaidOut, Rc<Cell<usiz
                 event.key,
                 Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown)
             );
-            if arrow && event.state() == KeyState::Down {
+            if arrow && matches!(event.state, KeyState::Down(_)) {
                 arrows.set(arrows.get() + 1);
                 return KeyEventResult::Handled;
             }

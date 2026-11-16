@@ -14,7 +14,7 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::focus::FocusNode;
 use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::PointerButton;
 use flui_testing::a11y::{A11yTree, Action, ActionRequest, Role, TreeId};
 use flui_testing::replay::{MouseScript, PointerScript};
@@ -236,7 +236,7 @@ impl Scene {
 
     fn key(&mut self, key: NamedKey) {
         let manager = self.laid.focus_manager();
-        for state in [KeyState::Down, KeyState::Up] {
+        for state in [KeyState::Down(KeyPress::First), KeyState::Up] {
             let event = KeyEvent::new(
                 state,
                 Key::Named(key),

@@ -182,7 +182,7 @@ struct InputWindow {
     pending_high_surrogate: Cell<Option<u16>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
-    held_dead_keys: RefCell<raw::HeldKeys>,
+    held_dead_keys: RefCell<raw::HeldKeys<Option<char>>>,
     /// Keys held down whose scancode names no code, with the key each was
     /// pressed as, so its repeats and release carry that key.
     unplaced_keys: RefCell<crate::input::keys::UnplacedKeys<(u16, bool)>>,
@@ -614,7 +614,7 @@ impl InputWindows {
                         // its own (the stray `WM_CHAR` arm).
                         let mut taken = ctx.keys_taken_by_input_method.borrow_mut();
                         if crate::input::keys::taken_by_input_method(key.vk) {
-                            taken.press(key.scan_code, key.extended);
+                            taken.press(key.scan_code, key.extended, ());
                             drop(taken);
                             return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
                         }
@@ -649,12 +649,13 @@ impl InputWindows {
                         // Alt) instead of a character, on the layer the held
                         // modifiers select. Taking it now leaves nothing for a
                         // nested keydown during the callback to mistake for its own.
-                        let stroke =
-                            if owns_burst && translated.is_none() && drain_dead_char(hwnd, msg) {
-                                raw::Keystroke::Dead
-                            } else {
-                                raw::Keystroke::Text(translated)
-                            };
+                        let dead = (owns_burst && translated.is_none())
+                            .then(|| drain_dead_char(hwnd, msg))
+                            .flatten();
+                        let stroke = match dead {
+                            Some(accent) => raw::Keystroke::Dead(accent),
+                            None => raw::Keystroke::Text(translated),
+                        };
                         // The default a system keydown may skip also lives in
                         // the WM_SYSCHAR `TranslateMessage` queued for it:
                         // `DefWindowProcW` turns Alt+Space's into the system
@@ -719,7 +720,8 @@ impl InputWindows {
                         let taken = ctx
                             .keys_taken_by_input_method
                             .borrow_mut()
-                            .release(key.scan_code, key.extended);
+                            .release(key.scan_code, key.extended)
+                            .is_some();
                         if taken {
                             return Some(DefWindowProcW(hwnd, msg, wparam, lparam));
                         }
@@ -849,19 +851,28 @@ mod keystroke_queue {
     /// being handled, if any: `WM_SYSDEADCHAR` for a system keydown, else
     /// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
     /// itself lives in the kernel's dead-key state, which this does not touch.
-    pub(super) fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
+    ///
+    /// `None` when there was none; otherwise the accent the message's
+    /// `wParam` names (the spacing character the layout prints on the key),
+    /// `Some(None)` for a unit that is no character on its own.
+    pub(super) fn drain_dead_char(hwnd: HWND, keydown: u32) -> Option<Option<char>> {
         let kind = if keydown == WM_SYSKEYDOWN {
             WM_SYSDEADCHAR
         } else {
             WM_DEADCHAR
         };
         let mut msg = MSG::default();
-        let mut found = false;
+        let mut found = None;
         // SAFETY: as in `drain_translated_chars`: a live writable local, and
         // `PM_REMOVE` touches only this thread's own queue.
         unsafe {
             while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
-                found = true;
+                found = Some(
+                    u32::try_from(msg.wParam.0)
+                        .ok()
+                        .and_then(char::from_u32)
+                        .filter(|accent| !accent.is_control()),
+                );
             }
         }
         found
@@ -1122,7 +1133,7 @@ mod raw {
 
     use flui_platform::{
         EventTime, Modifiers as KeyboardModifiers,
-        keyboard::{Code, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
         pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
     };
     use windows::Win32::{
@@ -2285,7 +2296,7 @@ mod raw {
     pub fn key_down_event(
         message: KeyMessage,
         stroke: Keystroke,
-        held_dead: &mut HeldKeys,
+        held_dead: &mut HeldKeys<Option<char>>,
         time: u64,
     ) -> PlatformInput {
         let KeyMessage {
@@ -2295,15 +2306,15 @@ mod raw {
             repeat: is_repeat,
         } = message;
         let (dead, translated_text) = match stroke {
-            Keystroke::Dead => (true, None),
-            Keystroke::Text(text) => (false, text),
+            Keystroke::Dead(accent) => (Some(accent), None),
+            Keystroke::Text(text) => (None, text),
         };
         // A press is also proof the key was released before: a dead press held
         // across a focus change whose release went to another window is forgotten
         // here, when the same physical key goes down again. A key that stays held
         // across a transient focus loss keeps its identity for its release.
-        if dead {
-            held_dead.press(scan_code, extended);
+        if let Some(accent) = dead {
+            held_dead.press(scan_code, extended, accent);
         } else if !is_repeat {
             held_dead.release(scan_code, extended);
         }
@@ -2315,8 +2326,8 @@ mod raw {
         // unshifted fallback character: otherwise a shortcut bound to that
         // character fires while the user composes an accented letter. Its second
         // press (or a space after it) types the accent itself and arrives as text.
-        let key = if dead {
-            Key::Named(NamedKey::Dead)
+        let key = if let Some(accent) = dead {
+            Key::Dead(accent)
         } else {
             keys::key_for_keydown(
                 fallback,
@@ -2327,15 +2338,20 @@ mod raw {
             )
         };
 
+        let press = if is_repeat {
+            KeyPress::AutoRepeat
+        } else {
+            KeyPress::First
+        };
         PlatformInput::Keyboard(
-            KeyEvent::new(KeyState::Down, key, code, EventTime::from_nanos(time))
-                .with_location(keys::location_for_code(code))
-                .with_modifiers(modifiers)
-                .with_repeat(if is_repeat {
-                    KeyRepeat::AutoRepeat
-                } else {
-                    KeyRepeat::First
-                }),
+            KeyEvent::new(
+                KeyState::Down(press),
+                key,
+                code,
+                EventTime::from_nanos(time),
+            )
+            .with_location(keys::location_for_code(code))
+            .with_modifiers(modifiers),
         )
     }
 
@@ -2346,7 +2362,11 @@ mod raw {
     /// punctuation the US-layout position. Consumers that type text act on
     /// `KeyState::Down` only, so this asymmetry never reaches a text field.
     /// `time` is the message's, as for [`key_down_event`].
-    pub fn key_up_event(message: KeyMessage, held_dead: &mut HeldKeys, time: u64) -> PlatformInput {
+    pub fn key_up_event(
+        message: KeyMessage,
+        held_dead: &mut HeldKeys<Option<char>>,
+        time: u64,
+    ) -> PlatformInput {
         let KeyMessage {
             vk,
             scan_code,
@@ -2358,8 +2378,8 @@ mod raw {
         // The release of a dead key is `Dead` too (W3C UI Events dead-key
         // sequence), so a pressed-key set sees the same identity go down and up.
         // The press decided it; the layout may have changed while the key was held.
-        let key = if held_dead.release(scan_code, extended) {
-            Key::Named(NamedKey::Dead)
+        let key = if let Some(accent) = held_dead.release(scan_code, extended) {
+            Key::Dead(accent)
         } else {
             keys::vk_to_key(vk, modifiers.contains(KeyboardModifiers::SHIFT))
         };
@@ -2383,13 +2403,12 @@ mod raw {
 
         PlatformInput::Keyboard(
             KeyEvent::new(
-                KeyState::Down,
+                KeyState::Down(KeyPress::Unpaired),
                 Key::character(text),
                 Code::Unidentified,
                 EventTime::from_nanos(time),
             )
             .with_location(keys::CHARACTER_WITHOUT_A_KEY)
-            .with_release(KeyRelease::Never)
             .with_modifiers(modifiers),
         )
     }
@@ -2401,29 +2420,47 @@ mod raw {
         /// translation (navigation keys, Ctrl chords).
         Text(Option<String>),
         /// A dead key: `TranslateMessage` queued `WM_DEADCHAR` (or
-        /// `WM_SYSDEADCHAR`) for it on the layer the held modifiers select.
-        Dead,
+        /// `WM_SYSDEADCHAR`) for it on the layer the held modifiers select,
+        /// carrying the accent it leaves pending (`None` for a unit that is
+        /// no character on its own).
+        Dead(Option<char>),
     }
 
     /// Physical keys currently held down whose press was of one kind (a dead
-    /// key, a key an input method took), by scancode and extended flag, so
-    /// each one's release is reported like its press, even if the keyboard
-    /// layout or the modifiers changed while it was held. Owned per window.
-    #[derive(Debug, Default)]
-    pub struct HeldKeys(Vec<(u16, bool)>);
+    /// key, a key an input method took), by scancode and extended flag, each
+    /// with what its press said (a dead key's accent), so each one's release
+    /// is reported like its press, even if the keyboard layout or the
+    /// modifiers changed while it was held. Owned per window.
+    #[derive(Debug)]
+    pub struct HeldKeys<T = ()>(Vec<((u16, bool), T)>);
 
-    impl HeldKeys {
-        pub(super) fn press(&mut self, scan_code: u16, extended: bool) {
-            if !self.0.contains(&(scan_code, extended)) {
-                self.0.push((scan_code, extended));
+    impl<T> Default for HeldKeys<T> {
+        fn default() -> Self {
+            Self(Vec::new())
+        }
+    }
+
+    impl<T> HeldKeys<T> {
+        /// Hold the key, with what its press said; a key held again keeps
+        /// what its first press said.
+        pub(super) fn press(&mut self, scan_code: u16, extended: bool, said: T) {
+            if !self
+                .0
+                .iter()
+                .any(|(held, _)| *held == (scan_code, extended))
+            {
+                self.0.push(((scan_code, extended), said));
             }
         }
 
-        /// Whether the released key was pressed as one of these; forgets it.
-        pub(super) fn release(&mut self, scan_code: u16, extended: bool) -> bool {
-            let before = self.0.len();
-            self.0.retain(|held| *held != (scan_code, extended));
-            self.0.len() != before
+        /// What the released key's press said, when it was pressed as one of
+        /// these; forgets it.
+        pub(super) fn release(&mut self, scan_code: u16, extended: bool) -> Option<T> {
+            let at = self
+                .0
+                .iter()
+                .position(|(held, _)| *held == (scan_code, extended))?;
+            Some(self.0.remove(at).1)
         }
     }
 

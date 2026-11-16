@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use flui_platform::input_capabilities::InputCapabilities;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::{
     Availability, CloseDecision, DispatchEventResult, EventTime, FrameRequest, ImeEvent,
     PlatformInput, SurfaceChange,
@@ -26,7 +26,7 @@ fn ime() -> PlatformInput {
 
 fn key() -> PlatformInput {
     PlatformInput::Keyboard(KeyEvent::new(
-        KeyState::Down,
+        KeyState::Down(KeyPress::First),
         Key::Named(NamedKey::Enter),
         Code::Enter,
         EventTime::from_nanos(0),

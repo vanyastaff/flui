@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Offset, Point};
-use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
+use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::typography::{TextDirection, TextStyle};
@@ -142,7 +142,7 @@ impl Scene {
     fn escape(&mut self) {
         let event: KeyEvent = KeyEventBuilder::new(Code::Escape)
             .key(Key::Named(NamedKey::Escape))
-            .state(KeyState::Down)
+            .state(KeyState::Down(KeyPress::First))
             .modifiers(Modifiers::NONE)
             .build();
         let _handled = self.laid.focus_manager().dispatch_key_event(&event);

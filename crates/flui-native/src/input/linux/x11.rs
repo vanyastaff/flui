@@ -1386,7 +1386,7 @@ mod live {
 
     use cursor_icon::CursorIcon;
     use flui_platform::input_capabilities::InputCapabilities;
-    use flui_platform::keyboard::KeyState;
+    use flui_platform::keyboard::{KeyPress, KeyState};
     use flui_platform::{CursorError, EventTime, PlatformInput, Unsupported, UnsupportedReason};
 
     use x11rb::connection::Connection as _;
@@ -2007,6 +2007,10 @@ mod live {
         /// What a key event delivers.
         fn key_event(&self, event: &xinput::KeyPressEvent, state: KeyState) -> Option<X11Key> {
             let repeat = u32::from(event.flags) & u32::from(xinput::KeyEventFlags::KEY_REPEAT) != 0;
+            let state = match state {
+                KeyState::Down(_) if repeat => KeyState::Down(KeyPress::AutoRepeat),
+                state => state,
+            };
             let time = EventTime::from_nanos(event_timestamp_ns());
             let shared = Rc::downgrade(&self.state);
             self.with_state(|input| {
@@ -2016,7 +2020,7 @@ mod live {
                 let core = input.keyboard.as_mut()?;
                 let keysym = core.keyboard.keysym(event.detail);
                 let keycode = event.detail;
-                let (held, held_keysym) = core.keyboard.key_held(keycode, state, repeat, time)?;
+                let (held, held_keysym) = core.keyboard.key_held(keycode, state, time)?;
                 // The core protocol's state: the modifier mask, and the
                 // group in bits 13 and 14.
                 let group = u32::from(event.group.effective) & 0b11;
@@ -2296,7 +2300,7 @@ mod live {
             let deliveries = match event {
                 Event::XinputKeyPress(key) | Event::XinputKeyRelease(key) => {
                     let state = if matches!(event, Event::XinputKeyPress(_)) {
-                        KeyState::Down
+                        KeyState::Down(KeyPress::First)
                     } else {
                         KeyState::Up
                     };

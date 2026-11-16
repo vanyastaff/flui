@@ -1,7 +1,7 @@
 //! Mounted Slider contracts: input proposals, allocated paint and live numeric actions.
 use crate::common::{lay_out, tight};
 use flui_foundation::geometry::Size;
-use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+use flui_interaction::events::{Code, Key, KeyPress, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_painting::{DrawOp, PaintStyle, typography::TextDirection};
 use flui_rendering::{
@@ -86,7 +86,7 @@ fn key(laid: &LaidOut, named: NamedKey) -> bool {
     laid.focus_manager()
         .dispatch_key_event(
             &KeyEventBuilder::new(Code::Unidentified)
-                .state(KeyState::Down)
+                .state(KeyState::Down(KeyPress::First))
                 .key(Key::Named(named))
                 .build(),
         )
@@ -316,7 +316,7 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             laid.focus_manager()
                 .dispatch_key_event(
                     &KeyEventBuilder::new(Code::Unidentified)
-                        .state(KeyState::Down)
+                        .state(KeyState::Down(KeyPress::First))
                         .key(Key::character("+"))
                         .modifiers(modifiers)
                         .build()
@@ -330,7 +330,7 @@ pub(crate) fn slider_focus_keys_and_semantic_actions_share_controlled_proposals(
             .focus_manager()
             .dispatch_key_event(
                 &KeyEventBuilder::new(Code::Unidentified)
-                    .state(KeyState::Down)
+                    .state(KeyState::Down(KeyPress::First))
                     .key(Key::Named(NamedKey::ArrowRight))
                     .modifiers(flui_interaction::events::Modifiers::SHIFT)
                     .build()

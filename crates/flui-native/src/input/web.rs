@@ -454,10 +454,10 @@ pub(crate) mod events {
     use flui_foundation::geometry::Point;
     use flui_platform::{
         EventTime,
-        keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey},
+        keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
         pointer::{
             ButtonChange, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId,
-            PointerInfo, PointerKind, PointerPosition, PointerRole, ScrollEvent,
+            PointerInfo, PointerKind, PointerPosition, PointerRole, ScrollDirection, ScrollEvent,
         },
     };
 
@@ -1038,7 +1038,10 @@ pub(crate) mod events {
         keys: &Rc<KeyRoute>,
         registration: &mut dyn CanvasRegistration,
     ) -> Result<(), crate::OpenWindowError> {
-        for (kind, state) in [("keydown", KeyState::Down), ("keyup", KeyState::Up)] {
+        for (kind, state) in [
+            ("keydown", KeyState::Down(KeyPress::First)),
+            ("keyup", KeyState::Up),
+        ] {
             let keys = Rc::clone(keys);
             let focus = registration.focus();
             let target = canvas.clone();
@@ -1761,8 +1764,24 @@ pub(crate) mod events {
                 .with_role(PointerRole::Primary)
             });
         Some(PlatformInput::Pointer(PointerEvent::Scroll(
-            ScrollEvent::new(pointer, time, position, delta).with_modifiers(modifiers),
+            ScrollEvent::new(pointer, time, position, delta)
+                .with_modifiers(modifiers)
+                .with_direction(wheel_direction(we)),
         )))
+    }
+
+    /// Whether the browser reversed the device's direction: WebKit's
+    /// `webkitDirectionInvertedFromDevice`, which no other engine has, so a
+    /// wheel event elsewhere does not say.
+    fn wheel_direction(we: &web_sys::WheelEvent) -> ScrollDirection {
+        match js_sys::Reflect::get(we, &JsValue::from_str("webkitDirectionInvertedFromDevice"))
+            .ok()
+            .and_then(|inverted| inverted.as_bool())
+        {
+            Some(true) => ScrollDirection::InvertedFromDevice,
+            Some(false) => ScrollDirection::FromDevice,
+            None => ScrollDirection::Unknown,
+        }
     }
 
     /// A DOM key event as the window delivers it; `composing` is whether the
@@ -1779,6 +1798,10 @@ pub(crate) mod events {
 
         let source: &Utf16KeyboardEvent = ke.unchecked_ref();
         let key = map_key_value(source.key_utf16());
+        let state = match state {
+            KeyState::Down(_) if ke.repeat() => KeyState::Down(KeyPress::AutoRepeat),
+            state => state,
+        };
 
         PlatformInput::Keyboard(
             KeyEvent::new(
@@ -1789,11 +1812,6 @@ pub(crate) mod events {
             )
             .with_location(crate::input::keys::location_of_number(ke.location()))
             .with_modifiers(modifiers)
-            .with_repeat(if ke.repeat() {
-                KeyRepeat::AutoRepeat
-            } else {
-                KeyRepeat::First
-            })
             .with_composition(key_composition(
                 ke.is_composing(),
                 ke.key_code(),
@@ -1856,6 +1874,9 @@ pub(crate) mod events {
         let key = String::from(key);
         if matches!(key.as_str(), "Hyper" | "Super") {
             Key::Named(NamedKey::Meta)
+        } else if key == "Dead" {
+            // The DOM names a dead key but not its accent.
+            Key::Dead(None)
         } else if let Some(named) = NamedKey::from_w3c(&key) {
             Key::Named(named)
         } else if is_web_key_string(&key) {

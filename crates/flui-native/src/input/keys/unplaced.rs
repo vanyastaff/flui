@@ -1,6 +1,6 @@
 //! The key a code-less key was pressed as, kept until its release.
 
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
 
 /// The keys a host reported without a code while they are held, each with the
 /// key its key-down named, by the host's own name for the key (`Id`: a key
@@ -31,23 +31,24 @@ impl<Id: PartialEq> UnplacedKeys<Id> {
         let Some(id) = id else {
             return event;
         };
-        if event.code != Code::Unidentified || event.release() == KeyRelease::Never {
+        if event.code != Code::Unidentified || event.state == KeyState::Down(KeyPress::Unpaired) {
             return event;
         }
         let held = self.held.iter().position(|(held, _)| *held == id);
-        match (event.state(), event.repeat(), held) {
-            (KeyState::Down, KeyRepeat::First, Some(at)) => self.held[at].1 = event.key.clone(),
-            (KeyState::Down, KeyRepeat::First, None) => {
+        match (event.state, held) {
+            (KeyState::Down(KeyPress::First), Some(at)) => self.held[at].1 = event.key.clone(),
+            (KeyState::Down(KeyPress::First), None) => {
                 if self.held.len() == Self::MAX_HELD {
                     self.held.remove(0);
                 }
                 self.held.push((id, event.key.clone()));
             }
-            (KeyState::Down, KeyRepeat::AutoRepeat, Some(at)) => {
+            (KeyState::Down(KeyPress::AutoRepeat), Some(at)) => {
                 event.key = self.held[at].1.clone();
             }
-            (KeyState::Up, _, Some(at)) => event.key = self.held.remove(at).1,
-            (KeyState::Down, KeyRepeat::AutoRepeat, None) | (KeyState::Up, _, None) => {}
+            (KeyState::Up, Some(at)) => event.key = self.held.remove(at).1,
+            (KeyState::Down(KeyPress::AutoRepeat) | KeyState::Up, None)
+            | (KeyState::Down(KeyPress::Unpaired), _) => {}
         }
         event
     }
@@ -56,7 +57,7 @@ impl<Id: PartialEq> UnplacedKeys<Id> {
 #[cfg(test)]
 mod tests {
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState};
 
     use super::UnplacedKeys;
 
@@ -66,61 +67,58 @@ mod tests {
 
     #[test]
     fn a_code_less_key_is_released_as_it_was_pressed() {
-        // (case, events in as (id, state, repeat, key, code), keys out)
-        type Step = (Option<u32>, KeyState, KeyRepeat, &'static str, Code);
+        // (case, events in as (id, state, key, code), keys out)
+        type Step = (Option<u32>, KeyState, &'static str, Code);
         type Row = (&'static str, &'static [Step], &'static [&'static str]);
         use Code::{KeyA, Unidentified};
-        use KeyRepeat::{AutoRepeat, First};
+        use KeyPress::{AutoRepeat, First};
         use KeyState::{Down, Up};
         let rows: &[Row] = &[
             (
                 "shift pressed while held",
                 &[
-                    (Some(7), Down, First, "x", Unidentified),
-                    (Some(7), Down, AutoRepeat, "X", Unidentified),
-                    (Some(7), Up, First, "X", Unidentified),
+                    (Some(7), Down(First), "x", Unidentified),
+                    (Some(7), Down(AutoRepeat), "X", Unidentified),
+                    (Some(7), Up, "X", Unidentified),
                 ],
                 &["x", "x", "x"],
             ),
             (
                 "a key with a code passes through",
-                &[
-                    (Some(7), Down, First, "a", KeyA),
-                    (Some(7), Up, First, "A", KeyA),
-                ],
+                &[(Some(7), Down(First), "a", KeyA), (Some(7), Up, "A", KeyA)],
                 &["a", "A"],
             ),
             (
                 "two keys apart",
                 &[
-                    (Some(7), Down, First, "x", Unidentified),
-                    (Some(8), Down, First, "y", Unidentified),
-                    (Some(7), Up, First, "X", Unidentified),
-                    (Some(8), Up, First, "Y", Unidentified),
+                    (Some(7), Down(First), "x", Unidentified),
+                    (Some(8), Down(First), "y", Unidentified),
+                    (Some(7), Up, "X", Unidentified),
+                    (Some(8), Up, "Y", Unidentified),
                 ],
                 &["x", "y", "x", "y"],
             ),
             (
                 "a release with no press passes through",
-                &[(Some(7), Up, First, "X", Unidentified)],
+                &[(Some(7), Up, "X", Unidentified)],
                 &["X"],
             ),
             (
                 "keys the host has no name for pass through",
                 &[
-                    (None, Down, First, "a", Unidentified),
-                    (None, Down, First, "b", Unidentified),
-                    (None, Up, First, "a", Unidentified),
-                    (None, Up, First, "b", Unidentified),
+                    (None, Down(First), "a", Unidentified),
+                    (None, Down(First), "b", Unidentified),
+                    (None, Up, "a", Unidentified),
+                    (None, Up, "b", Unidentified),
                 ],
                 &["a", "b", "a", "b"],
             ),
             (
                 "a press again takes its new key",
                 &[
-                    (Some(7), Down, First, "x", Unidentified),
-                    (Some(7), Down, First, "X", Unidentified),
-                    (Some(7), Up, First, "x", Unidentified),
+                    (Some(7), Down(First), "x", Unidentified),
+                    (Some(7), Down(First), "X", Unidentified),
+                    (Some(7), Up, "x", Unidentified),
                 ],
                 &["x", "X", "X"],
             ),
@@ -129,11 +127,7 @@ mod tests {
             let mut unplaced = UnplacedKeys::default();
             let out: Vec<Key> = steps
                 .iter()
-                .map(|&(id, state, repeat, key, code)| {
-                    unplaced
-                        .settle(id, event(state, key, code).with_repeat(repeat))
-                        .key
-                })
+                .map(|&(id, state, key, code)| unplaced.settle(id, event(state, key, code)).key)
                 .collect();
             let want: Vec<Key> = keys.iter().map(|key| Key::character(*key)).collect();
             assert_eq!(out, want, "{case}");
@@ -143,7 +137,7 @@ mod tests {
     #[test]
     fn a_key_no_release_follows_is_not_held() {
         let mut unplaced = UnplacedKeys::default();
-        let stray = event(KeyState::Down, "é", Code::Unidentified).with_release(KeyRelease::Never);
+        let stray = event(KeyState::Down(KeyPress::Unpaired), "é", Code::Unidentified);
         let _ = unplaced.settle(Some(1_u32), stray);
         let up = unplaced.settle(Some(1), event(KeyState::Up, "E", Code::Unidentified));
         assert_eq!(up.key, Key::character("E"), "nothing was held for it");
@@ -153,7 +147,10 @@ mod tests {
     fn the_oldest_held_key_is_let_go_past_the_bound() {
         let mut unplaced = UnplacedKeys::default();
         for id in 0..=16_u32 {
-            let _ = unplaced.settle(Some(id), event(KeyState::Down, "x", Code::Unidentified));
+            let _ = unplaced.settle(
+                Some(id),
+                event(KeyState::Down(KeyPress::First), "x", Code::Unidentified),
+            );
         }
         let first = unplaced.settle(Some(0), event(KeyState::Up, "X", Code::Unidentified));
         assert_eq!(first.key, Key::character("X"), "the oldest was let go");

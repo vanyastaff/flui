@@ -7,7 +7,7 @@ use core::time::Duration;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::EventTime;
-use flui_platform::keyboard::{Code, Key, KeyEvent, KeyRelease, KeyRepeat, KeyState, NamedKey};
+use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::pointer::{
     ContactSize, HoverDistance, InputValueError, PanZoomTransform, PenOrientation, PointerButton,
     PointerButtons, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition,
@@ -288,31 +288,24 @@ fn a_pan_zoom_transform_is_finite_with_a_positive_scale() {
     assert!(PanZoomTransform::try_new(tiny, 0.0).is_ok());
 }
 
-fn a_key_event_is_a_repeat_only_while_down() {
-    let up = KeyEvent::new(KeyState::Up, Key::Named(NamedKey::Enter), Code::Enter, T0)
-        .with_repeat(KeyRepeat::AutoRepeat);
-    assert_eq!(up.repeat(), KeyRepeat::First);
-    let down = KeyEvent::new(KeyState::Down, Key::character("a"), Code::KeyA, T0)
-        .with_repeat(KeyRepeat::AutoRepeat);
-    assert_eq!(down.repeat(), KeyRepeat::AutoRepeat);
+/// A repeat and a key-down with no release are kinds of key-down: the event
+/// keeps the one it was built with, and a release carries neither (an
+/// auto-repeated release does not compile, `KeyState`'s doctest).
+fn a_repeat_and_a_missing_release_are_kinds_of_key_down() {
+    for press in [KeyPress::First, KeyPress::AutoRepeat, KeyPress::Unpaired] {
+        let down = KeyEvent::new(KeyState::Down(press), Key::character("a"), Code::KeyA, T0);
+        assert_eq!(down.state, KeyState::Down(press), "{press:?}");
+    }
+    let up = KeyEvent::new(KeyState::Up, Key::character("a"), Code::KeyA, T0);
+    assert_eq!(up.state, KeyState::Up);
 }
 
-fn a_key_event_is_unreleased_only_while_down() {
-    let down = KeyEvent::new(KeyState::Down, Key::character("é"), Code::Unidentified, T0);
-    assert_eq!(
-        down.release(),
-        KeyRelease::Follows,
-        "a key-down has a release by default"
-    );
-    let stray = down.with_release(KeyRelease::Never);
-    assert_eq!(stray.release(), KeyRelease::Never);
-    let up = KeyEvent::new(KeyState::Up, Key::character("é"), Code::Unidentified, T0)
-        .with_release(KeyRelease::Never);
-    assert_eq!(
-        up.release(),
-        KeyRelease::Follows,
-        "a release is the key's own"
-    );
+/// A dead key is not a named key: it carries the accent it leaves pending.
+fn a_dead_key_carries_its_accent_and_no_named_key_spells_it() {
+    assert_eq!(NamedKey::from_w3c("Dead"), None);
+    assert!(NamedKey::ALL.iter().all(|key| key.as_str() != "Dead"));
+    assert_ne!(Key::Dead(Some('´')), Key::Dead(Some('^')));
+    assert_ne!(Key::Dead(None), Key::Named(NamedKey::Unidentified));
 }
 
 fn character_keys_preserve_nonempty_native_text_and_refuse_empty_text() {
@@ -641,12 +634,12 @@ fn input_vocabulary_contract() {
                 a_pan_zoom_event_is_always_a_trackpad_gesture,
             ),
             (
-                "a_key_event_is_a_repeat_only_while_down",
-                a_key_event_is_a_repeat_only_while_down,
+                "a_repeat_and_a_missing_release_are_kinds_of_key_down",
+                a_repeat_and_a_missing_release_are_kinds_of_key_down,
             ),
             (
-                "a_key_event_is_unreleased_only_while_down",
-                a_key_event_is_unreleased_only_while_down,
+                "a_dead_key_carries_its_accent_and_no_named_key_spells_it",
+                a_dead_key_carries_its_accent_and_no_named_key_spells_it,
             ),
             (
                 "character_keys_preserve_nonempty_native_text_and_refuse_empty_text",

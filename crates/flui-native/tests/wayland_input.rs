@@ -42,7 +42,7 @@ mod cases {
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
     use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
-    use flui_platform::keyboard::{Code, Key, KeyState};
+    use flui_platform::keyboard::{Code, Key, KeyPress, KeyState};
     use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
     use flui_testing::window_commands::AdmitAndApply as _;
@@ -232,7 +232,7 @@ mod cases {
         fake(KEY_RELEASE_EVENT, X_KEY_A, None);
         turn_until(&platform, &window, &handler, "the key", |calls| {
             calls.iter().any(|call| {
-                matches!(call, HandlerCall::Input(PlatformInput::Keyboard(key)) if key.state() == KeyState::Up)
+                matches!(call, HandlerCall::Input(PlatformInput::Keyboard(key)) if key.state == KeyState::Up)
             })
         });
         let keyed = last_input_serial(&platform).expect("the key is input");
@@ -295,10 +295,14 @@ mod cases {
             .collect();
         assert_eq!(
             keys.iter()
-                .map(|key| (key.state(), key.key.clone(), key.code))
+                .map(|key| (key.state, key.key.clone(), key.code))
                 .collect::<Vec<_>>(),
             [
-                (KeyState::Down, Key::character("a"), Code::KeyA),
+                (
+                    KeyState::Down(KeyPress::First),
+                    Key::character("a"),
+                    Code::KeyA
+                ),
                 (KeyState::Up, Key::character("a"), Code::KeyA),
             ]
         );
@@ -378,7 +382,7 @@ mod cases {
         handler.react_to_input(|input| {
             if let PlatformInput::Keyboard(key) = &input {
                 assert!(
-                    key.state() != KeyState::Down,
+                    !matches!(key.state, KeyState::Down(_)),
                     "the handler fails at the press"
                 );
             }
@@ -396,14 +400,14 @@ mod cases {
                 .inputs()
                 .into_iter()
                 .filter_map(|input| match input {
-                    PlatformInput::Keyboard(key) => Some(key.state()),
+                    PlatformInput::Keyboard(key) => Some(key.state),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
         };
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut raised = 0;
-        while !keys().contains(&KeyState::Down) {
+        while !keys().contains(&KeyState::Down(KeyPress::First)) {
             let turned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_for(&platform, Duration::from_millis(20))
             }));
@@ -415,7 +419,7 @@ mod cases {
         assert_eq!(raised, 1, "the press's panic left the loop once");
         assert_eq!(
             keys(),
-            [KeyState::Down, KeyState::Up],
+            [KeyState::Down(KeyPress::First), KeyState::Up],
             "the release the turn took was dropped with the press's panic"
         );
         window.close_for_cleanup();
