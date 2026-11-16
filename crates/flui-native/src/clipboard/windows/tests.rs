@@ -5,11 +5,19 @@
 //! `cargo test`, where they share one process and one clipboard thread (the
 //! nextest group `system-clipboard` serialises their processes), and it puts
 //! back what the clipboard held when the test began, on every exit.
-//! Restored are the formats whose data is global memory: text, DIBs, file
-//! lists, the locale and registered formats. Not restored: formats held as
-//! GDI handles (`CF_BITMAP`, `CF_ENHMETAFILE`, `CF_METAFILEPICT`,
-//! `CF_PALETTE`), owner-display formats, and the original owner, so data
-//! another application rendered on demand is restored as rendered.
+//!
+//! Saved and restored are [`SAVED_FORMATS`] alone: the standard formats
+//! whose data is plain global memory with no handle inside, which a copy of
+//! the bytes reproduces whole (text, the DIB images, the file list, the
+//! locale). Not saved: formats held as GDI handles (`CF_BITMAP`,
+//! `CF_ENHMETAFILE`, `CF_METAFILEPICT`, `CF_PALETTE`); registered formats,
+//! which may be rendered only on demand by an owner that takes up to thirty
+//! seconds each, and include OLE's `DataObject` and `Ole Private Data`, whose
+//! bytes name the original owner's objects and must never be set again by
+//! anyone else; owner-display formats; and the original owner itself.
+//!
+//! The guard never panics: a save or a restore the clipboard thread does not
+//! answer in time is reported on stderr, and the test's own outcome stands.
 //!
 //! Another process may hold the clipboard at any moment (this machine's
 //! remote-desktop client reads every change): no assertion depends on its
@@ -20,7 +28,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use windows::Win32::System::DataExchange::EnumClipboardFormats;
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, WM_RENDERFORMAT};
 
 use super::*;
@@ -31,50 +38,48 @@ use crate::testing::clipboard::{SettlingOwner, read_within};
 /// process's hold of the clipboard included.
 const ANSWER_WITHIN: Duration = Duration::from_secs(10);
 
+/// How long the guard waits for its save: each saved format may be one an
+/// owner renders on demand, which Win32 waits thirty seconds for.
+const SAVE_WITHIN: Duration = Duration::from_secs(5 * 31);
+
 /// Serialises this module's tests within one process.
 static SERIAL: Mutex<()> = Mutex::new(());
 
-/// The formats a snapshot copies: those whose data is global memory.
-const GLOBAL_FORMATS: [u32; 5] = [
+/// The formats the guard saves and restores: plain global memory with no
+/// handle inside, reproduced whole by a copy of its bytes.
+const SAVED_FORMATS: [u32; 5] = [
     13, // CF_UNICODETEXT
     8,  // CF_DIB
     17, // CF_DIBV5
-    15, // CF_HDROP
-    16, // CF_LOCALE
+    15, // CF_HDROP: a DROPFILES header and the paths, inline
+    16, // CF_LOCALE: an LCID
 ];
-
-/// The first registered format number; registered formats hold global
-/// memory.
-const FIRST_REGISTERED: u32 = 0xC000;
 
 /// One test's hold on the system clipboard: the module's lock, and what the
 /// clipboard held, put back when it drops.
 struct ClipboardTest {
-    saved: Vec<(u32, Vec<u8>)>,
+    /// `None` when the save was not answered in time: nothing is restored.
+    saved: Option<Vec<(u32, Vec<u8>)>>,
     _serial: MutexGuard<'static, ()>,
 }
 
 impl ClipboardTest {
     fn begin() -> Self {
         let serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
-        let saved = inspect(|| {
-            let mut saved = Vec::new();
-            let mut format = 0;
-            loop {
-                // SAFETY: plain FFI call; the session holds the clipboard
-                // open on this thread.
-                format = unsafe { EnumClipboardFormats(format) };
-                if format == 0 {
-                    break;
-                }
-                if (GLOBAL_FORMATS.contains(&format) || format >= FIRST_REGISTERED)
-                    && let Some(bytes) = copy_global(format)
-                {
-                    saved.push((format, bytes));
-                }
-            }
-            saved
+        let saved = try_inspect(SAVE_WITHIN, || {
+            SAVED_FORMATS
+                .iter()
+                .filter(|format| {
+                    // SAFETY: plain FFI call; the session holds the
+                    // clipboard open on this thread.
+                    unsafe { IsClipboardFormatAvailable(**format) }.is_ok()
+                })
+                .filter_map(|format| copy_global(*format).map(|bytes| (*format, bytes)))
+                .collect::<Vec<_>>()
         });
+        if saved.is_none() {
+            eprintln!("the clipboard was not saved in {SAVE_WITHIN:?}: it will not be restored");
+        }
         Self {
             saved,
             _serial: serial,
@@ -84,21 +89,24 @@ impl ClipboardTest {
 
 impl Drop for ClipboardTest {
     fn drop(&mut self) {
-        let saved = std::mem::take(&mut self.saved);
-        inspect(move || {
+        let Some(saved) = self.saved.take() else {
+            return;
+        };
+        let restored = try_inspect(ANSWER_WITHIN, move || {
             // SAFETY: the session holds the clipboard open on this thread;
             // each format's memory is ours until `hand_over` succeeds.
             unsafe {
                 if EmptyClipboard().is_err() {
-                    return;
+                    return false;
                 }
-                for (format, bytes) in saved {
-                    if let Ok(prepared) = Prepared::try_new(format, &bytes) {
-                        let _ = prepared.hand_over();
-                    }
-                }
+                saved.into_iter().all(|(format, bytes)| {
+                    Prepared::try_new(format, &bytes).is_ok_and(|prepared| prepared.hand_over())
+                })
             }
         });
+        if restored != Some(true) {
+            eprintln!("the clipboard was not restored: {restored:?}");
+        }
     }
 }
 
@@ -122,6 +130,22 @@ fn copy_global(format: u32) -> Option<Vec<u8>> {
         let _ = GlobalUnlock(global);
         Some(bytes)
     }
+}
+
+/// Run `look` on the clipboard thread inside a session and wait up to
+/// `within` for it: `None` when it did not answer in time.
+fn try_inspect<T: Send + 'static>(
+    within: Duration,
+    look: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (sent, seen) = mpsc::channel();
+    submit(
+        Task::Inspect(Box::new(move || {
+            let _ = sent.send(look());
+        })),
+        Answer::Nobody,
+    );
+    seen.recv_timeout(within).ok()
 }
 
 /// The measure matches what the lossy decode writes, surrogate pairs and
@@ -151,15 +175,7 @@ fn only_an_owner_that_did_not_render_in_time_answers_timeout() {
 
 /// Run `look` on the clipboard thread inside a session, and wait for it.
 fn inspect<T: Send + 'static>(look: impl FnOnce() -> T + Send + 'static) -> T {
-    let (sent, seen) = mpsc::channel();
-    submit(
-        Task::Inspect(Box::new(move || {
-            let _ = sent.send(look());
-        })),
-        Answer::Nobody,
-    );
-    seen.recv_timeout(ANSWER_WITHIN)
-        .expect("the clipboard thread opens the clipboard for a look")
+    try_inspect(ANSWER_WITHIN, look).expect("the clipboard thread opens the clipboard for a look")
 }
 
 /// Write `text` and wait up to `within` for the write's answer.
@@ -607,37 +623,6 @@ fn a_read_of_text_never_rendered_in_time_answers_timeout() {
             .expect("the write behind the read is answered")
             .expect("the write is answered, not abandoned"),
         Ok(())
-    );
-}
-
-/// A read whose completion nobody holds when its turn comes is skipped:
-/// the write queued behind it does not wait for an owner that renders late.
-#[test]
-fn a_read_nobody_waits_for_is_skipped() {
-    let _test = ClipboardTest::begin();
-    let delay = Duration::from_secs(3);
-    own_with_late_text(delay);
-    let clipboard = WindowsClipboard::new();
-    let owner = SettlingOwner::new();
-    // Held while the queue is still busy with this look, so the read waits
-    // its turn; dropped before the look lets go.
-    let (gate_open, gate) = mpsc::channel::<()>();
-    submit(
-        Task::Inspect(Box::new(move || {
-            let _ = gate.recv_timeout(ANSWER_WITHIN);
-        })),
-        Answer::Nobody,
-    );
-    let (read, answer) = owner.pending::<ClipboardRead>();
-    clipboard.read_text(answer);
-    drop(read);
-    let started = Instant::now();
-    let _ = gate_open.send(());
-    assert_eq!(write_and_wait(&clipboard, "not behind the read"), Ok(()));
-    assert!(
-        started.elapsed() < delay,
-        "the write waited {:?} behind a read nobody waited for",
-        started.elapsed()
     );
 }
 

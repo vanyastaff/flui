@@ -183,11 +183,14 @@ impl CompletionSource {
 
     /// A pending completion and the resolver that answers it.
     ///
-    /// The resolver may move to any thread; the completion settles at the
-    /// owner's next turn after [`Resolver::resolve`], never inline. Once the
-    /// owner has retired, the completion is born
+    /// The resolver is `Send` when `T` is: an answer the operating system
+    /// gives on another thread moves there, and an owner-local answer (a
+    /// scenario's, a value holding an `Rc`) stays on the owner. Either way the
+    /// completion settles at the owner's next turn after
+    /// [`Resolver::resolve`], never inline. Once the owner has retired, the
+    /// completion is born
     /// [`OwnerRetired`](Abandoned::OwnerRetired).
-    pub fn pending<T: Send + 'static>(&self) -> (Completion<T>, Resolver<T>) {
+    pub fn pending<T: 'static>(&self) -> (Completion<T>, Resolver<T>) {
         let shared: Shared<T> = Arc::new(Mutex::new(None));
         let local = Rc::new(Local {
             shared: Arc::clone(&shared),
@@ -426,18 +429,6 @@ pub struct Resolver<T> {
 }
 
 impl<T> Resolver<T> {
-    /// Whether anybody may still take the answer: `false` once the
-    /// completion was dropped unconsumed, or was born after its owner
-    /// retired. A provider may skip work whose answer nobody takes (a read);
-    /// work with effects of its own (a write) is still done. Read from any
-    /// thread; `true` can turn `false` at any moment, never back.
-    #[must_use]
-    pub fn is_awaited(&self) -> bool {
-        // The completion's owner-local half holds the other share of the
-        // slot until it is dropped or settled.
-        self.id.is_some() && Arc::strong_count(&self.shared) > 1
-    }
-
     fn deliver(&mut self, outcome: Outcome<T>) -> Result<(), OwnerRetired> {
         self.done = true;
         let previous = self
@@ -455,7 +446,7 @@ impl<T> Resolver<T> {
     }
 }
 
-impl<T: Send + 'static> Resolver<T> {
+impl<T: 'static> Resolver<T> {
     /// Answers the completion with `value`; it settles at the owner's next
     /// turn.
     ///

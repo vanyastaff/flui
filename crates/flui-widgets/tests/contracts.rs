@@ -821,6 +821,8 @@ fn selection_menu() {
             ("selection_menu::the_toolbar_offers_only_what_the_field_can_do", crate::selection_menu::the_toolbar_offers_only_what_the_field_can_do),
             ("selection_menu::a_secondary_click_opens_the_popup_on_the_selection", crate::selection_menu::a_secondary_click_opens_the_popup_on_the_selection),
             ("selection_menu::the_menu_key_and_assistive_technology_open_the_popup", crate::selection_menu::the_menu_key_and_assistive_technology_open_the_popup),
+            ("selection_menu::assistive_technology_cuts_and_pastes_in_an_unfocused_field", crate::selection_menu::assistive_technology_cuts_and_pastes_in_an_unfocused_field),
+            ("selection_menu::a_toolbar_cut_at_a_field_without_the_focus_is_refused", crate::selection_menu::a_toolbar_cut_at_a_field_without_the_focus_is_refused),
             ("selection_menu::added_commands_follow_the_editing_commands", crate::selection_menu::added_commands_follow_the_editing_commands),
             ("selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go", crate::selection_menu::a_handle_drag_hides_the_toolbar_until_it_lets_go),
             ("selection_menu::a_policy_or_no_menu_keeps_the_menu_away", crate::selection_menu::a_policy_or_no_menu_keeps_the_menu_away),

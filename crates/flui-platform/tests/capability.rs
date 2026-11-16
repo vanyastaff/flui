@@ -74,6 +74,25 @@ impl Drop for DropFlag {
 }
 
 #[test]
+fn an_owner_local_answer_settles_through_its_resolver() {
+    let owner = Owner::new();
+    // `Rc` is not `Send`: its resolver stays on the owner, and needs no more.
+    let (completion, resolver) = owner.source.pending::<Rc<u32>>();
+    let seen = Rc::new(RefCell::new(None));
+    let sink = Rc::clone(&seen);
+    completion.on_complete(move |outcome| *sink.borrow_mut() = Some(outcome));
+
+    resolver.resolve(Rc::new(7)).expect("owner live");
+    assert_eq!(
+        *seen.borrow(),
+        None,
+        "resolve never runs the closure inline"
+    );
+    owner.turn();
+    assert_eq!(*seen.borrow(), Some(Ok(Rc::new(7))));
+}
+
+#[test]
 fn a_resolved_completion_settles_at_the_next_owner_turn() {
     let owner = Owner::new();
     let (completion, resolver) = owner.source.pending::<u32>();
@@ -104,33 +123,6 @@ fn a_result_from_another_thread_reaches_the_owner_through_the_poster() {
     owner.turn();
     assert_eq!(completion.poll(), Some(Ok("from the OS".to_owned())));
     assert_eq!(completion.poll(), None, "a completion settles once");
-}
-
-/// A resolver tells, from any thread, whether anybody may still take its
-/// answer: while the completion is held or waited on, and no longer once it
-/// is dropped or its owner retired first.
-#[test]
-fn a_resolver_knows_whether_its_answer_is_awaited() {
-    let owner = Owner::new();
-    let (held, answer) = owner.source.pending::<u32>();
-    let awaited = std::thread::spawn(move || (answer.is_awaited(), answer))
-        .join()
-        .expect("OS thread");
-    assert!(awaited.0, "a held completion awaits its answer");
-    drop(held);
-    assert!(
-        !awaited.1.is_awaited(),
-        "a dropped completion awaits nothing"
-    );
-
-    let (waited, answer) = owner.source.pending::<u32>();
-    waited.on_complete(|_| {});
-    assert!(
-        answer.is_awaited(),
-        "a waited-on completion awaits its answer"
-    );
-    owner.retire();
-    assert!(!answer.is_awaited(), "a retired owner awaits nothing");
 }
 
 #[test]

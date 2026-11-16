@@ -63,7 +63,7 @@ use windows::{
     core::w,
 };
 
-use crate::clipboard::patience::OpenAttempts;
+use crate::clipboard::patience::{OpenAttempts, RestartBudget, queued_too_long};
 use crate::host::{NativeClipboard, admit_text, host_text, text_fits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
@@ -97,7 +97,8 @@ impl crate::host::Clipboard<crate::owner::windows::WindowsLoop> for WindowsClipb
 
 impl NativeClipboard for WindowsClipboard {
     /// Queued to the clipboard thread; answered from there. A read whose
-    /// completion nobody holds any longer when its turn comes is skipped.
+    /// readers all went away is still performed: the handle's shared read
+    /// keeps waiting for it, so the thread cannot tell it apart.
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
         submit(Task::Read, Answer::Read(answer));
     }
@@ -146,7 +147,8 @@ enum Settlement {
     Nothing,
 }
 
-/// One request and when it was accepted, which its patience counts from.
+/// One request and when it was accepted, which its time in the queue counts
+/// from.
 struct Request {
     task: Task,
     answer: Answer,
@@ -169,16 +171,6 @@ impl Task {
 }
 
 impl Answer {
-    /// Whether anybody still waits for this answer.
-    fn is_awaited(&self) -> bool {
-        match self {
-            Answer::Read(answer) => answer.is_awaited(),
-            Answer::Written(answer) => answer.is_awaited(),
-            #[cfg(test)]
-            Answer::Nobody => true,
-        }
-    }
-
     /// Hand the request its answer: what its task found, or `error` when
     /// the task found nothing (it panicked, or never ran). A retired owner
     /// has nobody left to answer.
@@ -296,11 +288,14 @@ impl ClipboardThread {
 }
 
 /// The clipboard thread's body: [`serve`] until `WM_QUIT`, starting it again
-/// after a panic outside any one request (a message its window dispatched),
-/// with the request whose turn it was kept. Only an abort, which ends the
-/// process, ends the thread before then.
+/// after a panic outside any one request, with the request whose turn it
+/// was kept. Past [`RestartBudget`]'s restarts in its window the panic
+/// recurs at once: the thread stops serving and refuses every request
+/// `Unavailable` from then on, logged once, rather than spin. Only an abort,
+/// which ends the process, ends the thread.
 fn run_thread(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
     let mut turn: Option<(Request, OpenAttempts)> = None;
+    let mut budget = RestartBudget::new();
     loop {
         let mut failure = FirstPanic::new();
         if failure
@@ -310,8 +305,45 @@ fn run_thread(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Reques
             return;
         }
         report(failure);
+        if !budget.restart(Instant::now()) {
+            break;
+        }
+    }
+    let mut failure = FirstPanic::new();
+    failure.contain(|| {
+        tracing::error!(
+            "the clipboard thread failed again at once; every clipboard request is refused from now on"
+        );
+    });
+    report(failure);
+    let refuse = |request: Request| {
+        let mut failure = FirstPanic::new();
+        failure.contain(|| request.answer.settle(None, ClipboardError::Unavailable));
+        report(failure);
+    };
+    if let Some((request, _)) = turn.take() {
+        refuse(request);
+    }
+    // The window still owns what FLUI last wrote: its messages are still
+    // pumped, so another process's `EmptyClipboard` is never kept waiting.
+    loop {
+        let mut failure = FirstPanic::new();
+        let live = failure.contain(pump_messages).unwrap_or(true);
+        report(failure);
+        if !live {
+            return;
+        }
+        match requests.recv_timeout(BROKEN_PUMP_PERIOD) {
+            Ok(request) => refuse(request),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
     }
 }
+
+/// How often a clipboard thread that stopped serving still pumps its
+/// window's messages.
+const BROKEN_PUMP_PERIOD: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Serve the requests in order, each tried until its clipboard opens or its
 /// patience runs out, and between attempts wait for the next attempt, a new
@@ -335,17 +367,18 @@ fn serve(
             let (request, mut attempts) = match turn.take() {
                 Some(current) => current,
                 None => match requests.try_recv() {
-                    Ok(request) => {
-                        let attempts = OpenAttempts::new(request.accepted);
-                        (request, attempts)
-                    }
+                    // The patience to open counts from the request's turn.
+                    Ok(request) => (request, OpenAttempts::new(Instant::now())),
                     Err(_) => break,
                 },
             };
-            if matches!(request.task, Task::Read) && !request.answer.is_awaited() {
-                // Nobody holds the read's completion: skip it, rather than
-                // wait on an owner that renders late for an answer nobody
-                // takes. Dropping the resolver abandons nobody's read.
+            if queued_too_long(request.accepted, Instant::now()) {
+                let mut failure = FirstPanic::new();
+                failure.contain(|| request.answer.settle(None, ClipboardError::Timeout));
+                failure.contain(|| {
+                    tracing::warn!("a clipboard request waited its whole bound in the queue");
+                });
+                report(failure);
                 continue;
             }
             if let Some(session) = ClipboardSession::try_open(window) {

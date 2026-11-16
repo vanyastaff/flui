@@ -120,6 +120,19 @@ pub(crate) fn a_cut_deletes_only_what_the_clipboard_took() {
     assert_eq!(controller.text(), "abc", "a refused cut deletes nothing");
     assert_eq!(harness.clipboard().text(), None);
 
+    // Kept by the application alone (a web page without the Clipboard API):
+    // no other application could paste it, so the cut deletes nothing.
+    harness
+        .clipboard()
+        .fail_writes_with(flui_platform::ClipboardError::ApplicationOnly);
+    assert!(cut(&harness), "cut consumes the chord");
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "abc",
+        "an application-only write deletes nothing"
+    );
+
     harness.clipboard().stop_failing_writes();
     assert!(cut(&harness), "cut consumes the chord");
     assert_eq!(
@@ -134,7 +147,7 @@ pub(crate) fn a_cut_deletes_only_what_the_clipboard_took() {
 
 /// A cut whose answer arrives after its field lost the focus, or was
 /// disposed, deletes nothing: the answer applies under the rule a paste's
-/// does.
+/// does. A field that took the focus back before the answer deletes.
 ///
 /// Fails without the change: the answer checked only that the field was
 /// enabled and drove the same controller, so both fields lost their text.
@@ -169,6 +182,23 @@ pub(crate) fn a_cut_answered_after_its_field_left_deletes_nothing() {
     assert_eq!(harness.clipboard().answer_held_writes(), 1);
     harness.tick();
     assert_eq!(controller.text(), "abc", "a disposed field keeps its text");
+
+    // Focus lost and taken back before the answer: the field takes an edit
+    // again, with the text and selection the cut wrote, so the cut deletes.
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, node) = mount_field(&controller, |field| field);
+    harness.clipboard().hold_writes();
+    controller.set_selection(0, 3);
+    assert!(cut(&harness), "cut consumes the chord");
+    node.unfocus();
+    let _ = node.request_focus();
+    assert_eq!(harness.clipboard().answer_held_writes(), 1);
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "",
+        "a field focused again deletes what it cut"
+    );
 }
 
 pub(crate) fn select_all_replaces_the_complete_unicode_document_without_reporting_selection_as_an_edit()

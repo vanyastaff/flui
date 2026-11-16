@@ -45,7 +45,11 @@ pub(super) struct ClipboardTextAction {
 impl ClipboardTextAction {
     /// Whether the field takes an edit from the clipboard now: it is enabled,
     /// mounted (its focus attachment is attached) and holds the primary
-    /// focus.
+    /// focus. Every path to a field's cut and paste gives it the focus first
+    /// (the chord reaches the focused node; the selection menu, assistive
+    /// technology's included, focuses the field it opens on), so an edit
+    /// that arrives at a field without it is refused, at its start and at
+    /// its answer alike.
     fn admits_edit(&self) -> bool {
         let attachment = self.attachment.borrow().clone();
         let node = self.focus_node.borrow().clone();
@@ -88,6 +92,11 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };
+        // A cut starts under the rule its answer re-checks, as a paste does:
+        // a field that does not take an edit now is not written from.
+        if *intent == CopySelectionTextIntent::Cut && !self.admits_edit() {
+            return ActionOutcome::NotPerformed;
+        }
         let controller = self.controller();
         let selected = controller.selected_text();
         if selected.is_empty() {

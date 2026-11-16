@@ -23,6 +23,14 @@
 //!   pipe meanwhile.
 //! - **A read of the application's own selection** asks its closure at
 //!   once, again with nothing held.
+//! - **A claim with no input to set it under is kept in the process.** A
+//!   clipboard write with none is refused (ADR-0337 §1) because a write
+//!   answers its caller and a refused write is never read back. A claim
+//!   answers nothing: the selection is what the user selected in the
+//!   application, which a middle press in the same application pastes
+//!   whether or not the compositor has it, until another client's selection
+//!   arrives. [`NativePrimarySelection::owns`](crate::host::NativePrimarySelection::owns)
+//!   still says whether the application holds the selection.
 
 use std::os::fd::OwnedFd;
 use std::rc::Rc;

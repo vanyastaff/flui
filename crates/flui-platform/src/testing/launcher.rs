@@ -1,9 +1,10 @@
 //! A scripted [`LauncherBackend`] for scenarios: the double of the launcher
-//! contract (ADR-0154 §10, ADR-0243 D4).
+//! contract (ADR-0154 §10, ADR-0243 D4), on the scenario primitive.
 
-use std::{cell::RefCell, collections::VecDeque, path::PathBuf, rc::Rc};
+use std::path::PathBuf;
 
 use crate::capability::Resolver;
+use crate::capability::scripted::{Answer, Scenario, Script};
 use crate::launch::{ExternalUri, LaunchResult, LauncherBackend};
 
 /// One request a [`ScriptedLauncher`] received.
@@ -20,100 +21,85 @@ pub enum LaunchRequest {
     TrashPath(PathBuf),
 }
 
-#[derive(Default)]
-struct State {
-    requests: Vec<LaunchRequest>,
-    /// Answers for the next requests, oldest first; `Ok(())` once empty.
-    script: VecDeque<LaunchResult>,
-    /// While set, requests wait in `held` instead of being answered.
-    holding: bool,
-    held: VecDeque<Resolver<LaunchResult>>,
+/// A launcher whose system is a [`Script`] of [`LaunchRequest`]s: it records
+/// every request and answers it as the script says. A request the script
+/// does not answer is the scenario's
+/// [`Unexpected`](crate::capability::scripted::ScenarioFailure::Unexpected)
+/// failure, and its completion ends
+/// [`ProviderDropped`](crate::capability::Abandoned::ProviderDropped): there
+/// is no answer nobody wrote.
+///
+/// Cheap to clone; clones share the script, so a test keeps one and hands
+/// another to the provider.
+#[derive(Clone, Debug)]
+pub struct ScriptedLauncher {
+    script: Script<LaunchRequest, LaunchResult>,
 }
 
-/// A launcher whose system is a script: it records every request and
-/// answers each with the next scripted result, `Ok(())` when none is
-/// scripted, or holds it until the test releases it.
-///
-/// Cheap to clone; clones share the script and the record, so a test keeps
-/// one and hands another to the provider.
-#[derive(Clone, Default)]
-pub struct ScriptedLauncher {
-    state: Rc<RefCell<State>>,
+impl Default for ScriptedLauncher {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ScriptedLauncher {
-    /// A launcher that answers every request `Ok(())`.
+    /// A launcher on a scenario of its own, with nothing scripted.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::on(&Scenario::new())
     }
 
-    /// Answer the next unscripted request with `result`.
+    /// A launcher whose script is on `scenario`, with nothing scripted.
+    #[must_use]
+    pub fn on(scenario: &Scenario) -> Self {
+        Self {
+            script: scenario.script("launcher"),
+        }
+    }
+
+    /// The script: steps matched by request, standing answers, holds.
+    #[must_use]
+    pub fn script(&self) -> &Script<LaunchRequest, LaunchResult> {
+        &self.script
+    }
+
+    /// Answer the next request, whichever it is, with `result`.
     pub fn answer_next(&self, result: LaunchResult) {
-        self.state.borrow_mut().script.push_back(result);
+        self.script.answer_next(Answer::value(result));
     }
 
     /// Hold every later request until [`release`](Self::release).
     pub fn hold(&self) {
-        self.state.borrow_mut().holding = true;
+        self.script.hold();
     }
 
     /// Answer the oldest held request with `result`; `false` when none is
     /// held.
     pub fn release(&self, result: LaunchResult) -> bool {
-        let held = self.state.borrow_mut().held.pop_front();
-        held.is_some_and(|answer| {
-            // A retired owner leaves nothing waiting for the answer.
-            let _ = answer.resolve(result);
-            true
-        })
+        self.script.release_oldest(result)
     }
 
     /// The requests received so far, oldest first.
     #[must_use]
     pub fn requests(&self) -> Vec<LaunchRequest> {
-        self.state.borrow().requests.clone()
-    }
-
-    fn receive(&self, request: LaunchRequest, answer: Resolver<LaunchResult>) {
-        let scripted = {
-            let mut state = self.state.borrow_mut();
-            state.requests.push(request);
-            if state.holding {
-                state.held.push_back(answer);
-                return;
-            }
-            (state.script.pop_front().unwrap_or(Ok(())), answer)
-        };
-        let (result, answer) = scripted;
-        let _ = answer.resolve(result);
+        self.script.requests()
     }
 }
 
 impl LauncherBackend for ScriptedLauncher {
     fn open_uri(&self, uri: ExternalUri, answer: Resolver<LaunchResult>) {
-        self.receive(LaunchRequest::OpenUri(uri), answer);
+        self.script.receive(LaunchRequest::OpenUri(uri), answer);
     }
 
     fn open_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        self.receive(LaunchRequest::OpenPath(path), answer);
+        self.script.receive(LaunchRequest::OpenPath(path), answer);
     }
 
     fn reveal_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        self.receive(LaunchRequest::RevealPath(path), answer);
+        self.script.receive(LaunchRequest::RevealPath(path), answer);
     }
 
     fn trash_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        self.receive(LaunchRequest::TrashPath(path), answer);
-    }
-}
-
-impl std::fmt::Debug for ScriptedLauncher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.borrow();
-        f.debug_struct("ScriptedLauncher")
-            .field("requests", &state.requests.len())
-            .field("held", &state.held.len())
-            .finish_non_exhaustive()
+        self.script.receive(LaunchRequest::TrashPath(path), answer);
     }
 }

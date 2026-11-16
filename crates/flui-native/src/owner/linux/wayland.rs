@@ -190,6 +190,19 @@ pub(crate) mod user_input {
             self.grabs.retain(|(grab, _)| grab.seat != *seat);
         }
 
+        /// `seat`'s keyboard left `surface`: the last input, if it was the
+        /// seat's on that surface, is no longer one a compositor takes a
+        /// request under (a selection, an activation), so nothing names it.
+        pub(crate) fn keyboard_left(&mut self, seat: &Seat, surface: &Surface) {
+            if self
+                .last
+                .as_ref()
+                .is_some_and(|last| last.seat == *seat && last.surface == *surface)
+            {
+                self.last = None;
+            }
+        }
+
         /// `seat`'s pointer went while the seat stays: the grab it held ends,
         /// and so does a watched grab of the seat's, whether or not a leave
         /// came first. Weston (`weston_seat_release_pointer`) and wlroots
@@ -273,6 +286,22 @@ pub(crate) mod user_input {
             inputs.left(&2);
             assert_eq!(inputs.grab_on(&8), None, "the pointer left");
             assert!(!inputs.watched_ended(&2, 20), "no release reached it");
+        }
+
+        /// The keyboard leaving the surface the last input went to ends
+        /// that input: a copy made after the focus moved away has no serial
+        /// to set the selection under, and is refused rather than sent under
+        /// a stale one. Leaving another surface, or another seat's keyboard
+        /// leaving, keeps it.
+        #[test]
+        fn the_keyboard_leaving_ends_the_last_input_it_had() {
+            let mut inputs = Inputs::default();
+            inputs.record(input(1, 5, 3));
+            inputs.keyboard_left(&1, &4);
+            inputs.keyboard_left(&2, &3);
+            assert_eq!(inputs.latest(), Some(&input(1, 5, 3)));
+            inputs.keyboard_left(&1, &3);
+            assert_eq!(inputs.latest(), None);
         }
 
         /// A seat removed with a button held leaves no grab and is not the
@@ -1288,6 +1317,11 @@ mod event_loop {
         /// it held: no release reaches a surface the pointer left.
         pub(crate) fn left(&self, seat: &WlSeat) {
             self.0.with(|inputs| inputs.left(seat));
+        }
+
+        /// `seat`'s keyboard left `surface`. See [`Inputs::keyboard_left`].
+        pub(crate) fn keyboard_left(&self, seat: &WlSeat, surface: &WlSurface) {
+            self.0.with(|inputs| inputs.keyboard_left(seat, surface));
         }
 
         /// `seat`'s pointer went while the seat stays. See

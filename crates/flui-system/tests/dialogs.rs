@@ -45,7 +45,7 @@ fn an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks() {
     let request = OpenRequest::files()
         .allow_multiple()
         .title("Choose pictures")
-        .directory("/home")
+        .directory(std::env::temp_dir())
         .filter(
             FileFilter::new("Images")
                 .with_extension(".png")
@@ -80,6 +80,7 @@ fn a_cancelled_save_dialog_answers_none() {
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
 
+    dialogs.answer_next_save(Ok(None));
     let answered = land(handle.save(SaveRequest::new().suggested_name("notes.txt")));
     turn(&mut host);
 
@@ -158,6 +159,7 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     }
 
     // A refused request leaves the window free for the next one.
+    dialogs.answer_next_open(Ok(None));
     let valid = land(handle.open(OpenRequest::files().filter(images())));
     turn(&mut host);
     assert_eq!(*valid.borrow(), Some(Ok(Ok(None))));

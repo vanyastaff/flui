@@ -3,8 +3,10 @@
 - **`flui-platform`**: `ClipboardWritten`, the answer to a clipboard write: `Ok(())` once the
   clipboard holds the text, or the `ClipboardError` the host gave up with
   ([ADR-0337](/docs/adr/ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)).
-  `Resolver::is_awaited` tells a provider whether anybody still takes an answer.
-- **`flui-testing`**: `ScriptedClipboard::fail_writes_with`, `stop_failing_writes`, `hold_writes`
+  `ClipboardError::ApplicationOnly` names a write no system clipboard could take but the
+  application kept for its own reads (a web page without the Clipboard API).
+- **`flui-testing`**: `ScriptedClipboard::writes`, the script that answers writes, and
+  `fail_writes_with`, `stop_failing_writes`, `hold_writes`
   and `answer_held_writes`, which refuse or hold writes as a host whose clipboard another
   application holds does.
 - **`flui-native`**: `testing::clipboard::SettlingOwner`, `write_unobserved` and `read_within`, for
@@ -22,10 +24,13 @@
   with no user input to set the selection under (`Denied`) instead of holding its text in the
   process, and refuses a concealed write it could only serve without the hint; the web answers when
   the browser's promise settles and keeps a write's text for the page only if the clipboard took
-  it.
+  it, and a page with no Clipboard API answers `ApplicationOnly` instead of `Ok`; Wayland names
+  no input once the keyboard left the window, so a later write is refused rather than sent under
+  a stale serial.
 - **`flui-widgets`**: a cut in an `EditableText` deletes its selection at the owner turn the
   clipboard answers that it took the text, and deletes nothing when the clipboard refused it or
-  the field lost the focus or was disposed meanwhile.
+  the field lost the focus or was disposed meanwhile; like a paste, a cut is refused at a field
+  that does not hold the focus.
 
 ### Fixed
 

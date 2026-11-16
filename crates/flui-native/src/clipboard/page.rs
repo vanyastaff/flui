@@ -3,9 +3,10 @@
 //!
 //! The browser settles each `writeText` later, and may refuse it. The page
 //! keeps a write's text only once the system clipboard took it, so a refused
-//! write is never what a later read in the page answers (ADR-0337 §1); where
-//! the page has no Clipboard API at all, the page's own clipboard is the
-//! clipboard and takes every write. Writes settle in any order: a write's
+//! write is never what a later read in the page answers (ADR-0337 §1), and a
+//! page with no Clipboard API at all keeps every write for itself, which its
+//! write answers `ApplicationOnly`. Writes settle in
+//! any order: a write's
 //! text is kept only if no later write's text was kept before it.
 
 #![forbid(unsafe_code)]
@@ -51,10 +52,11 @@ impl PageClipboard {
     }
 
     /// The browser answered `write` with `written`: the page keeps its text
-    /// when the system clipboard took it and no later write's text is kept.
+    /// when the system clipboard took it, or the page alone keeps it
+    /// (`ApplicationOnly`), and no later write's text is kept.
     /// Returns `written`, the write's answer.
     pub(crate) fn settle(&self, write: PageWrite, written: ClipboardWritten) -> ClipboardWritten {
-        if written.is_ok() {
+        if matches!(written, Ok(()) | Err(ClipboardError::ApplicationOnly)) {
             let mut state = self.state.lock();
             let newer_kept = state
                 .text
@@ -107,6 +109,22 @@ mod tests {
         assert_eq!(
             text(page.refused_read(ClipboardError::Denied)),
             Ok(Some("taken".to_owned()))
+        );
+    }
+
+    /// A write no system clipboard could take answers `ApplicationOnly`, not
+    /// `Ok`, and the page's own reads answer its text.
+    #[test]
+    fn a_write_the_page_alone_keeps_is_not_ok_but_is_read_back() {
+        let page = PageClipboard::default();
+        let kept = page.begin(Arc::from("kept"));
+        assert_eq!(
+            page.settle(kept, Err(ClipboardError::ApplicationOnly)),
+            Err(ClipboardError::ApplicationOnly)
+        );
+        assert_eq!(
+            text(page.refused_read(ClipboardError::Unavailable)),
+            Ok(Some("kept".to_owned()))
         );
     }
 

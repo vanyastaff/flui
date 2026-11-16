@@ -9,8 +9,9 @@
 //! anything, a refusal answers its reason: [`ClipboardError::Denied`] for a
 //! permission, [`ClipboardError::Unavailable`] otherwise. A write goes to
 //! `navigator.clipboard.writeText()` and answers when the browser's promise
-//! settles; the page keeps its text only if the clipboard took it, and where
-//! the page has no Clipboard API its own clipboard takes every write.
+//! settles; the page keeps its text only if the clipboard took it, and a
+//! page with no Clipboard API keeps every write for itself, answering
+//! [`ClipboardError::ApplicationOnly`].
 
 // The page has one thread, so the clipboard claims `Send`/`Sync` by hand: the
 // workspace lint `unsafe_code = "warn"` is opted out here, at the module
@@ -114,8 +115,9 @@ impl NativeClipboard for WebClipboard {
     /// Answered when the browser's promise settles: `Ok` once the system
     /// clipboard holds the text, the refusal otherwise
     /// ([`ClipboardError::Denied`] for a permission), which leaves the page's
-    /// own clipboard as it was. Where the page has no Clipboard API, its own
-    /// clipboard is the clipboard and the write answers `Ok` at once.
+    /// own clipboard as it was. A page with no Clipboard API (an insecure
+    /// context) keeps the text for itself and answers
+    /// [`ClipboardError::ApplicationOnly`] at once.
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         if write.is_concealed() {
             degraded_once(&self.degraded);
@@ -124,8 +126,13 @@ impl NativeClipboard for WebClipboard {
         let promise = system_clipboard("writeText").map(|clipboard| clipboard.write_text(&text));
         let pending = self.page.begin(Arc::from(text));
         let Some(promise) = promise else {
-            // A retired owner has nobody left to answer.
-            let _ = answer.resolve(self.page.settle(pending, Ok(())));
+            // No system clipboard (an insecure context): the page alone keeps
+            // the text, which its own reads answer. A retired owner has
+            // nobody left to answer.
+            let _ = answer.resolve(
+                self.page
+                    .settle(pending, Err(ClipboardError::ApplicationOnly)),
+            );
             return;
         };
         let page = Arc::clone(&self.page);

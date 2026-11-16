@@ -13,6 +13,7 @@ use flui_interaction::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
+use flui_platform::capability::scripted::{Answer, ScenarioFailure};
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
     ProviderContext, Resolver,
@@ -96,10 +97,19 @@ fn acquire_in(
     host: &mut HeadlessHost,
     window: flui_testing::HeadlessWindowId,
 ) -> Result<ClipboardHandle, Unsupported> {
-    let acquired = Acquired::<ClipboardCapability>::default();
+    acquire_capability_in::<ClipboardCapability>(host, window)
+}
+
+/// Mount an [`Acquirer`] of `C` as the root of `window` on `host` and return
+/// what it was answered.
+pub(crate) fn acquire_capability_in<C: Capability>(
+    host: &mut HeadlessHost,
+    window: flui_testing::HeadlessWindowId,
+) -> Result<C::Handle, Unsupported> {
+    let acquired = Acquired::<C>::default();
     host.attach_to(
         window,
-        &Acquirer::<ClipboardCapability> {
+        &Acquirer::<C> {
             acquired: Rc::clone(&acquired),
         },
     )
@@ -176,6 +186,29 @@ pub(crate) fn a_refused_write_answers_its_refusal() {
         Some(Ok(Err(ClipboardError::Unavailable)))
     );
     assert_eq!(scripted.text().as_deref(), Some("before"));
+}
+
+/// A write is a request the clipboard's write script answers: a step
+/// refuses the write it takes, and the standing answer takes the next onto
+/// the clipboard (ADR-0337).
+pub(crate) fn a_scripted_write_step_refuses_that_write_alone() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    scripted
+        .writes()
+        .answer_next(Answer::value(Err(ClipboardError::Unavailable)));
+    let clipboard = acquire(&mut host).expect("provided");
+    let refused = settle_into(clipboard.write_text("refused"));
+    let taken = settle_into(clipboard.write_text("taken"));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *refused.borrow(),
+        Some(Ok(Err(ClipboardError::Unavailable)))
+    );
+    assert_eq!(*taken.borrow(), Some(Ok(Ok(()))));
+    assert_eq!(scripted.text().as_deref(), Some("taken"));
+    assert_eq!(scripted.writes().received(), 2);
 }
 
 /// A concealed write reaches the host marked, pastes like any other, and an
@@ -410,6 +443,38 @@ pub(crate) fn a_read_after_a_write_never_joins_the_read_before_it() {
     assert_eq!(*after.borrow(), Some(Ok(Ok(Some(answered("after"))))));
 }
 
+pub(crate) fn scripted_reads_answer_in_order_before_the_clipboards_text() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("copied");
+    scripted
+        .reads()
+        .answer_next(Answer::value(Err(ClipboardError::Denied)));
+    scripted
+        .reads()
+        .answer_next(Answer::value(Ok(Some(answered("late")))).after(Duration::from_millis(100)));
+    let clipboard = acquire(&mut host).expect("provided");
+
+    let denied = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*denied.borrow(), Some(Ok(Err(ClipboardError::Denied))));
+
+    let late = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::from_millis(99));
+    assert_eq!(*late.borrow(), None, "the second step answers at 100 ms");
+    let _ = host.pump(Duration::from_millis(1));
+    assert_eq!(*late.borrow(), Some(Ok(Ok(Some(answered("late"))))));
+
+    let text = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *text.borrow(),
+        Some(Ok(Ok(Some(answered("copied"))))),
+        "the steps used up, the clipboard's text answers"
+    );
+    host.scenario().verify().expect("every step was used");
+}
+
 pub(crate) fn a_failed_read_reaches_every_reader_that_joined_it() {
     let mut host = HeadlessHost::new(window());
     let scripted = host.clipboard();
@@ -568,6 +633,7 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
     use std::task::{Context, Poll};
 
     let mut host = HeadlessHost::new(window());
+    let scenario = host.scenario().clone();
     host.clipboard().hold_reads();
     let clipboard = acquire(&mut host).expect("provided");
     let capture = PanicOnDrop;
@@ -596,6 +662,11 @@ pub(crate) fn a_capture_panicking_at_teardown_reaches_the_runtime_owner() {
     assert_eq!(
         later.as_mut().poll(&mut Context::from_waker(&waker)),
         Poll::Ready(Err(Abandoned::OwnerRetired))
+    );
+    let owed = scenario.verify().expect_err("the read was held to the end");
+    assert!(
+        matches!(owed.failures(), [ScenarioFailure::Unanswered { .. }]),
+        "{owed}"
     );
 }
 

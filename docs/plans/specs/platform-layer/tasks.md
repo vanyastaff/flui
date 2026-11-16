@@ -5274,15 +5274,60 @@ GPU-память простаивающего или невидимого окн
   правило kind. Версию с поездом держит общее правило поезда (`links = "flui_train"`), своего у
   kind нет. Остаётся правило про `build.rs` с посаженным нарушением: `rg 'javac|swiftc|d8'
   tools/xtask/src/workspace` пуст.
-- [ ] **LY54** (не закрыта: на `main` только половина `flui-testing`; фичи `scripted` и сценарного
-  примитива нет) — #2033 (`5b4ece201`) дал `HeadlessHost::with_capabilities(window, registry)` и
-  `HeadlessHost::with_plugin(window, plugin)` (`crates/flui-testing/src/host.rs`): тест ставит
-  провайдер без ручной сборки runtime. Двойники остаются по одному на возможность, каждый со
-  своими переключателями: `ScriptedClipboard` и `ScriptedPrimarySelection` во `flui-testing`,
-  `ScriptedHttp`, `ScriptedLauncher` и `FakeHaptics` в `flui_platform::testing`, `ScriptedSystem`
-  во `flui-system`. Остаётся: фича `scripted` контракта и сам примитив (упорядоченный скрипт
-  ответов, отзывы разрешений, внедрённые ошибки, потоки событий в виртуальном времени), перевод
-  двойников на него, сценарий из колонки «Тесты».
+- [x] **LY54** — ветка `platform/scripted-primitive` от `main` @ `ab45cd94c`. #2033 (`5b4ece201`)
+  дал `HeadlessHost::with_capabilities` и `HeadlessHost::with_plugin`; эта ветка дала примитив.
+  Фича `scripted` контракта (её включает `testing`), модуль `flui_platform::capability::scripted`:
+  `Scenario` (один `ManualClock` и журнал отказов), `Script<R, A>` (шаги `Expect` + `Answer`:
+  `value`, `computed`, `abandon`, `after(delay)`, и `expect_held` для удержания; запрос берёт
+  самый ранний шаг, который его принимает, затем постоянный ответ `otherwise`), `Track<T>` и
+  `ServiceState` (разрешение, служба вкл/выкл), `Events<E>` с `StreamEnd`. Всё owner-local,
+  `Send` не требуется: `CompletionSource::pending` и `Resolver::resolve` больше не требуют `Send`
+  от ответа (резолвер `Send` ровно тогда, когда ответ `Send`), две позиции ушли из
+  `send-positions.toml`. Каждый ответ идёт через `Resolver`, то есть оседает на ходу владельца;
+  запрос без ответа — `ScenarioFailure::Unexpected`, его completion кончается `ProviderDropped`,
+  тихого ответа по умолчанию нет. `Scenario::verify` перечисляет удержанные без ответа запросы,
+  неиспользованные шаги, недостигнутые изменения и события после конца потока; скрипт, брошенный
+  с долгами, передаёт их сценарию (все, до поднятия паники `Debug`), а сценарий, уничтоженный с
+  непроверенными отказами, паникует (если поток уже не разматывается). Признанное `verify`
+  хранится позицией в журнале и id долгов и запланированных изменений, а не значением: отказ
+  после `verify`, даже равный признанному, новый. Сообщения из других потоков ограничены
+  `MAX_REPORTS` (дальше счётчик `ReportsDropped`) и после конца сценария отклоняются; скрипт
+  хранит первые `MAX_RECORDED_REQUESTS` запросов. Код теста (матчер, вычисляемый ответ, `Clone`/`Debug`
+  значений) идёт без заимствований и под `FirstPanic`: обслуживаемый запрос остаётся удержанным,
+  остальные получают ответ, первая паника поднимается. Часы держит и двигает только один
+  `ScenarioDriver` (второй хост на том же сценарии — `AlreadyDriven`, `try_with_scenario`);
+  сценарий показывает лишь `now()`, а `HeadlessHost::clock()` и `Tester::clock()` отдают
+  `HostClock`, который двигается только через драйвер; у `HeadlessHost` `pump`, `advance`, `run_script` и
+  повтор записи двигают время только через него, а `time_to_next_frame` и `pump_until_settled`
+  ждут запланированных изменений как любой дедлайн. На примитив переведены `ScriptedLauncher`,
+  `ScriptedFileDialogs` (`ScriptedSystem::on`), `ScriptedClipboard` и
+  `ScriptedPrimarySelection` (у двух последних `service()`); у лаунчера и диалогов больше нет
+  неявных `Ok(())` и отмены. Не переведены, с причиной в `crates/flui-platform/ARCHITECTURE.md`
+  («A capability's double is built from one scenario primitive»): `FakeHaptics` (синхронный
+  ответ через trait окна), `ScriptedHttp` (клиент `Send + Sync`, его futures вне owner-потока,
+  ADR-0280; непрописанный URL он сообщает в сценарий через `FailureReport`, у хоста это включено)
+  и `flui_testing::storage::MemoryStorage` (хранилище, а не скрипт: неожиданному запросу не с
+  чем расходиться). Тесты runtime и app, которые держал `InMemoryClipboard`, перевёл #2033
+  (`5b4ece201`): он удалил `InMemoryClipboard` (`rg InMemoryClipboard crates` пуст), тесты
+  clipboard стали таблицей `capability_seam` во `flui-testing`, тесты app —
+  `crates/flui-app/tests/capability_registration.rs`. Подключение примитива к `flui-app[driver]`
+  и двойники ядра — LY100.
+  Тесты (`crates/flui-testing/tests/scenario.rs`): `deny_then_allow_then_revoke_at_three_seconds`
+  (сценарий колонки «Тесты»), `a_request_nothing_answers_ends_its_completion_and_fails_the_run`,
+  `a_step_answers_the_request_it_matches_not_the_next_one_in_line`,
+  `a_delayed_answer_settles_at_the_first_turn_at_or_after_its_instant`,
+  `a_service_turned_off_refuses_acquisition_until_it_is_back`,
+  `an_event_stream_delivers_on_virtual_time_and_ends_once`,
+  `a_caller_that_asks_again_from_its_answer_is_answered_at_the_next_turn`,
+  `a_held_request_and_an_unused_step_fail_the_run`; строка таблицы `capability_seam`
+  `scripted_reads_answer_in_order_before_the_clipboards_text`; во `flui-system`
+  `the_system_doubles_answer_on_the_hosts_scenario_and_report_what_was_not_scripted`. С
+  откатами: без `run_due` в `pump` падают пять тестов сценария и таблица `capability_seam`; с
+  сопоставлением по позиции вместо значения — `a_step_answers_…`; без записи `Unexpected` —
+  `a_request_nothing_answers_…` и тест `flui-system`; с возвращённым `Ok(())` по умолчанию у
+  лаунчера — тест `flui-system`. Тесты `flui-system` теперь берут абсолютные пути через
+  `temp_dir`: `/srv/…` и `/home` относительны на Windows, и два теста там падали. Примитив вне
+  фичи недоступен (модуль за `cfg(feature = "scripted")`). Запуски на устройствах не нужны.
 - [ ] **LY57** (не закрыта: крейт, плагин и две возможности на `main`; провайдеров Windows,
   остальных служб и общей conformance-таблицы нет) — #2150 (`9450db8e1`), портал Linux #2158,
   `Unsupported` в ошибках запуска и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт —
@@ -5291,8 +5336,8 @@ GPU-память простаивающего или невидимого окн
   `flui::services::system` за фичей `system`, выключенной по умолчанию. Возможности: файловые
   диалоги (`FileDialogCapability`, `FileDialogs`, модальны окну виджета, один на окно) и запуск
   (`LauncherCapability`, `Launcher` в контракте, `flui_platform::launch`: URI, открыть путь,
-  reveal, trash). Двойники — по одному на возможность (`ScriptedSystem` над `ScriptedLauncher` и
-  `ScriptedFileDialogs`), не на примитиве LY54, которого на `main` нет. Вне Linux плагин
+  reveal, trash). Двойники `ScriptedLauncher` и `ScriptedFileDialogs` (их плагин `ScriptedSystem`,
+  `ScriptedSystem::on`) построены на сценарном примитиве LY54. Вне Linux плагин
   регистрирует отказ `NotYetOnThisHost`. Тесты (`crates/flui-system/tests/`):
   `the_declared_plugin_is_the_crates_default_plugin`;
   `a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn`,
@@ -6014,11 +6059,24 @@ GPU-память простаивающего или невидимого окн
   текст в процессе, и отказывает скрытой записи, которую подал бы источник без подсказки
   (`a_write_answers_ok_only_where_the_clipboard_serves_it`), веб держит текст записи только после
   согласия буфера (`clipboard::page`, `a_refused_write_is_not_read_back`; иначе — читается
-  отказанный текст). Чтение, которое никто не ждёт, пропускается (`Resolver::is_awaited`,
-  `a_read_nobody_waits_for_is_skipped`; без пропуска запись ждёт 3,0 с). Владелец, который не
+  отказанный текст).
+  Владелец, который не
   рисует, — `a_read_of_text_never_rendered_in_time_answers_timeout` (30 с Win32). Ответ вырезания
   — под правилом вставки (`a_cut_answered_after_its_field_left_deletes_nothing`; со старой
   проверкой — поле без фокуса теряет текст). Тесты Win32 берут замок модуля и возвращают буфер.
+  После повторного чтения: вырезание начинается под тем же правилом, что проверяет его ответ, как
+  вставка (`a_toolbar_cut_at_a_field_without_the_focus_is_refused`; без проверки на старте буфер
+  берёт текст, поле его не теряет), путь вспомогательных технологий фокусирует поле
+  (`assistive_technology_cuts_and_pastes_in_an_unfocused_field`). `Resolver::is_awaited` снят:
+  общее чтение ручки ждёт ответа хоста, поэтому брошенное чтение всё равно выполняется. `Ok`
+  значит «системный буфер взял текст» на каждом хосте; страница без Clipboard API отвечает
+  `ClipboardError::ApplicationOnly` и держит текст для своих чтений, вырезание на нём не удаляет.
+  Wayland забывает последний ввод, когда клавиатура ушла с окна
+  (`the_keyboard_leaving_ends_the_last_input_it_had`): запись после этого — `Denied`; композитор
+  не подтверждает `set_selection`, это названо в контракте. Терпение открытия считается от
+  очереди запроса, время в очереди ограничено `LONGEST_QUEUED`; перезапуски потока считаются
+  (`restarts_are_counted_within_a_window`). Страж тестов не паникует в `Drop` и сохраняет только
+  стандартные форматы без дескрипторов.
   Подтверждено до правки на Windows 11: буфер, который другой поток держит открытым 100 мс, читается
   как `Unavailable` за 2 мс, а запись теряется молча (после неё буфер держит старый текст); чтение
   текста, который владелец рисует по запросу (`SetClipboardData(format, NULL)`) с задержкой 3 с,

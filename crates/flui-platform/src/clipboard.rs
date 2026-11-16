@@ -15,10 +15,15 @@ pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 /// The answer to one clipboard write (ADR-0337): `Ok(())` once the clipboard
 /// holds the written text, or why the host could not put it there.
 ///
-/// A refused write leaves the clipboard as it was, and no later read in this
-/// process answers its text, with one exception: a host that had to clear
+/// `Ok(())` means the system clipboard took the text, on every host. A
+/// refused write leaves the clipboard as it was, and no later read in this
+/// process answers its text, with two exceptions: a host that had to clear
 /// the clipboard before it could fill it (Win32's `EmptyClipboard`) and was
-/// then refused by the system itself leaves the clipboard without text.
+/// then refused by the system itself leaves the clipboard without text; and
+/// [`ClipboardError::ApplicationOnly`] names a write no system clipboard
+/// could take but the application kept, which its own reads answer. A
+/// Wayland compositor confirms no selection request: a write it drops
+/// silently still answers `Ok` (ADR-0337 §1).
 pub type ClipboardWritten = Result<(), ClipboardError>;
 
 /// Why a clipboard or primary-selection read has no answer, or a clipboard
@@ -51,6 +56,13 @@ pub enum ClipboardError {
     /// read stops rather than grow without bound.
     #[error("the clipboard's text is larger than the host reads")]
     TooLarge,
+    /// Only a write answers it: no system clipboard can be reached (a web
+    /// page without the Clipboard API), so the application alone keeps the
+    /// text. Its own later reads answer it; no other application can paste
+    /// it, and a caller that undoes on a refused write (a cut) treats it as
+    /// refused.
+    #[error("the text was kept by this application alone")]
+    ApplicationOnly,
 }
 
 /// One write to the clipboard: its text, and whether the clipboard keeps it

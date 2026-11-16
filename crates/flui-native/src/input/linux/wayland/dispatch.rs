@@ -361,6 +361,14 @@ impl Shared {
         }
     }
 
+    /// `seat`'s keyboard left `surface`: an input it took there is no longer
+    /// the last one a request may name.
+    fn record_keyboard_leave(&self, seat: SeatKey, surface: &WlSurface) {
+        if let Some(seat) = self.seat_of(seat) {
+            self.last_input.keyboard_left(&seat, surface);
+        }
+    }
+
     /// `seat`'s pointer left its window, ending the grab it held.
     fn record_leave(&self, seat: SeatKey) {
         if let Some(seat) = self.seat_of(seat) {
@@ -2230,8 +2238,10 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
                 }
                 Wire::KeyFocus { seat, focus }
             }
-            wl_keyboard::Event::Leave { .. } => {
+            wl_keyboard::Event::Leave { surface, .. } => {
                 shared.set_keyboard_focus(seat, None);
+                // A serial the window took is stale once the keyboard left it.
+                shared.record_keyboard_leave(seat, &surface);
                 Wire::KeyFocus { seat, focus: None }
             }
             wl_keyboard::Event::Key {
