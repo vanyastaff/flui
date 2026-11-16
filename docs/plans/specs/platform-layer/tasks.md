@@ -6609,12 +6609,17 @@ GPU-память простаивающего или невидимого окн
   minor или patch выше 99, коде выше 2 100 000 000, `0.0.0`), versionName как написано; в `aapt2`
   и в `gradle.properties`; iOS берёт `CFBundleVersion` из того же типа. Каждый вызов `cargo ndk`
   получает `ANDROID_HOME` и `ANDROID_NDK_HOME` найденного NDK, версии сравниваются числами
-  (одна функция и для build-tools), Gradle читает `flui.ndkPath`, `ndkVersion` в скрипте
-  отказан. `extractNativeLibs="false"` на пути SDK-tools. Сцена: устройство по serial
+  (одна функция и для build-tools), относительный путь делается абсолютным один раз; Gradle
+  получает NDK, исходники и правила R8 крейтов и ключ release в `-Pflui.…` командной строки
+  `gradlew`, в коммитимом `gradle.properties` — только факты проекта (сборка оставляет
+  сгенерированное дерево байт в байт: `a_build_leaves_the_scaffolded_project_as_it_was`, с
+  записью `ndkPath` в файл падает), `ndkVersion` в скрипте отказан; результат сборки называет
+  подпись (`signing` в `--json` и в тексте). `extractNativeLibs="false"` на пути SDK-tools.
+  Сцена: устройство по serial
   (`--device` или единственное онлайн), `adb -s <serial> shell run-as <AppId> cp … files/<lib>`
   словами, пакет — `AppId` (по умолчанию `[app] id`), `.so` — тот, что `cargo ndk -o`
   скопировал для крейта сцены. Пробы — `rustc --print target-libdir` и `rustc -vV` под сроком
-  (Android, iOS, web); цель без библиотек проходит при `build-std` и `rust-src`, отказ называет
+  (Android, iOS, web); цель без библиотек проходит при `build-std` и `rust-src` только на nightly, dev или с `RUSTC_BOOTSTRAP=1` (на stable — `BuildStdIgnored`), отказ называет
   тулчейн (выпуск и sysroot). targetSdk остаётся заявленным FLUI; путь SDK-tools проверяет
   build-tools и платформу не ниже него до нативной сборки, отказ —
   `AndroidPlatformMissing` с установленными уровнями. `min` выше targetSdk отказан.
