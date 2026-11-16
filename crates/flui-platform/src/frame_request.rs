@@ -39,7 +39,7 @@ pub struct FrameRequest {
     pub target_present: Option<EventTime>,
     /// The newest earlier frame the platform reported shown since the window's last request, if
     /// it reported one. A window whose capabilities say it reports no presentation
-    /// ([`WindowCapabilities::reports_presentation`](crate::CapabilityParts::reports_presentation))
+    /// ([`WindowCapabilities::reports_presentation`](crate::WindowCapabilities::reports_presentation))
     /// never fills it.
     pub presented: Option<FramePresented>,
 }

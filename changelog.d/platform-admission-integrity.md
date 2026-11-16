@@ -5,6 +5,10 @@
   never helps; admit against the window's snapshot.
 - `WindowStateExhausted { Revisions, Publications }`: what `WindowState::successor` refuses
   with, naming whether the window ran out of revisions or the process out of publications.
+- `WindowCapabilities::withdraw`: capabilities as no publication. A window whose state freezes
+  with capabilities it can no longer publish, or that opens when the process has no publication
+  left, holds withdrawn capabilities: it admits no command and opens no token, instead of carrying
+  out what it may have lost.
 
 ### Changed
 

@@ -488,7 +488,7 @@ impl AppConfig {
     /// Set the initial outer position, in global logical pixels.
     ///
     /// Applied where the backend places a window at open
-    /// ([`WindowCapabilities::places_at_open`](flui_platform::CapabilityParts::places_at_open)):
+    /// ([`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)):
     /// a backend that does not report it (the Wayland host, where the
     /// compositor places windows) leaves the place to the system. A coordinate
     /// that is NaN or infinite is no place: the application does not start,
@@ -709,7 +709,7 @@ impl AppConfig {
     /// Where it is applied: Win32 opens the window at the remembered position,
     /// size and mode, and matches the display it was on. A backend that does
     /// not place a window at open (it reports so through
-    /// [`WindowCapabilities::places_at_open`](flui_platform::CapabilityParts::places_at_open)),
+    /// [`WindowCapabilities::places_at_open`](flui_platform::WindowCapabilities::places_at_open)),
     /// so there only the size is restored and the position is left to the
     /// system; see `docs/platform-parity.md`.
     ///

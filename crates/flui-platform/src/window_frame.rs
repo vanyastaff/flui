@@ -16,7 +16,7 @@ pub enum WindowFrame {
     /// of what a frame does: the resize borders, the shadow and corners, snapping and the
     /// window menu. The application marks where its bar moves the window and where its
     /// caption buttons are with input regions. A window takes it where its
-    /// [`WindowCapabilities::app_title_bar`](crate::CapabilityParts::app_title_bar) is
+    /// [`WindowCapabilities::app_title_bar`](crate::WindowCapabilities::app_title_bar) is
     /// available.
     AppTitleBar(AppTitleBar),
     /// No frame: no title bar and no system resize borders.

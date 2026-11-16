@@ -178,7 +178,7 @@ impl WindowHandle {
     /// # Errors
     /// [`Unsupported`](flui_platform::AdmissionError::Unsupported) where the
     /// window draws no material
-    /// ([`WindowCapabilities::material`](flui_platform::CapabilityParts::material));
+    /// ([`WindowCapabilities::material`](flui_platform::WindowCapabilities::material));
     /// otherwise as [`Self::set_title`].
     pub fn set_material(&self, material: flui_platform::WindowMaterial) -> Result<(), SubmitError> {
         self.submit(WindowCommand::SetMaterial(material))

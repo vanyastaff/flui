@@ -13529,6 +13529,7 @@ pub const fn flui::platform::WindowCapabilities::sets_size(&self) -> flui::platf
 pub const fn flui::platform::WindowCapabilities::sets_title(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::shows(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::unavailable(self, command: &flui::platform::WindowCommand, absence: flui::platform::CapabilityAbsence) -> Self
+pub const fn flui::platform::WindowCapabilities::withdraw(self) -> Self
 pub fn flui::platform::WindowCapabilities::publish(self) -> Result<Self, flui::foundation::IdExhausted>
 pub enum flui::platform::WindowCapability
 impl Clone for flui::platform::WindowCapability

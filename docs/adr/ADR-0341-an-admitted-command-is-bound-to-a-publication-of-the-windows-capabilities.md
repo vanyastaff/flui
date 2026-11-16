@@ -78,6 +78,7 @@ impl WindowCapabilities {
     pub fn publish(self) -> Result<Self, IdExhausted>;   // a host's first snapshot
     pub const fn into_parts(self) -> CapabilityParts;    // the one way out: no publication
     pub const fn unavailable(self, ..) -> Self;           // an edit: no publication
+    pub const fn withdraw(self) -> Self;                  // a frozen window: no publication
     pub const fn material(&self) -> WindowCapability;     // one accessor per capability
 }
 impl CapabilityParts {
@@ -119,14 +120,23 @@ pub enum WindowStateExhausted { Revisions, Publications } // what `successor` re
 - **Revision.** The capabilities revision stays a published fact (`WindowCapabilities::revision`).
   It moves at exactly the points where the publication changes.
 - **Exhaustion** cannot wrap.
-  - At `publish`, the host's first snapshot, the host treats it as a broken invariant.
+  - At `publish` for a window's first snapshot, the window opens frozen and unpublished. Refusing
+    the open is not every host's to do: an Android activity or a UIKit scene exists before its
+    window is built.
   - In `successor`, it is `WindowStateExhausted::Publications`, and the window publishes nothing
     again, as at its last revision.
+  - **A frozen window whose capabilities can no longer be published is unpublished.** When the
+    freeze comes from `Publications`, or from `Revisions` with a sample whose capabilities differ,
+    the cell withdraws its snapshot's publication (`WindowCapabilities::withdraw`). Every token
+    then answers `Superseded`, and admission answers `Unpublished`. A window never carries out what
+    it lost because it could not say so.
 
 ### Consequences
 
-- Good, because the three forgeries above become a compile error (1), a type that no longer
-  exists (2), and a token that never opens (3).
+- Good, because each forgery above now fails: writing a field of an edited copy does not compile,
+  while taking the copy apart and building it again (`into_parts`, `into_capabilities`) compiles
+  and `admit` refuses the result as `Unpublished` (1); the owner type no longer exists (2); and a
+  token admitted against a computed successor never opens (3).
 - Good, because `Superseded` keeps one meaning, and `admit_and_apply` no longer spends its one
   re-admission on capabilities that can never be admitted.
 - Good, because a host has nothing to remember: it publishes once through the cell and opens
@@ -152,6 +162,8 @@ pub enum WindowStateExhausted { Revisions, Publications } // what `successor` re
   - `a_successor_a_caller_computes_opens_nothing`: a token admitted against a successor a caller
     computed does not open under the window's next capabilities at the same revision.
   - `a_successor_of_unpublished_capabilities_stays_unpublished`.
+- **Test** in `flui-native`'s window state cell:
+  `a_freeze_that_moves_the_capabilities_withdraws_their_publication`.
 - **Test** in `parts`: `parts_leave_the_revision_and_publication_to_the_publishing_window`.
 - **Global state.** `xtask globals` lists `window_capabilities::PUBLICATIONS` under ADR-0097.
 

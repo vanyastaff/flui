@@ -77,20 +77,20 @@ impl WindowCapability {
 /// [`CapabilityParts::into_capabilities`].
 ///
 /// The reports a window makes,
-/// [`reports_presentation`](CapabilityParts::reports_presentation),
-/// [`reports_keyboard_inset`](CapabilityParts::reports_keyboard_inset) and
-/// [`reports_system_gestures`](CapabilityParts::reports_system_gestures), carry
+/// [`reports_presentation`](Self::reports_presentation),
+/// [`reports_keyboard_inset`](Self::reports_keyboard_inset) and
+/// [`reports_system_gestures`](Self::reports_system_gestures), carry
 /// their reason the same way: no verb answers for them, so the field is where
 /// a caller learns why frames come without
 /// [`FrameRequest::presented`](crate::FrameRequest::presented) or why those
 /// insets stay zero.
 ///
 /// Four fields are a plain [`Availability`]: what the window observes or can
-/// be placed at ([`observes_position`](CapabilityParts::observes_position),
-/// [`observes_minimized`](CapabilityParts::observes_minimized),
-/// [`places_at_open`](CapabilityParts::places_at_open)), which nothing
+/// be placed at ([`observes_position`](Self::observes_position),
+/// [`observes_minimized`](Self::observes_minimized),
+/// [`places_at_open`](Self::places_at_open)), which nothing
 /// refuses, and the one verb a window takes outside the command queue,
-/// [`frame_rate_hint`](CapabilityParts::frame_rate_hint), which answers
+/// [`frame_rate_hint`](Self::frame_rate_hint), which answers
 /// [`Unsupported`](crate::Unsupported) exactly when it is `Unavailable` and
 /// whose reason is the verb's own answer: nothing admits a verb against the
 /// capabilities, so a reason kept here would be a second copy of what the
@@ -156,11 +156,23 @@ impl Publication {
     }
 }
 
-/// Declares one read-only accessor per capability, by value: none of them
-/// yields capabilities, so nothing read from a window's capabilities can
-/// stand in for them.
-macro_rules! capability_accessors {
-    ($($field:ident: $ty:ty),+ $(,)?) => {
+/// Declares [`CapabilityParts`] and, from the same field list, one read-only
+/// accessor of [`WindowCapabilities`] per field, by value, so a capability
+/// cannot be added to the parts without its accessor. None of the accessors
+/// yields capabilities, so nothing read from a window's capabilities can stand
+/// in for them.
+macro_rules! capability_parts {
+    (
+        $(#[$meta:meta])*
+        pub struct CapabilityParts {
+            $($(#[$field_meta:meta])* pub $field:ident: $ty:ty,)+
+        }
+    ) => {
+        $(#[$meta])*
+        pub struct CapabilityParts {
+            $($(#[$field_meta])* pub $field: $ty,)+
+        }
+
         impl WindowCapabilities {
             $(
                 #[doc = concat!("[`CapabilityParts::", stringify!($field), "`] of these capabilities.")]
@@ -171,31 +183,6 @@ macro_rules! capability_accessors {
             )+
         }
     };
-}
-
-capability_accessors! {
-    sets_title: WindowCapability,
-    sets_position: WindowCapability,
-    sets_size: WindowCapability,
-    sets_constraints: WindowCapability,
-    sets_resizable: WindowCapability,
-    sets_frame: WindowCapability,
-    app_title_bar: WindowCapability,
-    minimizes: WindowCapability,
-    maximizes: WindowCapability,
-    enters_fullscreen: WindowCapability,
-    hides: WindowCapability,
-    shows: WindowCapability,
-    activates: WindowCapability,
-    closes: WindowCapability,
-    material: WindowCapability,
-    reports_presentation: WindowCapability,
-    reports_keyboard_inset: WindowCapability,
-    reports_system_gestures: WindowCapability,
-    observes_position: Availability,
-    observes_minimized: Availability,
-    places_at_open: Availability,
-    frame_rate_hint: Availability,
 }
 
 impl PartialEq for WindowCapabilities {
@@ -341,6 +328,18 @@ impl WindowCapabilities {
         Ok(self)
     }
 
+    /// These capabilities as no publication, keeping what they honour and
+    /// their revision: what a window holds once it can no longer publish what
+    /// it honours ([`WindowStateExhausted`](crate::WindowStateExhausted),
+    /// ADR-0341). Every token admitted against the publication they were
+    /// answers [`ApplyError::Superseded`](crate::ApplyError::Superseded), and
+    /// admission refuses them.
+    #[must_use]
+    pub const fn withdraw(mut self) -> Self {
+        self.publication = None;
+        self
+    }
+
     /// The publication these capabilities are, for the admission that binds
     /// a token to it.
     pub(crate) const fn publication(&self) -> Option<Publication> {
@@ -473,6 +472,7 @@ impl WindowCapabilities {
     }
 }
 
+capability_parts! {
 /// Every capability of a [`WindowCapabilities`], public: what a backend names
 /// its window's capabilities as, what [`WindowCapabilities::into_parts`] hands
 /// a reader, and the boundary every serialization and mirror of
@@ -551,6 +551,7 @@ pub struct CapabilityParts {
     /// [`PlatformWindow::set_frame_rate_hint`](crate::PlatformWindow::set_frame_rate_hint):
     /// the window system takes a refresh-rate request for the window.
     pub frame_rate_hint: Availability,
+}
 }
 
 impl CapabilityParts {

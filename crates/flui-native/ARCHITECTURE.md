@@ -1087,7 +1087,11 @@ trait depends on `flui-platform` instead.
   `ApplyError::Superseded`. `WindowStateCell::open` publishes the window's
   first capabilities (`WindowCapabilities::publish`, ADR-0341: the contract's
   publication, never reissued), so a token admitted for another window opens
-  nothing on this one, and capabilities built by hand or edited admit nothing. The
+  nothing on this one, and capabilities built by hand or edited admit nothing. A
+  cell that freezes (`WindowStateExhausted`) with capabilities it can no longer
+  publish, or that opens with no publication left, withdraws its publication
+  (`WindowCapabilities::withdraw`), so the window takes no command it may have
+  lost (`a_freeze_that_moves_the_capabilities_withdraws_their_publication`). The
   conformance check `a_command_admitted_before_a_revision_is_superseded`
   holds a host to it where its fixture can revise capabilities. A command no
   host arm carries out, the Android and UIKit windows' included, answers
