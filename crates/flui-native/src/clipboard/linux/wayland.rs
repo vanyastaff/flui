@@ -187,7 +187,7 @@ impl SeatClipboard {
     pub(crate) fn new(last_input: LastInput, devices: DataDevices) -> Self {
         let shared = Arc::new(Shared {
             state: OwnerCell::new(),
-            devices: devices.clone(),
+            devices,
             last_input,
             primary: OwnerCell::new(),
             writers: pipe::Writers::new(MAX_WRITERS),

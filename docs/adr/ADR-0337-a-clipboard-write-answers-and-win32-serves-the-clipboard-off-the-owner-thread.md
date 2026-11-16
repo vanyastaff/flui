@@ -21,7 +21,7 @@
   `mozilla-firefox/firefox@f898416c560977636760a1fdab1d3f468cb62486 widget/windows/nsClipboard.cpp:702`
   ([permalink](https://github.com/mozilla-firefox/firefox/blob/f898416c560977636760a1fdab1d3f468cb62486/widget/windows/nsClipboard.cpp#L702-L716),
   three OLE clipboard attempts 3 ms apart),
-  `1Password/arboard@5f5c8637911ba219edee619105a19b4f74e66a9f src/platform/windows.rs:533`
+  `1Password/arboard@5f5c8637911ba219edee619105a19b4f74e66a9f` source directory, `platform/windows.rs:533`
   ([permalink](https://github.com/1Password/arboard/blob/5f5c8637911ba219edee619105a19b4f74e66a9f/src/platform/windows.rs#L533-L559),
   five attempts 5 ms apart)
 

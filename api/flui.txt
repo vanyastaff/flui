@@ -13959,6 +13959,7 @@ pub fn flui::platform::capability::RegisteredProvider::provide(&self, ctx: &flui
 pub struct flui::platform::capability::Resolver<T> { .. }
 impl<T> Drop for flui::platform::capability::Resolver<T>
 impl<T> core::fmt::Debug for flui::platform::capability::Resolver<T>
+pub fn flui::platform::capability::Resolver::is_awaited(&self) -> bool // impl<T> flui::platform::capability::Resolver<T>
 pub fn flui::platform::capability::Resolver::resolve(self, value: T) -> Result<(), flui::platform::capability::OwnerRetired> // impl<T: Send + 'static> flui::platform::capability::Resolver<T>
 pub struct flui::platform::capability::RuntimeLocals { .. }
 impl Clone for flui::platform::capability::RuntimeLocals
@@ -36605,10 +36606,12 @@ impl core::fmt::Debug for flui_testing::clipboard::ScriptedClipboard
 impl flui::platform::capability::CapabilityProvider<flui::interaction::ClipboardCapability> for flui_testing::clipboard::ScriptedClipboard
 pub fn flui_testing::clipboard::ScriptedClipboard::answer_concealment(&self, concealment: flui::platform::Concealment)
 pub fn flui_testing::clipboard::ScriptedClipboard::answer_held_reads(&self) -> usize
+pub fn flui_testing::clipboard::ScriptedClipboard::answer_held_writes(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::drop_held_reads(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::fail_reads_with(&self, error: flui::platform::ClipboardError)
 pub fn flui_testing::clipboard::ScriptedClipboard::fail_writes_with(&self, error: flui::platform::ClipboardError)
 pub fn flui_testing::clipboard::ScriptedClipboard::hold_reads(&self)
+pub fn flui_testing::clipboard::ScriptedClipboard::hold_writes(&self)
 pub fn flui_testing::clipboard::ScriptedClipboard::is_concealed(&self) -> bool
 pub fn flui_testing::clipboard::ScriptedClipboard::live_handles(&self) -> usize
 pub fn flui_testing::clipboard::ScriptedClipboard::new() -> Self
