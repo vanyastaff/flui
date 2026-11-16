@@ -1386,8 +1386,6 @@ mod event_loop {
     /// alone holds the table (ADR-0327 §5).
     pub(crate) struct WindowTable {
         windows: RefCell<FxHashMap<WindowId, Rc<dyn LoopWindow>>>,
-        /// The window the compositor last activated.
-        active: Cell<Option<WindowId>>,
         /// The window the compositor activated last, whether or not it still
         /// is: the one a forwarded launch brings forward.
         last_active: Cell<Option<WindowId>>,
@@ -1406,7 +1404,6 @@ mod event_loop {
         fn new(launch_token: Option<ActivationToken>) -> Self {
             Self {
                 windows: RefCell::default(),
-                active: Cell::new(None),
                 last_active: Cell::new(None),
                 emptied: Cell::new(false),
                 ids: RefCell::default(),
@@ -1460,9 +1457,6 @@ mod event_loop {
                 let window = windows.remove(&id);
                 (window, windows.is_empty())
             };
-            if self.active.get() == Some(id) {
-                self.active.set(None);
-            }
             if window.is_some() && empty {
                 self.emptied.set(true);
             }
@@ -1473,10 +1467,7 @@ mod event_loop {
         /// The compositor activated window `id`, or took the activation away.
         pub(crate) fn activation(&self, id: WindowId, activated: bool) {
             if activated {
-                self.active.set(Some(id));
                 self.last_active.set(Some(id));
-            } else if self.active.get() == Some(id) {
-                self.active.set(None);
             }
         }
 
@@ -1503,11 +1494,6 @@ mod event_loop {
                     }
                 }
             }
-        }
-
-        /// The active window.
-        fn active(&self) -> Option<WindowId> {
-            self.active.get()
         }
 
         /// The windows held now, as a snapshot a window's settle may change
@@ -2335,11 +2321,6 @@ mod event_loop {
             let mut dispatcher = self.dispatcher.borrow_mut();
             let Dispatcher { queue, state } = &mut *dispatcher;
             body(queue, state)
-        }
-
-        /// The window the compositor last activated.
-        pub(crate) fn active_window(&self) -> Option<WindowId> {
-            self.windows.active()
         }
 
         /// The serial of the last user input the seats reported, which an

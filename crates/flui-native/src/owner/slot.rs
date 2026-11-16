@@ -331,15 +331,6 @@ impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V
     }
 }
 
-/// How the AppKit host looks a window up in its table.
-#[cfg(target_os = "macos")]
-impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {
-    /// A clone of the value under `key`.
-    pub(crate) fn get(&self, key: &K) -> Option<V> {
-        self.cell.with(|map| map.get(key).cloned()).flatten()
-    }
-}
-
 /// How the AppKit host reads its window table.
 #[cfg(target_os = "macos")]
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {

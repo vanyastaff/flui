@@ -227,9 +227,9 @@ impl Forwarded {
     pub(crate) fn opened(&self) -> flui_platform::Opened {
         use std::os::windows::ffi::OsStringExt as _;
 
-        use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
+        use flui_platform::{Launch, OpenTarget, OpenedFile};
 
-        Opened::new(
+        crate::owner::opened::bounded(
             self.links.clone(),
             self.files
                 .iter()
@@ -239,6 +239,7 @@ impl Forwarded {
                     )))
                 })
                 .collect::<Vec<OpenedFile>>(),
+            0,
             OpenTarget::Application,
             Launch::Running,
         )

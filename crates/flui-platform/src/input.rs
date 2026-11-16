@@ -222,19 +222,6 @@ impl PlatformInput {
             | PlatformInput::Capabilities(_) => None,
         }
     }
-
-    /// Extract the drag-and-drop event if this is a DnD input.
-    #[inline]
-    pub fn as_drag_drop(&self) -> Option<&DragDropEvent> {
-        match self {
-            PlatformInput::DragDrop(event) => Some(event),
-            PlatformInput::Pointer(_)
-            | PlatformInput::PointerFrame(_)
-            | PlatformInput::Keyboard(_)
-            | PlatformInput::Ime(_)
-            | PlatformInput::Capabilities(_) => None,
-        }
-    }
 }
 
 /// The push half of the data-transfer transport (ADR-0312): stage-1 arrival

@@ -738,7 +738,7 @@ impl TextInputClient {
             // code: a focus change they request waits for the drain below.
             let _entered = self.queue.enter();
             if self.content.get() != Some(ContentType::of_store(&*store)) {
-                let _ = flui_platform::text_store::commit_composition_in_place(&*store);
+                crate::text::refusal::commit_in_place(&*store);
                 self.enable_on(&wire, &store);
             }
         }
@@ -795,7 +795,7 @@ impl TextInputClient {
                 };
                 if end != CompositionEnd::Committed {
                     let _entered = self.queue.enter();
-                    let _ = flui_platform::text_store::commit_composition_in_place(&*store);
+                    crate::text::refusal::commit_in_place(&*store);
                 }
             }
         }
@@ -822,7 +822,7 @@ impl TextInputClient {
             // The input method's composition belongs to the field losing
             // focus: it is committed there, and the input method is reset by
             // the next `enable` or told no field takes text.
-            let _ = flui_platform::text_store::commit_composition_in_place(&*previous);
+            crate::text::refusal::commit_in_place(&*previous);
             *self.focused.borrow_mut() = None;
             contain_owner_callback(|| previous.set_observer(None));
             if self.enabled.replace(false)
