@@ -144,6 +144,10 @@ Thumbs.db
 # Rust
 *.pdb
 Cargo.lock
+
+# Signing keys: flui.toml's [signing.android] names one, which stays out of git
+*.jks
+*.keystore
 ";
 
 /// Builder for generating FLUI project templates.

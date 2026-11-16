@@ -6736,6 +6736,58 @@ GPU-память простаивающего или невидимого окн
   `input/apple`, `owner/apple/macos/content_view`, `display/android`, `window/android`,
   `owner/android`, `text/android`, `drag/android`, `display/web`, `tests/wasm32` прочитаны, не
   скомпилированы); тесты X11 и Wayland на сервере — на CI.
+
+- [x] **LY146** — ветка `cli/android-packaging`. Все находки строки проверены по `main`; все
+  подтвердились, предположение о keystore — тоже (AGP: `ANDROID_USER_HOME`, затем
+  `ANDROID_PREFS_ROOT`/`ANDROID_SDK_HOME`, затем `user.home`, на Windows — `USERPROFILE`).
+  Подпись решается один раз (`build/android_signing.rs`, `SigningKey`) для обоих упаковщиков:
+  отладочная сборка — отладочный ключ там, где его держит AGP; release — ключ
+  `[signing.android]` (`keystore`, `alias`), пароли из `FLUI_ANDROID_KEYSTORE_PASSWORD` и
+  `FLUI_ANDROID_KEY_PASSWORD` (`apksigner env:`, `providers.environmentVariable` в Gradle), ни в
+  argv, ни в файле; release без ключа подписан отладочным с предупреждением (решение: так
+  `flui run --release` и `--agent` по-прежнему ставятся, как у шаблона Flutter). Gradle-скрипт
+  release без чтения `flui.signing.storeFile` отказан до Gradle, `app-<profile>-unsigned.apk`
+  новее подписанного — после. Оба упаковщика пишут `<name>-<profile>.apk`, путь SDK-tools
+  удаляет неподписанные промежуточные архивы. Версия — `AppVersion` (`build/app_version.rs`),
+  разобранная при загрузке `flui.toml`: versionCode `major*10000+minor*100+patch` (отказ при
+  minor или patch выше 99, коде выше 2 100 000 000, `0.0.0`), versionName как написано; в `aapt2`
+  и в `gradle.properties`; iOS берёт `CFBundleVersion` из того же типа. Каждый вызов `cargo ndk`
+  получает `ANDROID_HOME` и `ANDROID_NDK_HOME` найденного NDK, версии сравниваются числами
+  (одна функция и для build-tools), относительный путь делается абсолютным один раз; Gradle
+  получает NDK, исходники и правила R8 крейтов и ключ release в `-Pflui.…` командной строки
+  `gradlew`, в коммитимом `gradle.properties` — только факты проекта (сборка оставляет
+  сгенерированное дерево байт в байт: `a_build_leaves_the_scaffolded_project_as_it_was`, с
+  записью `ndkPath` в файл падает), `ndkVersion` в скрипте отказан; результат сборки называет
+  подпись (`signing` в `--json` и в тексте). `extractNativeLibs="false"` на пути SDK-tools.
+  Сцена: устройство по serial
+  (`--device` или единственное онлайн), `adb -s <serial> shell run-as <AppId> cp … files/<lib>`
+  словами, пакет — `AppId` (по умолчанию `[app] id`), `.so` — тот, что `cargo ndk -o`
+  скопировал для крейта сцены. Пробы — `rustc --print target-libdir` и `rustc -vV` под сроком
+  (Android, iOS, web); цель без библиотек проходит при `build-std` и `rust-src` только на nightly, dev или с `RUSTC_BOOTSTRAP=1` (на stable — `BuildStdIgnored`), отказ называет
+  тулчейн (выпуск и sysroot). targetSdk остаётся заявленным FLUI; путь SDK-tools проверяет
+  build-tools и платформу не ниже него до нативной сборки, отказ —
+  `AndroidPlatformMissing` с установленными уровнями. `min` выше targetSdk отказан.
+  Тесты (в скобках — с откатом): `android_run_builds_the_selected_device_native_abi` (без
+  `ndk_env` — пустой `ANDROID_NDK_HOME` у `cargo ndk`, проверено откатом; лексическая
+  сортировка — `9.0.0`); `the_newest_version_is_compared_by_number`;
+  `a_release_is_signed_with_the_named_key_or_says_it_is_not`;
+  `the_debug_keystore_is_where_the_android_gradle_plugin_keeps_it`;
+  `a_gradle_apk_that_is_not_signed_is_refused`;
+  `gradle_states_the_version_the_ndk_and_the_release_key_once`;
+  `every_package_states_the_one_version`; `a_version_that_is_not_semver_is_refused_when_read`;
+  `the_link_declares_the_floor_and_the_pinned_target` (версия в `aapt2`);
+  `the_linked_manifest_maps_the_libraries_from_the_archive`;
+  `the_apk_is_signed_with_the_chosen_key`;
+  `the_scene_plugin_is_copied_into_the_application_on_the_named_device`;
+  `the_scene_plugin_is_built_at_the_floor_into_its_own_directory`;
+  `a_target_is_buildable_from_its_libraries_or_from_source`;
+  `a_platform_older_than_the_target_is_refused`; `app_floor_raises_and_never_lowers` и
+  `a_platform_min_flui_cannot_honour_is_refused_before_building` (`min = 1000`).
+  Проверки: Windows — clippy `-p flui-cli --all-targets -D warnings`, nextest `flui-cli` (кроме
+  `agent::browser`, падающего на этом хосте вне диффа, и `generated_*`, превышающих срок
+  сборки), `xtask doc-strict`, `xtask checks`. Не запущено: устройство и эмулятор — долг в
+  строках parity «Package the OS installs» и «Code signing and notarisation».
+
 - [x] **LY143** — ветка `system/dialog-lifetime`, решение — ADR-0344. Находки подтверждены на
   `main` @ `f5c8254ae` чтением кода: `DialogError::WindowClosed` не строился нигде, `show` не
   смотрел на окно; `Request.Close` не звал никто, единственный конец — уход runtime; тест одного

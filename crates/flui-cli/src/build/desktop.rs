@@ -21,47 +21,15 @@ impl DesktopBuilder {
         Self
     }
 
-    /// Detect the host target triple from `rustc -vV`.
-    pub(crate) fn detect_host_target() -> BuildResult<String> {
-        // Get host triple from rustc
-        let output = std::process::Command::new("rustc")
-            .args(["-vV"])
-            .output()
-            .map_err(|e| BuildError::CommandFailed {
-                command: "rustc -vV".to_string(),
-                exit_code: -1,
-                stderr: e.to_string(),
-            })?;
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
-
-        let host = output_str
-            .lines()
-            .find(|line| line.starts_with("host:"))
-            .and_then(|line| line.split(':').nth(1))
-            .map(|s| s.trim().to_string());
-
-        if let Some(target) = host {
-            return Ok(target);
-        }
-
-        // Fallback to common targets
-        let fallback = if cfg!(target_os = "windows") {
-            "x86_64-pc-windows-msvc"
-        } else if cfg!(target_os = "macos") {
-            if cfg!(target_arch = "aarch64") {
-                "aarch64-apple-darwin"
-            } else {
-                "x86_64-apple-darwin"
-            }
-        } else {
-            "x86_64-unknown-linux-gnu"
-        };
-
-        let _ = crate::ui::warning(format!(
-            "Could not detect host target from rustc, falling back to {fallback}"
-        ));
-        Ok(fallback.to_string())
+    /// The host target triple of the toolchain the project in `dir` selects, from
+    /// `rustc -vV` under a deadline.
+    ///
+    /// # Errors
+    ///
+    /// When `rustc` cannot be started, fails, does not answer in time or
+    /// names no host: a guessed triple would build for the wrong target.
+    pub(crate) fn detect_host_target(dir: &std::path::Path) -> BuildResult<String> {
+        crate::build::util::environment::rust_host_triple(dir)
     }
 }
 
@@ -76,7 +44,7 @@ impl DesktopBuilder {
         let target = match &ctx.platform {
             crate::build::platform::Platform::Desktop { target } => match target {
                 Some(t) => t.clone(),
-                None => Self::detect_host_target()?,
+                None => Self::detect_host_target(&ctx.workspace_root)?,
             },
             _ => {
                 return Err(BuildError::InvalidPlatform {
@@ -216,7 +184,7 @@ impl DesktopBuilder {
             crate::build::platform::Platform::Desktop { target: None }
                 if cfg!(target_os = "linux") =>
             {
-                Self::detect_host_target().map(Some)
+                Self::detect_host_target(&ctx.workspace_root).map(Some)
             }
             _ => Ok(None),
         }
