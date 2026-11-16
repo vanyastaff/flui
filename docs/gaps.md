@@ -688,6 +688,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Driver pipeline compilation (6–10 ms a pipeline) dwarfs the parse, so the first-frame cost is taken by creating the first frame's modules and pipelines off the owner thread while the window opens, with `wgpu::PipelineCache` on Vulkan.
 - The entry closes when wgpu lets a native build drop the WGSL front end and the engine's shaders reach it as IR generated at build time, with the binary size and first-frame time measured before and after.
 
+### A release build links the development agent's owner side
+
+> **Environments:** all · **Who it hurts:** Every release application, which carries code only the driver agent reaches · **Parity:** none (build graph)
+
+- `flui-app` serves the agent only under `cfg(driver_agent)` (a debug build, or the `driver` feature; ADR-0239), but `flui-runtime` compiles its owner side on every build: `UiCommand::Agent` is a variant the owner's drain matches, so the window methods (`ui_runtime::agent*`), the protocol types they answer with (`flui-protocol`), `flui_view::__runtime::Reply`, the recording wire conversions and `flui-semantics`' agent reads stay reachable in a release binary although nothing can send that command there. In the release counter `cargo xtask perf --size` measures (Linux x86_64, symbols kept) they come to about 324 KB of the 21.7 MB.
+- The entry closes when the agent's owner side, its command variant and the crates' agent modules compile only under the conditions `cfg(driver_agent)` reads (debug assertions or the `driver` feature), and `counter_release_bytes` and `counter_wasm_bytes` in `perf/size.toml` fall by what they measure.
+
 ### The native hosts' parsers of foreign bytes have no fuzz target
 
 > **Environments:** Linux, Windows · **Who it hurts:** Applications whose process reads what another process sends: an input method's replies, clipboard and drag payloads, a compositor's arrays · **Parity:** none (robustness)
