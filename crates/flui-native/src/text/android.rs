@@ -955,7 +955,7 @@ mod input {
                         .focused()
                         .is_some_and(|focused| Rc::ptr_eq(&focused, &store));
                     if !focused || self.end_composition(&store) == CompositionEnd::Abandoned {
-                        let _ = flui_platform::text_store::commit_composition_in_place(&*store);
+                        crate::text::refusal::commit_in_place(&*store);
                     }
                 }
             }
@@ -1147,7 +1147,7 @@ mod input {
             type Found = Option<([f32; 7], Option<CharacterBounds>)>;
             let found: Rc<RefCell<Found>> = Rc::default();
             let out = Rc::clone(&found);
-            let scale = self.view.scale();
+            let scale = self.view.scale().get();
             let grant = LockGrant::read(move |session| {
                 let caret = session.rect_for_range(session.selection().range());
                 if let Ok(caret) = caret {

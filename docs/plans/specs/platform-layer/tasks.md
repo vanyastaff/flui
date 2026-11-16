@@ -5232,7 +5232,7 @@ GPU-память простаивающего или невидимого окн
   `D:\flui`; `cargo fmt -p flui -p xtask -p flui-native -- --check` — зелёный. Заодно убрана
   недействительная rustdoc-ссылка на cfg-зависимый `TextInputV3`, не дававшая `doc-strict`
   завершиться на Windows.
-- [ ] **LY55**, часть `parking_lot` — #2327 (`91f693962`), ветка `platform/contract-std-mutex`.
+- [x] **LY55**, часть `parking_lot` — #2327 (`91f693962`), ветка `platform/contract-std-mutex`.
   Контракт и его
   зависимость `flui-foundation` больше не используют `parking_lot`: `DisplayRegistry`,
   `Completion`, `FakeHaptics`, `ScriptedHttp`, `ManualClock` и `ClaimSlot` переведены на
@@ -5248,7 +5248,7 @@ GPU-память простаивающего или невидимого окн
   известного запуска `cargo fmt --all` во вложенном worktree; форматирование изменённых пакетов
   проверено отдельно. Остаются части LY55: `tracing` в text store и удаление `active_window`,
   `compositor_name`, публичного пути keyboard layout; они не входят в этот PR.
-- [ ] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
+- [x] **LY55**, часть `compositor_name` — #2330 (`30375cab6`), ветка `platform/compositor-name`.
   Метод удалён из
   `Platform`, `SharedPlatform` (сам тип ушёл в #2494), `host::Services` и всех восьми loop-реализаций; `Platform::name`
   остаётся. Продакшен-читателей метода не было. ADR-0039 обновлён, trybuild-снимки изменились
@@ -5259,12 +5259,51 @@ GPU-память простаивающего или невидимого окн
   падают и на неизменённой базе, поэтому не относятся к этому PR. Clippy тех же крейтов с
   `-D warnings`, `wasm-check`, `workspace`, `reach` и остальные `xtask checks` зелёные, кроме
   известного `cargo fmt --all` во вложенном worktree; `cross-typecheck` локально требует
-  отсутствующий `zig` и остаётся на CI. Остаются `tracing` в text store, `active_window` и
-  публичный путь keyboard layout.
-  `opened.rs` (отброшенные сверх предела URL), `reach-forbid` контракта его не называет;
-  `Platform::active_window` и `OwnerPlatform::active_window` на месте, выше хоста их читают
-  только тесты (`tests/handler_reentry.rs`); `Platform::keyboard_layout` и
-  `on_keyboard_layout_change` остаются методами публичного запечатанного `Platform`.
+  отсутствующий `zig` и остаётся на CI. Остальное закрывает запись ниже.
+- [x] **LY55** — #2660, ветка `platform/contract-without-tracing`. Контракт больше не зависит от
+  `tracing` и отдаёт каждое условие тому, кто решает. Отказ store в правке: сразу — ошибка
+  вызывающего (`commit_composition_in_place` теперь возвращает её, как `project_ime_event`);
+  в отложенном grant — вызов `late_refusal`, который передаёт вызывающий (обе функции идут
+  через один `edit_async`). Хосты коммитят композицию на месте одной функцией
+  `text::refusal::commit_in_place`, которая сообщает отказ в обоих случаях (TSF, зеркала Web и
+  Android, AppKit/UIKit, текстовый ввод Wayland); `TextInputOwner` сопоставляет исход явно и
+  тоже сообщает отказ. Ограничение того, что открыла ОС, — `Opened::bounded`, возвращающий
+  `(Opened, OpenedOverflow)`; публичного поля `Opened::overflow` нет. Хост сообщает переполнение
+  там, где ограничивает (`owner::opened::bounded`): аргументы запуска (и второй экземпляр до
+  пересылки), `file:`-URI, приём пересланного запуска, адрес страницы, интент Android (в том
+  числе пустой и документы сверх места; место считается после ссылок, которые останутся, так
+  что слишком длинная ссылка документ не вытесняет). Склейка запуска в `take_launch` берёт cold-отчёты, пока
+  их не больше `MAX_OPENED_ITEMS`, остальные доходят до `AppHandler::opened` после `ready`.
+  Манифест: `tracing` удалён и стоит в `reach-forbid`; единственный путь к нему — собственная
+  инструментация `flui-foundation` (`reach-exceptions`, grant ADR-0151 §7). `Platform` и
+  `OwnerPlatform` без `active_window` (вместе с позицией `host::Window::active` на восьми хостах,
+  полем `active` у headless и Wayland, `IOSLoop::active`, macOS-только `OwnerMap::get` и id окна
+  в `WebState::window`) и без `keyboard_layout`/`on_keyboard_layout_change`: раскладка осталась
+  позицией ввода ядра, запечатанной (публичный трейт в закрытом модуле `host`, как
+  `host_window::sealed`), так что вне крейта её не вызвать, как и решил ADR-0151 §9; тесты в
+  `tests/` входят через единственную дверь `testing::keyboard_layout` за фичей `testing`.
+  ADR-0039 получил `Superseded-by`. Удалены
+  непрочитанные `TargetPlatform::{is_mobile, is_desktop, is_touch_primary}` и
+  `PlatformInput::as_drag_drop`.
+  Тесты, в скобках результат без исправления: `a_refused_edit_reaches_the_caller_or_its_late_reporter`
+  (сначала `Ok(Granted)` вместо `Err(Protected)`, затем поздний отказ не доходит);
+  `a_refused_commit_in_place_is_reported_once`, `a_field_refusing_the_commit_on_blur_is_reported_once`
+  (AppKit/UIKit и текстовый ввод Wayland) и строка «termination and commit refused» TSF (ни
+  одного сообщения); сайты зеркал Web и Android собираются только для своих целей, их сообщение
+  проверяет только CI-компиляция; `a_launch_reports_what_bounding_its_arguments_dropped`,
+  `an_intent_reports_what_bounding_dropped_even_when_nothing_is_left` (ни одного сообщения; с
+  прежним расчётом места документ рядом с длинной ссылкой отброшен);
+  `a_forwarded_launch_reports_its_drop_where_it_happens` (только в WSL); строка «a launch too
+  large to join keeps the rest queued» в `app_delivery_contracts` (хвост отброшен). В
+  `handler_reentry.rs` деструктор обработчика теперь открывает окно, то есть берёт таблицу окон
+  хоста на запись (headless `HeadlessWindows::tracked`, Win32 `WindowSet::by_handle`): с
+  возвращённым удержанием `by_handle` вокруг `clear_then` таблица Win32 падает в `set.rs`.
+  Проверки: на Windows clippy `-D warnings`, nextest flui-platform, flui-native, flui-interaction
+  и flui-app, `reach`, `doc-strict`, `checks`, `expectations`; в WSL clippy, `cargo doc -D
+  warnings` и юнит-тесты Linux. На `main` @ `53c3e028f` на этом Windows-хосте уже падают
+  `an_intent_opens_its_link_or_documents` и trybuild-снимок `owner_platform_is_not_send`. Не
+  собирались здесь macOS, iOS, Android и wasm32 (CI `cross-typecheck`); тесты X11 и Wayland не
+  запускались.
 - [ ] **LY53** (не закрыта: запрета `build.rs`, запускающего `javac`, `swiftc` или `d8`, нет) —
   #2150 (`9450db8e1`), #2325 (`75872fc6e`). kind `capability` входит в закрытый список
   (`tools/xtask/src/workspace/tiers.rs`): крейт возможности живёт только в ярусе `pkg`
@@ -5603,7 +5642,7 @@ GPU-память простаивающего или невидимого окн
   `handle_for`) падают: `window_handle_contract` (`looking_a_window_up_reads_nothing_of_it`,
   «RefCell already borrowed»), `window_handler_obligation_table`
   (`a_revision_a_read_published_is_announced_at_the_owners_turn`),
-  `a_window_takes_no_dpi_of_zero`, `native_recording_contracts` (четыре случая на проверке
+  `a_window_takes_no_dpi_no_screen_has`, `native_recording_contracts` (четыре случая на проверке
   чтения) и `the_win32_window_conforms` (три нарушения: `a_closed_window_refuses`,
   `a_report_that_describes_no_window_publishes_nothing`, расхождение метрик); с исправлениями
   все зелёные. Новые conformance-строки ловят свои дефекты на headless-фикстуре с
@@ -6127,6 +6166,96 @@ GPU-память простаивающего или невидимого окн
   APK на Galaxy S21 и образе API 23–25). Потребитель — выбор файла `flui-system` (LY67).
   Не запущено: Android-код и Java компилирует только CI (`cross-typecheck`, `android-dex`), на
   устройстве ничего не запускалось.
+- [ ] **LY112** — ветка `platform/one-rule-once`, PR #2651 (ждёт независимого чтения).
+  **Частично:** масштаб каждой записи ввода (`NativeReading::scale`), зум преобразования
+  DirectManipulation и измеренные отношения боксов хоста Web сохраняют свою проверку; почему —
+  пункт «Scales still checked by hand» в `docs/gaps.md`. Все семь находок подтверждены на `main`
+  @ `5e09d5476`; ни одну пакеты-предпосылки не сняли.
+  Построено: окно Wayland отдаёт свои состояния как `ModeFlags`, режим решает `mode_of`, у
+  `every_window_system_decides_the_mode_alike` столбец Wayland. `value120` Wayland и
+  `WM_MOUSEWHEEL` Win32 считаются одним `DetentSteps` (поле закрыто, `WHEEL_DETENT` — 1/120
+  детента обоих протоколов); путь валюаторов X11 — `decode::valuator_detents`, и столбец X11
+  таблицы `every_backend_steps_a_turn_alike` идёт через него, столбец Wayland — через
+  `value120_step`. Такты счётчика в наносекунды — одна `counter_nanos`. `drag/{wayland,x11}` —
+  в `drag/linux/`. `flui_platform::MAX_SURFACE_EXTENT` — верхняя граница стороны поверхности
+  (не обещание: устройство отказывает раньше на адаптерах GLES 3.0 и WebGL2); псевдонимы
+  `MAX_CONTENT_EXTENT` и `client_frame::MAX_EXTENT` удалены. Одно правило перевода стороны
+  окна в пиксели устройства — `window::state::device_extent` и для пределов размера
+  `device_extent_rounded` (минимум вверх, максимум вниз; тот же диапазон): ими читают X11
+  (размеры, пределы), рамка Wayland, Win32 (`SetSize`, размер при открытии, `track_limits`), а
+  хост headless обрезает размер по той же границе. Без вьюпорта кнопки заголовка рамки
+  Wayland раскладываются в нарисованной ширине (`Frame::drawn_width`). Масштаб — от контракта
+  вниз: `DisplayInfo::scale_factor` — `DevicePixelRatio`, записи окон (Win32 `WindowRecord`,
+  X11, macOS, iOS, Android, headless, рамка Wayland), `FrameInset::logical`,
+  `Platform::window_frame_inset`, `ProjectedInputRegions::update`, `KeyboardMotion::keyboard` и
+  вставки Android берут его; число ОС читается один раз одним правилом `display::scale`
+  (`ScaleStreak::read`: годное берётся, негодное — базовое отношение, первый отказ серии
+  сообщается вне заимствований), им пользуются Win32 (DPI монитора, системы, пределов), macOS,
+  iOS, Android (плотность дисплея и окна, дисплей больше не выпадает), Web, X11 `Xft.dpi`,
+  headless. Серия — на источник: `ScaleStreak` для одного (окно, системный DPI Win32,
+  `Xft.dpi`), `ScaleStreaks` по `DisplayId` для дисплеев выборки (ушедший дисплей сбрасывается).
+  `DevicePixelRatio` держит диапазон экрана `MIN..=MAX` (1/32…32), `InvalidMetrics::LogicalOverflow`
+  удалён как недостижимый, `BufferScale` Wayland снижает лишь конечное число выше своего
+  предела. Пределы размера — одна функция у шва `window::state::device_limits` (минимум вверх,
+  максимум вниз и не ниже минимума), её зовут Win32 и X11. Одно преобразование стороны
+  поверхности — `flui_foundation::geometry::device_extent`: им считают хосты и поверхность сцены
+  в `flui-runtime` (было `ceil`: 400,9 × 1,5 давало 602, хост — 601). Чистая часть вставок
+  Android — `window::activity_insets`, её тесты идут на Linux.
+  Каждое число масштаба идёт одним из трёх путей. От ОС — через правило `display::scale`:
+  `read`/`try_read` (негодное — базовое отношение) у дисплеев и окон, `check` (негодное
+  отвергнуто, окно держит последний принятый масштаб) у `WM_DPICHANGED` Win32 (`ScaleStreak::admit` над `WindowDpi::try_new`,
+  `WindowScale` держит `WindowDpi`) и у `preferred_scale` и `preferred_buffer_scale` Wayland
+  (`ToldScale`); отказ несёт `Refusal`, и предупреждение говорит, что сделал вызвавший. Вывод
+  Wayland читает размер и отношение вместе (`scaled_extent`): при отказе границы — пиксели режима
+  при отношении 1. Android держит серии всех прочитанных дисплеев. От API — типизированный
+  отказ: `UiRuntime::try_new` и `with_capacity` — `UiRuntimeError::PixelRatio { bits }`; запись
+  с масштабом окна вне диапазона отвергается при чтении; `HeadlessHost` и
+  `LaidOut::set_scale_factor` берут `DevicePixelRatio`, `try_set_scale_factor` отвечает
+  `InvalidMetrics`. `UiRuntime::set_device_pixel_ratio_for` удалён (вызывали только тесты).
+  Константы — `DevicePixelRatio::try_new` стал `const`. Конвейер хранит и отдаёт
+  `DevicePixelRatio` (`PipelineOwner::device_pixel_ratio`), как и `JavaView` Android и
+  `OutputFacts` Wayland, так что повторных проверок при чтении нет.
+  Кодек записи держит число и отказывает в числе вне диапазона при чтении; формат не менялся.
+  Тесты, в скобках результат с откатом: `every_window_system_decides_the_mode_alike` (чтение
+  Wayland без `fullscreen` — столбец Wayland); `every_backend_steps_a_turn_alike` (шаг X11 с
+  вертикалью как у содержимого — столбец X11); `counter_ticks_become_nanoseconds_at_the_extremes`
+  (умножение в `u64` — 1 вместо 10⁹); `a_logical_side_becomes_a_device_extent_every_host_can_draw`
+  (таблица у, под и над границей); `window_limits_in_device_pixels`
+  (`a_huge_limit_is_held_at_the_largest_surface`: со старым насыщением — `i32::MAX`);
+  `a_window_asks_the_limits_it_was_given` (строка дробного масштаба: 151/750);
+  `window_state_contract` (`a_size_past_the_largest_surface_is_held_at_it`: без обрезки headless
+  публикует 10¹⁰; `window_facts_arrive_only_in_the_snapshot`: NaN читается как 1);
+  `a_frame_past_the_largest_extent_is_drawn_at_it` (раскладка по ширине содержимого — кнопка за
+  краем); `a_reported_scale_is_taken_or_read_as_the_base_ratio_once_reported` (сообщение о
+  каждом отказе — падает); `a_size_past_the_largest_surface_is_admitted` (Win32: старый
+  `device_pair` — `OutOfRange`; обрезку здесь не отличить от предела Win32, её доказывают
+  таблица и headless); `device_limits_round_outward_and_stay_ordered` и строки
+  `a_window_asks_the_limits_it_was_given` о равных и почти равных пределах (без подъёма
+  максимума — 150 при минимуме 151); `each_source_keeps_its_own_streak` (общая серия — второй
+  плохой источник не сообщён); `a_ratio_is_held_to_the_range_a_screen_can_have` (у, внутри и за
+  каждой границей); `a_surface_side_is_snapped_to_whole_device_pixels` (601, не 602);
+  `a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale` (Win32, DPI 1 и 4000: без
+  правила — паника в масштабе окна); `owner_metrics_contract` (64 и 1/64 — отказ, границы
+  приняты: с зажимом вместо отказа — падает); `a_scale_no_screen_has_reads_as_the_base_ratio`
+  (Wayland, масштаб 64 и границы: без правила — не базовое отношение, с логическим размером
+  при отказе — границы 30×16); `a_display_read_but_not_listed_keeps_its_streak`
+  (серии только перечисленных — второй отказ сообщён снова); строки «a refused fraction keeps
+  the one held» и соседние (сброс при отказе — 2, не 1,5); `a_refusal_names_what_its_caller_did`;
+  `a_recording_whose_window_scale_no_screen_has_is_refused_on_its_line`;
+  `a_scale_no_window_can_have_is_answered_and_changes_nothing`;
+  `a_window_takes_no_dpi_no_screen_has`. Строки,
+  которые тип делает невозможными (NaN, ноль, бесконечность, масштаб вне диапазона), сняты из
+  таблиц или переписаны на границы диапазона.
+  Проверки: Windows — clippy `--affected --all-targets -D warnings`, `check --workspace`,
+  nextest `flui-native`, `flui-platform`, `flui-app`, `flui-testing`, `flui-runtime` (кроме
+  `an_intent_opens_its_link_or_documents`, `trybuild` и `the_driver_agent_contains_every_failure`,
+  падающих на этом хосте вне диффа); WSL Ubuntu 24.04 — clippy `-p flui-native --all-targets
+  -D warnings` (и `--no-default-features`, `--features wayland`, `--features x11`), nextest
+  `-p flui-native --lib` под `xvfb-run` без `WAYLAND_DISPLAY` (794 из 794).
+  Не запущено: сборки macOS, iOS, Android и wasm32 (правки `display/apple`, `window/apple`,
+  `input/apple`, `owner/apple/macos/content_view`, `display/android`, `window/android`,
+  `owner/android`, `text/android`, `drag/android`, `display/web`, `tests/wasm32` прочитаны, не
+  скомпилированы); тесты X11 и Wayland на сервере — на CI.
 
 ## Отступление от порядка, решённое владельцем
 

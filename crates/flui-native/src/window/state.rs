@@ -288,9 +288,10 @@ pub(crate) fn held_to(
 
 /// What a window system says of a window, as the three facts its mode is
 /// decided from. Each platform reads them from its own report (AppKit's style
-/// mask and flags, the X11 window manager's
-/// properties, the Win32 window's tracked mode) and [`mode_of`] decides.
-#[cfg(any(windows, target_os = "macos", x11_host, test))]
+/// mask and flags, the X11 window manager's properties, the Wayland
+/// toplevel's configured states, the Win32 window's tracked mode) and
+/// [`mode_of`] decides.
+#[cfg(any(windows, target_os = "macos", x11_host, wayland_host, test))]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct ModeFlags {
     /// The window is minimized: iconic, in the Dock or on the taskbar.
@@ -304,7 +305,7 @@ pub(crate) struct ModeFlags {
 /// The mode of a window with these flags. A minimized window is hidden
 /// whatever else is set; a fullscreen one often keeps its maximized flag, so
 /// fullscreen comes before maximized.
-#[cfg(any(windows, target_os = "macos", x11_host, test))]
+#[cfg(any(windows, target_os = "macos", x11_host, wayland_host, test))]
 pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     use flui_platform::WindowMode;
     if flags.minimized {
@@ -316,6 +317,85 @@ pub(crate) const fn mode_of(flags: ModeFlags) -> flui_platform::WindowMode {
     } else {
         WindowMode::Normal
     }
+}
+
+/// A window's logical side `logical` at `ratio` in whole device pixels, as
+/// every host hands a window extent to its window system or draws a surface
+/// of the window: the one conversion every layer uses
+/// ([`flui_foundation::geometry::device_extent`]: snapped, at least one pixel),
+/// and at most
+/// [`MAX_SURFACE_EXTENT`](flui_platform::MAX_SURFACE_EXTENT), past which the
+/// side is clamped, since no host gives a window a larger surface. `None` for a
+/// side that is not finite or not positive.
+#[cfg(any(windows, x11_host, wayland_host, test))]
+pub(crate) fn device_extent(
+    logical: f64,
+    ratio: flui_foundation::geometry::DevicePixelRatio,
+) -> Option<u32> {
+    flui_foundation::geometry::device_extent(logical, ratio)
+        .map(|pixels| pixels.min(flui_platform::MAX_SURFACE_EXTENT))
+}
+
+/// [`device_extent`] with the device pixels rounded by `round` instead of
+/// snapped, as [`device_limits`] rounds a limit. The range is the same: at
+/// least one pixel, clamped at the largest surface, `None` for a side that is
+/// not finite or not positive.
+#[cfg(any(windows, x11_host, test))]
+fn device_extent_rounded(
+    logical: f64,
+    ratio: flui_foundation::geometry::DevicePixelRatio,
+    round: fn(f64) -> f64,
+) -> Option<u32> {
+    use flui_platform::MAX_SURFACE_EXTENT;
+    if !(logical.is_finite() && logical > 0.0) {
+        return None;
+    }
+    // A product past `f64::MAX` is infinite, which the clamp also bounds.
+    let pixels = round(ratio.to_device(logical)).clamp(1.0, f64::from(MAX_SURFACE_EXTENT));
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a whole number clamped to 1..=MAX_SURFACE_EXTENT just above"
+    )]
+    let pixels = pixels as u32;
+    Some(pixels)
+}
+
+/// A window's content-size limits in device pixels, as every host hands them
+/// to its window system.
+#[cfg(any(windows, x11_host, test))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct DeviceLimits {
+    /// The smallest content size, (width, height).
+    pub(crate) min: Option<(u32, u32)>,
+    /// The largest content size, never below `min` on either side.
+    pub(crate) max: Option<(u32, u32)>,
+}
+
+/// The logical limits `min` and `max` at `ratio` in device pixels, by the
+/// hosts' one rule: a minimum rounds up and a maximum down, so the content
+/// never ends outside the logical limits, each side at least a pixel and
+/// clamped at the largest surface; a limit with a side that is no size is no
+/// limit. Where rounding leaves the maximum below the minimum (both equal at a
+/// fractional ratio), the maximum is raised to it, so the pair is ordered by
+/// construction and the window is held at the minimum.
+#[cfg(any(windows, x11_host, test))]
+pub(crate) fn device_limits(
+    min: Option<flui_foundation::geometry::Size<f64>>,
+    max: Option<flui_foundation::geometry::Size<f64>>,
+    ratio: flui_foundation::geometry::DevicePixelRatio,
+) -> DeviceLimits {
+    let device = |size: flui_foundation::geometry::Size<f64>, round: fn(f64) -> f64| {
+        Some((
+            device_extent_rounded(size.width, ratio, round)?,
+            device_extent_rounded(size.height, ratio, round)?,
+        ))
+    };
+    let min = min.and_then(|size| device(size, f64::ceil));
+    let max = max
+        .and_then(|size| device(size, f64::floor))
+        .map(|max| min.map_or(max, |min: (u32, u32)| (max.0.max(min.0), max.1.max(min.1))));
+    DeviceLimits { min, max }
 }
 
 /// What a read of the cell answered.
@@ -1075,8 +1155,9 @@ mod tests {
 /// own report is held to: a row's facts, put as that system reports them and
 /// read back by the system's own reading, decide the row's mode. AppKit reads
 /// a full-screen window as full screen whatever else it says (it does not
-/// miniaturize one), so the rows where a minimized window also says full
-/// screen name its mode apart.
+/// miniaturize one), and a Wayland compositor never tells its client that a
+/// window was minimized, so the rows where a minimized window also says
+/// something else name those systems' modes apart.
 #[cfg(test)]
 mod mapping {
     use flui_foundation::geometry::{Bounds, Point, Size};
@@ -1084,6 +1165,7 @@ mod mapping {
 
     use super::{ModeFlags, mode_of};
     use crate::window::apple::geometry::mode::WindowFlags;
+    use crate::window::linux::wayland::configure::ToplevelStates;
     use crate::window::linux::x11::mode::{NetWmState, WmState, mode_flags};
     use crate::window::windows::mode::NativeMode;
 
@@ -1094,13 +1176,16 @@ mod mapping {
         mode: WindowMode,
         /// The mode AppKit reads from the same flags.
         appkit: WindowMode,
+        /// The mode a Wayland client reads from the states its compositor
+        /// configures for the same window.
+        wayland: WindowMode,
     }
 
     const fn row(
         case: &'static str,
         (minimized, fullscreen, maximized): (bool, bool, bool),
         mode: WindowMode,
-        appkit: WindowMode,
+        [appkit, wayland]: [WindowMode; 2],
     ) -> Row {
         Row {
             case,
@@ -1111,34 +1196,72 @@ mod mapping {
             },
             mode,
             appkit,
+            wayland,
         }
     }
 
     const ROWS: [Row; 8] = [
-        row("nothing set", (false, false, false), Normal, Normal),
-        row("maximized", (false, false, true), Maximized, Maximized),
-        row("fullscreen", (false, true, false), Fullscreen, Fullscreen),
-        row("minimized", (true, false, false), Minimized, Minimized),
+        row(
+            "nothing set",
+            (false, false, false),
+            Normal,
+            [Normal, Normal],
+        ),
+        row(
+            "maximized",
+            (false, false, true),
+            Maximized,
+            [Maximized, Maximized],
+        ),
+        row(
+            "fullscreen",
+            (false, true, false),
+            Fullscreen,
+            [Fullscreen, Fullscreen],
+        ),
+        row(
+            "minimized",
+            (true, false, false),
+            Minimized,
+            [Minimized, Normal],
+        ),
         row(
             "fullscreen that kept its maximized flag",
             (false, true, true),
             Fullscreen,
-            Fullscreen,
+            [Fullscreen, Fullscreen],
         ),
         row(
             "minimized from fullscreen",
             (true, true, false),
             Minimized,
-            Fullscreen,
+            [Fullscreen, Fullscreen],
         ),
         row(
             "minimized from maximized",
             (true, false, true),
             Minimized,
-            Minimized,
+            [Minimized, Maximized],
         ),
-        row("all three", (true, true, true), Minimized, Fullscreen),
+        row(
+            "all three",
+            (true, true, true),
+            Minimized,
+            [Fullscreen, Fullscreen],
+        ),
     ];
+
+    /// The states a Wayland compositor configures for such a window: the
+    /// maximized and fullscreen states as they stand, and nothing of its
+    /// being minimized, which xdg-shell has no state for.
+    fn wayland(said: ModeFlags) -> ModeFlags {
+        ToplevelStates {
+            maximized: said.maximized,
+            fullscreen: said.fullscreen,
+            ..ToplevelStates::default()
+        }
+        .mode_flags()
+    }
 
     /// The properties an X11 window manager keeps for such a window:
     /// `WM_STATE` iconic and `_NET_WM_STATE_HIDDEN` for a minimized one, the
@@ -1204,6 +1327,7 @@ mod mapping {
             said,
             mode,
             appkit: appkit_mode,
+            wayland: wayland_mode,
         } in ROWS
         {
             let modes = [
@@ -1211,10 +1335,121 @@ mod mapping {
                 ("X11", mode_of(x11(said)), mode),
                 ("Win32", mode_of(win32(said)), mode),
                 ("AppKit", mode_of(appkit(said)), appkit_mode),
+                ("Wayland", mode_of(wayland(said)), wayland_mode),
             ];
             for (system, decided, expected) in modes {
                 assert_eq!(decided, expected, "{system}: {case}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod extent {
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
+    use flui_platform::MAX_SURFACE_EXTENT;
+
+    use super::{DeviceLimits, device_extent, device_limits};
+
+    /// The limits every host hands its window system: a minimum up, a
+    /// maximum down, and the pair ordered by construction, so rounding never
+    /// sends a maximum below the minimum.
+    #[test]
+    fn device_limits_round_outward_and_stay_ordered() {
+        let ratio = |ratio: f64| DevicePixelRatio::try_new(ratio).expect("a positive ratio");
+        let square = |side: f64| Some(Size::new(side, side));
+        // (case, min, max, ratio, limits)
+        for (case, min, max, scale, limits) in [
+            (
+                "whole limits",
+                square(300.0),
+                square(900.0),
+                1.0,
+                (Some((300, 300)), Some((900, 900))),
+            ),
+            (
+                "a fractional ratio rounds outward",
+                square(100.3),
+                square(500.3),
+                1.5,
+                (Some((151, 151)), Some((750, 750))),
+            ),
+            (
+                "equal fractional limits hold the window at the minimum",
+                square(100.3),
+                square(100.3),
+                1.5,
+                (Some((151, 151)), Some((151, 151))),
+            ),
+            (
+                "a maximum just above the minimum is raised to it",
+                square(100.3),
+                square(100.4),
+                1.0,
+                (Some((101, 101)), Some((101, 101))),
+            ),
+            (
+                "a limit with a side that is no size is no limit",
+                Some(Size::new(f64::NAN, 10.0)),
+                square(100.0),
+                1.0,
+                (None, Some((100, 100))),
+            ),
+            ("no limits", None, None, 1.0, (None, None)),
+        ] {
+            assert_eq!(
+                device_limits(min, max, ratio(scale)),
+                DeviceLimits {
+                    min: limits.0,
+                    max: limits.1,
+                },
+                "{case}"
+            );
+        }
+    }
+
+    /// The one logical-to-device extent: snapped, at least a pixel, clamped
+    /// at the largest surface, and no extent for a side that is none.
+    #[test]
+    fn a_logical_side_becomes_a_device_extent_every_host_can_draw() {
+        let ratio = |ratio: f64| DevicePixelRatio::try_new(ratio).expect("a positive ratio");
+        let max = f64::from(MAX_SURFACE_EXTENT);
+        for (case, logical, scale, extent) in [
+            ("at one", 800.0, 1.0, Some(800)),
+            ("at a fractional scale", 401.0, 1.5, Some(602)),
+            ("a half pixel rounds up", 0.5, 5.0, Some(3)),
+            ("a sliver is one pixel", 0.01, 1.0, Some(1)),
+            (
+                "just under the largest surface",
+                max - 1.0,
+                1.0,
+                Some(MAX_SURFACE_EXTENT - 1),
+            ),
+            (
+                "one past the largest surface",
+                max + 1.0,
+                1.0,
+                Some(MAX_SURFACE_EXTENT),
+            ),
+            (
+                "the largest surface",
+                max / 2.0,
+                2.0,
+                Some(MAX_SURFACE_EXTENT),
+            ),
+            (
+                "past the largest surface",
+                max,
+                2.0,
+                Some(MAX_SURFACE_EXTENT),
+            ),
+            ("past every number", f64::MAX, 2.0, Some(MAX_SURFACE_EXTENT)),
+            ("no size", 0.0, 1.0, None),
+            ("negative", -10.0, 1.0, None),
+            ("not a number", f64::NAN, 1.0, None),
+            ("infinite", f64::INFINITY, 1.0, None),
+        ] {
+            assert_eq!(device_extent(logical, ratio(scale)), extent, "{case}");
         }
     }
 }

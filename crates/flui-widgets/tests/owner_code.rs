@@ -788,6 +788,7 @@ fn composing_store() -> Rc<InMemoryTextStore> {
             text: "ã‹ãª".to_owned(),
             cursor: Some((0, 0)),
         },
+        drop,
     );
     assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
     store
@@ -1119,6 +1120,7 @@ fn host_close_before_the_anchor_commits_a_queued_completion() {
                 text: "ã‹ãª".to_owned(),
                 cursor: Some((0, 0)),
             },
+            drop,
         ),
         Ok(LockOutcome::Granted),
         "preedit applies"
@@ -1170,6 +1172,7 @@ fn push_completion_queued_in_a_frame(
                 text: "ã‹ãª".to_owned(),
                 cursor: Some((0, 0)),
             },
+            drop,
         ),
         Ok(LockOutcome::Granted),
         "preedit applies"
@@ -1395,6 +1398,7 @@ fn editable_blur_during_preedit_pull() {
                     text: PREEDIT.to_owned(),
                     cursor: Some((0, 0)),
                 },
+                drop,
             );
             assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
         },

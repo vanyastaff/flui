@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets};
 use flui_platform::{EventTime, InsetCurve, InsetMotion, KeyboardInset};
 
 /// The fractions of time at which `FluiView` reads the interpolator, in the
@@ -112,15 +112,15 @@ impl KeyboardMotion {
         self,
         target: EdgeInsets,
         bottom: i32,
-        scale: f64,
+        scale: DevicePixelRatio,
     ) -> Option<KeyboardInset> {
-        if bottom != self.to || !scale.is_finite() || scale <= 0.0 {
+        if bottom != self.to {
             return None;
         }
         let from = EdgeInsets::new(
             target.top,
             target.right,
-            f64::from(self.from) / scale,
+            scale.to_logical(f64::from(self.from)),
             target.left,
         );
         let motion = InsetMotion::try_new(from, self.start, self.duration, self.curve).ok()?;
@@ -131,6 +131,10 @@ impl KeyboardMotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn three() -> DevicePixelRatio {
+        DevicePixelRatio::try_new(3.0).expect("a positive ratio")
+    }
 
     fn values(curve: InsetCurve) -> [f32; 3] {
         PROBES.map(|time| curve.progress(time) as f32)
@@ -160,7 +164,7 @@ mod tests {
         .expect("a motion with a duration");
         let target = EdgeInsets::new(0.0, 0.0, 300.0, 0.0);
         let keyboard = motion
-            .keyboard(target, 900, 3.0)
+            .keyboard(target, 900, three())
             .expect("the sample is the motion's end");
         assert_eq!(keyboard.target(), target);
         let moving = keyboard.motion().expect("a keyboard in motion");
@@ -185,12 +189,11 @@ mod tests {
         .expect("a motion with a duration");
         // Sampled before the keyboard began to hide.
         assert_eq!(
-            motion.keyboard(EdgeInsets::new(0.0, 0.0, 300.0, 0.0), 900, 3.0),
+            motion.keyboard(EdgeInsets::new(0.0, 0.0, 300.0, 0.0), 900, three()),
             None
         );
-        assert_eq!(motion.keyboard(EdgeInsets::ZERO, 0, f64::NAN), None);
         let hiding = motion
-            .keyboard(EdgeInsets::ZERO, 0, 3.0)
+            .keyboard(EdgeInsets::ZERO, 0, three())
             .and_then(|keyboard| keyboard.motion())
             .expect("the hidden keyboard is the motion's end");
         assert_eq!(hiding.from(), EdgeInsets::new(0.0, 0.0, 300.0, 0.0));

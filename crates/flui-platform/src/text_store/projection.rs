@@ -46,11 +46,13 @@ type Edit = Box<dyn FnOnce(&mut dyn TextStoreEdit) -> Result<(), TextStoreError>
 /// # Errors
 ///
 /// The store's refusal of the lock, or an edit's error when the grant ran
-/// before this returned. An edit that fails in a grant that runs later is
-/// reported with `tracing::warn!`, since no caller is left to receive it.
+/// before this returned. A grant the store queued runs after this returned:
+/// its refusal goes to `late_refusal`, which the caller supplies to report it
+/// (the contract does not log).
 pub fn project_ime_event(
     store: &dyn TextStore,
     event: &ImeEvent,
+    late_refusal: impl FnOnce(TextStoreError) + 'static,
 ) -> Result<LockOutcome, TextStoreError> {
     let edit: Edit = match event {
         ImeEvent::Preedit { text, cursor } if !text.is_empty() => {
@@ -64,27 +66,36 @@ pub fn project_ime_event(
         }
         ImeEvent::Enabled => return Ok(LockOutcome::Granted),
     };
+    edit_async(store, edit, late_refusal)
+}
 
+/// Run `edit` under an asynchronous read-write lock on `store`.
+///
+/// An edit that runs before this returns answers through the result: its
+/// error, or else what the store did with the request. One the store queues
+/// runs at a later commit anchor, after this returned, and hands its error to
+/// `late_refusal`; a queued edit that succeeds, or a grant the store drops
+/// unrun, calls nothing.
+pub(super) fn edit_async(
+    store: &dyn TextStore,
+    edit: impl FnOnce(&mut dyn TextStoreEdit) -> Result<(), TextStoreError> + 'static,
+    late_refusal: impl FnOnce(TextStoreError) + 'static,
+) -> Result<LockOutcome, TextStoreError> {
     let failure: Rc<Cell<Option<TextStoreError>>> = Rc::new(Cell::new(None));
-    let returned = Rc::new(Cell::new(false));
-    let (grant_failure, grant_returned) = (Rc::clone(&failure), Rc::clone(&returned));
+    // A grant that runs after this returned finds the caller gone.
+    let caller = Rc::downgrade(&failure);
     let outcome = store.request_lock(
         LockGrant::read_write(move |session| {
             if let Err(error) = edit(session) {
-                if grant_returned.get() {
-                    tracing::warn!(?error, "a deferred IME edit could not be applied");
-                } else {
-                    grant_failure.set(Some(error));
+                match caller.upgrade() {
+                    Some(failure) => failure.set(Some(error)),
+                    None => late_refusal(error),
                 }
             }
         }),
         LockTiming::Async,
     );
-    returned.set(true);
-    match failure.take() {
-        Some(error) => Err(error),
-        None => outcome,
-    }
+    failure.take().map_or(outcome, Err)
 }
 
 fn preedit(

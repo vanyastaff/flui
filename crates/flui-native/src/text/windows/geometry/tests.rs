@@ -188,8 +188,8 @@ fn screen_rects_follow_scale_and_round_outwards() {
 /// logical pixels by the injected scale, for every pair of `i32` screen and
 /// origin coordinates: the difference of two extremes does not fit an `i32`,
 /// but is exact in `f64`. At the smallest ratio `DevicePixelRatio` admits,
-/// dividing by it overflows for all but the nearest points: a point with no
-/// finite logical position has none at all.
+/// dividing by it grows that difference 32 times, which stays finite: every
+/// screen point has a logical position.
 #[test]
 fn screen_points_map_to_logical_client_points() {
     // Name, screen point, client origin, scale, logical point.
@@ -202,7 +202,7 @@ fn screen_points_map_to_logical_client_points() {
     );
     let (min, max) = (i32::MIN, i32::MAX);
     let span = f64::from(max) - f64::from(min);
-    let smallest = f64::MIN_POSITIVE;
+    let smallest = DevicePixelRatio::MIN.get();
     let rows: &[Row] = &[
         (
             "offset by the client origin",
@@ -265,20 +265,20 @@ fn screen_points_map_to_logical_client_points() {
             DevicePoint::new(max, min),
             DevicePoint::new(min, max),
             smallest,
-            None,
+            Some(Point::new(span / smallest, -span / smallest)),
         ),
         (
-            "one coordinate overflowing at the smallest ratio",
+            "one coordinate far out at the smallest ratio",
             DevicePoint::new(max, 200),
             ORIGIN,
             smallest,
-            None,
+            Some(Point::new((f64::from(max) - 100.0) / smallest, 0.0)),
         ),
     ];
     let failed: Vec<&str> = rows
         .iter()
         .filter(|(_, at, origin, scale, expected)| {
-            std::panic::catch_unwind(|| screen_point_to_client(*at, *origin, ratio(*scale)))
+            std::panic::catch_unwind(|| Some(screen_point_to_client(*at, *origin, ratio(*scale))))
                 .map_or(true, |point| point != *expected)
         })
         .map(|(name, ..)| *name)

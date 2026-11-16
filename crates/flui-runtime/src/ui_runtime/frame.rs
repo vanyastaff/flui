@@ -676,7 +676,8 @@ impl UiRuntime {
                         crate::presentation_scene::OverlayFrame {
                             layer,
                             device_pixel_ratio: pipeline
-                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio),
+                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio)
+                                .get(),
                             owner: pipeline
                                 .with(flui_rendering::pipeline::PipelineOwner::root_id)
                                 .expect("BUG: a frame that painted has a root"),
@@ -962,7 +963,10 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
-        let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
+        let constraints = BoxConstraints::tight(Size::new(
+            dpr.to_logical(width as f64),
+            dpr.to_logical(height as f64),
+        ));
         let mut drawing = FirstPanic::new();
         let drawn = drawing.contain(|| self.draw_frame_entered(constraints));
         // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
@@ -1590,19 +1594,12 @@ impl<'a> PhaseStopwatch<'a> {
 }
 
 /// A logical extent in whole device pixels, for the surface a patch is
-/// applied against: an unbounded or non-finite extent is no surface.
-fn device_extent(logical: f64, device_pixel_ratio: f64) -> u32 {
-    let device = (logical * device_pixel_ratio).ceil();
-    if device.is_finite() && device > 0.0 {
-        // In range: checked finite and positive, and clamped below.
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "finite, positive and clamped to u32::MAX before the cast"
-        )]
-        let pixels = device.min(f64::from(u32::MAX)) as u32;
-        pixels
-    } else {
-        0
-    }
+/// applied against, snapped by the conversion the hosts share
+/// (`flui_foundation::geometry::device_extent`), so the patch's surface rounds
+/// as the window's does: an unbounded or non-finite extent is no surface. The
+/// largest surface is a host's policy, applied where it sizes the window, and
+/// the renderer refuses a surface past its device's limit; the runtime holds
+/// neither, so it does not clamp.
+fn device_extent(logical: f64, ratio: flui_foundation::geometry::DevicePixelRatio) -> u32 {
+    flui_foundation::geometry::device_extent(logical, ratio).unwrap_or(0)
 }

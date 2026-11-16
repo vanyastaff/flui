@@ -65,7 +65,7 @@ use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, H
 use flui_platform::{
     AppDataDir, DeviceId, DisplaySnapshot, HapticFeedback, LaunchKey, PlatformHaptics,
     PlatformSystemChrome, SystemPreferences, SystemUiOverlayStyle, Unsupported, UnsupportedReason,
-    WindowCapabilities, WindowHandler, WindowId, WindowOptions,
+    WindowCapabilities, WindowHandler, WindowOptions,
 };
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -228,14 +228,15 @@ pub trait Window<O> {
         handler: Rc<dyn WindowHandler>,
     ) -> Result<Rc<dyn HostWindow>, OpenWindowError>;
 
-    /// [`Platform::active_window`].
-    fn active(owner: &O, shared: &Self::Shared) -> Option<WindowId>;
-
     /// [`Platform::window_capabilities`].
     fn capabilities(owner: &O, shared: &Self::Shared) -> WindowCapabilities;
 
     /// [`Platform::window_frame_inset`].
-    fn frame_inset(owner: &O, shared: &Self::Shared, scale_factor: f64) -> Size<f64>;
+    fn frame_inset(
+        owner: &O,
+        shared: &Self::Shared,
+        scale_factor: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64>;
 
     /// [`Platform::display_connection`].
     fn display_connection(
@@ -371,15 +372,32 @@ pub trait Displays<O> {
     fn snapshot(owner: &O) -> Result<DisplaySnapshot, PlatformError>;
 }
 
-/// The input position, as far as the application reaches it: the keyboard
-/// layout. Pointer, key and gesture input reach a window through its own
-/// callbacks.
-pub trait Input<O> {
-    /// [`Platform::keyboard_layout`].
-    fn keyboard_layout(owner: &O) -> String;
+pub(crate) use input::Input;
 
-    /// [`Platform::on_keyboard_layout_change`].
-    fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut()>);
+/// The input position, sealed: public in a crate-private module, so a table
+/// outside the crate can name [`Absent`] for it but nothing outside the crate
+/// can call it (ADR-0151 §9).
+mod input {
+    /// The input position above a window: the keyboard layout. Pointer, key
+    /// and gesture input reach a window through its own callbacks.
+    ///
+    /// Nothing above the host reads the layout yet, so it stays in the core
+    /// host (ADR-0151 §9): the menu feature, which labels shortcuts,
+    /// publishes it with that consumer. The host's integration tests reach it
+    /// through `testing::keyboard_layout`.
+    pub trait Input<O> {
+        /// The current keyboard layout's name as the operating system gives
+        /// it; empty where the host does not read the layout.
+        fn keyboard_layout(owner: &O) -> String;
+
+        /// Call `callback` on each keyboard layout change. A registration
+        /// replaces the callback before it, which is dropped then; a host
+        /// that does not read the layout never calls it. The callback is
+        /// called with no lock of the platform held, and its panic is the
+        /// failure of the turn that heard the change, as a window handler's
+        /// is.
+        fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut()>);
+    }
 }
 
 /// The clipboard position.
@@ -522,15 +540,11 @@ impl<O> Window<O> for Absent<position::Window> {
         Err(NOT_ON_THIS_PLATFORM.into())
     }
 
-    fn active(_: &O, (): &()) -> Option<WindowId> {
-        None
-    }
-
     fn capabilities(_: &O, (): &()) -> WindowCapabilities {
         WindowCapabilities::NONE
     }
 
-    fn frame_inset(_: &O, (): &(), _: f64) -> Size<f64> {
+    fn frame_inset(_: &O, (): &(), _: flui_foundation::geometry::DevicePixelRatio) -> Size<f64> {
         Size::new(0.0, 0.0)
     }
 

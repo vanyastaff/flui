@@ -223,7 +223,7 @@ test-group = 'x11-server'
 # seconds on CI). The `SERVER` lock in the tests covers plain `cargo test`
 # only; the group runs them one at a time under nextest.
 [[profile.default.overrides]]
-filter = 'package(flui-native) & test(/^drag::x11::tests::/)'
+filter = 'package(flui-native) & test(/^drag::linux::x11::tests::/)'
 test-group = 'xdnd-selection'
 
 # `cargo xtask` itself, spawned as a binary (see `xtask-binary`).

@@ -8,17 +8,15 @@ use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use windows::Win32::{
     Foundation::{HWND, RECT},
     Graphics::Gdi::UpdateWindow,
-    UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowPlacement, IsWindowVisible, WINDOWPLACEMENT,
-    },
+    UI::WindowsAndMessaging::{GetWindowPlacement, IsWindowVisible, WINDOWPLACEMENT},
 };
 
 use flui_platform::{
-    CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler, WindowId,
+    CapabilityAbsence, PlatformWindow, Unsupported, WindowCapabilities, WindowHandler,
     WindowIdMint, WindowOptions,
 };
 
@@ -34,6 +32,7 @@ use crate::owner::windows::{ClassWindows, WindowsLoop};
 use crate::version::gate::Since;
 use crate::version::gate::windows::WindowsBuild;
 use crate::window::config::WindowConfiguration;
+use crate::window::state::device_extent;
 
 /// The windows of FLUI's class the platform tracks, keyed by HWND, and the
 /// configuration they open with (hotkeys, debouncing, fullscreen behavior).
@@ -45,7 +44,7 @@ use crate::window::config::WindowConfiguration;
 /// names it, and nameable only inside the crate.
 pub struct WindowSet {
     /// The windows, which only the owner thread holds (ADR-0327 §5). The only
-    /// way from an HWND to a [`WindowId`]: a handle not in it names no window
+    /// way from an HWND to a [`WindowId`](flui_platform::WindowId): a handle not in it names no window
     /// of this platform.
     by_handle: RefCell<FxHashMap<isize, Rc<WindowsWindow>>>,
     /// Issues the id of every window the set opens,
@@ -61,6 +60,9 @@ pub struct WindowSet {
     /// Why the machine's display tells no window when its frames reached the
     /// screen, read once with the platform; `None` where it tells.
     presentation: Option<CapabilityAbsence>,
+    /// Whether the last system DPI a window opened at was refused, so a run
+    /// of refusals is reported once.
+    pub(super) system_scale_streak: std::cell::Cell<crate::display::scale::ScaleStreak>,
 }
 
 /// The machine's DXGI adapters, each with the number of its outputs the
@@ -112,6 +114,7 @@ impl WindowSet {
             positions,
             material: material::gate(build),
             presentation: presentation_absence(&display_adapters()),
+            system_scale_streak: std::cell::Cell::default(),
         }
     }
 
@@ -177,6 +180,7 @@ impl std::fmt::Debug for WindowSet {
             .field("positions", &self.positions)
             .field("material", &self.material)
             .field("presentation", &self.presentation)
+            .field("system_scale_streak", &self.system_scale_streak.get())
             .finish()
     }
 }
@@ -360,28 +364,15 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
         Ok(window)
     }
 
-    fn active(owner: &WindowsLoop, windows: &WindowSet) -> Option<WindowId> {
-        owner.affinity.debug_assert_owner("WindowsWindow::active");
-        // SAFETY: `GetForegroundWindow` takes no arguments; `hwnd` is just
-        // an opaque value looked up, never dereferenced.
-        let hwnd = unsafe { GetForegroundWindow() };
-        if hwnd.is_invalid() {
-            return None;
-        }
-        // Another application's window, or one of ours that closed, is in
-        // no entry: the foreground window is then none of this platform's.
-        windows
-            .by_handle
-            .borrow()
-            .get(&(hwnd.0 as isize))
-            .map(|window| window.window_id)
-    }
-
     fn capabilities(_: &WindowsLoop, windows: &WindowSet) -> WindowCapabilities {
         windows.capabilities()
     }
 
-    fn frame_inset(_: &WindowsLoop, _: &WindowSet, _: f64) -> Size<f64> {
+    fn frame_inset(
+        _: &WindowsLoop,
+        _: &WindowSet,
+        _: flui_foundation::geometry::DevicePixelRatio,
+    ) -> Size<f64> {
         // The frame is not measured before a window exists, so the host
         // reports the contract's default: no inset.
         Size::new(0.0, 0.0)
@@ -502,17 +493,17 @@ pub(crate) fn open_spot(
     options: &WindowOptions,
     opening: &flui_platform::OpeningGeometry,
     target: Option<&flui_platform::DisplayInfo>,
-    system_scale: f64,
+    system_scale: DevicePixelRatio,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
 ) -> OpenSpot {
-    let scale = target
-        .map(|display| display.scale_factor)
-        .filter(|scale| scale.is_finite() && *scale > 0.0)
-        .unwrap_or(system_scale);
+    let ratio = target.map_or(system_scale, |display| display.scale_factor);
+    let scale = ratio.get();
     let dpi = ((scale * f64::from(USER_DEFAULT_SCREEN_DPI)).round() as u32).max(1);
+    // The hosts' one extent rule; a side that is no size stays none.
+    let extent = |logical: f64| device_extent(logical, ratio).map_or(0, u32::cast_signed);
     let content = (
-        logical_to_device(opening.content.width(), scale),
-        logical_to_device(opening.content.height(), scale),
+        extent(opening.content.width()),
+        extent(opening.content.height()),
     );
     let outer = outer_of(dpi, content);
     let anchor = target.map_or((0, 0), |display| {
@@ -599,7 +590,7 @@ pub(crate) fn outer_size(
 #[cfg(test)]
 #[cfg(test)]
 mod open_tests {
-    use flui_foundation::geometry::{Bounds, Point, Size};
+    use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
         DisplayInfo, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
         WindowOptions,
@@ -620,6 +611,10 @@ mod open_tests {
         (content.0 + FRAME.0, content.1 + FRAME.1)
     }
 
+    fn ratio(scale: f64) -> DevicePixelRatio {
+        DevicePixelRatio::try_new(scale).expect("a positive ratio")
+    }
+
     fn display(scale: f64, origin: (i32, i32)) -> DisplayInfo {
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
@@ -627,7 +622,7 @@ mod open_tests {
             id,
             "d",
             Bounds::new(Point::new(origin.0, origin.1), Size::new(3840, 2160)),
-            scale,
+            ratio(scale),
         )
     }
 
@@ -637,7 +632,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.outer, (816, 639));
@@ -655,7 +650,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             Some(&target),
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.scale, 2.0);
@@ -669,7 +664,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.5,
+            ratio(1.5),
             with_frame,
         );
         assert_eq!(spot.origin, Some((150, 75)));
@@ -687,7 +682,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             Some(&target),
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.normal, Some((100, 80, 800, 580)));
@@ -701,7 +696,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(spot.normal, Some((30, 40, 330, 240)));
@@ -712,7 +707,7 @@ mod open_tests {
                 &unplaced,
                 &unplaced.geometry().expect("valid options"),
                 None,
-                1.0,
+                ratio(1.0),
                 with_frame
             )
             .normal,
@@ -731,7 +726,7 @@ mod open_tests {
             &options,
             &options.geometry().expect("valid options"),
             None,
-            1.0,
+            ratio(1.0),
             with_frame,
         );
         assert_eq!(

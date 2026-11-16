@@ -36,7 +36,7 @@ use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
     Composition, CompositionEnd, LockGrant, LockTiming, OwnerCalls, PointMode, Selection,
     TextChange, TextStore, TextStoreChange, TextStoreEdit, TextStoreHost, TextStoreHostError,
-    TextStoreObserver, TextStoreRead, TextStoreStatus, commit_composition_in_place,
+    TextStoreObserver, TextStoreRead, TextStoreStatus,
 };
 
 use crate::owner::panic_boundary::contain_owner_callback;
@@ -490,7 +490,7 @@ impl TextClient {
                 };
                 if end != CompositionEnd::Committed {
                     failure.contain(|| {
-                        let _ = commit_composition_in_place(&*store);
+                        crate::text::refusal::commit_in_place(&*store);
                     });
                 }
                 failure.contain(|| drop(store));
@@ -517,7 +517,7 @@ impl TextClient {
             // what it leaves composing there is committed in place, so no
             // field keeps a composing range no input method owns.
             self.discard_marked_text();
-            let _ = commit_composition_in_place(&*previous);
+            crate::text::refusal::commit_in_place(&*previous);
             *self.focused.borrow_mut() = None;
             contain_owner_callback(|| previous.set_observer(None));
         }

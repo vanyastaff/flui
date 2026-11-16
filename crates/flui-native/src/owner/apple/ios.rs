@@ -633,14 +633,6 @@ impl IOSLoop {
         retire(consumer);
     }
 
-    pub(crate) fn active(&self) -> Option<Rc<dyn SceneWindow>> {
-        self.state()
-            .borrow()
-            .session
-            .as_ref()
-            .map(|record| Rc::clone(&record.window))
-    }
-
     /// UIKit is about to terminate the process: let the application write what
     /// must survive. There is no way to ask it to wait, so the answer is not
     /// read.

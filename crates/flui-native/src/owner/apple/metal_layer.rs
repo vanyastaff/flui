@@ -382,7 +382,8 @@ mod tests {
                 id,
                 "panel",
                 Bounds::new(Point::new(0, 0), Size::new(1440, 900)),
-                2.0,
+                flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
+                    .expect("a positive ratio"),
             );
             display.refresh_period = RefreshPeriod::from_hz(hz).ok();
             display

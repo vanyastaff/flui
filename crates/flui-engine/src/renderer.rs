@@ -1171,7 +1171,10 @@ impl Renderer {
         adapter_limits: &wgpu::Limits,
     ) -> wgpu::Limits {
         let mut limits = wgpu::Limits {
-            max_texture_dimension_2d: capabilities.limits.max_texture_dimension_2d.min(16384),
+            max_texture_dimension_2d: capabilities
+                .limits
+                .max_texture_dimension_2d
+                .min(flui_platform::MAX_SURFACE_EXTENT),
             ..wgpu::Limits::default()
         };
 

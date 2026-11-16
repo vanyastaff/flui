@@ -12,6 +12,14 @@ this one path (ADR-0151 §9).
   C forbids the OS crates and winit, and this crate's own `reach-forbid` adds
   `accesskit` and `tokio`. `flui-native`'s `allowed-dependents` keeps the
   crates above from reaching the backends through a side door.
+- **No logging.** A condition the contract meets is the caller's outcome, never a
+  log line the contract decides on (ADR-0151 §7): a refusal is an error the
+  function returns, a bound applied to untrusted input returns its count
+  beside the value for the host that bounds to report (`Opened::bounded`), and
+  an edit refused in a text-store grant that runs after its request returned
+  goes to the reporter the caller handed in (`commit_composition_in_place`,
+  `project_ime_event`). `tracing` is in this crate's `reach-forbid`; the one path to
+  it, `flui-foundation`'s own instrumentation, is excused there.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
 - **A display id cannot be built from a number, and a period cannot be invalid.**
   `DisplayId` is an opaque `NonZeroU64` with no constructor outside a
@@ -20,7 +28,18 @@ this one path (ADR-0151 §9).
   the compile-fail fixture `display_id_cannot_be_built_from_a_number`). `RefreshPeriod`
   is 1 ms to 1 s and every constructor refuses what does not describe a cadence, with
   rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
-  never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
+  never substitutes 60 Hz; that is a consumer's policy (ADR-0236). A display's scale
+  is a `DevicePixelRatio`, held by its type to the range a screen can have
+  (`DevicePixelRatio::MIN..=MAX`): a host reads the number its operating system reports
+  once, where it enters, by `flui-native`'s one scale rule (out of range reads as the
+  base ratio and is reported once per source; `crates/flui-native/ARCHITECTURE.md`), and
+  no reader of a snapshot checks it again. A recording keeps the number and refuses
+  one out of range when it is read.
+- **The largest surface is stated here.** `MAX_SURFACE_EXTENT` is the longest side, in
+  device pixels, of a surface a window may ask a renderer to draw: the engine caps its
+  GPU's texture limit with it and the native hosts read it (what each does with it is in
+  `docs/gaps.md`, "A window larger than a renderer draws"), since `flui-native` and
+  `flui-engine` both read this crate and neither the other.
 - **A headroom is finite and at least white; an absent colour says why.** A display's
   colour profile is `DisplayInfo::color`: a `DisplayColor` or the `CapabilityAbsence` the
   platform gives, which `color_space()` and `headroom()` answer as `Unsupported`.

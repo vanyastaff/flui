@@ -100,7 +100,7 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
-pub(crate) use window_table::{WindowScale, WindowTable};
+pub(crate) use window_table::{WindowDpi, WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
 pub(crate) const WINDOW_CLASS_NAME: PCWSTR = w!("FluiWindowClass");
@@ -505,10 +505,10 @@ pub(crate) trait WindowMessages {
     }
 }
 
-/// What the application gave the loop, shared on the owner thread with every
+/// What the loop shares on the owner thread with every
 /// window it opens: the delivery to the application's handler, and the
-/// keyboard layout callback, which stays a registration until nothing above
-/// the host reads it (`Platform::on_keyboard_layout_change`).
+/// keyboard layout callback of the host's input position
+/// (`host::Input::on_keyboard_layout_change`).
 pub(crate) struct AppHooks {
     /// The loop's delivery to the application's handler.
     pub(crate) app: Arc<AppDelivery>,

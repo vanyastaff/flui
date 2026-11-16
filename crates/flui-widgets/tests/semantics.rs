@@ -2223,7 +2223,9 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
     let delivered: Arc<Mutex<Option<flui_testing::A11yTree>>> = Arc::new(Mutex::new(None));
     let sink = Arc::clone(&delivered);
     laid.pipeline_owner().with_mut(|owner| {
-        owner.set_device_pixel_ratio(1.5);
+        owner.set_device_pixel_ratio(
+            flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
+        );
         owner.set_semantics_update_callback(Arc::new(move |update| {
             let mut mirror = sink.lock().expect("publication mirror lock");
             let Some(current) = mirror.as_ref() else {
@@ -2282,8 +2284,11 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
 
     // Moving the window to a 200% monitor: the adapter must hear the new
     // scale.
-    laid.pipeline_owner()
-        .with_mut(|owner| owner.set_device_pixel_ratio(2.0));
+    laid.pipeline_owner().with_mut(|owner| {
+        owner.set_device_pixel_ratio(
+            flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+        );
+    });
     laid.tick();
     assert_rect_near(
         effective_bounds(&published(), "Physical"),

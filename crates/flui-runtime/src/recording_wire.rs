@@ -1902,7 +1902,7 @@ pub fn start_to_wire(
             .map(|window| {
                 Ok(rec::Window {
                     window: window.window.get().get(),
-                    scale_factor: window.scale_factor,
+                    scale_factor: window.scale_factor.get(),
                     title: None,
                     gestures: Some(profiles_to_wire(&window.gesture_profiles)?),
                 })
