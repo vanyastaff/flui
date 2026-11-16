@@ -480,8 +480,9 @@ impl PointerScript {
         use crate::recording::{RecordedWindow, RecordingClock, RecordingHeader, RecordingWriter};
         use flui_runtime::{InputRecord, InputRow, owner::InputOutcome};
 
-        let mut header = RecordingHeader::new(RecordingClock::Virtual)
-            .with_window(RecordedWindow::new(window, 1.0));
+        let mut header = RecordingHeader::new(RecordingClock::Virtual).with_window(
+            RecordedWindow::new(window, flui_foundation::geometry::DevicePixelRatio::ONE),
+        );
         header.privacy = crate::recording::Privacy::KeepText;
         let mut writer = RecordingWriter::try_new(out, &header)?;
         for step in &self.steps {

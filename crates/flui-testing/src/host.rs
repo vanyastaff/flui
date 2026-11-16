@@ -89,7 +89,7 @@ use crate::text_store_host::RecordingTextStoreHost;
 pub struct HeadlessWindow {
     id: WindowId,
     size: flui_platform::WindowExtent,
-    scale_factor: Mutex<f64>,
+    scale_factor: Mutex<DevicePixelRatio>,
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
@@ -138,17 +138,17 @@ struct SentInputRegions {
 }
 
 impl SentInputRegions {
-    fn update(&mut self, regions: &[InputRegion], scale: f64, display: Option<DisplayId>) {
-        // A scale that is not a positive finite number projects nothing; the OS keeps
-        // what it holds.
-        let Some(ratio) = DevicePixelRatio::try_new(scale) else {
-            return;
-        };
+    fn update(
+        &mut self,
+        regions: &[InputRegion],
+        ratio: DevicePixelRatio,
+        display: Option<DisplayId>,
+    ) {
         let projected: Vec<DeviceInputRegion> = regions
             .iter()
             .filter_map(|region| DeviceInputRegion::project(*region, ratio).ok())
             .collect();
-        let key = Some((scale.to_bits(), display));
+        let key = Some((ratio.get().to_bits(), display));
         let unchanged = if self.key.is_none() {
             projected.is_empty()
         } else {
@@ -232,7 +232,7 @@ impl HeadlessWindow {
                 f64::from(height),
             ))
             .expect("BUG: a side in whole pixels is finite and not negative"),
-            scale_factor: Mutex::new(1.0),
+            scale_factor: Mutex::new(DevicePixelRatio::ONE),
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
             text_store_host: false,
@@ -363,7 +363,7 @@ impl HeadlessWindow {
     /// The logical size in device pixels at the current scale factor: a
     /// window moved to another monitor keeps its logical size.
     fn physical_size_i32(&self) -> Size<i32> {
-        let scale = *self.scale_factor.lock();
+        let scale = self.scale_factor.lock().get();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "built from u32 pixel counts at a test's small scale factor, far below \
@@ -452,7 +452,7 @@ impl PlatformWindow for HeadlessWindow {
         .with_metrics(
             flui_foundation::geometry::WindowMetrics::from_logical(
                 extent.get(),
-                *self.scale_factor.lock(),
+                self.scale_factor.lock().get(),
             )
             .ok(),
         );
@@ -1897,22 +1897,44 @@ impl HeadlessHost {
     ///
     /// # Panics
     ///
+    /// If `window` was not opened by this host, or its logical size at
+    /// `scale_factor` is no drawable area (past `i32` device pixels, or below
+    /// one); [`try_set_scale_factor`](Self::try_set_scale_factor) answers that
+    /// instead.
+    pub fn set_scale_factor(&mut self, window: HeadlessWindowId, scale_factor: DevicePixelRatio) {
+        self.try_set_scale_factor(window, scale_factor.get())
+            .expect("a scale the window's size has metrics at; try_set_scale_factor answers one it has not");
+    }
+
+    /// [`set_scale_factor`](Self::set_scale_factor) for a scale that may make
+    /// no metrics: the window changes only when it does.
+    ///
+    /// # Errors
+    ///
+    /// The [`InvalidMetrics`](flui_foundation::geometry::InvalidMetrics) the
+    /// window's logical size at `scale_factor` makes: `InvalidScale` for a
+    /// ratio outside the range a screen can have, `Overflow` or `EmptyExtent`
+    /// for a size that does not fit at it. Nothing changes.
+    ///
+    /// # Panics
+    ///
     /// If `window` was not opened by this host.
-    pub fn set_scale_factor(&mut self, window: HeadlessWindowId, scale_factor: f64) {
+    pub fn try_set_scale_factor(
+        &mut self,
+        window: HeadlessWindowId,
+        scale_factor: f64,
+    ) -> Result<(), flui_foundation::geometry::InvalidMetrics> {
         // The runner's path: a metrics observation of the window, which a
         // recording sees as the `Metrics` row it is.
         let size = self.window_of(window).size;
-        // A scale that makes no metrics is refused, as the runner refuses it.
-        let Ok(metrics) =
-            flui_foundation::geometry::WindowMetrics::from_logical(size.get(), scale_factor)
-        else {
-            return;
-        };
+        let metrics =
+            flui_foundation::geometry::WindowMetrics::from_logical(size.get(), scale_factor)?;
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Metrics(metrics),
         );
         self.size_sink_to_primary();
+        Ok(())
     }
 
     /// Move `window` to the display `display` (`None`: the backend can name none) at its
@@ -2307,8 +2329,8 @@ impl HeadlessHost {
             .expect("a laid-out semantics node carries bounds");
         let scale = *self.window_of(window).scale_factor.lock();
         Ok(flui_foundation::geometry::Offset::new(
-            bounds.x0.midpoint(bounds.x1) / scale,
-            bounds.y0.midpoint(bounds.y1) / scale,
+            scale.to_logical(bounds.x0.midpoint(bounds.x1)),
+            scale.to_logical(bounds.y0.midpoint(bounds.y1)),
         ))
     }
 
@@ -2458,7 +2480,7 @@ impl HeadlessHost {
             *self
                 .window_of(HeadlessWindowId(presentation))
                 .scale_factor
-                .lock() = metrics.scale().get();
+                .lock() = metrics.scale();
         }
         let address = flui_foundation::PresentationAddress {
             ui_runtime_id: self.ui_runtime.id(),

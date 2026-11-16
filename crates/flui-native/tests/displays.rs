@@ -6,16 +6,22 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use flui_foundation::geometry::DevicePixelRatio;
 use flui_native::{
     DisplayChange, DisplayChangeError, DisplaySpec, HeadlessHostWindow, HeadlessPlatform,
     Platform as _,
 };
 use flui_platform::WindowOptions;
 
+/// Two device pixels per logical pixel.
+fn two() -> DevicePixelRatio {
+    DevicePixelRatio::try_new(2.0).expect("a positive ratio")
+}
+
 fn two_displays() -> HeadlessPlatform {
     HeadlessPlatform::new().with_displays(vec![
         DisplaySpec::new("Left", 1920, 1080).refresh_period(Duration::from_millis(16)),
-        DisplaySpec::new("Right", 2560, 1440).scale_factor(2.0),
+        DisplaySpec::new("Right", 2560, 1440).scale_factor(two()),
     ])
 }
 
@@ -32,7 +38,7 @@ fn injected_displays_are_laid_out_and_the_first_is_primary() {
         right.bounds.origin.x, 1920,
         "displays lay out left to right"
     );
-    assert_eq!(right.scale_factor, 2.0);
+    assert_eq!(right.scale_factor, two());
     assert_eq!(
         left.refresh_period.map(flui_platform::RefreshPeriod::get),
         Some(Duration::from_millis(16))

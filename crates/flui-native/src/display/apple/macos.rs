@@ -48,6 +48,7 @@ use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, Refresh
 use super::screen::MacosPotentialHeadroom;
 use super::screen::device_bounds_of_screen;
 use super::screen::{macos_display_key, macos_display_persistent_key, screen_color};
+use crate::display::scale::ScaleStreaks;
 use crate::display::source::DisplaySource;
 use crate::error::PlatformError;
 use crate::owner::apple::macos::bounds_of;
@@ -137,6 +138,9 @@ impl crate::owner::notices::StaleOnWake for MacosDisplays {
 pub struct MacosDisplays {
     source: DisplaySource,
     version: MacOSVersion,
+    /// Whether each screen's last scale read was refused, so a run of refusals
+    /// is reported once.
+    scale_streak: parking_lot::Mutex<ScaleStreaks<DisplayId>>,
 }
 
 impl std::fmt::Debug for MacosDisplays {
@@ -150,6 +154,7 @@ impl MacosDisplays {
         Self {
             source: DisplaySource::new(),
             version: MacOSVersion::read(),
+            scale_streak: parking_lot::Mutex::new(ScaleStreaks::default()),
         }
     }
 
@@ -167,7 +172,17 @@ impl MacosDisplays {
             let Some(id) = display_key_of(&screen).and_then(|key| self.source.mint(&key)) else {
                 continue;
             };
-            let scale = screen.backingScaleFactor();
+            // The screen's scale by the hosts' one rule; a refusal is
+            // reported with nothing borrowed.
+            let (ratio, refused) = self.scale_streak.lock().read(
+                id,
+                screen.backingScaleFactor(),
+                "NSScreen backingScaleFactor",
+            );
+            if let Some(refused) = refused {
+                refused.report();
+            }
+            let scale = ratio.get();
             // NSScreen frames are in points with a bottom-left origin on the
             // primary screen; the snapshot carries device pixels of this
             // screen from the primary screen's top-left corner, like every
@@ -179,7 +194,7 @@ impl MacosDisplays {
             // The name System Settings shows ("Built-in Retina Display", a
             // monitor's model), macOS 10.15 and later.
             let mut display =
-                DisplayInfo::new(id, screen.localizedName().to_string(), bounds, scale)
+                DisplayInfo::new(id, screen.localizedName().to_string(), bounds, ratio)
                     .with_usable_bounds(usable_bounds)
                     .with_primary(index == 0);
             if let Some(uuid) = display_id_of(&screen)
@@ -205,6 +220,9 @@ impl MacosDisplays {
             )));
             displays.push(display);
         }
+        // A screen this sample did not read takes its streak with it.
+        let read: Vec<DisplayId> = displays.iter().map(|display| display.id).collect();
+        self.scale_streak.lock().keep_only(&read);
         displays
     }
 }

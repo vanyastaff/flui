@@ -13,7 +13,7 @@
 //! past [`BufferScale::MAX`] gets into: the window's content and the
 //! frame it draws itself are drawn at that one and the viewport
 //! stretches them. A configure of any `int` asks for a content of any size,
-//! and the renderer configures no surface past [`MAX_CONTENT_EXTENT`]
+//! and the renderer configures no surface past [`MAX_SURFACE_EXTENT`]
 //! device pixels on a side: so the scale is lowered further until the
 //! content fits ([`BufferScale::fitted`]), and the window still draws, at
 //! fewer pixels the viewport stretches. A window's metrics are
@@ -23,6 +23,9 @@
 #![forbid(unsafe_code)]
 
 use flui_foundation::geometry::{DevicePixelRatio, Size, WindowMetrics};
+use flui_platform::MAX_SURFACE_EXTENT;
+
+use crate::display::scale::{RefusedScale, ScaleStreak};
 
 /// The scale a surface's buffer is drawn at: the scale the compositor
 /// named, up to [`Self::MAX`].
@@ -37,46 +40,54 @@ impl BufferScale {
     /// One device pixel per logical pixel.
     pub(crate) const ONE: Self = Self(DevicePixelRatio::ONE);
 
-    /// The scale a buffer is drawn at where the compositor names `told`;
-    /// `None` for one that is no positive finite number.
-    pub(crate) fn try_new(told: f64) -> Option<Self> {
-        let told = DevicePixelRatio::try_new(told)?;
-        DevicePixelRatio::try_new(told.get().min(Self::MAX)).map(Self)
+    /// The scale a buffer is drawn at where the compositor names `told`,
+    /// lowered to [`Self::MAX`] past it.
+    pub(crate) fn of(told: DevicePixelRatio) -> Self {
+        if told.get() > Self::MAX {
+            Self::LARGEST
+        } else {
+            Self(told)
+        }
     }
+
+    /// [`Self::MAX`] as a buffer scale.
+    const LARGEST: Self = Self(match DevicePixelRatio::try_new(Self::MAX) {
+        Some(ratio) => ratio,
+        None => panic!("BUG: the largest buffer scale is a ratio a screen can have"),
+    });
 
     /// Device pixels per logical pixel.
     pub(crate) const fn get(self) -> f64 {
         self.0.get()
     }
 
+    /// The scale as a device pixel ratio.
+    pub(crate) const fn ratio(self) -> DevicePixelRatio {
+        self.0
+    }
+
     /// This scale, lowered where `content` logical pixels drawn at it would
-    /// pass [`MAX_CONTENT_EXTENT`] device pixels on a side, so they fit;
-    /// this scale where the content is no size.
+    /// pass [`MAX_SURFACE_EXTENT`] device pixels on a side, so they fit, but
+    /// never below [`DevicePixelRatio::MIN`]: a content too long to fit at it
+    /// does not fit at all, and [`metrics`] publishes none; this scale where
+    /// the content is no size.
     pub(crate) fn fitted(self, content: Size<f64>) -> Self {
         let longest = content.width.max(content.height);
         if !(longest.is_finite() && longest > 0.0) {
             return self;
         }
-        let fits = f64::from(MAX_CONTENT_EXTENT) / longest;
+        let fits = f64::from(MAX_SURFACE_EXTENT) / longest;
         if self.get() <= fits {
             return self;
         }
-        DevicePixelRatio::try_new(fits).map_or(self, Self)
+        DevicePixelRatio::try_new(fits.max(DevicePixelRatio::MIN.get())).map_or(self, Self)
     }
 }
-
-/// The widest or tallest a window's content is drawn, in device pixels:
-/// the largest surface the renderer configures. `flui-engine` asks its
-/// device for textures no larger (`renderer.rs`, `required_limits`) and
-/// refuses a surface past it (`WindowSlot::resize`); this crate may not
-/// name the engine, so the number is stated here as well (`docs/gaps.md`,
-/// "Native Linux host").
-pub(crate) const MAX_CONTENT_EXTENT: i32 = 16_384;
 
 /// The metrics of a window whose content is `content` logical pixels
 /// drawn at `scale`, which [`buffer_scale`] fitted to it. `None` where it
 /// has no drawable area: an extent that is no size, or one past
-/// [`MAX_CONTENT_EXTENT`] in device pixels, which a window with no
+/// [`MAX_SURFACE_EXTENT`] in device pixels, which a window with no
 /// viewport cannot draw at a scale below one; nothing is published and
 /// nothing drawn until a configure gives a size a surface can have. A side
 /// that the scale would round below one device pixel (a window far longer
@@ -94,28 +105,72 @@ pub(crate) fn metrics(content: Size<f64>, scale: BufferScale) -> Option<WindowMe
     let content = Size::new(side(content.width), side(content.height));
     let metrics = WindowMetrics::from_logical(content, scale.get()).ok()?;
     let physical = metrics.physical();
-    (physical.width <= MAX_CONTENT_EXTENT && physical.height <= MAX_CONTENT_EXTENT)
-        .then_some(metrics)
+    let fits = |side: i32| u32::try_from(side).is_ok_and(|side| side <= MAX_SURFACE_EXTENT);
+    (fits(physical.width) && fits(physical.height)).then_some(metrics)
 }
 
-/// What the compositor said of the scale a surface is drawn at.
+/// One scale the compositor tells a window after it opens, kept by the hosts'
+/// one rule (`display::scale::ScaleStreak::check`): a value that is a ratio a
+/// screen can have replaces the one held, and one that is not is refused and
+/// changes nothing, so the window keeps the scale it had, as the Win32 window
+/// does at a `WM_DPICHANGED` it refuses. `T` is the number as the protocol
+/// carries it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ToldScale<T> {
+    held: Option<(T, DevicePixelRatio)>,
+    streak: ScaleStreak,
+}
+
+impl<T> Default for ToldScale<T> {
+    fn default() -> Self {
+        Self {
+            held: None,
+            streak: ScaleStreak::default(),
+        }
+    }
+}
+
+impl<T: Copy> ToldScale<T> {
+    /// The compositor told `raw`, which is the ratio `ratio`; `what` names the
+    /// event. The refusal to report, with nothing borrowed, when this one
+    /// starts a run of them.
+    #[must_use = "a refused scale is reported, with nothing borrowed"]
+    pub(crate) fn tell(&mut self, raw: T, ratio: f64, what: &'static str) -> Option<RefusedScale> {
+        match self.streak.check(ratio, what) {
+            Ok(ratio) => {
+                self.held = Some((raw, ratio));
+                None
+            }
+            Err(refused) => refused,
+        }
+    }
+
+    /// The ratio held: the last one told that was a ratio.
+    pub(crate) fn ratio(&self) -> Option<DevicePixelRatio> {
+        self.held.map(|(_, ratio)| ratio)
+    }
+
+    /// The number held, as the protocol carried it.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn raw(&self) -> Option<T> {
+        self.held.map(|(raw, _)| raw)
+    }
+}
+
+/// What the compositor said of the scale a surface is drawn at, each a ratio
+/// a screen can have by its type.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct ScaleTold {
-    /// `wp_fractional_scale_v1.preferred_scale`, as a numerator over 120.
-    pub(crate) fractional: Option<u32>,
+    /// `wp_fractional_scale_v1.preferred_scale`.
+    pub(crate) fractional: Option<DevicePixelRatio>,
     /// `wl_surface.preferred_buffer_scale`.
-    pub(crate) preferred: Option<i32>,
+    pub(crate) preferred: Option<DevicePixelRatio>,
     /// The scale of the output the surface is on.
-    pub(crate) output: Option<f64>,
+    pub(crate) output: Option<DevicePixelRatio>,
 }
 
-/// A fractional scale as the protocol carries it, as a numerator over 120; `None` for
-/// zero, which is no scale.
-fn over_120(numerator: u32) -> Option<f64> {
-    (numerator > 0).then(|| f64::from(numerator) / 120.0)
-}
-
-/// The scale a window's buffers are drawn at: the compositor's, fitted so
+/// The scale a window's buffers are drawn at: the compositor's (the
+/// fractional scale, else the preferred one, else the output's), fitted so
 /// that `drawn`, the logical size of everything drawn at it (the content,
 /// and the frame around it where the window draws one), fits the largest
 /// surface.
@@ -124,11 +179,9 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) 
         return BufferScale::ONE;
     }
     told.fractional
-        .and_then(over_120)
-        .or_else(|| told.preferred.filter(|scale| *scale > 0).map(f64::from))
+        .or(told.preferred)
         .or(told.output)
-        .and_then(BufferScale::try_new)
-        .unwrap_or(BufferScale::ONE)
+        .map_or(BufferScale::ONE, BufferScale::of)
         .fitted(drawn)
 }
 
@@ -136,86 +189,113 @@ pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) 
 mod tests {
     use super::*;
 
+    /// What a window holds after the compositor told it `fractional` (each a
+    /// numerator over 120) and `preferred` in turn, on an output of scale
+    /// `output`: each event through the hosts' one rule, as the window's
+    /// handlers send it.
+    fn told(fractional: &[u32], preferred: &[i32], output: Option<f64>) -> ScaleTold {
+        let mut held_fractional = ToldScale::default();
+        for &numerator in fractional {
+            let _ = held_fractional.tell(numerator, f64::from(numerator) / 120.0, "test");
+        }
+        let mut held_preferred = ToldScale::default();
+        for &factor in preferred {
+            let _ = held_preferred.tell(factor, f64::from(factor), "test");
+        }
+        ScaleTold {
+            fractional: held_fractional.ratio(),
+            preferred: held_preferred.ratio(),
+            output: output.map(|scale| DevicePixelRatio::try_new(scale).expect("a ratio")),
+        }
+    }
+
     /// The fractional scale wins over the whole ones, and each falls back
-    /// to the next where the compositor said nothing usable.
+    /// to the next where the compositor said nothing usable. A scale the
+    /// compositor tells that no screen has is refused and the window keeps
+    /// the one it held, so its buffer scale does not change.
     #[test]
     fn a_buffer_is_drawn_at_the_scale_the_compositor_prefers() {
-        let told = |fractional, preferred, output| ScaleTold {
-            fractional,
-            preferred,
-            output,
-        };
         for (case, viewported, told, expected) in [
-            ("nothing said", true, told(None, None, None), 1.0),
+            ("nothing said", true, told(&[], &[], None), 1.0),
             (
                 "a fractional scale",
                 true,
-                told(Some(180), Some(2), Some(2.0)),
+                told(&[180], &[2], Some(2.0)),
                 1.5,
             ),
             (
                 "a whole preferred scale",
                 true,
-                told(None, Some(2), Some(1.0)),
+                told(&[], &[2], Some(1.0)),
                 2.0,
             ),
-            ("the output's", true, told(None, None, Some(3.0)), 3.0),
-            ("a zero fraction", true, told(Some(0), Some(2), None), 2.0),
+            ("the output's", true, told(&[], &[], Some(3.0)), 3.0),
+            ("a zero fraction", true, told(&[0], &[2], None), 2.0),
             (
                 "a zero preferred scale",
                 true,
-                told(None, Some(0), Some(1.25)),
+                told(&[], &[0], Some(1.25)),
                 1.25,
             ),
+            ("no viewporter", false, told(&[180], &[2], Some(2.0)), 1.0),
+            ("a numerator over 120", true, told(&[150], &[], None), 1.25),
+            // A compositor names any scale. Past the largest buffer scale
+            // and within the range a screen can have, the buffer is drawn at
+            // the largest; past the range it is refused, as one the
+            // compositor did not say.
             (
-                "a broken output scale",
+                "a fraction past the buffer cap",
                 true,
-                told(None, None, Some(f64::NAN)),
-                1.0,
-            ),
-            (
-                "no viewporter",
-                false,
-                told(Some(180), Some(2), Some(2.0)),
-                1.0,
-            ),
-            (
-                "a numerator over 120",
-                true,
-                told(Some(150), None, None),
-                1.25,
-            ),
-            // A compositor names any scale: past the largest, the buffer
-            // is drawn at the largest.
-            (
-                "a fraction in the hundreds",
-                true,
-                told(Some(442 * 120), None, None),
+                told(&[30 * 120], &[], None),
                 BufferScale::MAX,
+            ),
+            (
+                "a fraction below the smallest falls back to the preferred",
+                true,
+                told(&[1], &[2], Some(3.0)),
+                2.0,
+            ),
+            (
+                "a fraction in the hundreds falls back to the output's",
+                true,
+                told(&[442 * 120], &[], Some(3.0)),
+                3.0,
             ),
             (
                 "the largest fraction the protocol carries",
                 true,
-                told(Some(u32::MAX), None, None),
-                BufferScale::MAX,
+                told(&[u32::MAX], &[], None),
+                1.0,
             ),
             (
                 "the largest whole scale the protocol carries",
                 true,
-                told(None, Some(i32::MAX), None),
-                BufferScale::MAX,
-            ),
-            (
-                "an output scale past the largest",
-                true,
-                told(None, None, Some(1e300)),
-                BufferScale::MAX,
-            ),
-            (
-                "an infinite output scale",
-                true,
-                told(None, None, Some(f64::INFINITY)),
+                told(&[], &[i32::MAX], None),
                 1.0,
+            ),
+            (
+                "a refused fraction keeps the one held",
+                true,
+                told(&[180, 0], &[2], Some(3.0)),
+                1.5,
+            ),
+            (
+                "a fraction past the range keeps the one held",
+                true,
+                told(&[180, u32::MAX], &[2], Some(3.0)),
+                1.5,
+            ),
+            (
+                "a refused preferred scale keeps the one held",
+                true,
+                told(&[], &[2, 0], Some(3.0)),
+                2.0,
+            ),
+            (
+                "a scale told after a refusal is taken",
+                true,
+                told(&[180, 0, 240], &[], None),
+                2.0,
             ),
         ] {
             assert_eq!(
@@ -226,9 +306,25 @@ mod tests {
         }
     }
 
+    /// A refused scale is reported once per run of them, and a scale taken
+    /// ends the run.
+    #[test]
+    fn a_run_of_refused_told_scales_is_reported_once() {
+        let mut held = ToldScale::default();
+        let refused: Vec<bool> = [180, 0, 0, u32::MAX, 240, 0]
+            .into_iter()
+            .map(|numerator| {
+                held.tell(numerator, f64::from(numerator) / 120.0, "test")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(refused, [false, true, false, false, false, true]);
+        assert_eq!(held.raw(), Some(240), "the last scale taken is held");
+    }
+
     /// A window publishes what the renderer can draw, whatever the
-    /// compositor says. Told a scale in the hundreds, a 400 by 300 window is
-    /// drawn at the largest scale, not 176 800 pixels across. A configure
+    /// compositor says. Told a scale past the buffer cap, a 400 by 300 window is
+    /// drawn at the largest buffer scale, not 12 000 pixels across. A configure
     /// whose content at the compositor's scale would pass the largest
     /// surface is drawn at the scale that fits it, so the window still
     /// draws and publishes metrics the renderer accepts. With no viewport
@@ -237,11 +333,7 @@ mod tests {
     /// non-finite.
     #[test]
     fn a_window_publishes_what_a_surface_can_be() {
-        let fractional = |numerator| ScaleTold {
-            fractional: Some(numerator),
-            preferred: None,
-            output: None,
-        };
+        let fractional = |numerator| told(&[numerator], &[], None);
         let published = |viewported, numerator, (width, height): (f64, f64)| {
             let content = Size::new(width, height);
             metrics(
@@ -256,12 +348,13 @@ mod tests {
                 )
             })
         };
-        let extent = f64::from(MAX_CONTENT_EXTENT);
+        let extent = f64::from(MAX_SURFACE_EXTENT);
+        let max = MAX_SURFACE_EXTENT.cast_signed();
         for (case, viewported, numerator, content, expected) in [
             (
-                "a scale in the hundreds",
+                "a scale past the buffer cap",
                 true,
-                442 * 120,
+                30 * 120,
                 (400.0, 300.0),
                 Some((3_200, 2_400, BufferScale::MAX)),
             ),
@@ -284,21 +377,21 @@ mod tests {
                 true,
                 960,
                 (extent / BufferScale::MAX, 300.0),
-                Some((MAX_CONTENT_EXTENT, 2_400, BufferScale::MAX)),
+                Some((max, 2_400, BufferScale::MAX)),
             ),
             (
                 "a configure past the largest surface at the largest scale",
                 true,
                 960,
                 (4_096.0, 1_024.0),
-                Some((MAX_CONTENT_EXTENT, 4_096, 4.0)),
+                Some((max, 4_096, 4.0)),
             ),
             (
                 "a configure past the largest surface at one",
                 true,
                 120,
                 (32_768.0, 100.0),
-                Some((MAX_CONTENT_EXTENT, 50, 0.5)),
+                Some((max, 50, 0.5)),
             ),
             (
                 "a configure past the largest surface with no viewport",
@@ -308,22 +401,25 @@ mod tests {
                 None,
             ),
             (
+                "the longest content the smallest ratio fits",
+                true,
+                120,
+                (extent / DevicePixelRatio::MIN.get(), 1.0),
+                Some((max, 1, DevicePixelRatio::MIN.get())),
+            ),
+            (
+                "a configure too long to fit at the smallest ratio",
+                true,
+                120,
+                (1e6, 1.0),
+                None,
+            ),
+            (
                 "the largest configure at the largest scale",
                 true,
                 960,
                 (f64::from(i32::MAX), f64::from(i32::MAX)),
-                Some((
-                    MAX_CONTENT_EXTENT,
-                    MAX_CONTENT_EXTENT,
-                    extent / f64::from(i32::MAX),
-                )),
-            ),
-            (
-                "a sliver far longer than the cap's ratio",
-                true,
-                120,
-                (1e6, 1.0),
-                Some((MAX_CONTENT_EXTENT, 1, extent / 1e6)),
+                None,
             ),
             ("a size that is none", true, 120, (0.0, 300.0), None),
             (

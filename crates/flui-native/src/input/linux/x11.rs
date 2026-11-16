@@ -53,7 +53,8 @@ pub mod decode {
     use flui_platform::input_capabilities::PointerKindSet;
     use flui_platform::keyboard::Modifiers;
     use flui_platform::pointer::{
-        PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollPrecision, ScrollUnit,
+        PenTool, PointerButton, PointerEvent, PointerKind, PointerMove, ScrollDelta,
+        ScrollPrecision, ScrollUnit,
     };
 
     use crate::input::assembly::{
@@ -1178,8 +1179,7 @@ pub mod decode {
             let Some(known) = self.devices.get(&event.source) else {
                 return;
             };
-            let mut detents = (0.0, 0.0);
-            let mut any = false;
+            let mut moves = Vec::with_capacity(known.scrolls.len());
             for axis in &known.scrolls {
                 let Some(&(_, value)) = event
                     .valuators
@@ -1188,26 +1188,19 @@ pub mod decode {
                 else {
                     continue;
                 };
-                let last = self.scrolled.insert((event.source, axis.number), value);
-                let Some(change) = last.map(|last| scroll_detents(value - last, axis.increment))
-                else {
-                    // The first value after an enter or a change of device
-                    // only sets where scrolling starts.
-                    continue;
-                };
-                let Some(change) = change.filter(|change| *change != 0.0) else {
-                    continue;
-                };
-                any = true;
-                if axis.horizontal {
-                    detents.0 += change;
-                } else {
-                    detents.1 += change;
+                // The first value after an enter or a change of device only
+                // sets where scrolling starts.
+                if let Some(last) = self.scrolled.insert((event.source, axis.number), value) {
+                    moves.push(ValuatorMove {
+                        horizontal: axis.horizontal,
+                        change: value - last,
+                        increment: axis.increment,
+                    });
                 }
             }
-            if !any {
+            let Some(detents) = valuator_detents(moves) else {
                 return;
-            }
+            };
             let whole = [detents.0, detents.1]
                 .iter()
                 .all(|detents| detents.fract() == 0.0);
@@ -1228,11 +1221,7 @@ pub mod decode {
             precision: ScrollPrecision,
             out: &mut Vec<PlatformInput>,
         ) {
-            let Ok(delta) = wheel_step(
-                ScrollUnit::Detents,
-                WheelAmount::offset(x),
-                WheelAmount::offset(y),
-            ) else {
+            let Some(delta) = detent_step((x, y)) else {
                 return;
             };
             let Some(time) = self.contacts.stamp(event.time.reading_time()) else {
@@ -1264,6 +1253,57 @@ pub mod decode {
         }
         let span = axis.max - axis.min;
         (span > 0.0).then(|| ((value - axis.min) / span * 180.0 - 90.0).clamp(-90.0, 90.0))
+    }
+
+    /// The step a scroll of `(x, y)` detents makes, whether from a legacy
+    /// wheel button or the scroll valuators: X11's detents grow the scroll
+    /// offset as FLUI's delta does. `None` for an amount that is not finite.
+    pub(crate) fn detent_step((x, y): (f64, f64)) -> Option<ScrollDelta> {
+        wheel_step(
+            ScrollUnit::Detents,
+            WheelAmount::offset(x),
+            WheelAmount::offset(y),
+        )
+        .ok()
+    }
+
+    /// How far one scroll valuator moved since its last value, and how much
+    /// a detent is on it.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub(crate) struct ValuatorMove {
+        /// The valuator scrolls horizontally.
+        pub(crate) horizontal: bool,
+        /// Its value now less its last one.
+        pub(crate) change: f64,
+        /// Its value's change for one detent.
+        pub(crate) increment: f64,
+    }
+
+    /// The detents `moves` scroll (horizontal, vertical); `None` when none
+    /// moved: a change of zero, or one that is no number of increments, is
+    /// no move.
+    pub(crate) fn valuator_detents(
+        moves: impl IntoIterator<Item = ValuatorMove>,
+    ) -> Option<(f64, f64)> {
+        let mut detents = None;
+        for ValuatorMove {
+            horizontal,
+            change,
+            increment,
+        } in moves
+        {
+            let Some(change) = scroll_detents(change, increment).filter(|change| *change != 0.0)
+            else {
+                continue;
+            };
+            let (x, y) = detents.get_or_insert((0.0, 0.0));
+            if horizontal {
+                *x += change;
+            } else {
+                *y += change;
+            }
+        }
+        detents
     }
 
     /// A scroll valuator's `change` in detents of `increment`; `None` for

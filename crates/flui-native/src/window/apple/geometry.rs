@@ -80,14 +80,11 @@ pub(crate) mod frame {
         let Some(display) = display else {
             return at;
         };
-        let scale = display.scale_factor;
-        if !scale.is_finite() || scale <= 0.0 {
-            return at;
-        }
+        let ratio = display.scale_factor;
         let origin = display.usable_bounds.origin;
         Point::new(
-            f64::from(origin.x) / scale + at.x,
-            f64::from(origin.y) / scale + at.y,
+            ratio.to_logical(f64::from(origin.x)) + at.x,
+            ratio.to_logical(f64::from(origin.y)) + at.y,
         )
     }
 
@@ -248,7 +245,8 @@ pub(crate) mod frame {
                     origin: Point::new(usable_origin.0, usable_origin.1),
                     size: Size::new(2880, 1800),
                 },
-                scale,
+                flui_foundation::geometry::DevicePixelRatio::try_new(scale)
+                    .expect("a positive ratio"),
             );
             info.usable_bounds = Bounds {
                 origin: Point::new(usable_origin.0, usable_origin.1),
@@ -261,7 +259,6 @@ pub(crate) mod frame {
         fn a_position_on_a_display_becomes_a_global_one() {
             let at = Point::new(40.0, 30.0);
             let secondary = display(2.0, (2880, 50));
-            let unscaled = display(0.0, (2880, 50));
             // (name, display, expected global position)
             let rows = [
                 ("no display: already global", None, (40.0, 30.0)),
@@ -269,11 +266,6 @@ pub(crate) mod frame {
                     "a 2x display starting at device x 2880",
                     Some(&secondary),
                     (1480.0, 55.0),
-                ),
-                (
-                    "a display whose scale is unusable is not trusted",
-                    Some(&unscaled),
-                    (40.0, 30.0),
                 ),
             ];
             for (name, display, (x, y)) in rows {

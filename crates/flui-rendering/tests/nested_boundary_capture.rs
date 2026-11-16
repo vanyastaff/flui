@@ -737,7 +737,9 @@ fn a_pixel_ratio_change_drops_the_retained_output() {
     let (mut owner, _) = frame(&mut scene, owner);
     let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
 
-    owner.set_device_pixel_ratio(2.0);
+    owner.set_device_pixel_ratio(
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
     owner.mark_needs_paint(inner);
     let (_, _) = frame(&mut scene, owner);
 

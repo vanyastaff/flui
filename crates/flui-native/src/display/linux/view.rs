@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::{Bounds, DevicePixelRatio};
 #[cfg(any(feature = "x11", test))]
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
@@ -39,7 +39,7 @@ pub(crate) struct OutputView {
     pub name: String,
     pub bounds: Bounds<i32>,
     pub usable_bounds: Bounds<i32>,
-    pub scale_factor: f64,
+    pub scale_factor: DevicePixelRatio,
     pub refresh_period: Option<RefreshPeriod>,
     pub is_primary: bool,
     /// What names the output again after a restart; see
@@ -162,7 +162,7 @@ mod tests {
             name: name.into(),
             bounds,
             usable_bounds: bounds,
-            scale_factor: 1.0,
+            scale_factor: DevicePixelRatio::ONE,
             refresh_period: None,
             is_primary: false,
             persistent_key: None,

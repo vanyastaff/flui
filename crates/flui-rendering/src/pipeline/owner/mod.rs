@@ -325,7 +325,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The device pixel ratio the recorded output above was recorded under.
     /// A paint pass under another ratio drops it first, without waking anyone:
     /// a ratio change is observed where it is applied, but acted on at paint.
-    retained_pixel_ratio: f64,
+    retained_pixel_ratio: flui_foundation::geometry::DevicePixelRatio,
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
@@ -344,7 +344,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// and hairline snapping are DPR-dependent). Set by the platform
     /// binding on surface creation / DPI change; defaults to 1.0 for
     /// headless tests.
-    device_pixel_ratio: f64,
+    device_pixel_ratio: flui_foundation::geometry::DevicePixelRatio,
 
     /// Private sender cloned only into node-bound invalidation capabilities.
     dirty_sender: DirtySender,
