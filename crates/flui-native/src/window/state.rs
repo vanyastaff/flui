@@ -9,8 +9,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::geometry::WindowMetrics;
 use flui_platform::{
-    InvalidGeometry, WindowAppearance, WindowCapabilities, WindowExecutionState, WindowExtent,
-    WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowState,
+    InvalidGeometry, PublicationMint, WindowAppearance, WindowCapabilities, WindowExecutionState,
+    WindowExtent, WindowGeometry, WindowInsets, WindowInteraction, WindowMode, WindowRevision,
+    WindowState,
 };
 use parking_lot::Mutex;
 
@@ -491,6 +492,9 @@ pub(crate) struct WindowStateCell {
     /// leaves the cell stale. At one per nanosecond it would take centuries to
     /// wrap.
     invalidations: AtomicU64,
+    /// Where the window's capability publications come from: the process's
+    /// mint, or an exhausted one in a test.
+    mint: PublicationMint,
     /// The snapshots the cell publishes, its first included, journalled while
     /// a native capture is installed (ADR-0215 §4): every host publishes
     /// through a cell, so this is the one place a window's state is recorded.
@@ -530,6 +534,13 @@ impl WindowStateCell {
     /// admitted for another window, or against capabilities built by hand or
     /// edited, never opens on this one.
     pub(crate) fn open(first_read: Sample) -> Self {
+        Self::open_from(first_read, flui_platform::PublicationMint::process())
+    }
+
+    /// [`open`](Self::open) publishing from `mint`: the process's in
+    /// production, an exhausted one in a test of what a window does once the
+    /// process has no publication left.
+    pub(crate) fn open_from(first_read: Sample, mint: PublicationMint) -> Self {
         let Sample {
             state: mut initial,
             refused,
@@ -543,13 +554,20 @@ impl WindowStateCell {
         // as any window's do, and the withdrawal is said with its first
         // delivery. Refusing the open is not every host's to do: an Android
         // activity or a UIKit scene exists before its window is built.
-        let withdrawn = if let Ok(published) = initial.capabilities.publish() {
+        let withdrawn = if let Ok(published) = initial.capabilities.publish_from(mint) {
             initial.capabilities = published;
             false
         } else {
             initial.capabilities = initial.capabilities.withdraw();
             true
         };
+        // A first snapshot already at the last revision is the last one the
+        // window will publish: frozen, its capabilities withdrawn, so that
+        // revision never names a second snapshot.
+        let frozen = initial.revision == WindowRevision::LAST;
+        if frozen {
+            initial.capabilities = initial.capabilities.withdraw();
+        }
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         let journal = {
             let journal = crate::journal::capture::Journal::open_stream(
@@ -562,14 +580,15 @@ impl WindowStateCell {
             last: Mutex::new(Slot {
                 state: initial,
                 read_after: 0,
-                frozen: false,
+                frozen,
                 refusing: refused.is_some(),
                 unreported_refusal: refused,
-                unreported_freeze: None,
+                unreported_freeze: frozen.then_some(flui_platform::WindowRevisionExhausted),
                 unreported_withdrawal: withdrawn,
                 unreported_note: note,
             }),
             invalidations: AtomicU64::new(1),
+            mint,
             #[cfg(all(debug_assertions, feature = "native-capture"))]
             journal,
         }
@@ -727,9 +746,10 @@ impl WindowStateCell {
     /// Publish a sample read after `invalidations`: the previous snapshot when
     /// nothing differs or a read begun later has published already, otherwise
     /// the next revision. A sample whose geometry was refused publishes its
-    /// other facts on the published geometry. At the last revision the cell
-    /// freezes on its final snapshot with its capabilities withdrawn, announces
-    /// that once, says one diagnostic, and publishes nothing again.
+    /// other facts on the published geometry. The snapshot that takes the last
+    /// revision is the cell's final one: its capabilities are withdrawn, it is
+    /// announced as any change is, one diagnostic is said, and nothing is
+    /// published again.
     fn commit(&self, sample: Sample, invalidations: u64) -> Published {
         let mut slot = self.last.lock();
         if slot.read_after > invalidations {
@@ -759,10 +779,19 @@ impl WindowStateCell {
                 }
             }
         }
-        match slot.state.successor(sample) {
-            Ok(next) => {
+        match slot.state.successor_from(sample, self.mint) {
+            Ok(mut next) => {
                 let changed = next.revision != slot.state.revision;
                 if changed {
+                    // The last revision is the last snapshot the window
+                    // publishes: it freezes there, and as it can no longer say
+                    // what it honours, that snapshot withdraws its capabilities
+                    // (ADR-0341). No revision names two snapshots.
+                    if next.revision == WindowRevision::LAST {
+                        next.capabilities = next.capabilities.withdraw();
+                        slot.frozen = true;
+                        slot.unreported_freeze = Some(flui_platform::WindowRevisionExhausted);
+                    }
                     if next.capabilities.is_withdrawn() && !slot.state.capabilities.is_withdrawn() {
                         slot.unreported_withdrawal = true;
                     }
@@ -781,27 +810,15 @@ impl WindowStateCell {
                     changed,
                 }
             }
+            // Reached only by a snapshot already at the last revision and not
+            // frozen, which `open` rules out: freeze on it and publish nothing.
             Err(error) => {
-                // Frozen, the window publishes nothing again, so it can no
-                // longer say what it honours: its capabilities are withdrawn,
-                // whatever the window system says now (ADR-0341). The frozen
-                // snapshot honours nothing, every token answers `Superseded`,
-                // admission answers `Unpublished`, and the change is announced
-                // once at the revision the window froze at, the last snapshot
-                // that revision names.
-                let withdrawn = slot.state.capabilities.withdraw();
-                let changed = withdrawn != slot.state.capabilities;
-                slot.state.capabilities = withdrawn;
                 slot.frozen = true;
                 slot.unreported_freeze = Some(error);
-                let state = slot.state.clone();
-                drop(slot);
-                #[cfg(all(debug_assertions, feature = "native-capture"))]
-                if changed {
-                    self.journal
-                        .record(crate::journal::capture::Captured::WindowState(&state));
+                Published {
+                    state: slot.state.clone(),
+                    changed: false,
                 }
-                Published { state, changed }
             }
         }
     }
@@ -1163,43 +1180,49 @@ mod tests {
         assert_eq!(kept.state, overtaken.state);
     }
 
+    /// A mint with no publication left, for what a window does once the
+    /// process has none.
+    const EXHAUSTED: flui_platform::PublicationMint = flui_platform::PublicationMint::exhausted();
+
+    /// A window whose first snapshot already sits at the last revision is
+    /// frozen from the start, its capabilities withdrawn, and publishes
+    /// nothing again: that revision names one snapshot.
     #[test]
-    fn an_exhausted_revision_freezes_the_cell() {
-        let mut last = window(1.0);
+    fn a_window_opened_at_the_last_revision_is_frozen() {
+        let mut last = window(1.0).with_capabilities(flui_platform::WindowCapabilities::ALL);
         last.revision = WindowRevision::LAST;
-        let cell = WindowStateCell::new(last.clone());
+        let cell = WindowStateCell::new(last);
+        let opened = cell.state_with(|| state(3.0));
+        assert!(!opened.changed, "frozen from the start");
+        assert!(opened.state.capabilities.is_withdrawn());
         for attempt in 0..3 {
             cell.invalidate();
             let published = cell.state_with(|| state(2.0 + f64::from(attempt)));
-            assert!(!published.changed);
-            assert_eq!(published.state, last, "attempt {attempt}");
+            assert!(!published.changed, "attempt {attempt}");
+            assert_eq!(published.state, opened.state, "attempt {attempt}");
         }
         assert!(
             !cell.is_stale(),
             "a frozen cell is current until invalidated"
         );
-        cell.invalidate();
-        assert_eq!(
-            cell.state_with(|| state(1.0)).state,
-            last,
-            "a frozen cell stays frozen even for a sample equal to its state"
-        );
     }
 
-    /// Frozen means unpublished: a window frozen at its last revision, even by
-    /// a sample with the same capabilities, withdraws them. The frozen
-    /// snapshot honours nothing, the change is announced once, a command
-    /// admitted before answers `Superseded`, and admitting again answers
-    /// `Unpublished`, also after the window system takes maximizing away.
+    /// The snapshot that takes the last revision is the window's final one:
+    /// it is announced, its commands are withdrawn even though the sample
+    /// carried the same capabilities, its reports and observations keep their
+    /// values, a command admitted before answers `Superseded`, and nothing is
+    /// admitted or published afterwards, also after the window system takes
+    /// maximizing away. No revision names two snapshots.
     #[test]
-    fn a_frozen_window_withdraws_its_capabilities() {
+    fn the_snapshot_that_takes_the_last_revision_withdraws_the_capabilities() {
         use flui_platform::{
-            AdmissionError, ApplyError, WindowCapabilities, WindowCapability, WindowCommand,
+            AdmissionError, ApplyError, CapabilityAbsence, WindowCapabilities, WindowCapability,
+            WindowCommand,
         };
 
-        let mut last = window(1.0).with_capabilities(WindowCapabilities::ALL);
-        last.revision = WindowRevision::LAST;
-        let cell = WindowStateCell::new(last);
+        let mut before_last = window(1.0).with_capabilities(WindowCapabilities::ALL);
+        before_last.revision = WindowRevision::from_raw(u64::MAX - 1);
+        let cell = WindowStateCell::new(before_last);
         let maximize = WindowCommand::SetMode(flui_platform::WindowMode::Maximized);
         let admitted = maximize
             .clone()
@@ -1207,14 +1230,18 @@ mod tests {
             .expect("the window maximizes");
 
         cell.invalidate();
-        let frozen = cell
+        let last = cell
             .state_with(|| Sample::from(window(2.0).with_capabilities(WindowCapabilities::ALL)));
-        assert!(frozen.changed, "the withdrawal is announced");
-        assert_eq!(frozen.state.revision, WindowRevision::LAST);
+        assert!(last.changed, "the final snapshot is announced");
+        assert_eq!(last.state.revision, WindowRevision::LAST);
         assert_eq!(
-            frozen.state.capabilities.maximizes(),
-            WindowCapability::NOT_ON_THIS_PLATFORM,
-            "a withdrawn snapshot honours nothing"
+            last.state.capabilities.maximizes(),
+            WindowCapability::Absent(CapabilityAbsence::WITHDRAWN)
+        );
+        assert_eq!(
+            last.state.capabilities.reports_presentation(),
+            WindowCapability::Native,
+            "a report no command reads keeps its value"
         );
         assert_eq!(
             admitted.against(&cell.published_capabilities()),
@@ -1231,9 +1258,74 @@ mod tests {
         });
         assert!(!later.changed, "frozen");
         assert_eq!(
+            later.state, last.state,
+            "the last revision names one snapshot"
+        );
+        assert_eq!(
             maximize.admit(&cell.published_capabilities()),
             Err(AdmissionError::Unpublished),
             "nothing is admitted once frozen"
+        );
+    }
+
+    /// A window opened when the process has no publication left opens with
+    /// its capabilities withdrawn, not frozen: the withdrawal waits to be said,
+    /// and its other facts go on publishing at new revisions while its
+    /// capabilities stay withdrawn.
+    #[test]
+    fn a_window_opened_with_no_publication_left_publishes_on_withdrawn() {
+        use flui_platform::{AdmissionError, WindowCapabilities, WindowCommand};
+
+        let cell = WindowStateCell::open_from(
+            Sample::from(window(1.0).with_capabilities(WindowCapabilities::ALL)),
+            EXHAUSTED,
+        );
+        assert!(cell.published_capabilities().is_withdrawn());
+        assert!(
+            cell.last.lock().unreported_withdrawal,
+            "the withdrawal is said with the first delivery"
+        );
+        assert_eq!(
+            WindowCommand::Hide.admit(&cell.published_capabilities()),
+            Err(AdmissionError::Unpublished)
+        );
+
+        let delivery = crate::owner::window_delivery::WindowDelivery::new(
+            flui_testing::window_handler::RecordingWindowHandler::new(),
+            flui_platform::input_capabilities::InputCapabilities::UNAVAILABLE,
+        );
+        cell.invalidate();
+        let focused = cell.read(&delivery, || read(1.0, true));
+        assert!(focused.focused, "not frozen: the focus publishes");
+        assert!(focused.capabilities.is_withdrawn(), "withdrawn for good");
+        assert!(
+            !cell.last.lock().unreported_withdrawal,
+            "the read hands the withdrawal to the window's turn to say, once"
+        );
+    }
+
+    /// A published snapshot whose capabilities change once the mint has no
+    /// publication left withdraws them, and its other facts publish with it.
+    #[test]
+    fn a_change_with_no_publication_left_withdraws_the_capabilities() {
+        use flui_platform::{AdmissionError, WindowCapabilities, WindowCommand};
+
+        let cell = WindowStateCell::new(window(1.0).with_capabilities(WindowCapabilities::ALL));
+        let published = cell.last.lock().state.clone();
+        assert!(!published.capabilities.is_withdrawn());
+        let next = published
+            .successor_from(
+                window(1.0)
+                    .with_capabilities(WindowCapabilities::NONE)
+                    .with_focused(true),
+                EXHAUSTED,
+            )
+            .expect("a revision is left");
+        assert!(next.capabilities.is_withdrawn());
+        assert!(next.focused, "the other facts publish");
+        assert_eq!(
+            WindowCommand::Hide.admit(&next.capabilities),
+            Err(AdmissionError::Unpublished)
         );
     }
 }

@@ -182,7 +182,8 @@ this one path (ADR-0151 §9).
   answers `CommandRefusal` (`Admission` or `Apply`). `successor` refuses
   only at the last revision (`WindowRevisionExhausted`); with no publication
   left, it withdraws changed capabilities (`WindowCapabilities::withdraw`:
-  they honour nothing, admit nothing and stay so) while the window's other
+  every command absent as `CapabilityAbsence::WITHDRAWN`, reports kept, nothing
+  admitted, and so in every later snapshot) while the window's other
   facts publish on.
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,

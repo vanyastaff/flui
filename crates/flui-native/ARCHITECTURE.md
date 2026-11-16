@@ -1152,10 +1152,13 @@ trait depends on `flui-platform` instead.
   first capabilities (`WindowCapabilities::publish`, ADR-0341: the contract's
   publication, never reissued), so a token admitted for another window opens
   nothing on this one, and capabilities built by hand or edited admit nothing. A
-  cell that freezes at its last revision withdraws its capabilities, whether or
-  not they moved, and announces that once; a window opened with no publication
-  left opens with withdrawn capabilities (`WindowCapabilities::withdraw`), so a
-  window takes no command it may have lost (`a_frozen_window_withdraws_its_capabilities`). The
+  cell publishes the snapshot that takes the last revision with its capabilities
+  withdrawn and freezes there, so no revision names two snapshots; a window opened with no publication
+  left opens with withdrawn capabilities (`WindowCapabilities::withdraw`, from the cell's
+  `PublicationMint`), so a
+  window takes no command it may have lost
+  (`the_snapshot_that_takes_the_last_revision_withdraws_the_capabilities`,
+  `a_window_opened_with_no_publication_left_publishes_on_withdrawn`). The
   conformance check `a_command_admitted_before_a_revision_is_superseded`
   holds a host to it where its fixture can revise capabilities. A command no
   host arm carries out, the Android and UIKit windows' included, answers

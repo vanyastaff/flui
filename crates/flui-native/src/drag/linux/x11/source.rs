@@ -46,7 +46,7 @@ use std::time::Duration;
 
 use flui_platform::data_transfer::{RepresentationIndex, TransferActions};
 use flui_platform::drag::{
-    DragError, OsDragEnd, OsDragEndHook, OsDragProvider, OsDragRequest, OsDragStart,
+    DragError, OsDragEnd, OsDragEndHook, OsDragParts, OsDragProvider, OsDragRequest, OsDragStart,
     PlatformDragSource,
 };
 use flui_platform::{Unsupported, UnsupportedReason};
@@ -226,26 +226,23 @@ impl X11Drag {
             .then(|| self.button_held())
             .flatten()
             .ok_or_else(|| refused(UnsupportedReason::Unavailable))?;
-        let OsDragRequest {
-            representations,
-            allowed,
+        let OsDragParts {
+            terms,
             provider,
             on_end,
             ..
-        } = request;
+        } = request.into_parts();
         let mut types = Vec::new();
-        for (index, descriptor) in representations.iter().enumerate() {
-            let Ok(index) = u16::try_from(index) else {
-                break;
-            };
+        for (index, descriptor) in terms.indexed() {
             for name in names_of(&descriptor.format) {
                 if let Some(atom) = self.intern(&name)
                     && types.iter().all(|(held, _)| *held != atom)
                 {
-                    types.push((atom, RepresentationIndex(index)));
+                    types.push((atom, index));
                 }
             }
         }
+        let allowed = terms.allowed();
         let action = self.atoms.actions.atom_of(proposed(allowed));
         let time = self.time();
         let xcb = self.connection.xcb();
