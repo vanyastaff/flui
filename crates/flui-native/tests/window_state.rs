@@ -285,8 +285,9 @@ fn a_false_capability_is_unsupported_and_changes_nothing() {
 }
 
 fn a_true_capability_is_honoured() {
-    let mut only_title = WindowCapabilities::NONE;
+    let mut only_title = WindowCapabilities::NONE.into_parts();
     only_title.sets_title = flui_platform::WindowCapability::Native;
+    let only_title = only_title.into_capabilities();
     let platform = HeadlessPlatform::new().with_window_capabilities(only_title);
     let window = open(&platform);
     assert_eq!(window.state().capabilities, only_title);
@@ -478,8 +479,9 @@ fn a_command_admitted_before_a_capability_change_is_superseded() {
         "focus is not a capability"
     );
 
-    let mut revised = WindowCapabilities::ALL;
+    let mut revised = WindowCapabilities::ALL.into_parts();
     revised.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
+    let revised = revised.into_capabilities();
     mock(&window).simulate_capabilities(revised);
     let after = window.state();
     assert_eq!(after.revision.get(), unfocused.revision.get() + 1);
@@ -581,8 +583,9 @@ fn the_user_resizing_and_moving_publish_too() {
 }
 
 fn a_window_without_position_reports_none() {
-    let mut caps = WindowCapabilities::ALL;
+    let mut caps = WindowCapabilities::ALL.into_parts();
     caps.observes_position = flui_platform::Availability::Unavailable;
+    let caps = caps.into_capabilities();
     let platform = HeadlessPlatform::new().with_window_capabilities(caps);
     let window = open(&platform);
     assert_eq!(window.state().outer.position(), None);

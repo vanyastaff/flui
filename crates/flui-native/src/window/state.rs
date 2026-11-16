@@ -227,10 +227,13 @@ impl StateDiagnostic {
 }
 
 /// The answer to a command a host has no way to carry out. `admit` refuses it
-/// first, through a capability the host names absent, so a window
-/// reaches this only for a command the contract gained before the host learnt
-/// it: the window system cannot do it, and the caller hears so.
-#[cfg(any(windows, target_os = "macos", target_arch = "wasm32", linux_host))]
+/// first, through a capability the host names absent, and a token opens only
+/// under the publication it was admitted against
+/// ([`AdmittedCommand::against`](flui_platform::AdmittedCommand::against)), so a
+/// window reaches this only for a command its published capabilities honour and
+/// its `apply` has no arm for: a command the contract gained before the host
+/// learnt it. The window system cannot do it, and the caller hears so; no host
+/// answers `Ok` for a command it did not carry out.
 pub(crate) fn not_carried_out(command: &flui_platform::WindowCommand) -> flui_platform::ApplyError {
     flui_platform::ApplyError::failed(format!("this window system does not carry out {command:?}"))
 }
@@ -400,22 +403,6 @@ pub(crate) struct WindowStateCell {
     journal: crate::journal::capture::Journal,
 }
 
-/// The capabilities owners handed out so far, one per window cell.
-static NEXT_CAPABILITIES_OWNER: AtomicU64 = AtomicU64::new(1);
-
-/// A capabilities owner no window of this process had before. Advanced with a
-/// checked add, so the source refuses instead of reissuing a number.
-fn next_capabilities_owner() -> flui_platform::CapabilitiesOwner {
-    let number = NEXT_CAPABILITIES_OWNER
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-            next.checked_add(1)
-        })
-        .expect("BUG: 2^64 windows opened in one process");
-    flui_platform::CapabilitiesOwner::new(
-        std::num::NonZeroU64::new(number).expect("BUG: the owner source starts at one"),
-    )
-}
-
 impl crate::owner::notices::StaleOnWake for WindowStateCell {
     fn mark_stale(&self) {
         self.invalidate();
@@ -442,10 +429,11 @@ impl WindowStateCell {
     /// the refusal is said with the window's first delivery that hands the
     /// cell's diagnostics on.
     ///
-    /// The capabilities are stamped with a capabilities owner no other window
-    /// of the process has, which every later snapshot keeps, so a command
-    /// admitted for another window, or against capabilities built by hand,
-    /// never opens on this one.
+    /// The capabilities are published (`WindowCapabilities::publish`): a
+    /// publication no other capabilities of the process are, which later
+    /// snapshots keep while the capabilities stay the same, so a command
+    /// admitted for another window, or against capabilities built by hand or
+    /// edited, never opens on this one.
     pub(crate) fn open(first_read: Sample) -> Self {
         let Sample {
             state: mut initial,
@@ -455,7 +443,10 @@ impl WindowStateCell {
         if refused.is_some() {
             initial = on_published_geometry(initial, None);
         }
-        initial.capabilities = initial.capabilities.owned_by(next_capabilities_owner());
+        initial.capabilities = initial
+            .capabilities
+            .publish()
+            .expect("BUG: 2^64 capability publications in one process");
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         let journal = {
             let journal = crate::journal::capture::Journal::open_stream(

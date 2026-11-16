@@ -26,7 +26,18 @@ use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 /// publishes a snapshot without the facts the window system reports
 /// ([`Fault::SnapshotWithoutFacts`]). It reports the id it is given, which is
 /// the window's own unless the fault is [`Fault::ReissuesAClosedId`].
-struct Faulty(Rc<dyn PlatformWindow>, Fault, WindowId, KeptSnapshot);
+struct Faulty(
+    Rc<dyn PlatformWindow>,
+    Fault,
+    WindowId,
+    KeptSnapshot,
+    ClaimedCapabilities,
+);
+
+/// The capabilities a window with a presentation fault publishes as its own:
+/// the window system's, as the host last read them, and its claim over them,
+/// published once for each set the window system holds.
+type ClaimedCapabilities = std::cell::RefCell<Option<(WindowCapabilities, WindowCapabilities)>>;
 
 /// The snapshot a window with [`Fault::DropsFactsWithABadReport`] keeps
 /// answering while its window system reports no window: set when the report
@@ -37,7 +48,30 @@ impl Faulty {
     /// `window` with `fault`, reporting its own id.
     fn new(window: Rc<dyn PlatformWindow>, fault: Fault, kept: KeptSnapshot) -> Self {
         let id = window.id();
-        Self(window, fault, id, kept)
+        Self(window, fault, id, kept, ClaimedCapabilities::default())
+    }
+
+    /// What the window publishes over the window system's `held`: `held`
+    /// itself, or, for a presentation fault, its claim, published again only
+    /// when what the window system holds changes, as a host publishes.
+    fn published(&self, held: WindowCapabilities) -> WindowCapabilities {
+        let claim = match self.1 {
+            Fault::ClaimsPresentation => WindowCapability::Native,
+            Fault::DisclaimsPresentation => WindowCapability::NOT_ON_THIS_PLATFORM,
+            _ => return held,
+        };
+        let mut claimed = self.4.borrow_mut();
+        if let Some((read, published)) = *claimed
+            && read.revision() == held.revision()
+            && read == held
+        {
+            return published;
+        }
+        let published = presentation_claimed(held, claim)
+            .publish()
+            .expect("the process has publications left");
+        *claimed = Some((held, published));
+        published
     }
 }
 
@@ -69,11 +103,8 @@ impl PlatformWindow for Faulty {
             Fault::SnapshotWithoutFacts => state.metrics = None,
             Fault::ClaimsWhatItCannot => state.capabilities = WindowCapabilities::ALL,
             Fault::HidesWhenMinimized => state.visible &= state.mode != WindowMode::Minimized,
-            Fault::ClaimsPresentation => {
-                state.capabilities.reports_presentation = WindowCapability::Native;
-            }
-            Fault::DisclaimsPresentation => {
-                state.capabilities.reports_presentation = WindowCapability::NOT_ON_THIS_PLATFORM;
+            Fault::ClaimsPresentation | Fault::DisclaimsPresentation => {
+                state.capabilities = self.published(state.capabilities);
             }
             _ => {}
         }
@@ -98,6 +129,20 @@ impl PlatformWindow for Faulty {
                     "the window does not honour it now".to_owned(),
                 )),
             };
+        }
+        if matches!(
+            self.1,
+            Fault::ClaimsPresentation | Fault::DisclaimsPresentation
+        ) {
+            // The host opens the token under what it published, and hands the
+            // window system the command under what that holds: the claim is
+            // about presentation, which admits no command.
+            let held = self.0.state().capabilities;
+            let command = command.against(&self.published(held))?;
+            let admitted = command
+                .admit(&held)
+                .expect("the claim names no capability a command is admitted against");
+            return self.0.apply(admitted);
         }
         self.0.apply(command)
     }
@@ -304,6 +349,7 @@ impl WindowFixture for Fixture {
                 fault,
                 self.window.id(),
                 KeptSnapshot::default(),
+                ClaimedCapabilities::default(),
             )),
             _ => another as _,
         })
@@ -362,12 +408,13 @@ impl WindowFixture for Fixture {
     /// The simulated window system stops reporting where the window opens
     /// again, and keeps the rest.
     fn revise_capabilities(&mut self) -> bool {
-        let mut revised = self.model.state().capabilities;
+        let mut revised = self.model.state().capabilities.into_parts();
         revised.places_at_open = match revised.places_at_open {
             flui_platform::Availability::Unavailable => flui_platform::Availability::Native,
             _ => flui_platform::Availability::Unavailable,
         };
-        self.mock().simulate_capabilities(revised);
+        self.mock()
+            .simulate_capabilities(revised.into_capabilities());
         true
     }
 
@@ -436,20 +483,31 @@ impl WindowFixture for Fixture {
     }
 }
 
+/// `capabilities` with the presentation report a faulty host claims, which
+/// are no publication of the window's.
+fn presentation_claimed(
+    capabilities: WindowCapabilities,
+    claimed: WindowCapability,
+) -> WindowCapabilities {
+    let mut parts = capabilities.into_parts();
+    parts.reports_presentation = claimed;
+    parts.into_capabilities()
+}
+
 fn only_the_move_and_size_commands() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.sets_position = flui_platform::WindowCapability::Native;
     capabilities.sets_size = flui_platform::WindowCapability::Native;
     capabilities.observes_position = flui_platform::Availability::Native;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 fn no_fullscreen_or_minimize() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::ALL;
+    let mut capabilities = WindowCapabilities::ALL.into_parts();
     capabilities.enters_fullscreen = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     capabilities.minimizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
     capabilities.observes_minimized = flui_platform::Availability::Unavailable;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 fn the_headless_window_conforms_under_every_capability_set() {

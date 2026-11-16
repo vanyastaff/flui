@@ -100,6 +100,10 @@ pub struct HeadlessWindow {
     /// Whether the simulated platform reports when frames reached the screen
     /// ([`HeadlessWindow::with_presentation_reports`]).
     reports_presentation: bool,
+    /// The commands the window honours, published once for what the window plays
+    /// ([`HeadlessWindow::published_capabilities`]): what its commands are
+    /// admitted against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
     /// The frame and mode the window was set to and the close requests it received,
     /// through its `WindowHandle` or a command applied to it.
     chrome: Mutex<KitChrome>,
@@ -167,28 +171,47 @@ struct KitChrome {
 }
 
 impl HeadlessWindow {
-    /// The commands the window honours: its frame and its mode, which have no window
-    /// system to refuse them.
+    /// The commands the window honours, as it published them.
     fn capabilities(&self) -> flui_platform::WindowCapabilities {
-        let mut capabilities = flui_platform::WindowCapabilities::NONE;
-        capabilities.sets_frame = flui_platform::WindowCapability::Native;
-        capabilities.app_title_bar = flui_platform::WindowCapability::Native;
-        capabilities.minimizes = flui_platform::WindowCapability::Native;
-        capabilities.maximizes = flui_platform::WindowCapability::Native;
-        if self.reports_presentation {
-            capabilities.reports_presentation = flui_platform::WindowCapability::Native;
+        self.capabilities
+    }
+
+    /// The commands a window honours: its frame and its mode, which have no
+    /// window system to refuse them, and the presentation report where it plays
+    /// one; published, as a host's first snapshot is.
+    fn published_capabilities(reports_presentation: bool) -> flui_platform::WindowCapabilities {
+        use flui_platform::WindowCapability::Native;
+        let mut capabilities = flui_platform::WindowCapabilities::NONE.into_parts();
+        capabilities.sets_frame = Native;
+        capabilities.app_title_bar = Native;
+        capabilities.minimizes = Native;
+        capabilities.maximizes = Native;
+        if reports_presentation {
+            capabilities.reports_presentation = Native;
         }
         capabilities
+            .into_capabilities()
+            .publish()
+            .expect("BUG: a test opens far fewer than u64::MAX windows")
     }
 
     /// Carry out an admitted `command`: a frame or a mode is taken at once, and the
     /// host tells the UI runtime at its next pump.
-    fn take(&self, command: flui_platform::WindowCommand) {
+    ///
+    /// # Errors
+    /// [`ApplyError::Platform`](flui_platform::ApplyError::Platform) for a
+    /// command its capabilities honour that this double has no arm for; its
+    /// capabilities name none today.
+    fn take(&self, command: flui_platform::WindowCommand) -> Result<(), flui_platform::ApplyError> {
         let mut chrome = self.chrome.lock();
         match command {
             flui_platform::WindowCommand::SetFrame(frame) => chrome.frame = frame,
             flui_platform::WindowCommand::SetMode(mode) => chrome.mode = mode,
-            _ => return,
+            other => {
+                return Err(flui_platform::ApplyError::failed(format!(
+                    "the headless window does not carry out {other:?}"
+                )));
+            }
         }
         chrome.unobserved = true;
         drop(chrome);
@@ -196,6 +219,7 @@ impl HeadlessWindow {
         *revision = revision
             .next()
             .expect("BUG: a test changes a window far fewer than u64::MAX times");
+        Ok(())
     }
 
     /// Whether the window changed since the host last told the UI runtime, forgotten.
@@ -238,6 +262,7 @@ impl HeadlessWindow {
             haptics: Arc::new(flui_platform::testing::FakeHaptics::new()),
             os_drags: Arc::new(HeadlessOsDrags::default()),
             reports_presentation: false,
+            capabilities: Self::published_capabilities(false),
             chrome: Mutex::default(),
         }
     }
@@ -299,6 +324,7 @@ impl HeadlessWindow {
     #[must_use]
     pub fn with_presentation_reports(mut self) -> Self {
         self.reports_presentation = true;
+        self.capabilities = Self::published_capabilities(true);
         self
     }
 
@@ -463,8 +489,7 @@ impl PlatformWindow for HeadlessWindow {
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
         let command = command.against(&self.capabilities())?;
-        self.take(command);
-        Ok(())
+        self.take(command)
     }
 }
 
@@ -2500,7 +2525,9 @@ impl flui_platform::WindowControl for HeadlessWindowControl {
         let command = admitted
             .against(&self.0.capabilities())
             .expect("BUG: the double's capabilities never move");
-        self.0.take(command);
+        self.0
+            .take(command)
+            .expect("BUG: the double carries out every command its capabilities honour");
         Ok(())
     }
 

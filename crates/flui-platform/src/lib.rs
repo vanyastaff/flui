@@ -221,9 +221,7 @@ pub use window::{
     WindowExecutionState, WindowId, WindowIdMint, WindowMaterial, WindowOption, WindowOptions,
     WindowReveal,
 };
-pub use window_capabilities::{
-    CapabilitiesOwner, CapabilityParts, WindowCapabilities, WindowCapability,
-};
+pub use window_capabilities::{CapabilityParts, WindowCapabilities, WindowCapability};
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };

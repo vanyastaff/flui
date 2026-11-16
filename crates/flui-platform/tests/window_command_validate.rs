@@ -3,7 +3,7 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, CapabilitiesOwner, CapabilityAbsence,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, CapabilityAbsence, CapabilityParts,
     ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset, SizeConstraints,
     SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
     WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
@@ -253,8 +253,9 @@ fn a_controls_offset_is_finite_and_non_negative() {
 
 fn a_window_that_cannot_take_the_app_title_bar_opens_with_the_system_frame() {
     let bar = WindowFrame::AppTitleBar(AppTitleBar::new());
-    let mut takes_it = WindowCapabilities::NONE;
+    let mut takes_it = WindowCapabilities::NONE.into_parts();
     takes_it.app_title_bar = WindowCapability::Native;
+    let takes_it = takes_it.into_capabilities();
     assert_eq!(bar.at_open(&takes_it), bar);
     assert_eq!(bar.at_open(&WindowCapabilities::NONE), WindowFrame::System);
     for frame in [WindowFrame::System, WindowFrame::None] {
@@ -277,7 +278,7 @@ fn commands_without_numbers_are_always_valid() {
     }
 }
 
-type Capability = fn(&mut WindowCapabilities) -> &mut WindowCapability;
+type Capability = fn(&mut CapabilityParts) -> &mut WindowCapability;
 
 /// What admitting `command` against `capabilities` answers, the token aside.
 fn admits(
@@ -326,13 +327,21 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
         }),
     ];
     for (command, capability) in rows {
-        let mut all = WindowCapabilities::ALL;
-        assert_eq!(admits(&command, &all), Ok(()), "{command:?}");
+        let mut all = WindowCapabilities::ALL.into_parts();
+        assert_eq!(
+            admits(&command, &all.into_capabilities()),
+            Ok(()),
+            "{command:?}"
+        );
         *capability(&mut all) = WindowCapability::Emulated;
-        assert_eq!(admits(&command, &all), Ok(()), "{command:?} emulated");
+        assert_eq!(
+            admits(&command, &all.into_capabilities()),
+            Ok(()),
+            "{command:?} emulated"
+        );
         *capability(&mut all) = WindowCapability::NOT_ON_THIS_PLATFORM;
         assert_eq!(
-            admits(&command, &all),
+            admits(&command, &all.into_capabilities()),
             Err(AdmissionError::Unsupported(Unsupported::new(
                 UnsupportedReason::NotOnThisPlatform
             ))),
@@ -358,14 +367,14 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
                 UnsupportedReason::NotYetOnThisHost,
             ),
         ] {
-            let mut marked = WindowCapabilities::ALL.unavailable(&command, absence);
+            let marked = WindowCapabilities::ALL.unavailable(&command, absence);
             assert_eq!(
                 marked.capability(&command),
                 WindowCapability::Absent(absence),
                 "{command:?} taken away, {absence:?}"
             );
             assert_eq!(
-                *capability(&mut marked),
+                *capability(&mut marked.into_parts()),
                 WindowCapability::Absent(absence),
                 "{command:?} is admitted against its own field"
             );
@@ -390,9 +399,11 @@ fn admit_refuses_exactly_when_the_capability_is_unavailable() {
 /// move: the absence went with the value that held it.
 fn a_capability_restored_is_the_one_never_taken_away() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    let mut restored =
-        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let mut restored = WindowCapabilities::ALL
+        .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+        .into_parts();
     restored.material = WindowCapability::Native;
+    let restored = restored.into_capabilities();
     assert_eq!(restored, WindowCapabilities::ALL);
     assert_eq!(
         hash_of(&restored),
@@ -554,8 +565,9 @@ fn metrics(width: i32, height: i32, scale: f64) -> WindowMetrics {
 
 /// Every fact the snapshot holds is a difference the revision moves for.
 fn each_window_fact_advances_the_revision() {
-    let mut honours_title = WindowCapabilities::NONE;
+    let mut honours_title = WindowCapabilities::NONE.into_parts();
     honours_title.sets_title = WindowCapability::Native;
+    let honours_title = honours_title.into_capabilities();
     let facts: [(&str, WindowState); 12] = [
         ("focus", base_state().with_focused(true)),
         ("visibility", base_state().with_visible(false)),
@@ -684,8 +696,9 @@ fn shown_minimized_and_occluded_are_three_facts() {
 /// of a capability moves it to the new snapshot's, and a sample's own is
 /// ignored.
 fn the_capabilities_revision_moves_only_with_the_capabilities() {
-    let mut honours_title = WindowCapabilities::ALL;
+    let mut honours_title = WindowCapabilities::ALL.into_parts();
     honours_title.sets_title = WindowCapability::NOT_ON_THIS_PLATFORM;
+    let honours_title = honours_title.into_capabilities();
     let first = base_state()
         .successor(base_state().with_capabilities(WindowCapabilities::ALL))
         .expect("capabilities change");
@@ -724,8 +737,11 @@ fn the_capabilities_revision_moves_only_with_the_capabilities() {
     );
 }
 
-fn owner(number: u64) -> CapabilitiesOwner {
-    CapabilitiesOwner::new(std::num::NonZeroU64::new(number).expect("a non-zero owner"))
+/// `capabilities` as a window's first snapshot publishes them.
+fn as_published(capabilities: WindowCapabilities) -> WindowCapabilities {
+    capabilities
+        .publish()
+        .expect("the process has publications left")
 }
 
 /// What opening `admitted` under `capabilities` answers, as the command or
@@ -738,14 +754,99 @@ fn opens(admitted: AdmittedCommand, capabilities: &WindowCapabilities) -> Result
     }
 }
 
-/// A token opens only under the capabilities it was admitted against: the
-/// same window at the same revision lets the command through; a moved
-/// revision answers `Superseded` and gives the command back, even for a
-/// command the new capabilities still honour; admitting it again against the
-/// new capabilities either opens or is refused by `admit`.
+/// Capabilities taken apart, changed and put back together are no window's,
+/// whatever window's they were: a command a window lacks, admitted against
+/// its published capabilities with that capability switched on, opens not on
+/// the window but `Superseded`. So does one admitted against the capabilities
+/// marked absent once more, and publishing equal capabilities again is
+/// another publication.
+fn an_edit_of_published_capabilities_belongs_to_no_window() {
+    let material = WindowCommand::SetMaterial(WindowMaterial::System);
+    let published = as_published(WindowCapabilities::NONE);
+    let mut switched_on = published.into_parts();
+    switched_on.material = WindowCapability::Native;
+    let switched_on = switched_on.into_capabilities();
+    let admitted = material
+        .clone()
+        .admit(&switched_on)
+        .expect("the edited copy honours the material");
+    assert_eq!(
+        admitted.against(&published),
+        Err(ApplyError::Superseded {
+            command: material.clone()
+        }),
+        "the window's own capabilities do not take the material"
+    );
+
+    let window = as_published(WindowCapabilities::ALL);
+    let narrowed = window.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let hide = |capabilities: &WindowCapabilities| {
+        WindowCommand::Hide
+            .admit(capabilities)
+            .expect("every one honours hiding")
+    };
+    assert_eq!(opens(hide(&narrowed), &window), Err(()), "an edit");
+    assert_eq!(
+        opens(hide(&as_published(WindowCapabilities::ALL)), &window),
+        Err(()),
+        "published again, equal capabilities are another publication"
+    );
+    assert_eq!(
+        opens(hide(&window), &window),
+        Ok(()),
+        "a copy is the publication"
+    );
+}
+
+/// The successor a caller computes from a window's snapshot is a publication
+/// of its own: a token admitted against it does not open under the window's
+/// next capabilities, even when the window publishes its next capabilities at
+/// that very revision.
+fn a_successor_a_caller_computes_opens_nothing() {
+    let material = WindowCommand::SetMaterial(WindowMaterial::System);
+    let first = base_state().with_capabilities(as_published(WindowCapabilities::NONE));
+    let computed = first
+        .successor(base_state().with_capabilities(WindowCapabilities::ALL))
+        .expect("a capability changes");
+    let window = first
+        .successor(base_state().with_capabilities(
+            WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_ON_THIS_DEVICE),
+        ))
+        .expect("a capability changes");
+    assert_eq!(
+        computed.capabilities.revision(),
+        window.capabilities.revision(),
+        "the same revision"
+    );
+    assert_eq!(
+        opens(
+            material
+                .admit(&computed.capabilities)
+                .expect("the computed capabilities take the material"),
+            &window.capabilities
+        ),
+        Err(()),
+        "the window's capabilities do not take the material"
+    );
+    assert_eq!(
+        opens(
+            WindowCommand::Hide
+                .admit(&computed.capabilities)
+                .expect("the computed capabilities take hiding"),
+            &window.capabilities
+        ),
+        Err(()),
+        "nor anything else: the token is bound to the publication, not the revision"
+    );
+}
+
+/// A token opens only under the publication it was admitted against: the
+/// same publication lets the command through; the window's next one answers
+/// `Superseded` and gives the command back, even for a command the new
+/// capabilities still honour; admitting it again against the new
+/// capabilities either opens or is refused by `admit`.
 fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
-    let mut published = base_state().with_capabilities(WindowCapabilities::ALL);
-    published.capabilities = published.capabilities.owned_by(owner(1));
+    let published = base_state().with_capabilities(as_published(WindowCapabilities::ALL));
     let title = WindowCommand::SetTitle("t".into());
     let admitted = title
         .clone()
@@ -758,8 +859,9 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
         "under the capabilities it was admitted against"
     );
 
-    let mut without_fullscreen = WindowCapabilities::ALL;
+    let mut without_fullscreen = WindowCapabilities::ALL.into_parts();
     without_fullscreen.enters_fullscreen = WindowCapability::NOT_ON_THIS_PLATFORM;
+    let without_fullscreen = without_fullscreen.into_capabilities();
     let revised = published
         .successor(base_state().with_capabilities(without_fullscreen))
         .expect("a capability changes");
@@ -806,8 +908,8 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
 /// capabilities, or capabilities built by hand, do not open it, and a token
 /// admitted against hand-built capabilities opens on no window.
 fn a_token_opens_only_on_the_window_it_was_admitted_for() {
-    let first = WindowCapabilities::ALL.owned_by(owner(1));
-    let second = WindowCapabilities::ALL.owned_by(owner(2));
+    let first = as_published(WindowCapabilities::ALL);
+    let second = as_published(WindowCapabilities::ALL);
     assert_eq!(first.revision(), second.revision(), "the same revision");
     let admit = |capabilities: &WindowCapabilities| {
         WindowCommand::Hide
@@ -928,6 +1030,14 @@ fn window_command_validate() {
                 a_token_opens_only_on_the_window_it_was_admitted_for,
             ),
             (
+                "an_edit_of_published_capabilities_belongs_to_no_window",
+                an_edit_of_published_capabilities_belongs_to_no_window,
+            ),
+            (
+                "a_successor_a_caller_computes_opens_nothing",
+                a_successor_a_caller_computes_opens_nothing,
+            ),
+            (
                 "a_capability_restored_is_the_one_never_taken_away",
                 a_capability_restored_is_the_one_never_taken_away,
             ),
@@ -956,11 +1066,13 @@ fn the_presentation_report_answers_why_it_is_missing() {
         WindowCapability::NOT_ON_THIS_PLATFORM,
         "a window that reports nothing: the platform's"
     );
-    let mut host = WindowCapabilities::ALL;
+    let mut host = WindowCapabilities::ALL.into_parts();
     host.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let host = host.into_capabilities();
     assert!(!host.reports_presentation.is_available());
-    let mut device = WindowCapabilities::ALL;
+    let mut device = WindowCapabilities::ALL.into_parts();
     device.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+    let device = device.into_capabilities();
     assert_ne!(
         host, device,
         "the absence is part of what the window honours"
@@ -971,8 +1083,9 @@ fn the_presentation_report_answers_why_it_is_missing() {
         None,
         "a zero refresh, a variable rate, is no interval"
     );
-    let mut restored = host;
+    let mut restored = host.into_parts();
     restored.reports_presentation = WindowCapability::Native;
+    let restored = restored.into_capabilities();
     assert_eq!(restored, WindowCapabilities::ALL);
     assert_eq!(hash_of(&restored), hash_of(&WindowCapabilities::ALL));
 }
@@ -982,11 +1095,13 @@ fn the_presentation_report_answers_why_it_is_missing() {
 /// or by its field, leaves no earlier reason behind to answer in its place.
 fn a_refusal_answers_the_reason_the_capability_holds() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    let mut capabilities =
-        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-    capabilities.material = WindowCapability::Native;
-    assert_eq!(admits(&material, &capabilities), Ok(()));
-    capabilities.material = WindowCapability::NOT_ON_THIS_PLATFORM;
+    let mut parts = WindowCapabilities::ALL
+        .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+        .into_parts();
+    parts.material = WindowCapability::Native;
+    assert_eq!(admits(&material, &parts.into_capabilities()), Ok(()));
+    parts.material = WindowCapability::NOT_ON_THIS_PLATFORM;
+    let capabilities = parts.into_capabilities();
     assert_eq!(
         admits(&material, &capabilities),
         Err(AdmissionError::Unsupported(Unsupported::new(

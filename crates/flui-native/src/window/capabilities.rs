@@ -52,13 +52,13 @@ use crate::version::gate::apple::MacOSVersion;
 /// insets, only edges an app may defer.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.material = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
     capabilities.reports_keyboard_inset = WindowCapability::Native;
     capabilities.closes = WindowCapability::Native;
     capabilities.frame_rate_hint = Availability::Native;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// `UIPointerInteraction` and `UIPointerStyle` (iOS 13.4): the pointer of a
@@ -101,7 +101,7 @@ pub(crate) const fn appkit_window_capabilities(
 ) -> WindowCapabilities {
     use WindowCapability::{Absent, Native};
     use flui_platform::Availability;
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.reports_presentation = match presentation {
         Some(absence) => Absent(absence),
         None => Native,
@@ -126,7 +126,7 @@ pub(crate) const fn appkit_window_capabilities(
     // transparent (`fullSizeContentView`), with the traffic lights over it.
     capabilities.app_title_bar = Native;
     capabilities.material = Native;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// Why an AppKit window reports no presentation on this machine; `None` where
@@ -207,7 +207,7 @@ pub(crate) struct ActivityFacts {
 /// and the system gesture regions from API 29.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.material =
         WindowCapability::Absent(material_absence(facts.api, facts.cross_window_blur));
     capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
@@ -217,7 +217,7 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
         None => WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     };
     capabilities.frame_rate_hint = facts.frame_rate_hint;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// Why an Activity's window draws no material. From Android 12 (API 31) the

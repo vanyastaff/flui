@@ -491,7 +491,7 @@ pub(crate) mod support {
         // present's completion to that connection alone), the keyboard's
         // geometry and system gesture edges (X11 has no on-screen keyboard
         // protocol and no such edges), and a refresh-rate request.
-        let mut capabilities = WindowCapabilities::NONE;
+        let mut capabilities = WindowCapabilities::NONE.into_parts();
         capabilities.sets_title = Native;
         capabilities.sets_position = Native;
         capabilities.sets_size = Native;
@@ -513,7 +513,7 @@ pub(crate) mod support {
         };
         capabilities.maximizes = from_the_window_manager(support.maximizes);
         capabilities.enters_fullscreen = from_the_window_manager(support.fullscreen);
-        capabilities
+        capabilities.into_capabilities()
     }
 
     #[cfg(test)]

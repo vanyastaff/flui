@@ -425,8 +425,9 @@ mod tests {
 
     #[test]
     fn open_plan_leaves_placement_to_a_window_that_cannot_be_placed() {
-        let mut capabilities = ALL;
+        let mut capabilities = ALL.into_parts();
         capabilities.places_at_open = flui_platform::Availability::Unavailable;
+        let capabilities = capabilities.into_capabilities();
         let planned = OpenPlan::new(
             &options(),
             &geometry_of(&options()),

@@ -1338,9 +1338,9 @@ impl PlatformWindow for HeadlessHostWindow {
                 WindowCommand::Hide => state.visible = false,
                 WindowCommand::Activate => state.focused = true,
                 WindowCommand::SetMaterial(material) => state.materials.push(material),
-                // A command this host does not know is refused by `admit`
-                // through its capability, and `Close` returned above.
-                _ => {}
+                // `Close` returned above; a command the contract gained
+                // before this host learnt it is not carried out, and says so.
+                other => return Err(crate::window::state::not_carried_out(&other)),
             }
         }
         self.publish_state();

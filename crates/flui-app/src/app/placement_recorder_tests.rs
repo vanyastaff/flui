@@ -195,8 +195,9 @@ fn restore_asks_the_platform_for_what_it_can_place() {
         WindowMode::Normal,
         1.0,
     );
-    let mut capabilities = WindowCapabilities::ALL;
+    let mut capabilities = WindowCapabilities::ALL.into_parts();
     capabilities.places_at_open = flui_platform::Availability::Unavailable;
+    let capabilities = capabilities.into_capabilities();
     restore_into(&mut options, &placement, &displays(), &capabilities, |_| {
         NO_FRAME
     });
@@ -219,10 +220,11 @@ fn restore_fits_the_frame_the_window_opens_with() {
         WindowMode::Normal,
         1.0,
     );
-    let mut no_app_title_bar = WindowCapabilities::ALL;
+    let mut no_app_title_bar = WindowCapabilities::ALL.into_parts();
     no_app_title_bar.app_title_bar = flui_platform::WindowCapability::Absent(
         flui_platform::CapabilityAbsence::NOT_YET_ON_THIS_HOST,
     );
+    let no_app_title_bar = no_app_title_bar.into_capabilities();
     // (case, frame asked for, content width)
     let table = [
         (

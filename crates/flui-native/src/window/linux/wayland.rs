@@ -296,7 +296,7 @@ pub(crate) mod configure {
         // window, no placement at open and no refresh-rate request. The
         // presentation report is the compositor's to offer
         // (`presentation::reported`).
-        let mut capabilities = WindowCapabilities::NONE;
+        let mut capabilities = WindowCapabilities::NONE.into_parts();
         capabilities.sets_title = Native;
         capabilities.sets_constraints = Native;
         capabilities.closes = Native;
@@ -315,7 +315,7 @@ pub(crate) mod configure {
         capabilities.minimizes = offered(|announced| announced.minimize);
         capabilities.maximizes = offered(|announced| announced.maximize);
         capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
-        capabilities
+        capabilities.into_capabilities()
     }
 
     /// `size` within `constraints`, the maximum before the minimum, and at
@@ -1049,15 +1049,16 @@ pub(crate) mod presented {
     /// where it offers no `wp_presentation`, a window learns nothing of when
     /// its frames are shown.
     pub(crate) const fn reported(
-        mut capabilities: WindowCapabilities,
+        capabilities: WindowCapabilities,
         offered: bool,
     ) -> WindowCapabilities {
+        let mut capabilities = capabilities.into_parts();
         capabilities.reports_presentation = if offered {
             WindowCapability::Native
         } else {
             WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         };
-        capabilities
+        capabilities.into_capabilities()
     }
 
     #[cfg(test)]

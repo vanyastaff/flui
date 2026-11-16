@@ -5880,6 +5880,36 @@ graph LR
   Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
   (`docs/gaps.md`); кнопки примера не нажимались.
 
+- [ ] **LY114** — ветка `platform/admission-integrity`, на ревью (строки LY114 в таблице на `main`
+  ещё нет: она придёт отдельным PR документов).
+  Подтверждено на `main` @ `ab45cd94c` тестом через публичный API (три подделки, все открывались
+  на окне): копия опубликованных возможностей с включённым `pub`-полем `material`; владелец,
+  выпущенный `CapabilitiesOwner::new(7)`; `WindowState::successor`, вычисленный вызывающим от
+  снимка окна, — он нёс владельца окна на той ревизии, которую займёт следующее изменение
+  возможностей самого окна. Построено: жетон связан с *публикацией* возможностей — идентичностью,
+  которую выпускает только `flui-platform` (один `AtomicIdMint`, без повторов; запись `globals`
+  `window_capabilities::PUBLICATIONS`); `WindowCapabilities::publish` ставит её на первый снимок
+  окна, `successor` сохраняет её, пока возможности те же, и выпускает новую при изменении.
+  `WindowCapabilities` только для чтения (поля читаются через `Deref` к `CapabilityParts`), любая
+  правка (`into_parts`, `unavailable`) и всё собранное руками — без публикации; `against`
+  открывает жетон только под той же публикацией. `CapabilitiesOwner`, `owned_by` и счётчик
+  `window::state::NEXT_CAPABILITIES_OWNER` удалены. Класс: окна Android, UIKit и headless (оба)
+  на команду, которую не исполняют, отвечают `ApplyError::Platform` (`not_carried_out`), а не
+  `Ok`; двойники `flui-testing` и `flui-app` публикуют возможности один раз.
+  Тесты, в скобках результат без исправления: `an_edit_of_published_capabilities_belongs_to_no_window`
+  и `a_successor_a_caller_computes_opens_nothing` (`window_command_validate`; на `main` правка
+  копии и вычисленный преемник открывались, `Ok`); trybuild
+  `published_capabilities_cannot_be_edited` (на `main` компилируется); пример «окно из одного
+  контракта» в `PlatformWindow` (жетон от возможностей без публикации — `Superseded`);
+  `parts_leave_the_revision_and_publication_to_the_publishing_window` (снимок, разобранный на
+  части и опубликованный снова, сохраняет публикацию).
+  Проверки на Windows: clippy рабочего пространства `--all-targets -D warnings`; nextest
+  `-p flui-platform -p flui-native -p flui-testing -p flui-app` (падают тесты, которые падают и на
+  базе: Android intent, trybuild `owner_platform_is_not_send`, `the_driver_agent_contains_every_failure`;
+  `native_window_commands` и таймерный тест пера проходят отдельно); trybuild контракта —
+  новые и изменённый случаи. Не скомпилировано здесь (только CI): код Android, iOS, macOS и wasm32
+  (правки чтения и сборки возможностей, `apply` Android и UIKit).
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

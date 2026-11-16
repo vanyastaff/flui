@@ -820,12 +820,14 @@ impl PlatformWindow for AndroidWindow {
     }
 
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-        // The system owns the surface and the Activity's lifetime: every
-        // command is refused unless it asks for what the window already is.
-        // An Activity cannot bring its task to the front itself: the user and
-        // the system decide which task is shown.
-        command.against(&self.snapshot.published_capabilities())?;
-        Ok(())
+        // The system owns the surface and the Activity's lifetime: admission
+        // refuses every command but the normal mode, which the window is
+        // always in. An Activity cannot bring its task to the front itself:
+        // the user and the system decide which task is shown.
+        match command.against(&self.snapshot.published_capabilities())? {
+            flui_platform::WindowCommand::SetMode(flui_platform::WindowMode::Normal) => Ok(()),
+            other => Err(crate::window::state::not_carried_out(&other)),
+        }
     }
 
     fn state(&self) -> WindowState {

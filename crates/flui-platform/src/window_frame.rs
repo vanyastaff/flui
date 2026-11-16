@@ -37,7 +37,9 @@ impl WindowFrame {
     #[must_use]
     pub const fn at_open(self, capabilities: &WindowCapabilities) -> Self {
         match self {
-            Self::AppTitleBar(_) if !capabilities.app_title_bar.is_available() => Self::System,
+            Self::AppTitleBar(_) if !capabilities.into_parts().app_title_bar.is_available() => {
+                Self::System
+            }
             Self::System | Self::AppTitleBar(_) | Self::None => self,
         }
     }

@@ -1083,14 +1083,14 @@ trait depends on `flui-platform` instead.
   opens the token against the capabilities of its last published snapshot
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
   a capability change the snapshot published (the headless `simulate_capabilities`) answers
-  `ApplyError::Superseded`. `WindowStateCell::new` stamps the window's first
-  snapshot with a `CapabilitiesOwner` from one process-wide counter
-  (`window::state::NEXT_CAPABILITIES_OWNER`, checked, never reissued), so a
-  token admitted for another window, or against capabilities built by hand,
-  never opens on this one. The conformance check
-  `a_command_admitted_before_a_revision_is_superseded` holds a host to it
-  where its fixture can revise capabilities. A command no host arm carries
-  out answers `ApplyError::Platform` (`window::state::not_carried_out`), and
+  `ApplyError::Superseded`. `WindowStateCell::open` publishes the window's
+  first capabilities (`WindowCapabilities::publish`, the contract's
+  publication, never reissued), so a token admitted for another window, or
+  against capabilities built by hand or edited, never opens on this one. The
+  conformance check `a_command_admitted_before_a_revision_is_superseded`
+  holds a host to it where its fixture can revise capabilities. A command no
+  host arm carries out, the Android and UIKit windows' included, answers
+  `ApplyError::Platform` (`window::state::not_carried_out`), never `Ok`, and
   Win32 numbers beyond its device range are `PlatformFailure::OutOfRange`:
   admission held them finite and positive, the range is the window system's.
   Showing, activating and closing are commands like the others

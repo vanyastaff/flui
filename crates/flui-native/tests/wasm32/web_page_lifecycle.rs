@@ -463,6 +463,7 @@ async fn web_window_reports_what_a_page_can_do() {
     expected.sets_title = flui_platform::WindowCapability::Native;
     expected.enters_fullscreen = flui_platform::WindowCapability::Native;
     expected.closes = flui_platform::WindowCapability::Emulated;
+    let expected = expected.into_capabilities();
     assert_eq!(window.state().capabilities, expected);
     assert_eq!(
         running

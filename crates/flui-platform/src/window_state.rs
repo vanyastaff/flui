@@ -33,10 +33,11 @@
 
 use flui_foundation::geometry::{Point, Size, WindowMetrics};
 
+use crate::window_capabilities::Publication;
 use crate::{
-    CapabilitiesOwner, CapabilityParts, DisplayId, InvalidGeometry, Unsupported, WindowAppearance,
-    WindowCapabilities, WindowCapability, WindowExecutionState, WindowExtent, WindowFrame,
-    WindowGeometry, WindowInsets,
+    CapabilityParts, DisplayId, InvalidGeometry, Unsupported, WindowAppearance, WindowCapabilities,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets,
 };
 
 /// The monotone version of a [`WindowState`]. Never wraps.
@@ -66,7 +67,9 @@ impl WindowRevision {
     pub const LAST: Self = Self(u64::MAX);
 }
 
-/// A window state cannot advance: the last revision was reached.
+/// A window state cannot advance: the last revision was reached, or its
+/// capabilities changed and the process has no publication left to issue them
+/// as ([`WindowState::successor`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("window revisions exhausted")]
 pub struct WindowRevisionExhausted;
@@ -406,19 +409,23 @@ impl WindowState {
     /// said: AppKit calls a miniaturized window occluded, which is no
     /// covering, and a hidden window has nothing to cover.
     ///
-    /// The capabilities' own [`revision`](WindowCapabilities::revision) and
-    /// owner are this function's to keep, so a sample's are ignored too: the
-    /// owner stays this snapshot's, and the revision stays while the window
-    /// honours the same commands the same way and becomes the new snapshot's
-    /// revision when that changes.
+    /// The capabilities' publication and their own
+    /// [`revision`](WindowCapabilities::revision) are this function's to
+    /// issue, so a sample's are ignored too. While the window honours the same
+    /// commands the same way, both stay this snapshot's; when that changes,
+    /// the capabilities become a new publication (a
+    /// [`publish`](WindowCapabilities::publish) of their own) at the new
+    /// snapshot's revision. A successor a caller computes from a window's
+    /// snapshot is therefore a publication of its own, which no token admitted
+    /// against the window's capabilities opens under, and the other way round.
     ///
     /// # Errors
     /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
-    /// at the last revision. The revision never wraps.
+    /// at the last revision, or when its capabilities differ and the process
+    /// issued every publication it can. Neither wraps.
     pub fn successor(&self, mut sample: Self) -> Result<Self, WindowRevisionExhausted> {
         sample.revision = self.revision;
-        sample.capabilities.revision = self.capabilities.revision;
-        sample.capabilities.owner = self.capabilities.owner;
+        sample.capabilities = sample.capabilities.carried_from(&self.capabilities);
         if sample.metrics.is_none() {
             sample.metrics = self.metrics;
         }
@@ -429,7 +436,10 @@ impl WindowState {
         let next = self.revision.next().ok_or(WindowRevisionExhausted)?;
         sample.revision = next;
         if sample.capabilities != self.capabilities {
-            sample.capabilities.revision = next;
+            sample.capabilities = sample
+                .capabilities
+                .republished(next)
+                .map_err(|flui_foundation::IdExhausted| WindowRevisionExhausted)?;
         }
         Ok(sample)
     }
@@ -513,12 +523,12 @@ impl WindowCommand {
     /// must be valid, then the window must honour it. The only way to build
     /// the [`AdmittedCommand`] that
     /// [`PlatformWindow::apply`](crate::PlatformWindow::apply) takes; the
-    /// token is bound to the capabilities' window and
-    /// [`revision`](WindowCapabilities::revision).
+    /// token is bound to the capabilities' publication
+    /// ([`WindowCapabilities`], "Publication").
     ///
     /// Pass the capabilities of the window's published snapshot
-    /// ([`WindowState::capabilities`]): capabilities built by hand belong to
-    /// no window, and a host's window answers a token admitted against them
+    /// ([`WindowState::capabilities`]): capabilities built by hand or edited
+    /// belong to no window, and a window answers a token admitted against them
     /// with [`ApplyError::Superseded`].
     ///
     /// # Errors
@@ -536,8 +546,7 @@ impl WindowCommand {
         }
         Ok(AdmittedCommand {
             command: self,
-            owner: capabilities.owner,
-            revision: capabilities.revision,
+            publication: capabilities.publication(),
         })
     }
 
@@ -582,20 +591,27 @@ pub(crate) fn asked_size(size: Size<f64>) -> Result<WindowExtent, InvalidGeometr
 /// [`PlatformWindow::apply`](crate::PlatformWindow::apply) takes nothing else,
 /// so a window never receives an unchecked command.
 ///
-/// **What the token proves, and what it does not.** It proves the command was
-/// validated against the capabilities read at admission, and it carries their
-/// window and [`revision`](WindowCapabilities::revision): a window opens it
-/// with [`against`](Self::against) its current capabilities, which answers
-/// [`ApplyError::Superseded`] when they belong to another window or moved
-/// since, so a command is never applied under capabilities it was not checked
-/// against. The operating system still keeps the last word: it speaks through
+/// **What the token proves, and what it does not.** It proves the command's
+/// numbers describe a window and that one publication of a window's
+/// capabilities ([`WindowCapabilities`], "Publication") honours it, and it
+/// carries that publication. No caller can make capabilities of a window's
+/// publication say anything but what the window published: their fields are
+/// read-only, an edit leaves the publication behind, and the publication is
+/// minted inside this crate and never reissued. A window opens the token with
+/// [`against`](Self::against) its own published capabilities, which answers
+/// [`ApplyError::Superseded`] unless they are the very publication the token
+/// carries, so a window carries out only what its own published capabilities
+/// honour, and never a command checked against capabilities it no longer has,
+/// another window's, or capabilities no window published. The operating
+/// system still keeps the last word: it speaks through
 /// [`ApplyError::Platform`] and the next snapshot.
 #[derive(Debug, PartialEq)]
 #[must_use = "an admitted command does nothing until a window applies it"]
 pub struct AdmittedCommand {
     command: WindowCommand,
-    owner: Option<CapabilitiesOwner>,
-    revision: WindowRevision,
+    /// The publication the command was admitted against; `None` when it was
+    /// admitted against capabilities no window published.
+    publication: Option<Publication>,
 }
 
 impl AdmittedCommand {
@@ -609,22 +625,23 @@ impl AdmittedCommand {
     /// its last published snapshot holds them. The one way a window takes the
     /// command out of the token.
     ///
-    /// The contract is identity: the same window and the same capabilities
-    /// revision. Within one window, one revision is one set of capabilities
-    /// ([`WindowState::successor`] moves it with every change), so the
-    /// command they admitted is honoured without asking again.
+    /// The contract is identity: the token opens only under the publication
+    /// it was admitted against. Within one window one publication is one set
+    /// of capabilities ([`WindowState::successor`] issues a new one with every
+    /// change), so the command it admitted is honoured without asking again.
     ///
     /// # Errors
     /// [`ApplyError::Superseded`], carrying the command back, when
-    /// `capabilities` belong to another window or a later revision. The
-    /// caller admits it again.
+    /// `capabilities` are another publication than the token's: a later one
+    /// of the same window, another window's, or none at all; or when the token
+    /// was admitted against capabilities no window published. The caller
+    /// admits it again against the window's snapshot.
     pub fn against(self, capabilities: &WindowCapabilities) -> Result<WindowCommand, ApplyError> {
-        if self.owner == capabilities.owner && self.revision == capabilities.revision {
-            Ok(self.command)
-        } else {
-            Err(ApplyError::Superseded {
+        match (self.publication, capabilities.publication()) {
+            (Some(admitted), Some(published)) if admitted == published => Ok(self.command),
+            _ => Err(ApplyError::Superseded {
                 command: self.command,
-            })
+            }),
         }
     }
 }

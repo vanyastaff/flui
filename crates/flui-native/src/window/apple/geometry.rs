@@ -448,7 +448,7 @@ pub(crate) mod mode {
         const ABSENT: flui_platform::WindowCapability =
             flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
 
-        let mut honoured = every;
+        let mut honoured = every.into_parts();
         if !flags.resizable {
             honoured.maximizes = ABSENT;
             honoured.enters_fullscreen = ABSENT;
@@ -461,7 +461,7 @@ pub(crate) mod mode {
         if flags.fullscreen || mode != WindowMode::Normal {
             honoured.sets_resizable = ABSENT;
         }
-        honoured
+        honoured.into_capabilities()
     }
 
     /// The requests that take a window with these flags to `target`, in order.
@@ -942,12 +942,13 @@ pub(crate) mod mode {
             const ABSENT: WindowCapability = WindowCapability::NOT_ON_THIS_PLATFORM;
             use flui_platform::WindowCapabilities;
 
-            let mut every = WindowCapabilities::NONE;
+            let mut every = WindowCapabilities::NONE.into_parts();
             every.maximizes = Native;
             every.enters_fullscreen = Native;
             every.sets_resizable = Native;
             every.sets_frame = Native;
             every.hides = Native;
+            let every = every.into_capabilities();
             /// What a window with `flags` honours.
             #[derive(Debug, PartialEq)]
             struct Row {
@@ -1044,8 +1045,9 @@ pub(crate) mod mode {
             const ABSENT: WindowCapability = WindowCapability::NOT_ON_THIS_PLATFORM;
             use flui_platform::WindowCapabilities;
 
-            let mut every = WindowCapabilities::NONE;
+            let mut every = WindowCapabilities::NONE.into_parts();
             every.sets_resizable = Native;
+            let every = every.into_capabilities();
             let fixed =
                 |flags: WindowFlags, heading| capabilities_of(flags, heading, every).sets_resizable;
             let now = Instant::now();
@@ -1200,8 +1202,9 @@ pub(crate) mod mode {
             const ABSENT: WindowCapability = WindowCapability::NOT_ON_THIS_PLATFORM;
             use flui_platform::WindowCapabilities;
 
-            let mut every = WindowCapabilities::NONE;
+            let mut every = WindowCapabilities::NONE.into_parts();
             every.sets_resizable = flui_platform::WindowCapability::Native;
+            let every = every.into_capabilities();
             let honoured = capabilities_of(flags("FR"), Some(Normal), every);
             assert_eq!(honoured.sets_resizable, ABSENT);
         }
