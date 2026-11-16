@@ -1,14 +1,17 @@
 //! The loop's raster host (ADR-0305 §12): one [`RasterExecutor`] over the
-//! application's one GPU context, a slot for each window that draws, run
-//! inline on the owner thread.
+//! application's one GPU context, a slot for each window that draws, turned
+//! inline on the owner thread or on its own raster thread (ADR-0305 §10).
 //!
 //! The first window to attach places the executor: its surface picks the
 //! adapter (ADR-0305 §2). Every later window is a slot on the same device.
-//! A frame is sent to the window's slot and the executor turns at once, so
-//! the frame's verdict is in hand before the UI runtime's frame transaction
-//! returns. A frame dispatched while the host is already turning (a platform
-//! callback re-entering from inside the GPU work) is answered
-//! [`SubmitVerdict::Retry`] and keeps its work for the next wake.
+//! Inline, a frame is sent to the window's slot and the executor turns at
+//! once, so the frame's verdict is in hand before the UI runtime's frame
+//! transaction returns. A frame dispatched while the host is already turning
+//! (a platform callback re-entering from inside the GPU work) is answered
+//! [`SubmitVerdict::Retry`] and keeps its work for the next wake. Threaded,
+//! the frame is answered queued and settles later: the thread's wake asks
+//! every window for a frame, and each window's wake drains its own slot's
+//! settlements into its UI runtime ([`RasterSlot::settle`]).
 //!
 //! The host also keeps what only the owner knows about each slot: the size
 //! it last sent, what the window's surfaces are made over, the version on
@@ -23,15 +26,15 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use flui_engine::{
-    DeviceHealth, EngineError, RasterBackend, RasterCommand, RasterExecutor, RasterSendError,
-    RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure, SlotId,
-    SlotSettlement, SlotSize, SlotTarget, SlotVisibility, SurfaceFactory, SurfaceHold,
+    DeviceHealth, EngineError, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement,
+    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
+    SlotId, SlotSettlement, SlotSize, SlotTarget, SlotVisibility, SurfaceFactory, SurfaceHold,
 };
 use flui_foundation::geometry::DeviceSize;
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{FrameEpoch, FrameStamp, PresentationAddress, SurfaceGeneration};
 use flui_layer::{DamageMode, RasterBase, ScenePublication, SceneSnapshot, SurfaceKey};
-use flui_platform::{DisplayColor, PlatformWindow, SurfaceTarget};
+use flui_platform::{DisplayColor, PlatformWindow, RedrawRequester, SurfaceTarget};
 use flui_runtime::pump::SampledClock;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 
@@ -78,6 +81,19 @@ impl std::fmt::Debug for RasterFactory {
 pub(crate) struct SharedRasterHost {
     host: Rc<RefCell<RasterHost>>,
     deferred: Rc<Deferred>,
+    /// Where the executor turns, read by each frame's sink for its in-flight
+    /// limit.
+    placement: RasterPlacement,
+    /// Scratch for the settlements a window's wake drains, kept between
+    /// wakes.
+    #[cfg_attr(
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(all(test, feature = "testing"))
+        ),
+        expect(dead_code, reason = "only the desktop loop turns a raster thread")
+    )]
+    settled: Rc<RefCell<Vec<flui_runtime::sink::FrameSettlement>>>,
 }
 
 /// Work that met a busy host.
@@ -125,7 +141,8 @@ impl Drop for Deferred {
 }
 
 impl SharedRasterHost {
-    /// A host whose executor will be placed on `factory`'s backend.
+    /// A host whose executor will be placed on `factory`'s backend, turned
+    /// in `placement`.
     #[cfg_attr(
         all(
             any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
@@ -136,10 +153,12 @@ impl SharedRasterHost {
             reason = "the mobile and web runners keep the default GPU host; only the desktop loop picks a factory"
         )
     )]
-    pub(crate) fn new(factory: RasterFactory) -> Self {
+    pub(crate) fn new(factory: RasterFactory, placement: RasterPlacement) -> Self {
         Self {
-            host: Rc::new(RefCell::new(RasterHost::new(factory))),
+            host: Rc::new(RefCell::new(RasterHost::new(factory, placement))),
             deferred: Rc::default(),
+            placement,
+            settled: Rc::default(),
         }
     }
 
@@ -149,6 +168,15 @@ impl SharedRasterHost {
         let mut host = self.host.try_borrow_mut().ok()?;
         let answer = with(&mut host);
         self.run_deferred(&mut host);
+        // A raster thread's detaches are waited for with the host released.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let detaching = std::mem::take(&mut host.detaching);
+            drop(host);
+            for wait in detaching {
+                wait.wait();
+            }
+        }
         Some(answer)
     }
 
@@ -264,19 +292,150 @@ impl SharedRasterHost {
 #[derive(Default)]
 pub(crate) struct RasterHost {
     factory: RasterFactory,
+    placement: RasterPlacement,
     placed: Option<Placed>,
     /// The textures each window's slot kept on an executor its owner
     /// retired, for the slot attached for it next (the web, ADR-0305 §8).
     carried: rustc_hash::FxHashMap<PresentationAddress, flui_layer::TextureUpdates>,
+    /// The detaches a raster thread owes, which the shared host waits for
+    /// once its borrow is released.
+    #[cfg(not(target_arch = "wasm32"))]
+    detaching: Vec<DetachWait>,
+}
+
+/// A window's detach a raster thread has to answer before the window's
+/// surface is given back.
+#[cfg(not(target_arch = "wasm32"))]
+struct DetachWait {
+    handle: Rc<flui_engine::ExecutorHandle>,
+    sender: RasterSender,
+    slot: SlotId,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DetachWait {
+    /// Wait until the thread took the slot down, at most
+    /// [`flui_engine::DETACH_DEADLINE`].
+    fn wait(self) {
+        if let Err(failure) =
+            self.handle
+                .detach(&self.sender, self.slot, flui_engine::DETACH_DEADLINE)
+        {
+            tracing::error!(%failure, "raster host: the raster thread did not take a window's slot down");
+        }
+    }
 }
 
 struct Placed {
-    executor: RasterExecutor<Box<dyn RasterBackend>>,
+    executor: Executor,
     sender: RasterSender,
     surfaces: SurfaceFactory,
     slots: rustc_hash::FxHashMap<PresentationAddress, HostSlot>,
     /// Scratch for a slot's settlements, kept between frames.
     settlements: Vec<SlotSettlement>,
+    /// The windows a raster thread's settlement wakes: every attached
+    /// window's redraw requester, read by the thread's wake.
+    redraws: Redraws,
+}
+
+/// The executor as the owner holds it in each placement (ADR-0305 §10).
+enum Executor {
+    /// Turned by the owner, within the call that sent it work.
+    Inline(RasterExecutor<Box<dyn RasterBackend>>),
+    /// Turned by its own raster thread, which the handle stops. Shared so
+    /// a window's detach waits for the thread with no borrow of the host
+    /// held.
+    #[cfg(not(target_arch = "wasm32"))]
+    Threaded(Rc<flui_engine::ExecutorHandle>),
+}
+
+impl Executor {
+    /// Turn an inline executor; a raster thread turns on its own, rung by
+    /// every send.
+    fn turn(&mut self) {
+        match self {
+            Self::Inline(executor) => {
+                let _outcome = executor.turn();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Threaded(_) => {}
+        }
+    }
+
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "the web turns inline only; every other target may hold a raster thread"
+        )
+    )]
+    fn inline(&self) -> Option<&RasterExecutor<Box<dyn RasterBackend>>> {
+        match self {
+            Self::Inline(executor) => Some(executor),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Threaded(_) => None,
+        }
+    }
+
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "the web turns inline only; every other target may hold a raster thread"
+        )
+    )]
+    fn inline_mut(&mut self) -> Option<&mut RasterExecutor<Box<dyn RasterBackend>>> {
+        match self {
+            Self::Inline(executor) => Some(executor),
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Threaded(_) => None,
+        }
+    }
+}
+
+/// The redraw requesters a raster thread's wake calls, as one list it clones
+/// out under the lock and calls with the lock released: a requester is the
+/// platform's code.
+#[derive(Clone, Default)]
+struct Redraws(Arc<std::sync::Mutex<RedrawList>>);
+
+/// The redraw requesters of every attached window, shared with the wake.
+type RedrawList = Arc<[Arc<dyn RedrawRequester>]>;
+
+impl Redraws {
+    /// Ask every listed window for a frame.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web has no raster thread to wake its windows")
+    )]
+    fn wake(&self) {
+        let listed = Arc::clone(
+            &*self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for redraw in listed.iter() {
+            redraw.request_redraw();
+        }
+    }
+
+    /// List the requesters of `slots`; the list replaced is dropped with the
+    /// lock released.
+    fn follow(&self, slots: &rustc_hash::FxHashMap<PresentationAddress, HostSlot>) {
+        let listed: RedrawList = slots
+            .values()
+            .filter_map(|slot| slot.redraw.clone())
+            .collect();
+        let replaced = std::mem::replace(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            listed,
+        );
+        drop(replaced);
+    }
 }
 
 /// What the owner keeps about one window's slot.
@@ -313,6 +472,24 @@ struct HostSlot {
     /// The first panic of the slot's frames since the window last reported
     /// one to its UI runtime ([`RasterSlot::report_frame_panic`]).
     panic: flui_foundation::panic::FirstPanic,
+    /// The window's redraw requester, which a raster thread's settlement
+    /// calls so the window's next wake drains it.
+    redraw: Option<Arc<dyn RedrawRequester>>,
+    /// The frames a raster thread holds for the slot, oldest first: what the
+    /// verdict of each needs once it settles (ADR-0305 §4).
+    pending: Vec<PendingFrame>,
+}
+
+/// What the owner keeps of a frame a raster thread holds, to settle it.
+#[derive(Clone, Copy, Debug)]
+struct PendingFrame {
+    epoch: FrameEpoch,
+    /// The version the frame shows, which the slot's base moves to.
+    shown: flui_layer::SceneVersionId,
+    /// The surface it was measured on.
+    key: SurfaceKey,
+    /// Whether it is the retry of a frame whose resize or upload panicked.
+    retrying: bool,
 }
 
 impl HostSlot {
@@ -374,6 +551,13 @@ impl RestorePace {
     }
 }
 
+/// What a window hands its slot: what its surfaces are made over, and, for a
+/// raster thread, the requester its settlements wake the window through.
+struct WindowHandles {
+    surface_target: Arc<dyn SurfaceTarget>,
+    redraw: Option<Arc<dyn RedrawRequester>>,
+}
+
 /// The raster executor refused a window's slot.
 #[derive(Debug, thiserror::Error)]
 #[error("the raster executor refused the window's slot: {0}")]
@@ -396,7 +580,8 @@ enum SlotTurn {
 }
 
 impl RasterHost {
-    /// A host whose executor will be placed on `factory`'s backend.
+    /// A host whose executor will be placed on `factory`'s backend, turned
+    /// in `placement`.
     #[cfg_attr(
         all(
             any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
@@ -407,11 +592,14 @@ impl RasterHost {
             reason = "the mobile and web runners keep the default GPU host; only the desktop loop picks a factory"
         )
     )]
-    pub(crate) fn new(factory: RasterFactory) -> Self {
+    pub(crate) fn new(factory: RasterFactory, placement: RasterPlacement) -> Self {
         Self {
             factory,
+            placement,
             placed: None,
             carried: rustc_hash::FxHashMap::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            detaching: Vec::new(),
         }
     }
 
@@ -437,7 +625,9 @@ impl RasterHost {
         display: Option<DisplayColor>,
     ) -> Result<(), EngineError> {
         let surface_target = self.surface_target(window);
-        self.attach_target(surface_target, address, config, textures, display)
+        let redraw =
+            (self.placement == RasterPlacement::Threaded).then(|| window.redraw_requester());
+        self.attach_target(surface_target, redraw, address, config, textures, display)
     }
 
     /// Give the window whose surfaces are made over `surface_target` a slot,
@@ -452,6 +642,7 @@ impl RasterHost {
     fn attach_target(
         &mut self,
         surface_target: Arc<dyn SurfaceTarget>,
+        redraw: Option<Arc<dyn RedrawRequester>>,
         address: PresentationAddress,
         config: &crate::app::AppConfig,
         textures: Option<flui_layer::TextureRegistry>,
@@ -461,7 +652,10 @@ impl RasterHost {
             .color(config.surface_color, display)
             .latency(config.frame_latency);
         self.attach_on(
-            surface_target,
+            WindowHandles {
+                surface_target,
+                redraw,
+            },
             address,
             slot_config,
             textures,
@@ -498,7 +692,10 @@ impl RasterHost {
         }
         let surface_target = self.surface_target(window);
         let attached = self.attach_on(
-            surface_target,
+            WindowHandles {
+                surface_target,
+                redraw: None,
+            },
             address,
             slot_config,
             textures,
@@ -523,13 +720,17 @@ impl RasterHost {
     /// on a context bootstrapped now, if this is the first window.
     fn attach_on(
         &mut self,
-        surface_target: Arc<dyn SurfaceTarget>,
+        window: WindowHandles,
         address: PresentationAddress,
         slot_config: SlotConfig,
         textures: Option<flui_layer::TextureRegistry>,
         display: Option<DisplayColor>,
         bootstrap: Option<flui_engine::GpuBootstrap>,
     ) -> Result<(), EngineError> {
+        let WindowHandles {
+            surface_target,
+            redraw,
+        } = window;
         let target = if let Some(placed) = self.placed.as_ref() {
             SlotTarget::Window(placed.surfaces.create(Arc::clone(&surface_target))?)
         } else {
@@ -560,6 +761,10 @@ impl RasterHost {
             // A panic of the turn alone (not of the slot's attach) leaves the
             // slot attached; the window reports it after its first frame.
             Some(flui_engine::SlotPhase::Attached) => None,
+            // A raster thread attaches on its own turn; a refusal it meets
+            // there is the window's first wake's to log, and the frames it
+            // sends meanwhile are refused (`SubmitVerdict::Failed`).
+            Some(flui_engine::SlotPhase::Attaching) if placed.executor.inline().is_none() => None,
             _ => match placed.sender.take_failure(slot) {
                 Some(SlotFailure::Refused(error)) => Some(error),
                 Some(SlotFailure::Panicked(payload)) => {
@@ -601,8 +806,11 @@ impl RasterHost {
                 available: true,
                 restore: RestorePace::default(),
                 panic: caught,
+                redraw,
+                pending: Vec::with_capacity(self.placement.depth().get()),
             },
         );
+        placed.redraws.follow(&placed.slots);
         Ok(())
     }
 
@@ -614,11 +822,8 @@ impl RasterHost {
         first: Arc<dyn SurfaceTarget>,
         bootstrap: Option<flui_engine::GpuBootstrap>,
     ) -> Result<(Placed, SlotTarget), EngineError> {
-        let clock: Rc<dyn flui_foundation::MonotonicClock> = Rc::new(flui_foundation::SystemClock);
-        // Inline: the owner drains a slot's settlements right after its turn,
-        // and reads the device's rebuild deadline for its wake.
-        let wake = || {};
-        match &self.factory {
+        let (backend, surfaces, target): (Box<dyn RasterBackend + Send>, _, _) = match &self.factory
+        {
             RasterFactory::Gpu => {
                 let bootstrap = match bootstrap {
                     Some(bootstrap) => bootstrap,
@@ -627,15 +832,11 @@ impl RasterHost {
                 let surface = bootstrap.first.ok_or_else(|| {
                     refused("the GPU context answered without the first window's surface")
                 })?;
-                let (executor, sender) = RasterExecutor::new(
-                    Box::new(bootstrap.context) as Box<dyn RasterBackend>,
-                    clock,
-                    wake,
-                );
-                Ok((
-                    Placed::new(executor, sender, bootstrap.factory),
+                (
+                    Box::new(bootstrap.context),
+                    bootstrap.factory,
                     SlotTarget::Window(surface),
-                ))
+                )
             }
             #[cfg(all(
                 feature = "testing",
@@ -646,12 +847,7 @@ impl RasterHost {
                     flui_engine::testing::FakeDisplay,
                 ));
                 let target = SlotTarget::Window(surfaces.create(first)?);
-                let (executor, sender) = RasterExecutor::new(
-                    Box::new(renderers.backend()) as Box<dyn RasterBackend>,
-                    clock,
-                    wake,
-                );
-                Ok((Placed::new(executor, sender, surfaces), target))
+                (Box::new(renderers.backend()), surfaces, target)
             }
             #[cfg(all(test, feature = "testing"))]
             RasterFactory::Scripted(slots) => {
@@ -659,14 +855,39 @@ impl RasterHost {
                     flui_engine::testing::FakeDisplay,
                 ));
                 let target = SlotTarget::Window(surfaces.create(first)?);
-                let (executor, sender) = RasterExecutor::new(
-                    Box::new(slots.clone()) as Box<dyn RasterBackend>,
-                    clock,
-                    wake,
-                );
-                Ok((Placed::new(executor, sender, surfaces), target))
+                (Box::new(slots.clone()), surfaces, target)
             }
-        }
+        };
+        let redraws = Redraws::default();
+        let (executor, sender) = match self.placement {
+            RasterPlacement::Inline => {
+                // The owner drains a slot's settlements right after its turn,
+                // and reads the device's rebuild deadline for its wake.
+                let clock: Rc<dyn flui_foundation::MonotonicClock> =
+                    Rc::new(flui_foundation::SystemClock);
+                let backend: Box<dyn RasterBackend> = backend;
+                let (executor, sender) = RasterExecutor::new(backend, clock, || {});
+                (Executor::Inline(executor), sender)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            RasterPlacement::Threaded => {
+                // A settlement, a device's health or a failure wakes every
+                // attached window; each window's wake drains its own slot.
+                let woken = redraws.clone();
+                let (handle, sender) = RasterExecutor::spawn(
+                    backend,
+                    Arc::new(flui_foundation::SystemClock),
+                    move || woken.wake(),
+                )
+                .map_err(EngineError::surface_creation)?;
+                (Executor::Threaded(Rc::new(handle)), sender)
+            }
+            #[cfg(target_arch = "wasm32")]
+            RasterPlacement::Threaded => {
+                return Err(refused("the web has no raster thread"));
+            }
+        };
+        Ok((Placed::new(executor, sender, surfaces, redraws), target))
     }
 
     /// The application's GPU context over `first`, the first window,
@@ -717,7 +938,14 @@ impl RasterHost {
             // kept are what the next one draws until their producers submit
             // again; images carried here that no frame took yet are newer.
             for (address, slot) in &mut placed.slots {
-                let mut kept = placed.executor.backend().kept_textures(slot.slot);
+                // A raster thread's backend is its own: only the web retires
+                // an executor, and the web turns inline.
+                let mut kept = placed
+                    .executor
+                    .inline()
+                    .map_or_else(flui_layer::TextureUpdates::default, |executor| {
+                        executor.backend().kept_textures(slot.slot)
+                    });
                 kept.merge(std::mem::take(&mut slot.carried));
                 self.carried.insert(*address, kept);
             }
@@ -791,6 +1019,18 @@ impl RasterHost {
             .send(RasterCommand::Detach { slot: slot.slot })
         {
             tracing::warn!(%error, "raster host: a window's detach was refused");
+        }
+        placed.redraws.follow(&placed.slots);
+        // A raster thread takes the slot down on its own turn; the window's
+        // surface is given back once it did, which the shared host waits for
+        // with its borrow released (ADR-0305 §9).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Executor::Threaded(handle) = &placed.executor {
+            self.detaching.push(DetachWait {
+                handle: Rc::clone(handle),
+                sender: placed.sender.clone(),
+                slot: slot.slot,
+            });
         }
         let _turned = caught.contain(|| placed.executor.turn());
     }
@@ -873,11 +1113,28 @@ impl RasterHost {
     fn turn_for(placed: &mut Placed, address: PresentationAddress) -> SlotTurn {
         let mut caught = FirstPanic::new();
         let _turned = caught.contain(|| placed.executor.turn());
-        let Some(slot) = placed.slots.get_mut(&address) else {
+        if !placed.slots.contains_key(&address) {
             caught.resume();
             return SlotTurn::Clean;
+        }
+        let settled = Self::take_slot_failure(placed, address);
+        // The turn's own panic (a retired scene's `Drop`, a trim, a device
+        // rebuild) goes to the window that turned it, for its report.
+        if let Some(slot) = placed.slots.get_mut(&address) {
+            slot.panic.absorb(caught);
+        }
+        settled
+    }
+
+    /// Settle what the executor left for `address`'s slot: a refusal is
+    /// logged, and a panic of the slot's commands is held for the window's
+    /// report after its frame. Answers whether the slot's own commands
+    /// panicked.
+    fn take_slot_failure(placed: &mut Placed, address: PresentationAddress) -> SlotTurn {
+        let Some(slot) = placed.slots.get_mut(&address) else {
+            return SlotTurn::Clean;
         };
-        let settled = match placed.sender.take_failure(slot.slot) {
+        match placed.sender.take_failure(slot.slot) {
             Some(SlotFailure::Panicked(payload)) => {
                 slot.panic.record(payload);
                 SlotTurn::Panicked
@@ -891,11 +1148,7 @@ impl RasterHost {
                 SlotTurn::Clean
             }
             None => SlotTurn::Clean,
-        };
-        // The turn's own panic (a retired scene's `Drop`, a trim, a device
-        // rebuild) goes to the window that turned it, for its report.
-        slot.panic.absorb(caught);
-        settled
+        }
     }
 
     /// Ask the executor to rebuild a device it gave up on (ADR-0267).
@@ -929,7 +1182,10 @@ impl RasterHost {
             return DeviceHealth::Healthy;
         };
         let health = placed.sender.device_health();
-        let backend = placed.executor.backend();
+        // A raster thread's backend rebuilds where it runs: a native one.
+        let Some(backend) = placed.executor.inline().map(RasterExecutor::backend) else {
+            return health;
+        };
         if backend.rebuilds_inline() || !(health.is_lost() || backend.device_lost()) {
             return health;
         }
@@ -1239,7 +1495,13 @@ impl RasterHost {
         let id = slot.slot;
         // A panic of the render is the slot's, held for the window's report.
         let mut caught = FirstPanic::new();
-        let rendered = caught.contain(|| placed.executor.render_lent(id, scene, reset_fonts));
+        // A lent scene is drawn within this call, which only an inline
+        // executor can do; only Android lends one, and it turns inline.
+        let Some(executor) = placed.executor.inline_mut() else {
+            tracing::warn!("raster host: a lent scene met a raster thread, which cannot draw it");
+            return false;
+        };
+        let rendered = caught.contain(|| executor.render_lent(id, scene, reset_fonts));
         slot.panic.absorb(caught);
         match rendered {
             Some(Ok(shown)) => shown == flui_engine::PresentDisposition::Presented,
@@ -1440,17 +1702,29 @@ impl RasterHost {
             snapshot = snapshot.textures(updates);
         }
         let id = slot.slot;
-        if let Err(error) = placed
+        let receipt = match placed
             .sender
             .send(RasterCommand::Frame { slot: id, snapshot })
         {
-            tracing::error!(%error, "raster host: a frame was refused");
-            // The texture frames it took from the registry and the carry
-            // reached no backend: the window's next frame takes them.
-            if let RasterCommand::Frame { snapshot, .. } = error.into_command() {
-                slot.carried = snapshot.textures;
+            Ok(receipt) => receipt,
+            Err(error) => {
+                tracing::error!(%error, "raster host: a frame was refused");
+                // The texture frames it took from the registry and the carry
+                // reached no backend: the window's next frame takes them.
+                if let RasterCommand::Frame { snapshot, .. } = error.into_command() {
+                    slot.carried = snapshot.textures;
+                }
+                return SubmitVerdict::Failed;
             }
-            return SubmitVerdict::Failed;
+        };
+        let frame = PendingFrame {
+            epoch,
+            shown,
+            key,
+            retrying,
+        };
+        if placed.executor.inline().is_none() {
+            return Self::queue(placed, address, frame, receipt);
         }
         // The turn runs code that is not ours; its settlements are drained
         // whatever it did, so a panic leaves none for the next frame to trip
@@ -1464,6 +1738,58 @@ impl RasterHost {
             .iter()
             .find(|settlement| settlement.epoch == epoch)
             .map(|settlement| settlement.verdict);
+        let Some(verdict) = Self::settle_one(placed, address, frame, settled, turned) else {
+            tracing::error!(?epoch, "raster host: an inline frame settled nothing");
+            return SubmitVerdict::Failed;
+        };
+        verdict
+    }
+
+    /// Hold `frame`, which a raster thread took with `receipt`, until it
+    /// settles: answered [`SubmitVerdict::Queued`], or
+    /// [`SubmitVerdict::QueuedReplacing`] naming the frame it took the place
+    /// of, which never settles and is no longer held (ADR-0305 §4).
+    fn queue(
+        placed: &mut Placed,
+        address: PresentationAddress,
+        frame: PendingFrame,
+        receipt: SendReceipt,
+    ) -> SubmitVerdict {
+        let slot = placed
+            .slots
+            .get_mut(&address)
+            .expect("BUG: `configure` found the slot");
+        let verdict = match receipt {
+            SendReceipt::Replaced(replaced) => {
+                slot.pending.retain(|held| held.epoch != replaced);
+                SubmitVerdict::QueuedReplacing(replaced)
+            }
+            SendReceipt::Accepted | SendReceipt::Configured(_) | SendReceipt::Unconfigured => {
+                SubmitVerdict::Queued
+            }
+        };
+        slot.pending.push(frame);
+        verdict
+    }
+
+    /// What `frame` of `address`'s window became, once the executor settled
+    /// it `settled` in a turn that `turned`, with the slot's base moved to
+    /// what the screen now holds; `None` when nothing settled it and nothing
+    /// refuses it.
+    fn settle_one(
+        placed: &mut Placed,
+        address: PresentationAddress,
+        frame: PendingFrame,
+        settled: Option<RasterVerdict>,
+        turned: SlotTurn,
+    ) -> Option<SubmitVerdict> {
+        let PendingFrame {
+            shown,
+            key,
+            retrying,
+            ..
+        } = frame;
+        let id = placed.slots.get(&address)?.slot;
         // No surface the GPU takes, or no size it draws at: the frame is
         // refused, and nothing until the window's next change (or a rebuilt
         // device) asks again. Retried, the frame would meet the same refusal.
@@ -1472,11 +1798,8 @@ impl RasterHost {
                 .sender
                 .record(id)
                 .is_some_and(|record| record.surface.hold == SurfaceHold::Refused)
-                || Self::size_refused(placed, address, surface));
-        let slot = placed
-            .slots
-            .get_mut(&address)
-            .expect("BUG: the slot is still there");
+                || Self::size_refused(placed, address, key.size));
+        let slot = placed.slots.get_mut(&address)?;
         if turned == SlotTurn::Panicked {
             let verdict = match settled {
                 // The render itself panicked, which the executor settles as
@@ -1500,17 +1823,86 @@ impl RasterHost {
             // The image may be torn or miss an upload: the next frame is
             // drawn in full.
             slot.base.forget();
-            return verdict;
+            return Some(verdict);
         }
         if stuck {
             slot.base.forget();
-            return SubmitVerdict::Refused;
+            return Some(SubmitVerdict::Refused);
         }
-        let Some(verdict) = settled else {
-            tracing::error!(?epoch, "raster host: an inline frame settled nothing");
-            return SubmitVerdict::Failed;
+        Some(Self::verdict(&mut slot.base, settled?, shown, key))
+    }
+
+    /// Drain what a raster thread settled of `address`'s frames into
+    /// `into`, each with the verdict its UI runtime settles it with
+    /// (`UiRuntime::settle_frame`). A panic of the slot's commands since the
+    /// last drain is held for the window's report and refuses the frames it
+    /// settled with; a frame settled with no record of it held (one the
+    /// owner forgot on a detach) is dropped. An inline executor settles each
+    /// frame in its own submit and leaves nothing here.
+    #[cfg_attr(
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(all(test, feature = "testing"))
+        ),
+        expect(dead_code, reason = "only the desktop loop turns a raster thread")
+    )]
+    pub(crate) fn drain_settled(
+        &mut self,
+        address: PresentationAddress,
+        into: &mut Vec<flui_runtime::sink::FrameSettlement>,
+    ) {
+        let Some(placed) = self.placed.as_mut() else {
+            return;
         };
-        Self::verdict(&mut slot.base, verdict, shown, key)
+        if placed.executor.inline().is_some() {
+            return;
+        }
+        let Some(id) = placed.slots.get(&address).map(|slot| slot.slot) else {
+            return;
+        };
+        let turned = Self::take_slot_failure(placed, address);
+        let mut settlements = std::mem::take(&mut placed.settlements);
+        settlements.clear();
+        placed.sender.drain_settlements(id, &mut settlements);
+        for settlement in &settlements {
+            let Some(slot) = placed.slots.get_mut(&address) else {
+                break;
+            };
+            let Some(at) = slot
+                .pending
+                .iter()
+                .position(|held| held.epoch == settlement.epoch)
+            else {
+                tracing::warn!(epoch = ?settlement.epoch, "raster host: a settlement for a frame the window does not hold");
+                continue;
+            };
+            let frame = slot.pending.remove(at);
+            let verdict =
+                Self::settle_one(placed, address, frame, Some(settlement.verdict), turned)
+                    .unwrap_or(SubmitVerdict::Failed);
+            into.push(flui_runtime::sink::FrameSettlement::new(
+                address,
+                settlement.epoch,
+                verdict,
+            ));
+        }
+        placed.settlements = settlements;
+    }
+
+    /// Whether `address`'s window holds frames a raster thread has not
+    /// settled yet.
+    #[cfg_attr(
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(all(test, feature = "testing"))
+        ),
+        expect(dead_code, reason = "only the desktop loop turns a raster thread")
+    )]
+    pub(crate) fn has_pending(&self, address: PresentationAddress) -> bool {
+        self.placed
+            .as_ref()
+            .and_then(|placed| placed.slots.get(&address))
+            .is_some_and(|slot| !slot.pending.is_empty())
     }
 
     /// What a settled frame of `version`, drawn on `surface`, became, with
@@ -1548,9 +1940,10 @@ impl RasterHost {
 }
 impl Placed {
     fn new(
-        executor: RasterExecutor<Box<dyn RasterBackend>>,
+        executor: Executor,
         sender: RasterSender,
         surfaces: SurfaceFactory,
+        redraws: Redraws,
     ) -> Self {
         Self {
             executor,
@@ -1558,6 +1951,7 @@ impl Placed {
             surfaces,
             slots: rustc_hash::FxHashMap::default(),
             settlements: Vec::new(),
+            redraws,
         }
     }
 }
@@ -1603,6 +1997,59 @@ fn damage_mode() -> DamageMode {
     damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref())
 }
 
+/// The environment variable that turns the executor on its own raster thread
+/// (ADR-0305 §10): `FLUI_RASTER_PLACEMENT=threaded`. Read only by a debug
+/// build on Linux and Windows, the hosts that run the threaded placement
+/// today, and ignored by every release build: it is the switch the threaded
+/// placement is measured and run on devices with until ADR-0305 §10 decides
+/// how an application picks its placement, and goes with that decision.
+const PLACEMENT_ENV: &str = "FLUI_RASTER_PLACEMENT";
+
+/// The placement [`PLACEMENT_ENV`]'s value selects: `threaded` (any case)
+/// turns the executor on its raster thread; unset, empty or `inline` keeps it
+/// inline; anything else keeps it inline and says so.
+#[cfg_attr(
+    not(any(all(debug_assertions, any(target_os = "linux", windows)), test)),
+    expect(
+        dead_code,
+        reason = "only a debug build on Linux or Windows reads the switch"
+    )
+)]
+fn placement_from(value: Option<&str>) -> RasterPlacement {
+    match value.map(str::trim) {
+        None | Some("") => RasterPlacement::Inline,
+        Some(value) if value.eq_ignore_ascii_case("threaded") => RasterPlacement::Threaded,
+        Some(value) if value.eq_ignore_ascii_case("inline") => RasterPlacement::Inline,
+        Some(value) => {
+            tracing::warn!(
+                value,
+                "{PLACEMENT_ENV} takes `inline` or `threaded`; the executor stays inline"
+            );
+            RasterPlacement::Inline
+        }
+    }
+}
+
+/// Where the desktop loop's executor turns: inline, unless a debug build on
+/// Linux or Windows is asked otherwise through [`PLACEMENT_ENV`].
+#[cfg_attr(
+    all(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        not(all(test, feature = "testing"))
+    ),
+    expect(dead_code, reason = "only the desktop loop turns a raster thread")
+)]
+pub(crate) fn desktop_placement() -> RasterPlacement {
+    #[cfg(all(debug_assertions, any(target_os = "linux", windows)))]
+    {
+        placement_from(std::env::var(PLACEMENT_ENV).ok().as_deref())
+    }
+    #[cfg(not(all(debug_assertions, any(target_os = "linux", windows))))]
+    {
+        RasterPlacement::Inline
+    }
+}
+
 /// One frame's sink: the window's size measured once at frame start, and the
 /// host it submits through.
 pub(crate) struct SlotFrame {
@@ -1629,6 +2076,12 @@ impl SlotFrame {
 impl FrameSink for SlotFrame {
     fn surface_size(&mut self) -> (u32, u32) {
         self.surface
+    }
+
+    fn in_flight_limit(&mut self) -> std::num::NonZeroUsize {
+        // An inline turn settles each frame in its submit; a raster thread
+        // holds one frame rendering and one in its inbox (ADR-0305 §5).
+        self.host.placement.depth()
     }
 
     fn submit(&mut self, epoch: FrameEpoch, publication: ScenePublication) -> SubmitVerdict {
@@ -1676,6 +2129,83 @@ impl RasterSlot {
         }
         caught.absorb(self.host.take_deferred_panic());
         caught.resume();
+    }
+
+    /// Hand `ui_runtime` what a raster thread settled of the window's frames
+    /// (`UiRuntime::settle_frame`), with no borrow of the host held, then
+    /// report a panic the settlements carried. Run first in every wake of
+    /// the window, whatever the wake goes on to do, so a frame the thread
+    /// finished frees its place before the wake's gate reads it. Answers
+    /// whether one of them presented. An inline executor leaves nothing to
+    /// settle here.
+    #[cfg_attr(
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(all(test, feature = "testing"))
+        ),
+        expect(dead_code, reason = "only the desktop loop turns a raster thread")
+    )]
+    pub(crate) fn settle(&self, ui_runtime: &mut crate::app::ui_runtime::UiRuntime) -> bool {
+        if self.host.placement == RasterPlacement::Inline {
+            return false;
+        }
+        let address = self.address;
+        let mut drained = self
+            .host
+            .settled
+            .try_borrow_mut()
+            .map_or_else(|_| Vec::new(), |mut scratch| std::mem::take(&mut *scratch));
+        drained.clear();
+        let _drained = self
+            .host
+            .try_with(|host| host.drain_settled(address, &mut drained));
+        if drained.is_empty() {
+            self.give_back(drained);
+            return false;
+        }
+        // Every settlement reaches the runtime whatever an earlier one ran
+        // into: a frame left unsettled holds its place for good.
+        let mut caught = FirstPanic::new();
+        let mut presented = false;
+        for settlement in drained.drain(..) {
+            presented |= settlement.verdict == SubmitVerdict::Presented;
+            let _settled = caught.contain(|| ui_runtime.settle_frame(settlement));
+        }
+        self.give_back(drained);
+        caught.contain(|| self.report_frame_panic(ui_runtime));
+        caught.resume();
+        presented
+    }
+
+    /// Keep `scratch`'s room for the next wake's settlements.
+    #[cfg_attr(
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(all(test, feature = "testing"))
+        ),
+        expect(dead_code, reason = "only the desktop loop turns a raster thread")
+    )]
+    fn give_back(&self, scratch: Vec<flui_runtime::sink::FrameSettlement>) {
+        if let Ok(mut kept) = self.host.settled.try_borrow_mut() {
+            *kept = scratch;
+        }
+    }
+
+    /// Whether a raster thread holds frames of the window it has not
+    /// settled: the window's pacing then waits for their settlement, which
+    /// wakes it, instead of arming its fallback.
+    #[cfg_attr(
+        all(
+            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+            not(all(test, feature = "testing"))
+        ),
+        expect(dead_code, reason = "only the desktop loop turns a raster thread")
+    )]
+    pub(crate) fn has_pending(&self) -> bool {
+        let address = self.address;
+        self.host
+            .try_read(|host| host.has_pending(address))
+            .unwrap_or(false)
     }
 
     /// The deadline this window's own frame serves, for its wake's dirty

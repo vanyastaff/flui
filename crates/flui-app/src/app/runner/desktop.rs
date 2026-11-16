@@ -505,11 +505,41 @@ impl DesktopFrameDriver {
         );
     }
 
+    /// Show the window its first frame was deferred for.
+    fn reveal(&self) {
+        if let Some(window) = self.reveal_window.upgrade() {
+            window.reveal_after_first_frame();
+            // What the run registers with Windows waits for its first frame
+            // shown, so it never competes with the start.
+            #[cfg(windows)]
+            super::associations::start_pending();
+        }
+    }
+
+    /// A frame of the window presented at `at`, settled after the wake that
+    /// submitted it: the first reveals the window, and the pacing fallback
+    /// stands down, as for a frame that presented within its wake.
+    fn after_presented(&self, at: web_time::Instant) {
+        if self.deadlines.first_reveal.after_frame(true, at) {
+            self.reveal();
+        }
+        self.deadlines.fallback.record_present(at);
+    }
+
     pub(super) fn wake(
         &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
         presentation: flui_foundation::PresentationId,
     ) {
+        // What a raster thread finished since the last wake settles first,
+        // whatever this wake goes on to do: a settled frame frees its place,
+        // which the gate below reads, and its failure arms the runtime's
+        // retry (ADR-0305 §4). A frame that presented there paces the window
+        // as one presented by this wake's own frame does.
+        if self.raster.settle(ui_runtime) {
+            let settled_at = web_time::Instant::now();
+            self.after_presented(settled_at);
+        }
         // The application's request to rebuild a given-up device: it takes
         // the device out of the runtime's abandoned state, which the frame's
         // slot reads as the request (`RasterSlot::pump`).
@@ -520,7 +550,6 @@ impl DesktopFrameDriver {
         let worker_reload_frame = &self.worker_reload;
         let fallback = &self.deadlines.fallback;
         let first_reveal = &self.deadlines.first_reveal;
-        let reveal_window = &self.reveal_window;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
         let raster_deadline = self.raster.frame_deadline();
@@ -617,18 +646,14 @@ impl DesktopFrameDriver {
         // The deferred first reveal: handed to the window on the first
         // presented frame, or at the fallback bound after a frame that ran
         // and presented nothing (`FirstReveal`).
-        if first_reveal.after_frame(presented, pace_now)
-            && let Some(window) = reveal_window.upgrade()
-        {
-            window.reveal_after_first_frame();
-            // What the run registers with Windows waits for its first frame
-            // shown, so it never competes with the start.
-            #[cfg(windows)]
-            super::associations::start_pending();
+        if first_reveal.after_frame(presented, pace_now) {
+            self.reveal();
         }
         if presented {
             fallback.record_present(pace_now);
-        } else if keeps_gate_open {
+        } else if keeps_gate_open && !self.raster.has_pending() {
+            // A frame a raster thread still holds is paced by its
+            // settlement, which wakes the window.
             let deadline =
                 self.deadlines
                     .defer_after_no_present(ui_runtime, presentation, pace_now);

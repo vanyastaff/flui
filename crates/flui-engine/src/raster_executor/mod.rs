@@ -63,6 +63,39 @@ pub use surface::{SlotSize, SlotSurface, SurfaceHold};
 #[cfg(not(target_arch = "wasm32"))]
 pub use thread::ExecutorHandle;
 
+/// Where an executor turns (ADR-0305 §10): on the owner thread, within the
+/// owner's calls, or on its own raster thread, with one frame presenting
+/// while the owner builds the next.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "ADR-0305 §10 decides the two placements; a third is a new decision"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RasterPlacement {
+    /// The owner turns the executor itself, within the call that sent it work.
+    #[default]
+    Inline,
+    /// One raster thread turns it ([`RasterExecutor::spawn`]).
+    Threaded,
+}
+
+impl RasterPlacement {
+    /// How many frames of one slot are in flight at most: the depth of its
+    /// settlement ring (ADR-0305 §5).
+    #[must_use]
+    pub fn depth(self) -> std::num::NonZeroUsize {
+        let depth = match self {
+            Self::Inline => inbox::INLINE_DEPTH,
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Threaded => inbox::THREADED_DEPTH,
+            #[cfg(target_arch = "wasm32")]
+            Self::Threaded => inbox::INLINE_DEPTH,
+        };
+        std::num::NonZeroUsize::new(depth)
+            .expect("BUG: a slot's ring holds at least one settlement")
+    }
+}
+
 use self::{
     device_health::{DeviceRebuilds, FailedRebuild},
     inbox::{InboxState, SlotInbox},
