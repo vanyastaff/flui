@@ -28,8 +28,9 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     PlatformWindow, Unsupported, UnsupportedReason,
     capability::{
-        CapabilityRegistrar, CompletionSource, HostBridge, OwnerJob, OwnerPoster, OwnerRetired,
-        OwnerScope, PendingCompletions, Plugin, ProviderContext, RegisteredProvider, WindowRef,
+        Capability, CapabilityRegistrar, CompletionSource, HostBridge, OwnerJob, OwnerPoster,
+        OwnerRetired, OwnerScope, PendingCompletions, Plugin, ProviderContext, RegisteredProvider,
+        WindowRef,
     },
 };
 use flui_view::CapabilitySource;
@@ -361,6 +362,91 @@ impl Drop for OwnerJobs {
     }
 }
 
+/// What the composition root acquires capabilities through for itself, outside
+/// every UI runtime: the run's registry, an owner-job queue of its own and no
+/// window (ADR-0338).
+///
+/// The host keeps state of its own in an application's capabilities (a window's
+/// remembered placement in its storage), so it acquires them from the same
+/// registry its UI runtimes do, the application's override included, before any
+/// UI runtime exists. A provider sees a [`ProviderContext`] whose
+/// [`window`](ProviderContext::window) is `None`; a capability that needs a
+/// window answers [`UnsupportedReason::NoWindow`] itself, as for a widget. What
+/// a provider posts back runs when the owner calls [`run_posted`](Self::run_posted)
+/// at its turn, never inline in the post.
+///
+/// Owner-thread: it holds the registry, an `Rc`. [`retire`](Self::retire) ends
+/// its pending completions and refuses later posts; dropping it unretired
+/// retires it and resumes the first panic of that.
+pub struct HostCapabilities {
+    registry: CapabilityRegistry,
+    jobs: OwnerJobs,
+}
+
+impl HostCapabilities {
+    /// A scope over `registry` whose poster calls `wake` after each post, from
+    /// whatever thread posted: the owner then takes the job at its next turn.
+    #[must_use]
+    pub fn new(registry: CapabilityRegistry, wake: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            registry,
+            jobs: OwnerJobs::new(wake),
+        }
+    }
+
+    /// The handle of capability `C`, from the provider the registry holds for
+    /// it, asked now: the registry keeps no handle.
+    ///
+    /// # Errors
+    ///
+    /// [`Unsupported`] naming `C`:
+    /// [`NotRegistered`](UnsupportedReason::NotRegistered) when nothing
+    /// provides it, otherwise what the provider answers. A provider's panic
+    /// is not caught here; the caller decides what it costs.
+    pub fn acquire<C: Capability>(&self) -> Result<C::Handle, Unsupported> {
+        let handle = acquire_with(
+            &self.registry,
+            self.jobs.completions(),
+            self.jobs.locals(),
+            None,
+            TypeId::of::<C>(),
+            C::NAME,
+        )?
+        .downcast::<C::Handle>()
+        .expect("BUG: the registry keys a provider by the capability whose handle it makes");
+        Ok(*handle)
+    }
+
+    /// Run the jobs providers posted before this call, each contained, so one
+    /// that panics leaves the rest to run. Returns the first panic; a later
+    /// one is discarded (ADR-0281).
+    #[must_use = "the first panic of the posted jobs belongs to the owner's turn"]
+    pub fn run_posted(&self) -> FirstPanic {
+        let mut first = FirstPanic::new();
+        self.jobs.drain(|job, scope| {
+            first.contain(|| job.run(scope));
+        });
+        first
+    }
+
+    /// The host retires the scope: its pending completions end, a job still
+    /// queued is dropped unrun and a later post is refused with
+    /// [`OwnerRetired`]. Returns the first panic of that.
+    #[must_use = "the first panic of a retirement belongs to the host's teardown"]
+    pub fn retire(&self) -> FirstPanic {
+        self.jobs.retire()
+    }
+}
+
+impl fmt::Debug for HostCapabilities {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HostCapabilities")
+            .field("registry", &self.registry)
+            .field("posted", &self.jobs.has_queued())
+            .finish_non_exhaustive()
+    }
+}
+
 /// What a presentation's widgets acquire capabilities through: the UI
 /// runtime's registry, its completions and the presentation's window.
 pub(crate) struct PresentationCapabilities {
@@ -379,16 +465,37 @@ impl CapabilitySource for PresentationCapabilities {
                 .map_or(1.0, |metrics| metrics.scale().get());
             WindowRef::new(window.id(), scale, window.surface_target())
         });
-        let poster = self.completions.poster();
-        let ctx = ProviderContext::new(
-            poster,
+        acquire_with(
+            &self.registry,
             &self.completions,
             &self.locals,
-            self.registry.host(),
             window,
-        );
-        self.registry.acquire(capability, name, &ctx)
+            capability,
+            name,
+        )
     }
+}
+
+/// Ask `registry`'s provider of `capability` in the context one owner gives
+/// its providers: its completions, what providers keep for it, and the window
+/// it acquires for, if any. The one acquisition a UI runtime's presentation
+/// and the host's own scope share.
+fn acquire_with(
+    registry: &CapabilityRegistry,
+    completions: &CompletionSource,
+    locals: &flui_platform::capability::RuntimeLocals,
+    window: Option<WindowRef>,
+    capability: TypeId,
+    name: &'static str,
+) -> Result<Box<dyn Any>, Unsupported> {
+    let ctx = ProviderContext::new(
+        completions.poster(),
+        completions,
+        locals,
+        registry.host(),
+        window,
+    );
+    registry.acquire(capability, name, &ctx)
 }
 
 #[cfg(test)]

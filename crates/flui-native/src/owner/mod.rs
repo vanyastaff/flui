@@ -29,8 +29,8 @@
 //!   and [`headless`]: each platform's loop, its wakes and what it owns of the
 //!   thread, each on the targets its host runs on (headless everywhere);
 //!   `redraw_poll`, the redraw decision around one native poll,
-//!   `wake_deadline`, the rule by which a loop that waits with a timeout of its
-//!   own arms the application's wake deadline, and `modal_pace`, how often a
+//!   `wake_deadline`, the rules by which a loop arms and delivers the
+//!   application's turn and wake deadlines, and `modal_pace`, how often a
 //!   Windows modal loop asks for frames, each pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A
@@ -123,7 +123,6 @@ pub(crate) mod signal;
 #[cfg(any(windows, x11_host, wayland_host, test))]
 pub(crate) mod single_instance;
 pub(crate) mod slot;
-#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 pub(crate) mod wake_deadline;
 #[cfg(any(
     target_os = "macos",

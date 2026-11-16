@@ -676,6 +676,7 @@ impl host::Loop for AndroidLoop {
         // waits for a change to be reported.
         let mut next_preference_sample = Some(web_time::Instant::now());
         let mut due_deadline = DueDeadline::default();
+        let mut turn_deadline = crate::owner::wake_deadline::TurnDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
@@ -756,6 +757,22 @@ impl host::Loop for AndroidLoop {
             // call point with no lock held (ADR-0287).
             let wake_deadline = self.app_delivery.wake_deadline().or_resume(None);
             let now = web_time::Instant::now();
+            // The turn deadline: the owner's turn at its instant, whether the
+            // Activity shows a window or not, and no frame asked for.
+            let turn_answer = if self.owner_signal.accepting() {
+                self.app_delivery.turn_deadline().or_resume(None)
+            } else {
+                None
+            };
+            let turn_armed = turn_deadline.arm(turn_answer);
+            if turn_deadline.take_due(now) {
+                let _ = self.owner_signal.wake();
+                if self.owner_signal.drive_in(&self.turn) {
+                    self.running.set(false);
+                    continue;
+                }
+            }
+            let turn_wait = turn_armed.filter(|at| *at > now);
             let deadline_due = is_deadline_due(wake_deadline, now);
             if due_deadline.offer(wake_deadline, now) {
                 // Owner services remain deliverable while execution gates frames.
@@ -797,7 +814,7 @@ impl host::Loop for AndroidLoop {
                             should_render: should_render && !awaiting_vsync,
                             awaiting_vsync,
                             resumed,
-                            wake_deadline,
+                            wake_deadline: [wake_deadline, turn_wait].into_iter().flatten().min(),
                             next_preference_sample: self.next_sample(next_preference_sample),
                             hand_off_deadline: self.results.next_deadline(),
                         },

@@ -1502,6 +1502,9 @@ impl IOSWindow {
                 // A scene has no activation apart from its focus.
                 active: focused,
                 capabilities: scene_capabilities(),
+                // The user can resize a scene in Stage Manager or split view,
+                // which this host does not read: it cannot tell.
+                interaction: flui_platform::WindowInteraction::Unknown,
             }
             .onto(state)
         });

@@ -339,7 +339,7 @@ graph LR
 | **LY105** | **Хост X11: устаревшее состояние и ограниченная работа.** Окно без оконного менеджера читает режим `Normal` и перечитывает поддержку по `DestroyNotify` окна `_NET_SUPPORTING_WM_CHECK`; удалённое устройство XInput2 распознаётся по флагу, а не по `type_`; цикл разбирает за ход то, что поставил один read, читает каждое устаревшее окно один раз и сливает движения; `XkbMapNotify` помечает keymap, а не компилирует её; списки RandR ограничены, смена рабочего стола читает только рабочую область; чтение выделения без `INCR` проверяет тип и формат; `pump_for` и `run_loop` делят один `turn()`; запрос устройства сверх `MAX_DEVICES` не делается; `tracing::warn!` — после мьютекса наблюдений | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/x11*`, `preferences/linux.rs`, `ARCHITECTURE.md` (обработчики с ограниченной работой на событие) | `module-dag`, `file-length`, `globals` | X-сервер без менеджера: режим `Normal`, `SetMode` исполняется; таблица `removed_devices`/`added_devices` по инфо в форме провода через функцию обработчика; счёт запросов на ход; выделение с чужим типом отвергается; каждый падает при откате | L; Dev: Linux (X11) |
 | **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; случаи `wayland_window`, которым нужен протокол сверх xdg-shell или seat (`wayland_window::optional`), CI гоняет и под headless Weston, и под headless sway (`cargo xtask wayland-optional`, где недостающее — падение), остальной `wayland_window` — под Weston: sway 1.9 тайлит и предлагает `xdg_wm_base` 2, так что maximize не исполняет; пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; `wayland_window::optional` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
-| **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; **открыто:** оно читается и пишется через хранилище хоста, мимо `StorageCapability` приложения ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{window_routes.rs,desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
+| **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; размещение читается и пишется через хранилище, которое даёт реестр возможностей запуска (переопределение `StorageCapability` приложения), без блокировки потока владельца (исключение — последняя запись при выходе из цикла и в конце сеанса, в пределах их дедлайна) и с границей ожидания чтения; `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{runner/window_routes.rs,runner/desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
 | **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (перечисление `Standard(gamut)` / `High(gamut, headroom)`, у стандартного диапазона headroom нет); headroom или яркость поверхности, которым нельзя верить, читаются как SDR; срок простоя не бывает уже прошедшим; каждую фичу фасада поодиночке собирает `feature-matrix` (`cargo hack clippy --workspace --each-feature`), `facade-combos` не меняется | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна, поток отметок с опережением доходит до каждого запроса; самотест гейта с посаженным ivar; строка записи, противоречащая себе, — ошибка разбора; headroom NaN и ∞, белый уровень 0 и ниже; каждый падает при откате | L + T; Dev: macOS, iOS |
 | **LY110** | **Escape hatch делает то, что говорит, и имеет потребителя.** Команды `AppKitWindow` возвращают `Result<_, AppKitWindowError>`, проверяют закрытое окно (проверки главной дорожки нет: окно AppKit создаётся на главном потоке — `new_inner` берёт `MainThreadMarker` — и не `Send` и не `Sync`, так что его вид не попадает на другой поток); прозрачность приложения хранится в состоянии окна и переживает отложенный первый показ, её тип не держит NaN; главное окно достижимо из того, что держит виджет, и это показывает один пример; у каждого метода `Win32Window` есть тест, либо метод удалён; `NotOnTheOwnerThread` удалён; `MacOSWindowLevel` и `MacOSCollectionBehavior` не публикуют сырые значения ОС | — | `crates/flui-native/src/window/{apple/macos/ext.rs,windows/*}`, `crates/flui-app/src/*`, `src/*` (фасад), `examples/*`, `docs/{gaps,extending}.md` | `workspace`, `reach`, `facade-combos`, `doc-strict`, гейт API-замыкания | команда на закрытом окне отвечает типизированной ошибкой; прозрачность после первого показа; пример собирается; тесты методов `Win32Window`; каждый падает при откате | L + W + T; Dev: macOS |
 | **LY111** | **Манифесты объявляют только то, что линкует сборка.** `flui build` берёт фичи каждого узла из `cargo tree -e normal,no-proc-macro`: фича dev-зависимости ничего не объявляет (Android; iOS и остальные манифесты проверяются на то же); строка LY56 и R5.12 переписаны под объём ADR-0307, остаток открыт в `docs/gaps.md` | — | `crates/flui-cli/src/{declarations.rs,build/*}`, `docs/plans/specs/platform-layer/{tasks,requirements}.md`, `docs/gaps.md` | `workspace`, `checks` | строка «фича dev-зависимости ничего не объявляет» падает при откате; `the_manifest_declares_what_the_linked_crates_need` проходит без ребра dev-зависимости | L |
@@ -5685,10 +5685,10 @@ GPU-память простаивающего или невидимого окн
   clippy workspace `--all-targets -D warnings`, nextest шести крейтов 1262 из 1264 (две известные
   ошибки базы), `xtask checks`; WSL — clippy `-p flui-native -p flui-testing`, lib-тесты
   `window::` 115 из 115. Не собиралось: macOS, iOS, Android, wasm32.
-- [ ] **LY108** — ветка `app/handler-answers`, PR #2641, слит (`942184abe`). Открытая часть: размещение окна мимо
-  `StorageCapability` приложения
-  ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); как хост
-  получает capability для себя, решает владелец.
+- [x] **LY108** — ветка `app/handler-answers`, PR #2641 (влит, `942184abe`); открытая часть —
+  ветка `app/placement-through-storage` (последний пункт ниже). Решение владельца: хост берёт
+  провайдер хранилища из реестра запуска, первое окно открывается по умолчанию, если чтение не
+  ответило в пределах границы.
   - **Маршрут кадра.** `WindowRoutes::route_frame_requested` принимает
     `FnMut(FrameRequest) -> FrameOutcome`; у каждого runner это `dispatch_platform_frame`.
     Принятый кадр (выполнен в вызове или встал в идущий ход) — `Produced`; `StaleRuntime`,
@@ -5729,6 +5729,71 @@ GPU-память простаивающего или невидимого окн
   `xtask checks` зелёный; `xtask expectations`: изменение не трогает ни одного ожидания. Не
   запускалось: Linux, wasm32, Android и Apple; правки `window/android.rs` и `window/web.rs`
   впервые собирает CI.
+  - **Размещение через хранилище приложения** (ветка `app/placement-through-storage`). Хост
+    берёт `StorageCapability` из реестра запуска через `flui_runtime::capability::HostCapabilities`
+    (реестр, своя очередь заданий владельца, без окна; построение контекста общее с
+    `PresentationCapabilities`), по разу на открываемое окно — решение записано в ADR-0338.
+    Чтение — `PlacementRecall` с типизированным исходом `Recalled`; окно ждёт его не дольше
+    `RECALL_BOUND` по часам размещения (в тестах `ManualClock`). Ход владельца на границе даёт
+    новый срок `AppHandler::turn_deadline`: петля даёт владельцу ход в этот момент с окнами и без
+    них и не просит кадров; срок обязателен в `AppHandler` и обслуживается каждым хостом (Win32 с
+    модальными петлями, X11, Wayland, AppKit, UIKit, Android, веб, headless на ручных часах через
+    `drive_at`). Все петли ведут срок одним типом `TurnDeadline`: ход, данный за срок, обслуживает
+    всякий срок не позже своего времени, и ответ не позже последнего обслуженного не взводится
+    снова, так что ответ обработчика не крутит петлю; готовая работа не срок — ответ хранилища
+    будит владельца сам, перенесённое закрытие просит ход через сигнал (ADR-0343 §1). Поздний
+    ответ некуда применить: чтение принадлежит окну. После таймаута, отказа или паники
+    `StoredPlacement::Unknown` ничего не пишет, пока отчёт, несущий изменение, не скажет, что
+    окно размещает пользователь: `WindowState::interaction` (`WindowInteraction::UserPlacing`,
+    ADR-0343 §2) — Win32 в петле size-move и в системных командах размера от пользователя,
+    публикуя `None` по их концу; команда, которую окно шлёт себе само, помечена отправителем;
+    headless — из `simulate_interaction`; остальные хосты говорят `Unknown` (запись gaps «Only
+    Win32 says when the user places a window, and not for every placement»). Отказ записи — `WRITE_ATTEMPTS` попыток с удвоением
+    интервала, затем ни одного срока, пока размещение не изменится. Код хранилища (`publish`,
+    `poll`, drop) идёт без заимствований записи; повторный вход видит `Write::Starting`/`Polling`.
+    Закрытие не ждёт записи; закрытие при занятом состоянии — `Closing::Deferred`, выполняется в
+    следующем ходе. Последняя запись при выходе ждёт в пределах дедлайна сервисов и выполняет
+    задания провайдеров; в конце сеанса — после работы приложения и документов, не дольше
+    `SESSION_END_PLACEMENT_BOUND`. Окно, открытое из размещения закрытого окна, берёт и его долг
+    (`hand_over` → `HandOver::Taken`, запись в полёте переходит к новому окну; занятое состояние —
+    `HandOver::Busy`, новое окно не пишет, пока старое не отдаст), так что у имени один писатель.
+    Одно открытое окно держит имя. Поток ожидания границы удалён.
+
+    Тесты (откат и что он показывает): `an_application_storage_keeps_its_window_placement`,
+    `a_remembered_placement_is_read_once_before_the_window_opens`,
+    `the_host_acquires_the_storage_once_per_window` — с реестром только встроенных провайдеров
+    (`left: 800×600, right: 640×480`; `left: 0, right: 1`);
+    `a_window_opens_at_its_default_when_the_read_does_not_answer_in_time` и
+    `a_window_opens_where_it_was_when_the_read_answers_inside_its_bound` — без ожидания чтения окно
+    открывается сразу; `two_windows_never_share_one_placement` — без захвата имени; строки
+    `placement_recorder` `an_unread_placement_is_overwritten_only_by_the_user`,
+    `a_refusing_storage_is_tried_a_bounded_number_of_times`,
+    `a_handed_over_placement_carries_its_debt`, `storage_code_runs_with_nothing_borrowed`,
+    `a_closed_window_finishes_its_last_write_at_owner_turns`,
+    `the_end_of_the_loop_reports_a_placement_storage_did_not_take`;
+    `a_close_that_finds_the_state_busy_is_carried_over`,
+    `the_final_flush_takes_answers_posted_to_the_owner`,
+    `a_store_that_never_answers_leaves_the_session_end_its_budget`; таблица
+    `host_capabilities_contract` (flui-runtime); `a_turn_deadline_gives_the_owner_a_turn_with_no_window`
+    (Win32 в `app_handler`, X11 и Wayland в WSL), `a_turn_deadline_asks_no_window_for_a_frame`,
+    `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop`,
+    `a_reopened_window_takes_over_the_write_in_flight`, `a_served_turn_deadline_is_not_armed_again`,
+    `a_past_turn_deadline_gives_one_turn` (headless), `a_past_turn_deadline_does_not_spin_the_win32_loop`,
+    `the_size_move_loop_states_the_users_placement_and_ends_it`,
+    `a_system_command_states_the_users_placement_and_ends_it`,
+    `the_applications_own_restore_is_not_the_users`,
+    `a_window_that_could_not_read_its_placement_writes_only_what_the_user_places`.
+    Откаты по каждому — в теле PR, раздел `## Evidence`. Строки без отката охраняют:
+    `a_provider_that_fails_still_lets_the_first_window_open` — что запуск переживает панику и
+    отказ провайдера; `a_recall_reads_what_storage_answers_and_checks_it` и
+    `a_storage_that_panics_costs_the_window_its_placement_only` — исходы модели чтения;
+    `a_display_change_alone_measures_the_window_again` — запись после смены рабочей области.
+
+    Долг на устройствах: путь изменился (асинхронное чтение, граница, отложенное первое открытие),
+    а прогон Windows в строке паритета «Save and restore window placement» был на прежнем
+    блокирующем чтении. Ни тест, ни пример не прогоняет цикл перезапуска нативного окна, поэтому
+    на этой машине он не запускался; прогоны Windows, macOS, X11 и Wayland записаны в примечании
+    той строки.
 - [x] **LY105** — ветка `platform/x11-peer-bounds`, PR #2645. Все девять находок подтверждены
   кодом и исправлены; неверных нет. (1) Оконный менеджер, который убит, не меняет свойств
   корневого окна: платформа слушает конец окна `_NET_SUPPORTING_WM_CHECK` (`StructureNotify`, как

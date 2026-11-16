@@ -478,6 +478,7 @@ impl WindowsWindow {
                     occluded: false,
                     capabilities,
                     frame: options.frame,
+                    interaction: flui_platform::WindowInteraction::None,
                 },
             )));
 
@@ -564,6 +565,8 @@ impl WindowsWindow {
                 visibility: super::proc::Visibility::new(),
                 cloak_watch: super::proc::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
+                in_system_command: std::cell::Cell::new(false),
+                in_app_command: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
                 modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
                     crate::owner::windows::modal_loop::ModalFrames::new(
@@ -571,6 +574,7 @@ impl WindowsWindow {
                         Arc::downgrade(&windows)
                             as std::sync::Weak<dyn crate::owner::windows::ClassWindows>,
                         Rc::clone(&frames),
+                        std::sync::Weak::clone(&app_hooks.borrow().signal),
                     ),
                 ),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),

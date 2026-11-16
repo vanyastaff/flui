@@ -1,4 +1,5 @@
 //! Standalone AppKit loop ownership and orderly, policy-aware stopping.
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -33,6 +34,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::panic_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry},
     owner::signal::OwnerTurnSlot,
+    owner::wake_deadline::TurnDeadline,
 };
 
 /// Whether finishing a session end also answers a waiting
@@ -80,9 +82,28 @@ pub(crate) struct LoopControl {
     /// state, made there the first time the owner needs it, since the owner
     /// turn the signal posts reaches it through this shared control.
     turn: OnceLock<NativeOwner<Rc<OwnerTurnSlot>>>,
+    /// The application's turn deadline and the generation of the timer
+    /// scheduled for it: main-thread state, made there the first time the
+    /// owner asks. AppKit's loop has no idle wait of its own to bound, so each
+    /// answer schedules a timer on the main queue and supersedes the last
+    /// ([`Self::schedule_turn_deadline`]).
+    turn_deadline: OnceLock<NativeOwner<TurnTimer>>,
 }
 
+/// The turn deadline as AppKit arms it, and the generation of the timer
+/// scheduled for it.
+type TurnTimer = Rc<RefCell<(TurnDeadline, u64)>>;
+
 impl LoopControl {
+    /// The turn deadline's state, on the main thread.
+    fn turn_timer(&self, main: MainThreadMarker) -> TurnTimer {
+        Rc::clone(
+            self.turn_deadline
+                .get_or_init(|| NativeOwner::new(Rc::default(), main))
+                .get(main),
+        )
+    }
+
     /// The slot the application's wake callback waits in between turns.
     pub(crate) fn turn(&self, main: MainThreadMarker) -> Rc<OwnerTurnSlot> {
         Rc::clone(
@@ -110,10 +131,12 @@ impl LoopControl {
                     cleanup_step(|| {
                         let main = MainThreadMarker::new()
                             .expect("BUG: the owner queue is the AppKit main queue");
-                        if let Some(control) = weak.upgrade()
-                            && control.owner_signal.drive_in(&control.turn(main))
-                        {
-                            control.quit();
+                        if let Some(control) = weak.upgrade() {
+                            if control.owner_signal.drive_in(&control.turn(main)) {
+                                control.quit();
+                            } else {
+                                control.schedule_turn_deadline();
+                            }
                         }
                     });
                 });
@@ -135,6 +158,7 @@ impl LoopControl {
                 app,
                 terminate_gate: Mutex::new(TerminateGate::new()),
                 turn: OnceLock::new(),
+                turn_deadline: OnceLock::new(),
             }
         })
     }
@@ -216,9 +240,89 @@ impl LoopControl {
         }
     }
 
+    /// Ask the application's turn deadline, with no lock held, and schedule
+    /// the owner turn it asks for on the main queue: at that instant the
+    /// owner gets a turn whether or not a window is open, and no window is
+    /// asked for a frame. Called after each owner turn and once the run's
+    /// handler has bootstrapped. An answer that changes the instant armed
+    /// supersedes the timer an earlier one scheduled, the same instant keeps
+    /// it, and an instant a turn served is not scheduled again
+    /// ([`TurnDeadline`]).
+    pub(crate) fn schedule_turn_deadline(self: &Arc<Self>) {
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        let answer = if self.owner_signal.accepting() {
+            self.app.turn_deadline().or_resume(None)
+        } else {
+            None
+        };
+        let armed = {
+            let timer = self.turn_timer(main);
+            let mut slot = timer.borrow_mut();
+            let before = slot.0.armed();
+            let armed = slot.0.arm(answer);
+            if armed == before {
+                // The timer scheduled for this instant still stands.
+                return;
+            }
+            armed
+        };
+        self.schedule_turn_timer(main, armed);
+    }
+
+    /// Schedule the main-queue timer for `armed`, superseding the one
+    /// scheduled before; `None` only supersedes it. A timer that fires before
+    /// its instant schedules the rest of the wait, so the armed instant always
+    /// has a timer.
+    fn schedule_turn_timer(
+        self: &Arc<Self>,
+        main: MainThreadMarker,
+        armed: Option<web_time::Instant>,
+    ) {
+        let generation = {
+            let timer = self.turn_timer(main);
+            let mut slot = timer.borrow_mut();
+            slot.1 = slot
+                .1
+                .checked_add(1)
+                .expect("BUG: a turn-deadline generation per owner turn fits in u64");
+            slot.1
+        };
+        let Some(at) = armed else {
+            return;
+        };
+        let delay = at.saturating_duration_since(web_time::Instant::now());
+        self.run_after(delay, move |control| {
+            let Some(main) = MainThreadMarker::new() else {
+                return;
+            };
+            let (current, due) = {
+                let timer = control.turn_timer(main);
+                let mut slot = timer.borrow_mut();
+                let current = slot.1 == generation;
+                (
+                    current,
+                    current && slot.0.take_due(web_time::Instant::now()),
+                )
+            };
+            if due {
+                let _ = control.owner_signal.wake();
+            } else if current {
+                // The queue ran the timer before its instant: schedule the
+                // rest of the wait.
+                control.schedule_turn_timer(main, Some(at));
+            }
+        });
+    }
+
     /// Run `body` on the owner lane after `delay`, if the control is still
     /// alive.
-    fn run_after(self: &Arc<Self>, delay: Duration, body: impl FnOnce(&Self) + Send + 'static) {
+    fn run_after(
+        self: &Arc<Self>,
+        delay: Duration,
+        body: impl FnOnce(&Arc<Self>) + Send + 'static,
+    ) {
         let weak = Arc::downgrade(self);
         owner_queue().exec_after(delay, move || {
             os_entry(

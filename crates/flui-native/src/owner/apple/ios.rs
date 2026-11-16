@@ -52,7 +52,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
-use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
+use crate::owner::wake_deadline::{FrameCount, TurnDeadline, WakeDeadline};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
@@ -469,6 +469,11 @@ pub struct IOSLoop {
     /// delivered as a frame request to the scene's window, and the same
     /// instant is armed again only once a frame ran ([`WakeDeadline`]).
     wake: RefCell<WakeDeadline>,
+    /// The timer of the armed turn deadline, named by its ticket.
+    turn_timer: RefCell<Option<(Arc<()>, web_time::Instant)>>,
+    /// The turn deadline armed and the time its last turn served
+    /// ([`TurnDeadline`]).
+    turn_deadline: RefCell<TurnDeadline>,
     /// The frames the scenes' windows' handlers produced.
     frames: FrameCount,
     /// A re-arm after a window's run is posted and has not run yet.
@@ -570,6 +575,8 @@ impl IOSLoop {
             identity,
             deadline: RefCell::new(None),
             wake: RefCell::default(),
+            turn_timer: RefCell::new(None),
+            turn_deadline: RefCell::default(),
             frames: FrameCount::default(),
             rearm_posted: Cell::new(false),
             displays,
@@ -733,7 +740,76 @@ impl IOSLoop {
         });
     }
 
+    /// Ask the handler for its turn deadline and schedule the owner turn it
+    /// asks for on the main queue: at that instant the owner gets a turn
+    /// whether or not a scene shows a window, and no window is asked for a
+    /// frame. A new answer supersedes the timer an earlier one scheduled.
+    fn arm_turn_deadline(&self) {
+        let answer = if self.signal.accepting() {
+            self.app.turn_deadline().or_resume(None)
+        } else {
+            None
+        };
+        let next = self.turn_deadline.borrow_mut().arm(answer);
+        let ticket = {
+            let mut current = self.turn_timer.borrow_mut();
+            if current.as_ref().map(|(_, at)| *at) == next {
+                return;
+            }
+            let Some(at) = next else {
+                current.take();
+                return;
+            };
+            let ticket = Arc::new(());
+            *current = Some((Arc::clone(&ticket), at));
+            ticket
+        };
+        let at = next.expect("BUG: an armed ticket retains its instant");
+        let delay = at.saturating_duration_since(web_time::Instant::now());
+        let Ok(when) = dispatch2::DispatchTime::try_from(delay) else {
+            self.turn_timer.borrow_mut().take();
+            tracing::warn!("UIKit turn deadline exceeds dispatch time range");
+            return;
+        };
+        let identity = Arc::clone(&self.identity);
+        let _ = dispatch2::DispatchQueue::main().after(when, move || {
+            os_entry(
+                "the UIKit turn deadline",
+                (),
+                AfterPanic::Answer(|()| ()),
+                move || {
+                    FluiAppDelegate::with_platform(|platform| {
+                        if !Arc::ptr_eq(&platform.identity, &identity) {
+                            return;
+                        }
+                        let admitted = {
+                            let mut current = platform.turn_timer.borrow_mut();
+                            if current
+                                .as_ref()
+                                .is_some_and(|(active, _)| Arc::ptr_eq(active, &ticket))
+                            {
+                                current.take();
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        let due = admitted
+                            && platform
+                                .turn_deadline
+                                .borrow_mut()
+                                .take_due(web_time::Instant::now());
+                        if due {
+                            let _ = platform.signal.wake();
+                        }
+                    });
+                },
+            );
+        });
+    }
+
     fn arm_deadline(&self) {
+        self.arm_turn_deadline();
         if !self.signal.accepting() {
             return;
         }
