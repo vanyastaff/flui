@@ -13,6 +13,10 @@
         {
           "const": "not_yet_on_this_host",
           "type": "string"
+        },
+        {
+          "const": "withdrawn",
+          "type": "string"
         }
       ]
     },
@@ -4664,23 +4668,6 @@
             "named"
           ],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "dead": {
-              "maxLength": 1,
-              "minLength": 1,
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "dead"
-          ],
-          "type": "object"
         }
       ]
     },
@@ -4757,6 +4744,9 @@
           },
           "type": "array"
         },
+        "repeat": {
+          "type": "boolean"
+        },
         "state": {
           "$ref": "#/$defs/KeyState"
         },
@@ -4764,6 +4754,9 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "unreleased": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -4779,14 +4772,6 @@
       "oneOf": [
         {
           "const": "down",
-          "type": "string"
-        },
-        {
-          "const": "repeat",
-          "type": "string"
-        },
-        {
-          "const": "unpaired",
           "type": "string"
         },
         {
@@ -6350,16 +6335,6 @@
             "null"
           ]
         },
-        "direction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NativeScrollDirection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "modifiers": {
           "items": {
             "$ref": "#/$defs/Modifier"
@@ -6403,18 +6378,6 @@
         "time_ns"
       ],
       "type": "object"
-    },
-    "NativeScrollDirection": {
-      "oneOf": [
-        {
-          "const": "from_device",
-          "type": "string"
-        },
-        {
-          "const": "inverted_from_device",
-          "type": "string"
-        }
-      ]
     },
     "NativeScrollPhase": {
       "oneOf": [
@@ -7518,6 +7481,70 @@
           },
           "required": [
             "smart_zoom"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "revise": {
+              "properties": {
+                "pointer": {
+                  "$ref": "#/$defs/PointerInfo"
+                },
+                "sample": {
+                  "$ref": "#/$defs/Sample"
+                }
+              },
+              "required": [
+                "pointer",
+                "sample"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "revise"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "pen_squeeze": {
+              "properties": {
+                "hover": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Sample"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phase": {
+                  "$ref": "#/$defs/SqueezePhase"
+                },
+                "pointer": {
+                  "$ref": "#/$defs/PointerInfo"
+                },
+                "t": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pointer",
+                "t",
+                "phase"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "pen_squeeze"
           ],
           "type": "object"
         },
@@ -8641,16 +8668,6 @@
     },
     "Scroll": {
       "properties": {
-        "direction": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ScrollDirection"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "dx": {
           "format": "double",
           "type": "number"
@@ -8709,18 +8726,6 @@
         "precision"
       ],
       "type": "object"
-    },
-    "ScrollDirection": {
-      "oneOf": [
-        {
-          "const": "from_device",
-          "type": "string"
-        },
-        {
-          "const": "inverted_from_device",
-          "type": "string"
-        }
-      ]
     },
     "ScrollHint": {
       "oneOf": [
@@ -9163,6 +9168,26 @@
             "full"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "SqueezePhase": {
+      "oneOf": [
+        {
+          "const": "began",
+          "type": "string"
+        },
+        {
+          "const": "changed",
+          "type": "string"
+        },
+        {
+          "const": "ended",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "type": "string"
         }
       ]
     },

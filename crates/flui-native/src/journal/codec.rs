@@ -2308,6 +2308,7 @@ const fn absence_to_wire(absence: CapabilityAbsence) -> wire::Absence {
         CapabilityAbsence::NOT_ON_THIS_PLATFORM => wire::Absence::NotOnThisPlatform,
         CapabilityAbsence::NOT_ON_THIS_DEVICE => wire::Absence::NotOnThisDevice,
         CapabilityAbsence::NOT_YET_ON_THIS_HOST => wire::Absence::NotYetOnThisHost,
+        CapabilityAbsence::WITHDRAWN => wire::Absence::Withdrawn,
     }
 }
 
@@ -2316,6 +2317,7 @@ fn absence_from_wire(absence: wire::Absence) -> DtoResult<CapabilityAbsence> {
         wire::Absence::NotOnThisPlatform => CapabilityAbsence::NOT_ON_THIS_PLATFORM,
         wire::Absence::NotOnThisDevice => CapabilityAbsence::NOT_ON_THIS_DEVICE,
         wire::Absence::NotYetOnThisHost => CapabilityAbsence::NOT_YET_ON_THIS_HOST,
+        wire::Absence::Withdrawn => CapabilityAbsence::WITHDRAWN,
         other => return Err(unread(other.name())),
     })
 }

@@ -79,7 +79,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 15);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 16);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +130,15 @@ pub const BREAKING: &[Break] = &[
     },
     Break {
         version: ProtocolVersion::new(0, 15),
+        adr: "ADR-0341",
+        // A recorded capability can be absent as `withdrawn`, the absence of a window that
+        // withdrew its capabilities: an older client refuses the unknown value, so an app
+        // speaking 0.15 refuses older clients.
+        renamed: &[],
+        removed: &[],
+    },
+    Break {
+        version: ProtocolVersion::new(0, 16),
         adr: "ADR-0344",
         // A recorded key's state says whether it repeated or has no release, so its `repeat`
         // and `unreleased` flags went; the pointer revision and the pen squeeze, which no host
@@ -227,8 +236,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.15");
-        assert_eq!("0.15".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.16");
+        assert_eq!("0.16".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -250,10 +259,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.15"))
+            Some(serde_json::json!("0.16"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.15")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.16")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

@@ -41,7 +41,9 @@ mod cases {
     use flui_platform::data_transfer::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+    use flui_platform::drag::{
+        DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
+    };
     use flui_platform::keyboard::{Code, Key, KeyPress, KeyState};
     use flui_platform::pointer::{PointerButton, PointerEvent, PointerKind, ScrollUnit};
     use flui_platform::{Availability, PlatformInput, WindowOptions};
@@ -543,16 +545,20 @@ mod cases {
             DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
         );
         let ended = Rc::clone(ended);
-        OsDragRequest {
+        let terms = OsDragTerms::try_new(
             key,
-            pointer: None,
-            representations: vec![RepresentationDescriptor {
+            vec![RepresentationDescriptor {
                 format: TransferFormat::Text,
                 declared_len: None,
             }],
-            allowed: TransferActions::COPY,
-            provider: Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
-            on_end: Box::new(move |end| ended.set(Some(end))),
-        }
+            TransferActions::COPY,
+        )
+        .expect("one text representation under COPY");
+        OsDragRequest::new(
+            terms,
+            None,
+            Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
+            Box::new(move |end| ended.set(Some(end))),
+        )
     }
 }

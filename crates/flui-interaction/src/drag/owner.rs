@@ -17,10 +17,10 @@ use flui_platform::data_transfer::{
 };
 use flui_platform::drag::{
     AllowedActions, DragError, DragMoment, DragReach, DragSessionKey, OsDragEnd, OsDragRequest,
-    OsDragStart, OsOffer, OsSessionPlan, PlatformDragSource, ProcessNonce, plan_os_session,
+    OsDragStart, OsDragTerms, OsOffer, PlatformDragSource, ProcessNonce, plan_os_session,
     validate_session,
 };
-use flui_platform::pointer::PointerInfo;
+use flui_platform::pointer::{PointerInfo, PressId};
 use flui_platform::{
     DragDropEvent, EventTime, PlatformWindow, Unsupported, UnsupportedReason, WindowAt, WindowId,
 };
@@ -121,6 +121,7 @@ pub struct DragStart {
     allowed: AllowedActions,
     reach: Option<DragReach>,
     pointer: Option<PointerInfo>,
+    press: Option<PressId>,
     window: Option<std::rc::Weak<dyn PlatformWindow>>,
     hit_test: Option<HitTestHandle>,
     capture: Option<PointerCapture>,
@@ -138,6 +139,7 @@ impl DragStart {
             allowed,
             reach: None,
             pointer: None,
+            press: None,
             window: None,
             hit_test: None,
             capture: None,
@@ -156,6 +158,16 @@ impl DragStart {
     /// The contact that drags, and so the kind hit tests ask with.
     pub fn pointer(mut self, pointer: PointerInfo) -> Self {
         self.pointer = Some(pointer);
+        self
+    }
+
+    /// The press sequence the drag began in, as its press event named it
+    /// ([`PointerPress::press`](flui_platform::pointer::PointerPress::press)).
+    /// An OS session starts from that press, and the backend refuses it once
+    /// the window no longer holds the press, rather than starting from a later
+    /// press of the same contact.
+    pub fn press(mut self, press: PressId) -> Self {
+        self.press = Some(press);
         self
     }
 
@@ -1107,6 +1119,7 @@ impl DragHandle {
             allowed,
             reach,
             pointer,
+            press,
             window,
             hit_test,
             capture,
@@ -1137,6 +1150,7 @@ impl DragHandle {
                 reach,
                 source,
                 pointer,
+                press,
                 window,
                 hit_test,
                 capture,
@@ -1964,7 +1978,7 @@ impl PendingOsDrag {
     /// The session this request starts.
     #[must_use]
     pub fn key(&self) -> DragSessionKey {
-        self.request.key
+        self.request.terms().key()
     }
 
     /// Start the OS session through `source`, the drag source of the window
@@ -2041,17 +2055,24 @@ fn escalate(
                 entry.source,
                 state.key_of(id),
                 Rc::clone(&entry.data),
-                entry.pointer,
+                entry.press,
             ),
         )
     };
-    let (presentation, key, data, pointer) = request_parts;
+    let (presentation, key, data, press) = request_parts;
+    let serialized = match plan.offer {
+        OsOffer::Full => data.descriptors(),
+        OsOffer::IdentityOnly => Vec::new(),
+    };
+    // Terms that cannot be offered refuse the OS session; the drag stays in
+    // its window.
+    let terms = OsDragTerms::try_new(key, serialized, plan.advertised)?;
     let session = SessionRef {
         shared: Rc::downgrade(shared),
         slot,
         id,
     };
-    let request = os_request(plan, key, data, pointer, session.clone());
+    let request = os_request(terms, data, press, session.clone());
     let pending = PendingOsDrag {
         presentation,
         request,
@@ -2073,28 +2094,21 @@ fn escalate(
 }
 
 fn os_request(
-    plan: OsSessionPlan,
-    key: DragSessionKey,
+    terms: OsDragTerms,
     data: Rc<SessionData>,
-    pointer: Option<PointerInfo>,
+    press: Option<PressId>,
     session: SessionRef,
 ) -> OsDragRequest {
-    let mut representations = match plan.offer {
-        OsOffer::Full => data.descriptors(),
-        OsOffer::IdentityOnly => Vec::new(),
-    };
-    let serialized = representations.len();
-    representations.push(key.representation());
+    // The identity is the terms' last representation.
+    let serialized = terms.representations().len() - 1;
     let end = OsEnd {
         session,
         reported: false,
     };
-    OsDragRequest {
-        key,
-        pointer: pointer.map(|info| info.id),
-        representations,
-        allowed: plan.advertised,
-        provider: Box::new(move |RepresentationIndex(index)| {
+    OsDragRequest::new(
+        terms,
+        press,
+        Box::new(move |RepresentationIndex(index)| {
             let index = usize::from(index);
             match index.cmp(&serialized) {
                 std::cmp::Ordering::Less => data.serialized(index),
@@ -2105,6 +2119,6 @@ fn os_request(
                 std::cmp::Ordering::Greater => Err(TransferError::Cancelled),
             }
         }),
-        on_end: Box::new(move |outcome| end.report(outcome)),
-    }
+        Box::new(move |outcome| end.report(outcome)),
+    )
 }

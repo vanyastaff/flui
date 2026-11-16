@@ -101,15 +101,15 @@ not by pointer id and time; `docs/gaps.md` holds that shape.
 
 The recording's key state is `down`, `repeat`, `unpaired` or `up`, its key has a `dead` variant
 and its scroll an optional `direction`; the format is version 4 and refuses version 3. Protocol
-0.15 is a break (ADR-0342 §1 for the added variants) and lists the removed names in `BREAKING`, which gains a `removed` list beside `renamed`.
+0.16 is a break (ADR-0342 §1 for the added variants) and lists the removed names in `BREAKING`, which gains a `removed` list beside `renamed`.
 
 ### Consequences
 
 - Good, because a release can no longer claim a repeat, and a consumer reads one field.
 - Good, because a hardware dead key on Android types the composed character, and a field gets
   the accent to show while it waits.
-- Bad, because every place that built a key event changed, and a 0.14 agent client is refused by
-  a 0.15 application.
+- Bad, because every place that built a key event changed, and a 0.15 agent client is refused by
+  a 0.16 application.
 - Neutral, because Windows, X11, Android and iOS report no direction: their
   scrolls say `Unknown` (`docs/gaps.md`).
 

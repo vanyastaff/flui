@@ -1114,6 +1114,9 @@ vocabulary! {
         NotOnThisDevice => "not_on_this_device",
         /// The platform has it, the host does not read it yet.
         NotYetOnThisHost => "not_yet_on_this_host",
+        /// The window withdrew its capabilities: it can publish no more of
+        /// what it honours.
+        Withdrawn => "withdrawn",
     }
 }
 
