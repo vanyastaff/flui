@@ -63,7 +63,7 @@ use windows::{
     core::w,
 };
 
-use crate::clipboard::patience::{OpenAttempts, RestartBudget, queued_too_long};
+use crate::clipboard::patience::{OpenAttempts, queued_too_long};
 use crate::host::{NativeClipboard, admit_text, host_text, text_fits};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
@@ -197,20 +197,24 @@ fn submit(task: Task, answer: Answer) {
         answer,
         accepted: Instant::now(),
     };
-    let refused = match ClipboardThread::get() {
+    // A full queue is worth a retry; a thread that never started or ended is
+    // gone for the rest of the run.
+    let (refused, error) = match ClipboardThread::get() {
         Some(thread) => match thread.requests.try_send(request) {
             Ok(()) => {
                 thread.wake();
                 return;
             }
-            Err(mpsc::TrySendError::Full(request) | mpsc::TrySendError::Disconnected(request)) => {
-                request
-            }
+            Err(mpsc::TrySendError::Full(request)) => (request, ClipboardError::Unavailable),
+            Err(mpsc::TrySendError::Disconnected(request)) => (request, ClipboardError::Gone),
         },
-        None => request,
+        None => (request, ClipboardError::Gone),
     };
-    refused.answer.settle(None, ClipboardError::Unavailable);
-    tracing::warn!("a clipboard request was refused: the clipboard thread cannot take it");
+    refused.answer.settle(None, error);
+    tracing::warn!(
+        ?error,
+        "a clipboard request was refused: the clipboard thread cannot take it"
+    );
 }
 
 /// The process's clipboard thread: where requests are sent, and the event
@@ -222,7 +226,8 @@ struct ClipboardThread {
 
 impl ClipboardThread {
     /// The thread, started on first use and never stopped; `None` if it
-    /// could not be started, in which case every request is refused.
+    /// could not be started, in which case every request answers
+    /// [`ClipboardError::Gone`].
     fn get() -> Option<&'static Self> {
         static THREAD: OnceLock<Option<ClipboardThread>> = OnceLock::new();
         THREAD.get_or_init(Self::spawn).as_ref()
@@ -265,7 +270,7 @@ impl ClipboardThread {
                     }
                 };
                 let _ = created.send(Ok(()));
-                run_thread(hwnd, &thread_wake, &received);
+                serve(hwnd, &thread_wake, &received);
             });
         if let Err(error) = spawned {
             tracing::error!(%error, "failed to spawn the clipboard thread");
@@ -287,77 +292,22 @@ impl ClipboardThread {
     }
 }
 
-/// The clipboard thread's body: [`serve`] until `WM_QUIT`, starting it again
-/// after a panic outside any one request, with the request whose turn it
-/// was kept. Past [`RestartBudget`]'s restarts in its window the panic
-/// recurs at once: the thread stops serving and refuses every request
-/// `Unavailable` from then on, logged once, rather than spin. Only an abort,
-/// which ends the process, ends the thread.
-fn run_thread(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
+/// The clipboard thread's body. Serve the requests in order, each tried
+/// until its clipboard opens or its patience runs out, and between attempts
+/// wait for the next attempt, a new request or a message, pumping the
+/// messages. The owner window must be pumped while it owns the clipboard:
+/// another process's `EmptyClipboard` sends it `WM_DESTROYCLIPBOARD` and
+/// waits, and so would keep the clipboard it holds open meanwhile. Returns at
+/// `WM_QUIT`, which nothing posts while the process lives.
+///
+/// Every request runs contained, and nothing else here runs code the thread
+/// does not own (the window's messages go through `os_entry`), so the loop
+/// has no failure to restart from. Were it to end all the same, the channel
+/// would close and every later request answers
+/// [`ClipboardError::Gone`].
+fn serve(window: HWND, wake: &OwnedHandle, requests: &mpsc::Receiver<Request>) {
     let mut turn: Option<(Request, OpenAttempts)> = None;
-    let mut budget = RestartBudget::new();
-    loop {
-        let mut failure = FirstPanic::new();
-        if failure
-            .contain(|| serve(window, wake, requests, &mut turn))
-            .is_some()
-        {
-            return;
-        }
-        report(failure);
-        if !budget.restart(Instant::now()) {
-            break;
-        }
-    }
-    let mut failure = FirstPanic::new();
-    failure.contain(|| {
-        tracing::error!(
-            "the clipboard thread failed again at once; every clipboard request is refused from now on"
-        );
-    });
-    report(failure);
-    let refuse = |request: Request| {
-        let mut failure = FirstPanic::new();
-        failure.contain(|| request.answer.settle(None, ClipboardError::Unavailable));
-        report(failure);
-    };
-    if let Some((request, _)) = turn.take() {
-        refuse(request);
-    }
-    // The window still owns what FLUI last wrote: its messages are still
-    // pumped, so another process's `EmptyClipboard` is never kept waiting.
-    loop {
-        let mut failure = FirstPanic::new();
-        let live = failure.contain(pump_messages).unwrap_or(true);
-        report(failure);
-        if !live {
-            return;
-        }
-        match requests.recv_timeout(BROKEN_PUMP_PERIOD) {
-            Ok(request) => refuse(request),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-        }
-    }
-}
-
-/// How often a clipboard thread that stopped serving still pumps its
-/// window's messages.
-const BROKEN_PUMP_PERIOD: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// Serve the requests in order, each tried until its clipboard opens or its
-/// patience runs out, and between attempts wait for the next attempt, a new
-/// request or a message, pumping the messages. The owner window must be
-/// pumped while it owns the clipboard: another process's `EmptyClipboard`
-/// sends it `WM_DESTROYCLIPBOARD` and waits, and so would keep the clipboard
-/// it holds open meanwhile. Returns at `WM_QUIT`, which nothing posts while
-/// the process lives.
-fn serve(
-    window: HWND,
-    wake: &OwnedHandle,
-    requests: &mpsc::Receiver<Request>,
-    turn: &mut Option<(Request, OpenAttempts)>,
-) {
+    let turn = &mut turn;
     loop {
         if !pump_messages() {
             return;

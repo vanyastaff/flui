@@ -2530,20 +2530,23 @@ serving the requests in the order they were made, so a read after a write
 answers what the write left. Each answer goes to its request's resolver after
 the clipboard is closed again. A read whose readers all went away is still
 performed: a handle's shared read waits for it whatever its readers do. A
-request's patience to open counts from its turn; its time in the queue is
+request's patience to open counts from its turn; the wait for its turn is
 bounded apart (`clipboard::patience::LONGEST_QUEUED`), past which it answers
-`Timeout`.
+`Timeout`. That bounds the turn, not the answer: a request whose turn comes
+just inside it still waits its own call to Win32, so the worst case is
+`LONGEST_QUEUED`, `PATIENCE` and Win32's thirty seconds.
 
 - **Nothing the thread does not own can stop it.** A request's task (its
   conversions and `tracing` events: a subscriber is user code), its answer's
   delivery and the report of a failure each run contained. The resolver is
   kept apart from the task, so a task that panics still answers its request
   `Unavailable`; the first failure is reported and discarded, a panicking
-  report is discarded too, and the thread goes on to the next request. A panic
-  outside any request restarts the thread's loop with the request whose turn
-  it was, at most `MAX_RESTARTS` times within `RESTART_WINDOW`; past them the
-  thread stops serving and refuses every request `Unavailable`, logged once,
-  still pumping its window. Only an abort, which ends the process, ends it.
+  report is discarded too, and the thread goes on to the next request.
+  Nothing else in its loop runs code it does not own (the window's messages
+  cross `os_entry`), so the loop has no failure to restart from; were it to
+  end all the same, its channel closes and every later request answers
+  `ClipboardError::Gone`, as every request does when the thread could not
+  start. A full queue answers `Unavailable`, worth a retry.
 - **A write is made before the clipboard is emptied.** Every format's global
   memory is allocated and filled first, so a write that cannot be made leaves
   the clipboard as it was; after `EmptyClipboard` only `SetClipboardData`

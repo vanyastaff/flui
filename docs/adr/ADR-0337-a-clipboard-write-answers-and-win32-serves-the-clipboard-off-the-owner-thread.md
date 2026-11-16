@@ -102,64 +102,75 @@ can act on it and keeps the owner thread free of another process's waits.
   `ClipboardBackend::write(&self, ClipboardWrite, Resolver<ClipboardWritten>)` and
   `NativeClipboard::write` take the same resolver; `ClipboardHandle::write` and `write_text`
   return `Completion<ClipboardWritten>`, which settles at an owner turn, never inside the call.
-  `NativeClipboard` has no `write_text` shorthand. `Ok(())` means the system clipboard took the
-  text, on every host. A refused write leaves the clipboard as it was and no later read in the
-  process answers its text, with two exceptions: Win32 must empty the clipboard before it fills
-  it, and once it has, only Win32 itself (`SetClipboardData` refusing a handle whose memory is
-  already made) can fail the write, which then leaves no text; and a write no system clipboard
-  could take but the application kept answers `ClipboardError::ApplicationOnly`, which its own
-  reads then answer (a web page without the Clipboard API). A Wayland compositor confirms no
-  selection request, so a write it drops silently still answers `Ok`; to keep that rare, a Wayland
-  host names no input once the keyboard left the window it went to, and a write after that is
-  refused `Denied` rather than sent under a stale serial. A caller with nothing to undo (a copy)
-  drops the completion; `EditableText`'s cut deletes the selection only once the write answers
-  `Ok`, and only under the rule its start and a paste follow at both ends (the field mounted,
-  enabled, holding the focus, on the same controller), with its text and selection as the cut
-  left them. Every path to a field's cut or paste focuses the field first, assistive technology's
-  popup included. The write changes on every host in one change because the seam is shared: a
-  write that answers on one host and not on the others would be two contracts.
+  `NativeClipboard` has no `write_text` shorthand. The answer means the same on every host:
+  - `Ok(())`: the system clipboard took the text.
+  - `ApplicationOnly`: the system clipboard cannot take the text now, and only this application
+    can read it back: the host keeps it for the application's own reads. One situation, one
+    outcome, on every host that can meet it (the table).
+  - any other error: nothing was kept, and no later read in the process answers the text. The
+    clipboard is as it was, except where a host must clear it before filling it (Win32's
+    `EmptyClipboard`, AppKit's `clearContents`) and the system itself then refuses the text:
+    the clipboard is then left without text.
 
-  | Host | `Ok` | Refused |
-  |------|------|---------|
-  | Win32 | the text and its markers are set | `Unavailable`: held past the patience (§2), memory not made (the clipboard untouched), `EmptyClipboard` or `SetClipboardData` failed, more than `MAX_WAITING` requests wait; `Timeout`: queued past `LONGEST_QUEUED` |
-  | AppKit, UIKit | the pasteboard took the string | `Unavailable`: a marker or the set failed, UIKit off its main thread |
-  | Android | `setPrimaryClip` returned | `Unavailable`: a JNI failure, no clipboard service |
-  | X11 | the clipboard thread owns `CLIPBOARD` at the server's time | `Unavailable`: another client took it first; a write a newer one replaced before it owned shares the newer one's answer |
-  | Wayland | the seat's selection serves the write: a new source set under the input's serial, or the source set under it answering in place (a plain write through a hinted source is served marked secret) | `Denied`: no user input to set it under, or the keyboard left the window it went to; `Unavailable`: no source could be made or set, or a concealed write would go out through a source without the hint; either way no selection changes |
-  | Web | `writeText`'s promise resolved | its refusal (`Denied` for a permission), the page's own clipboard keeping its earlier text; `ApplicationOnly` where the page has no Clipboard API: the page keeps the text for its own reads |
-  | Headless, in memory | always | never; the scripted double answers writes through its write script, refusing or holding them as a test asks (`ScriptedClipboard::writes`, `fail_writes_with`, `hold_writes`) |
+  A Wayland compositor confirms no selection request, so a request it drops silently still
+  answers `Ok`; a Wayland host names no input once the keyboard left the window it went to, so a
+  write after that is kept for the application (`ApplicationOnly`) rather than sent under a stale
+  serial. Worth a retry: `Unavailable` and `Timeout` (a clipboard held or slow now), `Denied` once
+  the user acts; `Gone` is not: the host's clipboard will serve nothing more this run. A caller
+  with nothing to undo (a copy) drops the completion, and treats `ApplicationOnly` as done;
+  `EditableText`'s cut deletes the selection once the write answers `Ok` or `ApplicationOnly`
+  (nothing is lost: a paste in the application returns the text), and only under the rule its
+  start, its enablement and a paste follow at both ends (the field mounted, enabled, holding the
+  focus, on the same controller), with its text and selection as the cut left them. Every path
+  to a field's cut or paste focuses the field first, assistive technology's popup included. The
+  write changes on every host in one change because the seam is shared: a write that answers on
+  one host and not on the others would be two contracts.
+
+  | Host | `Ok` | `ApplicationOnly` | Refused (nothing kept) |
+  |------|------|-------------------|------------------------|
+  | Win32 | the text and its markers are set | never | `Unavailable`: held past the patience (§2), memory not made (the clipboard untouched), `EmptyClipboard` or `SetClipboardData` failed (the clipboard left without text), more than `MAX_WAITING` requests wait; `Timeout`: queued past `LONGEST_QUEUED`; `Gone`: the clipboard thread could not start or has ended |
+  | AppKit | the pasteboard took the string | never | `Unavailable`: a marker or the set failed after `clearContents` (the pasteboard left without text) |
+  | UIKit | the pasteboard took the string | never | `Unavailable`: off its main thread (the set replaces the items in one call) |
+  | Android | `setPrimaryClip` returned | never | `Unavailable`: a JNI failure, no clipboard service (the clip is built and marked before it is set) |
+  | X11 | the clipboard thread owns `CLIPBOARD` at the server's time | never | `Unavailable`: another client took it first; a write a newer one replaced before it owned shares the newer one's answer |
+  | Wayland | the seat's selection serves the write: a new source set under the input's serial, or the source set under it answering in place (a plain write through a hinted source is served marked secret) | no input serial to set it under (none yet, or the keyboard left the window): kept under no seat until another client's selection arrives, as the primary selection keeps a claim | `Unavailable`: no source could be made or set, or a concealed write would go out through a source without the hint |
+  | Web | `writeText`'s promise resolved | no Clipboard API (an insecure context): the page keeps the text for its own reads | the browser's refusal (`Denied` for a permission), the page keeping its earlier text |
+  | Headless, in memory | always | never | never; the scripted double answers through its write script as a test asks (`ScriptedClipboard::writes`, `fail_writes_with`, `hold_writes`) |
 
 - **§2. Win32 retries a held clipboard on a stated schedule.** `OpenClipboard` fails while
   another window holds the clipboard; a request tries again first after `FIRST_DELAY` (4 ms), each
   delay twice the one before up to `LONGEST_DELAY` (64 ms), the last attempt when its `PATIENCE`
   (500 ms, counted from when its turn came) runs out, and is then refused `Unavailable`. A request
-  queued behind a slow one keeps its full patience; its time in the queue has a bound of its own,
-  `LONGEST_QUEUED` (40 s: one late render and its neighbours' patience), past which it is refused
-  `Timeout` without an attempt. The schedule is a pure model (`clipboard::patience`) whose clock
-  the caller passes, tested with instants of its own. Off the owner thread the patience can be a
-  hundred times Chromium's: a copy can wait for a remote-desktop client reading over a slow link.
+  queued behind a slow one keeps its full patience; the wait for its turn has a bound of its own,
+  `LONGEST_QUEUED` (40 s), past which it is refused `Timeout` without an attempt. That bounds the
+  wait for the turn, not the answer: a request whose turn comes just inside it still makes its
+  attempts and its own call to Win32, which a late or hung owner keeps up to thirty seconds, so a
+  request answers within `LONGEST_QUEUED`, `PATIENCE` and thirty seconds at worst. The schedule is
+  a pure model (`clipboard::patience`) whose clock the caller passes, tested with instants of its
+  own. Off the owner thread the patience can be a hundred times Chromium's: a copy can wait for a
+  remote-desktop client reading over a slow link.
 - **§3. Win32 serves its clipboard on a thread of its own.** One `flui-clipboard` thread per
   process owns the message-only clipboard window, opens the clipboard for every read and write
   and answers each through its resolver; the owner thread only queues, into a channel bounded at
-  `MAX_WAITING` (64) requests, and a request past it is refused at once. Requests are served in
-  the order they were made, so a read after a write answers what the write left. Between attempts
-  the thread waits in `MsgWaitForMultipleObjectsEx` on its wake event and its messages, pumping
-  them: another process's `EmptyClipboard` sends the owner window `WM_DESTROYCLIPBOARD` and waits.
-  A read of text rendered on demand waits on that thread, and Win32's own thirty-second bound
-  ends it as `ClipboardError::Timeout`; the owner's frames keep turning meanwhile, and the requests
-  behind it wait. A read whose readers all went away is still performed: a handle's shared read
-  waits for the host's answer whatever its readers do, so the thread cannot tell it apart. Everything
-  the thread runs that it does not own is contained: a request's conversions and `tracing` events
-  (a subscriber is user code) and the delivery of its answer. A request whose work panics is
-  answered `Unavailable`, the first failure is reported and discarded, a panic in the report is
-  discarded too, and the thread goes on to the next request; a panic outside any request restarts
-  its loop with the request whose turn it was, at most `MAX_RESTARTS` (4) times within
-  `RESTART_WINDOW` (10 s). Past them the failure recurs at once: the thread stops serving, logs it
-  once, and refuses every request `Unavailable` from then on, still pumping its window. The
-  thread uses `GetClipboardData`, which needs no COM apartment; `OleGetClipboard` would tie the
-  data object to the thread's apartment and is not used. Since only this thread opens the
-  clipboard, FLUI's sessions cannot overlap, and the process-wide clipboard lock that serialized
-  sessions opened from any thread is gone.
+  `MAX_WAITING` (64) requests, and a request past it is refused `Unavailable` at once. Requests are
+  served in the order they were made, so a read after a write answers what the write left.
+  Between attempts the thread waits in `MsgWaitForMultipleObjectsEx` on its wake event and its
+  messages, pumping them: another process's `EmptyClipboard` sends the owner window
+  `WM_DESTROYCLIPBOARD` and waits. A read of text rendered on demand waits on that thread, and
+  Win32's own thirty-second bound ends it as `ClipboardError::Timeout`; the owner's frames keep
+  turning meanwhile, and the requests behind it wait. A read whose readers all went away is still
+  performed: a handle's shared read waits for the host's answer whatever its readers do.
+  Everything the thread runs that it does not own is contained: a request's conversions and
+  `tracing` events (a subscriber is user code) and the delivery of its answer. A request whose
+  work panics is answered `Unavailable`, the first failure is reported and discarded, a panic in
+  the report is discarded too, and the thread goes on to the next request. Nothing else in the
+  thread's loop runs code it does not own (its window's messages cross `os_entry`), so the loop
+  has no failure to restart from; were it to end all the same, its channel closes and every later
+  request answers `Gone`, as every request does when the thread could not start. The thread uses
+  `GetClipboardData`, which needs no COM apartment; `OleGetClipboard` would tie the data object to
+  the thread's apartment and is not used. Since only this thread opens the clipboard, FLUI's
+  sessions cannot overlap, and the process-wide clipboard lock that serialized sessions opened
+  from any thread is gone.
 - **§4. A late answer reaches only its request.** An answer settles the completion its resolver
   was made for: the resolver carries the completion's generational slot, so an answer after the
   caller dropped the completion settles nothing. While the thread holds the clipboard open no other
@@ -171,12 +182,12 @@ can act on it and keeps the owner thread free of another process's waits.
 - Good, because a copy that another application blocked is no longer lost silently, and a cut
   keeps the text the clipboard did not take.
 - Good, because no other process can freeze the Win32 owner thread through the clipboard.
+- Good, because a host that cannot reach a system clipboard now (an insecure web page, a Wayland
+  window without an input serial) still cuts, copies and pastes inside the application, and says
+  so.
 - Bad, because a cut deletes its selection one owner turn after the chord rather than inside it.
 - Bad, because every Win32 clipboard answer crosses a thread, and the requests behind a read of a
   late renderer wait up to Win32's thirty seconds.
-- Bad, because a Wayland application that writes before any user input reaches it (a copy at
-  start-up), or after the keyboard left its window, is refused `Denied`, where its own reads used
-  to answer the text.
 - Neutral, because AppKit, UIKit and Android still read on the owner thread: a pasteboard item
   another application provides lazily, or an Android clip whose text is a content URI, still
   holds it while the other application answers ([gaps](../gaps.md#clipboard-is-broken-on-two-environments)).
@@ -184,8 +195,7 @@ can act on it and keeps the owner thread free of another process's waits.
 ### Confirmation
 
 - `clipboard::patience` tests: `a_held_clipboard_is_tried_on_a_doubling_schedule_until_the_patience_ends`,
-  `the_queue_has_a_bound_of_its_own`, `the_delay_saturates_without_overflow`,
-  `restarts_are_counted_within_a_window`.
+  `the_queue_has_a_bound_of_its_own`, `the_delay_saturates_without_overflow`.
 - `clipboard::windows::tests` on Windows: `a_write_and_a_read_while_the_clipboard_is_held_for_a_moment_land_once_it_is_let_go`,
   `a_clipboard_held_past_the_patience_refuses_the_write`, `a_write_that_cannot_be_made_leaves_the_clipboard_as_it_was`,
   `a_panicking_subscriber_leaves_the_clipboard_thread_serving`, `a_read_of_text_rendered_late_never_holds_the_caller`,
@@ -193,13 +203,18 @@ can act on it and keeps the owner thread free of another process's waits.
   `a_burst_of_clipboard_writes_is_answered_in_full`, `a_concealed_write_stays_out_of_the_windows_history`.
 - `clipboard::linux::wayland::tests::a_write_answers_ok_only_where_the_clipboard_serves_it`,
   `owner::linux::wayland::user_input::tests::the_keyboard_leaving_ends_the_last_input_it_had`,
+  `clipboard::linux::owners::tests::text_held_under_no_seat_answers_until_a_newer_one`,
   `clipboard::linux::x11::tests::a_clipboard_write_answers_once_it_owns_the_selection` (Xvfb),
   `clipboard::page::tests::a_refused_write_is_not_read_back`,
   `a_write_the_page_alone_keeps_is_not_ok_but_is_read_back`.
-- `capability_seam::a_refused_write_answers_its_refusal` and
-  `a_scripted_write_step_refuses_that_write_alone` (`flui-testing`),
+- `scenario::a_scripts_observer_hears_every_answer_however_it_is_given`,
+  `capability_seam::a_refused_write_answers_its_refusal`,
+  `a_scripted_write_step_refuses_that_write_alone`,
+  `the_scripted_clipboard_keeps_one_order_across_reads_and_writes` (`flui-testing`),
   `editable_text_clipboard::a_cut_deletes_only_what_the_clipboard_took`,
-  `a_cut_answered_after_its_field_left_deletes_nothing` and
-  `selection_menu::assistive_technology_cuts_and_pastes_in_an_unfocused_field` (`flui-widgets`).
+  `a_cut_the_application_alone_keeps_deletes_and_pastes_back`,
+  `a_cut_answered_after_its_field_left_deletes_nothing`,
+  `selection_menu::a_toolbar_cut_at_a_field_without_the_focus_is_refused` and
+  `assistive_technology_cuts_and_pastes_in_an_unfocused_field` (`flui-widgets`).
 - The compiler: `ClipboardBackend::write` and `NativeClipboard::write` cannot be implemented
   without taking the resolver.

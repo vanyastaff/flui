@@ -10,7 +10,7 @@ use flui_interaction::ClipboardHandle;
 use flui_interaction::focus::{FocusAttachment, FocusNode};
 use flui_platform::capability::Abandoned;
 use flui_platform::text_store::OwnerCalls;
-use flui_platform::{ClipboardRead, ClipboardWritten};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWritten};
 use flui_view::EventContext;
 
 use super::{CompositionCommit, EditObserver};
@@ -58,9 +58,6 @@ impl ClipboardTextAction {
             && node.has_primary_focus()
             && node.can_request_focus()
     }
-    fn enabled(&self) -> bool {
-        self.focus_node.borrow().can_request_focus()
-    }
 
     /// Whether an answer that arrives after its request still applies: the
     /// field admits an edit and drives `controller`, the controller it drove
@@ -80,7 +77,7 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
     fn is_enabled(&self, intent: &CopySelectionTextIntent) -> bool {
         self.clipboard.is_some()
             && !self.obscure.get()
-            && (*intent == CopySelectionTextIntent::Copy || self.enabled())
+            && (*intent == CopySelectionTextIntent::Copy || self.admits_edit())
             && self.controller.borrow().has_selection()
     }
 
@@ -115,7 +112,8 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
 
 impl ClipboardTextAction {
     /// What a cut does once the clipboard answers its write: deletes the
-    /// selection it wrote, if the clipboard took it, the field still edits
+    /// selection it wrote, if the clipboard took it (or the application alone
+    /// kept it, which a paste returns), the field still edits
     /// (mounted, focused, enabled, on the same controller) and its text and
     /// selection are the ones the cut wrote. A refused or abandoned write
     /// deletes nothing, so a cut the clipboard could not take loses no text.
@@ -128,7 +126,9 @@ impl ClipboardTextAction {
         let text = controller.text();
         let selection = controller.selection();
         move |written| {
-            if written != Ok(Ok(())) {
+            // Taken, or kept by the application alone: a paste in it returns
+            // the text, so nothing is lost by deleting it.
+            if !matches!(written, Ok(Ok(()) | Err(ClipboardError::ApplicationOnly))) {
                 return;
             }
             let unchanged = authority.still_edits(&controller)
@@ -145,7 +145,7 @@ impl ClipboardTextAction {
 
 impl Action<PasteTextIntent> for ClipboardTextAction {
     fn is_enabled(&self, _intent: &PasteTextIntent) -> bool {
-        self.clipboard.is_some() && self.enabled()
+        self.clipboard.is_some() && self.admits_edit()
     }
 
     /// Commits an active composition first, keeping its text, so the paste

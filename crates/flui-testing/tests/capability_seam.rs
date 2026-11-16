@@ -211,6 +211,99 @@ pub(crate) fn a_scripted_write_step_refuses_that_write_alone() {
     assert_eq!(scripted.writes().received(), 2);
 }
 
+/// Whatever answers a write `Ok` lands its text, in one place: a step, a
+/// delayed step and a released hold, as the standing answer does; and an
+/// `ApplicationOnly` answer keeps the text for this clipboard's reads.
+pub(crate) fn every_ok_answer_to_a_scripted_write_lands_its_text() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    let clipboard = acquire(&mut host).expect("provided");
+
+    scripted.writes().answer_next(Answer::value(Ok(())));
+    drop(clipboard.write(ClipboardWrite::text("stepped").concealed()));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(scripted.text().as_deref(), Some("stepped"));
+    assert!(
+        scripted.is_concealed(),
+        "the step's write is the clipboard's"
+    );
+
+    scripted
+        .writes()
+        .answer_next(Answer::value(Ok(())).after(Duration::from_millis(50)));
+    drop(clipboard.write_text("delayed"));
+    let _ = host.pump(Duration::from_millis(49));
+    assert_eq!(
+        scripted.text().as_deref(),
+        Some("stepped"),
+        "not before its answer"
+    );
+    let _ = host.pump(Duration::from_millis(1));
+    assert_eq!(scripted.text().as_deref(), Some("delayed"));
+
+    let hold = scripted.hold_writes();
+    drop(clipboard.write_text("held"));
+    assert_eq!(hold.held(), 1);
+    drop(hold);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(scripted.text().as_deref(), Some("held"));
+
+    scripted
+        .writes()
+        .answer_next(Answer::value(Err(ClipboardError::ApplicationOnly)));
+    let kept = settle_into(clipboard.write_text("kept"));
+    let read = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *kept.borrow(),
+        Some(Ok(Err(ClipboardError::ApplicationOnly)))
+    );
+    assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("kept"))))));
+}
+
+/// Reads and writes keep one order, as a host's clipboard serves them: a
+/// read asked after a held write waits for it and answers what it wrote; a
+/// read asked before it answers what was there; and writes land in the
+/// order they were asked, whichever answer comes first.
+pub(crate) fn the_scripted_clipboard_keeps_one_order_across_reads_and_writes() {
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("before");
+    let clipboard = acquire(&mut host).expect("provided");
+
+    let earlier = settle_into(clipboard.read_text());
+    let hold = scripted.hold_writes();
+    drop(clipboard.write_text("written"));
+    let later = settle_into(clipboard.read_text());
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*earlier.borrow(), Some(Ok(Ok(Some(answered("before"))))));
+    assert_eq!(
+        *later.borrow(),
+        None,
+        "a read after a held write waits for it"
+    );
+    drop(hold);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*later.borrow(), Some(Ok(Ok(Some(answered("written"))))));
+
+    // The first write answers late, the second at once: the second lands
+    // last, as it was asked last.
+    scripted
+        .writes()
+        .answer_next(Answer::value(Ok(())).after(Duration::from_millis(20)));
+    drop(clipboard.write_text("first"));
+    drop(clipboard.write_text("second"));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        scripted.text().as_deref(),
+        Some("written"),
+        "the first has not landed"
+    );
+    let _ = host.pump(Duration::from_millis(20));
+    assert_eq!(scripted.text().as_deref(), Some("second"));
+}
+
 /// A concealed write reaches the host marked, pastes like any other, and an
 /// ordinary write after it is unmarked again; the handle answers what the
 /// host does with one (ADR-0152 §6).

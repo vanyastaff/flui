@@ -12,18 +12,23 @@ use std::sync::Arc;
 /// allocation, however large.
 pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 
-/// The answer to one clipboard write (ADR-0337): `Ok(())` once the clipboard
-/// holds the written text, or why the host could not put it there.
+/// The answer to one clipboard write (ADR-0337), the same on every host:
 ///
-/// `Ok(())` means the system clipboard took the text, on every host. A
-/// refused write leaves the clipboard as it was, and no later read in this
-/// process answers its text, with two exceptions: a host that had to clear
-/// the clipboard before it could fill it (Win32's `EmptyClipboard`) and was
-/// then refused by the system itself leaves the clipboard without text; and
-/// [`ClipboardError::ApplicationOnly`] names a write no system clipboard
-/// could take but the application kept, which its own reads answer. A
-/// Wayland compositor confirms no selection request: a write it drops
-/// silently still answers `Ok` (ADR-0337 §1).
+/// - `Ok(())`: the system clipboard took the text.
+/// - `Err(`[`ClipboardError::ApplicationOnly`]`)`: the system clipboard
+///   cannot take the text now, and only this application can read it back:
+///   its own later reads answer it, other applications do not see it.
+/// - any other error: nothing was kept. The clipboard is as it was, and no
+///   later read in this process answers the text, with one exception: a host
+///   that must clear the clipboard before it fills it (Win32's
+///   `EmptyClipboard`, AppKit's `clearContents`) and is then refused by the
+///   system itself leaves the clipboard without text.
+///
+/// A Wayland compositor confirms no selection request, so a request it drops
+/// silently still answers `Ok`. Worth a retry: [`ClipboardError::Unavailable`]
+/// and [`ClipboardError::Timeout`] (a clipboard held or slow now), and
+/// [`ClipboardError::Denied`] once the user acts; not
+/// [`ClipboardError::Gone`].
 pub type ClipboardWritten = Result<(), ClipboardError>;
 
 /// Why a clipboard or primary-selection read has no answer, or a clipboard
@@ -35,7 +40,8 @@ pub type ClipboardWritten = Result<(), ClipboardError>;
 #[non_exhaustive]
 pub enum ClipboardError {
     /// The host could not reach the clipboard: another application held it
-    /// open past the host's patience, the display connection is gone, or the
+    /// open past the host's patience, the host's queue of requests is full,
+    /// the display connection is gone, or the
     /// selection's owner left during the transfer.
     #[error("the clipboard could not be reached")]
     Unavailable,
@@ -56,13 +62,19 @@ pub enum ClipboardError {
     /// read stops rather than grow without bound.
     #[error("the clipboard's text is larger than the host reads")]
     TooLarge,
-    /// Only a write answers it: no system clipboard can be reached (a web
-    /// page without the Clipboard API), so the application alone keeps the
-    /// text. Its own later reads answer it; no other application can paste
-    /// it, and a caller that undoes on a refused write (a cut) treats it as
-    /// refused.
-    #[error("the text was kept by this application alone")]
+    /// Only a write answers it: the system clipboard cannot take the text
+    /// now (a web page without the Clipboard API, a Wayland write with no
+    /// input serial to set the selection under), so the host keeps it for
+    /// this application alone. Its own later reads answer it; no other
+    /// application can paste it. Nothing is lost: a cut may delete on it, as
+    /// a paste in the application returns the text.
+    #[error("only this application can read the text back")]
     ApplicationOnly,
+    /// The host's clipboard is gone for the rest of this run: it could not
+    /// be started, or stopped (Win32's clipboard thread). No later request
+    /// is served; not worth a retry.
+    #[error("the clipboard is gone for this run")]
+    Gone,
 }
 
 /// One write to the clipboard: its text, and whether the clipboard keeps it

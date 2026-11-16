@@ -120,19 +120,6 @@ pub(crate) fn a_cut_deletes_only_what_the_clipboard_took() {
     assert_eq!(controller.text(), "abc", "a refused cut deletes nothing");
     assert_eq!(harness.clipboard().text(), None);
 
-    // Kept by the application alone (a web page without the Clipboard API):
-    // no other application could paste it, so the cut deletes nothing.
-    harness
-        .clipboard()
-        .fail_writes_with(flui_platform::ClipboardError::ApplicationOnly);
-    assert!(cut(&harness), "cut consumes the chord");
-    harness.tick();
-    assert_eq!(
-        controller.text(),
-        "abc",
-        "an application-only write deletes nothing"
-    );
-
     harness.clipboard().stop_failing_writes();
     assert!(cut(&harness), "cut consumes the chord");
     assert_eq!(
@@ -143,6 +130,41 @@ pub(crate) fn a_cut_deletes_only_what_the_clipboard_took() {
     harness.tick();
     assert_eq!(controller.text(), "");
     assert_eq!(harness.clipboard().text().as_deref(), Some("abc"));
+}
+
+/// A cut whose text only the application can read back (the system
+/// clipboard cannot take it now: a web page without the Clipboard API, a
+/// Wayland write with no input serial) deletes the selection, and a paste in
+/// the application puts it back: nothing is lost (ADR-0337 §1).
+///
+/// Fails without the change: the cut deleted only on `Ok`, so on such a
+/// host Cut consumed the chord and did nothing.
+pub(crate) fn a_cut_the_application_alone_keeps_deletes_and_pastes_back() {
+    let controller = TextEditingController::with_text("abc");
+    let (mut harness, _node) = mount_field(&controller, |field| field);
+    harness
+        .clipboard()
+        .fail_writes_with(flui_platform::ClipboardError::ApplicationOnly);
+    controller.set_selection(0, 3);
+    let consumed = harness
+        .focus_manager()
+        .dispatch_key_event(&chord("x", command()))
+        .is_handled();
+    assert!(consumed, "cut consumes the chord");
+    harness.tick();
+    assert_eq!(
+        controller.text(),
+        "",
+        "the cut deletes what the application kept"
+    );
+    assert_eq!(harness.clipboard().text().as_deref(), Some("abc"));
+
+    let _ = harness
+        .focus_manager()
+        .dispatch_key_event(&chord("v", command()))
+        .is_handled();
+    harness.tick();
+    assert_eq!(controller.text(), "abc", "a paste puts it back");
 }
 
 /// A cut whose answer arrives after its field lost the focus, or was
@@ -161,11 +183,12 @@ pub(crate) fn a_cut_answered_after_its_field_left_deletes_nothing() {
 
     let controller = TextEditingController::with_text("abc");
     let (mut harness, node) = mount_field(&controller, |field| field);
-    harness.clipboard().hold_writes();
+    let hold = harness.clipboard().hold_writes();
     controller.set_selection(0, 3);
     assert!(cut(&harness), "cut consumes the chord");
     node.unfocus();
-    assert_eq!(harness.clipboard().answer_held_writes(), 1);
+    assert_eq!(hold.held(), 1);
+    drop(hold);
     harness.tick();
     assert_eq!(
         controller.text(),
@@ -175,11 +198,12 @@ pub(crate) fn a_cut_answered_after_its_field_left_deletes_nothing() {
 
     let controller = TextEditingController::with_text("abc");
     let (mut harness, _node) = mount_field(&controller, |field| field);
-    harness.clipboard().hold_writes();
+    let hold = harness.clipboard().hold_writes();
     controller.set_selection(0, 3);
     assert!(cut(&harness), "cut consumes the chord");
     harness.swap_root(flui_widgets::SizedBox::new(1.0, 1.0));
-    assert_eq!(harness.clipboard().answer_held_writes(), 1);
+    assert_eq!(hold.held(), 1);
+    drop(hold);
     harness.tick();
     assert_eq!(controller.text(), "abc", "a disposed field keeps its text");
 
@@ -187,12 +211,13 @@ pub(crate) fn a_cut_answered_after_its_field_left_deletes_nothing() {
     // again, with the text and selection the cut wrote, so the cut deletes.
     let controller = TextEditingController::with_text("abc");
     let (mut harness, node) = mount_field(&controller, |field| field);
-    harness.clipboard().hold_writes();
+    let hold = harness.clipboard().hold_writes();
     controller.set_selection(0, 3);
     assert!(cut(&harness), "cut consumes the chord");
     node.unfocus();
     let _ = node.request_focus();
-    assert_eq!(harness.clipboard().answer_held_writes(), 1);
+    assert_eq!(hold.held(), 1);
+    drop(hold);
     harness.tick();
     assert_eq!(
         controller.text(),

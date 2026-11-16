@@ -1,6 +1,6 @@
 //! How long the Win32 clipboard keeps trying to open a clipboard another
-//! process holds, how long a request may wait for its turn, and how often
-//! its thread may start again (ADR-0337 §2).
+//! process holds, and how long a request may wait for its turn
+//! (ADR-0337 §2).
 //!
 //! `OpenClipboard` fails while any other window holds the clipboard open,
 //! and clipboard managers, remote-desktop clients (`rdpclip.exe`) and
@@ -33,18 +33,13 @@ pub(crate) const FIRST_DELAY: Duration = Duration::from_millis(4);
 /// The longest delay between two attempts.
 pub(crate) const LONGEST_DELAY: Duration = Duration::from_millis(64);
 
-/// The longest a request waits for its turn: one read of a late renderer
-/// (Win32 gives up on it after thirty seconds) and the patience of the
-/// requests around it, with room to spare. Past it the caller has long
-/// stopped waiting for a clipboard answer.
+/// The longest a request waits for its turn before it is refused
+/// `Timeout`. It bounds the wait for a request's turn, not its answer: a
+/// request whose turn comes just inside it still makes its attempts and its
+/// own call to Win32, which a late or hung owner can keep thirty seconds,
+/// so a request answers within `LONGEST_QUEUED`, [`PATIENCE`] and thirty
+/// seconds at worst.
 pub(crate) const LONGEST_QUEUED: Duration = Duration::from_secs(40);
-
-/// How many times the clipboard thread may start its loop again within
-/// [`RESTART_WINDOW`] before it stops serving.
-pub(crate) const MAX_RESTARTS: usize = 4;
-
-/// The window [`MAX_RESTARTS`] counts restarts in.
-pub(crate) const RESTART_WINDOW: Duration = Duration::from_secs(10);
 
 /// Whether a request accepted at `accepted` has waited past
 /// [`LONGEST_QUEUED`] for its turn at `now`.
@@ -90,34 +85,6 @@ fn delay_after(failures: u32) -> Duration {
         .checked_shl(failures)
         .and_then(|factor| FIRST_DELAY.checked_mul(factor))
         .map_or(LONGEST_DELAY, |delay| delay.min(LONGEST_DELAY))
-}
-
-/// The restarts the clipboard thread has left: a failure that recurs at once
-/// would otherwise spin a core and log without end.
-#[derive(Debug)]
-pub(crate) struct RestartBudget {
-    /// The instants of the restarts within the last window, oldest first.
-    recent: Vec<Instant>,
-}
-
-impl RestartBudget {
-    pub(crate) fn new() -> Self {
-        Self {
-            recent: Vec::with_capacity(MAX_RESTARTS),
-        }
-    }
-
-    /// The thread failed at `now`: `true` when it may start again, `false`
-    /// when [`MAX_RESTARTS`] restarts already fell within [`RESTART_WINDOW`].
-    pub(crate) fn restart(&mut self, now: Instant) -> bool {
-        self.recent
-            .retain(|at| now.saturating_duration_since(*at) < RESTART_WINDOW);
-        if self.recent.len() >= MAX_RESTARTS {
-            return false;
-        }
-        self.recent.push(now);
-        true
-    }
 }
 
 #[cfg(test)]
@@ -182,25 +149,5 @@ mod tests {
             assert_eq!(delay_after(failures), LONGEST_DELAY, "{failures}");
         }
         assert_eq!(delay_after(0), FIRST_DELAY);
-    }
-
-    /// The thread may start again a few times within the window, then not,
-    /// and again once the window has passed the earlier restarts.
-    #[test]
-    fn restarts_are_counted_within_a_window() {
-        let start = Instant::now();
-        let mut budget = RestartBudget::new();
-        for at in 0..MAX_RESTARTS {
-            let at = u64::try_from(at).expect("few restarts");
-            assert!(budget.restart(start + Duration::from_millis(at)));
-        }
-        assert!(
-            !budget.restart(start + Duration::from_millis(10)),
-            "a failure that recurs at once ends the restarts"
-        );
-        assert!(
-            budget.restart(start + RESTART_WINDOW + Duration::from_secs(1)),
-            "restarts spread over time are allowed"
-        );
     }
 }

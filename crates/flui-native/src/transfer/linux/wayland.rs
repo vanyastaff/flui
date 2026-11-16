@@ -12,7 +12,8 @@
 //! - **A seat's selection** reaches its device as a data offer named by
 //!   `selection`, sent before the keyboard enters one of the client's
 //!   surfaces and whenever it changes while the keyboard is in one. The
-//!   device keeps the last, which a read of the clipboard asks.
+//!   device keeps the last, and every [`DeviceListener`] hears that one
+//!   arrived.
 //! - **A drag** over one of the client's surfaces reaches the seat's device as
 //!   `enter` with its offer, then `motion`, and `leave` or `drop`. The
 //!   [`DragListener`] hears each, and the offer of an `enter` is its own
@@ -61,6 +62,13 @@ pub(crate) const MAX_TYPES: usize = 100;
 /// 127 characters each (RFC 6838), so a longer name names nothing.
 pub(crate) const MAX_TYPE_LEN: usize = 255;
 
+/// What a feature hears of the devices.
+pub(crate) trait DeviceListener: Send + Sync {
+    /// A seat's device was told a selection offer: another client's, or the
+    /// application's own as the compositor holds it.
+    fn selection_arrived(&self);
+}
+
 /// What a seat's device was told of a drag over one of the client's
 /// surfaces.
 #[derive(Debug)]
@@ -101,6 +109,7 @@ pub(crate) struct DataDevices {
 /// What the devices hold, reached on the owner thread.
 struct Shared {
     state: OwnerCell<State>,
+    listeners: OwnerCell<Vec<Weak<dyn DeviceListener>>>,
     /// The drag feature, which takes the offers of the drags.
     drags: OwnerCell<Option<Weak<dyn DragListener>>>,
 }
@@ -246,9 +255,18 @@ impl DataDevices {
         Self {
             shared: Arc::new(Shared {
                 state: OwnerCell::new(),
+                listeners: OwnerCell::new(),
                 drags: OwnerCell::new(),
             }),
         }
+    }
+
+    /// `listener` hears what the devices are told from now on, while it
+    /// lives.
+    pub(crate) fn listen(&self, listener: Weak<dyn DeviceListener>) {
+        self.shared
+            .listeners
+            .with(|listeners| listeners.push(listener));
     }
 
     /// `listener` hears the drags over the client's surfaces from now on,
@@ -614,6 +632,7 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
             }
             Err(event) => event,
         };
+        let selection = matches!(&event, wl_data_device::Event::Selection { id: Some(_) });
         let unheld = shared
             .state
             .with(|state| {
@@ -641,6 +660,20 @@ impl Dispatch<WlDataDevice, DeviceData> for WaylandState {
             .flatten();
         if let Some(offer) = unheld {
             offer.destroy();
+        }
+        if selection {
+            // Heard with nothing of the devices held: a listener may read
+            // them.
+            let listeners = shared
+                .listeners
+                .with(|listeners| {
+                    listeners.retain(|listener| listener.strong_count() > 0);
+                    listeners.clone()
+                })
+                .unwrap_or_default();
+            for listener in listeners.iter().filter_map(Weak::upgrade) {
+                listener.selection_arrived();
+            }
         }
     }
 

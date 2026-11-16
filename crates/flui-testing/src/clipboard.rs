@@ -15,16 +15,23 @@
 //! reads fail as a host that cannot reach its clipboard does.
 //!
 //! Writes go through a second script on the same scenario,
-//! [`writes`](ScriptedClipboard::writes), whose standing answer takes the
-//! write onto the clipboard (ADR-0337): a test refuses a write with a step
-//! or with [`fail_writes_with`](ScriptedClipboard::fail_writes_with), and
-//! holds writes with [`hold_writes`](ScriptedClipboard::hold_writes) until
-//! [`answer_held_writes`](ScriptedClipboard::answer_held_writes).
+//! [`writes`](ScriptedClipboard::writes), of [`WriteRequest`]s (ADR-0337):
+//! a step, a delayed step, the standing answer or a release decides whether
+//! a write is taken and when, and whenever a write is answered `Ok` or
+//! [`ApplicationOnly`](ClipboardError::ApplicationOnly), the clipboard takes
+//! its text, in one place. [`fail_writes_with`](ScriptedClipboard::fail_writes_with)
+//! makes the standing answer refuse, and
+//! [`hold_writes`](ScriptedClipboard::hold_writes) holds writes while its
+//! hold lives. Reads and writes keep one order, as a host's clipboard serves
+//! them (ADR-0337 §3): a read asked after a write waits until that write is
+//! answered, and writes land in the order they were asked, however their
+//! answers were scheduled.
 //! [`answer_concealment`](ScriptedClipboard::answer_concealment) sets what
 //! the host does with a concealed write, and
 //! [`is_concealed`](ScriptedClipboard::is_concealed) tells whether the text
 //! came from one.
 
+use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_interaction::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
@@ -42,13 +49,25 @@ pub enum ClipboardRequest {
     ReadText,
 }
 
+/// A write a clipboard's handle asked of its host: its number in the order
+/// the writes were asked, from 1, and the write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WriteRequest {
+    /// The write's place among the writes asked of this clipboard, from 1.
+    pub number: u64,
+    /// What it asks.
+    pub write: ClipboardWrite,
+}
+
 /// The clipboard a headless test host hands its widgets. Owner-thread, cheap
 /// to clone; every clone is the same clipboard.
 #[derive(Clone)]
 pub struct ScriptedClipboard {
     contents: Rc<RefCell<Contents>>,
+    order: Rc<RefCell<Order>>,
     reads: Script<ClipboardRequest, ClipboardRead>,
-    writes: Script<ClipboardWrite, ClipboardWritten>,
+    writes: Script<WriteRequest, ClipboardWritten>,
     service: Track<ServiceState>,
 }
 
@@ -61,7 +80,7 @@ struct Contents {
     /// [`Concealment::Honored`].
     concealment: Option<Concealment>,
     failure: Option<ClipboardError>,
-    /// What a write is refused with; `None` takes it.
+    /// What the standing answer refuses a write with; `None` takes it.
     write_failure: Option<ClipboardError>,
     /// One clone per live handle.
     handles: Rc<()>,
@@ -76,16 +95,32 @@ impl Contents {
         }
     }
 
-    /// Take `write` onto the clipboard, or refuse it with the scripted
-    /// failure, which leaves the clipboard as it was.
-    fn take(&mut self, write: ClipboardWrite) -> ClipboardWritten {
-        if let Some(error) = self.write_failure {
-            return Err(error);
-        }
+    /// What the standing answer gives a write: the scripted failure, or
+    /// `Ok`.
+    fn decide(&self) -> ClipboardWritten {
+        self.write_failure.map_or(Ok(()), Err)
+    }
+
+    /// Take `write`'s text onto the clipboard.
+    fn take(&mut self, write: ClipboardWrite) {
         self.concealed = write.is_concealed();
         self.text = Some(Arc::<str>::from(write.into_text()));
-        Ok(())
     }
+}
+
+/// The one order reads and writes keep.
+#[derive(Default)]
+struct Order {
+    /// How many writes were asked.
+    asked: u64,
+    /// How many writes, from the first, were answered and landed.
+    landed: u64,
+    /// Writes answered ahead of an earlier one, by number: the write and
+    /// its answer, or `None` for one that ended unanswered.
+    early: BTreeMap<u64, Option<(ClipboardWrite, ClipboardWritten)>>,
+    /// Reads asked behind writes not landed yet: the writes they wait for
+    /// (by count) and their answers.
+    reads: VecDeque<(u64, Resolver<ClipboardRead>)>,
 }
 
 impl Default for ScriptedClipboard {
@@ -95,14 +130,15 @@ impl Default for ScriptedClipboard {
 }
 
 impl ScriptedClipboard {
-    /// An empty clipboard on a scenario of its own, whose reads answer at
-    /// once.
+    /// An empty clipboard on a scenario of its own, whose reads and writes
+    /// answer at once.
     #[must_use]
     pub fn new() -> Self {
         Self::on(&Scenario::new())
     }
 
-    /// An empty clipboard on `scenario`, whose reads answer at once.
+    /// An empty clipboard on `scenario`, whose reads and writes answer at
+    /// once.
     #[must_use]
     pub fn on(scenario: &Scenario) -> Self {
         let contents = Rc::new(RefCell::new(Contents::default()));
@@ -110,13 +146,30 @@ impl ScriptedClipboard {
         let answered = Rc::clone(&contents);
         reads.otherwise(move |_: &ClipboardRequest| answered.borrow().answer());
         let writes = scenario.script("clipboard writes");
-        let taken = Rc::clone(&contents);
-        writes.otherwise(move |write: &ClipboardWrite| taken.borrow_mut().take(write.clone()));
-        Self {
+        let decided = Rc::clone(&contents);
+        writes.otherwise(move |_: &WriteRequest| decided.borrow().decide());
+        let clipboard = Self {
             contents,
+            order: Rc::default(),
             reads,
             writes,
             service: scenario.service("clipboard"),
+        };
+        let heard = clipboard.landing();
+        clipboard
+            .writes
+            .on_answer(move |request, written| heard.answered(request, written));
+        clipboard
+    }
+
+    /// What the write script's observer keeps: the clipboard's state and
+    /// order, and its read script, which a landed write lets waiting reads
+    /// through to.
+    fn landing(&self) -> Landing {
+        Landing {
+            contents: Rc::downgrade(&self.contents),
+            order: Rc::downgrade(&self.order),
+            reads: self.reads.clone(),
         }
     }
 
@@ -125,6 +178,17 @@ impl ScriptedClipboard {
     #[must_use]
     pub fn reads(&self) -> &Script<ClipboardRequest, ClipboardRead> {
         &self.reads
+    }
+
+    /// The script that answers writes (ADR-0337): its standing answer takes
+    /// the write, or refuses it with what
+    /// [`fail_writes_with`](Self::fail_writes_with) set; its steps answer
+    /// writes in order before it. Whatever answers a write `Ok` or
+    /// [`ApplicationOnly`](ClipboardError::ApplicationOnly) lands its text
+    /// on the clipboard; any other answer leaves the clipboard as it was.
+    #[must_use]
+    pub fn writes(&self) -> &Script<WriteRequest, ClipboardWritten> {
+        &self.writes
     }
 
     /// Whether the clipboard is there: turned off (now, or at an instant
@@ -197,19 +261,12 @@ impl ScriptedClipboard {
         self.contents.borrow_mut().failure = None;
     }
 
-    /// The script that answers writes (ADR-0337): its standing answer takes
-    /// the write onto the clipboard, or refuses it with what
-    /// [`fail_writes_with`](Self::fail_writes_with) set, and its steps answer
-    /// writes in order before it. A step's own answer decides the write's
-    /// answer alone: a step answering `Ok` leaves the clipboard as it was.
-    #[must_use]
-    pub fn writes(&self) -> &Script<ClipboardWrite, ClipboardWritten> {
-        &self.writes
-    }
-
-    /// Refuse every later write with `error`, leaving the clipboard as it
-    /// was, as a host answers when another application holds the clipboard
-    /// past its patience, until [`stop_failing_writes`](Self::stop_failing_writes).
+    /// Answer every later write `error` from the standing answer, until
+    /// [`stop_failing_writes`](Self::stop_failing_writes): a refusal leaves
+    /// the clipboard as it was, as a host answers when another application
+    /// holds the clipboard past its patience, while
+    /// [`ApplicationOnly`](ClipboardError::ApplicationOnly) keeps the text
+    /// for this clipboard's own reads.
     pub fn fail_writes_with(&self, error: ClipboardError) {
         self.contents.borrow_mut().write_failure = Some(error);
     }
@@ -219,21 +276,18 @@ impl ScriptedClipboard {
         self.contents.borrow_mut().write_failure = None;
     }
 
-    /// Keep every later write unanswered and off the clipboard until
-    /// [`answer_held_writes`](Self::answer_held_writes), as a host whose
-    /// clipboard another application holds keeps it waiting.
-    pub fn hold_writes(&self) {
+    /// Hold every later write, unanswered and off the clipboard, while the
+    /// returned hold lives, as a host whose clipboard another application
+    /// holds keeps it waiting; reads asked after a held write wait for it.
+    /// Dropping the hold answers the held writes, in order, with the
+    /// standing answer.
+    #[must_use = "writes are held only while the hold is alive"]
+    pub fn hold_writes(&self) -> ClipboardWriteHold {
         self.writes.hold();
-    }
-
-    /// Take the writes held so far, in order, or refuse them with the
-    /// scripted failure, answer each, and answer later writes at once again.
-    /// Returns how many writes it answered.
-    pub fn answer_held_writes(&self) -> usize {
-        self.writes.resume();
-        let contents = Rc::clone(&self.contents);
-        self.writes
-            .release_held(|write| contents.borrow_mut().take(write.clone()))
+        ClipboardWriteHold {
+            writes: self.writes.clone(),
+            contents: Rc::clone(&self.contents),
+        }
     }
 
     /// How many reads reached this clipboard. A handle shares one read among
@@ -261,6 +315,116 @@ impl ScriptedClipboard {
     pub fn register(&self, registrar: &mut CapabilityRegistrar) {
         registrar.provide::<ClipboardCapability>(self.clone());
     }
+
+    /// A read asked now: through the read script at once, or after the
+    /// writes asked before it have landed.
+    fn read(&self, answer: Resolver<ClipboardRead>) {
+        let waiting = {
+            let mut order = self.order.borrow_mut();
+            let behind = order.landed < order.asked;
+            if behind {
+                let asked = order.asked;
+                order.reads.push_back((asked, answer));
+                None
+            } else {
+                Some(answer)
+            }
+        };
+        if let Some(answer) = waiting {
+            self.reads.receive(ClipboardRequest::ReadText, answer);
+        }
+    }
+
+    /// A write asked now, numbered in the order writes were asked.
+    fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
+        let number = {
+            let mut order = self.order.borrow_mut();
+            order.asked = order.asked.saturating_add(1);
+            order.asked
+        };
+        self.writes.receive(WriteRequest { number, write }, answer);
+    }
+}
+
+/// What the write script's observer holds: the clipboard's state, weakly,
+/// so the script it sits in does not keep the clipboard alive.
+struct Landing {
+    contents: std::rc::Weak<RefCell<Contents>>,
+    order: std::rc::Weak<RefCell<Order>>,
+    reads: Script<ClipboardRequest, ClipboardRead>,
+}
+
+impl Landing {
+    /// The write `request` was answered `written` (`None`: it ended
+    /// unanswered): land it and every write after it already answered, in
+    /// order, then let through the reads that waited for them.
+    fn answered(&self, request: &WriteRequest, written: Option<&ClipboardWritten>) {
+        let (Some(contents), Some(order)) = (self.contents.upgrade(), self.order.upgrade()) else {
+            return;
+        };
+        let released = {
+            let mut order = order.borrow_mut();
+            let answered = written.map(|written| (request.write.clone(), *written));
+            order.early.insert(request.number, answered);
+            loop {
+                let next = order.landed.saturating_add(1);
+                let Some(answered) = order.early.remove(&next) else {
+                    break;
+                };
+                if let Some((write, Ok(()) | Err(ClipboardError::ApplicationOnly))) = answered {
+                    contents.borrow_mut().take(write);
+                }
+                order.landed = next;
+            }
+            let landed = order.landed;
+            let mut released = Vec::new();
+            while order
+                .reads
+                .front()
+                .is_some_and(|(after, _)| *after <= landed)
+            {
+                if let Some((_, answer)) = order.reads.pop_front() {
+                    released.push(answer);
+                }
+            }
+            released
+        };
+        for answer in released {
+            self.reads.receive(ClipboardRequest::ReadText, answer);
+        }
+    }
+}
+
+/// Writes held on a [`ScriptedClipboard`] while this lives; dropped, the
+/// held writes are answered, in order, with the standing answer.
+#[must_use = "writes are held only while the hold is alive"]
+pub struct ClipboardWriteHold {
+    writes: Script<WriteRequest, ClipboardWritten>,
+    contents: Rc<RefCell<Contents>>,
+}
+
+impl ClipboardWriteHold {
+    /// How many writes are held now.
+    #[must_use]
+    pub fn held(&self) -> usize {
+        self.writes.held()
+    }
+}
+
+impl Drop for ClipboardWriteHold {
+    fn drop(&mut self) {
+        self.writes.resume();
+        let contents = Rc::clone(&self.contents);
+        let _ = self.writes.release_held(|_| contents.borrow().decide());
+    }
+}
+
+impl fmt::Debug for ClipboardWriteHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClipboardWriteHold")
+            .field("held", &self.writes.held())
+            .finish_non_exhaustive()
+    }
 }
 
 impl CapabilityProvider<ClipboardCapability> for ScriptedClipboard {
@@ -278,18 +442,24 @@ impl fmt::Debug for ScriptedClipboard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Copied out and the borrow released before writing: the formatter
         // is the caller's code.
-        let (text, concealed, failure) = {
+        let (text, concealed, failure, write_failure) = {
             let contents = self.contents.borrow();
-            (contents.text.clone(), contents.concealed, contents.failure)
+            (
+                contents.text.clone(),
+                contents.concealed,
+                contents.failure,
+                contents.write_failure,
+            )
         };
         f.debug_struct("ScriptedClipboard")
             .field("text", &text)
             .field("concealed", &concealed)
             .field("failure", &failure)
+            .field("write_failure", &write_failure)
             .field("reads", &self.reads)
             .field("writes", &self.writes)
             .field("service", &self.service.get())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -301,13 +471,11 @@ struct Backend {
 
 impl ClipboardBackend for Backend {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        self.clipboard
-            .reads
-            .receive(ClipboardRequest::ReadText, answer);
+        self.clipboard.read(answer);
     }
 
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
-        self.clipboard.writes.receive(write, answer);
+        self.clipboard.write(write, answer);
     }
 
     fn concealment(&self) -> Concealment {

@@ -1,14 +1,17 @@
 ### Added
 
-- **`flui-platform`**: `ClipboardWritten`, the answer to a clipboard write: `Ok(())` once the
-  clipboard holds the text, or the `ClipboardError` the host gave up with
-  ([ADR-0337](/docs/adr/ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)).
-  `ClipboardError::ApplicationOnly` names a write no system clipboard could take but the
-  application kept for its own reads (a web page without the Clipboard API).
-- **`flui-testing`**: `ScriptedClipboard::writes`, the script that answers writes, and
-  `fail_writes_with`, `stop_failing_writes`, `hold_writes`
-  and `answer_held_writes`, which refuse or hold writes as a host whose clipboard another
-  application holds does.
+- **`flui-platform`**: `ClipboardWritten`, the answer to a clipboard write
+  ([ADR-0337](/docs/adr/ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)):
+  `Ok(())` once the system clipboard took the text; `ClipboardError::ApplicationOnly` when it
+  cannot now and only this application can read the text back (a web page without the Clipboard
+  API, a Wayland window with no input serial); any other error when nothing was kept.
+  `ClipboardError::Gone` says a host's clipboard will serve nothing more this run.
+- **`flui-platform`**: `Script::on_answer`, which hears every answer a scenario script gives,
+  however it is given, before the caller's completion settles.
+- **`flui-testing`**: `ScriptedClipboard::writes`, the script that answers writes (each a
+  `WriteRequest`), with `fail_writes_with`, `stop_failing_writes` and `hold_writes`, whose
+  `ClipboardWriteHold` holds writes while it lives; reads and writes keep one order, and whatever
+  answers a write `Ok` or `ApplicationOnly` lands its text.
 - **`flui-native`**: `testing::clipboard::SettlingOwner`, `write_unobserved` and `read_within`, for
   a test of a host's clipboard that answers from another thread.
 
@@ -19,18 +22,15 @@
   `Resolver<ClipboardWritten>` it answers. A caller with nothing to undo when the write fails may
   drop the completion.
 - **`flui-native`**: `NativeClipboard::write` takes a `Resolver<ClipboardWritten>`, and
-  `NativeClipboard::write_text` is gone. Every host answers it, and a refused write is never what a
-  later read in the process answers: X11 answers once it owns the selection; Wayland refuses a write
-  with no user input to set the selection under (`Denied`) instead of holding its text in the
-  process, and refuses a concealed write it could only serve without the hint; the web answers when
-  the browser's promise settles and keeps a write's text for the page only if the clipboard took
-  it, and a page with no Clipboard API answers `ApplicationOnly` instead of `Ok`; Wayland names
-  no input once the keyboard left the window, so a later write is refused rather than sent under
-  a stale serial.
+  `NativeClipboard::write_text` is gone. Every host answers it: X11 once it owns the selection;
+  Wayland `ApplicationOnly` with no input serial (none yet, or the keyboard left the window),
+  keeping the text for the application's reads, and `Unavailable` for a concealed write it could
+  only serve without the hint; the web when the browser's promise settles, a page with no
+  Clipboard API keeping the text and answering `ApplicationOnly`.
 - **`flui-widgets`**: a cut in an `EditableText` deletes its selection at the owner turn the
-  clipboard answers that it took the text, and deletes nothing when the clipboard refused it or
-  the field lost the focus or was disposed meanwhile; like a paste, a cut is refused at a field
-  that does not hold the focus.
+  clipboard answers that it took the text, or that only the application can read it back, and
+  deletes nothing when the clipboard refused it or the field lost the focus or was disposed
+  meanwhile; cut and paste are offered and performed only while the field takes an edit.
 
 ### Fixed
 

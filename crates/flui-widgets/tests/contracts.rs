@@ -333,6 +333,7 @@ fn text_editing() {
             ("editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip", crate::editable_text::text_store::editable_paint_places_long_text_under_the_viewport_clip),
             ("editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed", crate::editable_text_clipboard::copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed),
             ("editable_text_clipboard::a_cut_deletes_only_what_the_clipboard_took", crate::editable_text_clipboard::a_cut_deletes_only_what_the_clipboard_took),
+            ("editable_text_clipboard::a_cut_the_application_alone_keeps_deletes_and_pastes_back", crate::editable_text_clipboard::a_cut_the_application_alone_keeps_deletes_and_pastes_back),
             ("editable_text_clipboard::a_cut_answered_after_its_field_left_deletes_nothing", crate::editable_text_clipboard::a_cut_answered_after_its_field_left_deletes_nothing),
             ("editable_text_clipboard::paste_rechecks_focus_after_committing_composition", crate::editable_text_clipboard::paste_rechecks_focus_after_committing_composition),
             ("editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text", crate::editable_text_clipboard::copy_then_paste_round_trips_text_in_an_editable_text),

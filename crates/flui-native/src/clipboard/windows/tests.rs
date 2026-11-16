@@ -66,17 +66,25 @@ struct ClipboardTest {
 impl ClipboardTest {
     fn begin() -> Self {
         let serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
-        let saved = try_inspect(SAVE_WITHIN, || {
-            SAVED_FORMATS
-                .iter()
-                .filter(|format| {
-                    // SAFETY: plain FFI call; the session holds the
-                    // clipboard open on this thread.
-                    unsafe { IsClipboardFormatAvailable(**format) }.is_ok()
-                })
-                .filter_map(|format| copy_global(*format).map(|bytes| (*format, bytes)))
-                .collect::<Vec<_>>()
-        });
+        // A save refused because another process held the clipboard past the
+        // request's patience is asked again, within the test's own patience.
+        let started = Instant::now();
+        let saved = loop {
+            let saved = try_inspect(SAVE_WITHIN, || {
+                SAVED_FORMATS
+                    .iter()
+                    .filter(|format| {
+                        // SAFETY: plain FFI call; the session holds the
+                        // clipboard open on this thread.
+                        unsafe { IsClipboardFormatAvailable(**format) }.is_ok()
+                    })
+                    .filter_map(|format| copy_global(*format).map(|bytes| (*format, bytes)))
+                    .collect::<Vec<_>>()
+            });
+            if saved.is_some() || started.elapsed() >= ANSWER_WITHIN {
+                break saved;
+            }
+        };
         if saved.is_none() {
             eprintln!("the clipboard was not saved in {SAVE_WITHIN:?}: it will not be restored");
         }
@@ -92,18 +100,28 @@ impl Drop for ClipboardTest {
         let Some(saved) = self.saved.take() else {
             return;
         };
-        let restored = try_inspect(ANSWER_WITHIN, move || {
-            // SAFETY: the session holds the clipboard open on this thread;
-            // each format's memory is ours until `hand_over` succeeds.
-            unsafe {
-                if EmptyClipboard().is_err() {
-                    return false;
+        // Asked again while another process holds the clipboard, within the
+        // test's own patience.
+        let started = Instant::now();
+        let restored = loop {
+            let attempt = saved.clone();
+            let restored = try_inspect(ANSWER_WITHIN, move || {
+                // SAFETY: the session holds the clipboard open on this
+                // thread; each format's memory is ours until `hand_over`
+                // succeeds.
+                unsafe {
+                    if EmptyClipboard().is_err() {
+                        return false;
+                    }
+                    attempt.into_iter().all(|(format, bytes)| {
+                        Prepared::try_new(format, &bytes).is_ok_and(|prepared| prepared.hand_over())
+                    })
                 }
-                saved.into_iter().all(|(format, bytes)| {
-                    Prepared::try_new(format, &bytes).is_ok_and(|prepared| prepared.hand_over())
-                })
+            });
+            if restored.is_some() || started.elapsed() >= ANSWER_WITHIN {
+                break restored;
             }
-        });
+        };
         if restored != Some(true) {
             eprintln!("the clipboard was not restored: {restored:?}");
         }
