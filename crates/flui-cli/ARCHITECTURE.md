@@ -452,6 +452,36 @@ in it exists because a command calls it. Its artifact-selection tests live
 in `src/build/tests/` as unit modules; they build real Cargo fixtures and
 re-execute the test binary as a worker.
 
+### A web build writes its page; a project's own page is a named template
+
+`flui build web` writes `index.html`, `flui.js` and `flui.css` on every build
+(`build::web_page`, ADR-0255 decision 16). The page holds no inline script or
+style, so it runs under `script-src 'self'; style-src 'self'`: it links the
+stylesheet and loads `flui.js`, which imports and starts the module
+`wasm-bindgen` wrote. It names `[web] base_href` as its `<base href>`, a
+checked `BaseHref` (absolute, plain segments, no escape: it cannot name
+another site), states `[web] description` and `[web] theme_color` escaped for
+their context, and asks for `viewport-fit=cover`, which the host's safe area
+needs. The manifest a build writes for a project that keeps none and the one
+`flui platform add web` scaffolds come from one renderer
+(`web_page::manifest`), which writes JSON through `serde_json`.
+
+A project's page is never overridden in silence. A `platforms/web/index.html`
+that `[web] page` does not name stops the build before anything compiles,
+with the two ways on: delete it, or name it as the page template. A template
+holds `{{flui_module}}`, which becomes the script that starts the app, and
+may hold `{{flui_base}}`, `{{flui_manifest}}` and `{{flui_stylesheet}}`; one
+without `{{flui_module}}` is refused (`a_project_page_is_never_overridden_in_silence`).
+
+`flui run`'s server (`serve.rs`) serves the build under the same base path
+and answers a navigation (`Sec-Fetch-Mode: navigate` or an HTML `Accept`) to
+a path that is no file with the page, which history routing needs. It serves
+nothing outside the build directory: the path is percent-decoded, a
+component that is not a plain name or that holds a backslash, a colon or a
+NUL is refused, and a file is opened only when its canonical path is still
+inside the directory. A missing asset and a request that is not a navigation
+get a 404 (`dev_server_contract`).
+
 ## The watcher is dev-machine code
 
 `SourceWatcher` (`src/watch.rs`) watches files on the developer's machine;

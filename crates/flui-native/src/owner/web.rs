@@ -119,7 +119,7 @@ pub(crate) trait HostInput {
 }
 
 /// How a DOM key event reaches a canvas's window as the canvas's own: from
-/// the canvas, or from the editor its text input keeps beside it.
+/// the canvas, or from the editor its text input keeps in the text-input host.
 pub(crate) trait CanvasKeys {
     /// Deliver `event` as a key `state`, answering it with the result.
     fn deliver(&self, event: &web_sys::Event, state: flui_platform::keyboard::KeyState);
@@ -169,7 +169,7 @@ pub(crate) trait CanvasRegistration {
     fn custody(&self) -> Rc<dyn PointerCustody>;
 
     /// The canvas's focus area: the canvas and the editor its text input keeps
-    /// beside it.
+    /// in the text-input host.
     fn focus(&self) -> Rc<dyn CanvasFocus>;
 }
 
@@ -193,7 +193,7 @@ impl Accepting {
 
 /// A canvas's focus area ([`CanvasRegistration::focus`]).
 pub(crate) trait CanvasFocus {
-    /// Whether the canvas, or the editor beside it, has the page's focus.
+    /// Whether the canvas, or the editor in its text-input host, has the page's focus.
     fn has_focus(&self) -> bool;
 }
 
@@ -233,6 +233,10 @@ pub(crate) struct HostSlots {
     /// `flui-semantics`, last: the accessibility placeholder, then the
     /// semantics host in its place.
     pub(crate) semantics: web_sys::HtmlElement,
+    /// The viewport's unsafe edges last read from the text-input host's
+    /// padding; `None` until read, and once a resize, an orientation change
+    /// or a visual-viewport change may have moved them.
+    pub(crate) read_edges: Rc<Cell<Option<flui_foundation::geometry::EdgeInsets>>>,
 }
 
 /// One canvas window as its window-level positions are made for it

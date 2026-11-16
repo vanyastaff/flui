@@ -67,9 +67,9 @@ export function canvasSiblings() {
 export function hostElementsInPage() {
     return document.querySelectorAll('flui-view, flui-text-input, flui-semantics').length;
 }
-// The page canvas's `style` and `tabindex` attributes.
+// The page canvas's `style`, `tabindex`, `width` and `height` attributes.
 export function canvasAttributes() {
-    return JSON.stringify([canvas().getAttribute('style'), canvas().getAttribute('tabindex')]);
+    return JSON.stringify(['style', 'tabindex', 'width', 'height'].map(name => canvas().getAttribute(name)));
 }
 // A canvas the page put in the document, styled as a page would.
 export function pageCanvas() {
@@ -229,16 +229,32 @@ export function editorState() {
         fontSize: parseFloat(getComputedStyle(area).fontSize),
     } : null);
 }
-// A touch lifting from the canvas, as a tap ends.
-export function touchUp() {
-    canvas().dispatchEvent(new PointerEvent('pointerup', {
+// A touch contact going down at the canvas at (x0, y0) and lifting at
+// (x1, y1): a tap where the two are the same.
+export function touchStroke(x0, y0, x1, y1) {
+    const at = (type, x, y) => canvas().dispatchEvent(new PointerEvent(type, {
         bubbles: true, cancelable: true, pointerId: 3, pointerType: 'touch', isPrimary: true,
-        button: 0, buttons: 0, clientX: 10, clientY: 10,
+        button: 0, buttons: type === 'pointerdown' ? 1 : 0, clientX: x, clientY: y,
     }));
+    at('pointerdown', x0, y0);
+    at('pointerup', x1, y1);
+}
+// What holds the page's focus: the canvas, the textarea, or the tag.
+export function pageFocus() {
+    const active = document.activeElement;
+    if (active === canvas()) return 'canvas';
+    if (active && active === editor()) return 'editor';
+    return active ? active.tagName.toLowerCase() : 'nothing';
 }
 // Move the page's focus to the body, as a tap on a canvas a mobile browser
 // does not focus leaves it.
 export function blurAll() { document.activeElement?.blur(); }
+// The textarea's hints as [inputmode, autocomplete, enterkeyhint], each null
+// when absent.
+export function editorHints() {
+    const area = editor();
+    return JSON.stringify(['inputmode', 'autocomplete', 'enterkeyhint'].map(name => area.getAttribute(name)));
+}
 // The input method types into the textarea: its value becomes `value`.
 export function typeIntoEditor(value, caret, composing) {
     const area = editor();
@@ -326,10 +342,14 @@ extern "C" {
     fn host_elements_in_page() -> u32;
     #[wasm_bindgen(js_name = canvasAttributes)]
     fn canvas_attributes() -> String;
-    #[wasm_bindgen(js_name = touchUp)]
-    fn touch_up();
+    #[wasm_bindgen(js_name = touchStroke)]
+    fn touch_stroke(x0: f64, y0: f64, x1: f64, y1: f64);
+    #[wasm_bindgen(js_name = pageFocus)]
+    fn page_focus() -> String;
     #[wasm_bindgen(js_name = blurAll)]
     fn blur_all();
+    #[wasm_bindgen(js_name = editorHints)]
+    fn editor_hints() -> String;
 }
 
 /// What one dispatched drag event did.
@@ -1462,30 +1482,114 @@ fn a_textarea_serves_the_field_without_edit_context() {
     }
 }
 
-/// A hidden editor that attached while the page's focus was on nothing (a
-/// mobile browser does not focus a canvas it is tapped on, and a field may
-/// attach after its tap ended) takes the page's focus when the next touch
-/// lifts from the canvas, the gesture in which a mobile browser shows its
-/// keyboard; a mouse lifting does not move it.
+/// A tap with no field served focuses a textarea in the tap's handler, the
+/// one moment a mobile browser opens its keyboard for it; the field the
+/// application focuses for that tap after the handler (at its next frame)
+/// takes the textarea over with its focus.
+///
+/// The test driver has no trusted input from the page, so the taps are
+/// constructed events; what a real tap opens on iOS Safari and Android is a
+/// device run.
 #[wasm_bindgen_test]
-fn a_touch_on_the_canvas_focuses_an_editor_left_unfocused() {
+fn a_tap_focuses_an_editor_the_field_attached_after_it_takes_over() {
     let _hidden = EditContextHidden::hide();
     let canvas = HostedCanvas::open();
     blur_all();
+    touch_stroke(5.0, 5.0, 5.0, 5.0);
+    assert_eq!(page_focus(), "editor", "focused in the tap's handler");
     let store = InMemoryTextStore::new("ab");
     canvas.host.focus_store(Some(as_store(&store)));
-    let state = editor().expect("a textarea in the text-input host");
-    assert!(
-        !state.focused,
-        "nothing asked for the focus outside a gesture"
-    );
-    press_mouse("pointerup", 10.0, 10.0);
-    assert!(!editor().expect("the textarea").focused, "a mouse lifting");
-    touch_up();
-    assert!(
-        editor().expect("the textarea").focused,
-        "a touch lifting from the canvas focuses the editor"
-    );
+    let state = editor().expect("the textarea the tap focused");
+    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+    canvas.host.focus_store(None);
+}
+
+/// A tap no field follows within two animation frames gives the textarea up
+/// and the focus back to the canvas.
+#[wasm_bindgen_test]
+async fn a_tap_no_field_follows_gives_the_focus_back_to_the_canvas() {
+    let _hidden = EditContextHidden::hide();
+    let _canvas = HostedCanvas::open();
+    blur_all();
+    touch_stroke(200.0, 100.0, 200.0, 100.0);
+    assert_eq!(page_focus(), "editor");
+    wait(200).await;
+    assert!(editor().is_none(), "the provisional textarea is gone");
+    assert_eq!(page_focus(), "canvas");
+}
+
+/// With a field served and its keyboard hidden (the textarea blurred), a tap
+/// on the field focuses the textarea again; a tap elsewhere, a drag over
+/// the field (the end of a scroll) and a mouse leave it unfocused.
+#[wasm_bindgen_test]
+fn a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    // The kit's field "ab" lies over (0, 0)–(20, 20) of the canvas.
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    assert_eq!(page_focus(), "editor");
+    blur_all();
+    for (what, stroke) in [
+        ("a tap off the field", [200.0, 100.0, 200.0, 100.0]),
+        ("a drag ending on the field", [5.0, 60.0, 5.0, 5.0]),
+    ] {
+        touch_stroke(stroke[0], stroke[1], stroke[2], stroke[3]);
+        assert_ne!(page_focus(), "editor", "{what}");
+    }
+    press_mouse("pointerdown", 5.0, 5.0);
+    press_mouse("pointerup", 5.0, 5.0);
+    assert_ne!(page_focus(), "editor", "a mouse");
+    touch_stroke(5.0, 5.0, 6.0, 6.0);
+    assert_eq!(page_focus(), "editor", "a tap on the field");
+    canvas.host.focus_store(None);
+}
+
+/// The hidden editor tells the browser, for each purpose, each enter action
+/// and protection, which keyboard to show (`inputmode`), what it may fill the
+/// field with (`autocomplete`: nothing beside the canvas, `new-password` for a
+/// protected field) and how to label Return (`enterkeyhint`: a search, a new
+/// line for a field of many lines, else the browser's own).
+#[wasm_bindgen_test]
+fn the_hidden_editor_states_each_purpose_and_enter_action() {
+    use flui_platform::text_store::TextInputPurpose::{Email, Number, Phone, Search, Text, Url};
+
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    // (purpose, single line, protected, [inputmode, autocomplete, enterkeyhint])
+    let cases = [
+        (Text, true, false, r#"["text","off",null]"#),
+        (Text, false, false, r#"["text","off","enter"]"#),
+        (Email, true, false, r#"["email","off",null]"#),
+        (Email, false, false, r#"["email","off","enter"]"#),
+        (Url, true, false, r#"["url","off",null]"#),
+        (Phone, true, false, r#"["tel","off",null]"#),
+        (Number, true, false, r#"["numeric","off",null]"#),
+        (Search, true, false, r#"["search","off","search"]"#),
+        (Search, false, false, r#"["search","off","search"]"#),
+        (Text, true, true, r#"["text","new-password",null]"#),
+        (Number, true, true, r#"["numeric","new-password",null]"#),
+    ];
+    for (purpose, single_line, protected, expected) in cases {
+        let store = InMemoryTextStore::new("ab");
+        store.set_purpose(purpose);
+        store.set_single_line(single_line);
+        store.set_protected(protected);
+        canvas.host.focus_store(Some(as_store(&store)));
+        let case = format!("{purpose:?}, single line {single_line}, protected {protected}");
+        assert_eq!(editor_hints(), expected, "attached: {case}");
+        canvas.host.focus_store(None);
+    }
+    // A status that changes while the field is served reaches the element.
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    store.set_purpose(Search);
+    assert_eq!(editor_hints(), r#"["search","off","search"]"#, "refreshed");
+    store.set_purpose(Text);
+    store.set_single_line(false);
+    assert_eq!(editor_hints(), r#"["text","off","enter"]"#, "refreshed");
     canvas.host.focus_store(None);
 }
 

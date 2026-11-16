@@ -503,15 +503,13 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     let web_builder = WebBuilder::new(&workspace_root);
 
+    // `flui.toml` is read once, for the floors and for the page.
     let config = crate::config::nearest_config(&workspace_root)?;
-    let floors = match &config {
-        Some(config) => config.floors()?,
-        None => crate::build::app_floor::AppFloors::default(),
-    };
-    let base_href = config.map_or_default(|config| config.web.base_href);
+    let floors = crate::config::floors_of(config.as_ref())?;
+    let page = crate::config::web_page(config.as_ref());
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .floors(floors)
-        .platform(Platform::Web { base_href })
+        .platform(Platform::Web { page })
         .target(options.cargo_target())
         .profile(profile);
 

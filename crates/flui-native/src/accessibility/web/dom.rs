@@ -83,7 +83,7 @@ impl WebAccessibility {
     }
 }
 
-/// Each canvas window gets its placeholder beside the canvas when it opens.
+/// Each canvas window gets its placeholder in its semantics slot when it opens.
 impl crate::host::Accessibility<CanvasRef> for WebAccessibility {
     fn for_window(window: &CanvasRef) -> Arc<dyn crate::host::WindowAccessibility> {
         let shared = Arc::new(BridgeShared::new());
@@ -176,7 +176,7 @@ struct Overlay {
     _listeners: Vec<CanvasListener>,
 }
 
-/// What stands beside the canvas.
+/// What stands in the semantics slot.
 enum Stage {
     Placeholder(Overlay),
     Host(Overlay),
@@ -926,7 +926,7 @@ impl Page {
         }));
     }
 
-    /// Show what stands beside the canvas only while the canvas is shown,
+    /// Show what stands in the semantics slot only while the canvas is shown,
     /// and put the host over the canvas's drawable box in the viewport, at
     /// the canvas's layout size, which the tree's CSS pixels are in.
     ///
@@ -1079,7 +1079,7 @@ impl Page {
             .is_some_and(|active| element.contains(Some(&active)))
     }
 
-    /// The window closed: remove what stands beside the canvas, for good.
+    /// The window closed: remove what stands in the semantics slot, for good.
     fn retire(&self) {
         let stage = std::mem::replace(&mut *self.stage.borrow_mut(), Stage::Retired);
         self.work.borrow_mut().clear();

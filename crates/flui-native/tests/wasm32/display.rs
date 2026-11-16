@@ -84,7 +84,7 @@ class FakeCanvas extends EventTarget {
     constructor(tag = 'canvas') {
         super();
         this.tagName = tag.toUpperCase();
-        this.style = { setProperty() {} };
+        this.style = { setProperty() {}, cssText: '' };
         this.clientWidth = 300;
         this.clientHeight = 150;
         this.width = 300;
@@ -142,6 +142,7 @@ class PageCanvas extends FakeCanvas {
         this.writes = [];
         const canvas = this;
         this.style = {
+            cssText: '',
             setProperty(name, value) {
                 canvas.declared[name] = value;
                 if (name === 'width' || name === 'height') canvas.writes.push(`${name}: ${value}`);

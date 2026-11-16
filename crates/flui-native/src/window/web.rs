@@ -255,19 +255,22 @@ fn safe_area_over(
 ) -> flui_foundation::geometry::EdgeInsets {
     use crate::window::safe_area;
     let zero = flui_foundation::geometry::EdgeInsets::ZERO;
-    let Some(edges) = slots.unsafe_edges().filter(|edges| *edges != zero) else {
+    let edges = slots.unsafe_edges();
+    if edges == zero {
+        return zero;
+    }
+    // The bands are edges of the layout viewport, whose size is the
+    // window's inner size; `documentElement.clientHeight` is the document's
+    // height in quirks mode, which would put the bottom band below the page.
+    let Some(window) = web_sys::window() else {
         return zero;
     };
-    let Some(layout) = web_sys::window()
-        .and_then(|window| window.document())
-        .and_then(|document| document.document_element())
+    let side = |size: Result<JsValue, JsValue>| size.ok().as_ref().and_then(JsValue::as_f64);
+    let (Some(width), Some(height)) = (side(window.inner_width()), side(window.inner_height()))
     else {
         return zero;
     };
-    let viewport = Size::new(
-        f64::from(layout.client_width()),
-        f64::from(layout.client_height()),
-    );
+    let viewport = Size::new(width, height);
     let bounds = canvas.get_bounding_client_rect();
     safe_area::within(
         viewport,
@@ -512,21 +515,19 @@ impl WebWindow {
         // with a live owner is refused before anything is added beside it or
         // its sizing, focusability or title changes; the claim compares the
         // actual DOM object, never its label.
-        let (root, claim) = match PageRoot::page_canvas(&document).map_err(backend)? {
-            Some(canvas) => {
-                let claim = CanvasClaim::acquire(&canvas)?;
-                let root = PageRoot::adopt(&document, canvas).map_err(|error| {
-                    backend(format!("the page's canvas could not be hosted: {error:?}"))
-                })?;
-                (root, claim)
-            }
-            None => {
-                let root = PageRoot::make(&document).map_err(|error| {
-                    backend(format!("the page root could not be made: {error:?}"))
-                })?;
-                let claim = CanvasClaim::acquire(root.canvas())?;
-                (root, claim)
-            }
+        let (root, claim) = if let Some(canvas) =
+            PageRoot::page_canvas(&document).map_err(backend)?
+        {
+            let claim = CanvasClaim::acquire(&canvas)?;
+            let root = PageRoot::adopt(&document, canvas).map_err(|error| {
+                backend(format!("the page's canvas could not be hosted: {error:?}"))
+            })?;
+            (root, claim)
+        } else {
+            let root = PageRoot::make(&document)
+                .map_err(|error| backend(format!("the page root could not be made: {error:?}")))?;
+            let claim = CanvasClaim::acquire(root.canvas())?;
+            (root, claim)
         };
         let canvas = root.canvas().clone();
         let slots = root.slots().clone();
@@ -743,6 +744,7 @@ impl WebWindow {
         );
         let browser =
             web_sys::window().expect("BUG: window construction verified browser environment");
+        let slots = self.slots.clone();
         registration.listen(
             browser.as_ref(),
             "resize",
@@ -750,6 +752,8 @@ impl WebWindow {
                 if let Some(ratio) = &ratio {
                     ratio.arm_if_unarmed();
                 }
+                // A rotation resizes the viewport and moves the safe area.
+                slots.forget_unsafe_edges();
                 sync.sync();
             }),
         )
@@ -852,9 +856,15 @@ impl WebWindow {
             )?;
         }
         let publisher = self.publisher();
+        let slots = self.slots.clone();
         let moved = crate::owner::web::listener::viewport_listeners(
             &Accepting::reading(&registration.accepting),
-            move || publisher.publish(),
+            move || {
+                // A visual-viewport change or an orientation change can move
+                // the safe area.
+                slots.forget_unsafe_edges();
+                publisher.publish();
+            },
         )?;
         registration.listeners.extend(moved);
         Ok(())

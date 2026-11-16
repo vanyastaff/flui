@@ -1556,8 +1556,16 @@ pins the projection, while actual layout and Shift mapping require live input.
 browser's toolbars), holding the canvas, the text-input host
 (`flui-text-input`) and the semantics slot (`flui-semantics`), in that
 order. A page that supplies `<canvas id="flui-canvas">` owns its layout: the
-two hosts are inserted after the canvas, and the canvas's `style` and
-`tabindex` attributes are put back when the window retires. A `#flui-canvas`
+two hosts are inserted after the canvas, and when the window retires the
+canvas gets back everything the window wrote on it: the attributes of one list
+(`PAGE_CANVAS_ATTRIBUTES`: `width`, `height`, `tabindex`) and its inline
+style, restored through the CSSOM, which a Content Security Policy that
+refuses inline style attributes allows. For the window's life the canvas has
+two more siblings, which selectors such as `canvas:last-child` see; they
+change no layout, since they generate no box and all they hold is
+`position: fixed`. They stay beside the canvas so what the semantics slot
+holds is hidden by the canvas's ancestors and placed in the containing block
+a transformed ancestor gives it. A `#flui-canvas`
 inside another window's `flui-view` (another FLUI instance on the page) is
 not the page's: the window makes a root of its own, whose canvas takes the id
 only while no element has it. The hosts are `display: contents`, so they give
@@ -1571,16 +1579,18 @@ The safe area is the part of each band `env(safe-area-inset-*)` names
 unsafe that the canvas lies under. The text-input host's padding is those
 `env()` values, so its computed padding is the bands in CSS pixels;
 `window::safe_area::within` intersects them with the canvas's box in the
-layout viewport and scales them into the window's logical pixels, as the
+layout viewport (the window's `innerWidth`×`innerHeight`, which quirks mode
+does not change) and scales them into the window's logical pixels, as the
 keyboard's occlusion is. The bands are zero unless the page covers the display
-(`viewport-fit=cover`, which the page `flui build` writes asks for). The
-snapshot reads them whenever it reads the page: a layout change, a resize, a
-scroll or a visual-viewport change.
+(`viewport-fit=cover`, which the page `flui build` writes asks for). They are
+read once and kept (`HostSlots::unsafe_edges`), since reading them is a style
+recalculation every state sample would pay, and read again after a window
+resize (a rotation among them) or a visual-viewport or scroll change.
 
 `a_window_takes_the_part_of_each_band_over_it` pins the intersection on
-Linux; on Node, `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
-and `web_window_reads_the_safe_area_from_the_viewport` drive the fake page; in
-headless Chrome, `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+Linux; the Node suite's `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+and `web_window_reads_the_safe_area_from_the_viewport` drive the fake page,
+and the headless-Chrome `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
 checks the order, the teardown and the page canvas's attributes. No mobile
 browser has run the safe area.
 
@@ -2025,23 +2035,31 @@ change, its keys reach the window through the canvas's key route
 (`CanvasKeys`), focusing the canvas forwards focus to it, and detaching gives
 focus back to the canvas.
 
-A mobile browser shows its keyboard only for an element focused inside a
-user gesture, and iOS Safari zooms the page into a focused field whose text
-is below 16 CSS pixels. Every element the host focuses for editing (the
-textarea, a semantics field) has `font-size: 16px` (`owner::web::EDITOR_FONT_SIZE`).
-The textarea takes the page's focus when it attaches while the canvas has
-it, or while the page's focus is on nothing and the page has transient user
-activation (`navigator.userActivation.isActive`: a tap on a canvas the
-browser does not focus). A field whose focus the application applies after
-the tap ended attaches outside the gesture, so while the textarea serves a
-store unfocused, a touch or pen `pointerup` on the canvas focuses it; the
-canvas's input registered first, so a tap that moves the application's focus
-off the field has detached the textarea, and that listener, before it runs.
-`a_textarea_serves_the_field_without_edit_context` reads the font size and
-`a_touch_on_the_canvas_focuses_an_editor_left_unfocused` the touch focus in
-headless Chrome; whether Safari on iOS and Chrome on Android show the
-keyboard is a device run (`platform-parity.toml`, "Input purpose and
-hints").
+A mobile browser shows its keyboard only for an element focused inside the
+handler of a tap, and iOS Safari zooms the page into a focused field whose
+text is below 16 CSS pixels. Every element the host focuses for editing (the
+textarea, a semantics field) has `font-size: 16px`
+(`owner::web::EDITOR_FONT_SIZE`), and every focus the text input makes
+passes `preventScroll`. The textarea is focused in the `pointerup` handler of
+a touch or pen tap (a contact that travelled at most `TAP_SLOP`), after the
+canvas's input dispatched it: with a field served and its textarea unfocused
+(the user hid the keyboard), a tap on the field's box focuses it again and
+any other tap or a drag leaves it closed; with nothing served (and no
+`EditContext`), a textarea is focused provisionally, which the field that
+attaches next takes over with its focus, and which two animation frames
+without one remove, the focus going back to the canvas. A field attached
+outside a tap focuses its textarea only while the canvas has the page's
+focus (a desktop click focused it). `navigator.userActivation.isActive` is
+not used: it stays true for seconds after a tap, outside its handler. The
+headless-Chrome tests `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
+`a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
+`a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone` (constructed
+events: the test driver has no trusted input) and
+`the_hidden_editor_states_each_purpose_and_enter_action` (the textarea's
+`inputmode`, `autocomplete` and `enterkeyhint` for each purpose, one line or
+many and a protected field) pin the rule; whether Safari on iOS and Chrome on
+Android open the keyboard is a device run (`platform-parity.toml`, "Input
+purpose and hints").
 
 `the_purpose_picks_the_input_mode`,
 `a_key_of_the_input_method_is_marked_composing` and `mirror_text_table` pin

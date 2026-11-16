@@ -19,8 +19,10 @@
   `[package.metadata.flui.capability]` declarations in marker-delimited blocks: the CLI writes the
   manifest whole from `[package.metadata.flui.declares]`); its other manifest lines stand;
   [ADR-0336](ADR-0336-the-web-accessibility-tree-is-a-dom-mirror-the-host-keeps-itself.md) for
-  decision 18 in part (that the Web consumes `TreeUpdate` through `accesskit_consumer`: the host
-  keeps its own mirror); the parallel ARIA DOM, its placeholder and its place stand
+  decision 18's sentence that the Web's `PlatformAccessibility` "consumes `TreeUpdate` through
+  `accesskit_consumer`" (the host keeps the tree in a mirror of its own, ADR-0336 §1–§2); the rest
+  of decision 18 (the parallel ARIA DOM, one element per node, the lazy placeholder, the semantics
+  host last in the root) stands
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (the platform crates and
   where host code lives), [ADR-0152](ADR-0152-capability-seam-revised.md) (the capability seam and
   `Completion`), [ADR-0154](ADR-0154-capability-crates.md) (capability crates and their native

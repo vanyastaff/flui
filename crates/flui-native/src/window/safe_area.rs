@@ -31,7 +31,6 @@ pub(crate) fn within(
     window: Placement,
     logical: Size<f64>,
 ) -> EdgeInsets {
-    let usable = |value: f64| value.is_finite();
     if ![
         viewport.width,
         viewport.height,
@@ -43,7 +42,7 @@ pub(crate) fn within(
         logical.height,
     ]
     .into_iter()
-    .all(usable)
+    .all(f64::is_finite)
         || window.width <= 0.0
         || window.height <= 0.0
     {

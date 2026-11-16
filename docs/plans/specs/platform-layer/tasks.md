@@ -5383,19 +5383,30 @@ GPU-память простаивающего или невидимого окн
   `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`. Wasm-половину собирает и
   гоняет только CI (`wasm-check`, `wasm-test`, headless Chrome). Не закрыто здесь и записано в
   `docs/gaps.md` («The Web host embeds only as the whole viewport or the page's own canvas»):
-  элемент-точка монтирования, кроме canvas; запасной ответ страницей в сервере `flui run`
-  (решение 19 ADR-0255).
+  элемент-точка монтирования, кроме canvas; маршрутизация History в самом хосте (решение 19
+  ADR-0255). Сервер `flui run` (`serve.rs`) отвечает страницей на навигацию к пути, который не
+  файл, под `base_href`; отсутствующий ресурс, не-навигация, обход каталога (в том числе
+  закодированный) и выход по символической ссылке получают 404 (`dev_server_contract`: с
+  отключённым ответом страницей падают случаи навигации).
 - [x] **LY75** (закрыта: код и тесты в ветке `native/web-dom-root`; прогоны Safari iOS и Firefox
   записаны в `platform-parity.toml`, строка «Input purpose and hints») — атрибуты #2109
   (`3223e936d`). Скрытый textarea и поля дерева доступности получают `font-size: 16px`
-  (`owner::web::EDITOR_FONT_SIZE`). Textarea берёт фокус страницы при прикреплении, если фокус на
-  canvas или ни на чём при активном жесте (`navigator.userActivation.isActive`), а пока он
-  обслуживает хранилище без фокуса, касание или перо, отпущенные над canvas (`pointerup`), его
-  фокусируют: поле, прикреплённое после жеста, поднимает клавиатуру со следующего касания. Тесты
-  в headless Chrome: `a_textarea_serves_the_field_without_edit_context` (размер шрифта),
-  `a_focused_text_field_is_edited_through_its_element` (размер шрифта поля семантики),
-  `a_touch_on_the_canvas_focuses_an_editor_left_unfocused` (без слушателя `pointerup` редактор
-  остаётся без фокуса). Только CI их собирает и запускает.
+  (`owner::web::EDITOR_FONT_SIZE`); фокус текстового ввода всегда с `preventScroll`. Textarea
+  фокусируется в обработчике `pointerup` касания или пера, если это тап (путь не больше
+  `TAP_SLOP`): при обслуживаемом поле — только тап по рамке поля (клавиатура, скрытая
+  пользователем, открывается снова, прокрутка и тап мимо — нет); без поля и без `EditContext` —
+  временный textarea, который забирает поле, прикреплённое следующим (вместе с фокусом), а через
+  два кадра анимации без поля он убирается и фокус возвращается на canvas.
+  `navigator.userActivation.isActive` не используется: он истинен секунды после тапа, вне
+  обработчика. Тесты в headless Chrome (сконструированные события: у тест-драйвера нет
+  доверенного ввода из страницы): `a_textarea_serves_the_field_without_edit_context` и
+  `a_focused_text_field_is_edited_through_its_element` (размер шрифта),
+  `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
+  `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
+  `a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
+  `the_hidden_editor_states_each_purpose_and_enter_action` (таблица `inputmode`, `autocomplete`
+  и `enterkeyhint` скрытого textarea для каждого назначения, одной и многих строк и защищённого
+  поля, при прикреплении и при смене статуса). Только CI их собирает и запускает.
 - [x] **LY76** (закрыта: зеркало ARIA на `main`, слот в корне и ADR в ветке
   `native/web-dom-root`; прогон с экранным диктором записан в `platform-parity.toml`, строка
   «Tree and actions») — #2032 (`16d7d2770`), #2099, #2109, #2119, #2120. Решение: дерево держит

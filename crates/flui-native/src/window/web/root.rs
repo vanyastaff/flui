@@ -9,10 +9,20 @@
 //! A page with no canvas of its own gets a root, `flui-view`, fixed over the
 //! viewport with the three inside it. A page that supplies a `<canvas
 //! id="flui-canvas">` owns its layout: the two hosts follow the canvas as its
-//! siblings, and the canvas gets back the `style` and `tabindex` the window
-//! wrote once the window retires. The hosts are `display: contents`, so they
-//! give their children no box, ancestor or containing block the canvas does
-//! not have.
+//! next siblings, and when the window retires the canvas gets back
+//! everything the window wrote on it ([`PAGE_CANVAS_ATTRIBUTES`] and its
+//! inline style, restored through the CSSOM, which a Content Security Policy
+//! that refuses inline style attributes still allows).
+//!
+//! What a page author must know: for the window's life the canvas has two
+//! more siblings after it, so a selector such as `canvas:last-child` or
+//! `canvas + *` sees them. They change no layout: the hosts are
+//! `display: contents` and generate no box, and everything in them is
+//! `position: fixed`, out of flow, so a flex or grid container gets no item
+//! from them. They stay beside the canvas, rather than at the end of the
+//! body, because what the semantics host holds must be hidden with the canvas
+//! by every ancestor's `display` and `visibility`, and be placed in the same
+//! containing block a transformed ancestor gives the canvas.
 //!
 //! Dropping a [`PageRoot`] takes out of the page what it put there, on every
 //! exit: a window that closes, and one that fails to open after its root was
@@ -42,6 +52,13 @@ const SAFE_AREA_PADDING: [(&str, &str); 4] = [
     ("padding-left", "env(safe-area-inset-left, 0px)"),
 ];
 
+/// The attributes the window writes on a page's canvas, beside its inline
+/// style: the backing store's size in device pixels (`width`, `height`,
+/// `apply_backing_size`) and its focusability (`tabindex`). Every attribute
+/// the window writes on a page canvas is in this list, which retiring puts
+/// back as the page had it.
+const PAGE_CANVAS_ATTRIBUTES: [&str; 3] = ["width", "height", "tabindex"];
+
 /// One canvas window's elements in the page; see the module doc.
 pub(crate) struct PageRoot {
     canvas: HtmlCanvasElement,
@@ -53,10 +70,12 @@ pub(crate) struct PageRoot {
 enum Owner {
     /// The host made `root`, the canvas in it and the two hosts.
     Host { root: HtmlElement },
-    /// The page's canvas, and what it had before the window wrote to it.
+    /// The page's canvas, and what it had before the window wrote to it:
+    /// each of [`PAGE_CANVAS_ATTRIBUTES`] (`None` where it had none) and its
+    /// inline style's text.
     Page {
-        style: Option<String>,
-        tab_index: Option<String>,
+        attributes: [Option<String>; PAGE_CANVAS_ATTRIBUTES.len()],
+        style: String,
     },
 }
 
@@ -133,8 +152,8 @@ impl PageRoot {
             .parent_node()
             .ok_or_else(|| JsValue::from_str("the page's canvas is not in the document"))?;
         let owner = Owner::Page {
-            style: canvas.get_attribute("style"),
-            tab_index: canvas.get_attribute("tabindex"),
+            attributes: PAGE_CANVAS_ATTRIBUTES.map(|name| canvas.get_attribute(name)),
+            style: canvas.style().css_text(),
         };
         let slots = HostSlots::try_new(document)?;
         parent.insert_before(&slots.text_input, canvas.next_sibling().as_ref())?;
@@ -168,10 +187,10 @@ impl Drop for PageRoot {
     fn drop(&mut self) {
         match &self.owner {
             Owner::Host { root } => root.remove(),
-            Owner::Page { style, tab_index } => {
+            Owner::Page { attributes, style } => {
                 self.slots.text_input.remove();
                 self.slots.semantics.remove();
-                for (name, value) in [("style", style), ("tabindex", tab_index)] {
+                for (name, value) in PAGE_CANVAS_ATTRIBUTES.iter().zip(attributes) {
                     let restored = match value {
                         Some(value) => self.canvas.set_attribute(name, value),
                         None => self.canvas.remove_attribute(name),
@@ -180,6 +199,7 @@ impl Drop for PageRoot {
                         tracing::debug!(?error, name, "the page canvas kept the window's value");
                     }
                 }
+                self.canvas.style().set_css_text(style);
             }
         }
     }
@@ -201,13 +221,32 @@ impl HostSlots {
         Ok(Self {
             text_input,
             semantics: host(SEMANTICS_TAG)?,
+            read_edges: std::rc::Rc::default(),
         })
     }
 
-    /// The viewport's unsafe edges in CSS pixels, from the text-input host's
-    /// computed padding; `None` where the browser computes none (no
-    /// `getComputedStyle`, or a value that is no length).
-    pub(crate) fn unsafe_edges(&self) -> Option<EdgeInsets> {
+    /// The viewport's unsafe edges in CSS pixels: the ones last read, or
+    /// read now from the text-input host's computed padding (a style
+    /// recalculation, which a state sample on every focus or hover change
+    /// need not pay); zero where the browser computes none.
+    pub(crate) fn unsafe_edges(&self) -> EdgeInsets {
+        if let Some(edges) = self.read_edges.get() {
+            return edges;
+        }
+        let edges = self.compute_unsafe_edges().unwrap_or(EdgeInsets::ZERO);
+        self.read_edges.set(Some(edges));
+        edges
+    }
+
+    /// The edges may have moved (a resize, an orientation change, the visual
+    /// viewport changing): the next [`Self::unsafe_edges`] reads them again.
+    pub(crate) fn forget_unsafe_edges(&self) {
+        self.read_edges.set(None);
+    }
+
+    /// The text-input host's computed padding; `None` where the browser
+    /// computes none (no `getComputedStyle`, or a value that is no length).
+    fn compute_unsafe_edges(&self) -> Option<EdgeInsets> {
         let style = web_sys::window()?
             .get_computed_style(&self.text_input)
             .ok()

@@ -3,17 +3,28 @@
 //! host makes its own root in the body when the module starts. It asks to
 //! cover the whole display (`viewport-fit=cover`), so the host reads the
 //! safe area from `env(safe-area-inset-*)`; its `<base href>` resolves the
-//! module and the manifest from the deployment's root path whatever address
-//! the page is served at, so an application can be hosted under a sub-path
-//! and answer a deep link with the same page.
+//! module, the stylesheet and the manifest from the deployment's base path
+//! whatever address the page is served at, so an application can be hosted
+//! under a sub-path and answer a deep link with the same page (which
+//! `flui run`'s server does, `serve.rs`).
+//!
+//! The page holds no inline script and no inline style: it links
+//! [`STYLESHEET`] and loads [`BOOTSTRAP`], both written beside it, so it runs
+//! under a Content Security Policy of `script-src 'self'; style-src 'self'`.
+//!
+//! A project that needs its own page names a template (`[web] page` in
+//! `flui.toml`): the build substitutes the placeholders of [`Placeholder`]
+//! into it and refuses a template without the module's placeholder.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 /// The path a web build is served from: absolute, starting and ending with
-/// `/` (`/`, `/apps/demo/`), with no character the page would have to
-/// escape or a URL would read as more than a path.
+/// `/` (`/`, `/apps/demo/`), each segment between non-empty, not `.` or
+/// `..`, and made of the characters a URL path carries unescaped
+/// (`A-Z a-z 0-9 - . _ ~`). So it cannot name another site (`//host/`),
+/// climb out of one (`/../`), or carry an escape a server decodes into one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub(crate) struct BaseHref(String);
@@ -24,14 +35,19 @@ pub(crate) enum InvalidBaseHref {
     /// It does not start and end with `/`.
     #[error("`{0}` must start and end with `/` (`/`, `/apps/demo/`)")]
     NotADirectory(String),
-    /// It holds a character a path must not (a quote, an angle bracket, a
-    /// space, a query, a fragment, a backslash or a control character).
-    #[error("`{0}` holds a character a base path cannot (quotes, `<>`, spaces, `?`, `#`, `\\`)")]
+    /// A segment is empty (`//`, which a browser reads as another site) or
+    /// a dot segment (`.`, `..`).
+    #[error("`{0}` has an empty, `.` or `..` segment")]
+    Segment(String),
+    /// It holds a character other than `A-Z a-z 0-9 - . _ ~` and `/`: a
+    /// space, a quote, a query, a fragment, a backslash, an escape (`%`) or a
+    /// control character.
+    #[error("`{0}` holds a character a base path cannot (only `A-Z a-z 0-9 - . _ ~` and `/`)")]
     Character(String),
 }
 
 impl BaseHref {
-    /// The site's root, where `flui run` serves a build.
+    /// The site's root.
     pub(crate) fn root() -> Self {
         Self("/".to_owned())
     }
@@ -39,22 +55,30 @@ impl BaseHref {
     /// `path` as a base path.
     ///
     /// # Errors
-    /// [`InvalidBaseHref`] when `path` does not start and end with `/`, or
-    /// holds a character a base path cannot.
+    /// [`InvalidBaseHref`] when `path` does not start and end with `/`, has
+    /// an empty or dot segment, or holds a character a base path cannot.
     pub(crate) fn try_new(path: impl Into<String>) -> Result<Self, InvalidBaseHref> {
         let path = path.into();
         if !path.starts_with('/') || !path.ends_with('/') {
             return Err(InvalidBaseHref::NotADirectory(path));
         }
-        let refused = |c: char| {
-            c.is_control()
-                || c.is_whitespace()
-                || matches!(c, '"' | '\'' | '<' | '>' | '&' | '?' | '#' | '\\' | '`')
-        };
-        if path.chars().any(refused) {
+        let unescaped = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~');
+        if !path.chars().all(|c| c == '/' || unescaped(c)) {
             return Err(InvalidBaseHref::Character(path));
         }
+        if path.len() > 1
+            && path[1..path.len() - 1]
+                .split('/')
+                .any(|segment| matches!(segment, "" | "." | ".."))
+        {
+            return Err(InvalidBaseHref::Segment(path));
+        }
         Ok(Self(path))
+    }
+
+    /// The path, starting and ending with `/`.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -87,54 +111,180 @@ impl fmt::Display for BaseHref {
 /// The directory, relative to the page's base, that `wasm-bindgen` writes
 /// the module into.
 pub(crate) const PKG_DIR: &str = "pkg";
-/// The module's name: `wasm-bindgen --out-name` writes `<PKG_DIR>/<OUT_NAME>.js`,
-/// which the page imports.
+/// The module's name: `wasm-bindgen --out-name` writes `<PKG_DIR>/<OUT_NAME>.js`.
 pub(crate) const OUT_NAME: &str = "app";
 /// The web app manifest the page links, relative to its base.
 pub(crate) const MANIFEST: &str = "manifest.json";
+/// The module the page loads, which starts the application.
+pub(crate) const BOOTSTRAP: &str = "flui.js";
+/// The stylesheet the page links.
+pub(crate) const STYLESHEET: &str = "flui.css";
 
-/// The page of an application named `title`, served from `base`.
+/// What a web build states about the application in its page and manifest:
+/// `flui.toml`'s `[app] name` and its `[web]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub(crate) struct WebPage {
+    /// The application's name; `None` leaves it to the package the build
+    /// compiled.
+    pub(crate) title: Option<String>,
+    /// `[web] description`.
+    pub(crate) description: Option<String>,
+    /// `[web] theme_color`, a CSS colour for the browser's chrome.
+    pub(crate) theme_color: Option<String>,
+    /// `[web] base_href`.
+    pub(crate) base_href: BaseHref,
+    /// `[web] page`: the project's page template, relative to the project.
+    pub(crate) template: Option<std::path::PathBuf>,
+}
+
+/// A placeholder a project's page template holds, which the build replaces
+/// with the element the page needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Placeholder {
+    /// `{{flui_base}}`: the `<base href>`.
+    Base,
+    /// `{{flui_manifest}}`: the manifest link.
+    Manifest,
+    /// `{{flui_stylesheet}}`: the stylesheet link.
+    Stylesheet,
+    /// `{{flui_module}}`: the script that starts the application; a template
+    /// without it is refused.
+    Module,
+}
+
+impl Placeholder {
+    const ALL: [Self; 4] = [Self::Base, Self::Manifest, Self::Stylesheet, Self::Module];
+
+    /// The text the template holds.
+    pub(crate) const fn token(self) -> &'static str {
+        match self {
+            Self::Base => "{{flui_base}}",
+            Self::Manifest => "{{flui_manifest}}",
+            Self::Stylesheet => "{{flui_stylesheet}}",
+            Self::Module => "{{flui_module}}",
+        }
+    }
+
+    /// The element the build puts in its place.
+    fn element(self, base: &BaseHref) -> String {
+        match self {
+            Self::Base => format!(r#"<base href="{base}">"#),
+            Self::Manifest => format!(r#"<link rel="manifest" href="{MANIFEST}">"#),
+            Self::Stylesheet => format!(r#"<link rel="stylesheet" href="{STYLESHEET}">"#),
+            Self::Module => format!(r#"<script type="module" src="{BOOTSTRAP}"></script>"#),
+        }
+    }
+}
+
+/// Why a project's page template was refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum InvalidTemplate {
+    /// It has no `{{flui_module}}`, so the page would never start the
+    /// application.
+    #[error("the page template has no `{{{{flui_module}}}}`, so it would never start the app")]
+    NoModule,
+}
+
+/// The page `template` makes for the build served from `base`: each
+/// placeholder replaced by its element.
+///
+/// # Errors
+/// [`InvalidTemplate::NoModule`] when the template has no
+/// `{{flui_module}}`.
+pub(crate) fn render_template(template: &str, base: &BaseHref) -> Result<String, InvalidTemplate> {
+    if !template.contains(Placeholder::Module.token()) {
+        return Err(InvalidTemplate::NoModule);
+    }
+    Ok(Placeholder::ALL
+        .iter()
+        .fold(template.to_owned(), |page, placeholder| {
+            page.replace(placeholder.token(), &placeholder.element(base))
+        }))
+}
+
+/// The page of the application named `title`, from `page`'s description,
+/// theme colour and base path.
 #[must_use]
-pub(crate) fn render(title: &str, base: &BaseHref) -> String {
+pub(crate) fn render(title: &str, page: &WebPage) -> String {
     let title = escape(title);
-    format!(
+    let description = page
+        .description
+        .as_deref()
+        .map_or_else(String::new, |text| {
+            format!(
+                "\n    <meta name=\"description\" content=\"{}\">",
+                escape(text)
+            )
+        });
+    let theme = page
+        .theme_color
+        .as_deref()
+        .map_or_else(String::new, |colour| {
+            format!(
+                "\n    <meta name=\"theme-color\" content=\"{}\">",
+                escape(colour)
+            )
+        });
+    let template = format!(
         r#"<!DOCTYPE html>
 <!-- Written by `flui build` on every build; edits here are lost. -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <base href="{base}">
+    {base}
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="{title}">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">{description}{theme}
     <title>{title}</title>
-    <link rel="manifest" href="{MANIFEST}">
-    <style>
-        html, body {{ margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }}
-    </style>
+    {manifest}
+    {stylesheet}
 </head>
 <body>
-    <script type="module">
-        import init from './{PKG_DIR}/{OUT_NAME}.js';
-        init();
-    </script>
+    {module}
 </body>
 </html>
-"#
-    )
+"#,
+        base = Placeholder::Base.token(),
+        manifest = Placeholder::Manifest.token(),
+        stylesheet = Placeholder::Stylesheet.token(),
+        module = Placeholder::Module.token(),
+    );
+    render_template(&template, &page.base_href)
+        .expect("BUG: the generated page holds the module's placeholder")
 }
 
-/// The manifest of an application named `name` that has none of its own.
+/// The module the page loads: it imports the application's module and
+/// starts it.
 #[must_use]
-pub(crate) fn default_manifest(name: &str) -> String {
-    let manifest = serde_json::json!({
+pub(crate) fn bootstrap() -> String {
+    format!("import init from './{PKG_DIR}/{OUT_NAME}.js';\ninit();\n")
+}
+
+/// The page's stylesheet: no margin and no scrolling, so the host's root
+/// covers the viewport, and no pull-to-refresh or bounce past the content.
+#[must_use]
+pub(crate) fn stylesheet() -> String {
+    "html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }\n"
+        .to_owned()
+}
+
+/// The web app manifest of the application named `name`, with `page`'s
+/// description and theme colour: what a build writes when the project keeps
+/// none and what `flui platform add web` scaffolds.
+#[must_use]
+pub(crate) fn manifest(name: &str, page: &WebPage) -> String {
+    let mut manifest = serde_json::json!({
         "name": name,
         "short_name": name,
         "start_url": ".",
         "display": "standalone",
         "background_color": "#FFFFFF",
-        "theme_color": "#FFFFFF",
+        "theme_color": page.theme_color.as_deref().unwrap_or("#FFFFFF"),
     });
+    if let Some(description) = &page.description {
+        manifest["description"] = serde_json::Value::from(description.as_str());
+    }
     let mut text = serde_json::to_string_pretty(&manifest).expect("BUG: a JSON value serializes");
     text.push('\n');
     text
@@ -160,18 +310,28 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn page(base: &str) -> WebPage {
+        WebPage {
+            base_href: BaseHref::try_new(base).expect("a base path"),
+            ..WebPage::default()
+        }
+    }
+
     #[test]
     fn the_page_matches_its_golden() {
-        insta::assert_snapshot!(render("Demo", &BaseHref::root()));
+        insta::assert_snapshot!(render("Demo", &page("/")));
     }
 
     /// The page names its base, covers the display, links the manifest and
-    /// imports the module relative to the base, holds no canvas and no
-    /// script file of its own, and escapes the application's name.
+    /// the stylesheet and loads the bootstrap module relative to the base,
+    /// holds no canvas, no inline script and no inline style, and escapes
+    /// the application's name, description and theme colour.
     #[test]
-    fn the_page_is_a_mount_point_and_a_loader() {
-        let base = BaseHref::try_new("/apps/demo/").expect("a base path");
-        let page = render("Tom & \"Jerry\" <3", &base);
+    fn the_page_is_a_mount_point_and_a_loader_with_nothing_inline() {
+        let mut described = page("/apps/demo/");
+        described.description = Some("Cats & \"dogs\"".to_owned());
+        described.theme_color = Some("#123\"><script>".to_owned());
+        let html = render("Tom & \"Jerry\" <3", &described);
         for (part, what) in [
             (r#"<base href="/apps/demo/">"#, "the base"),
             (
@@ -182,53 +342,107 @@ mod tests {
                 r#"<link rel="manifest" href="manifest.json">"#,
                 "the manifest",
             ),
-            ("import init from './pkg/app.js';", "the module"),
+            (
+                r#"<link rel="stylesheet" href="flui.css">"#,
+                "the stylesheet",
+            ),
+            (
+                r#"<script type="module" src="flui.js"></script>"#,
+                "the module",
+            ),
             (
                 "<title>Tom &amp; &quot;Jerry&quot; &lt;3</title>",
                 "the escaped name",
             ),
+            (
+                r#"<meta name="description" content="Cats &amp; &quot;dogs&quot;">"#,
+                "the escaped description",
+            ),
+            (
+                r##"<meta name="theme-color" content="#123&quot;&gt;&lt;script&gt;">"##,
+                "the escaped theme colour",
+            ),
         ] {
-            assert!(page.contains(part), "{what}: {page}");
+            assert!(html.contains(part), "{what}: {html}");
         }
-        assert!(!page.contains("<canvas"), "the host makes its own root");
-        assert!(!page.contains("src="), "no script file beside the module");
+        assert!(!html.contains("<canvas"), "the host makes its own root");
+        assert!(!html.contains("<style"), "no inline style");
+        assert!(
+            !html.contains("<script>") && !html.contains("<script type=\"module\">"),
+            "no inline script"
+        );
+        assert!(bootstrap().contains("import init from './pkg/app.js';"));
+        assert!(stylesheet().contains("overscroll-behavior: none"));
     }
 
     #[test]
-    fn a_base_path_is_an_absolute_directory_with_nothing_to_escape() {
-        for accepted in ["/", "/apps/demo/", "/a-b_c.d~e/"] {
+    fn a_template_gets_each_placeholder_and_needs_the_module() {
+        let template = "<head>{{flui_base}}{{flui_manifest}}{{flui_stylesheet}}</head>\
+                        <body><main></main>{{flui_module}}</body>";
+        let html = render_template(template, &BaseHref::try_new("/x/").expect("base"))
+            .expect("a template with the module");
+        assert_eq!(
+            html,
+            "<head><base href=\"/x/\"><link rel=\"manifest\" href=\"manifest.json\">\
+             <link rel=\"stylesheet\" href=\"flui.css\"></head><body><main></main>\
+             <script type=\"module\" src=\"flui.js\"></script></body>"
+        );
+        assert_eq!(
+            render_template("<body></body>", &BaseHref::root()),
+            Err(InvalidTemplate::NoModule)
+        );
+    }
+
+    #[test]
+    fn a_base_path_is_an_absolute_path_of_plain_segments() {
+        for accepted in ["/", "/apps/demo/", "/a-b_c.d~e/", "/v1.2/"] {
             assert_eq!(
                 BaseHref::try_new(accepted).map(|base| base.to_string()),
                 Ok(accepted.to_owned())
             );
         }
-        for refused in ["", "apps/", "/apps", "https://example.com/"] {
+        // Each refused path and the variant its refusal is.
+        let cases = [
+            ("", "NotADirectory"),
+            ("apps/", "NotADirectory"),
+            ("/apps", "NotADirectory"),
+            ("https://evil.example/", "NotADirectory"),
+            ("//evil.example/", "Segment"),
+            ("//", "Segment"),
+            ("/../", "Segment"),
+            ("/./", "Segment"),
+            ("/a/../b/", "Segment"),
+            ("/a//b/", "Segment"),
+            ("/%2e%2e/", "Character"),
+            ("/a%2fb/", "Character"),
+            ("/a%5Cb/", "Character"),
+            ("/a\\b/", "Character"),
+            ("/a b/", "Character"),
+            ("/a\"/", "Character"),
+            ("/<x>/", "Character"),
+            ("/a?b/", "Character"),
+            ("/a#b/", "Character"),
+            ("/a\n/", "Character"),
+        ];
+        for (refused, variant) in cases {
+            let error = BaseHref::try_new(refused).expect_err(refused);
             assert!(
-                matches!(
-                    BaseHref::try_new(refused),
-                    Err(InvalidBaseHref::NotADirectory(_))
-                ),
-                "{refused}"
-            );
-        }
-        for refused in [
-            "/a b/", "/a\"/", "/<x>/", "/a?b/", "/a#b/", "/a\\b/", "/a\n/",
-        ] {
-            assert!(
-                matches!(
-                    BaseHref::try_new(refused),
-                    Err(InvalidBaseHref::Character(_))
-                ),
-                "{refused:?}"
+                format!("{error:?}").starts_with(variant),
+                "{refused:?}: {error:?}"
             );
         }
     }
 
     #[test]
-    fn the_default_manifest_names_the_application() {
+    fn the_manifest_names_the_application_and_escapes_what_it_is_given() {
+        let mut described = page("/");
+        described.description = Some("A \"quoted\" app".to_owned());
+        described.theme_color = Some("#123456".to_owned());
         let manifest: serde_json::Value =
-            serde_json::from_str(&default_manifest("Demo")).expect("JSON");
-        assert_eq!(manifest["name"], "Demo");
+            serde_json::from_str(&manifest("Demo \"x\"", &described)).expect("JSON");
+        assert_eq!(manifest["name"], "Demo \"x\"");
+        assert_eq!(manifest["description"], "A \"quoted\" app");
+        assert_eq!(manifest["theme_color"], "#123456");
         assert_eq!(manifest["start_url"], ".");
     }
 }

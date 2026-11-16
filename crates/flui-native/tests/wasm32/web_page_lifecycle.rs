@@ -108,11 +108,16 @@ export function installKeyboard(virtual) {
     visual = Object.assign(new EventTarget(), { offsetTop: 0, height: 150, scale: 1 });
     globalThis.visualViewport = visual;
     globalThis.document.documentElement = { clientWidth: 300, clientHeight: 150 };
+    // The layout viewport the safe-area bands are edges of.
+    globalThis.innerWidth = 300;
+    globalThis.innerHeight = 150;
 }
 export function removeKeyboard() {
     delete globalThis.navigator.virtualKeyboard;
     delete globalThis.visualViewport;
     delete globalThis.document.documentElement;
+    delete globalThis.innerWidth;
+    delete globalThis.innerHeight;
 }
 export function keyboardOverlaysContent() { return keyboard.overlaysContent; }
 // An ancestor of the canvas scrolled, moving it to `top` in the viewport; the
