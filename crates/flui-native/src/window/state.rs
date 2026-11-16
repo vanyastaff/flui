@@ -493,7 +493,7 @@ pub(crate) struct WindowStateCell {
     invalidations: AtomicU64,
     /// Where the window's capability publications come from: the process's
     /// mint, or an exhausted one in a test.
-    mint: &'static PublicationMint,
+    mint: PublicationMint,
     /// The snapshots the cell publishes, its first included, journalled while
     /// a native capture is installed (ADR-0215 §4): every host publishes
     /// through a cell, so this is the one place a window's state is recorded.
@@ -539,7 +539,7 @@ impl WindowStateCell {
     /// [`open`](Self::open) publishing from `mint`: the process's in
     /// production, an exhausted one in a test of what a window does once the
     /// process has no publication left.
-    pub(crate) fn open_from(first_read: Sample, mint: &'static PublicationMint) -> Self {
+    pub(crate) fn open_from(first_read: Sample, mint: PublicationMint) -> Self {
         let Sample {
             state: mut initial,
             refused,
@@ -1181,7 +1181,7 @@ mod tests {
 
     /// A mint with no publication left, for what a window does once the
     /// process has none.
-    static EXHAUSTED: flui_platform::PublicationMint = flui_platform::PublicationMint::exhausted();
+    const EXHAUSTED: flui_platform::PublicationMint = flui_platform::PublicationMint::exhausted();
 
     /// A window whose first snapshot already sits at the last revision is
     /// frozen from the start, its capabilities withdrawn, and publishes
@@ -1277,7 +1277,7 @@ mod tests {
 
         let cell = WindowStateCell::open_from(
             Sample::from(window(1.0).with_capabilities(WindowCapabilities::ALL)),
-            &EXHAUSTED,
+            EXHAUSTED,
         );
         assert!(cell.published_capabilities().is_withdrawn());
         assert!(
@@ -1317,7 +1317,7 @@ mod tests {
                 window(1.0)
                     .with_capabilities(WindowCapabilities::NONE)
                     .with_focused(true),
-                &EXHAUSTED,
+                EXHAUSTED,
             )
             .expect("a revision is left");
         assert!(next.capabilities.is_withdrawn());

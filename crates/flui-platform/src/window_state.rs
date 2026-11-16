@@ -488,7 +488,7 @@ impl WindowState {
     pub fn successor_from(
         &self,
         mut sample: Self,
-        mint: &crate::PublicationMint,
+        mint: crate::PublicationMint,
     ) -> Result<Self, WindowRevisionExhausted> {
         sample.revision = self.revision;
         sample.capabilities = sample.capabilities.carried_from(&self.capabilities);

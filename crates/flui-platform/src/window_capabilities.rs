@@ -155,32 +155,32 @@ enum Edition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Publication(NonZeroU64);
 
-/// The issuer of capability publications (ADR-0341). There is one for the
-/// process, [`PublicationMint::process`], which every host publishes from:
-/// two mints issuing the same number would make two publications one, so no
-/// other issuing mint exists. Behind the `testing` feature,
+/// Where capability publications come from (ADR-0341). There is one issuer,
+/// the process's ([`PublicationMint::process`]), which every host publishes
+/// from: two issuers handing out the same number would make two publications
+/// one, so no other issuing mint exists. Behind the `testing` feature,
 /// [`PublicationMint::exhausted`] is one that issues nothing, so a test can
 /// drive what a window does once the process has no publication left.
-#[derive(Debug)]
-pub struct PublicationMint(AtomicIdMint<NonZeroU64>);
+#[derive(Debug, Clone, Copy)]
+pub struct PublicationMint(Option<&'static AtomicIdMint<NonZeroU64>>);
 
 /// The process's publications.
-static PUBLICATIONS: PublicationMint = PublicationMint(AtomicIdMint::new());
+static PUBLICATIONS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
 
 impl PublicationMint {
     /// The process's mint, which every host publishes from.
     #[must_use]
-    pub fn process() -> &'static Self {
-        &PUBLICATIONS
+    pub const fn process() -> Self {
+        Self(Some(&PUBLICATIONS))
     }
 
     /// A mint that has issued everything it can: every publication it is
-    /// asked for is refused with [`IdExhausted`], and it can never issue a
-    /// number the process's mint issues.
+    /// asked for is refused with [`IdExhausted`], and it never issues a number
+    /// the process's mint issues.
     #[cfg(feature = "testing")]
     #[must_use]
     pub const fn exhausted() -> Self {
-        Self(AtomicIdMint::starting_after(u64::MAX))
+        Self(None)
     }
 
     /// A publication no capabilities had before.
@@ -188,8 +188,8 @@ impl PublicationMint {
     /// # Errors
     /// [`IdExhausted`] once the mint issued every publication it can; it never
     /// reissues one.
-    fn mint(&self) -> Result<Publication, IdExhausted> {
-        self.0.next().map(Publication)
+    fn mint(self) -> Result<Publication, IdExhausted> {
+        self.0.ok_or(IdExhausted)?.next().map(Publication)
     }
 }
 
@@ -379,7 +379,7 @@ impl WindowCapabilities {
     ///
     /// # Errors
     /// [`IdExhausted`] once `mint` issued every publication it can.
-    pub fn publish_from(mut self, mint: &PublicationMint) -> Result<Self, IdExhausted> {
+    pub fn publish_from(mut self, mint: PublicationMint) -> Result<Self, IdExhausted> {
         self.edition = Edition::Published(mint.mint()?);
         Ok(self)
     }
@@ -445,7 +445,7 @@ impl WindowCapabilities {
         mut self,
         previous: &Self,
         revision: WindowRevision,
-        mint: &PublicationMint,
+        mint: PublicationMint,
     ) -> Self {
         self.revision = revision;
         match previous.edition {
