@@ -82,10 +82,10 @@ where
     ///
     /// # Panics
     ///
-    /// With the first panic of the value type's `PartialEq`, `Clone` or
-    /// `Drop`, once the value is changed and every other watcher answered; a
-    /// watcher whose answer could not be cloned keeps waiting for the next
-    /// change.
+    /// A panic of the value type's `PartialEq` leaves before anything
+    /// changes. One of its `Drop` or `Clone` is resumed once the value is
+    /// changed and every other watcher answered; a watcher whose answer could
+    /// not be cloned keeps waiting for the next change.
     pub fn set(&self, value: T) {
         let current = Rc::clone(&self.cell.state.borrow().value);
         // Compared, and the old value dropped, with no borrow held:
@@ -117,8 +117,8 @@ where
     }
 
     /// Change the value to `value` at `at` on the scenario's clock: at the
-    /// first [`Scenario::run_due`] on or after it, as [`set`](Self::set)
-    /// does. An instant already passed applies at the next `run_due`.
+    /// moment its driver reaches it, as [`set`](Self::set) does. An instant
+    /// already passed applies when the driver next moves.
     pub fn set_at(&self, at: Duration, value: T) {
         let what = Cow::Owned(format!("{} becomes {value:?}", self.cell.name));
         let track = Rc::downgrade(&self.cell);

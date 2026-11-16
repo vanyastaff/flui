@@ -9,9 +9,8 @@
 //!   earliest step that accepts a request answers it, a standing answer covers
 //!   what no step takes, and a request nothing answers is
 //!   [`Unexpected`](ScenarioFailure::Unexpected), never a silent default;
-//! - a [`Track`] is a value the platform changes over time: a permission the
-//!   user revokes, a service that goes away and comes back
-//!   ([`ServiceState`]);
+//! - a [`Track`] is a value the platform changes over time: a service that
+//!   goes away and comes back ([`ServiceState`]);
 //! - [`Events`] is a stream of events at virtual instants, ended once with a
 //!   [`StreamEnd`].
 //!
@@ -21,12 +20,13 @@
 //!
 //! # Time
 //!
-//! The timeline is a [`ManualClock`]. Exactly one driver moves it
-//! ([`Scenario::drive`]): a change scheduled at an instant
-//! ([`Track::set_at`], [`Events::emit_at`], [`Answer::after`]) applies when
-//! the driver [advances](ScenarioDriver::advance) to or past it, at the
-//! owner-turn boundary, never in the middle of a turn.
-//! [`Scenario::next_due`] is the driver's next deadline.
+//! The timeline is a `ManualClock` that only the scenario's one driver
+//! holds ([`Scenario::drive`]): the scenario itself shows the time
+//! ([`Scenario::now`]) and nothing else can move it. A change scheduled at an
+//! instant ([`Track::set_at`], [`Events::emit_at`], [`Answer::after`]) applies
+//! when the driver [advances](ScenarioDriver::advance) to or past it, in the
+//! same call that moves the clock. [`Scenario::next_due`] is the driver's next
+//! deadline.
 //!
 //! # The owner-turn boundary
 //!
@@ -39,37 +39,43 @@
 //! while code the scenario does not own runs (a matcher, a computed answer,
 //! a value's `Clone`, `PartialEq`, `Debug` or `Drop`). When that code
 //! panics, the state is already committed: the request it was answering
-//! stays held, every other one is still answered, and the first panic is
-//! resumed once the rest has run (ADR-0281).
+//! stays held, every other one is still answered and every debt recorded,
+//! and the first panic is resumed once the rest has run (ADR-0281).
 //!
 //! # Failures
 //!
 //! [`Scenario::verify`] returns every failure the run collected, typed. What
 //! a script owes outlives its handles: a script dropped with a held request
-//! or an unused step hands them to the ledger. A scenario that ends with a
-//! failure no `verify` returned panics as it drops, unless the thread is
-//! already unwinding, so a test that forgets to verify cannot pass with
-//! work left undone.
+//! or an unused step hands them to the ledger. What `verify` returned is
+//! acknowledged by position and identity, not by value: a failure recorded
+//! after it, even one equal to an acknowledged one, is new. A scenario that
+//! ends with a failure no `verify` returned panics as it drops, unless the
+//! thread is already unwinding, so a test that forgets to verify cannot pass
+//! with work left undone.
 
 mod events;
 mod script;
 mod track;
 
 pub use events::{EventSubscription, Events, StreamEnd, StreamItem};
-pub use script::{Answer, Expect, Script};
+pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, Script};
 pub use track::{ServiceState, Track};
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 use flui_foundation::{IdMint, ManualClock};
+
+/// How many reports from other threads a scenario keeps; one past it is
+/// counted in [`ScenarioFailure::ReportsDropped`] instead.
+pub const MAX_REPORTS: usize = 256;
 
 /// One virtual timeline and the failures of one run, shared by the scripts,
 /// tracks and streams made on it.
@@ -103,10 +109,25 @@ struct Core {
 struct CoreState {
     /// Scheduled changes by instant, then by the order they were scheduled.
     timeline: BTreeMap<(Duration, NonZeroU64), Timed>,
-    failures: Vec<ScenarioFailure>,
+    /// Failures recorded on the owner thread as they happened.
+    events: Vec<ScenarioFailure>,
+    /// What dropped scripts still owed, each under its step's or request's
+    /// id.
+    debts: Vec<(NonZeroU64, ScenarioFailure)>,
     audited: Vec<Weak<dyn Audit>>,
     /// What the last `verify` returned.
-    acknowledged: Vec<ScenarioFailure>,
+    acknowledged: Acknowledged,
+}
+
+/// What [`Scenario::verify`] returned: how far each append-only list had
+/// been read, and the ids of the debts and scheduled changes it listed.
+#[derive(Default)]
+struct Acknowledged {
+    events: usize,
+    reports: usize,
+    dropped_reports: u64,
+    debts: BTreeSet<NonZeroU64>,
+    scheduled: BTreeSet<NonZeroU64>,
 }
 
 /// A change scheduled on the timeline.
@@ -115,10 +136,14 @@ struct Timed {
     apply: Box<dyn FnOnce()>,
 }
 
+/// A failure a script still owes, under the id of its step or request.
+type Debt = (NonZeroU64, ScenarioFailure);
+
 /// What a script still owes: what [`Scenario::verify`] asks of a live one
-/// and what a dropped one hands to the ledger.
+/// and what a dropped one hands to the ledger. A panic of the request
+/// type's `Debug` is kept in `first`, after every debt is written.
 trait Audit {
-    fn audit(&self, failures: &mut Vec<ScenarioFailure>);
+    fn audit(&self, debts: &mut Vec<Debt>, first: &mut FirstPanic);
 }
 
 impl Default for Scenario {
@@ -131,16 +156,9 @@ impl Scenario {
     /// A scenario on a clock of its own, at zero.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_clock(ManualClock::new())
-    }
-
-    /// A scenario on `clock`: the instants it schedules are `clock`'s
-    /// elapsed time.
-    #[must_use]
-    pub fn with_clock(clock: ManualClock) -> Self {
         Self {
             core: Rc::new(Core {
-                clock,
+                clock: ManualClock::new(),
                 state: RefCell::new(CoreState::default()),
                 reported: FailureReport::default(),
                 driven: Cell::new(false),
@@ -149,21 +167,14 @@ impl Scenario {
         }
     }
 
-    /// The clock the scenario's instants are on. Read it; move it only
-    /// through the [driver](Self::drive), which applies what falls due.
-    #[must_use]
-    pub fn clock(&self) -> &ManualClock {
-        &self.core.clock
-    }
-
-    /// The virtual time now: the clock's elapsed time.
+    /// The virtual time now: how far the driver has moved the clock.
     #[must_use]
     pub fn now(&self) -> Duration {
         self.core.clock.elapsed()
     }
 
     /// The one driver of the scenario's clock: a headless host takes it, so
-    /// time moves only through that host's frames.
+    /// time moves only through that host.
     ///
     /// # Errors
     ///
@@ -228,15 +239,84 @@ impl Scenario {
         state.timeline.keys().next().map(|&(at, _)| at)
     }
 
+    /// Every failure of the run so far, or `Ok` when there is none. What it
+    /// returns is acknowledged: the scenario does not panic over it when it
+    /// drops. A failure recorded after this call is not, even when it equals
+    /// one this call returned.
+    ///
+    /// # Errors
+    ///
+    /// [`ScenarioFailures`] listing, in this order: the failures recorded on
+    /// the owner thread, in the order they happened (an unexpected request,
+    /// an event after its stream's end); the reports from other threads, in
+    /// the order they arrived, and how many were dropped past
+    /// [`MAX_REPORTS`]; what each live script owes (a held request nobody
+    /// answered, a step no request used); what dropped scripts owed; and
+    /// every scheduled change not yet applied, by instant.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a request type's `Debug`, once everything is
+    /// listed and acknowledged.
+    pub fn verify(&self) -> Result<(), ScenarioFailures> {
+        let audited: Vec<Rc<dyn Audit>> = {
+            let mut state = self.core.state.borrow_mut();
+            state.audited.retain(|script| script.strong_count() > 0);
+            state.audited.iter().filter_map(Weak::upgrade).collect()
+        };
+        let mut first = FirstPanic::new();
+        let mut live = Vec::new();
+        for script in &audited {
+            script.audit(&mut live, &mut first);
+        }
+        drop(audited);
+        let (reports, dropped_reports) = self.core.reported.snapshot();
+        let mut state = self.core.state.borrow_mut();
+        let mut failures = state.events.clone();
+        failures.extend(reports.iter().cloned());
+        if dropped_reports > 0 {
+            failures.push(ScenarioFailure::ReportsDropped {
+                dropped: dropped_reports,
+            });
+        }
+        let mut debts: BTreeSet<NonZeroU64> = BTreeSet::new();
+        for (id, failure) in live.into_iter().chain(state.debts.iter().cloned()) {
+            debts.insert(id);
+            failures.push(failure);
+        }
+        let mut scheduled = BTreeSet::new();
+        for (&(at, seq), timed) in &state.timeline {
+            scheduled.insert(seq);
+            failures.push(ScenarioFailure::NotReached {
+                what: timed.what.clone(),
+                at,
+            });
+        }
+        state.acknowledged = Acknowledged {
+            events: state.events.len(),
+            reports: reports.len(),
+            dropped_reports,
+            debts,
+            scheduled,
+        };
+        drop(state);
+        first.resume();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(ScenarioFailures(failures))
+        }
+    }
+
     /// Apply every change scheduled at or before [`now`](Self::now), in the
     /// order of their instants and, at one instant, the order they were
-    /// scheduled. Returns how many it applied.
+    /// scheduled. Reached only through the driver, as it moves the clock.
     ///
     /// A change scheduled while this runs, at an instant already reached,
     /// applies in the same call. Each change runs with no borrow held, so one
     /// that panics leaves the others applied; the first panic is resumed
     /// once all of them have run.
-    pub fn run_due(&self) -> usize {
+    fn run_due(&self) -> usize {
         let now = self.now();
         let mut applied = 0;
         let mut first = FirstPanic::new();
@@ -259,52 +339,6 @@ impl Scenario {
         applied
     }
 
-    /// Every failure of the run so far, or `Ok` when there is none. What it
-    /// returns is acknowledged: the scenario does not panic over it when it
-    /// drops.
-    ///
-    /// # Errors
-    ///
-    /// [`ScenarioFailures`] listing, in this order: the failures recorded as
-    /// they happened (an unexpected request, an event after its stream's
-    /// end, a script dropped with debts, a report from another thread), what
-    /// each live script still owes (a held request nobody answered, a step no
-    /// request used), and every scheduled change not yet applied.
-    pub fn verify(&self) -> Result<(), ScenarioFailures> {
-        let audited: Vec<Rc<dyn Audit>> = {
-            let mut state = self.core.state.borrow_mut();
-            state.audited.retain(|script| script.strong_count() > 0);
-            state.audited.iter().filter_map(Weak::upgrade).collect()
-        };
-        let mut failures = self.recorded();
-        for script in &audited {
-            script.audit(&mut failures);
-        }
-        drop(audited);
-        failures.extend(self.unreached());
-        self.core
-            .state
-            .borrow_mut()
-            .acknowledged
-            .clone_from(&failures);
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(ScenarioFailures(failures))
-        }
-    }
-
-    /// The failures recorded so far, from this thread and others.
-    fn recorded(&self) -> Vec<ScenarioFailure> {
-        let mut failures = self.core.state.borrow().failures.clone();
-        failures.extend(self.core.reported.take_snapshot());
-        failures
-    }
-
-    fn unreached(&self) -> Vec<ScenarioFailure> {
-        unreached(&self.core.state.borrow())
-    }
-
     /// Schedule `apply` at `at`; `what` names it if the clock never gets
     /// there.
     fn schedule(&self, at: Duration, what: Cow<'static, str>, apply: Box<dyn FnOnce()>) {
@@ -325,42 +359,66 @@ impl Scenario {
     }
 
     fn fail(&self, failure: ScenarioFailure) {
-        self.core.state.borrow_mut().failures.push(failure);
+        self.core.state.borrow_mut().events.push(failure);
+    }
+
+    fn owe(&self, debts: Vec<Debt>) {
+        self.core.state.borrow_mut().debts.extend(debts);
     }
 
     fn audit(&self, script: Weak<dyn Audit>) {
-        self.core.state.borrow_mut().audited.push(script);
+        let mut state = self.core.state.borrow_mut();
+        state.audited.retain(|script| script.strong_count() > 0);
+        state.audited.push(script);
     }
-}
-
-fn unreached(state: &CoreState) -> Vec<ScenarioFailure> {
-    state
-        .timeline
-        .iter()
-        .map(|(&(at, _), timed)| ScenarioFailure::NotReached {
-            what: timed.what.clone(),
-            at,
-        })
-        .collect()
 }
 
 impl Drop for Core {
     fn drop(&mut self) {
+        let (reports, dropped_reports) = self.reported.end();
         // A destructor that panics while the thread unwinds aborts; the
         // unwinding failure is the one to report (ADR-0281).
         if std::thread::panicking() {
             return;
         }
         let state = self.state.get_mut();
-        let mut failures = std::mem::take(&mut state.failures);
-        failures.extend(self.reported.take_snapshot());
+        let acknowledged = &state.acknowledged;
         // Every script is gone by now: each held this scenario alive, and
-        // handed its debts to `failures` as it dropped.
-        failures.extend(unreached(state));
-        let unacknowledged: Vec<ScenarioFailure> = failures
-            .into_iter()
-            .filter(|failure| !state.acknowledged.contains(failure))
-            .collect();
+        // handed its debts to `debts` as it dropped.
+        let mut unacknowledged: Vec<ScenarioFailure> = state
+            .events
+            .get(acknowledged.events..)
+            .unwrap_or_default()
+            .to_vec();
+        unacknowledged.extend(
+            reports
+                .get(acknowledged.reports..)
+                .unwrap_or_default()
+                .iter()
+                .cloned(),
+        );
+        if dropped_reports > acknowledged.dropped_reports {
+            unacknowledged.push(ScenarioFailure::ReportsDropped {
+                dropped: dropped_reports - acknowledged.dropped_reports,
+            });
+        }
+        unacknowledged.extend(
+            state
+                .debts
+                .iter()
+                .filter(|(id, _)| !acknowledged.debts.contains(id))
+                .map(|(_, failure)| failure.clone()),
+        );
+        unacknowledged.extend(
+            state
+                .timeline
+                .iter()
+                .filter(|((_, seq), _)| !acknowledged.scheduled.contains(seq))
+                .map(|(&(at, _), timed)| ScenarioFailure::NotReached {
+                    what: timed.what.clone(),
+                    at,
+                }),
+        );
         assert!(
             unacknowledged.is_empty(),
             "a scenario ended unverified: {}",
@@ -375,7 +433,7 @@ impl fmt::Debug for Scenario {
         // writer is the caller's code.
         let (scheduled, failures) = {
             let state = self.core.state.borrow();
-            (state.timeline.len(), state.failures.len())
+            (state.timeline.len(), state.events.len() + state.debts.len())
         };
         f.debug_struct("Scenario")
             .field("now", &self.now())
@@ -400,8 +458,20 @@ impl ScenarioDriver {
         &self.scenario
     }
 
+    /// The clock itself, for the driver's own reader (a UI runtime that
+    /// frames on it). Move it only with [`advance`](Self::advance).
+    #[must_use]
+    pub fn clock(&self) -> &ManualClock {
+        &self.scenario.core.clock
+    }
+
     /// Move the clock forward by `dt`, then apply every change due at the
-    /// new instant ([`Scenario::run_due`]). Returns how many it applied.
+    /// new instant. Returns how many it applied.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a change it applied, once every due change
+    /// has run.
     pub fn advance(&self, dt: Duration) -> usize {
         self.scenario.core.clock.advance(dt);
         self.scenario.run_due()
@@ -425,46 +495,68 @@ impl fmt::Debug for ScenarioDriver {
 /// [`Scenario::drive`] refused: another driver holds the clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("another driver already moves this scenario's clock")]
-#[allow(
-    clippy::exhaustive_structs,
-    reason = "the refusal is the whole fact: there is nothing more to say about it"
-)]
 pub struct AlreadyDriven;
 
 /// Where a double whose contract is `Send + Sync` reports a failure into a
 /// [`Scenario`]'s ledger, from any thread. Cheap to clone.
+///
+/// It keeps at most [`MAX_REPORTS`]; the ones past it are counted. Once the
+/// scenario has ended, a report is refused and nothing accumulates.
 #[derive(Clone, Default)]
 pub struct FailureReport {
-    failures: Arc<Mutex<Vec<ScenarioFailure>>>,
+    shared: Arc<Mutex<Reports>>,
+}
+
+#[derive(Default)]
+struct Reports {
+    failures: Vec<ScenarioFailure>,
+    dropped: u64,
+    ended: bool,
 }
 
 impl FailureReport {
-    /// Report `failure`; the scenario's [`verify`](Scenario::verify) lists it.
-    pub fn report(&self, failure: ScenarioFailure) {
-        // A `Vec` push runs no user code; a poisoned lock held a whole list.
-        self.failures
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(failure);
+    /// Report `failure`; the scenario's [`verify`](Scenario::verify) lists
+    /// it. `false` when the scenario has ended and nobody will read it.
+    pub fn report(&self, failure: ScenarioFailure) -> bool {
+        let mut reports = self.lock();
+        if reports.ended {
+            return false;
+        }
+        if reports.failures.len() < MAX_REPORTS {
+            reports.failures.push(failure);
+        } else {
+            reports.dropped = reports.dropped.saturating_add(1);
+        }
+        true
     }
 
-    fn take_snapshot(&self) -> Vec<ScenarioFailure> {
-        self.failures
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    fn lock(&self) -> MutexGuard<'_, Reports> {
+        // A `Vec` push runs no user code; a poisoned lock held a whole list.
+        self.shared.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn snapshot(&self) -> (Vec<ScenarioFailure>, u64) {
+        let reports = self.lock();
+        (reports.failures.clone(), reports.dropped)
+    }
+
+    /// The scenario ends: what was reported, and no report from now on.
+    fn end(&self) -> (Vec<ScenarioFailure>, u64) {
+        let mut reports = self.lock();
+        reports.ended = true;
+        (std::mem::take(&mut reports.failures), reports.dropped)
     }
 }
 
 impl fmt::Debug for FailureReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let reported = self
-            .failures
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len();
+        let (reported, ended) = {
+            let reports = self.lock();
+            (reports.failures.len(), reports.ended)
+        };
         f.debug_struct("FailureReport")
             .field("reported", &reported)
+            .field("ended", &ended)
             .finish()
     }
 }
@@ -510,6 +602,12 @@ pub enum ScenarioFailure {
         /// What was sent, as its `Debug` writes it.
         sent: String,
     },
+    /// Reports from other threads past [`MAX_REPORTS`], counted instead of
+    /// kept.
+    ReportsDropped {
+        /// How many.
+        dropped: u64,
+    },
 }
 
 impl fmt::Display for ScenarioFailure {
@@ -529,6 +627,12 @@ impl fmt::Display for ScenarioFailure {
             }
             Self::AfterEnd { stream, sent } => {
                 write!(f, "{stream}: {sent} was sent after the stream ended")
+            }
+            Self::ReportsDropped { dropped } => {
+                write!(
+                    f,
+                    "{dropped} report(s) past the first {MAX_REPORTS} were dropped"
+                )
             }
         }
     }

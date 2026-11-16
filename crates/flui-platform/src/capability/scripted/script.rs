@@ -10,8 +10,12 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 
-use super::{Audit, Scenario, ScenarioFailure, describe};
+use super::{Audit, Debt, Scenario, ScenarioFailure, describe};
 use crate::capability::Resolver;
+
+/// How many requests a script keeps for [`Script::requests`]; later ones are
+/// counted by [`Script::received`] and answered all the same.
+pub const MAX_RECORDED_REQUESTS: usize = 4096;
 
 /// A step's test of a request.
 type Matcher<R> = Rc<dyn Fn(&R) -> bool>;
@@ -180,7 +184,10 @@ struct ScriptState<R, A> {
     holding: bool,
     /// Requests not answered yet, oldest first.
     waiting: VecDeque<Waiting<R, A>>,
+    /// The first [`MAX_RECORDED_REQUESTS`] requests, oldest first.
     received: Vec<Rc<R>>,
+    /// How many requests reached the script, recorded or not.
+    received_count: usize,
 }
 
 struct Step<R, A> {
@@ -237,6 +244,7 @@ where
                 holding: false,
                 waiting: VecDeque::new(),
                 received: Vec::new(),
+                received_count: 0,
             }),
         });
         let audited: Rc<dyn Audit> = Rc::clone(&cell) as Rc<dyn Audit>;
@@ -383,9 +391,11 @@ where
     /// How many requests reached the script.
     #[must_use]
     pub fn received(&self) -> usize {
-        self.cell.state.borrow().received.len()
+        self.cell.state.borrow().received_count
     }
-
+    /// The requests that reached the script, oldest first: the first
+    /// [`MAX_RECORDED_REQUESTS`] of them; [`received`](Self::received) counts
+    /// every one.
     /// The requests that reached the script, oldest first.
     #[must_use]
     pub fn requests(&self) -> Vec<R>
@@ -415,7 +425,10 @@ where
     fn dispatch(&self, request: Rc<R>, resolver: Resolver<A>, first: &mut FirstPanic) {
         let candidates = {
             let mut state = self.cell.state.borrow_mut();
-            state.received.push(Rc::clone(&request));
+            state.received_count = state.received_count.saturating_add(1);
+            if state.received.len() < MAX_RECORDED_REQUESTS {
+                state.received.push(Rc::clone(&request));
+            }
             if state.holding {
                 drop(state);
                 self.hold_request(request, resolver);
@@ -565,51 +578,57 @@ where
 }
 
 impl<R: fmt::Debug + 'static, A: 'static> Audit for ScriptCell<R, A> {
-    fn audit(&self, failures: &mut Vec<ScenarioFailure>) {
+    fn audit(&self, debts: &mut Vec<Debt>, first: &mut FirstPanic) {
         let (unanswered, unconsumed) = {
             let state = self.state.borrow();
-            let unanswered: Vec<Rc<R>> = state
+            let unanswered: Vec<(EntryId, Rc<R>)> = state
                 .waiting
                 .iter()
                 .filter(|waiting| matches!(waiting.until, Until::Released))
-                .map(|waiting| Rc::clone(&waiting.request))
+                .map(|waiting| (waiting.id, Rc::clone(&waiting.request)))
                 .collect();
-            let unconsumed: Vec<Cow<'static, str>> = state
+            let unconsumed: Vec<(EntryId, Cow<'static, str>)> = state
                 .steps
                 .iter()
-                .map(|step| step.expect.label.clone())
+                .map(|step| (step.id, step.expect.label.clone()))
                 .collect();
             (unanswered, unconsumed)
         };
-        // Written after the borrow: `Debug` is the request type's code.
-        let mut first = FirstPanic::new();
-        for request in &unanswered {
-            failures.push(ScenarioFailure::Unanswered {
-                script: self.name,
-                request: describe(&**request, &mut first),
-            });
+        // Written after the borrow: `Debug` is the request type's code. One
+        // that panics is written as such and its panic kept in `first`, so
+        // every debt is still written.
+        for (id, request) in &unanswered {
+            debts.push((
+                id.0,
+                ScenarioFailure::Unanswered {
+                    script: self.name,
+                    request: describe(&**request, first),
+                },
+            ));
         }
-        failures.extend(
-            unconsumed
-                .into_iter()
-                .map(|step| ScenarioFailure::Unconsumed {
+        debts.extend(unconsumed.into_iter().map(|(id, step)| {
+            (
+                id.0,
+                ScenarioFailure::Unconsumed {
                     script: self.name,
                     step,
-                }),
-        );
-        first.resume();
+                },
+            )
+        }));
     }
 }
 
 impl<R: fmt::Debug + 'static, A: 'static> Drop for ScriptCell<R, A> {
     /// The last handle is gone: what the script still owes becomes the
-    /// scenario's, so a dropped script cannot leave a debt unreported.
+    /// scenario's, so a dropped script cannot leave a debt unreported. Every
+    /// debt is handed over before a panic of the request type's `Debug` is
+    /// resumed.
     fn drop(&mut self) {
         let mut debts = Vec::new();
-        self.audit(&mut debts);
-        for debt in debts {
-            self.scenario.fail(debt);
-        }
+        let mut first = FirstPanic::new();
+        self.audit(&mut debts, &mut first);
+        self.scenario.owe(debts);
+        first.resume();
     }
 }
 
@@ -620,7 +639,7 @@ impl<R: fmt::Debug + 'static, A: 'static> fmt::Debug for Script<R, A> {
             (
                 state.steps.len(),
                 state.waiting.len(),
-                state.received.len(),
+                state.received_count,
                 state.holding,
             )
         };

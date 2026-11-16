@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{Vsync, VsyncRegistration, VsyncRegistrationError};
-use flui_foundation::{ElementId, ManualClock};
+use flui_foundation::ElementId;
 use flui_interaction::events::PointerEvent;
 use flui_platform::PlatformInput;
 use flui_rendering::pipeline::PipelineCell;
@@ -204,7 +204,7 @@ impl WidgetHost {
         &self.pipeline
     }
 
-    pub(super) fn clock(&self) -> &ManualClock {
+    pub(super) fn clock(&self) -> &crate::HostClock {
         self.ui_runtime.clock()
     }
 

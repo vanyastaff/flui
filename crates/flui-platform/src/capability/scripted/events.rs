@@ -148,8 +148,8 @@ where
         first.resume();
     }
 
-    /// Send `event` at `at` on the scenario's clock: at the first
-    /// [`Scenario::run_due`] on or after it.
+    /// Send `event` at `at` on the scenario's clock: when its driver reaches
+    /// it.
     pub fn emit_at(&self, at: Duration, event: E) {
         let what = Cow::Owned(format!("{}: {event:?}", self.cell.name));
         self.schedule(at, what, move |events| events.emit(event));

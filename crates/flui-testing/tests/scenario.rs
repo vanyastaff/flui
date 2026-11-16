@@ -8,8 +8,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_platform::capability::scripted::{
-    Answer, EventSubscription, Events, Expect, Scenario, ScenarioFailure, Script, ServiceState,
-    StreamEnd, StreamItem, Track,
+    AlreadyDriven, Answer, EventSubscription, Events, Expect, MAX_REPORTS, Scenario,
+    ScenarioFailure, Script, ServiceState, StreamEnd, StreamItem, Track,
 };
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityRegistrar, Completion, CompletionSource, Plugin,
@@ -310,12 +310,110 @@ fn a_scenario_drives_one_host_at_a_time() {
     let scenario = Scenario::new();
     let camera = SimulatedCamera::on(&scenario);
     let first = HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera);
-    let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let second = HeadlessHost::try_with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera);
+    assert!(
+        matches!(second, Err(AlreadyDriven)),
+        "a second host would move the first's time"
+    );
+    let panicking = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera)
     }));
-    assert!(second.is_err(), "a second host would move the first's time");
+    assert!(panicking.is_err(), "the panicking form refuses too");
     drop(first);
-    let _third = HeadlessHost::with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera);
+    let _third = HeadlessHost::try_with_scenario(HeadlessWindow::new(10, 10), &scenario, &camera)
+        .expect("free once the first host is gone");
+}
+
+#[test]
+fn a_failure_repeated_after_verify_is_new() {
+    let ended = std::panic::catch_unwind(|| {
+        let scenario = Scenario::new();
+        let (mut host, camera, handle) = camera_on(&scenario);
+        let first = land(handle.request_access());
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(taken(&first), Some(Err(Abandoned::ProviderDropped)));
+        assert_eq!(
+            scenario.verify().expect_err("unscripted").failures().len(),
+            1
+        );
+        // The same unscripted request again: equal by value, but new.
+        let again = land(handle.request_access());
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(taken(&again), Some(Err(Abandoned::ProviderDropped)));
+        drop(camera);
+    });
+    let payload = ended.expect_err("the repeat was never verified");
+    let text = flui_foundation::panic::payload_text(&*payload).unwrap_or_default();
+    assert!(text.contains("camera prompts"), "{text}");
+}
+
+#[test]
+fn a_dropped_script_keeps_its_debts_when_a_requests_debug_panics() {
+    /// A request whose `Debug` fails.
+    struct Opaque;
+
+    impl std::fmt::Debug for Opaque {
+        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            panic!("this request cannot be written")
+        }
+    }
+
+    let scenario = Scenario::new();
+    let (_host, _camera, handle) = camera_on(&scenario);
+    let script: Script<Opaque, u32> = scenario.script("opaque");
+    script.expect_held(Expect::any());
+    script.expect(Expect::when("never", |_| false), Answer::value(1));
+    let (held, resolver) = handle.completions.pending::<u32>();
+    script.receive(Opaque, resolver);
+
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(script)));
+    assert!(dropped.is_err(), "the Debug's panic is resumed");
+    let failures = scenario.verify().expect_err("both debts were handed over");
+    assert_eq!(
+        failures.failures(),
+        [
+            ScenarioFailure::Unanswered {
+                script: "opaque",
+                request: "<a value whose Debug panicked>".to_owned(),
+            },
+            ScenarioFailure::Unconsumed {
+                script: "opaque",
+                step: "never".into(),
+            },
+        ]
+    );
+    drop(held);
+}
+
+#[test]
+fn reports_from_other_threads_are_bounded_and_refused_after_the_end() {
+    let scenario = Scenario::new();
+    let report = scenario.failure_report();
+    std::thread::scope(|threads| {
+        threads.spawn(|| {
+            for n in 0..MAX_REPORTS + 3 {
+                assert!(report.report(ScenarioFailure::Unexpected {
+                    script: "http",
+                    request: format!("https://example.com/{n}"),
+                }));
+            }
+        });
+    });
+    let failures = scenario.verify().expect_err("reported");
+    assert_eq!(failures.failures().len(), MAX_REPORTS + 1);
+    assert_eq!(
+        failures.failures().last(),
+        Some(&ScenarioFailure::ReportsDropped { dropped: 3 })
+    );
+
+    drop(scenario);
+    assert!(
+        !report.report(ScenarioFailure::Unexpected {
+            script: "http",
+            request: "late".to_owned(),
+        }),
+        "nobody reads a report after the scenario ended"
+    );
 }
 
 #[test]
