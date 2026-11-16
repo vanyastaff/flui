@@ -429,7 +429,12 @@ nested analytic intersections; those remain in the clip/effect implementation
 plan.
 
 Each display list dispatch opens and closes a state scope, so its local clips
-and CTM do not escape into sibling pictures. Command SaveLayer owns a state
+and CTM do not escape into sibling pictures, and `dispatch_commands` is the only
+way a command reaches a renderer. Within a list, a run of commands under one
+transform entry installs its CTM once and is matched by the entry's address
+before its value (ADR-0306 §5); that address is only compared while its list is
+borrowed, because the scope flushes the installed transform at both ends and the
+scene walk flushes it at every node. Command SaveLayer owns a state
 scope as well as compositor state; RestoreLayer closes both. The same readback
 family's `display_list_and_save_layer_scopes_own_their_clips` pins sibling
 isolation, restoration after a clipped group and group opacity. These scopes
