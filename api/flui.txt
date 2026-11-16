@@ -33280,6 +33280,22 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Coun
 impl schemars::JsonSchema for flui_protocol::native_recording::Counter
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Counter
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Counter
+#[non_exhaustive] pub enum flui_protocol::native_recording::CutReason
+impl Clone for flui_protocol::native_recording::CutReason
+impl Copy for flui_protocol::native_recording::CutReason
+impl Eq for flui_protocol::native_recording::CutReason
+impl PartialEq for flui_protocol::native_recording::CutReason
+impl core::fmt::Debug for flui_protocol::native_recording::CutReason
+impl core::hash::Hash for flui_protocol::native_recording::CutReason
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CutReason
+impl schemars::JsonSchema for flui_protocol::native_recording::CutReason
+impl serde_core::ser::Serialize for flui_protocol::native_recording::CutReason
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CutReason
+pub const flui_protocol::native_recording::CutReason::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::CutReason::name(self) -> &'static str
+variant flui_protocol::native_recording::CutReason::Bytes // at 0
+variant flui_protocol::native_recording::CutReason::Rows // at 1
+variant flui_protocol::native_recording::CutReason::StoreJournal // at 2
 pub struct flui_protocol::native_recording::Device
 field flui_protocol::native_recording::Device::device: u64 // at 0
 field flui_protocol::native_recording::Device::kinds: Vec<flui_protocol::native_recording::PointerKind> // at 1
@@ -33495,11 +33511,12 @@ pub struct flui_protocol::native_recording::Header
 field flui_protocol::native_recording::Header::backend: flui_protocol::native_recording::Backend // at 1
 field flui_protocol::native_recording::Header::click_settings: Option<flui_protocol::native_recording::ClickSettings> // at 9
 field flui_protocol::native_recording::Header::counter: Option<flui_protocol::native_recording::Counter> // at 5
-field flui_protocol::native_recording::Header::devices: Vec<flui_protocol::native_recording::Device> // at 11
+field flui_protocol::native_recording::Header::devices: Vec<flui_protocol::native_recording::Device> // at 12
 field flui_protocol::native_recording::Header::epoch_ns: Option<u64> // at 3
 field flui_protocol::native_recording::Header::first_device: Option<u64> // at 8
 field flui_protocol::native_recording::Header::first_pointer: Option<u64> // at 7
 field flui_protocol::native_recording::Header::flui_native_recording: u32 // at 0
+field flui_protocol::native_recording::Header::joined_late: bool // at 11
 field flui_protocol::native_recording::Header::provenance: Option<String> // at 10
 field flui_protocol::native_recording::Header::reserved_contact: Option<u64> // at 6
 field flui_protocol::native_recording::Header::stream: flui_protocol::native_recording::Stream // at 2
@@ -33795,17 +33812,18 @@ variant flui_protocol::native_recording::Row::CancelContact { surface: u64, cont
 variant flui_protocol::native_recording::Row::CancelSurface { surface: u64, time_ns: u64, reason: flui_protocol::native_recording::CancelReason } // at 9
 variant flui_protocol::native_recording::Row::ClickSettings { settings: Option<flui_protocol::native_recording::ClickSettings> } // at 2
 variant flui_protocol::native_recording::Row::CloseRequest { answer: flui_protocol::native_recording::CloseAnswer, queued: bool } // at 17
-variant flui_protocol::native_recording::Row::Closed { cause: flui_protocol::native_recording::CloseCause } // at 18
-variant flui_protocol::native_recording::Row::Displays { read: flui_protocol::native_recording::DisplayRead, redacted: bool } // at 20
+variant flui_protocol::native_recording::Row::Closed { cause: flui_protocol::native_recording::CloseCause } // at 19
+variant flui_protocol::native_recording::Row::Cut { reason: flui_protocol::native_recording::CutReason } // at 18
+variant flui_protocol::native_recording::Row::Displays { read: flui_protocol::native_recording::DisplayRead, redacted: bool } // at 21
 variant flui_protocol::native_recording::Row::Ime { ime: flui_protocol::native_recording::Ime, redacted: bool } // at 14
 variant flui_protocol::native_recording::Row::Notice { notice: flui_protocol::native_recording::Notice } // at 11
-variant flui_protocol::native_recording::Row::Preferences { read: flui_protocol::native_recording::PreferenceRead } // at 19
+variant flui_protocol::native_recording::Row::Preferences { read: flui_protocol::native_recording::PreferenceRead } // at 20
 variant flui_protocol::native_recording::Row::Reading { reading: flui_protocol::native_recording::Reading } // at 0
 variant flui_protocol::native_recording::Row::RemoveDevice { device: u64, time_ns: u64 } // at 8
 variant flui_protocol::native_recording::Row::Reopen // at 13
 variant flui_protocol::native_recording::Row::Scroll { scroll: flui_protocol::native_recording::Scroll } // at 6
 variant flui_protocol::native_recording::Row::SessionEnd { phase: flui_protocol::native_recording::SessionEndPhase } // at 12
-variant flui_protocol::native_recording::Row::State { state: flui_protocol::native_recording::WindowState, redacted: bool } // at 21
+variant flui_protocol::native_recording::Row::State { state: flui_protocol::native_recording::WindowState, redacted: bool } // at 22
 variant flui_protocol::native_recording::Row::StoreFocus { focus: Option<flui_protocol::native_recording::StoreFocus> } // at 15
 variant flui_protocol::native_recording::Row::StoreLock { lock: flui_protocol::native_recording::StoreLock, redacted: bool } // at 16
 variant flui_protocol::native_recording::Row::Viewport { viewport: flui_protocol::native_recording::Viewport, frame: flui_protocol::native_recording::Frame } // at 3
