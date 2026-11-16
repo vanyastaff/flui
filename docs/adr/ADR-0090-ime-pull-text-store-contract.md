@@ -13,6 +13,8 @@
   changes, after the lock is released), §2's reporting of a failure after a projected grant, §3's
   reading of `TextInputOwner::active_store`, and the interim implementation's write-back. The
   rest of this ADR stands.
+  [ADR-0346](ADR-0346-an-android-input-method-edit-survives-the-snapshot-it-raced.md) for the
+  Android row's generation-tagged snapshot and its dropping of an edit on an older snapshot.
 - **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md) §5 (who owns a text-input

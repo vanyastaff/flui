@@ -5476,9 +5476,18 @@ size. The count of `WindowResized` during a keyboard animation on both sides of 
 a device (`docs/platform-parity.md`, "Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
-view's mirror; `text::android::ime::Mirror` turns each report into one edit against the
-snapshot the view holds, and the host replays it under an async lock, dropping one made on an
-older snapshot than it published last (`replay_current`). A key the native queue delivers while
+view's mirror, under the rule of ADR-0346: the owner's `text::android::ime::Ledger` (one per
+view, shared by the windows over it) mints a `Publication` for each snapshot and records the last
+report it replayed; `text::android::ime::Mirror`, on the Java main thread, installs each snapshot
+inside the posted call that hands it to the view (`Mirror::install`) and turns each report into
+one edit, numbered by a `ReportId`, against the publication it holds. A selection-only snapshot
+that missed a report is not taken (`Install::Keep`) and the owner still replays the edit; a text
+snapshot that missed one wins and restarts the input method, and the owner drops the edit
+(`Ledger::replay`, `Replayed::Stale`); otherwise the input method restarts only when a snapshot
+ends its composition or changes the composed text, and is told the rest (`updateSelection`, and
+`updateExtractedText` for a monitoring input method). A tap that goes down and comes up on the
+focused field shows the soft keyboard again (`ime::KeyboardTap`, `FluiView.showKeyboard`), and
+the keyboard's Cut and Copy reach the clipboard except from a protected field. A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
 platform's one `DragTransport`: drags over the view mint offers from their
@@ -5509,9 +5518,10 @@ Java main thread. Each answers an `InputMethodReply`: whether the input method c
 which the view applies, and the work the owner runs against the window in order with the
 view's other reports (`ViewEvent::RunOnWindow`): an edit replayed into the field, the editor
 action committed and delivered as the key it stands for, a cursor update request. What the
-view reports of its editor (`EditorState`) is the view's own vocabulary. A pen tip the loop
-reads is offered to `InputMethod::pen_down`; stylus handwriting has not run on a device (the
-S21 has no S Pen).
+view reports of its editor (`EditorState`) is the view's own vocabulary. Each contact's start
+and end the loop reads is offered to `InputMethod::pointer` before the window takes it: a pen tip
+down in the focused field asks for stylus handwriting, which has not run on a device (the S21
+has no S Pen), and a tap on it shows the keyboard.
 
 `android_ime_adapter` (`src/text/android/ime/tests.rs`), `android_drag_mapping` (beside
 `drag::android::clip`) and `android_drop_state` (beside `drag::android::drops`) pin the pure

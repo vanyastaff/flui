@@ -90,7 +90,6 @@ use crate::{
     platform::AppHandler,
     platform::Platform,
     version::gate::android::AndroidApi,
-    version::gate::android::StylusHandwriting,
 };
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
@@ -514,27 +513,20 @@ impl AndroidLoop {
         }
     }
 
-    /// A pen tip that touches down is offered to the input method, whose
-    /// handwriting takes a stroke inside the focused field (API 33+):
-    /// Android's own initiation sees only the stylus events native code
-    /// leaves unhandled.
-    fn offer_handwriting(
-        &self,
-        window: &dyn ActivityWindow,
-        events: &[flui_platform::PlatformInput],
-    ) {
-        use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
-        if self.api.since::<StylusHandwriting>().is_none() {
-            return;
-        }
+    /// Each contact is shown to the input method before the window takes it:
+    /// a pen tip down inside the focused field starts its handwriting (API
+    /// 33+), since Android's own initiation sees only the stylus events native
+    /// code leaves unhandled, and a tap on the focused field shows the soft
+    /// keyboard, which the native queue's touches never ask for.
+    fn offer_contacts(&self, window: &dyn ActivityWindow, events: &[flui_platform::PlatformInput]) {
+        use flui_platform::pointer::PointerEvent;
         for event in events {
-            let flui_platform::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
-                continue;
-            };
-            if press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip }) {
-                self.java_view
-                    .input_method()
-                    .pen_down(window, press.sample.position.get());
+            // Only a contact's start and end decide either; a move costs nothing.
+            if let flui_platform::PlatformInput::Pointer(
+                pointer @ (PointerEvent::Down(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)),
+            ) = event
+            {
+                self.java_view.input_method().pointer(window, pointer);
             }
         }
     }
@@ -577,7 +569,7 @@ impl AndroidLoop {
                             }
                             let events = self.input.motion(&self.app, motion, scale_factor.get());
                             let mut any_handled = false;
-                            self.offer_handwriting(window.as_ref(), &events);
+                            self.offer_contacts(window.as_ref(), &events);
                             for platform_input in events {
                                 let result = delivery.dispatch_input(platform_input);
                                 if result.default_prevented {

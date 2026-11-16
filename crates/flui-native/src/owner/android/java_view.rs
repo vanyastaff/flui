@@ -42,6 +42,7 @@ use super::bridge_slot::BridgeSlot;
 use super::main_thread;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
+use crate::text::android::ime::{Install as SnapshotInstall, Snapshot};
 use crate::version::gate::android::AndroidApi;
 
 use super::{ActivityWindow, ActivityWindowId};
@@ -155,17 +156,19 @@ pub(crate) type WindowWork = Box<dyn FnOnce(&dyn ActivityWindow) + Send>;
 /// The input method reads and edits the view's copy of the focused field on
 /// the Java main thread and never waits for the owner; the owner publishes the
 /// field to the view, and the view reports what the input method made of it.
-/// Each call below but [`Self::hold`] and [`Self::pen_down`] comes from a
-/// native method of the view, on the Java main thread under no lock of the
-/// view, and answers what the view applies and queues.
+/// Each of `edited`, `editor_action` and `cursor_updates` comes from a native
+/// method of the view, on the Java main thread under no lock of the view, and
+/// answers what the view applies and queues.
 pub(crate) trait InputMethod: Send + Sync {
-    /// The view now holds `text`, which the owner published as `generation`:
-    /// the reports that follow are made against it. On the owner thread.
-    fn hold(&self, generation: u32, text: &str);
+    /// The view takes `snapshot`, which the owner published: the reports
+    /// that follow are made against what the answer leaves it holding. On
+    /// the Java main thread, in the posted call that hands the view the
+    /// snapshot, so it is ordered with the view's reports.
+    fn install(&self, snapshot: &Snapshot) -> SnapshotInstall;
 
-    /// `nativeImeState`: what the view holds after an input method edit made
-    /// on the publication `generation` names; `None` when it changed nothing.
-    fn edited(&self, generation: u32, state: EditorState) -> Option<InputMethodReply>;
+    /// `nativeImeState`: what the view holds after an input method edit;
+    /// `None` before the view holds a snapshot.
+    fn edited(&self, state: EditorState) -> Option<InputMethodReply>;
 
     /// `nativeImeAction`: the input method performed its editor action
     /// (`EditorInfo.IME_ACTION_*`) at `uptime_ms` on the event clock.
@@ -174,11 +177,12 @@ pub(crate) trait InputMethod: Send + Sync {
     /// `nativeImeCursorUpdates`: `requestCursorUpdates` with this mode.
     fn cursor_updates(&self, mode: i32) -> InputMethodReply;
 
-    /// A pen tip touched `window` down at `at` (logical pixels), on the owner
-    /// thread: inside the focused field, the input method's handwriting may
-    /// take the stroke. Android's own initiation sees only the stylus events
-    /// native code leaves unhandled.
-    fn pen_down(&self, window: &dyn ActivityWindow, at: flui_foundation::geometry::Point<f64>);
+    /// A contact `window` reads from the native input queue, on the owner
+    /// thread before the window takes it: a pen tip down inside the focused
+    /// field may start the input method's handwriting (Android's own
+    /// initiation sees only the stylus events native code leaves unhandled),
+    /// and a tap on the focused field shows the soft keyboard.
+    fn pointer(&self, window: &dyn ActivityWindow, event: &flui_platform::pointer::PointerEvent);
 
     /// The window `window` opened over `view` at `api`: from now on the input
     /// method edits its field, which this keeps until the window closes. On
@@ -668,7 +672,7 @@ fn register_natives(env: &mut Env<'_>, class: &JClass<'_>) -> jni::errors::Resul
             ),
             NativeMethod::from_raw_parts(
                 jni_str!("nativeImeState"),
-                jni_str!("(JLjava/lang/String;IIIII)V"),
+                jni_str!("(JLjava/lang/String;IIII)V"),
                 native_ime_state as *mut std::ffi::c_void,
             ),
             NativeMethod::from_raw_parts(
@@ -855,7 +859,6 @@ extern "system" fn native_ime_state<'local>(
     selection_end: jint,
     composition_start: jint,
     composition_end: jint,
-    generation: jint,
 ) {
     jni_native("nativeImeState", || {
         let Some(view) = bridge(handle) else {
@@ -872,7 +875,7 @@ extern "system" fn native_ime_state<'local>(
             composition_start,
             composition_end,
         };
-        if let Some(reply) = view.input_method.edited(generation.cast_unsigned(), state) {
+        if let Some(reply) = view.input_method.edited(state) {
             view.reply(reply);
         }
     });

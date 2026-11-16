@@ -120,6 +120,10 @@ final class FluiInputConnection extends BaseInputConnection {
             case android.R.id.selectAll:
                 Selection.setSelection(text, 0, text.length());
                 return edited(true);
+            case android.R.id.copy:
+                return copy(false);
+            case android.R.id.cut:
+                return copy(true);
             case android.R.id.paste:
             case android.R.id.pasteAsPlainText:
                 paste();
@@ -127,6 +131,39 @@ final class FluiInputConnection extends BaseInputConnection {
             default:
                 return false;
         }
+    }
+
+    /**
+     * Copy the selected text to the clipboard and, for a cut, delete it from
+     * the mirror as one input method edit. A protected field refuses both:
+     * its mirror holds bullets, and its text never leaves it. An empty
+     * selection copies nothing.
+     */
+    private boolean copy(boolean cut) {
+        if (view.isProtected()) {
+            return false;
+        }
+        Editable text = getEditable();
+        int start = Selection.getSelectionStart(text);
+        int end = Selection.getSelectionEnd(text);
+        int from = Math.max(0, Math.min(start, end));
+        int to = Math.min(text.length(), Math.max(start, end));
+        if (from >= to) {
+            return true;
+        }
+        ClipboardManager clipboard = (ClipboardManager) view.getContext()
+                .getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard == null) {
+            return false;
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText(null, text.subSequence(from, to)));
+        if (!cut) {
+            return true;
+        }
+        BaseInputConnection.removeComposingSpans(text);
+        text.delete(from, to);
+        Selection.setSelection(text, from);
+        return edited(true);
     }
 
     /**
@@ -153,15 +190,6 @@ final class FluiInputConnection extends BaseInputConnection {
 
     @Override
     public ExtractedText getExtractedText(ExtractedTextRequest request, int flags) {
-        Editable text = getEditable();
-        ExtractedText extracted = new ExtractedText();
-        extracted.text = text.toString();
-        extracted.startOffset = 0;
-        extracted.partialStartOffset = -1;
-        extracted.partialEndOffset = -1;
-        extracted.selectionStart = Selection.getSelectionStart(text);
-        extracted.selectionEnd = Selection.getSelectionEnd(text);
-        extracted.flags = 0;
-        return extracted;
+        return view.extractedText(this, request, flags);
     }
 }

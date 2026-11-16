@@ -11,7 +11,9 @@
   in-memory and file loaders and the `hasCode="false"` manifest), and item 9 (taken there). Items 3
   to 8 and 10 stand, and item 3's "that loader" is the Activity's class loader. The "Alternatives
   rejected" entry on a dex in the APK and the consequence "no packaging path changes" follow items 1
-  and 2.
+  and 2. [ADR-0346](ADR-0346-an-android-input-method-edit-survives-the-snapshot-it-raced.md) for
+  item 6's generation-tagged snapshot, its restart on every text change, and its dropping of an
+  edit made on an older snapshot with a restart; the rest of item 6 stands.
 - **Amends:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the Android row of its
   platform mapping, and its GameActivity hypothesis), [ADR-0211](ADR-0211-unified-drag-and-drop.md)
   (the Android target and source)
