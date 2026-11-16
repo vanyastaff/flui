@@ -12,8 +12,8 @@
 //! caller as a [`RefusedScale`], which it reports with nothing borrowed, since
 //! a `tracing` subscriber is the application's code; a good reading ends the
 //! streak. A streak is kept per source: one [`ScaleStreak`] where a host reads
-//! one (a window, the system DPI, `Xft.dpi`), [`ScaleStreaks`] by display
-//! where it reads several in one sample.
+//! one (a window, the system DPI, `Xft.dpi`), `ScaleStreaks` by display
+//! where it reads several in one sample (only those hosts compile it).
 
 #![forbid(unsafe_code)]
 
