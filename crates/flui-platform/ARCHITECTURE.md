@@ -50,31 +50,24 @@ this one path (ADR-0151 §9).
   luminance ratio that overflows. A profile change
   is a display change: a new revision of the same monotone snapshot, so an older sample
   never replaces a newer profile.
-- **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except seven whose types keep their module path:
-  `testing`, what a test double's window is written with (`NoNativeSurface`, and the
-  `window_takes_no_frame_verbs!` macro it defines, exported at the root as every
-  `macro_export` is), which production code has no use for;
-  `os_options`, one operating system's window creation options, which are not
-  everyone's vocabulary; `haptics`, the second haptic tier with its requests and outcomes, which
-  the facade and `flui-sdk` re-export only under `unstable-input` (ADR-0210 §9)
-  while `PlatformHaptics` and `HapticFeedback` stay at the root;
-  `data_transfer`,
-  `text_store`, whose four traits (`TextStore`, `TextStoreRead`,
-  `TextStoreEdit`, `TextStoreObserver`) are also at the root, and `pointer` and
-  `keyboard`, the input vocabulary, whose names (`PointerEvent`, `Key`,
-  `Modifiers`, …) are still taken at the root by the `ui-events` re-exports.
+- **Flat root.** The contract's everyday names are re-exported at the crate
+  root, the input vocabulary's (`PointerEvent`, `Key`, `Modifiers`, …) among
+  them. A module is public where its other types keep their module path
+  because they are not everyone's vocabulary: `os_options` (one operating
+  system's window creation options), `haptics` (the second haptic tier, which
+  the facade and `flui-sdk` re-export only under `unstable-input`, ADR-0210 §9,
+  while `PlatformHaptics` and `HapticFeedback` stay at the root),
+  `data_transfer`, `drag`, `text_store` (whose four traits are also at the
+  root), `pointer`, `keyboard`, `input_capabilities`, `input_regions`,
+  `capability`, `executor`, `http` and `launch`. `testing` exists only under
+  the `testing` feature: what a test double's window is written with
+  (`NoNativeSurface` and the `window_takes_no_frame_verbs!` macro) and the
+  doubles of this crate's contracts, none of which production code uses.
 - **The text store is owner-thread and UTF-16.** `TextStore` is shared as
   `Rc<dyn TextStore>`; `CommitGate` is not `Send`
   (a `static_assertions` test pins it). Every offset on the surface is a
   `Utf16Offset`, and the conversion to a field's own representation is
   `text_store::utf16`, nowhere else.
-- **`ui-events` re-exports are debt.** `PlatformInput` wraps the `ui-events`
-  pointer and keyboard types and re-exports them (with `keyboard-types`' `Key`
-  and `Modifiers` through `ui-events`). ADR-0089 keeps upstream types out of
-  stable signatures; the `pointer` and `keyboard` modules and `EventTime` are
-  their replacement (ADR-0143), which `PlatformInput` switches to with its
-  consumers.
 - **Input values are finite where they are built.** Every number in `pointer`
   enters through a validated type (`PointerPosition`, `Pressure`,
   `PenOrientation`, `ScrollDelta`, `PanZoomTransform`, …) whose `try_new`
@@ -92,11 +85,30 @@ this one path (ADR-0151 §9).
 - **A window fact has one source: the `WindowState` snapshot (ADR-0254 §1).**
   `PlatformWindow` has no getter and no per-fact callback beside `state()`
   and the handler's `state_changed`; its capabilities are a field of the
-  snapshot.
+  snapshot. The one query beside it, `gesture_geometry`, answers no fact of
+  the window: it is the system's gesture distances read at the window's
+  scale, which can fail and is retried, so it stays a query. Each fact is
+  stated once in one shape: the theme is a `Brightness` (what the window
+  system draws behind the content is its `WindowMaterial`, a command), and
+  focus and activation are one `WindowFocus` (`Inactive`, `Active`,
+  `Focused`), so a window that holds the keyboard and is not active cannot
+  be published; a host whose window system reports the two apart reads them
+  through `WindowFocus::reported`, where the focus wins, and `successor`
+  publishes a hidden window `Inactive`
+  (`focus_implies_activation_and_a_hidden_window_has_neither`).
   Showing, activating and closing are `WindowCommand`s (`Show`, `Activate`,
   `Close`, the last admitted by `WindowCapabilities::closes`), with no method
   twin. A `compile_fail` doctest on the trait pins that a getter does not
   compile.
+- **Every implementation says what it does.** No method of `PlatformWindow`
+  has a default body: a backend that defers its reveal and forgot
+  `reveal_after_first_frame` would never show its window, and one that forgot
+  `window_at` or `gesture_geometry` would report an absence it never chose. A
+  `compile_fail` doctest on `reveal_after_first_frame` pins it.
+- **The window system's refusal has one shape.** A command
+  (`ApplyError::Platform`), a cursor (`CursorError::Platform`) and a
+  preference query (`PreferenceQueryError::Platform`) the window system
+  refused or failed carry a `PlatformFailure`, so a caller matches one type.
 - **A snapshot holds no number that is not a window's.** Its rectangles are
   valid by construction, as its metrics and insets are: `WindowGeometry` is a
   finite position and a `WindowExtent` (each side finite and not negative),
@@ -209,7 +221,7 @@ this one path (ADR-0151 §9).
 - **A closed enum is a decision** (ADR-0329, the workspace's
   `clippy::exhaustive_enums`): a
   public enum is `#[non_exhaustive]` where a backend may report something new
-  to an application (`WindowAppearance`, `WindowCommand`, the errors), and
+  to an application (`WindowExecutionState`, `WindowCommand`, the errors), and
   closed with an `expect` that says why where its set is fixed by what it
   names (a key goes down or up, TSF's lock kinds, the W3C `location` values),
   where `Custom` is its open end (`TransferFormat`), or where every consumer
@@ -257,7 +269,7 @@ this one path (ADR-0151 §9).
   main thread only, where AppKit and UIKit make a surface, and Android's on
   its looper thread. A thread that wants a frame asks
   `redraw_requester()`, a `RedrawRequester`; any `Fn() + Send + Sync` closure
-  is one, which is what a test double hands out. `testing::NoNativeSurface` is the
+  is one, which is what a test double hands out. `testing::NoNativeSurface` (under the `testing` feature) is the
   target of a window with no native surface. `raw-window-handle` appears only
   through the two handle traits and their
   `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).

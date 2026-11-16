@@ -1,7 +1,7 @@
 //! The per-window contract.
 //!
-//! A thin abstraction over platform windows for testability and
-//! flexibility. What a window delivers (its input, state changes, frame and
+//! [`PlatformWindow`] is what the framework holds of a window; every native
+//! host implements it, and so does a test double. What a window delivers (its input, state changes, frame and
 //! close requests, surface changes) goes to the [`WindowHandler`] it was
 //! opened with (ADR-0254 §4). It names no OS or AccessKit type
 //! (ADR-0082 §1): the accessibility bridge is reached through
@@ -43,10 +43,13 @@ pub enum WindowAt {
     Unknown,
 }
 
-/// Trait for platform window abstraction
+/// One window of the platform, as the framework programs against it: its
+/// identity, its [`WindowState`] snapshot and the [`WindowCommand`]s it takes,
+/// the per-frame verbs (redraw, input regions, the refresh-rate hint, the
+/// cursor) and its facets (text input, haptics, system chrome, the OS drag
+/// source). Every native host implements it, and so does a test double.
 ///
-/// Provides a minimal interface for window operations, enabling
-/// testing and future flexibility (e.g., headless rendering).
+/// [`WindowCommand`]: crate::WindowCommand
 ///
 /// # What a window delivers
 ///
@@ -81,7 +84,7 @@ pub enum WindowAt {
 /// # One source of truth
 ///
 /// Every fact of the window — its metrics and scale, focus, visibility, hover,
-/// appearance, display, safe area, execution state and capabilities — is a
+/// theme, display, safe area, execution state and capabilities — is a
 /// field of the [`WindowState`] snapshot (ADR-0254 §1), and a change of any of
 /// them is one [`WindowHandler::state_changed`](crate::WindowHandler::state_changed). There is no getter
 /// and no callback per fact: a consumer that needs to know which fact changed
@@ -94,15 +97,40 @@ pub enum WindowAt {
 /// ```
 /// use std::sync::Arc;
 ///
+/// use flui_foundation::geometry::Point;
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
 ///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
-///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
-///     RedrawRequester,
-///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowExtent, WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode,
-///     WindowState,
+///     GestureGeometry, PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
+///     PreferenceQueryError, RedrawRequester, SurfaceTarget, SwapChainStatistics, Unsupported,
+///     UnsupportedReason, WindowAt, WindowCapabilities, WindowCommand, WindowExtent,
+///     WindowGeometry, WindowId, WindowIdMint, WindowMaterial, WindowMode, WindowState,
 /// };
+/// use raw_window_handle::{
+///     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
+/// };
+///
+/// /// It draws into no native surface, so it hands out none.
+/// struct NoSurface;
+///
+/// impl HasWindowHandle for NoSurface {
+///     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+///         Err(HandleError::Unavailable)
+///     }
+/// }
+/// impl HasDisplayHandle for NoSurface {
+///     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+///         Err(HandleError::Unavailable)
+///     }
+/// }
+/// impl SurfaceTarget for NoSurface {
+///     fn pre_present_notify(
+///         &self,
+///         _: Option<flui_foundation::FrameStamp>,
+///         _: SwapChainStatistics,
+///     ) {
+///     }
+/// }
 ///
 /// struct Offscreen {
 ///     id: WindowId,
@@ -114,12 +142,16 @@ pub enum WindowAt {
 ///     fn id(&self) -> WindowId {
 ///         self.id
 ///     }
+///     // No window system, so no gesture geometry of its own.
+///     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
+///         Ok(None)
+///     }
 ///     fn request_redraw(&self) {}
 ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
 ///         Arc::new(|| {})
 ///     }
 ///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
-///         Arc::new(flui_platform::testing::NoNativeSurface)
+///         Arc::new(NoSurface)
 ///     }
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
@@ -146,6 +178,12 @@ pub enum WindowAt {
 ///     fn drag_source(&self) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
 ///         None
 ///     }
+///     // It shares no desktop with other windows.
+///     fn window_at(&self, _position: Point<f64>) -> WindowAt {
+///         WindowAt::Unknown
+///     }
+///     // It is on no screen, so there is nothing to reveal.
+///     fn reveal_after_first_frame(&self) {}
 ///     // Its capabilities leave every verb `Unavailable`, so each answers so.
 ///     fn set_frame_rate_hint(&self, _hint: FrameRateHint) -> Result<(), Unsupported> {
 ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
@@ -210,13 +248,13 @@ pub enum WindowAt {
 /// ```compile_fail,E0407
 /// use std::sync::Arc;
 ///
+/// use flui_foundation::geometry::Point;
 /// use flui_platform::input_regions::InputRegion;
 /// use flui_platform::{
-///     AdmissionError, AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint,
+///     AdmittedCommand, ApplyError, CursorError, CursorIcon, FrameRateHint, GestureGeometry,
 ///     PlatformHaptics, PlatformSystemChrome, PlatformTextInput, PlatformWindow,
-///     RedrawRequester,
-///     SurfaceTarget, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-///     WindowExtent, WindowGeometry, WindowId, WindowMaterial, WindowMode, WindowState,
+///     PreferenceQueryError, RedrawRequester, SurfaceTarget, Unsupported, UnsupportedReason,
+///     WindowAt, WindowExtent, WindowGeometry, WindowId, WindowState,
 /// };
 ///
 /// struct Offscreen(WindowId);
@@ -225,13 +263,20 @@ pub enum WindowAt {
 ///     fn id(&self) -> WindowId {
 ///         self.0
 ///     }
+///     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
+///         Ok(None)
+///     }
 ///     fn request_redraw(&self) {}
 ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> {
 ///         Arc::new(|| {})
 ///     }
 ///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> {
-///         Arc::new(flui_platform::testing::NoNativeSurface)
+///         unimplemented!("the window never presents")
 ///     }
+///     fn window_at(&self, _position: Point<f64>) -> WindowAt {
+///         WindowAt::Unknown
+///     }
+///     fn reveal_after_first_frame(&self) {}
 ///     fn state(&self) -> WindowState {
 ///         WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
 ///     }
@@ -286,11 +331,17 @@ pub trait PlatformWindow {
     /// windows compare equal.
     fn id(&self) -> WindowId;
 
-    /// Query gesture geometry for this presentation's native coordinate context.
+    /// The system's gesture distances and speeds projected into this window's
+    /// coordinates: the one query a window answers beside
+    /// [`state`](Self::state). It is not a fact of the window but a system
+    /// preference read at the window's scale, which can fail and be retried,
+    /// so it is not a field of the snapshot.
     ///
     /// Call on the platform owner thread after accepting system-preference or DPI
     /// changes. This query shares the host's observation lifetime; it installs no
-    /// additional native subscription. `Ok(None)` means unsupported geometry.
+    /// additional native subscription. `Ok(None)`: the window system has no
+    /// such geometry, and the consumer keeps its own defaults. Every
+    /// implementation says which; there is no default.
     ///
     /// # Errors
     /// A closed owner, wrong thread, native failure or invalid projection fails
@@ -298,9 +349,7 @@ pub trait PlatformWindow {
     /// retry instead of replacing it with unknown values.
     fn gesture_geometry(
         &self,
-    ) -> Result<Option<crate::GestureGeometry>, crate::PreferenceQueryError> {
-        Ok(None)
-    }
+    ) -> Result<Option<crate::GestureGeometry>, crate::PreferenceQueryError>;
 
     /// Request that this window produce a frame: the handler's
     /// [`frame_requested`](crate::WindowHandler::frame_requested) runs on a
@@ -322,8 +371,10 @@ pub trait PlatformWindow {
     /// Every call returns a target for the same native surface. It answers
     /// [`HandleError::Unavailable`](raw_window_handle::HandleError::Unavailable)
     /// once this window is gone, and does not keep the window open. Required,
-    /// with no default: a window with no native surface hands out
-    /// [`NoNativeSurface`](crate::testing::NoNativeSurface).
+    /// with no default: a window with no native surface hands out a target
+    /// whose handle queries answer `Unavailable` (a test double's is
+    /// `flui_platform::testing::NoNativeSurface`, under the `testing`
+    /// feature).
     fn surface_target(&self) -> Arc<dyn SurfaceTarget>;
 
     // ==================== State and commands (ADR-0237) ====================
@@ -419,12 +470,10 @@ pub trait PlatformWindow {
     /// capture uses it to reach the other windows of its process without an OS
     /// session (ADR-0211 §2).
     ///
-    /// Owner thread only. The default, for a backend that cannot place its
-    /// windows on one desktop, answers [`WindowAt::Unknown`].
-    fn window_at(&self, position: Point<f64>) -> WindowAt {
-        let _ = position;
-        WindowAt::Unknown
-    }
+    /// Owner thread only. A backend that cannot place its windows on one
+    /// desktop answers [`WindowAt::Unknown`]. Every implementation says which;
+    /// there is no default.
+    fn window_at(&self, position: Point<f64>) -> WindowAt;
 
     /// Hand the OS this window's input regions, in window-logical pixels (ADR-0217 §5).
     ///
@@ -480,7 +529,52 @@ pub trait PlatformWindow {
     /// presented nothing, so a surface that never presents still yields a
     /// window the user can see and close rather than a process with no
     /// window at all.
-    fn reveal_after_first_frame(&self) {}
+    ///
+    /// Every implementation says what it does; there is no default, so a
+    /// backend that defers its reveal cannot forget to perform it and leave
+    /// its window unseen:
+    ///
+    /// ```compile_fail,E0046
+    /// use std::sync::Arc;
+    ///
+    /// use flui_platform::input_regions::InputRegion;
+    /// use flui_platform::*;
+    ///
+    /// struct Deferred(WindowId);
+    ///
+    /// impl PlatformWindow for Deferred {
+    ///     fn id(&self) -> WindowId { self.0 }
+    ///     fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
+    ///         Ok(None)
+    ///     }
+    ///     fn request_redraw(&self) {}
+    ///     fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
+    ///     fn surface_target(&self) -> Arc<dyn SurfaceTarget> { unimplemented!() }
+    ///     fn state(&self) -> WindowState {
+    ///         WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
+    ///     }
+    ///     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
+    ///         command.against(&self.state().capabilities)?;
+    ///         Ok(())
+    ///     }
+    ///     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> { None }
+    ///     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> { None }
+    ///     fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> { None }
+    ///     fn drag_source(&self) -> Option<Arc<dyn drag::PlatformDragSource>> { None }
+    ///     fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> WindowAt {
+    ///         WindowAt::Unknown
+    ///     }
+    ///     fn set_input_regions(&self, _: &[InputRegion]) -> Result<(), Unsupported> {
+    ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+    ///     }
+    ///     fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> { Ok(()) }
+    ///     fn set_frame_rate_hint(&self, _: FrameRateHint) -> Result<(), Unsupported> {
+    ///         Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform))
+    ///     }
+    ///     // No `reveal_after_first_frame`.
+    /// }
+    /// ```
+    fn reveal_after_first_frame(&self);
 
     /// Apply the cursor selected by this window's presentation.
     ///
@@ -490,8 +584,8 @@ pub trait PlatformWindow {
     /// # Errors
     ///
     /// Returns [`CursorError::Unsupported`] when this window backend has no
-    /// pointer-cursor facility, or [`CursorError::Backend`] when the native
-    /// update fails.
+    /// pointer-cursor facility, or [`CursorError::Platform`] when the window
+    /// system refuses or fails the update.
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError>;
 
     /// Tell the system which refresh rate this window wants from its display.

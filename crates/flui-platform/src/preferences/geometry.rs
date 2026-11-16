@@ -370,21 +370,24 @@ pub enum PreferenceQueryError {
     /// A numeric observation or projection failed validation.
     #[error(transparent)]
     Invalid(#[from] InvalidPreference),
-    /// The native query failed.
-    #[error("native preference query failed: {message}")]
-    Native {
-        /// Description from the failing native operation.
-        message: String,
-    },
+    /// The operating system refused or failed the query.
+    #[error("native preference query failed: {0}")]
+    Platform(#[from] crate::PlatformFailure),
 }
 
 impl PreferenceQueryError {
+    /// An operating-system failure with this message.
+    #[must_use]
+    pub fn failed(message: String) -> Self {
+        Self::Platform(crate::PlatformFailure::Failed { message })
+    }
+
     /// What is not here, when that is why the query has no answer.
     #[must_use]
     pub const fn unsupported(&self) -> Option<Unsupported> {
         match self {
             Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::WrongThread | Self::Invalid(_) | Self::Native { .. } => None,
+            Self::WrongThread | Self::Invalid(_) | Self::Platform(_) => None,
         }
     }
 }

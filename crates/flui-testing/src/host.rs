@@ -409,6 +409,21 @@ impl PlatformWindow for HeadlessWindow {
         self.id
     }
 
+    /// No window system, so no gesture geometry: the runtime keeps its own.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    /// The host's only window is on no desktop with others.
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    /// Shown from the start; there is no reveal to defer.
+    fn reveal_after_first_frame(&self) {}
+
     fn request_redraw(&self) {}
 
     /// Nothing to ask: the host runs a frame when its test pumps one.
@@ -474,7 +489,7 @@ impl PlatformWindow for HeadlessWindow {
             flui_platform::WindowGeometry::unplaced(extent),
             extent,
         )
-        .with_focused(true)
+        .with_focus(flui_platform::WindowFocus::Focused)
         .with_display(*self.display.lock())
         .with_insets(*self.insets.lock())
         .with_metrics(
@@ -1875,7 +1890,7 @@ impl HeadlessHost {
             id,
             flui_runtime::owner::WindowObservation::Snapshot {
                 execution: seed.execution,
-                focused: seed.focused,
+                focused: seed.focus.is_focused(),
                 visible: seed.is_seen(),
             },
         );

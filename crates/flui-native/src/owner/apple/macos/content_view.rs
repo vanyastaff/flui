@@ -35,7 +35,7 @@ use std::sync::Weak;
 use flui_foundation::geometry::{Bounds, Point};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
-use flui_platform::{PlatformInput, WindowAppearance};
+use flui_platform::{Brightness, PlatformInput};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, ClassBuilder, Sel};
 use objc2::{ClassType, msg_send, sel};
@@ -279,7 +279,7 @@ struct ViewContext {
     /// The appearance last reported to the window's snapshot; AppKit also
     /// re-resolves the effective appearance for changes that keep the theme,
     /// such as the accent colour.
-    appearance: Cell<WindowAppearance>,
+    appearance: Cell<Brightness>,
 }
 
 /// Create the content view of a window whose callbacks are `callbacks`, with
@@ -379,7 +379,7 @@ pub(crate) fn set_layer_refresh(view: &AnyObject, refresh: Option<std::time::Dur
 /// unless the app or a window overrides it.
 pub(crate) fn effective_appearance(
     object: &(impl NSAppearanceCustomization + objc2::Message),
-) -> WindowAppearance {
+) -> Brightness {
     // SAFETY: AppKit exports both names as constant strings that live for the
     // process; reading the extern statics only copies those references.
     let (aqua, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
@@ -388,8 +388,8 @@ pub(crate) fn effective_appearance(
         .effectiveAppearance()
         .bestMatchFromAppearancesWithNames(&names)
     {
-        Some(name) if &*name == dark => WindowAppearance::Dark,
-        _ => WindowAppearance::Light,
+        Some(name) if &*name == dark => Brightness::Dark,
+        _ => Brightness::Light,
     }
 }
 

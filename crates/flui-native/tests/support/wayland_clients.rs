@@ -82,7 +82,7 @@ impl Client {
         };
         client.until("its window to have the keyboard", || {
             let state = client.window.state();
-            state.visible && state.focused
+            state.visible && state.focus.is_focused()
         });
         client
     }

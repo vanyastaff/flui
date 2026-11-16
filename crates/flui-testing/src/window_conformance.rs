@@ -77,7 +77,7 @@ use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
     AdmissionError, AppTitleBar, ApplyError, Availability, EventTime, FrameRateHint, FrameRequest,
     PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason, WindowCapability,
-    WindowCommand, WindowFrame, WindowMaterial, WindowMode, WindowState,
+    WindowCommand, WindowFocus, WindowFrame, WindowMaterial, WindowMode, WindowState,
 };
 
 use crate::window_commands::AdmitAndApply;
@@ -548,13 +548,22 @@ fn disagreements(step: &str, state: &WindowState, readback: Readback) -> Vec<Str
         .occluded
         .map(|read| read && readback.visible && state.mode != WindowMode::Minimized)
         .map(|read| ("occluded", state.occluded, read));
-    for (fact, published, read) in [
-        ("focused", state.focused, readback.focused),
-        ("active", state.active, readback.active),
-        ("visible", state.visible, readback.visible),
-    ]
-    .into_iter()
-    .chain(occlusion)
+    // The window system's two reports, read as one standing by the one rule
+    // every host follows; a hidden window stands nowhere.
+    let focus = if readback.visible {
+        WindowFocus::reported(readback.focused, readback.active)
+    } else {
+        WindowFocus::Inactive
+    };
+    if state.focus != focus {
+        broken.push(format!(
+            "{step}: the snapshot says {:?}, the window system {focus:?}",
+            state.focus
+        ));
+    }
+    for (fact, published, read) in [("visible", state.visible, readback.visible)]
+        .into_iter()
+        .chain(occlusion)
     {
         if published != read {
             broken.push(format!(

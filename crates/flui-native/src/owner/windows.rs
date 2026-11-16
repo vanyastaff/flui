@@ -699,7 +699,7 @@ unsafe fn load_cursor_style(style: PCWSTR) -> Result<HCURSOR, CursorError> {
     // required and documented for loading a predefined `IDC_*` cursor.
     unsafe {
         LoadCursorW(None, style)
-            .map_err(|e| CursorError::Backend(format!("Failed to load cursor: {e}")))
+            .map_err(|e| CursorError::failed(format!("Failed to load cursor: {e}")))
     }
 }
 

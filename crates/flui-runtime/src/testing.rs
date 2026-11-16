@@ -245,6 +245,18 @@ impl PlatformWindow for TestWindow {
 
     flui_platform::window_takes_no_frame_verbs!();
 
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
         Ok(())
@@ -257,7 +269,10 @@ impl PlatformWindow for TestWindow {
         let extent = self.logical_size;
         flui_platform::WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
             .with_visible(self.visible)
-            .with_focused(self.focused)
+            .with_focus(flui_platform::WindowFocus::reported(
+                self.focused,
+                self.focused,
+            ))
             .with_metrics(
                 flui_foundation::geometry::WindowMetrics::try_new(
                     self.physical_size,

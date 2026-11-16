@@ -109,7 +109,7 @@ fn commands() -> Vec<(&'static str, WindowCommand, Change)> {
         (
             "minimize",
             WindowCommand::SetMode(WindowMode::Minimized),
-            |state| state.mode == WindowMode::Minimized && !state.focused,
+            |state| state.mode == WindowMode::Minimized && !state.focus.is_focused(),
         ),
         (
             "fullscreen",
@@ -139,12 +139,15 @@ fn show_and_activate_change_what_hide_and_blur_left() {
     let window = open(&platform);
     window.admit_and_apply(WindowCommand::Hide).expect("hide");
     let (before, after) = applied(&window, WindowCommand::Show);
-    assert!(after.visible && after.focused, "show reveals and focuses");
+    assert!(
+        after.visible && after.focus.is_focused(),
+        "show reveals and focuses"
+    );
     assert_eq!(after.revision.get(), before.revision.get() + 1);
 
     mock(&window).simulate_focus(false);
     let (before, after) = applied(&window, WindowCommand::Activate);
-    assert!(after.focused);
+    assert!(after.focus.is_focused());
     assert_eq!(after.revision.get(), before.revision.get() + 1);
 }
 
@@ -416,9 +419,13 @@ fn a_bad_report_keeps_the_geometry_and_publishes_the_rest() {
     let host = mock(&opened.window);
     let before = opened.window.state();
     host.simulate_resize(f64::NAN, 100.0);
-    host.simulate_focus(!before.focused);
+    host.simulate_focus(!before.focus.is_focused());
     let focused = opened.window.state();
-    assert_eq!(focused.focused, !before.focused, "the focus is published");
+    assert_eq!(
+        focused.focus.is_focused(),
+        !before.focus.is_focused(),
+        "the focus is published"
+    );
     assert_eq!(
         focused.content_size, before.content_size,
         "the geometry stands"
@@ -692,7 +699,7 @@ fn listen(window: &Opened) -> Arc<std::sync::Mutex<Vec<WindowState>>> {
 /// drawable area publishes nothing.
 fn window_facts_arrive_only_in_the_snapshot() {
     use flui_foundation::geometry::{EdgeInsets, WindowMetrics};
-    use flui_platform::{WindowAppearance, WindowExecutionState};
+    use flui_platform::{Brightness, WindowExecutionState, WindowFocus};
 
     let platform = HeadlessPlatform::new().with_displays(vec![
         DisplaySpec::new("Left", 1920, 1080),
@@ -714,7 +721,7 @@ fn window_facts_arrive_only_in_the_snapshot() {
         (
             "focus",
             Box::new(|mock: &HeadlessHostWindow| mock.simulate_focus(false)),
-            Box::new(|state: &WindowState| !state.focused && !state.active),
+            Box::new(|state: &WindowState| state.focus == WindowFocus::Inactive),
         ),
         (
             "occlusion",
@@ -727,9 +734,9 @@ fn window_facts_arrive_only_in_the_snapshot() {
             Box::new(|state: &WindowState| state.hovered),
         ),
         (
-            "appearance",
-            Box::new(|mock: &HeadlessHostWindow| mock.simulate_appearance(WindowAppearance::Dark)),
-            Box::new(|state: &WindowState| state.appearance == WindowAppearance::Dark),
+            "brightness",
+            Box::new(|mock: &HeadlessHostWindow| mock.simulate_brightness(Brightness::Dark)),
+            Box::new(|state: &WindowState| state.brightness == Brightness::Dark),
         ),
         (
             "insets",

@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use flui_platform::{HourCycle, MotionPreference, SystemPreferences, WindowAppearance};
+use flui_platform::{Brightness, HourCycle, MotionPreference, SystemPreferences};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{OwnedVariant, Proxy};
@@ -39,7 +39,7 @@ struct Observation {
     /// The portal's `color-scheme`, kept beside the host-wide snapshot because
     /// brightness is presentation-specific (ADR-0172): each window reports it
     /// through the window state's `appearance`.
-    appearance: WindowAppearance,
+    appearance: Brightness,
 }
 
 /// The portal's observation and the task that keeps it, which a Linux host's loop
@@ -65,7 +65,7 @@ impl SystemPreferenceSource for PreferenceSource {
 /// windows follow the portal's colour scheme.
 impl crate::owner::linux::LinuxPreferences for PreferenceSource {
     /// The accepted `color-scheme`; light until the portal says otherwise.
-    fn appearance(&self) -> WindowAppearance {
+    fn appearance(&self) -> Brightness {
         self.observation.lock().appearance
     }
 }
@@ -88,7 +88,7 @@ impl PreferenceSource {
         let observation = Arc::new(Mutex::new(Observation {
             active: true,
             accepted,
-            appearance: WindowAppearance::Light,
+            appearance: Brightness::Light,
         }));
         let (ready, receiver) = mpsc::sync_channel(1);
         let task = executor.handle().spawn(observe(
@@ -324,14 +324,14 @@ async fn read_text_scale(proxy: &Proxy<'_>) -> zbus::Result<Option<f64>> {
 
 /// `color-scheme`: 1 prefers dark; 0 (no preference) and 2 (prefers light)
 /// are light, as is a portal without the key.
-async fn read_appearance(proxy: &Proxy<'_>) -> zbus::Result<WindowAppearance> {
+async fn read_appearance(proxy: &Proxy<'_>) -> zbus::Result<Brightness> {
     match read(proxy, APPEARANCE, "color-scheme").await {
         Ok(value) => Ok(if u32::try_from(value)? == 1 {
-            WindowAppearance::Dark
+            Brightness::Dark
         } else {
-            WindowAppearance::Light
+            Brightness::Light
         }),
-        Err(error) if missing_key(&error) => Ok(WindowAppearance::Light),
+        Err(error) if missing_key(&error) => Ok(Brightness::Light),
         Err(error) => Err(error),
     }
 }
@@ -423,7 +423,7 @@ mod tests {
         let observation = Arc::new(Mutex::new(Observation {
             active: true,
             accepted: SystemPreferences::default(),
-            appearance: WindowAppearance::Light,
+            appearance: Brightness::Light,
         }));
         let events = Arc::new(AtomicUsize::new(0));
         let locked = Arc::new(AtomicUsize::new(0));

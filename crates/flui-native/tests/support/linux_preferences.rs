@@ -5,7 +5,7 @@
 
 pub mod linux {
     use flui_native::{Platform, PlatformProxy, X11Platform};
-    use flui_platform::{MotionPreference, WindowAppearance};
+    use flui_platform::{Brightness, MotionPreference};
     use std::rc::{Rc, Weak};
     use std::sync::{
         Arc,
@@ -646,17 +646,18 @@ pub mod linux {
                         )?
                         .try_ready()?;
                     assert_eq!(
-                        window.state().appearance,
-                        WindowAppearance::Dark,
+                        window.state().brightness,
+                        Brightness::Dark,
                         "the first window must observe the portal's dark scheme"
                     );
                     let proxy = owner.proxy();
                     let observed = std::rc::Rc::downgrade(&window);
                     let seen = Arc::clone(&scheme_witness);
                     handler.react_to_state_change(move || {
-                        if observed.upgrade().is_some_and(|window| {
-                            window.state().appearance == WindowAppearance::Light
-                        }) && !seen.swap(true, Ordering::SeqCst)
+                        if observed
+                            .upgrade()
+                            .is_some_and(|window| window.state().brightness == Brightness::Light)
+                            && !seen.swap(true, Ordering::SeqCst)
                         {
                             proxy.request_quit().expect("color-scheme owner quit");
                         }

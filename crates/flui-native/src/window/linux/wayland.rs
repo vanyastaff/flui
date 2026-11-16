@@ -1537,7 +1537,6 @@ mod toplevel {
                     // A toplevel has no hidden state of its own: it is shown
                     // until it closes.
                     .with_visible(!self.closed)
-                    .with_focused(states.activated)
                     .with_title(Some(applied.title.clone()))
                     .with_constraints(applied.constraints)
                     .with_resizable(applied.resizable)
@@ -1545,7 +1544,7 @@ mod toplevel {
                     .with_display(output.map(|output| output.display));
                 ReportedFacts {
                     metrics: scale::metrics(content, scale),
-                    appearance: self.portal.appearance(),
+                    brightness: self.portal.appearance(),
                     insets: flui_platform::WindowInsets::ZERO,
                     execution: WindowExecutionState::Running,
                     // What the compositor says it draws: a surface it maps (a
@@ -1563,7 +1562,8 @@ mod toplevel {
                     }
                     .occluded(),
                     hovered: self.hovered,
-                    active: states.activated,
+                    // xdg-shell has one `activated` state for both.
+                    focus: flui_platform::WindowFocus::reported(states.activated, states.activated),
                     // A move or resize the compositor runs for the user is not
                     // read yet (docs/gaps.md).
                     interaction: flui_platform::WindowInteraction::Unknown,
@@ -1912,11 +1912,7 @@ mod toplevel {
                 }
                 if let Some(client_frame) = client_frame.as_mut() {
                     let look = Look {
-                        dark: matches!(
-                            self.portal.appearance(),
-                            flui_platform::WindowAppearance::Dark
-                                | flui_platform::WindowAppearance::VibrantDark
-                        ),
+                        dark: self.portal.appearance().is_dark(),
                         active: frame.is_some_and(|frame| frame.states.activated),
                     };
                     committed = client_frame.update(frame, scale, look, &title);
@@ -2535,6 +2531,24 @@ mod toplevel {
         fn id(&self) -> WindowId {
             self.id
         }
+
+        /// Wayland states no gesture distances; the consumer keeps its own.
+        fn gesture_geometry(
+            &self,
+        ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError>
+        {
+            Ok(None)
+        }
+
+        /// A Wayland client learns neither where its toplevels stand nor
+        /// which is on top.
+        fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+            flui_platform::WindowAt::Unknown
+        }
+
+        /// A toplevel is mapped by the commit of its first frame, so there is
+        /// no reveal to defer.
+        fn reveal_after_first_frame(&self) {}
 
         fn request_redraw(&self) {
             if self.delivery.retirement().is_retired() {

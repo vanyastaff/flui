@@ -145,6 +145,7 @@ mod surface_target;
 mod system_chrome;
 mod system_failure;
 mod target_platform;
+#[cfg(feature = "testing")]
 pub mod testing;
 mod text_input;
 pub mod text_store;
@@ -222,9 +223,8 @@ pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, InvalidWindowOption, OpeningGeometry, WindowAppearance,
-    WindowExecutionState, WindowId, WindowIdMint, WindowMaterial, WindowOption, WindowOptions,
-    WindowReveal,
+    CursorError, InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState,
+    WindowId, WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };
 pub use window_capabilities::{
     CapabilityParts, PublicationMint, WindowCapabilities, WindowCapability,
@@ -237,6 +237,6 @@ pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandl
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
     AdmissionError, AdmittedCommand, ApplyError, CommandRefusal, PlatformFailure, SizeConstraints,
-    SubmitError, WindowCommand, WindowControl, WindowInteraction, WindowMode, WindowRevision,
-    WindowRevisionExhausted, WindowState, WindowStateParts,
+    SubmitError, WindowCommand, WindowControl, WindowFocus, WindowInteraction, WindowMode,
+    WindowRevision, WindowRevisionExhausted, WindowState, WindowStateParts,
 };

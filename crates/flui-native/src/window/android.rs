@@ -19,7 +19,7 @@ use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::input_regions::{InputRegion, InputRegionKind};
 use flui_platform::{
-    AdmittedCommand, ApplyError, FrameRateHint, Unsupported, UnsupportedReason, WindowAppearance,
+    AdmittedCommand, ApplyError, Brightness, FrameRateHint, Unsupported, UnsupportedReason,
     WindowCapabilities, WindowGeometry, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
@@ -88,7 +88,7 @@ pub struct AndroidWindow {
     /// The platform's API level, for the safe-area gates.
     api: AndroidApi,
     /// The night mode last reported, which the snapshot's appearance reads.
-    appearance: Arc<Mutex<WindowAppearance>>,
+    appearance: Arc<Mutex<Brightness>>,
     displays: Arc<dyn crate::owner::android::HostDisplays>,
     /// The last refresh-rate request, applied again to every native window that
     /// replaces the one it was made on.
@@ -508,7 +508,7 @@ fn native_scale(
 /// mode its configuration last said, the insets last accepted and the
 /// hover last reported.
 struct Kept {
-    appearance: WindowAppearance,
+    appearance: Brightness,
     insets: WindowInsets,
     hovered: bool,
 }
@@ -546,7 +546,6 @@ fn sample_state(
             // An Activity cannot hide its window; between `onStop` and `onStart`
             // the system keeps it from the screen, which is its occlusion.
             .with_visible(true)
-            .with_focused(focused)
             .with_resizable(false)
             .with_frame(flui_platform::WindowFrame::None)
             .with_display(displays.activity_display());
@@ -557,13 +556,13 @@ fn sample_state(
                 scale.get(),
             )
             .ok(),
-            appearance: kept.appearance,
+            brightness: kept.appearance,
             insets: kept.insets,
             execution: execution_of(activity),
             occluded: !activity.visible.load(Ordering::SeqCst),
             hovered: kept.hovered,
             // An Activity has no activation apart from its window's focus.
-            active: focused,
+            focus: flui_platform::WindowFocus::reported(focused, focused),
             capabilities: activity_capabilities(activity_facts(api, displays)),
             // The user can resize a freeform or split-screen window, which
             // this host does not read: it cannot tell.
@@ -788,7 +787,7 @@ impl host::Window<AndroidLoop> for AndroidWindow {
 /// preference source reads it. The native configuration stands in when the
 /// Java read fails; it is current only until the first change the Activity
 /// handles in place.
-fn night_mode(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> WindowAppearance {
+fn night_mode(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> Brightness {
     appearance_of(
         preferences
             .night_mode()
@@ -796,11 +795,11 @@ fn night_mode(app: &AndroidApp, preferences: &dyn ActivityPreferences) -> Window
     )
 }
 
-fn appearance_of(night: bool) -> WindowAppearance {
+fn appearance_of(night: bool) -> Brightness {
     if night {
-        WindowAppearance::Dark
+        Brightness::Dark
     } else {
-        WindowAppearance::Light
+        Brightness::Light
     }
 }
 
@@ -841,6 +840,16 @@ impl PlatformWindow for AndroidWindow {
         }
         self.preferences.gesture_geometry().map(Some)
     }
+
+    /// An Activity's window shares no desktop with other windows of the
+    /// process.
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    /// The Activity shows its window when it opens; there is no reveal to
+    /// defer.
+    fn reveal_after_first_frame(&self) {}
 
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {
         Some(Arc::clone(&self.facets.chrome))

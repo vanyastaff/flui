@@ -148,6 +148,18 @@ impl PlatformWindow for OutsideWindow {
 
     flui_platform::window_takes_no_frame_verbs!();
 
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         None
     }
