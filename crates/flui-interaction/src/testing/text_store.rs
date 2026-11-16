@@ -48,6 +48,7 @@ pub struct InMemoryTextStore {
     pending: RefCell<Vec<Notice>>,
     protected: Cell<bool>,
     purpose: Cell<TextInputPurpose>,
+    single_line: Cell<bool>,
     owner_notifications: Cell<usize>,
     /// A session changed the committed text and its owner notification is
     /// not delivered yet: it is, once the session's lock is released.
@@ -128,6 +129,7 @@ impl InMemoryTextStore {
             pending: RefCell::new(Vec::new()),
             protected: Cell::new(false),
             purpose: Cell::new(TextInputPurpose::Text),
+            single_line: Cell::new(true),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
             generation: Cell::new(EditGeneration::FIRST),
@@ -164,6 +166,14 @@ impl InMemoryTextStore {
     /// observer.
     pub fn set_purpose(&self, purpose: TextInputPurpose) {
         if self.purpose.replace(purpose) != purpose {
+            self.report(Notice::Status);
+        }
+    }
+
+    /// Make the store a field of one line or of many (it starts as one) and
+    /// tell the observer.
+    pub fn set_single_line(&self, single_line: bool) {
+        if self.single_line.replace(single_line) != single_line {
             self.report(Notice::Status);
         }
     }
@@ -417,9 +427,11 @@ impl InMemoryTextStore {
 
 impl TextStore for InMemoryTextStore {
     fn status(&self) -> TextStoreStatus {
-        TextStoreStatus::EDITABLE_SINGLE_LINE
+        let mut status = TextStoreStatus::EDITABLE_SINGLE_LINE
             .with_protected(self.protected.get())
-            .with_purpose(self.purpose.get())
+            .with_purpose(self.purpose.get());
+        status.single_line = self.single_line.get();
+        status
     }
 
     fn request_lock(

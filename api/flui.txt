@@ -25617,7 +25617,7 @@ pub const fn flui::view::navigation::OpenDeclarations::declared_url_schemes(&sel
 pub const fn flui::view::navigation::OpenDeclarations::file_types(self, file_types: &'static [flui::view::navigation::FileTypeDeclaration]) -> Self
 pub const fn flui::view::navigation::OpenDeclarations::new() -> Self
 pub const fn flui::view::navigation::OpenDeclarations::url_schemes(self, url_schemes: &'static [&'static str]) -> Self
-pub fn flui::view::navigation::OpenDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl) -> Result<(), flui::view::navigation::OpenUrlRefused>
+pub fn flui::view::navigation::OpenDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl, page_origin: Option<&flui::view::navigation::OpenedUrl>) -> Result<(), flui::view::navigation::OpenUrlRefused>
 #[non_exhaustive] pub enum flui::view::navigation::OpenUrlRefused
 impl Clone for flui::view::navigation::OpenUrlRefused
 impl Eq for flui::view::navigation::OpenUrlRefused
@@ -33416,6 +33416,39 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Clic
 impl schemars::JsonSchema for flui_protocol::native_recording::ClickSettings
 impl serde_core::ser::Serialize for flui_protocol::native_recording::ClickSettings
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::ClickSettings
+#[non_exhaustive] pub enum flui_protocol::native_recording::CloseAnswer
+impl Clone for flui_protocol::native_recording::CloseAnswer
+impl Copy for flui_protocol::native_recording::CloseAnswer
+impl Eq for flui_protocol::native_recording::CloseAnswer
+impl PartialEq for flui_protocol::native_recording::CloseAnswer
+impl core::fmt::Debug for flui_protocol::native_recording::CloseAnswer
+impl core::hash::Hash for flui_protocol::native_recording::CloseAnswer
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CloseAnswer
+impl schemars::JsonSchema for flui_protocol::native_recording::CloseAnswer
+impl serde_core::ser::Serialize for flui_protocol::native_recording::CloseAnswer
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CloseAnswer
+pub const flui_protocol::native_recording::CloseAnswer::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::CloseAnswer::name(self) -> &'static str
+variant flui_protocol::native_recording::CloseAnswer::Close // at 0
+variant flui_protocol::native_recording::CloseAnswer::Closing // at 2
+variant flui_protocol::native_recording::CloseAnswer::KeepOpen // at 1
+variant flui_protocol::native_recording::CloseAnswer::NoHandler // at 3
+variant flui_protocol::native_recording::CloseAnswer::Panicked // at 4
+#[non_exhaustive] pub enum flui_protocol::native_recording::CloseCause
+impl Clone for flui_protocol::native_recording::CloseCause
+impl Copy for flui_protocol::native_recording::CloseCause
+impl Eq for flui_protocol::native_recording::CloseCause
+impl PartialEq for flui_protocol::native_recording::CloseCause
+impl core::fmt::Debug for flui_protocol::native_recording::CloseCause
+impl core::hash::Hash for flui_protocol::native_recording::CloseCause
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CloseCause
+impl schemars::JsonSchema for flui_protocol::native_recording::CloseCause
+impl serde_core::ser::Serialize for flui_protocol::native_recording::CloseCause
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CloseCause
+pub const flui_protocol::native_recording::CloseCause::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::CloseCause::name(self) -> &'static str
+variant flui_protocol::native_recording::CloseCause::GrantedRequest // at 0
+variant flui_protocol::native_recording::CloseCause::NoRequest // at 1
 pub struct flui_protocol::native_recording::Color
 field flui_protocol::native_recording::Color::dynamic_range: flui_protocol::native_recording::DynamicRange // at 1
 field flui_protocol::native_recording::Color::gamut: flui_protocol::native_recording::Gamut // at 0
@@ -33440,6 +33473,22 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Coun
 impl schemars::JsonSchema for flui_protocol::native_recording::Counter
 impl serde_core::ser::Serialize for flui_protocol::native_recording::Counter
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Counter
+#[non_exhaustive] pub enum flui_protocol::native_recording::CutReason
+impl Clone for flui_protocol::native_recording::CutReason
+impl Copy for flui_protocol::native_recording::CutReason
+impl Eq for flui_protocol::native_recording::CutReason
+impl PartialEq for flui_protocol::native_recording::CutReason
+impl core::fmt::Debug for flui_protocol::native_recording::CutReason
+impl core::hash::Hash for flui_protocol::native_recording::CutReason
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::CutReason
+impl schemars::JsonSchema for flui_protocol::native_recording::CutReason
+impl serde_core::ser::Serialize for flui_protocol::native_recording::CutReason
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::CutReason
+pub const flui_protocol::native_recording::CutReason::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::CutReason::name(self) -> &'static str
+variant flui_protocol::native_recording::CutReason::Bytes // at 0
+variant flui_protocol::native_recording::CutReason::Rows // at 1
+variant flui_protocol::native_recording::CutReason::StoreJournal // at 2
 pub struct flui_protocol::native_recording::Device
 field flui_protocol::native_recording::Device::device: u64 // at 0
 field flui_protocol::native_recording::Device::kinds: Vec<flui_protocol::native_recording::PointerKind> // at 1
@@ -33655,11 +33704,12 @@ pub struct flui_protocol::native_recording::Header
 field flui_protocol::native_recording::Header::backend: flui_protocol::native_recording::Backend // at 1
 field flui_protocol::native_recording::Header::click_settings: Option<flui_protocol::native_recording::ClickSettings> // at 9
 field flui_protocol::native_recording::Header::counter: Option<flui_protocol::native_recording::Counter> // at 5
-field flui_protocol::native_recording::Header::devices: Vec<flui_protocol::native_recording::Device> // at 11
+field flui_protocol::native_recording::Header::devices: Vec<flui_protocol::native_recording::Device> // at 12
 field flui_protocol::native_recording::Header::epoch_ns: Option<u64> // at 3
 field flui_protocol::native_recording::Header::first_device: Option<u64> // at 8
 field flui_protocol::native_recording::Header::first_pointer: Option<u64> // at 7
 field flui_protocol::native_recording::Header::flui_native_recording: u32 // at 0
+field flui_protocol::native_recording::Header::joined_late: bool // at 11
 field flui_protocol::native_recording::Header::provenance: Option<String> // at 10
 field flui_protocol::native_recording::Header::reserved_contact: Option<u64> // at 6
 field flui_protocol::native_recording::Header::stream: flui_protocol::native_recording::Stream // at 2
@@ -33705,6 +33755,26 @@ variant flui_protocol::native_recording::ImeEvent::Commit(String) // at 2
 variant flui_protocol::native_recording::ImeEvent::Disabled // at 3
 variant flui_protocol::native_recording::ImeEvent::Enabled // at 0
 variant flui_protocol::native_recording::ImeEvent::Preedit { text: String, cursor: Option<[usize; 2]> } // at 1
+#[non_exhaustive] pub enum flui_protocol::native_recording::InputPurpose
+impl Clone for flui_protocol::native_recording::InputPurpose
+impl Copy for flui_protocol::native_recording::InputPurpose
+impl Default for flui_protocol::native_recording::InputPurpose
+impl Eq for flui_protocol::native_recording::InputPurpose
+impl PartialEq for flui_protocol::native_recording::InputPurpose
+impl core::fmt::Debug for flui_protocol::native_recording::InputPurpose
+impl core::hash::Hash for flui_protocol::native_recording::InputPurpose
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::InputPurpose
+impl schemars::JsonSchema for flui_protocol::native_recording::InputPurpose
+impl serde_core::ser::Serialize for flui_protocol::native_recording::InputPurpose
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::InputPurpose
+pub const flui_protocol::native_recording::InputPurpose::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::InputPurpose::name(self) -> &'static str
+variant flui_protocol::native_recording::InputPurpose::Email // at 1
+variant flui_protocol::native_recording::InputPurpose::Number // at 4
+variant flui_protocol::native_recording::InputPurpose::Phone // at 3
+variant flui_protocol::native_recording::InputPurpose::Search // at 5
+variant flui_protocol::native_recording::InputPurpose::Text // at 0
+variant flui_protocol::native_recording::InputPurpose::Url // at 2
 #[non_exhaustive] pub enum flui_protocol::native_recording::InsetCurve
 impl Clone for flui_protocol::native_recording::InsetCurve
 impl Copy for flui_protocol::native_recording::InsetCurve
@@ -33934,16 +34004,21 @@ variant flui_protocol::native_recording::Row::Batch { coalesced: Vec<flui_protoc
 variant flui_protocol::native_recording::Row::CancelContact { surface: u64, contact: u64, time_ns: u64, reason: flui_protocol::native_recording::CancelReason } // at 10
 variant flui_protocol::native_recording::Row::CancelSurface { surface: u64, time_ns: u64, reason: flui_protocol::native_recording::CancelReason } // at 9
 variant flui_protocol::native_recording::Row::ClickSettings { settings: Option<flui_protocol::native_recording::ClickSettings> } // at 2
-variant flui_protocol::native_recording::Row::Displays { read: flui_protocol::native_recording::DisplayRead, redacted: bool } // at 16
+variant flui_protocol::native_recording::Row::CloseRequest { answer: flui_protocol::native_recording::CloseAnswer, queued: bool } // at 17
+variant flui_protocol::native_recording::Row::Closed { cause: flui_protocol::native_recording::CloseCause } // at 19
+variant flui_protocol::native_recording::Row::Cut { reason: flui_protocol::native_recording::CutReason } // at 18
+variant flui_protocol::native_recording::Row::Displays { read: flui_protocol::native_recording::DisplayRead, redacted: bool } // at 21
 variant flui_protocol::native_recording::Row::Ime { ime: flui_protocol::native_recording::Ime, redacted: bool } // at 14
 variant flui_protocol::native_recording::Row::Notice { notice: flui_protocol::native_recording::Notice } // at 11
-variant flui_protocol::native_recording::Row::Preferences { read: flui_protocol::native_recording::PreferenceRead } // at 15
+variant flui_protocol::native_recording::Row::Preferences { read: flui_protocol::native_recording::PreferenceRead } // at 20
 variant flui_protocol::native_recording::Row::Reading { reading: flui_protocol::native_recording::Reading } // at 0
 variant flui_protocol::native_recording::Row::RemoveDevice { device: u64, time_ns: u64 } // at 8
 variant flui_protocol::native_recording::Row::Reopen // at 13
 variant flui_protocol::native_recording::Row::Scroll { scroll: flui_protocol::native_recording::Scroll } // at 6
 variant flui_protocol::native_recording::Row::SessionEnd { phase: flui_protocol::native_recording::SessionEndPhase } // at 12
-variant flui_protocol::native_recording::Row::State { state: flui_protocol::native_recording::WindowState, redacted: bool } // at 17
+variant flui_protocol::native_recording::Row::State { state: flui_protocol::native_recording::WindowState, redacted: bool } // at 22
+variant flui_protocol::native_recording::Row::StoreFocus { focus: Option<flui_protocol::native_recording::StoreFocus> } // at 15
+variant flui_protocol::native_recording::Row::StoreLock { lock: flui_protocol::native_recording::StoreLock, redacted: bool } // at 16
 variant flui_protocol::native_recording::Row::Viewport { viewport: flui_protocol::native_recording::Viewport, frame: flui_protocol::native_recording::Frame } // at 3
 variant flui_protocol::native_recording::Row::ViewportAbandoned { frame: flui_protocol::native_recording::Frame } // at 4
 variant flui_protocol::native_recording::Row::Wheel { wheel: flui_protocol::native_recording::Wheel } // at 5
@@ -34030,6 +34105,121 @@ impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Size
 impl schemars::JsonSchema for flui_protocol::native_recording::SizeConstraints
 impl serde_core::ser::Serialize for flui_protocol::native_recording::SizeConstraints
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::SizeConstraints
+pub struct flui_protocol::native_recording::StoreComposition
+field flui_protocol::native_recording::StoreComposition::hides_caret: bool // at 1
+field flui_protocol::native_recording::StoreComposition::range: [u64; 2] // at 0
+impl Clone for flui_protocol::native_recording::StoreComposition
+impl Copy for flui_protocol::native_recording::StoreComposition
+impl Eq for flui_protocol::native_recording::StoreComposition
+impl PartialEq for flui_protocol::native_recording::StoreComposition
+impl core::fmt::Debug for flui_protocol::native_recording::StoreComposition
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreComposition
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreComposition
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreComposition
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreComposition
+pub struct flui_protocol::native_recording::StoreDocument
+field flui_protocol::native_recording::StoreDocument::composition: Option<flui_protocol::native_recording::StoreComposition> // at 2
+field flui_protocol::native_recording::StoreDocument::selection: [u64; 2] // at 1
+field flui_protocol::native_recording::StoreDocument::text: String // at 0
+impl Clone for flui_protocol::native_recording::StoreDocument
+impl Eq for flui_protocol::native_recording::StoreDocument
+impl PartialEq for flui_protocol::native_recording::StoreDocument
+impl core::fmt::Debug for flui_protocol::native_recording::StoreDocument
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreDocument
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreDocument
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreDocument
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreDocument
+#[non_exhaustive] pub enum flui_protocol::native_recording::StoreError
+impl Clone for flui_protocol::native_recording::StoreError
+impl Copy for flui_protocol::native_recording::StoreError
+impl Eq for flui_protocol::native_recording::StoreError
+impl PartialEq for flui_protocol::native_recording::StoreError
+impl core::fmt::Debug for flui_protocol::native_recording::StoreError
+impl core::hash::Hash for flui_protocol::native_recording::StoreError
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreError
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreError
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreError
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreError
+pub const flui_protocol::native_recording::StoreError::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::StoreError::name(self) -> &'static str
+variant flui_protocol::native_recording::StoreError::DeferredQueueFull // at 1
+variant flui_protocol::native_recording::StoreError::Detached // at 6
+variant flui_protocol::native_recording::StoreError::NoLayout // at 4
+variant flui_protocol::native_recording::StoreError::Offset // at 2
+variant flui_protocol::native_recording::StoreError::PointOutside // at 5
+variant flui_protocol::native_recording::StoreError::Protected // at 3
+variant flui_protocol::native_recording::StoreError::SyncLockUnavailable // at 0
+pub struct flui_protocol::native_recording::StoreFocus
+field flui_protocol::native_recording::StoreFocus::status: flui_protocol::native_recording::StoreStatus // at 1
+field flui_protocol::native_recording::StoreFocus::store: u64 // at 0
+impl Clone for flui_protocol::native_recording::StoreFocus
+impl Copy for flui_protocol::native_recording::StoreFocus
+impl Eq for flui_protocol::native_recording::StoreFocus
+impl PartialEq for flui_protocol::native_recording::StoreFocus
+impl core::fmt::Debug for flui_protocol::native_recording::StoreFocus
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreFocus
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreFocus
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreFocus
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreFocus
+pub struct flui_protocol::native_recording::StoreLock
+field flui_protocol::native_recording::StoreLock::incomplete: bool // at 4
+field flui_protocol::native_recording::StoreLock::kind: flui_protocol::native_recording::StoreLockKind // at 1
+field flui_protocol::native_recording::StoreLock::opened: Option<flui_protocol::native_recording::StoreDocument> // at 2
+field flui_protocol::native_recording::StoreLock::protected: bool // at 5
+field flui_protocol::native_recording::StoreLock::steps: Vec<flui_protocol::native_recording::StoreStep> // at 3
+field flui_protocol::native_recording::StoreLock::store: u64 // at 0
+impl Clone for flui_protocol::native_recording::StoreLock
+impl PartialEq for flui_protocol::native_recording::StoreLock
+impl core::fmt::Debug for flui_protocol::native_recording::StoreLock
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreLock
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreLock
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreLock
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreLock
+#[non_exhaustive] pub enum flui_protocol::native_recording::StoreLockKind
+impl Clone for flui_protocol::native_recording::StoreLockKind
+impl Copy for flui_protocol::native_recording::StoreLockKind
+impl Eq for flui_protocol::native_recording::StoreLockKind
+impl PartialEq for flui_protocol::native_recording::StoreLockKind
+impl core::fmt::Debug for flui_protocol::native_recording::StoreLockKind
+impl core::hash::Hash for flui_protocol::native_recording::StoreLockKind
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreLockKind
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreLockKind
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreLockKind
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreLockKind
+pub const flui_protocol::native_recording::StoreLockKind::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::StoreLockKind::name(self) -> &'static str
+variant flui_protocol::native_recording::StoreLockKind::Read // at 0
+variant flui_protocol::native_recording::StoreLockKind::ReadWrite // at 1
+pub struct flui_protocol::native_recording::StoreStatus
+field flui_protocol::native_recording::StoreStatus::protected: bool // at 0
+field flui_protocol::native_recording::StoreStatus::purpose: flui_protocol::native_recording::InputPurpose // at 2
+field flui_protocol::native_recording::StoreStatus::single_line: bool // at 1
+impl Clone for flui_protocol::native_recording::StoreStatus
+impl Copy for flui_protocol::native_recording::StoreStatus
+impl Eq for flui_protocol::native_recording::StoreStatus
+impl PartialEq for flui_protocol::native_recording::StoreStatus
+impl core::fmt::Debug for flui_protocol::native_recording::StoreStatus
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreStatus
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreStatus
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreStatus
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreStatus
+#[non_exhaustive] pub enum flui_protocol::native_recording::StoreStep
+impl Clone for flui_protocol::native_recording::StoreStep
+impl PartialEq for flui_protocol::native_recording::StoreStep
+impl core::fmt::Debug for flui_protocol::native_recording::StoreStep
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::StoreStep
+impl schemars::JsonSchema for flui_protocol::native_recording::StoreStep
+impl serde_core::ser::Serialize for flui_protocol::native_recording::StoreStep
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::StoreStep
+variant flui_protocol::native_recording::StoreStep::Composition { composition: Option<flui_protocol::native_recording::StoreComposition> } // at 3
+variant flui_protocol::native_recording::StoreStep::DocumentLen { len: u64 } // at 0
+variant flui_protocol::native_recording::StoreStep::IndexAtPoint { point: [f64; 2], round_to_nearest_edge: bool, nearest_when_outside: bool, index: Option<u64>, error: Option<flui_protocol::native_recording::StoreError> } // at 4
+variant flui_protocol::native_recording::StoreStep::InsertAtSelection { text: String, change: Option<[u64; 3]>, error: Option<flui_protocol::native_recording::StoreError> } // at 6
+variant flui_protocol::native_recording::StoreStep::Replace { range: [u64; 2], text: String, change: Option<[u64; 3]>, error: Option<flui_protocol::native_recording::StoreError> } // at 5
+variant flui_protocol::native_recording::StoreStep::Selection { selection: [u64; 2] } // at 2
+variant flui_protocol::native_recording::StoreStep::SetComposition { composition: Option<flui_protocol::native_recording::StoreComposition>, error: Option<flui_protocol::native_recording::StoreError> } // at 8
+variant flui_protocol::native_recording::StoreStep::SetSelection { selection: [u64; 2], error: Option<flui_protocol::native_recording::StoreError> } // at 7
+variant flui_protocol::native_recording::StoreStep::Text { range: [u64; 2], text: Option<String>, error: Option<flui_protocol::native_recording::StoreError> } // at 1
 #[non_exhaustive] pub enum flui_protocol::native_recording::Stream
 impl Clone for flui_protocol::native_recording::Stream
 impl Copy for flui_protocol::native_recording::Stream

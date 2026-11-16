@@ -16,6 +16,7 @@
 
 use std::io::{BufRead, Write};
 use std::num::{NonZeroU8, NonZeroU64};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,16 +27,17 @@ use flui_platform::pointer::{
     PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
     ScrollPrecision, ScrollUnit,
 };
+use flui_platform::text_store::TextStore;
 use flui_platform::{
-    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, ColorGamut, ControlsOffset,
-    DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom, HourCycle,
-    ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale, MeasurementSystem,
-    MemoryPressureLevel, MotionPreference, NativeMouseGeometry, NativeTouchGeometry,
-    NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod, RegionOverride, RegionalParts,
-    SessionEndPhase, SizeConstraints, SystemControls, SystemNotice, SystemPreferences,
-    TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance, WindowCapability,
-    WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry, WindowInsets,
-    WindowInteraction, WindowMode, WindowState, WindowStateParts,
+    AppTitleBar, Availability, CapabilityAbsence, CapabilityParts, CloseDecision, ColorGamut,
+    ControlsOffset, DisplayColor, DisplayId, DisplayInfo, DisplayParts, GestureParts, Headroom,
+    HourCycle, ImeEvent, InsetCurve, InsetMotion, InvalidPreference, KeyboardInset, Locale,
+    MeasurementSystem, MemoryPressureLevel, MotionPreference, NativeMouseGeometry,
+    NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
+    RegionOverride, RegionalParts, SessionEndPhase, SizeConstraints, SystemControls, SystemNotice,
+    SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep, WindowAppearance,
+    WindowCapability, WindowExecutionState, WindowExtent, WindowFrame, WindowGeometry,
+    WindowInsets, WindowInteraction, WindowMode, WindowState, WindowStateParts,
 };
 use flui_protocol::native_recording as wire;
 use serde::Serialize;
@@ -49,8 +51,10 @@ use crate::input::assembly::{
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
-pub use wire::{Backend, FORMAT_VERSION, FailureKind, Stream};
+pub use wire::{Backend, CloseAnswer, CloseCause, CutReason, FORMAT_VERSION, FailureKind, Stream};
 
+use super::order::{CutBudget, RowOrder, read_bounded_line};
+use super::store::{self, RecordedStore, StoreDivergence, StoreFocus, StoreLock};
 use crate::error::PlatformError;
 
 /// Why a native recording could not be read or written.
@@ -60,6 +64,32 @@ pub enum CodecError {
     /// Reading or writing the stream failed.
     #[error("native recording I/O failed: {0}")]
     Io(#[from] std::io::Error),
+    /// Line `line` is longer than [`wire::MAX_LINE_BYTES`]: refused before it
+    /// is parsed.
+    #[error("line {line} of the native recording is longer than {limit} bytes")]
+    LineTooLong {
+        /// The 1-based line, the header being line 1.
+        line: u64,
+        /// The bound.
+        limit: usize,
+    },
+    /// Line `line` takes the recording past the [`wire::MAX_RECORDING_BYTES`]
+    /// it may hold: refused before it is parsed.
+    #[error("line {line} takes the native recording past {limit} bytes")]
+    TooLarge {
+        /// The 1-based line.
+        line: u64,
+        /// The bound.
+        limit: usize,
+    },
+    /// Line `line` is past the [`wire::MAX_ROWS`] rows a recording holds.
+    #[error("line {line} is past the {limit} rows a native recording holds")]
+    TooManyRows {
+        /// The 1-based line.
+        line: u64,
+        /// The bound.
+        limit: usize,
+    },
     /// Line `line` is not a well-formed object.
     #[error("line {line} of the native recording is malformed: {source}")]
     Json {
@@ -144,6 +174,9 @@ pub struct Header {
     /// Where the readings came from, when not a capture: a hand-written
     /// recording says so here.
     pub provenance: Option<String>,
+    /// The recording joined a live stream late: a row may name a text store
+    /// whose focus or document it never saw, which its replay refuses.
+    pub joined_late: bool,
 }
 
 impl Header {
@@ -166,6 +199,7 @@ impl Header {
             first_device: None,
             click_settings: None,
             provenance: None,
+            joined_late: false,
         }
     }
 
@@ -307,6 +341,31 @@ pub enum Row {
         /// refuses the row.
         redacted: bool,
     },
+    /// The window was told which text store its input method serves, or
+    /// that it serves none (a `window` stream).
+    StoreFocus(Option<StoreFocus>),
+    /// The window's input method held a lock on a text store and made these
+    /// calls in it (a `window` stream).
+    StoreLock {
+        /// The lock.
+        lock: StoreLock,
+        /// Its text was replaced before writing (ADR-0215 §5): replay
+        /// refuses the row.
+        redacted: bool,
+    },
+    /// The window system asked to close the window, and its handler
+    /// answered (a `window` stream).
+    CloseRequest {
+        /// What the handler answered.
+        answer: CloseAnswer,
+        /// The request waited behind a running method of the handler, or came
+        /// from another thread: the window system was told to keep the window.
+        queued: bool,
+    },
+    /// The writer stopped the recording here; no row follows (any stream).
+    Cut(CutReason),
+    /// The window closed (a `window` stream).
+    Closed(CloseCause),
 }
 
 /// What one read of the system preferences returned.
@@ -471,6 +530,19 @@ impl Row {
         row_to_wire(self).map_err(|error| error.at(0))
     }
 
+    /// This row as the wire holds it, a text store lock's text moved rather
+    /// than copied.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(super) fn into_wire(self) -> Result<wire::Row, CodecError> {
+        match self {
+            Self::StoreLock { lock, redacted } => Ok(wire::Row::StoreLock {
+                lock: store::lock_to_wire(lock),
+                redacted,
+            }),
+            row => row.to_wire(),
+        }
+    }
+
     /// The row's name in the schema, as a replay error names it.
     pub const fn name(&self) -> &'static str {
         match self {
@@ -492,12 +564,19 @@ impl Row {
             Self::Preferences(_) => "preferences",
             Self::Displays { .. } => "displays",
             Self::State { .. } => "state",
+            Self::StoreFocus(_) => "store_focus",
+            Self::StoreLock { .. } => "store_lock",
+            Self::CloseRequest { .. } => "close_request",
+            Self::Closed(_) => "closed",
+            Self::Cut(_) => "cut",
         }
     }
 }
 
-/// Why a recording could not be replayed: a row the target does not take, or
-/// one whose text was redacted. Replay stops there, never skipping a row.
+/// Why a recording could not be replayed: a row the target does not take,
+/// one whose text was redacted or that holds only part of what happened, or
+/// one the target reproduced otherwise than recorded. Replay stops there,
+/// never skipping a row.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ReplayError {
@@ -518,6 +597,62 @@ pub enum ReplayError {
         /// The row's name in the schema.
         row: &'static str,
     },
+    /// Line `line` holds only part of what happened (a text store lock past
+    /// the journal's bounds, a handler that panicked while it answered).
+    #[error("line {line} is an incomplete `{row}` row, which cannot be replayed")]
+    Incomplete {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+    },
+    /// Line `line` is a text store lock the recording cannot set its store up
+    /// for: the recording began after the store was focused, or after the lock
+    /// that found the store's document (a live stream joined late).
+    #[error("line {line} is a `{row}` row on a store the recording joined after")]
+    JoinedLate {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+    },
+    /// The writer cut the recording at line `line`: what it holds is not all
+    /// the source journaled (`NativeRecording::replay`, which returns only
+    /// input, says so this way).
+    #[error("the native recording was cut at line {line} ({reason:?})")]
+    Cut {
+        /// The 1-based line of the `cut` row.
+        line: u64,
+        /// Why the writer cut it.
+        reason: CutReason,
+    },
+    /// Line `line` was reproduced otherwise than recorded.
+    #[error("line {line} (`{row}`) replayed otherwise than recorded: {divergence}")]
+    Diverged {
+        /// The 1-based line.
+        line: u64,
+        /// The row's name in the schema.
+        row: &'static str,
+        /// How.
+        divergence: Divergence,
+    },
+}
+
+/// How a replayed row departed from its recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum Divergence {
+    /// The replaying window's handler decided a close request otherwise.
+    #[error("the close request was answered {replayed:?}, recorded {recorded:?}")]
+    CloseDecision {
+        /// What the recorded handler decided.
+        recorded: CloseDecision,
+        /// What the replaying handler decided.
+        replayed: CloseDecision,
+    },
+    /// A text store lock replayed to another answer.
+    #[error(transparent)]
+    Store(#[from] StoreDivergence),
 }
 
 /// A target's refusal of a kind of row it does not reproduce.
@@ -577,6 +712,36 @@ pub trait ReplayTarget {
         let _ = state;
         Err(Unsupported)
     }
+
+    /// The window was told to serve `focus`'s store, or none: the target
+    /// makes the store it replays that store's locks on, starting with the
+    /// recorded status. A store it was told about earlier stays: a lock
+    /// deferred past a focus change still runs on it.
+    fn store_focus(&mut self, focus: Option<&StoreFocus>) -> Result<(), Unsupported> {
+        let _ = focus;
+        Err(Unsupported)
+    }
+
+    /// The store the target replays `store`'s locks on, which an earlier
+    /// `store_focus` row named; `None` refuses the row.
+    fn text_store(&mut self, store: RecordedStore) -> Option<Rc<dyn TextStore>> {
+        let _ = store;
+        None
+    }
+
+    /// The window system asks to close the window: the target asks its
+    /// window's handler and returns what was decided.
+    fn close_request(&mut self) -> Result<CloseDecision, Unsupported> {
+        Err(Unsupported)
+    }
+
+    /// The window closed: the target closes its window unless it already
+    /// has (after a close request its handler granted), without asking its
+    /// handler.
+    fn closed(&mut self, cause: CloseCause) -> Result<(), Unsupported> {
+        let _ = cause;
+        Err(Unsupported)
+    }
 }
 
 /// The target [`NativeRecording::replay`] collects a registry's input into.
@@ -599,14 +764,18 @@ pub struct NativeRecording {
 }
 
 impl NativeRecording {
-    /// Read a whole recording.
+    /// Read a whole recording. A recording is untrusted input: a line longer
+    /// than [`wire::MAX_LINE_BYTES`] is refused before it is parsed, a row
+    /// past [`wire::MAX_ROWS`] or a line that takes the recording past
+    /// [`wire::MAX_RECORDING_BYTES`] is refused, and each row's values are checked
+    /// against their ranges before the row is built.
     ///
     /// # Errors
     ///
     /// [`CodecError`] for the first line that cannot be read.
     pub fn read(mut input: impl BufRead) -> Result<Self, CodecError> {
         let mut buffer = String::new();
-        input.read_line(&mut buffer)?;
+        let mut total = read_bounded_line(&mut input, &mut buffer, 1)?;
         let value: serde_json::Value =
             serde_json::from_str(&buffer).map_err(|source| CodecError::Json {
                 line: 1,
@@ -628,19 +797,36 @@ impl NativeRecording {
         let declared = dto.devices.clone();
         let header = header_from_wire(dto).map_err(|error| error.at(1))?;
         let mut rows = Vec::new();
-        let mut line = 1;
+        let mut order = RowOrder::new(header.joined_late);
+        let mut line: u64 = 1;
         loop {
-            buffer.clear();
-            if input.read_line(&mut buffer)? == 0 {
+            line += 1;
+            let read = read_bounded_line(&mut input, &mut buffer, line)?;
+            if read == 0 {
                 break;
             }
-            line += 1;
+            total = total.saturating_add(read);
+            if total > wire::MAX_RECORDING_BYTES {
+                return Err(CodecError::TooLarge {
+                    line,
+                    limit: wire::MAX_RECORDING_BYTES,
+                });
+            }
+            if usize::try_from(line - 1).map_or(true, |rows| rows > wire::MAX_ROWS) {
+                return Err(CodecError::TooManyRows {
+                    line,
+                    limit: wire::MAX_ROWS,
+                });
+            }
             if buffer.trim().is_empty() {
                 continue;
             }
             let dto: wire::Row =
                 serde_json::from_str(&buffer).map_err(|source| json_error(line, source))?;
             let row = row_from_wire(dto).map_err(|error| error.at(line))?;
+            order
+                .admit(&row)
+                .map_err(|what| CodecError::Invalid { line, what })?;
             for (device, kind) in row_devices(&row) {
                 let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
                 if !declared
@@ -658,42 +844,73 @@ impl NativeRecording {
         Ok(Self { header, rows })
     }
 
-    /// Write the recording, declaring in the header every device its rows
-    /// read with the kinds they read it as.
+    /// Write the recording, declaring in the header every device its written
+    /// rows read with the kinds they read it as. A recording past
+    /// [`wire::MAX_ROWS`] rows or [`wire::MAX_RECORDING_BYTES`] bytes is
+    /// written up to the last row that fits with room for a `cut` row after
+    /// it, which ends it: the writer never writes what its reader refuses, and
+    /// one that fits whole is written whole.
     ///
     /// # Errors
     ///
     /// [`CodecError::Unmirrored`] for a value this format does not mirror,
     /// and [`CodecError::Io`] when the sink fails.
     pub fn write(&self, mut out: impl Write) -> Result<(), CodecError> {
-        let mut devices: Vec<wire::Device> = Vec::new();
-        let rows = self
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let line = index as u64 + 2;
-                for (device, kind) in row_devices(row) {
-                    let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
-                    match devices.iter_mut().find(|entry| entry.device == device.0) {
-                        Some(entry) if entry.kinds.contains(&kind) => {}
-                        Some(entry) => entry.kinds.push(kind),
-                        None => devices.push(wire::Device {
-                            device: device.0,
-                            kinds: vec![kind],
-                        }),
-                    }
-                }
-                row_to_wire(row).map_err(|error| error.at(line))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let header = header_to_wire(&self.header, devices).map_err(|error| error.at(1))?;
-        write_line(&mut out, 1, &header)?;
-        for (index, row) in rows.iter().enumerate() {
-            write_line(&mut out, index as u64 + 2, row)?;
+        // The header that declares every row's devices is the longest it can
+        // be: what fits after it fits after the one that declares fewer.
+        let longest = encode_line(1, &self.header_declaring(&self.rows)?)?.len();
+        let mut budget = CutBudget::after_header(longest);
+        // Each row is encoded only once the rows before it fit, so nothing
+        // past the cut is encoded, and no value there can fail the write.
+        let mut lines: Vec<Vec<u8>> = Vec::new();
+        let mut cut = None;
+        for (index, row) in self.rows.iter().enumerate() {
+            let number = index as u64 + 2;
+            let wire = row_to_wire(row).map_err(|error| error.at(number))?;
+            let line = encode_line(number, &wire)?;
+            let follows = index + 1 < self.rows.len();
+            if let Err(reason) = budget.admit(line.len(), follows) {
+                cut = Some(reason);
+                break;
+            }
+            lines.push(line);
+            if matches!(row, Row::Cut(_)) {
+                // The recorder cut it already: nothing after it is written.
+                break;
+            }
+        }
+        let kept = lines.len();
+        let header = self.header_declaring(&self.rows[..kept])?;
+        out.write_all(&encode_line(1, &header)?)?;
+        for line in &lines[..kept] {
+            out.write_all(line)?;
+        }
+        if let Some(reason) = cut {
+            let number = kept as u64 + 2;
+            out.write_all(&encode_line(number, &wire::Row::Cut { reason })?)?;
         }
         out.flush()?;
         Ok(())
+    }
+
+    /// The header as the wire holds it, declaring the devices `rows` read.
+    fn header_declaring(&self, rows: &[Row]) -> Result<wire::Header, CodecError> {
+        let mut devices: Vec<wire::Device> = Vec::new();
+        for (index, row) in rows.iter().enumerate() {
+            let line = index as u64 + 2;
+            for (device, kind) in row_devices(row) {
+                let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
+                match devices.iter_mut().find(|entry| entry.device == device.0) {
+                    Some(entry) if entry.kinds.contains(&kind) => {}
+                    Some(entry) => entry.kinds.push(kind),
+                    None => devices.push(wire::Device {
+                        device: device.0,
+                        kinds: vec![kind],
+                    }),
+                }
+            }
+        }
+        header_to_wire(&self.header, devices).map_err(|error| error.at(1))
     }
 
     /// The input the backend's registry assembles from these rows, as the
@@ -702,25 +919,34 @@ impl NativeRecording {
     /// # Errors
     ///
     /// [`ReplayError::Unsupported`] for the first row that is not a
-    /// registry's.
+    /// registry's, and [`ReplayError::Cut`] for a recording its writer cut:
+    /// what it holds is not all the registry assembled (`replay_into` replays
+    /// it up to the cut and says so).
     pub fn replay(&self) -> Result<Vec<PlatformInput>, ReplayError> {
         let mut collect = Collect(Vec::new());
-        self.replay_into(&mut collect)?;
-        Ok(collect.0)
+        match self.replay_into(&mut collect)? {
+            Replayed::Whole => Ok(collect.0),
+            Replayed::Cut { line, reason } => Err(ReplayError::Cut { line, reason }),
+        }
     }
 
     /// Replay every row into `target`, in order: a registry's rows as the
     /// input the registry assembles from them, each other row as itself.
+    /// Returns whether the recording was whole, or cut by its writer, and
+    /// where: every row before the cut was replayed.
     ///
     /// # Errors
     ///
     /// [`ReplayError`] for the first row `target` refuses or whose text was
     /// redacted; the rows after it are not replayed.
-    pub fn replay_into(&self, target: &mut dyn ReplayTarget) -> Result<(), ReplayError> {
+    pub fn replay_into(&self, target: &mut dyn ReplayTarget) -> Result<Replayed, ReplayError> {
         let mut registry = self.header.registry();
         let mut batch = MoveBatch::new();
         let mut touchpad = TouchpadAssembler::new(NativeSurface(0));
         let pointer = |event| PlatformInput::Pointer(event);
+        // Each store the replay saw focused, and whether a lock gave it a
+        // document yet.
+        let mut stores = std::collections::BTreeMap::<RecordedStore, bool>::new();
         for (index, row) in self.rows.iter().enumerate() {
             let line = index as u64 + 2;
             let unsupported = |Unsupported| ReplayError::Unsupported {
@@ -782,8 +1008,31 @@ impl NativeRecording {
                 Row::Notice(notice) => target.notice(*notice).map_err(unsupported)?,
                 Row::SessionEnd(phase) => target.session_end(*phase).map_err(unsupported)?,
                 Row::Reopen => target.reopen().map_err(unsupported)?,
-                Row::Ime { redacted: true, .. } | Row::State { redacted: true, .. } => {
+                Row::Ime { redacted: true, .. }
+                | Row::State { redacted: true, .. }
+                | Row::StoreLock { redacted: true, .. } => {
                     return Err(ReplayError::Redacted {
+                        line,
+                        row: row.name(),
+                    });
+                }
+                Row::StoreLock { lock, .. } if lock.protected => {
+                    return Err(ReplayError::Redacted {
+                        line,
+                        row: row.name(),
+                    });
+                }
+                Row::StoreLock { lock, .. } if lock.incomplete => {
+                    return Err(ReplayError::Incomplete {
+                        line,
+                        row: row.name(),
+                    });
+                }
+                Row::CloseRequest {
+                    answer: CloseAnswer::Panicked,
+                    ..
+                } => {
+                    return Err(ReplayError::Incomplete {
                         line,
                         row: row.name(),
                     });
@@ -792,13 +1041,97 @@ impl NativeRecording {
                 Row::Preferences(read) => target.preferences(read).map_err(unsupported)?,
                 Row::Displays { read, .. } => target.displays(read).map_err(unsupported)?,
                 Row::State { state, .. } => target.window_state(state).map_err(unsupported)?,
+                Row::StoreFocus(focus) => {
+                    if let Some(focus) = focus {
+                        stores.insert(focus.store, false);
+                    }
+                    target.store_focus(focus.as_ref()).map_err(unsupported)?;
+                }
+                Row::StoreLock { lock, .. } => {
+                    // A recording that began after the store was focused, or
+                    // after the lock that found its document, cannot set a
+                    // store to what the input method edited.
+                    let documented =
+                        stores.get_mut(&lock.store).ok_or(ReplayError::JoinedLate {
+                            line,
+                            row: row.name(),
+                        })?;
+                    if lock.opened.is_none() && !*documented {
+                        return Err(ReplayError::JoinedLate {
+                            line,
+                            row: row.name(),
+                        });
+                    }
+                    *documented = true;
+                    let store = target
+                        .text_store(lock.store)
+                        .ok_or(ReplayError::Unsupported {
+                            line,
+                            row: row.name(),
+                        })?;
+                    lock.replay_on(&*store)
+                        .map_err(|divergence| ReplayError::Diverged {
+                            line,
+                            row: row.name(),
+                            divergence: divergence.into(),
+                        })?;
+                }
+                // The handler was not asked: an earlier request was granted,
+                // or the window had let go of its handler. Nothing is asked on
+                // replay either; the `closed` row closes the window.
+                Row::CloseRequest {
+                    answer: CloseAnswer::Closing | CloseAnswer::NoHandler,
+                    ..
+                } => {}
+                // The writer stopped here: everything before replayed, and the
+                // caller learns the recording is not whole.
+                Row::Cut(reason) => {
+                    return Ok(Replayed::Cut {
+                        line,
+                        reason: *reason,
+                    });
+                }
+                Row::CloseRequest { answer, .. } => {
+                    let replayed = target.close_request().map_err(unsupported)?;
+                    let recorded = match answer {
+                        CloseAnswer::KeepOpen => CloseDecision::KeepOpen,
+                        _ => CloseDecision::Close,
+                    };
+                    if replayed != recorded {
+                        return Err(ReplayError::Diverged {
+                            line,
+                            row: row.name(),
+                            divergence: Divergence::CloseDecision { recorded, replayed },
+                        });
+                    }
+                }
+                Row::Closed(cause) => target.closed(*cause).map_err(unsupported)?,
             }
             for input in out {
                 target.input(input).map_err(unsupported)?;
             }
         }
-        Ok(())
+        Ok(Replayed::Whole)
     }
+}
+
+/// How much of a recording a replay reproduced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "a cut recording was replayed only up to its cut"]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a recording is whole or its writer cut it"
+)]
+pub enum Replayed {
+    /// Every row, the recording being whole.
+    Whole,
+    /// Every row before line `line`, where the writer cut the recording.
+    Cut {
+        /// The 1-based line of the `cut` row.
+        line: u64,
+        /// Why the writer cut it.
+        reason: CutReason,
+    },
 }
 
 /// The devices `row`'s readings name, with the kind each reads it as.
@@ -829,7 +1162,12 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::Ime { .. }
         | Row::Preferences(_)
         | Row::Displays { .. }
-        | Row::State { .. } => Vec::new(),
+        | Row::State { .. }
+        | Row::StoreFocus(_)
+        | Row::StoreLock { .. }
+        | Row::CloseRequest { .. }
+        | Row::Closed(_)
+        | Row::Cut(_) => Vec::new(),
     };
     readings
         .into_iter()
@@ -839,7 +1177,7 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
 
 /// A conversion failure, before its line is known.
 #[derive(Debug)]
-enum DtoError {
+pub(super) enum DtoError {
     /// The schema has a variant this codec does not read.
     UnknownSpelling(String),
     Invalid(String),
@@ -857,14 +1195,14 @@ impl DtoError {
     }
 }
 
-type DtoResult<T> = Result<T, DtoError>;
+pub(super) type DtoResult<T> = Result<T, DtoError>;
 
-fn invalid(what: impl Into<String>) -> DtoError {
+pub(super) fn invalid(what: impl Into<String>) -> DtoError {
     DtoError::Invalid(what.into())
 }
 
 /// A schema variant this codec does not read, by its spelling.
-fn unread(tag: &str) -> DtoError {
+pub(super) fn unread(tag: &str) -> DtoError {
     DtoError::UnknownSpelling(tag.to_owned())
 }
 
@@ -885,19 +1223,14 @@ fn json_error(line: u64, source: serde_json::Error) -> CodecError {
     }
 }
 
-fn write_line(out: &mut impl Write, line: u64, value: &impl Serialize) -> Result<(), CodecError> {
-    serde_json::to_writer(&mut *out, value).map_err(|source| {
-        if source.is_io() {
-            CodecError::Io(source.into())
-        } else {
-            CodecError::Json {
-                line,
-                source: MalformedJson(source),
-            }
-        }
+/// `value` as line `line` of a recording, its newline included.
+fn encode_line(line: u64, value: &impl Serialize) -> Result<Vec<u8>, CodecError> {
+    let mut bytes = serde_json::to_vec(value).map_err(|source| CodecError::Json {
+        line,
+        source: MalformedJson(source),
     })?;
-    out.write_all(b"\n")?;
-    Ok(())
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 const fn nanos(time: EventTime) -> u64 {
@@ -944,6 +1277,7 @@ fn header_to_wire(header: &Header, devices: Vec<wire::Device>) -> DtoResult<wire
             .map(click_settings_to_wire)
             .transpose()?,
         provenance: header.provenance.clone(),
+        joined_late: header.joined_late,
         devices,
     })
 }
@@ -972,6 +1306,7 @@ fn header_from_wire(header: wire::Header) -> DtoResult<Header> {
             .transpose()?,
         click_settings: header.click_settings.map(click_settings_from_wire),
         provenance: header.provenance,
+        joined_late: header.joined_late,
         ..match (header.stream, header.epoch_ns, header.uptime_ns) {
             (Stream::Registry, Some(epoch), Some(uptime)) => Header::new(
                 header.backend,
@@ -1537,6 +1872,19 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
             state: window_state_to_wire(state)?,
             redacted: *redacted,
         },
+        Row::StoreFocus(focus) => wire::Row::StoreFocus {
+            focus: focus.as_ref().map(store::focus_to_wire).transpose()?,
+        },
+        Row::StoreLock { lock, redacted } => wire::Row::StoreLock {
+            lock: store::lock_to_wire(lock.clone()),
+            redacted: *redacted,
+        },
+        Row::CloseRequest { answer, queued } => wire::Row::CloseRequest {
+            answer: *answer,
+            queued: *queued,
+        },
+        Row::Closed(cause) => wire::Row::Closed { cause: *cause },
+        Row::Cut(reason) => wire::Row::Cut { reason: *reason },
     })
 }
 
@@ -1696,6 +2044,16 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
             state: window_state_from_wire(state)?,
             redacted,
         },
+        wire::Row::StoreFocus { focus } => {
+            Row::StoreFocus(focus.map(store::focus_from_wire).transpose()?)
+        }
+        wire::Row::StoreLock { lock, redacted } => Row::StoreLock {
+            lock: store::lock_from_wire(lock)?,
+            redacted,
+        },
+        wire::Row::CloseRequest { answer, queued } => Row::CloseRequest { answer, queued },
+        wire::Row::Closed { cause } => Row::Closed(cause),
+        wire::Row::Cut { reason } => Row::Cut(reason),
         _ => return Err(unread("Row")),
     })
 }
