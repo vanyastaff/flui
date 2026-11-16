@@ -17,7 +17,7 @@ pub(crate) use inbox::Delivery;
 #[cfg(all(windows, feature = "single-instance"))]
 pub(crate) use inbox::MAX_WAITING;
 #[cfg(any(x11_host, wayland_host, all(windows, feature = "single-instance")))]
-pub(crate) use inbox::hand_on;
+pub(crate) use inbox::hand_on_forwarded;
 #[cfg(all(any(x11_host, wayland_host, windows), feature = "single-instance"))]
 pub(crate) use inbox::{HOLD, Inbox, OwnerWake};
 #[cfg(all(any(x11_host, wayland_host), feature = "single-instance"))]
@@ -135,7 +135,7 @@ mod inbox {
     /// launches as it keeps waiting (a handler in a modal loop while
     /// launches come): the launch is refused to its caller, which runs as an
     /// instance of its own, so it is neither lost nor opened twice.
-    pub(crate) fn hand_on(app: &AppDelivery, opened: Opened, delivery: Delivery) -> bool {
+    fn hand_on(app: &AppDelivery, opened: Opened, delivery: Delivery) -> bool {
         match app.try_opened(opened, move || delivery.delivered()) {
             Ok(called) => {
                 called.or_contain((), "a launch another instance forwarded");
@@ -150,6 +150,29 @@ mod inbox {
                 false
             }
         }
+    }
+
+    /// Hand on a launch another instance forwarded ([`hand_on`]), as every
+    /// host that keeps one instance does. A launch that opens nothing is the
+    /// user starting the application again: answered first, it then asks the
+    /// application to reopen while `shows_any` says no window is shown, as
+    /// relaunching an application does on macOS (ADR-0254 §4). A launch that
+    /// opens URLs or files asks no reopen of the host: the application's
+    /// runner decides where they open, and opens or shows a window only for a
+    /// URL it admits (ADR-0339), as it does for every host.
+    pub(crate) fn hand_on_forwarded(
+        app: &AppDelivery,
+        opened: Opened,
+        delivery: Delivery,
+        shows_any: impl FnOnce() -> bool,
+    ) -> bool {
+        let bare = opened.is_empty();
+        let taken = hand_on(app, opened, delivery);
+        if taken && bare && !shows_any() {
+            app.reopen()
+                .or_contain((), "a launch another instance forwarded");
+        }
+        taken
     }
 
     /// The launches waiting for the owner, and the way to wake it.
@@ -365,6 +388,7 @@ mod inbox {
 
     #[cfg(test)]
     mod tests {
+        use std::rc::Rc;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::time::{Duration, Instant};
@@ -578,6 +602,75 @@ mod inbox {
                     answer.claimed.try_recv().err(),
                     Some(tokio::sync::oneshot::error::TryRecvError::Closed),
                     "each waiting caller hears the refusal"
+                );
+            }
+        }
+
+        /// A later launch that opens nothing is the user starting the
+        /// application again: it asks for a reopen while no window shows,
+        /// after its caller is answered. One that opens a URL or a file
+        /// reaches the application's `opened` and asks the host for no
+        /// reopen, shown window or not: the runner opens or shows the window
+        /// a URL it admits goes to (`flui-app`'s
+        /// `a_link_shows_the_hidden_window_it_opens_in`), and nothing for one
+        /// it refuses.
+        #[test]
+        fn only_a_launch_that_opens_nothing_asks_for_a_reopen() {
+            use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
+
+            use crate::owner::app_delivery::testing::{AppCall, AppLog, bound};
+
+            let link = {
+                Opened::bounded(
+                    ["notes:///note/3".to_owned()],
+                    [],
+                    OpenTarget::Application,
+                    Launch::Running,
+                )
+                .0
+            };
+            let file = {
+                Opened::bounded(
+                    [],
+                    [OpenedFile::new("/a.note")],
+                    OpenTarget::Application,
+                    Launch::Running,
+                )
+                .0
+            };
+            let bare = Opened::bounded([], [], OpenTarget::Application, Launch::Running).0;
+            let cases = [
+                ("a bare launch, no window shown", bare.clone(), false, 1),
+                ("a bare launch, a window shown", bare, true, 0),
+                ("a link, no window shown", link.clone(), false, 0),
+                ("a link, a window shown", link, true, 0),
+                ("a file, no window shown", file, false, 0),
+            ];
+            let runtime = timers();
+            for (case, opened, shown, reopens) in cases {
+                let opens = usize::from(!opened.is_empty());
+                let log = AppLog::new();
+                let run = bound(Rc::clone(&log) as Rc<dyn crate::platform::AppHandler>);
+                let inbox = Inbox::new(Duration::from_secs(15), runtime.handle().clone());
+                let posted = inbox.post("launch", Instant::now()).expect("room to wait");
+                let (_, delivery) = inbox.take_next().expect("the launch is taken");
+                assert!(
+                    super::hand_on_forwarded(&run.delivery, opened, delivery, || shown),
+                    "{case}: the application takes the launch"
+                );
+                assert_eq!(
+                    runtime.block_on(inbox.answer(posted)),
+                    Ok(()),
+                    "{case}: its caller is answered as taken"
+                );
+                assert_eq!(log.count(AppCall::Reopen), reopens, "{case}: reopens");
+                assert_eq!(
+                    log.calls()
+                        .iter()
+                        .filter(|call| matches!(call, AppCall::Opened { .. }))
+                        .count(),
+                    opens,
+                    "{case}: what it opens reaches the application"
                 );
             }
         }

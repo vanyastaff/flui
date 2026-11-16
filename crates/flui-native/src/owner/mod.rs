@@ -407,9 +407,16 @@ impl OwnerPlatform {
     /// accessibility bridge (`runner::presentation_window`).
     ///
     /// [`PlatformWindow::text_input`]: flui_platform::PlatformWindow::text_input
+    ///
+    /// In debug builds with `native-capture`, a host read while a capture
+    /// was installed as the window opened journals into the window's stream
+    /// what its input method does to each store it serves (ADR-0215 §4).
     #[must_use]
     pub fn text_store_host(&self, window: &Rc<dyn HostWindow>) -> Option<Rc<dyn TextStoreHost>> {
-        window.text_store_host(OwnerThreadToken::new())
+        let host = window.text_store_host(OwnerThreadToken::new())?;
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        let host = crate::host_window::delivery_of(&**window).journaled_store_host(host);
+        Some(host)
     }
 }
 

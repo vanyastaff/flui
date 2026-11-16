@@ -41,7 +41,7 @@ use super::control::{OwnerMessages, OwnerPost, OwnerWindow};
 use crate::executor::NativeExecutor;
 pub(crate) use crate::owner::single_instance::frame::Forwarded;
 use crate::owner::single_instance::frame::{self, FrameError};
-use crate::owner::single_instance::{HOLD, Inbox, MAX_WAITING, OwnerWake, hand_on};
+use crate::owner::single_instance::{HOLD, Inbox, MAX_WAITING, OwnerWake, hand_on_forwarded};
 use crate::process::TokenIdentity;
 
 /// The first instance's answer to a launch it took.
@@ -154,21 +154,16 @@ impl LaunchHook {
         let (Some(app), Some(windows)) = (owner.app(), owner.windows()) else {
             return;
         };
-        // One launch at a time, each claimed only once the reopen before it
-        // ran: one waiting behind a handler that blocks stays withdrawable,
+        // One launch at a time, each answered before any handler it reaches
+        // runs: one waiting behind a handler that blocks stays withdrawable,
         // so its caller never runs on its own while this instance opens it.
+        // A launch that opens nothing asks an application that shows no
+        // window to reopen; the window it shows comes forward with the right.
         while self.instance.inbox.has_waiting() {
-            // An application that shows no window (one that outlives its
-            // last, or hid it) is asked to reopen, as a Dock click asks on
-            // macOS; the window it shows comes forward with the right.
-            if !windows.shows_any() {
-                app.reopen()
-                    .or_contain((), "a launch another instance forwarded");
-            }
             let Some((forwarded, delivery)) = self.instance.inbox.take_next() else {
                 break;
             };
-            if hand_on(&app, forwarded.opened(), delivery) {
+            if hand_on_forwarded(&app, forwarded.opened(), delivery, || windows.shows_any()) {
                 windows.activate_forwarded();
             }
         }

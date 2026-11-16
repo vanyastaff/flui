@@ -232,8 +232,8 @@ fn runner_open() {
                 runner_open::a_link_that_launched_the_app_opens_its_first_router_on_it as fn(),
             ),
             (
-                "runner_open::a_link_goes_to_the_window_focused_last",
-                runner_open::a_link_goes_to_the_window_focused_last as fn(),
+                "runner_open::a_link_goes_to_the_main_window_whichever_window_is_focused",
+                runner_open::a_link_goes_to_the_main_window_whichever_window_is_focused as fn(),
             ),
             (
                 "runner_open::an_undeclared_scheme_opens_nothing",
@@ -251,6 +251,87 @@ fn runner_open() {
             (
                 "runner_open::the_entry_functions_manifest_declares_what_a_run_opens",
                 runner_open::the_entry_functions_manifest_declares_what_a_run_opens as fn(),
+            ),
+            (
+                "runner_open::a_link_with_no_window_reopens_the_main_window_on_it",
+                runner_open::a_link_with_no_window_reopens_the_main_window_on_it as fn(),
+            ),
+            (
+                "runner_open::a_link_that_launched_a_resident_app_opens_its_main_window_on_it",
+                runner_open::a_link_that_launched_a_resident_app_opens_its_main_window_on_it
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_no_declaration_admits_opens_no_window",
+                runner_open::a_link_no_declaration_admits_opens_no_window as fn(),
+            ),
+            (
+                "runner_open::a_burst_of_links_with_no_window_opens_one_window_on_the_last",
+                runner_open::a_burst_of_links_with_no_window_opens_one_window_on_the_last as fn(),
+            ),
+            (
+                "runner_open::a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link",
+                runner_open::a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_for_a_closed_window_is_refused_as_it_arrives",
+                runner_open::a_link_for_a_closed_window_is_refused_as_it_arrives as fn(),
+            ),
+            (
+                "runner_open::a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end",
+                runner_open::a_link_after_the_quit_opens_no_window_and_is_refused_at_the_end
+                    as fn(),
+            ),
+            (
+                "runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link",
+                runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link as fn(),
+            ),
+            (
+                "runner_open::a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt",
+                runner_open::a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_goes_to_the_main_window_not_a_window_its_files_open",
+                runner_open::a_link_goes_to_the_main_window_not_a_window_its_files_open as fn(),
+            ),
+            (
+                "runner_open::a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused",
+                runner_open::a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_goes_to_the_main_window_never_a_hidden_helper",
+                runner_open::a_link_goes_to_the_main_window_never_a_hidden_helper as fn(),
+            ),
+            (
+                "runner_open::a_link_restores_the_minimized_window_it_opens_in",
+                runner_open::a_link_restores_the_minimized_window_it_opens_in as fn(),
+            ),
+            (
+                "runner_open::a_link_shows_the_hidden_window_it_opens_in",
+                runner_open::a_link_shows_the_hidden_window_it_opens_in as fn(),
+            ),
+            (
+                "runner_open::a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned",
+                runner_open::a_reopen_during_a_deferred_quit_opens_when_the_quit_is_abandoned
+                    as fn(),
+            ),
+            (
+                "runner_open::a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead",
+                runner_open::a_reopen_during_a_deferred_quit_is_dropped_when_the_quit_goes_ahead
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails",
+                runner_open::a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails
+                    as fn(),
+            ),
+            (
+                "runner_open::a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime",
+                runner_open::a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime
+                    as fn(),
             ),
         ],
     );

@@ -46,7 +46,9 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, capability::Resolver};
+use flui_platform::{
+    ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, capability::Resolver,
+};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use web_time::Instant;
@@ -123,8 +125,8 @@ impl Generation {
 
 /// What the handle asks of the thread.
 pub(super) enum Command {
-    /// Own the clipboard with this write.
-    Write(ClipboardWrite),
+    /// Own the clipboard with this write, and answer whether it owned.
+    Write(ClipboardWrite, Owed<()>),
     /// Own the primary selection with the application's offer, whose text
     /// the owner thread answers.
     Offer(Generation),
@@ -134,9 +136,38 @@ pub(super) enum Command {
     /// when the offer is no longer the application's or holds no text.
     Answer(Generation, Option<String>),
     /// Answer with the selection's text.
-    Read(Name, Resolver<ClipboardRead>),
+    Read(Name, Owed<Option<Arc<str>>>),
     /// Let go of everything and end.
     Stop,
+}
+
+/// The answer a read or write command owes its handle. The thread takes the
+/// resolver to settle; a command that drops untaken (sent to a thread that
+/// has ended, or left in its queue as it ends) answers
+/// [`ClipboardError::Gone`], so no exit leaves it without a typed answer.
+pub(super) struct Owed<V: 'static>(Option<Resolver<Result<V, ClipboardError>>>);
+
+impl<V: 'static> Owed<V> {
+    /// The answer `resolver` owes.
+    pub(super) fn new(resolver: Resolver<Result<V, ClipboardError>>) -> Self {
+        Self(Some(resolver))
+    }
+
+    /// The resolver, which the thread settles from here.
+    fn take(mut self) -> Resolver<Result<V, ClipboardError>> {
+        self.0
+            .take()
+            .expect("BUG: an owed answer is taken once, as its command is carried out")
+    }
+}
+
+impl<V: 'static> Drop for Owed<V> {
+    fn drop(&mut self) {
+        if let Some(resolver) = self.0.take() {
+            // A retired owner has nobody left to answer.
+            let _ = resolver.resolve(Err(ClipboardError::Gone));
+        }
+    }
 }
 
 /// What the thread tells the owner thread about its primary selection, and
@@ -383,6 +414,10 @@ struct Selection {
     owned: Option<Owned>,
     /// A write waiting for its timestamp; a newer write replaces it.
     pending: Option<Content>,
+    /// The answers owed to the clipboard writes waiting for their timestamp:
+    /// the pending one's, and those of the writes it replaced, which the
+    /// selection then holds the application's newer text for.
+    written: Vec<Resolver<ClipboardWritten>>,
     /// The writes' clock appends the server has not stamped yet: only the
     /// last one's time is the pending write's.
     clocks: usize,
@@ -415,6 +450,7 @@ impl Selection {
             destinations: [first, second, third, fourth],
             owned: None,
             pending: None,
+            written: Vec::new(),
             clocks: 0,
             readers: Vec::new(),
             after_write: Vec::new(),
@@ -529,9 +565,21 @@ impl Selection {
         failure.resume();
     }
 
-    /// The thread ends: every read still waiting is abandoned, each drop
-    /// contained, so one whose abandonment panics leaves the others
-    /// abandoned too, and the first failure goes on.
+    /// The pending write owned the selection or lost it: answer every write
+    /// waiting for it. A delivery that panics leaves the others answered,
+    /// and the first failure goes on.
+    fn answer_writes(&mut self, written: ClipboardWritten) {
+        let mut failure = FirstPanic::new();
+        for answer in std::mem::take(&mut self.written) {
+            // A retired owner has nobody left to answer.
+            failure.contain(|| answer.resolve(written));
+        }
+        failure.resume();
+    }
+
+    /// The thread ends: every read and write still waiting is answered
+    /// [`ClipboardError::Gone`], each delivery contained, so one that panics
+    /// leaves the others answered too, and the first failure goes on.
     fn abandon(&mut self) {
         let mut failure = FirstPanic::new();
         let waiting = std::mem::take(&mut self.readers);
@@ -539,7 +587,15 @@ impl Selection {
             .into_iter()
             .chain(std::mem::take(&mut self.after_write))
         {
-            failure.contain(|| drop(reader));
+            // A retired owner has nobody left to answer.
+            failure.contain(|| {
+                let _ = reader.resolve(Err(ClipboardError::Gone));
+            });
+        }
+        for answer in std::mem::take(&mut self.written) {
+            failure.contain(|| {
+                let _ = answer.resolve(Err(ClipboardError::Gone));
+            });
         }
         failure.resume();
     }
@@ -848,13 +904,15 @@ impl Selections {
     /// Carry out `command`; `false` once it asks the thread to end.
     fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
         match command {
-            Command::Write(write) => {
+            Command::Write(write, answer) => {
+                self.clipboard.written.push(answer.take());
                 self.claim(Name::Clipboard, Content::Text(Encodings::new(write)))?;
             }
             Command::Offer(offer) => self.claim(Name::Primary, Content::Offered(offer))?,
             Command::Withdraw(offer) => self.withdraw(offer)?,
             Command::Answer(offer, text) => self.answered(offer, text)?,
             Command::Read(name, answer) => {
+                let answer = answer.take();
                 // Past a few handles' reads waiting, a read is refused rather
                 // than queue behind them.
                 let selection = self.split(name).3;
@@ -980,8 +1038,9 @@ impl Selections {
             .get_selection_owner(selection.atom)?
             .reply()?
             .owner;
-        if owner == window {
+        let written = if owner == window {
             selection.owned = Some(Owned { content, time });
+            Ok(())
         } else {
             // A client took it at a later time than ours.
             selection.owned = None;
@@ -989,12 +1048,17 @@ impl Selections {
             if let Content::Offered(offer) = content {
                 self.notice.lose(offer);
             }
-        }
+            Err(ClipboardError::Unavailable)
+        };
         // The reads that waited for the write.
         let (connection, window, _, selection) = self.split(name);
         selection.readers.append(&mut selection.after_write);
-        selection.serve(connection, window)?;
-        self.settle_asks()
+        let served = selection.serve(connection, window);
+        let settled = served.and_then(|()| self.settle_asks());
+        // The writes' answers go last: a delivery that panics leaves the
+        // reads above served and the connection's state settled.
+        self.split(name).3.answer_writes(written);
+        settled
     }
 
     /// Another client took a selection the window owned, unless the window
@@ -1396,21 +1460,21 @@ impl Selections {
 
 /// The thread's body: commands and events until `Stop`, or until the
 /// connection fails. A panic is contained here: the thread ends, and the
-/// reads waiting are abandoned, each drop contained, before the state
-/// drops; so are the commands still queued, whose reads were never taken.
-/// What ended the thread is reported after the abandonment, so a report
-/// that fails cannot skip it.
+/// reads and writes waiting are answered `Gone`, each delivery contained,
+/// before the state drops; so are the commands still queued, whose reads
+/// and writes were never taken. What ended the thread is reported after,
+/// so a report that fails cannot skip it.
 pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell: &OwnedFd) {
     #[expect(
         clippy::disallowed_methods,
-        reason = "ADR-0287: a panic ends the clipboard thread but abandons its reads first"
+        reason = "ADR-0287: a panic ends the clipboard thread, which answers its reads and writes `Gone` first"
     )]
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         steps(&mut selections, &commands, bell)
     }));
     #[expect(
         clippy::disallowed_methods,
-        reason = "ADR-0287: pending reads are abandoned even when the thread's body panicked"
+        reason = "ADR-0287: waiting reads and writes are answered `Gone` even when the thread's body panicked"
     )]
     let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut failure = FirstPanic::new();
@@ -1418,10 +1482,10 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
         // The connection closes with the thread, and the selections it
         // owned with it: the owner's turn retires the offers.
         failure.contain(|| selections.notice.end());
+        // A read or write answers `Gone` as it drops, here or with the queue.
         while let Ok(command) = commands.try_recv() {
             failure.contain(|| drop(command));
         }
-        // A command sent after the drain drops with the queue.
         failure.contain(|| drop(commands));
         failure.resume();
     }));

@@ -93,6 +93,14 @@ mod sealed {
 
 pub(crate) use sealed::{CoreHostWindow, OwnerThreadToken};
 
+/// What `window` delivers to the handler it was opened with.
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+pub(crate) fn delivery_of(
+    window: &dyn HostWindow,
+) -> &crate::owner::window_delivery::WindowDelivery {
+    sealed::Sealed::delivery(window)
+}
+
 /// A window as a backend hands it to the composition root.
 ///
 /// Implemented by every backend window next to its [`PlatformWindow`] impl,

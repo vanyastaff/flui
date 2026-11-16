@@ -31,6 +31,7 @@ mod cases {
     use std::sync::{Arc, mpsc};
     use std::time::Instant;
 
+    use flui_native::testing::clipboard::write_unobserved;
     use flui_native::testing::wayland::selection_offers_concealed_hint;
     use flui_native::{NativePrimarySelection, Platform as _};
     use flui_platform::ClipboardWrite;
@@ -254,15 +255,15 @@ mod cases {
         first.until("the keyboard", || first.window.state().focused);
         let clipboard = first.platform.clipboard();
         let hint = || selection_offers_concealed_hint(&first.platform);
-        clipboard.write(ClipboardWrite::text("plain"));
+        write_unobserved(&*clipboard, ClipboardWrite::text("plain"));
         first.until("the plain selection", || hint() == Some(false));
-        clipboard.write(ClipboardWrite::text("concealed").concealed());
+        write_unobserved(&*clipboard, ClipboardWrite::text("concealed").concealed());
         first.until("the concealed selection", || hint() == Some(true));
         assert_eq!(
             first.read(|answer| clipboard.read_text(answer)).as_deref(),
             Some("concealed")
         );
-        clipboard.write(ClipboardWrite::text("plain again"));
+        write_unobserved(&*clipboard, ClipboardWrite::text("plain again"));
         first.until("the plain selection again", || hint() == Some(false));
         first.window.close_for_cleanup();
     }
