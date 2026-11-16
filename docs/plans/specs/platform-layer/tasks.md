@@ -6536,7 +6536,13 @@ GPU-память простаивающего или невидимого окн
   `tests/contract.rs` теперь ждут акцент; строки XKB `key_of` (мёртвый циркумфлекс, мёртвая точка
   снизу без отдельного знака); `a_scroll_carries_the_direction_the_compositor_reports` (до правки
   событие `axis_relative_direction` отбрасывалось, направление — `Unknown`).
-  RESULTS
+  Проверки: на Windows clippy рабочего пространства `--all-targets -D warnings`, nextest
+  `flui-platform`, `flui-interaction`, `flui-runtime`, `flui-testing`, `flui-protocol`, `flui-widgets`,
+  `flui-native` (падают и на базе: Android intent, `owner_code_is_contained_at_every_point`, trybuild),
+  мёртвые строки Windows в `test_window_lifecycle_contract`, `doc-strict`, `checks`, `expectations`;
+  в WSL clippy `flui-native --all-targets` и тесты xkb, провода Wayland, клавиш Android; откат
+  чтения `axis_relative_direction` валит `a_scroll_carries_the_direction_the_compositor_reports`;
+  `cargo +nightly check` для Android, macOS и wasm32.
   Не запущено: Android и Apple не компилировались здесь иначе как `cargo +nightly check` в WSL
   (iOS — только CI); прогон аппаратной клавиатуры на Android и естественной прокрутки на Mac не
   делался (`docs/gaps.md`, «Pointer and keyboard gaps»). Windows, X11, Android и iOS флага
