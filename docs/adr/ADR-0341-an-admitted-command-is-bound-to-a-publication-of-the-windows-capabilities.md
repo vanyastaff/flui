@@ -134,7 +134,8 @@ pub enum AdmissionError { Unsupported(Unsupported), InvalidGeometry(InvalidGeome
   - Every token then answers `Superseded`, and admission answers `Unpublished`. A window never
     carries out what it lost because it could not say so.
   - `UnsupportedReason::Withdrawn` names the reason. The agent protocol carries it as the
-    recording's absence `withdrawn`, an additive change published as protocol 0.14.
+    recording's absence `withdrawn`, published as protocol 0.15, a listed break (`BREAKING`):
+    an older client refuses the unknown value.
 - **The two counters fail apart.** Neither wraps.
   - **Publications.** The process's publications come from one `PublicationMint`
     (`PublicationMint::process`). When it has none left and a window's capabilities change,

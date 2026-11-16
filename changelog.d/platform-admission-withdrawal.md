@@ -2,7 +2,8 @@
 
 - `UnsupportedReason::Withdrawn` and `CapabilityAbsence::WITHDRAWN`: the lasting absence of a
   command a window withdrew because it can publish no more of what it honours.
-- Agent protocol 0.14: a recorded window capability can be absent as `withdrawn`.
+- Agent protocol 0.15: a recorded window capability can be absent as `withdrawn`. A client older
+  than 0.15 is refused, as it would refuse the unknown value.
 - `PublicationMint` (`process`), `WindowCapabilities::publish_from` and
   `WindowState::successor_from`: a host names the mint its publications come from; production
   passes the process's. Behind the `testing` feature, `PublicationMint::exhausted` issues nothing
