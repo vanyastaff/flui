@@ -9,7 +9,7 @@
   launch after `reopen` whenever it shows no window)
 - **Related:** [ADR-0307](ADR-0307-platform-declarations-are-crate-metadata.md) (the declarations
   that admit a URL), [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §4 (a
-  handler's panic ends the run), [ADR-0281](ADR-0281-first-panic-and-discarded-payloads.md) (each
+  handler's panic ends the run), [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) (each
   URL opens under `FirstPanic`)
 
 ## Context and problem statement
