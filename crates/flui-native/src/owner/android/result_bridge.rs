@@ -5,7 +5,7 @@
 //! Owner thread: the provider's closures run here, with the router's borrow
 //! released, and what the router settles is resolved after it. A start is
 //! posted to the Java main thread through [`main_thread::post`], which the
-//! owner never waits for (ADR-0347 §2). The posted work reports back
+//! owner never waits for (ADR-0348 §2). The posted work reports back
 //! through [`HandOffs`]: taken, which lifts the request's deadline, or failed
 //! (a JNI error, a panic), which ends it as `HandOffFailed`; a launch the
 //! Java main thread never takes ends the same way at its deadline, since

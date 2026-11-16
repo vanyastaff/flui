@@ -5182,7 +5182,7 @@ capabilities; after it a request is `Submitted`. Chrome's own answer is all
 that ran: a headless desktop has no vibration motor.
 
 Android tier 1 posts `performHapticFeedback` to the Java main thread, which
-owns the decor view, and the owner never waits for it (ADR-0347 §2): a busy
+owns the decor view, and the owner never waits for it (ADR-0348 §2): a busy
 Java thread, or one blocked on the native thread in a lifecycle callback,
 never stalls the owner. One call waits at a time (`AndroidViewAnswers`): a
 request made while it waits posts nothing and reports `Suppressed`, since a
@@ -5424,7 +5424,7 @@ a `FluiActivity`; anything else refuses the start with `PlatformError::HostProto
 naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
-lays one full-window view over the Activity's content (ADR-0347). Every owner-to-view call is posted
+lays one full-window view over the Activity's content (ADR-0348). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the
@@ -5534,7 +5534,7 @@ size. The count of `WindowResized` during a keyboard animation on both sides of 
 a device (`docs/platform-parity.md`, "Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
-view's mirror, under the rule of ADR-0347: the owner's `text::android::ime::Ledger` (one per
+view's mirror, under the rule of ADR-0348: the owner's `text::android::ime::Ledger` (one per
 view, shared by the windows over it) mints a `Publication` for each snapshot and records the last
 report it replayed; `text::android::ime::Mirror`, on the Java main thread, turns each report into
 one edit, numbered by a `ReportId`, against the publication it holds. A snapshot reaches the view

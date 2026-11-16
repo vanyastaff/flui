@@ -1,4 +1,4 @@
-//! `FluiView`, the Java side of the Android backend (ADR-0347, ADR-0255).
+//! `FluiView`, the Java side of the Android backend (ADR-0348, ADR-0255).
 //!
 //! The view's classes are compiled from `crates/flui-native/android/java`
 //! into one dex (`android/classes.dex`, checked against its sources by
@@ -53,7 +53,7 @@ const VIEW_CLASS: &str = "dev.flui.platform.FluiView";
 /// The host's drag-and-drop transport as the view's drag callbacks reach it:
 /// `nativeDrag`, `nativeDropOffer` and `nativeDrop` run on the Java main thread and must be
 /// answered at once, from what the owner published earlier (ADR-0211,
-/// ADR-0347). The transport is the host's one [`DragTransport`].
+/// ADR-0348). The transport is the host's one [`DragTransport`].
 ///
 /// [`DragTransport`]: flui_platform::data_transfer::DragTransport
 pub(crate) trait ViewTransfer: flui_platform::data_transfer::DragTransport {
