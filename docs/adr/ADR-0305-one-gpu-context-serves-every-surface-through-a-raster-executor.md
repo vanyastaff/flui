@@ -525,7 +525,8 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   owner held when it took a panic, or one that replaced it, has its base forgotten. A surface whose
   resize or upload panicked gets one retry, counted by surface (size and generation) rather than by
   frame: the first frame that settles stale on it is retried, and any other that meets the panic
-  on it is refused until a frame settles without one. The thread's
+  on it is refused until a frame on it settles any other way (one held when the slot's panic was
+  taken excepted), which ends the count. The thread's
   wake asks every attached window for a frame through its
   `RedrawRequester`, each one contained; each window's wake drains its own slot's settlements
   into `UiRuntime::settle_frame` first, before its frame gate and whatever the wake goes on to do,

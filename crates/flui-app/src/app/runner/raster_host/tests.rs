@@ -1587,7 +1587,7 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
         size: SIZE,
         generation: flui_foundation::SurfaceGeneration::ZERO,
     };
-    let frame = |epoch: u64| super::PendingFrame {
+    let frame = |epoch: u64, tainted: bool| super::PendingFrame {
         epoch: {
             let mut at = flui_foundation::FrameEpoch::ZERO;
             for _ in 0..epoch {
@@ -1597,35 +1597,38 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
         },
         shown,
         key: surface,
-        tainted: false,
+        tainted,
     };
-    let settle = |placed: &mut super::Placed, epoch: u64, turned: super::SlotTurn| {
-        RasterHost::settle_one(
-            placed,
-            address(),
-            frame(epoch),
-            Some(flui_engine::RasterVerdict::SurfaceStale),
-            turned,
-        )
+    let stale = Some(flui_engine::RasterVerdict::SurfaceStale);
+    let settle = |placed: &mut super::Placed,
+                  epoch: u64,
+                  settled: Option<flui_engine::RasterVerdict>,
+                  tainted: bool,
+                  turned: super::SlotTurn| {
+        RasterHost::settle_one(placed, address(), frame(epoch, tainted), settled, turned)
     };
     // The first frame on the surface whose resize panicked is retried.
     assert_eq!(
-        settle(placed, 1, super::SlotTurn::Panicked),
+        settle(placed, 1, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::SurfaceStale)
     );
     // One queued behind it, and the retry, meet the panic again: refused.
     assert_eq!(
-        settle(placed, 2, super::SlotTurn::Panicked),
+        settle(placed, 2, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::Refused)
     );
+    // A frame whose turn settled nothing, and one held when the slot's panic
+    // was taken (whose own mark may be gone), do not end the retry.
+    let _nothing = settle(placed, 3, None, false, super::SlotTurn::Clean);
+    let _tainted = settle(placed, 4, stale, true, super::SlotTurn::Clean);
     assert_eq!(
-        settle(placed, 3, super::SlotTurn::Panicked),
+        settle(placed, 5, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::Refused)
     );
     // A frame that settles without a panic ends the surface's retry.
-    let _clean = settle(placed, 4, super::SlotTurn::Clean);
+    let _clean = settle(placed, 6, stale, false, super::SlotTurn::Clean);
     assert_eq!(
-        settle(placed, 5, super::SlotTurn::Panicked),
+        settle(placed, 7, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::SurfaceStale)
     );
 }

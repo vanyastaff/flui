@@ -1917,7 +1917,12 @@ impl RasterHost {
         settled: Option<RasterVerdict>,
         turned: SlotTurn,
     ) -> Option<SubmitVerdict> {
-        let PendingFrame { shown, key, .. } = frame;
+        let PendingFrame {
+            shown,
+            key,
+            tainted,
+            ..
+        } = frame;
         let id = placed.slots.get(&address)?.slot;
         // No surface the GPU takes, or no size it draws at: the frame is
         // refused, and nothing until the window's next change (or a rebuilt
@@ -1957,8 +1962,12 @@ impl RasterHost {
             slot.base.forget();
             return Some(verdict);
         }
-        // A frame that settled without a panic ends the surface's retry.
-        slot.stale_panic = None;
+        // A frame that settled without a panic ends the surface's retry. One
+        // whose turn settled nothing says nothing of the surface, and one held
+        // when its slot's panic was taken may have lost its own mark.
+        if settled.is_some() && !tainted {
+            slot.stale_panic = None;
+        }
         if stuck {
             slot.base.forget();
             return Some(SubmitVerdict::Refused);
