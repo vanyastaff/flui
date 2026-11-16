@@ -51,6 +51,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::lifecycle::background::BackgroundWindow;
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use crate::owner::wake_deadline::{FrameCount, TurnDeadline, WakeDeadline};
 use objc2::rc::{Allocated, Retained};
@@ -59,8 +60,9 @@ use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
 use objc2::{MainThreadMarker, Message};
 use objc2_foundation::{NSObjectProtocol, NSSet, NSString, NSUserActivity};
 use objc2_ui_kit::{
-    UIApplication, UIApplicationDelegate, UIOpenURLContext, UIScene, UISceneActivationState,
-    UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate, UISceneSession, UIWindowScene,
+    UIApplication, UIApplicationDelegate, UIBackgroundTaskIdentifier, UIOpenURLContext, UIScene,
+    UISceneActivationState, UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate,
+    UISceneSession, UIWindowScene,
 };
 
 use parking_lot::Mutex;
@@ -478,6 +480,9 @@ pub struct IOSLoop {
     frames: FrameCount,
     /// A re-arm after a window's run is posted and has not run yet.
     rearm_posted: Cell<bool>,
+    /// The application's trip to the background and the UIKit background
+    /// task its writes hold.
+    background: RefCell<BackgroundWindow<UIBackgroundTaskIdentifier>>,
     /// The screens, as the table made them; shared with every window.
     pub(crate) displays: Arc<dyn HostDisplays>,
     /// Marks `displays` stale and wakes the owner on screen and scene
@@ -579,6 +584,7 @@ impl IOSLoop {
             turn_deadline: RefCell::default(),
             frames: FrameCount::default(),
             rearm_posted: Cell::new(false),
+            background: RefCell::new(BackgroundWindow::Foreground),
             displays,
             _screen_observer: NativeOwner::new(screen_observer, marker),
             notices: H::notices(&app),
@@ -648,6 +654,83 @@ impl IOSLoop {
             .app
             .session_end(SessionEndPhase::Ending)
             .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
+    }
+
+    /// The scene left the screen, and with it the application, whose process
+    /// UIKit may now suspend or end: the first time in this trip, the
+    /// application is told its session is ending (as Android's `onStop` tells
+    /// it), and an answer of [`SessionEndAnswer::Block`], which its pending
+    /// writes give, begins a UIKit background task that keeps the process
+    /// running until the application releases it
+    /// ([`LifecycleHooks::release_session_end`]), the system expires it
+    /// ([`Self::background_expired`]) or the scene comes back.
+    fn entered_background(&self) {
+        if !self.background.borrow_mut().entered_background() {
+            return;
+        }
+        let answer = self
+            .app
+            .session_end(SessionEndPhase::Ending)
+            .or_contain(SessionEndAnswer::Proceed, "the session-end handler");
+        if answer != SessionEndAnswer::Block {
+            return;
+        }
+        let marker = MainThreadMarker::new().expect("BUG: UIKit scene events run on main");
+        let application = UIApplication::sharedApplication(marker);
+        let expiry = block2::RcBlock::new(|| {
+            os_entry(
+                "a background task's expiration handler",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || FluiAppDelegate::with_platform(IOSLoop::background_expired),
+            );
+        });
+        let name = NSString::from_str("FLUI application writes");
+        let task =
+            application.beginBackgroundTaskWithName_expirationHandler(Some(&name), Some(&*expiry));
+        // SAFETY: `UIBackgroundTaskInvalid` is UIKit's constant, initialised
+        // before any application code runs and never written.
+        if task == unsafe { objc2_ui_kit::UIBackgroundTaskInvalid } {
+            tracing::warn!(
+                "UIKit gave no background time: writes still running may be cut off by suspension"
+            );
+            return;
+        }
+        let refused = self.background.borrow_mut().hold(task);
+        if let Some(task) = refused {
+            application.endBackgroundTask(task);
+        }
+    }
+
+    /// The scene is coming back on screen: the next trip to the background
+    /// is announced again, and a background task still held ends, since the
+    /// foreground keeps the process running.
+    fn entering_foreground(&self) {
+        let task = self.background.borrow_mut().entering_foreground();
+        Self::end_background_task(task);
+    }
+
+    /// UIKit is about to end the background task before the application
+    /// released it: the task ends here, as UIKit requires, and what the
+    /// application had not written yet may be lost to the suspension that
+    /// follows, which is reported.
+    fn background_expired(&self) {
+        let task = self.background.borrow_mut().expired();
+        if task.is_some() {
+            tracing::warn!(
+                "UIKit ended the background time before the application's writes finished"
+            );
+        }
+        Self::end_background_task(task);
+    }
+
+    /// End `task` with UIKit, if there is one, with no borrow of the loop
+    /// held.
+    fn end_background_task(task: Option<UIBackgroundTaskIdentifier>) {
+        if let Some(task) = task {
+            let marker = MainThreadMarker::new().expect("BUG: UIKit background tasks end on main");
+            UIApplication::sharedApplication(marker).endBackgroundTask(task);
+        }
     }
 
     /// UIKit's memory warning means the system is close to terminating the
@@ -1026,13 +1109,14 @@ impl host::Preferences<IOSLoop> for IOSLoop {
 }
 
 /// UIKit tells the application delegate, which is the loop's, that the process
-/// is about to terminate and that memory is low; it cannot be asked to wait
-/// and has no reopen. The lifecycle feature's position reaches the hooks
-/// through this.
+/// is about to terminate and that memory is low, and the scene delegate that
+/// the application left the screen; the background task begun then is what a
+/// release ends. The lifecycle feature's position reaches the hooks through
+/// this.
 impl LifecycleHooks for IOSLoop {
     fn release_session_end(&self) {
-        // The answer to a session end is not read, so no session end is held
-        // open.
+        let task = self.background.borrow_mut().release();
+        Self::end_background_task(task);
     }
 }
 
@@ -1849,9 +1933,9 @@ define_class!(
         #[unsafe(method(sceneWillResignActive:))]
         fn inactive(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Inactive)); }
         #[unsafe(method(sceneDidEnterBackground:))]
-        fn background(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Background)); }
+        fn background(&self, scene: &UIScene) { Self::scene_event_then(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Background), IOSLoop::entered_background); }
         #[unsafe(method(sceneWillEnterForeground:))]
-        fn foreground(&self, scene: &UIScene) { Self::scene_event(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Foreground)); }
+        fn foreground(&self, scene: &UIScene) { Self::scene_event_then(self, scene, |origin| SceneAction::Observe(origin, LifecycleObservation::Foreground), IOSLoop::entering_foreground); }
     }
     // SAFETY: NSObjectProtocol has no additional requirements.
     unsafe impl NSObjectProtocol for FluiSceneDelegate {}
@@ -1896,6 +1980,19 @@ impl FluiSceneDelegate {
     /// The boundary of the scene's lifecycle methods: `action` of the scene's
     /// origin is queued, while the scene is the one this delegate connected.
     fn scene_event(&self, scene: &UIScene, action: impl FnOnce(SceneOrigin) -> SceneAction) {
+        self.scene_event_then(scene, action, |_| {});
+    }
+
+    /// [`Self::scene_event`], then `then` on the loop, inside the same
+    /// boundary and for the same scene only: the application's trip to the
+    /// background and back ([`IOSLoop::entered_background`],
+    /// [`IOSLoop::entering_foreground`]).
+    fn scene_event_then(
+        &self,
+        scene: &UIScene,
+        action: impl FnOnce(SceneOrigin) -> SceneAction,
+        then: fn(&IOSLoop),
+    ) {
         os_entry(
             "a UIKit scene event",
             (),
@@ -1914,6 +2011,7 @@ impl FluiSceneDelegate {
                     });
                 if let Some(origin) = origin {
                     FluiAppDelegate::with_platform(|platform| platform.enqueue(action(origin)));
+                    FluiAppDelegate::with_platform(then);
                 }
             },
         );

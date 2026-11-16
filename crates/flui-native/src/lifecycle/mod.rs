@@ -24,6 +24,8 @@
 pub(crate) mod android;
 #[cfg(any(target_os = "macos", test))]
 pub(crate) mod apple;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) mod background;
 pub(crate) mod headless;
 #[cfg(any(linux_host, test))]
 pub(crate) mod linux;
@@ -47,7 +49,11 @@ impl<L: crate::owner::notices::LifecycleHooks> crate::host::Lifecycle<L> for L {
     }
 
     /// AppKit holds a log out with `NSTerminateLater`; logind waits for the
-    /// owner through its delay inhibitor; UIKit and Android do not wait.
+    /// owner through its delay inhibitor; UIKit and Android keep a
+    /// backgrounded process running for its writes, UIKit through a
+    /// background task the host holds while the application does
+    /// ([`background`]), Android by not stopping a stopped Activity's process
+    /// until it reclaims it.
     fn session_end_support(_: &L) -> flui_platform::SessionEndSupport {
         #[cfg(target_os = "macos")]
         {
@@ -57,9 +63,17 @@ impl<L: crate::owner::notices::LifecycleHooks> crate::host::Lifecycle<L> for L {
         {
             linux::SESSION_END_SUPPORT
         }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
+        #[cfg(target_os = "ios")]
         {
-            flui_platform::SessionEndSupport::NotifyOnly
+            flui_platform::SessionEndSupport::Background {
+                window: background::IOS_BACKGROUND_WINDOW,
+            }
+        }
+        #[cfg(target_os = "android")]
+        {
+            flui_platform::SessionEndSupport::Background {
+                window: background::ANDROID_BACKGROUND_WINDOW,
+            }
         }
     }
 
