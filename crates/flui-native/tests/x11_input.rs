@@ -441,7 +441,7 @@ fn losing_the_focus_ends_a_dead_key_and_releases_held_keys() {
         .collect();
     assert_eq!(
         composed,
-        [Key::Named(NamedKey::Dead), Key::character("é")],
+        [Key::Dead(Some('\u{b4}')), Key::character("é")],
         "the dead key composes with e"
     );
     handler.take_calls();

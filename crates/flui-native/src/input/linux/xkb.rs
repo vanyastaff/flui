@@ -547,14 +547,14 @@ mod keyboard {
     use std::sync::Arc;
 
     use flui_platform::EventTime;
-    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
+    use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
     use xkbcommon_dl::{
         XkbCommon, XkbCommonCompose, xkb_compose_feed_result, xkb_compose_state,
         xkb_compose_status, xkb_compose_table, xkb_context, xkb_keymap, xkb_mod_index_t, xkb_state,
         xkb_state_component,
     };
 
-    use super::{EVDEV_OFFSET, XkbModifier, code_of, key_of, modifiers_of};
+    use super::{EVDEV_OFFSET, XkbModifier, code_of, dead_key, key_of, modifiers_of};
     #[cfg(wayland_host)]
     use super::{group_names, keymap_text};
     use crate::input::keys::{UnplacedKeys, location_for_code};
@@ -1131,7 +1131,7 @@ mod keyboard {
     #[cfg(all(test, wayland_host))]
     mod tests {
         use flui_platform::EventTime;
-        use flui_platform::keyboard::{Key, KeyPress, KeyState, NamedKey};
+        use flui_platform::keyboard::{Key, KeyPress, KeyState};
 
         use super::{Keyboard, KeymapSource, MAX_HELD_KEYS};
         use crate::input::linux::xkb::EVDEV_OFFSET;
