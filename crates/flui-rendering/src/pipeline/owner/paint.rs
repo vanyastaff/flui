@@ -1079,14 +1079,16 @@ impl PipelineOwner<PaintPhase> {
         let node = if composer.served(child_id) {
             composer.node_of(self, child_id)
         } else {
-            match self.refresh_boundary(composer, child_id, committed, region_anchor, inputs)? {
-                Some(fresh) => {
-                    let node = fresh.node;
-                    composer.stage_record(child_id, fresh);
-                    Some(node)
-                }
-                None => committed.map(|record| record.node),
+            let refreshed =
+                self.refresh_boundary(composer, child_id, committed, region_anchor, inputs)?;
+            let node = match &refreshed {
+                Some(Refreshed::Repainted(fresh)) => Some(fresh.node),
+                Some(Refreshed::Patched { .. }) | None => committed.map(|record| record.node),
+            };
+            if let Some(refreshed) = refreshed {
+                composer.stage_record(child_id, refreshed);
             }
+            node
         };
         let Some(node) = node else {
             debug_assert!(false, "BUG: a served boundary has a node");
@@ -1114,8 +1116,8 @@ impl PipelineOwner<PaintPhase> {
     }
 
     /// What `id`'s content becomes this frame: a fresh record when it is
-    /// repainted or its composited layers are patched, `None` when it stays
-    /// as `committed` holds it.
+    /// repainted, the patched content when its composited layers are
+    /// updated, `None` when it stays as `committed` holds it.
     ///
     /// A boundary without a record, queued for a repaint, or whose record was
     /// dropped as stale is painted afresh in a content of its own, at its own
@@ -1128,7 +1130,7 @@ impl PipelineOwner<PaintPhase> {
         committed: Option<&BoundaryRecord>,
         region_anchor: Option<AnchorFrame>,
         inputs: &PaintInputs<'_>,
-    ) -> crate::error::RenderResult<Option<BoundaryRecord>> {
+    ) -> crate::error::RenderResult<Option<Refreshed>> {
         composer.mark_served(id);
         if inputs.dirty_set.contains(&id) {
             composer.work.visited.insert(id);
@@ -1163,17 +1165,16 @@ impl PipelineOwner<PaintPhase> {
                 composer.counts.layers_produced += rebuilt;
                 composer.counts.layers_reused +=
                     (content.entries().len() as u64).saturating_sub(rebuilt);
-                let fresh = BoundaryRecord {
-                    content,
-                    ..record.clone()
-                };
                 // The patched content keeps every slot of the one it replaces.
                 composer
                     .work
                     .slotted
-                    .extend(fresh.children.iter().map(|&(_, node)| node));
-                composer.publish(fresh.node, Arc::clone(&fresh.content));
-                Some(fresh)
+                    .extend(record.children.iter().map(|&(_, node)| node));
+                composer.publish(record.node, Arc::clone(&content));
+                Some(Refreshed::Patched {
+                    content,
+                    placed: record.placed,
+                })
             });
             patches.clear();
             composer.work.layer_patches = patches;
@@ -1194,7 +1195,7 @@ impl PipelineOwner<PaintPhase> {
             committed.map_or(Placed::UNPLACED, |record| record.placed),
         );
         composer.publish(node, Arc::clone(&fresh.content));
-        Ok(Some(fresh))
+        Ok(Some(Refreshed::Repainted(fresh)))
     }
 }
 
@@ -1236,6 +1237,40 @@ impl BoundaryRecord {
     /// entries and origin.
     fn effect_slots(&self) -> &[(RenderId, EffectSlots)] {
         self.effect_slots.as_deref().unwrap_or_default()
+    }
+}
+
+/// What a paint pass made of a boundary it served: a record that replaces
+/// the committed one, or the committed record's content patched by a
+/// composited-layer update at its placement, which keeps every other field
+/// of that record.
+#[derive(Debug)]
+pub(super) enum Refreshed {
+    /// Painted afresh: the record replaces the committed one.
+    Repainted(BoundaryRecord),
+    /// The committed record, republished with `content` at `placed`: its
+    /// node, effect slots, followers and children stay as they are.
+    Patched {
+        content: Arc<BoundaryContent>,
+        placed: Placed,
+    },
+}
+
+impl Refreshed {
+    /// The content the pass published.
+    fn content(self) -> Arc<BoundaryContent> {
+        match self {
+            Self::Repainted(record) => record.content,
+            Self::Patched { content, .. } => content,
+        }
+    }
+
+    /// Where the boundary's slot puts it.
+    fn placed_mut(&mut self) -> &mut Placed {
+        match self {
+            Self::Repainted(record) => &mut record.placed,
+            Self::Patched { placed, .. } => placed,
+        }
     }
 }
 
@@ -1288,7 +1323,7 @@ impl FrameRecord {
 #[derive(Debug, Default)]
 pub(super) struct StagedScene {
     /// Records replaced (`Some`) or dropped (`None`).
-    pub(super) records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    pub(super) records: FxHashMap<RenderId, Option<Refreshed>>,
     /// New placements of records the pass kept.
     placed: FxHashMap<RenderId, Placed>,
     /// Records the residue scan found owing a paint.
@@ -1328,17 +1363,28 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             orphans,
             ops: _,
         } = staged;
-        for (id, record) in records.drain() {
-            if let Some(record) = record {
-                if record.followers.is_empty() {
-                    self.follower_boundaries.remove(&id);
-                } else {
-                    self.follower_boundaries.insert(id);
+        for (id, refreshed) in records.drain() {
+            match refreshed {
+                Some(Refreshed::Repainted(record)) => {
+                    if record.followers.is_empty() {
+                        self.follower_boundaries.remove(&id);
+                    } else {
+                        self.follower_boundaries.insert(id);
+                    }
+                    self.boundary_records.insert(id, record);
                 }
-                self.boundary_records.insert(id, record);
-            } else {
-                self.follower_boundaries.remove(&id);
-                self.boundary_records.remove(&id);
+                // A boundary removed since the pass took its record with it;
+                // its node is retired with the orphans.
+                Some(Refreshed::Patched { content, placed }) => {
+                    if let Some(record) = self.boundary_records.get_mut(&id) {
+                        record.content = content;
+                        record.placed = placed;
+                    }
+                }
+                None => {
+                    self.follower_boundaries.remove(&id);
+                    self.boundary_records.remove(&id);
+                }
             }
         }
         for (id, placed) in placed.drain() {
@@ -1414,8 +1460,8 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             orphans,
             ..
         } = staged;
-        for record in records.drain().filter_map(|(_, record)| record) {
-            writer.discard(record.content);
+        for refreshed in records.drain().filter_map(|(_, refreshed)| refreshed) {
+            writer.discard(refreshed.content());
         }
         if let Some(scratch) = self.paint_scratch.as_mut() {
             scratch.recycle_staged(records, placed, stale, orphans);
@@ -1657,7 +1703,7 @@ impl PaintScratch {
     /// into.
     fn recycle_staged(
         &mut self,
-        mut records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+        mut records: FxHashMap<RenderId, Option<Refreshed>>,
         mut placed: FxHashMap<RenderId, Placed>,
         mut stale: Vec<RenderId>,
         mut orphans: Vec<SceneNodeId>,
@@ -1784,7 +1830,7 @@ struct ComposerScratch {
     retired_set: FxHashSet<SceneNodeId>,
     unslotted: Vec<RenderId>,
     /// A staged patch's maps, handed back by `scene_applied`.
-    records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    records: FxHashMap<RenderId, Option<Refreshed>>,
     placed: FxHashMap<RenderId, Placed>,
     stale: Vec<RenderId>,
     /// The orphan list the owner held before the last applied patch
@@ -1943,28 +1989,33 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     /// The node of a boundary served this pass.
     fn node_of(&self, owner: &PipelineOwner<PaintPhase>, id: RenderId) -> Option<SceneNodeId> {
         match self.staged.records.get(&id) {
-            Some(Some(record)) => Some(record.node),
+            Some(Some(Refreshed::Repainted(record))) => Some(record.node),
             Some(None) => None,
-            None => owner.boundary_records.get(&id).map(|record| record.node),
+            Some(Some(Refreshed::Patched { .. })) | None => {
+                owner.boundary_records.get(&id).map(|record| record.node)
+            }
         }
     }
 
-    fn stage_record(&mut self, id: RenderId, record: BoundaryRecord) {
+    /// Stages what the pass made of `id`; the placement it carries, the
+    /// committed one for a patched content, replaces any staged before.
+    fn stage_record(&mut self, id: RenderId, refreshed: Refreshed) {
         self.staged.placed.remove(&id);
-        self.staged.records.insert(id, Some(record));
+        self.staged.records.insert(id, Some(refreshed));
     }
 
     /// The placement a repaint staged for `id` this pass, if any.
     fn staged_placed(&self, id: RenderId) -> Option<Placed> {
         match self.staged.records.get(&id) {
-            Some(Some(record)) => Some(record.placed),
+            Some(Some(Refreshed::Repainted(record))) => Some(record.placed),
+            Some(Some(Refreshed::Patched { placed, .. })) => Some(*placed),
             _ => self.staged.placed.get(&id).copied(),
         }
     }
 
     fn stage_placed(&mut self, id: RenderId, placed: Placed) {
         match self.staged.records.get_mut(&id) {
-            Some(Some(record)) => record.placed = placed,
+            Some(Some(refreshed)) => *refreshed.placed_mut() = placed,
             _ => {
                 self.staged.placed.insert(id, placed);
             }
@@ -2187,9 +2238,9 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         }
         while let Some(id) = unslotted.pop() {
             let below: SmallVec<[(RenderId, SceneNodeId); 4]> = match self.staged.records.get(&id) {
-                Some(Some(record)) => record.children.clone(),
+                Some(Some(Refreshed::Repainted(record))) => record.children.clone(),
                 Some(None) => SmallVec::new(),
-                None => owner
+                Some(Some(Refreshed::Patched { .. })) | None => owner
                     .boundary_records
                     .get(&id)
                     .map_or_default(|record| record.children.clone()),
