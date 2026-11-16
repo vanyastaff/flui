@@ -953,11 +953,51 @@ fn with_render_editable<T>(
     })
 }
 
+/// A tap the gesture arena gives the focused field asks the host for the
+/// soft keyboard, so one the user put away returns; a drag that starts on
+/// the field, which a tap recogniser loses past its slop, asks nothing.
+///
+/// Red-check: drop the field's `on_tap_up` request, and the tap asks the
+/// host nothing.
+pub(crate) fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
+    use flui_testing::StoreHostCall;
+    use std::time::Duration;
+
+    let asked = |harness: &crate::common::harness::Harness| {
+        harness
+            .store_host_calls()
+            .iter()
+            .filter(|call| **call == StoreHostCall::ShowKeyboard)
+            .count()
+    };
+    let controller = TextEditingController::with_text("hello");
+    let node = FocusNode::with_debug_label("tapped field");
+    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
+        controller,
+        Rc::clone(&node),
+    ));
+    let _ = node.request_focus();
+    harness.tick();
+    assert_eq!(asked(&harness), 0, "focus alone asks nothing more");
+
+    harness.dispatch_pointer_down(10.0, 5.0);
+    harness.dispatch_pointer_up(10.0, 5.0);
+    // The tap waits out the double-tap window before it is the field's.
+    harness.pump_for(Duration::from_millis(500));
+    assert_eq!(asked(&harness), 1, "a tap on the focused field");
+
+    harness.dispatch_pointer_down(10.0, 5.0);
+    harness.dispatch_pointer_move(200.0, 5.0);
+    harness.dispatch_pointer_up(200.0, 5.0);
+    harness.pump_for(Duration::from_millis(500));
+    assert_eq!(asked(&harness), 1, "a drag from the field is no tap");
+}
+
 /// A field's whole bounds, which a host hit-tests a tap or a pen against and
 /// hands the input method as the editor's area, are the box the field was
-/// given, even with no text to cover it; and they still cover text that runs
-/// past the box.
-pub(crate) fn a_fields_bounds_are_its_box_and_its_text() {
+/// given: with no text to cover it, and with text that runs past it, which
+/// is clipped there and must not draw a tap beside the field into it.
+pub(crate) fn a_fields_bounds_are_its_box() {
     use flui_platform::text_store::{LockGrant, LockOutcome, LockTiming};
     use flui_view::ViewExt;
     use flui_widgets::SizedBox;
@@ -992,8 +1032,10 @@ pub(crate) fn a_fields_bounds_are_its_box_and_its_text() {
     );
     let long = bounds_of(&"m".repeat(200));
     assert!(
-        long.size.width > 240.0,
-        "text past the box stays inside the bounds: {long:?}"
+        (long.size.width - 240.0).abs() < 0.5
+            && long.size.height <= 40.5
+            && long.origin.x.abs() < 0.5,
+        "text past the box widens no bounds: {long:?}"
     );
 }
 

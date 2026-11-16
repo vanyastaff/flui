@@ -2049,6 +2049,12 @@ mod input {
             self.drain();
             Ok(end)
         }
+
+        /// The browser shows its keyboard for the editor that has the
+        /// page's focus, and this host reopens it from the pointer event's
+        /// own handler, inside the user gesture the browser requires; a
+        /// field's tap, recognised later, asks nothing more.
+        fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
     }
 
     /// What the store tells the browser's surface when the application changes

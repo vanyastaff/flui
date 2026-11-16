@@ -6,15 +6,15 @@
 - **Revised:** 2026-10-30 — the macOS row: edits take an `Async` read-write lock, queries keep `Sync`.
 - **Related:** [ADR-0135](ADR-0135-win32-text-services-hold-the-text-store-on-the-owner-thread.md)
   (the Win32 TSF host of this contract)
-- **Amended by:** [ADR-0247](ADR-0247-android-java-view.md) (2026-10-17): the Android row of the
+- **Amended by:** [ADR-0347](ADR-0347-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md) (2026-11-16, after ADR-0247): the Android row of the
   platform mapping, and the GameActivity hypothesis in Consequences, rejected.
 - **Superseded-by:** [ADR-0142](ADR-0142-text-store-commit-gate-and-owner-code-containment.md),
   in part: §1's one change notification per session (the owner hears only of committed-text
   changes, after the lock is released), §2's reporting of a failure after a projected grant, §3's
   reading of `TextInputOwner::active_store`, and the interim implementation's write-back. The
   rest of this ADR stands.
-  [ADR-0346](ADR-0346-an-android-input-method-edit-survives-the-snapshot-it-raced.md) for the
-  Android row's generation-tagged snapshot and its dropping of an edit on an older snapshot.
+  [ADR-0347](ADR-0347-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md) for the
+  Android row of the platform mapping, which it states whole.
 - **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md) §5 (who owns a text-input
@@ -241,7 +241,7 @@ No backend code exists for any of these yet; this is the shape each backend impl
 | Linux, winit (X11 XIM, Wayland) | Push-only: through `project_ime_event`. The candidate area comes from `rect_for_range` over the composition or the caret. |
 | Linux, native Wayland `text-input-v3` (if a backend bypasses winit) | `set_surrounding_text` takes UTF-8 byte cursor and anchor (at most 4000 bytes), read under a sync read lock; `delete_surrounding_text` → `replace`; `preedit_string` byte cursors are handled as the projection handles them; `done(serial)` is one read-write lock. |
 | Linux, IBus over D-Bus; AT-SPI | IBus counts Unicode scalars, so a scalar↔UTF-16 helper is needed then. AT-SPI `Text` reads through the store. |
-| Android | Amended by [ADR-0247](ADR-0247-android-java-view.md): asynchronous, through `FluiView`. The `InputConnection` answers the input method from a mirror of the store on the Java main thread and never waits for the owner. The owner publishes a generation-tagged snapshot (read under a sync lock, or an async one when the frame transaction refuses it) on focus and on every observer notification; each reported edit is the diff of the mirror against that snapshot (`replace`, then `set_selection` and `set_composition` as the view ended), replayed under an `Async` read-write lock in order; an edit on an older snapshot is dropped, and a refused step publishes a new one. A protected store is mirrored as one bullet per code unit. `complete_composition` commits under an async lock and restarts the input method. Offsets are UTF-16 code units. |
+| Android | Superseded by [ADR-0347](ADR-0347-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md) §3, which states the Android rule: asynchronous, through `FluiView`, whose `InputConnection` answers the input method from a mirror of the store on the Java main thread and never waits for the owner; each reported edit is the diff of the mirror against the publication it was made on, replayed under an `Async` read-write lock in order. Offsets are UTF-16 code units. |
 | Web | A hidden-input bridge implements the same store. |
 
 ### 5. Live evidence stays in exit B1

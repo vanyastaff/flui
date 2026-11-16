@@ -430,6 +430,17 @@ public final class FluiView extends View {
         return Math.max(0, Math.min(value, length));
     }
 
+    /**
+     * Report what the input method did since the last report, an edit inside
+     * a batch it has not ended included. The native side calls this before it
+     * hands the view a snapshot, so the snapshot is decided against every
+     * edit the input method made; the batch's later edits are reported when
+     * it ends, from this state.
+     */
+    public void reportPending() {
+        report();
+    }
+
     /** Send the mirror's state to the owner, when it changed since the last report. */
     void report() {
         if (handle == 0 || !editing) {

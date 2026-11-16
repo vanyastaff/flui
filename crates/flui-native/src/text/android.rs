@@ -1,5 +1,5 @@
 //! The Android host's text input: `FluiView`'s editor mirrors the focused
-//! field for the input method (ADR-0247, ADR-0090), and the system font scale
+//! field for the input method (ADR-0347, ADR-0090), and the system font scale
 //! sizes text natively.
 //!
 //! - `ime`: the decidable half, how the view's mirror and the field's store
@@ -25,13 +25,13 @@
     )
 )]
 pub(crate) mod ime {
-    //! The decidable half of the Android backend's input method (ADR-0247,
+    //! The decidable half of the Android backend's input method (ADR-0347,
     //! ADR-0090): how `FluiView`'s mirror and the field's `TextStore` stay one
     //! document while two threads own the session.
     //!
     //! The input method reads and edits `FluiView`'s mirror on the Java main
     //! thread and never waits for FLUI's owner thread. Two ledgers keep the
-    //! threads in step (ADR-0346):
+    //! threads in step (ADR-0347):
     //!
     //! - the owner's [`Ledger`] mints a [`Publication`] for each [`Snapshot`]
     //!   of the focused store it publishes (a field took focus, the
@@ -51,9 +51,8 @@ pub(crate) mod ime {
     //! drops the edits made before it ([`Replayed::Stale`]). Otherwise the
     //! input method starts over only when the snapshot ends its composition
     //! or changes the composed text; a text or selection change outside the
-    //! composition is only told (`updateSelection`), so a formatter that
-    //! rewrites the text on every key leaves the keyboard's composition and
-    //! suggestions alone.
+    //! composition is only told (`updateSelection`), and leaves the
+    //! keyboard's composition and suggestions alone.
     //!
     //! Plain values over UTF-16, built for tests on every host, so Linux CI
     //! pins them; `input` moves them across JNI. What the view reports
@@ -67,7 +66,6 @@ pub(crate) mod ime {
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Bounds, Point};
     use flui_platform::keyboard::NamedKey;
-    use flui_platform::pointer::PointerId;
     use flui_platform::text_store::{
         Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreError, TextStoreRead,
         TextStoreStatus, Utf16Offset, Utf16Range,
@@ -255,27 +253,44 @@ pub(crate) mod ime {
         text_base: std::cell::Cell<Option<Publication>>,
         /// The last report replayed or dropped.
         seen: std::cell::Cell<Option<ReportId>>,
+        /// The composition the store holds as far as the owner has seen it:
+        /// as it last published it, or as the last edit it replayed left it.
+        composition: std::cell::Cell<Option<Utf16Range>>,
     }
 
     impl Ledger {
-        /// The store as `session` reads it, published for `change`.
+        /// The store as `session` reads it, published for `change`. A
+        /// selection change that also moved or ended the composition is the
+        /// application's edit of what the input method composes, so it is
+        /// published as a text change: it wins a race and restarts the input
+        /// method. The store is read before the ledger counts the
+        /// publication, so a read that panics leaves the ledger as it was.
         #[must_use]
         pub fn publish(&self, session: &dyn TextStoreRead, change: Change) -> Snapshot {
+            let text = document_text(session);
+            let selection = session.selection();
+            let composition = session.composition().map(|composition| composition.range);
+            let change = if change == Change::Selection && composition != self.composition.get() {
+                Change::Text
+            } else {
+                change
+            };
             let publication = Publication(
                 self.publications
                     .next()
-                    .expect("BUG: a window publishes fewer than 2^64 snapshots"),
+                    .expect("BUG: a view publishes fewer than 2^64 snapshots"),
             );
             if change.replaces_text() {
                 self.text_base.set(Some(publication));
             }
+            self.composition.set(composition);
             Snapshot {
                 publication,
                 change,
                 seen: self.seen.get(),
-                text: document_text(session),
-                selection: session.selection(),
-                composition: session.composition().map(|composition| composition.range),
+                text,
+                selection,
+                composition,
             }
         }
 
@@ -288,7 +303,10 @@ pub(crate) mod ime {
                 return Replayed::Stale;
             }
             match edit.replay(session) {
-                Ok(()) => Replayed::Applied,
+                Ok(()) => {
+                    self.composition.set(edit.composition);
+                    Replayed::Applied
+                }
                 Err(_) => Replayed::Refused,
             }
         }
@@ -327,23 +345,41 @@ pub(crate) mod ime {
     }
 
     impl Mirror {
-        /// The view takes `snapshot`; how it takes it (see the module doc).
-        pub fn install(&mut self, snapshot: &Snapshot) -> Install {
+        /// How the view takes `snapshot` (see the module doc), decided
+        /// against every edit the view has reported: the view reports what
+        /// the input method did since its last report, an open batch edit
+        /// included, before it asks. Changes nothing; [`Self::take`] does,
+        /// once the view's own editor holds what the answer says.
+        #[must_use]
+        pub fn decide(&self, snapshot: &Snapshot) -> Install {
             let raced = self.unconfirmed > snapshot.seen;
-            let install = match snapshot.change {
+            match snapshot.change {
                 Change::Focus | Change::Resync => Install::Replace { restart: true },
                 Change::Selection if raced => Install::Keep,
                 Change::Text if raced => Install::Replace { restart: true },
                 Change::Text | Change::Selection => Install::Replace {
                     restart: self.composition_touched(snapshot),
                 },
-            };
+            }
+        }
+
+        /// The view took `snapshot` as `install` says: the reports that
+        /// follow are diffed against what it holds now.
+        pub fn take(&mut self, snapshot: &Snapshot, install: Install) {
             self.publication = Some(snapshot.publication);
             if matches!(install, Install::Replace { .. }) {
                 self.units = snapshot.text.encode_utf16().collect();
                 self.composition = snapshot.composition;
                 self.unconfirmed = None;
             }
+        }
+
+        /// [`Self::decide`], then [`Self::take`]: a view whose editor always
+        /// takes what it is told.
+        #[cfg(any(test, feature = "testing"))]
+        pub fn install(&mut self, snapshot: &Snapshot) -> Install {
+            let install = self.decide(snapshot);
+            self.take(snapshot, install);
             install
         }
 
@@ -648,64 +684,13 @@ pub(crate) mod ime {
         field: Option<Bounds<f64>>,
         point: Point<f64>,
     ) -> bool {
-        pen_tip_down && field_contains(field, point)
-    }
-
-    /// Whether `point` lies inside the focused field's bounds, edges included;
-    /// `false` with no field laid out.
-    #[must_use]
-    pub fn field_contains(field: Option<Bounds<f64>>, point: Point<f64>) -> bool {
-        field.is_some_and(|field| {
-            point.x >= field.origin.x
-                && point.y >= field.origin.y
-                && point.x <= field.origin.x + field.size.width
-                && point.y <= field.origin.y + field.size.height
-        })
-    }
-
-    /// Whether a tap shows the soft keyboard over the focused field, as a tap
-    /// on Android's own `EditText` does: a contact that went down and came up
-    /// inside the field, so a keyboard the user put away with Back returns on
-    /// the next tap. A contact that went down elsewhere, or was cancelled,
-    /// shows nothing.
-    #[derive(Debug, Default)]
-    pub struct KeyboardTap {
-        /// The contact that went down inside the field and is still down.
-        pressed: Option<PointerId>,
-    }
-
-    impl KeyboardTap {
-        /// `pointer` went down, inside the focused field or not.
-        pub fn press(&mut self, pointer: PointerId, inside: bool) {
-            if inside {
-                self.pressed = Some(pointer);
-            } else if self.pressed == Some(pointer) {
-                self.pressed = None;
-            }
-        }
-
-        /// Whether `pointer` went down inside the field and is still down.
-        #[must_use]
-        pub fn holds(&self, pointer: PointerId) -> bool {
-            self.pressed == Some(pointer)
-        }
-
-        /// `pointer` came up, inside the focused field or not: whether the
-        /// keyboard shows.
-        pub fn release(&mut self, pointer: PointerId, inside: bool) -> bool {
-            if self.pressed != Some(pointer) {
-                return false;
-            }
-            self.pressed = None;
-            inside
-        }
-
-        /// `pointer`'s contact ended without coming up.
-        pub fn cancel(&mut self, pointer: PointerId) {
-            if self.pressed == Some(pointer) {
-                self.pressed = None;
-            }
-        }
+        pen_tip_down
+            && field.is_some_and(|field| {
+                point.x >= field.origin.x
+                    && point.y >= field.origin.y
+                    && point.x <= field.origin.x + field.size.width
+                    && point.y <= field.origin.y + field.size.height
+            })
     }
 
     #[cfg(test)]
@@ -716,14 +701,15 @@ pub(crate) mod ime {
 mod input {
     //! The Android window's text input: the focused field's `TextStore`
     //! (ADR-0090) served to the input method through `FluiView`'s
-    //! `InputConnection` (ADR-0247).
+    //! `InputConnection` (ADR-0347).
     //!
     //! [`AndroidTextInput`] is the window's `TextStoreHost` (ADR-0135). The input
     //! method asks synchronously on the Java main thread and never waits for the
     //! owner: it reads and edits the view's mirror of the field, and the owner
     //! keeps that mirror honest. Focusing a field publishes a snapshot of its
-    //! store, which becomes the mirror, and shows the soft keyboard; so does a
-    //! tap on the focused field ([`KeyboardTap`]). Each edit the view reports is
+    //! store, which becomes the mirror, and shows the soft keyboard; so does
+    //! the focused field's own tap (`TextStoreHost::show_keyboard`). Each edit
+    //! the view reports is
     //! replayed into the store under an asynchronous lock, in order, now if the
     //! store is free and else when its frame transaction lets it. When the field
     //! changes outside the input method's edits (the application's own edit, a
@@ -739,8 +725,7 @@ mod input {
     use std::rc::{Rc, Weak};
     use std::sync::Arc;
 
-    use flui_foundation::geometry::Bounds;
-    use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
+    use flui_foundation::geometry::{Bounds, Point};
     use flui_platform::text_store::{
         CompositionEnd, LockGrant, LockOutcome, LockTiming, TextChange, TextStore, TextStoreEdit,
         TextStoreHost, TextStoreHostError, TextStoreObserver, TextStoreRead,
@@ -748,9 +733,9 @@ mod input {
     use jni::{JValue, jni_sig, jni_str};
 
     use super::ime::{
-        Change, CharacterBounds, EditorReport, ImeEdit, Install, KeyboardTap, Ledger, Mirror,
-        Replayed, Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info,
-        field_contains, starts_handwriting,
+        Change, CharacterBounds, EditorReport, ImeEdit, Install, Ledger, Mirror, Replayed,
+        Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info,
+        starts_handwriting,
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -762,7 +747,7 @@ mod input {
     use crate::version::gate::android::{AndroidApi, StylusHandwriting};
 
     use super::sizing::Acquisition;
-    use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView};
+    use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView, ViewEvent};
     use crate::owner::android::{ActivityRef, ActivityWindow, ActivityWindowId};
 
     /// The key presses an input method's editor action arrives as: `key`
@@ -928,9 +913,9 @@ mod input {
             }
         }
 
-        fn pointer(&self, window: &dyn ActivityWindow, event: &PointerEvent) {
+        fn pen_down(&self, window: &dyn ActivityWindow, at: Point<f64>) {
             if let Some(input) = self.fields.of(window.activity_id()) {
-                input.pointer(event);
+                input.offer_pen(at);
             }
         }
 
@@ -943,6 +928,7 @@ mod input {
                         api,
                         Arc::clone(&self.mirror),
                         ledger,
+                        Arc::downgrade(&self.fields),
                     ))
                     .is_ok()
             });
@@ -1057,8 +1043,6 @@ mod input {
         /// What publishes the focused store to the view and decides whether
         /// an edit still applies.
         publisher: Publisher,
-        /// The contact that may be a tap on the focused field.
-        tap: RefCell<KeyboardTap>,
         /// What `requestCursorUpdates` last asked for.
         cursor_mode: Cell<i32>,
         queue: HostQueue<MirrorHostOp>,
@@ -1074,12 +1058,15 @@ mod input {
 
     /// The view's two halves of the focused field, shared by every window's
     /// field over the view: the mirror the Java main thread diffs reports
-    /// against, and the owner's ledger of publications and replayed reports.
+    /// against, and the owner's ledger of publications and replayed reports;
+    /// and the fields of the view's windows, which a failed publication asks
+    /// to publish again.
     #[derive(Clone)]
     struct Publisher {
         view: Arc<JavaView>,
         mirror: Arc<parking_lot::Mutex<Mirror>>,
         ledger: Rc<Ledger>,
+        fields: std::sync::Weak<Fields>,
     }
 
     impl Publisher {
@@ -1094,94 +1081,128 @@ mod input {
         /// ([`Mirror::install`]) and the view takes it as the install says: as
         /// a new editor for a focus, by replacing its text with or without a
         /// restart, or not at all when it keeps the input method's newer
-        /// edits. A view that is not installed takes neither.
+        /// edits.
+        ///
+        /// The ledger counts the publication before the view takes it, so a
+        /// publication the view never takes (the view not installed, the call
+        /// failing or dropped unrun) would leave every later report older
+        /// than it, and dropped: the window's field publishes the store once
+        /// more as a resynchronisation, whose own failure is only logged.
         fn publish(&self, session: &dyn TextStoreRead, change: Change, status: (i32, i32, bool)) {
-            publish(
-                &self.view,
-                Arc::clone(&self.mirror),
-                self.ledger.publish(session, change),
-                status,
+            let snapshot = self.ledger.publish(session, change);
+            let mirror = Arc::clone(&self.mirror);
+            let bridge = Arc::clone(&self.view);
+            let fields = self.fields.clone();
+            self.view.post_or(
+                move |env, view| take_snapshot(env, view, &bridge, &mirror, &snapshot, status),
+                move |view: &JavaView| {
+                    if change == Change::Resync {
+                        return;
+                    }
+                    view.push_event(ViewEvent::RunOnWindow(Box::new(
+                        move |window: &dyn ActivityWindow| {
+                            if let Some(input) = fields
+                                .upgrade()
+                                .and_then(|fields| fields.of(window.activity_id()))
+                            {
+                                input.publish_now(Change::Resync);
+                            }
+                        },
+                    )));
+                },
             );
         }
     }
 
-    /// See [`Publisher::publish`].
-    fn publish(
-        view: &Arc<JavaView>,
-        mirror: Arc<parking_lot::Mutex<Mirror>>,
-        snapshot: Snapshot,
+    /// The view takes `snapshot` (see [`Publisher::publish`]); on the Java
+    /// main thread. Answers whether the view took it.
+    fn take_snapshot(
+        env: &mut jni::Env<'_>,
+        view: &jni::objects::JObject<'_>,
+        bridge: &JavaView,
+        mirror: &parking_lot::Mutex<Mirror>,
+        snapshot: &Snapshot,
         status: (i32, i32, bool),
-    ) {
-        let bridge = Arc::clone(view);
-        view.post(move |env, view| {
-            // Made before the mirror changes, so a refused allocation leaves
-            // the mirror and the view's editor holding the same text.
-            let text = env.new_string(&snapshot.text)?;
-            let Install::Replace { restart } = mirror.lock().install(&snapshot) else {
-                return Ok(());
-            };
-            bridge.set_composing(snapshot.composition.is_some());
-            let [
-                selection_start,
-                selection_end,
-                composition_start,
-                composition_end,
-            ] = snapshot.java_offsets();
-            if snapshot.change == Change::Focus {
-                let (input_type, options, stylus) = status;
-                env.call_method(
-                    view,
-                    jni_str!("focusEditor"),
-                    jni_sig!("(IIZLjava/lang/String;IIII)V"),
-                    &[
-                        JValue::Int(input_type),
-                        JValue::Int(options),
-                        JValue::Bool(stylus),
-                        JValue::Object(&text),
-                        JValue::Int(selection_start),
-                        JValue::Int(selection_end),
-                        JValue::Int(composition_start),
-                        JValue::Int(composition_end),
-                    ],
-                )?;
-            } else {
-                env.call_method(
-                    view,
-                    jni_str!("pushState"),
-                    jni_sig!("(Ljava/lang/String;IIIIZ)V"),
-                    &[
-                        JValue::Object(&text),
-                        JValue::Int(selection_start),
-                        JValue::Int(selection_end),
-                        JValue::Int(composition_start),
-                        JValue::Int(composition_end),
-                        JValue::Bool(restart),
-                    ],
-                )?;
-            }
-            Ok(())
-        });
+    ) -> jni::errors::Result<bool> {
+        let text = env.new_string(&snapshot.text)?;
+        // What the input method did since the view last reported (an edit
+        // inside a batch it has not ended) is reported first, through the
+        // view's native method into the mirror, so the decision sees it and
+        // nothing typed is lost to the snapshot. The mirror's lock is not
+        // held: the report takes it.
+        env.call_method(view, jni_str!("reportPending"), jni_sig!("()V"), &[])?;
+        let install = mirror.lock().decide(snapshot);
+        let Install::Replace { restart } = install else {
+            mirror.lock().take(snapshot, install);
+            return Ok(true);
+        };
+        bridge.set_composing(snapshot.composition.is_some());
+        let [
+            selection_start,
+            selection_end,
+            composition_start,
+            composition_end,
+        ] = snapshot.java_offsets();
+        if snapshot.change == Change::Focus {
+            let (input_type, options, stylus) = status;
+            env.call_method(
+                view,
+                jni_str!("focusEditor"),
+                jni_sig!("(IIZLjava/lang/String;IIII)V"),
+                &[
+                    JValue::Int(input_type),
+                    JValue::Int(options),
+                    JValue::Bool(stylus),
+                    JValue::Object(&text),
+                    JValue::Int(selection_start),
+                    JValue::Int(selection_end),
+                    JValue::Int(composition_start),
+                    JValue::Int(composition_end),
+                ],
+            )?;
+        } else {
+            env.call_method(
+                view,
+                jni_str!("pushState"),
+                jni_sig!("(Ljava/lang/String;IIIIZ)V"),
+                &[
+                    JValue::Object(&text),
+                    JValue::Int(selection_start),
+                    JValue::Int(selection_end),
+                    JValue::Int(composition_start),
+                    JValue::Int(composition_end),
+                    JValue::Bool(restart),
+                ],
+            )?;
+        }
+        // Taken only once the view holds it: a call that failed part way left
+        // the view's editor unknown, and the resynchronisation the failure
+        // asks for replaces both.
+        mirror.lock().take(snapshot, install);
+        Ok(true)
     }
 
     impl AndroidTextInput {
         /// The field of a window over `view`, whose mirror and ledger every
-        /// window over the view shares.
+        /// window over the view shares; `fields` holds the field, which so
+        /// keeps them weakly.
         fn new(
             view: Arc<JavaView>,
             api: AndroidApi,
             mirror: Arc<parking_lot::Mutex<Mirror>>,
             ledger: Rc<Ledger>,
+            fields: std::sync::Weak<Fields>,
         ) -> Rc<Self> {
             Rc::new_cyclic(|this| Self {
                 publisher: Publisher {
                     view: Arc::clone(&view),
                     mirror,
                     ledger,
+                    fields,
                 },
                 view,
                 handwriting: api.since::<StylusHandwriting>(),
                 focused: RefCell::new(None),
-                tap: RefCell::new(KeyboardTap::default()),
                 cursor_mode: Cell::new(0),
                 queue: HostQueue::new(),
                 retired: Cell::new(false),
@@ -1437,55 +1458,20 @@ mod input {
             });
         }
 
-        /// A contact of the window's pointer input, before the window takes
-        /// it: a pen tip that touches down inside the focused field is handed
-        /// to the input method's handwriting where the device has it, and a
-        /// tap on the focused field shows the soft keyboard ([`KeyboardTap`]).
-        /// With no field focused, nothing is read.
-        fn pointer(&self, event: &PointerEvent) {
-            if self.focused.borrow().is_none() {
+        /// A pen tip touched down at `point`: on a device that has the input
+        /// method's handwriting, a stroke inside the focused field is handed to
+        /// it.
+        fn offer_pen(&self, point: Point<f64>) {
+            let Some(handwriting) = self.handwriting else {
                 return;
-            }
-            match event {
-                PointerEvent::Down(press) => {
-                    let at = press.sample.position.get();
-                    let pen_tip = press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip });
-                    let field = self.field_bounds();
-                    if let Some(handwriting) = self.handwriting
-                        && starts_handwriting(pen_tip, field, at)
-                    {
-                        self.start_handwriting(handwriting);
-                    }
-                    let inside = field_contains(field, at);
-                    self.tap.borrow_mut().press(press.pointer.id, inside);
-                }
-                PointerEvent::Up(release) => {
-                    let pointer = release.pointer.id;
-                    if !self.tap.borrow().holds(pointer) {
-                        return;
-                    }
-                    // Read with no borrow held: the read runs the store.
-                    let inside = field_contains(self.field_bounds(), release.sample.position.get());
-                    if self.tap.borrow_mut().release(pointer, inside) {
-                        self.show_keyboard();
-                    }
-                }
-                PointerEvent::Cancel(cancel) => self.tap.borrow_mut().cancel(cancel.pointer.id),
-                _ => {}
+            };
+            if starts_handwriting(true, self.field_bounds(), point) {
+                self.start_handwriting(handwriting);
             }
         }
 
-        /// Show the soft keyboard over the focused field again, as a tap on
-        /// it asks; the view does nothing when it edits no field.
-        fn show_keyboard(&self) {
-            self.view.post(|env, view| {
-                env.call_method(view, jni_str!("showKeyboard"), jni_sig!("()V"), &[])
-                    .map(drop)
-            });
-        }
-
-        /// The focused field's bounds, for a press that may start handwriting
-        /// or show the keyboard; `None` when no field is focused or laid out.
+        /// The focused field's bounds, for a stylus press that may start
+        /// handwriting; `None` when no field is focused or laid out.
         fn field_bounds(&self) -> Option<Bounds<f64>> {
             let store = self.focused()?;
             let found: Rc<Cell<Option<Bounds<f64>>>> = Rc::default();
@@ -1547,6 +1533,23 @@ mod input {
             let end = self.end_composition(store);
             self.drain();
             Ok(end)
+        }
+
+        /// Android shows the keyboard when a field takes focus, but not
+        /// again after Back put it away: the field's tap asks for it, as a
+        /// tap on an `EditText` does.
+        fn show_keyboard(&self, store: &Rc<dyn TextStore>) {
+            if self.retired.get() {
+                return;
+            }
+            let focused = self.queue.focus_after_queue(|| self.focused());
+            if !focused.is_some_and(|focused| Rc::ptr_eq(&focused, store)) {
+                return;
+            }
+            self.view.post(|env, view| {
+                env.call_method(view, jni_str!("showKeyboard"), jni_sig!("()V"), &[])
+                    .map(drop)
+            });
         }
     }
 

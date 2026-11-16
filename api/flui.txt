@@ -7610,6 +7610,7 @@ pub fn flui::interaction::TextInputHandle::complete_composition(&self, token: fl
 pub fn flui::interaction::TextInputHandle::detach(&self, token: flui::interaction::ClientToken) -> Result<flui::interaction::DetachOutcome, flui::interaction::TextInputError>
 pub fn flui::interaction::TextInputHandle::ensure_open(&self) -> Result<(), flui::interaction::TextInputError>
 pub fn flui::interaction::TextInputHandle::set_cursor_area(&self, area: flui::geometry::Bounds<f64>) -> Result<(), flui::interaction::TextInputError>
+pub fn flui::interaction::TextInputHandle::show_keyboard(&self, token: flui::interaction::ClientToken) -> Result<(), flui::interaction::TextInputError>
 #[non_exhaustive] pub enum flui::interaction::TransformLock
 impl Clone for flui::interaction::TransformLock
 impl Copy for flui::interaction::TransformLock
@@ -13398,6 +13399,7 @@ fn flui::platform::TextStoreEdit::set_selection(&mut self, selection: flui::plat
 pub trait flui::platform::TextStoreHost
 fn flui::platform::TextStoreHost::complete_composition(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>) -> Result<flui::platform::text_store::CompositionEnd, flui::platform::text_store::TextStoreHostError>
 fn flui::platform::TextStoreHost::focus_store(&self, store: Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStore>>)
+fn flui::platform::TextStoreHost::show_keyboard(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>)
 pub trait flui::platform::TextStoreObserver
 fn flui::platform::TextStoreObserver::composition_changed(&self) { .. }
 fn flui::platform::TextStoreObserver::layout_changed(&self)
@@ -37383,6 +37385,7 @@ impl core::fmt::Debug for flui_testing::text_store_host::StoreHostCall
 impl core::marker::StructuralPartialEq for flui_testing::text_store_host::StoreHostCall
 variant flui_testing::text_store_host::StoreHostCall::CompleteComposition // at 2
 variant flui_testing::text_store_host::StoreHostCall::Focus // at 0
+variant flui_testing::text_store_host::StoreHostCall::ShowKeyboard // at 3
 variant flui_testing::text_store_host::StoreHostCall::Unfocus // at 1
 pub struct flui_view::context::build_context::sealed::CrateToken(_)
 impl Clone for flui_view::context::build_context::sealed::CrateToken

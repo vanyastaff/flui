@@ -1285,6 +1285,16 @@ impl EditableTextState {
                 }
             });
         }
+        // A tap the arena gives the field (not a drag, a scroll or a press on
+        // something drawn over it) asks for the soft keyboard while the field
+        // holds the input.
+        if view.enabled && self.ime_handle.is_some() {
+            let keyboard = KeyboardRequest {
+                handle: self.ime_handle.clone(),
+                token: Rc::clone(&self.ime_token),
+            };
+            detector = detector.on_tap_up(move |_ctx, _details| keyboard.run());
+        }
         // The popup opens on the secondary tap a press in the field began,
         // through the arena (see `menu::with_secondary_tap`).
         if view.enabled && self.touch_handles.menu().look().is_some() {
@@ -1758,6 +1768,41 @@ impl CompositionCommit {
                 );
             });
         }
+    }
+}
+
+/// What a tap the field's gesture arena gave it asks of the platform while
+/// the field holds the input: its soft keyboard, so one the user put away
+/// returns, as on the platform's own text field (`TextStoreHost::show_keyboard`).
+#[derive(Clone)]
+struct KeyboardRequest {
+    handle: Option<TextInputHandle>,
+    /// The client this field attached, while it holds the input.
+    token: Rc<RefCell<Option<ClientToken>>>,
+}
+
+impl KeyboardRequest {
+    /// Ask for the keyboard; a field holding no input asks nothing. The host
+    /// call reaches platform code, so a failure it raises is resumed here,
+    /// after the request.
+    fn run(&self) {
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        let token = *self.token.borrow();
+        let Some(token) = token else {
+            return;
+        };
+        let mut calls = OwnerCalls::new();
+        if let Some(Err(error)) = calls.run(|| handle.show_keyboard(token)) {
+            calls.run(|| {
+                tracing::trace!(
+                    ?error,
+                    "a keyboard request reached a presentation that was already closing"
+                );
+            });
+        }
+        calls.resume();
     }
 }
 

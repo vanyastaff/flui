@@ -1,5 +1,5 @@
 //! The decidable half of the Android backend's input method
-//! (`text::android::ime`, ADR-0247, ADR-0346): how `FluiView`'s mirror
+//! (`text::android::ime`, ADR-0347): how `FluiView`'s mirror
 //! reports become ordered edits of the field's store, how the view takes a
 //! snapshot that raced the input method's edits, when the input method
 //! restarts, and what an editor action, a stylus press and a tap become. The
@@ -10,15 +10,14 @@ use std::rc::Rc;
 use super::{
     Change, CharacterBounds, EditorReport, FLAG_HAS_VISIBLE_REGION, IME_ACTION_DONE,
     IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH, IME_FLAG_NO_ENTER_ACTION, ImeEdit,
-    Install, KeyboardTap, Ledger, MAX_CHARACTER_BOUNDS, Mirror, Replayed, Snapshot,
-    TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
+    Install, Ledger, MAX_CHARACTER_BOUNDS, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER,
+    TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
     TYPE_TEXT_VARIATION_EMAIL_ADDRESS, TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI,
     character_bounds, cursor_anchor, editor_action_key, editor_info, starts_handwriting,
 };
 use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::keyboard::NamedKey;
-use flui_platform::pointer::PointerId;
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
     TextStoreStatus, Utf16Offset, Utf16Range,
@@ -261,6 +260,75 @@ fn a_report_on_replaced_text_races_no_later_snapshot() {
     assert_eq!(next.replaced, None, "the view and the store hold one text");
 }
 
+/// The application ended the composition while the keyboard went on
+/// composing: the store's observer reports a selection change, but it
+/// changed what the input method composes, so it is published as the
+/// application's text and wins the race like one: the view restarts the input
+/// method on it, and the report made before it is dropped instead of putting
+/// the keyboard's composition back.
+fn an_application_composition_end_wins_a_race() {
+    let store = InMemoryTextStore::new("");
+    let (ledger, mut mirror) = focus(&store);
+    let composing = mirror
+        .report(&state("か", (1, 1), Some((0, 1))))
+        .expect("current");
+    assert_eq!(
+        replay(&store, &ledger, composing).get(),
+        Some(Replayed::Applied)
+    );
+    let _ended = store
+        .request_lock(
+            LockGrant::read_write(|session| {
+                session.set_composition(None).expect("a composition ends");
+            }),
+            LockTiming::Sync,
+        )
+        .expect("a free store grants a sync edit");
+    let ended = publish(&ledger, &store, Change::Selection);
+    assert_eq!(
+        ended.change,
+        Change::Text,
+        "a composition change is no move"
+    );
+    let typed = mirror
+        .report(&state("かな", (2, 2), Some((0, 2))))
+        .expect("the view reports before it takes the snapshot");
+    assert_eq!(mirror.install(&ended), Install::Replace { restart: true });
+    assert_eq!(replay(&store, &ledger, typed).get(), Some(Replayed::Stale));
+    assert_eq!(store.composition(), None);
+    // A plain caret move with the composition as the owner last saw it
+    // stays a selection change.
+    store.app_select(Selection::collapsed(offset(0)));
+    assert_eq!(
+        publish(&ledger, &store, Change::Selection).change,
+        Change::Selection
+    );
+}
+
+/// The view decides how it takes a snapshot before its editor takes it, and
+/// the mirror follows only once the editor did: a snapshot whose call to the
+/// view failed leaves the reports diffed against the text the view still
+/// holds.
+fn a_snapshot_the_view_did_not_take_leaves_the_mirror() {
+    let store = InMemoryTextStore::new("abc");
+    let (ledger, mut mirror) = focus(&store);
+    store.app_replace(range(0, 3), "xyz");
+    let rewritten = publish(&ledger, &store, Change::Text);
+    assert_eq!(
+        mirror.decide(&rewritten),
+        Install::Replace { restart: false }
+    );
+    let typed = mirror
+        .report(&state("abcd", (4, 4), None))
+        .expect("current");
+    assert_eq!(
+        typed.replaced,
+        Some((range(3, 3), "d".to_owned())),
+        "diffed against the text the view holds"
+    );
+    assert!(typed.base < rewritten.publication);
+}
+
 /// An application edit outside the input method's composition, or with no
 /// composition at all (a formatter rewriting the text on every key), only
 /// tells the input method, as does one that only moves the composition; one
@@ -445,33 +513,6 @@ fn a_snapshot_hands_the_view_its_offsets() {
         publish(&ledger, &store, Change::Selection).java_offsets(),
         [3, 1, 1, 3]
     );
-}
-
-/// A contact that went down and came up inside the focused field is a tap,
-/// which shows the keyboard again after Back put it away; one that went
-/// down outside, was cancelled, or was another finger's is not.
-fn a_tap_on_the_focused_field_shows_the_keyboard() {
-    let finger = PointerId::try_from(1_u64).expect("a non-zero id");
-    let other = PointerId::try_from(2_u64).expect("a non-zero id");
-    let mut tap = KeyboardTap::default();
-    tap.press(finger, true);
-    assert!(tap.holds(finger));
-    assert!(tap.release(finger, true), "a tap inside shows the keyboard");
-    assert!(!tap.release(finger, true), "one release, one tap");
-    tap.press(finger, true);
-    assert!(
-        !tap.release(finger, false),
-        "a press dragged out of the field"
-    );
-    tap.press(finger, false);
-    assert!(!tap.release(finger, true), "a press that began outside");
-    tap.press(finger, true);
-    tap.cancel(finger);
-    assert!(!tap.release(finger, true), "a cancelled contact");
-    tap.press(finger, true);
-    tap.press(other, false);
-    assert!(!tap.release(other, true), "another finger's release");
-    assert!(tap.release(finger, true), "the first finger still taps");
 }
 
 fn the_editor_info_follows_the_store_status() {
@@ -675,6 +716,14 @@ fn android_ime_adapter() {
                 a_report_on_replaced_text_races_no_later_snapshot,
             ),
             (
+                "an_application_composition_end_wins_a_race",
+                an_application_composition_end_wins_a_race,
+            ),
+            (
+                "a_snapshot_the_view_did_not_take_leaves_the_mirror",
+                a_snapshot_the_view_did_not_take_leaves_the_mirror,
+            ),
+            (
                 "the_input_method_restarts_only_when_its_composition_is_touched",
                 the_input_method_restarts_only_when_its_composition_is_touched,
             ),
@@ -689,10 +738,6 @@ fn android_ime_adapter() {
             (
                 "a_report_before_any_snapshot_is_no_edit",
                 a_report_before_any_snapshot_is_no_edit,
-            ),
-            (
-                "a_tap_on_the_focused_field_shows_the_keyboard",
-                a_tap_on_the_focused_field_shows_the_keyboard,
             ),
             (
                 "a_refused_step_asks_for_a_new_snapshot",

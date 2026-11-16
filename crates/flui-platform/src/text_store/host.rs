@@ -52,6 +52,15 @@ pub trait TextStoreHost {
         &self,
         store: &Rc<dyn TextStore>,
     ) -> Result<CompositionEnd, TextStoreHostError>;
+
+    /// The user tapped `store`'s field, which has the input: show the
+    /// platform's soft keyboard over it if the user put it away, as a tap
+    /// on the platform's own text field does. A host whose platform shows
+    /// it by itself, or has none, does nothing; so does one for a `store`
+    /// it is not serving (compared by identity, as
+    /// [`Self::complete_composition`] compares). Called with no borrow
+    /// held, after the window's gesture arena gave the tap to the field.
+    fn show_keyboard(&self, store: &Rc<dyn TextStore>);
 }
 
 /// How [`TextStoreHost::complete_composition`] ended the composition.

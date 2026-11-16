@@ -90,6 +90,7 @@ use crate::{
     platform::AppHandler,
     platform::Platform,
     version::gate::android::AndroidApi,
+    version::gate::android::StylusHandwriting,
 };
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
@@ -147,7 +148,7 @@ pub struct ActivityRef {
     /// The Activity the window shows.
     pub(crate) app: AndroidApp,
     /// `FluiView`: the input method's editor, the drop target and the drag
-    /// source (ADR-0247).
+    /// source (ADR-0347).
     pub(crate) view: Arc<java_view::JavaView>,
     /// The device's API level.
     pub(crate) api: AndroidApi,
@@ -258,7 +259,7 @@ pub struct AndroidLoop {
     /// The Activity's requests for results, which providers reach through
     /// the bridge `android_platform` hands out.
     results: Rc<super::result_bridge::ResultBridge>,
-    /// `FluiView`, installed on the Java main thread at start (ADR-0247).
+    /// `FluiView`, installed on the Java main thread at start (ADR-0347).
     pub(crate) java_view: Arc<java_view::JavaView>,
     /// The displays, as the table made them; shared with the window.
     pub(crate) displays: Arc<dyn HostDisplays>,
@@ -425,7 +426,7 @@ impl AndroidLoop {
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
-    /// owner thread (ADR-0247).
+    /// owner thread (ADR-0347).
     fn deliver_view_events(&self) {
         let events = self.java_view.take_events();
         if events.is_empty() {
@@ -513,20 +514,27 @@ impl AndroidLoop {
         }
     }
 
-    /// Each contact is shown to the input method before the window takes it:
-    /// a pen tip down inside the focused field starts its handwriting (API
-    /// 33+), since Android's own initiation sees only the stylus events native
-    /// code leaves unhandled, and a tap on the focused field shows the soft
-    /// keyboard, which the native queue's touches never ask for.
-    fn offer_contacts(&self, window: &dyn ActivityWindow, events: &[flui_platform::PlatformInput]) {
-        use flui_platform::pointer::PointerEvent;
+    /// A pen tip that touches down is offered to the input method, whose
+    /// handwriting takes a stroke inside the focused field (API 33+):
+    /// Android's own initiation sees only the stylus events native code
+    /// leaves unhandled.
+    fn offer_handwriting(
+        &self,
+        window: &dyn ActivityWindow,
+        events: &[flui_platform::PlatformInput],
+    ) {
+        use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
+        if self.api.since::<StylusHandwriting>().is_none() {
+            return;
+        }
         for event in events {
-            // Only a contact's start and end decide either; a move costs nothing.
-            if let flui_platform::PlatformInput::Pointer(
-                pointer @ (PointerEvent::Down(_) | PointerEvent::Up(_) | PointerEvent::Cancel(_)),
-            ) = event
-            {
-                self.java_view.input_method().pointer(window, pointer);
+            let flui_platform::PlatformInput::Pointer(PointerEvent::Down(press)) = event else {
+                continue;
+            };
+            if press.pointer.kind == (PointerKind::Pen { tool: PenTool::Tip }) {
+                self.java_view
+                    .input_method()
+                    .pen_down(window, press.sample.position.get());
             }
         }
     }
@@ -569,7 +577,7 @@ impl AndroidLoop {
                             }
                             let events = self.input.motion(&self.app, motion, scale_factor.get());
                             let mut any_handled = false;
-                            self.offer_contacts(window.as_ref(), &events);
+                            self.offer_handwriting(window.as_ref(), &events);
                             for platform_input in events {
                                 let result = delivery.dispatch_input(platform_input);
                                 if result.default_prevented {
@@ -1258,7 +1266,7 @@ impl host::Clipboard<AndroidLoop> for AndroidLoop {
     }
 }
 
-/// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0247), the
+/// The drag position: `FluiView`'s drag and drop (ADR-0211, ADR-0347), the
 /// transport the host's [`AndroidHost::transfer`] made for the view.
 impl host::Drag<AndroidLoop> for AndroidLoop {
     fn data_transfer(owner: &AndroidLoop) -> Arc<dyn flui_platform::data_transfer::DragTransport> {

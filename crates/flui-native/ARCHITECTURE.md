@@ -5159,7 +5159,7 @@ capabilities; after it a request is `Submitted`. Chrome's own answer is all
 that ran: a headless desktop has no vibration motor.
 
 Android tier 1 posts `performHapticFeedback` to the Java main thread, which
-owns the decor view, and the owner never waits for it (ADR-0247 §5): a busy
+owns the decor view, and the owner never waits for it (ADR-0347 §2): a busy
 Java thread, or one blocked on the native thread in a lifecycle callback,
 never stalls the owner. One call waits at a time (`AndroidViewAnswers`): a
 request made while it waits posts nothing and reports `Suppressed`, since a
@@ -5401,7 +5401,7 @@ a `FluiActivity`; anything else refuses the start with `PlatformError::HostProto
 naming what it found, before any native method is bound (decision 5). `owner::android::java_view`
 then loads `FluiView` through the same loader on the Java main thread, binds its native methods
 with `RegisterNatives` on the class it returned (`FindClass` would search the system loader), and
-lays one full-window view over the Activity's content (ADR-0247). Every owner-to-view call is posted
+lays one full-window view over the Activity's content (ADR-0347). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the
@@ -5511,17 +5511,21 @@ size. The count of `WindowResized` during a keyboard animation on both sides of 
 a device (`docs/platform-parity.md`, "Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
-view's mirror, under the rule of ADR-0346: the owner's `text::android::ime::Ledger` (one per
+view's mirror, under the rule of ADR-0347: the owner's `text::android::ime::Ledger` (one per
 view, shared by the windows over it) mints a `Publication` for each snapshot and records the last
-report it replayed; `text::android::ime::Mirror`, on the Java main thread, installs each snapshot
-inside the posted call that hands it to the view (`Mirror::install`) and turns each report into
-one edit, numbered by a `ReportId`, against the publication it holds. A selection-only snapshot
-that missed a report is not taken (`Install::Keep`) and the owner still replays the edit; a text
-snapshot that missed one wins and restarts the input method, and the owner drops the edit
-(`Ledger::replay`, `Replayed::Stale`); otherwise the input method restarts only when a snapshot
-ends its composition or changes the composed text, and is told the rest (`updateSelection`, and
-`updateExtractedText` for a monitoring input method). A tap that goes down and comes up on the
-focused field shows the soft keyboard again (`ime::KeyboardTap`, `FluiView.showKeyboard`), and
+report it replayed; `text::android::ime::Mirror`, on the Java main thread, turns each report into
+one edit, numbered by a `ReportId`, against the publication it holds. A snapshot reaches the view
+in one posted call (`text::android::input::Publisher`): the view first reports what the input
+method did since its last report, an open batch edit included (`FluiView.reportPending`), the
+mirror decides against it (`Mirror::decide`), the view's editor takes the snapshot, and only then
+the mirror (`Mirror::take`); a call that fails asks the field for one resynchronisation. A
+selection-only snapshot that missed a report is not taken (`Install::Keep`) and the owner still
+replays the edit; a text snapshot that missed one wins and restarts the input method, and the
+owner drops the edit (`Ledger::replay`, `Replayed::Stale`); a selection change that moved or
+ended the composition is published as a text change; otherwise the input method restarts only
+when a snapshot ends its composition or changes the composed text, and is told the rest
+(`updateSelection`, and `updateExtractedText` for a monitoring input method). The focused field's
+own tap asks for the soft keyboard (`TextStoreHost::show_keyboard`, `FluiView.showKeyboard`), and
 the keyboard's Cut and Copy reach the clipboard except from a protected field. A key the native queue delivers while
 the view reports a composition is marked composing (`key_composition`): Android pre-dispatches
 every key to the input method, so such a key is one it passed on. `drag::android::AndroidTransfer` is the
@@ -5553,10 +5557,9 @@ Java main thread. Each answers an `InputMethodReply`: whether the input method c
 which the view applies, and the work the owner runs against the window in order with the
 view's other reports (`ViewEvent::RunOnWindow`): an edit replayed into the field, the editor
 action committed and delivered as the key it stands for, a cursor update request. What the
-view reports of its editor (`EditorState`) is the view's own vocabulary. Each contact's start
-and end the loop reads is offered to `InputMethod::pointer` before the window takes it: a pen tip
-down in the focused field asks for stylus handwriting, which has not run on a device (the S21
-has no S Pen), and a tap on it shows the keyboard.
+view reports of its editor (`EditorState`) is the view's own vocabulary. A pen tip the loop
+reads is offered to `InputMethod::pen_down`; stylus handwriting has not run on a device (the
+S21 has no S Pen).
 
 `android_ime_adapter` (`src/text/android/ime/tests.rs`), `android_drag_mapping` (beside
 `drag::android::clip`) and `android_drop_state` (beside `drag::android::drops`) pin the pure

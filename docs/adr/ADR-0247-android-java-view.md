@@ -1,19 +1,13 @@
 # ADR-0247: Android's Java side is a `flui-native` view loaded from the native library
 
-- **Status:** Implemented (2026-10-17)
+- **Status:** Superseded (2026-11-16)
 - **Date:** 2026-10-17
-- **Amended:** 2026-10-31: item 4 lays the view over the whole window as the decor view's first
-  child, not over the content frame with `addContentView`, which sits below the status bar on a
-  window that is not edge to edge while FLUI places everything in window pixels.
 - **Superseded-by:** [ADR-0255](ADR-0255-mobile-and-web-hosts.md) for item 1's embedding of the dex
-  in the library with `include_bytes!` and its "every packager ships that copy" (the sources, the
-  checked-in dex, the digest gate and "no JDK" stand), item 2 except its first sentence (the
-  in-memory and file loaders and the `hasCode="false"` manifest), and item 9 (taken there). Items 3
-  to 8 and 10 stand, and item 3's "that loader" is the Activity's class loader. The "Alternatives
-  rejected" entry on a dex in the APK and the consequence "no packaging path changes" follow items 1
-  and 2. [ADR-0346](ADR-0346-an-android-input-method-edit-survives-the-snapshot-it-raced.md) for
-  item 6's generation-tagged snapshot, its restart on every text change, and its dropping of an
-  edit made on an older snapshot with a restart; the rest of item 6 stands.
+  in the library with `include_bytes!` and its "every packager ships that copy", item 2 except its
+  first sentence (the in-memory and file loaders and the `hasCode="false"` manifest), and item 9;
+  [ADR-0347](ADR-0347-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md)
+  for everything else, item 6's input method rule rewritten (no generation, no restart on every
+  text change, no edit dropped against the snapshot it raced).
 - **Amends:** [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the Android row of its
   platform mapping, and its GameActivity hypothesis), [ADR-0211](ADR-0211-unified-drag-and-drop.md)
   (the Android target and source)

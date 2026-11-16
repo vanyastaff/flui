@@ -11,7 +11,7 @@
 - **Related:** [ADR-0154](ADR-0154-capability-crates.md) §9 (the host bridge through the provider
   context), [ADR-0152](ADR-0152-capability-seam-revised.md) §2 items 5, 6 and 8 (`Completion`,
   the provider context, the permission vocabulary), [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
-  (the keyboard inset and its motion), [ADR-0247](ADR-0247-android-java-view.md) item 5 (the Java
+  (the keyboard inset and its motion), [ADR-0347](ADR-0347-android-text-input-loses-no-edit-and-restarts-the-keyboard-only-for-its-composition.md) §2 (the Java
   side never waits for the owner)
 - **Sources:** flutter/flutter@f60eef8885
   `engine/src/flutter/shell/platform/android/io/flutter/plugin/editing/TextInputPlugin.java`,

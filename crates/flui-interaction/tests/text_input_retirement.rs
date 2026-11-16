@@ -647,6 +647,8 @@ impl flui_platform::text_store::TextStoreHost for PullHost {
     > {
         Ok(flui_platform::text_store::CompositionEnd::Committed)
     }
+
+    fn show_keyboard(&self, _: &Rc<dyn TextStore>) {}
 }
 
 /// Issue #1052 on a pull-model owner: a retired client's capture detaches
