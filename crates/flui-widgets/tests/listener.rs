@@ -84,7 +84,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
                 sample(10.0, 0),
             ),
         )));
-        host.clock().advance(Duration::from_millis(100));
+        host.advance(Duration::from_millis(100));
         host.dispatch(PlatformInput::Pointer(PointerEvent::Move(
             PointerMove::new(
                 pointer,

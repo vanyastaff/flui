@@ -21,9 +21,9 @@ pub use flui_testing::find;
 pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, ReadHold, WriteHold};
 pub use flui_testing::{DropLedger, DropSentinel};
 pub use flui_testing::{
-    Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint,
-    LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester, TextMatch,
-    Tree,
+    Expectation, HostClock, InspectField, InspectNode, InspectReading, InspectValue, Locator,
+    LogicalPoint, LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester,
+    TextMatch, Tree,
 };
 
 /// Render-object tests that drive layout and queries without a widget tree,
