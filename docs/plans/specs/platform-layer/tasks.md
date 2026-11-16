@@ -4994,20 +4994,21 @@ GPU-память простаивающего или невидимого окн
   записи крейтом `flui-driver`, когда он появится (спека flui-driver); и codec в release-сборке —
   строимое расхождение с ADR-0151 §16.
 
-- [ ] **LY97** (не закрыта: четыре PR — потоки #1981, предпочтения #1989, дисплеи #1996 и
-  состояние окна #2017; дальше строки `close_request`/`closed`, которые ждали T8 спеки teardown
-  (`docs/plans/specs/teardown/tasks.md`; T8 сделана, они больше ничего не ждут), и строка store-edit для
-  IME без событий, на `main` их нет; `os`-lane драйвера, чей `--record` называет строка, нет:
-  эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и iOS, страница Web
-  пишет только слой `input`, прогонов на этих ОС нет) — ветка
+- [ ] **LY97** (не закрыта, остался только `--record` `os`-lane драйвера: строка его называет, а
+  крейта `flui-driver` нет, он ждёт спеки flui-driver (FD6); всё остальное на `main` — потоки
+  #1981, предпочтения #1989, дисплеи #1996, состояние окна #2017, закрытие и блокировки хранилища
+  (запись «Закрытие и правки хранилища» ниже). Эти потоки пишет `flui record --native` из LY98 на настольных ОС, Android и
+  iOS, страница Web пишет только слой `input`; захват настоящего метода ввода на устройствах не
+  прогонялся, долг записан в строке parity «Recorded native input replays deterministically on
+  the headless host») — ветка
   `claude/project-thread-jqc75j` после
   LY98. **Потоки журнала:** заголовок называет `Stream` — `registry` (по умолчанию, единственный с
   часами; `epoch_ns` и `uptime_ns` теперь необязательны и пишутся только у него), `app`
   (`AppDelivery`: `notice`, `session_end`, `reopen`) и `window` (`WindowDelivery::dispatch_input`:
   `ime`). Каждая доставка открывает свой поток при создании (`Journal::open_stream`), нумерация
   общая с реестрами. Строка `ime` — одно семейство с тегированной `#[non_exhaustive]` нагрузкой
-  `Ime::Event(ImeEvent)`; правка хранилища (TSF, зеркала Android и web) войдёт туда же как
-  `StoreEdit` без смены версии формата. Записывающий по умолчанию редактирует текст IME
+  `Ime::Event(ImeEvent)`; правки хранилища pull-модели пишутся отдельными строками `store_focus` и
+  `store_lock` (запись «Закрытие и правки хранилища» ниже). Записывающий по умолчанию редактирует текст IME
   (`Privacy::Redact`, ADR-0215 §5) и помечает строку `redacted`. **Replay:**
   `NativeRecording::replay_into(&mut dyn ReplayTarget)` проигрывает каждую строку по порядку; цель
   принимает свои виды строк, остальные отказывает по умолчанию; отказ и отредактированная строка
@@ -5058,8 +5059,84 @@ GPU-память простаивающего или невидимого окн
   в `captured_streams_replay_to_what_the_session_delivered` replay снимков с общим реестром меток
   даёт те же факты и ревизии, что живая публикация, включая свёрнутое окно, которое не бывает
   occluded и сохраняет метрики; отказ на снимке с вычеркнутым заголовком в
-  `a_row_the_replay_does_not_reproduce_is_a_typed_error`. Строки `close_request`/`closed` с
-  причиной и решением охранника (veto или доставка) — отдельный PR после T8.
+  `a_row_the_replay_does_not_reproduce_is_a_typed_error`.
+  **Закрытие и правки хранилища** (#2657; T8 спеки teardown сделана). Поток `window`:
+  `WindowDelivery` пишет `close_request` после ответа обработчика (в нём охранник закрытия
+  `flui-app`) и до действия по нему — `close`, `keep_open`, `closing` (прежний запрос уже
+  разрешён, обработчика не спрашивали), `no_handler`, `panicked` — и `queued`; `closed` с
+  причиной `granted_request` или `no_request`. Запись — через `contain_owner_callback`. Replay
+  спрашивает обработчик только о строках, где его спрашивали (`close`, `keep_open`), и сверяет
+  решение; `closing` и `no_handler` воспроизводятся без вопроса, `panicked` — отказ
+  `ReplayError::Incomplete`; `closed` закрывает окно, если оно ещё открыто. Правки хранилища
+  pull-модели (TSF, AppKit, UIKit, зеркала Android и Web, текстовые входы Linux) журналируются у
+  хранилища: `OwnerPlatform::text_store_host` в debug-сборке с `native-capture` оборачивает хост в
+  `journal::store_capture::JournaledHost`, если при открытии окна был захват; все хосты одного
+  окна делят его `StoreJournal` (фокус и `IdMint` ключей `RecordedStore`) в `OwnerSlot` доставки.
+  Каждая блокировка — строка `store_lock`: вызовы с ответами и документ, который она застала,
+  если запись его ещё не держит (первая после фокуса, после правки приложения или после
+  блокировки, изменившей документ; найденный тем же документ не пишется заново). Защищённое
+  хранилище даёт одну строку `protected` (без текста, диапазонов, смещений, длин и вида
+  блокировки) на всё время, пока оно защищено, сколько бы блокировок ни было: строка несёт один бит —
+  что в защищённом поле была блокировка, в её позиции; когда поле перестаёт быть защищённым,
+  следующая блокировка пишет документ целиком в режиме keep-text. Каждый вызов журнала в чужой
+  код идёт под защитой, а работа хоста выполняется в любом случае: в блокировке статус хранилища
+  под `FirstPanic`, тело метода ввода выполняется, первая паника поднимается после; при фокусе
+  статус, приёмник и drop отпущенного хранилища под `FirstPanic`, хосту сообщают фокус (хранилище
+  без журнала, если строку фокуса не записать), паника — после; строки блокировок и закрытия —
+  через `contain_owner_callback`. Любая блокировка, прошедшая без записи (никто не хочет строк,
+  хранилище защищено, статус запаниковал), забывает документ, и следующая записанная пишет его
+  заново. Хочет ли приёмник строки — значение (`capture_wanting`: `AtomicBool`, который
+  `capture_lines` обновляет ответом `LineSink::wants` на каждой не-setup-строке); документ
+  длиннее `MAX_STORE_TEXT_BYTES` единиц UTF-16 не читается. `store_focus` — не setup-строка,
+  `cut` — setup-строка (делается всегда и отдаётся позднему читателю с префиксом потока).
+  Поздний читатель получает заголовок с `joined_late` (`NativeLines::join`), и запись начинается в
+  точке присоединения: правило порядка ослабляется только для контекста до неё — блокировка
+  хранилища, чей фокус был до присоединения, и первая строка закрытия после разрешения, которого
+  запись не видела; хранилище, сфокусированное после присоединения, и строки закрытия после первой
+  проверяются полностью. Читатель отвергает (`Invalid`, с номером строки) второй `store_focus`
+  ключа, блокировку хранилища без строки фокуса или до его документа и строки закрытия в порядке,
+  которого доставка не пишет. Внутрипроцессный писатель (`NativeRecording::write`) пишет запись,
+  которая помещается, целиком, иначе обрывает её на последней поместившейся строке строкой `cut`
+  с причиной (место под `cut` держится, только если за строкой есть ещё одна; заголовок объявляет
+  только устройства записанных строк) и не кодирует ничего после обрыва. `Recorder` держит ту же
+  границу по мере прихода строк (`CutBudget`): первую строку за границей заменяет `cut`, после неё
+  ничего не хранит, так что запись в памяти не больше, чем примет читатель. Строка длиннее
+  `MAX_LINE_BYTES` отказывается `LineTooLong` и тогда, когда граница режет многобайтовый символ
+  (длина проверяется до декодирования UTF-8); replay обрезанной записи проигрывает всё до `cut` и
+  возвращает `Replayed::Cut` со строкой и причиной. `flui record --native` из `flui-cli` границ не
+  соблюдает — записано в `docs/gaps.md` («Quality-bar partials with no entry»), строку спеки
+  добавит координатор. Исчерпание owner-слотов окна — `cut` (`store_journal`). Протокол 0.14 — в
+  `BREAKING` (ADR-0342). Правило `version.rs` и проверка `wire_schema` — одно: объединение открыто
+  для нового значения или варианта ровно тогда, когда его читатель понимает неизвестное как
+  запасное (`Role`, `ErrorCode`, `TreeDiagnostic` через `#[serde(other)]`, `ActionName` через
+  `known_actions`; точные имена `$defs`, у каждого файл читателя, который проверяет
+  `every_open_union_names_its_fallback`), какой бы ни была форма (строковый `enum`, `oneOf`
+  констант, внутренняя или внешняя тегировка); всё остальное — разрыв, который снимает только
+  `BREAKING`; опубликованные до проверки версии — закрытый список (0.7, 0.8, 0.9, 0.10).
+  `assert_backend_conforms`
+  (`crates/flui-testing/src/backend_conformance.rs:494`, ADR-0215 §7) сертифицирует перевод
+  нативного чтения в `HostInput` и строки IME путей ввода; строки журнала — запись тех же путей, их
+  воспроизводимость проверяет `StoreLock::replay_on`. `tools/xtask/src/recording_vocabulary.rs`
+  читает только перечисления записи `HostInput`; словари нативной записи — `vocabulary!`, новые
+  добавлены в `every_vocabulary_enum_is_spelled_as_it_is_named`. Тесты таблицы
+  `native_recording_contracts`: золотой `headless_window_store_and_close.jsonl`,
+  `window_store_and_close_recordings_replay_on_the_headless_host`,
+  `a_row_replayed_otherwise_is_a_divergence`, `a_native_recording_past_its_bounds_is_refused`,
+  `a_store_lock_the_recording_joined_after_is_refused`, `close_rows_out_of_order_are_refused`,
+  `a_recording_past_its_bound_is_written_cut`; с `native-capture` —
+  `a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
+  `captured_store_locks_replay_to_the_document_they_left`,
+  `a_protected_store_journals_nothing_of_its_content`,
+  `a_protected_store_journals_one_row_whatever_was_typed`,
+  `the_granted_body_runs_when_the_store_status_panics`,
+  `the_host_is_told_of_a_focus_when_the_store_status_panics`,
+  `an_unchanged_document_is_not_written_again`,
+  `the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
+  `a_store_lock_past_its_bounds_or_unwound_is_incomplete`, `every_close_answer_and_cause_replays`
+  (по `CloseAnswer::ALL` и `CloseCause::ALL`: новый вариант без случая роняет тест). Каждый падает
+  с откатом своей правки; самопроверка `wire_schema` падает без проверки добавленного значения.
+  Не построено: `--record` драйвера (ждёт `flui-driver`). Не прогнано: захват настоящего метода
+  ввода на устройствах — долг в строке parity.
 
 - [x] **LY48** (часть haptics) — #1983, ветка `claude/project-thread-00ptwi`, от `main` @ `377efd1`.
   `FakeHaptics`, `HapticCall`, `HapticPlay` → `flui_platform::testing` под новой фичей

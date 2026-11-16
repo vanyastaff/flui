@@ -4760,12 +4760,127 @@ so a failure of another kind is refused
 `window_recordings_replay_on_the_headless_host`,
 `platform_recordings_replay_on_the_headless_host`,
 `window_state_recordings_replay_on_the_headless_host`,
-`captured_streams_replay_to_what_the_session_delivered`). An input method that
-edits the focused text store directly (TSF, the Android and web mirrors)
-delivers no event and is not journaled yet; the `ime` row's payload is tagged
-so a store edit can join it. A window's `close_request` and `closed` are not
-journaled yet: their rows will carry the vetoable reason and whether the close
-guard vetoed or delivered it.
+`captured_streams_replay_to_what_the_session_delivered`).
+
+The `window` stream also holds what the window's close and its text store host
+did. `WindowDelivery` journals a `close_request` row when its handler (the
+application's close guard, in `flui-app`) has answered, before the answer is
+acted on: `close`, `keep_open`, `closing` (an earlier request was granted, the
+handler not asked), `no_handler` or `panicked`, and whether the request waited
+behind a running method. It journals `closed` with its cause: `granted_request`,
+or `no_request` (the application's close command or the system taking the
+window away, which ask no veto). Both go through `contain_owner_callback`, so a
+sink that panics ends its capture and never drops a granted close. A replay asks
+its window's handler only where the live one was asked (`close`, `keep_open`)
+and compares the decision; `closing` and `no_handler` replay without asking,
+`panicked` is refused as incomplete, and `closed` closes the window unless the
+replayed request already did.
+
+A pull-model input method (TSF, AppKit, UIKit, the Android and web mirrors, the
+Linux text inputs) edits the focused store with no event, so its edits are
+journaled at the store: in debug builds with `native-capture`,
+`OwnerPlatform::text_store_host`, the one place a host is handed out, wraps it
+in `journal::store_capture::JournaledHost` when a capture was installed as the
+window opened (otherwise the host is handed out as it is). Every host handed out
+for a window shares the window's `StoreJournal`, held in an `OwnerSlot` of its
+delivery: the focused store and the `IdMint` of `RecordedStore` keys, never
+reissued, so a lock deferred past a focus change names the store it ran on. The
+wrapper serves a `JournaledStore` in place of each focused store and maps
+`complete_composition` back by the presented store's identity. Each lock the
+input method is granted becomes one `store_lock` row: every read and edit in
+order with the store's answer (a refusal by its kind), and the document the lock
+found when the recording does not hold it yet (the first lock after the focus,
+and the first after the application changed the store, which the wrapped
+observer notices). Geometry reads change nothing in the store and are not
+recorded; an offset asked at a point is kept and not asked again on replay.
+A document the recording already holds the store at (what the last lock found
+and left unchanged) is not written again, so a store nobody observes does not
+copy its text into every row. Whenever a lock runs unrecorded, for any reason
+(nobody wants the row, the store is protected, the store's status panicked),
+the journal forgets the document it held, so the next recorded lock records the
+document it finds.
+
+What the journal holds of a field is bounded by what the field allows and what
+anyone wants. A protected store gives one `protected` row, with no text, range,
+offset, length or lock kind, for as long as it stays protected, however many
+locks its input method was granted: the count of locks would count the keys
+typed. The row carries one bit, that a lock was granted on the protected field,
+at the row's position: that something was typed or read there, never what or
+how much. Its replay is refused as withheld. When the field stops being
+protected, the next lock records its document like any other's, in full when the
+recording keeps text: that is the text the user chose to reveal. A document
+longer than `MAX_STORE_TEXT_BYTES` UTF-16 units is never read; a row holds at
+most `MAX_STORE_STEPS` calls and `MAX_STORE_TEXT_BYTES` of text; a lock past
+either, or whose body unwound, is written `incomplete` and refused on replay.
+Whether the sink wants rows is a value the capture holds (`capture_wanting`'s
+`AtomicBool`, which `capture_lines` updates from `LineSink::wants` at each row
+that is not a setup row, a store's focus among them): a lock reads it with no
+lock taken and no code of the sink's run, and while it is `false` the lock runs
+untouched. Every call the journal makes into code it does not own runs
+contained, and the host's own work happens whatever it does: in a lock the
+store's status runs under `FirstPanic`, the granted body runs, and the first
+failure is raised after it; at a focus the store's status, the sink and the drop
+of the store let go run under `FirstPanic`, the host is told of the focus
+(serving the store unjournaled when its focus row could not be written), and the
+first failure is raised after; every row a lock or a window's close writes goes
+through `contain_owner_callback`.
+
+`store_focus` is not a setup row a late reader is handed, so focus changes never
+crowd window state out of that prefix; a stream's `cut` is one, made whether or
+not a reader wants rows, so a reader that joins after it is handed the cut with
+the stream's setup. A reader that joins late gets the header with `joined_late`
+set (`flui-runtime`'s `NativeLines::join`), and the recording begins at that
+point. A reader relaxes an order rule only for context that would have come
+before it: a lock on a store no focus row in the recording named (focused
+before the join), and a first close row that follows a grant the recording did
+not see; a store focused after the join, and every close row after the first,
+are held to every rule. A replay refuses a lock on a store focused before the
+join with `ReplayError::JoinedLate`. In any other case the reader refuses what no
+live stream writes: a store focused twice, a lock on a store with no focus row,
+a lock before the recording holds its store's document, and close rows in an
+order no delivery writes (a second close, a request after the close, `closing`
+with nothing granted, a request after a grant, a cause that contradicts the
+requests). The in-process writers never write what their reader refuses, and
+the recorder never holds more: `Recorder` counts each row's bytes and the rows
+as they arrive, under the rule `NativeRecording::write` applies (`CutBudget`),
+replaces the first row past either bound with a `cut` row naming why and keeps
+nothing its source reports after it, so a recording holds at most `MAX_ROWS`
+rows and `MAX_RECORDING_BYTES` of lines however long the capture runs.
+`NativeRecording::write` writes a recording that fits whole, and otherwise ends
+it at the last row that fits with room for a `cut` row, encoding nothing past
+it, so a value the format does not mirror past the cut does not fail the write;
+a header that grew after the recorder's first row (a device it declares) can
+move that cut a few rows earlier. A line sink drops what a source reports after
+its cut. `flui record --native` in `flui-cli` writes
+lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
+recording replays every row before the cut and returns `Replayed::Cut` with its
+line and reason, never plain success. When a window's store journal cannot be
+kept (no owner slot left), its stream is cut (`store_journal`) instead of a host
+keying stores on its own. `StoreLock::replay_on` replays a lock under a
+synchronous lock of the recorded kind, restoring the found document first, and
+compares every answer: a read that answers otherwise is a
+`ReplayError::Diverged` naming the row. The reader treats a recording as
+untrusted input: a line past `MAX_LINE_BYTES` is refused before it is parsed, as
+is a row past `MAX_ROWS` and a line that takes the recording past
+`MAX_RECORDING_BYTES`, and a store lock's bounds, ranges, answer-or-error shape,
+lock kind and protected emptiness are checked before any call is built
+(`a_native_recording_past_its_bounds_is_refused`,
+`window_store_and_close_recordings_replay_on_the_headless_host`,
+`a_row_replayed_otherwise_is_a_divergence`,
+`a_store_lock_the_recording_joined_after_is_refused`,
+`close_rows_out_of_order_are_refused`, `a_recording_past_its_bound_is_written_cut`,
+`a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
+`captured_store_locks_replay_to_the_document_they_left`,
+`a_protected_store_journals_nothing_of_its_content`,
+`a_protected_store_journals_one_row_whatever_was_typed`,
+`the_granted_body_runs_when_the_store_status_panics`,
+`the_host_is_told_of_a_focus_when_the_store_status_panics`,
+`an_unchanged_document_is_not_written_again`,
+`the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
+`a_store_lock_past_its_bounds_or_unwound_is_incomplete`,
+`every_close_answer_and_cause_replays`, and `lines`'
+`a_cut_is_a_setup_line_and_nothing_follows_it`). The driver's own `--record` of
+these rows waits for the `flui-driver` crate.
 
 On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch
