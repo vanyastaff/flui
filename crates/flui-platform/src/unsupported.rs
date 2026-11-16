@@ -40,7 +40,7 @@ pub enum UnsupportedReason {
     /// The operating system has it, but this FLUI host does not implement it
     /// yet.
     ///
-    /// Of the three lasting absences it is the one a later FLUI may remove:
+    /// Of the lasting absences it is the one a later FLUI may remove:
     /// [`NotOnThisPlatform`](Self::NotOnThisPlatform) says no device of this
     /// platform has the thing, [`NotOnThisDevice`](Self::NotOnThisDevice)
     /// that this device or its operating system build lacks it, and this
@@ -61,6 +61,10 @@ pub enum UnsupportedReason {
     /// It belongs to a window, and that window is not there: never opened,
     /// or already closed.
     NoWindow,
+    /// The window can publish no more of what it honours, so it withdrew its
+    /// capabilities (ADR-0341): a lasting absence, which only a window that
+    /// publishes again would end, and none does.
+    Withdrawn,
 }
 
 /// Why a capability that lasts is not here: an [`UnsupportedReason`] that no
@@ -68,10 +72,11 @@ pub enum UnsupportedReason {
 /// refusal of it answers it: a window capability the window lacks holds it
 /// ([`WindowCapability::Absent`](crate::WindowCapability::Absent)).
 ///
-/// It holds one of three reasons:
+/// It holds one of four reasons:
 /// [`NotOnThisPlatform`](UnsupportedReason::NotOnThisPlatform),
-/// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice) or
-/// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost), named by the
+/// [`NotOnThisDevice`](UnsupportedReason::NotOnThisDevice),
+/// [`NotYetOnThisHost`](UnsupportedReason::NotYetOnThisHost) or
+/// [`Withdrawn`](UnsupportedReason::Withdrawn), named by the
 /// constants of the same names and read back with [`reason`](Self::reason).
 /// The vocabulary is [`UnsupportedReason`]'s; this type only narrows it. A
 /// capability is published as absent until the host publishes it
@@ -108,6 +113,7 @@ enum Lasting {
     Platform,
     Device,
     Host,
+    Withdrawn,
 }
 
 const _: () = assert!(
@@ -126,6 +132,9 @@ impl CapabilityAbsence {
     /// The operating system has it and this host does not implement it yet
     /// ([`UnsupportedReason::NotYetOnThisHost`]).
     pub const NOT_YET_ON_THIS_HOST: Self = Self(Lasting::Host);
+    /// The window withdrew its capabilities because it can publish no more of
+    /// what it honours ([`UnsupportedReason::Withdrawn`], ADR-0341).
+    pub const WITHDRAWN: Self = Self(Lasting::Withdrawn);
 
     /// The reason a refusal of the capability answers.
     #[must_use]
@@ -134,6 +143,7 @@ impl CapabilityAbsence {
             Lasting::Platform => UnsupportedReason::NotOnThisPlatform,
             Lasting::Device => UnsupportedReason::NotOnThisDevice,
             Lasting::Host => UnsupportedReason::NotYetOnThisHost,
+            Lasting::Withdrawn => UnsupportedReason::Withdrawn,
         }
     }
 }
@@ -148,6 +158,7 @@ impl TryFrom<UnsupportedReason> for CapabilityAbsence {
             UnsupportedReason::NotOnThisPlatform => Lasting::Platform,
             UnsupportedReason::NotOnThisDevice => Lasting::Device,
             UnsupportedReason::NotYetOnThisHost => Lasting::Host,
+            UnsupportedReason::Withdrawn => Lasting::Withdrawn,
             UnsupportedReason::NotDeclared { .. }
             | UnsupportedReason::Unavailable
             | UnsupportedReason::NotRegistered
@@ -187,6 +198,7 @@ impl fmt::Display for UnsupportedReason {
             Self::Unavailable => f.write_str("unavailable for now"),
             Self::NotRegistered => f.write_str("nothing is registered to provide it"),
             Self::NoWindow => f.write_str("its window is not there"),
+            Self::Withdrawn => f.write_str("the window withdrew its capabilities"),
         }
     }
 }
@@ -278,6 +290,7 @@ impl Unsupported {
             UnsupportedReason::NotOnThisPlatform
             | UnsupportedReason::NotOnThisDevice
             | UnsupportedReason::NotYetOnThisHost
+            | UnsupportedReason::Withdrawn
             | UnsupportedReason::NotDeclared { .. }
             | UnsupportedReason::NotRegistered
             | UnsupportedReason::NoWindow => false,

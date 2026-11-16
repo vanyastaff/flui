@@ -1108,7 +1108,7 @@ use flui_platform::{
         DragTransport, DropFeedback, RepresentationIndex, TransferActions, TransferError,
         TransferLimits, TransferPayload, TransferRequest,
     },
-    drag::{DragError, OsDragEndHook, OsDragRequest, OsDragStart, PlatformDragSource},
+    drag::{DragError, OsDragEndHook, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
 };
 #[cfg(target_os = "android")]
 use jni::{
@@ -1553,22 +1553,21 @@ impl ActivityDragSource for AndroidDragSource {
 #[cfg(target_os = "android")]
 fn serve(
     provider: &mut flui_platform::drag::OsDragProvider,
-    index: u16,
+    index: RepresentationIndex,
 ) -> Option<TransferPayload> {
     #[expect(
         clippy::disallowed_methods,
         reason = "ADR-0287: a drag provider's panic fails the transfer instead of crossing the JNI"
     )]
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        provider(RepresentationIndex(index)).ok()
-    }))
-    .unwrap_or_else(|payload| {
-        flui_foundation::panic::discard_payload(payload);
-        contain_owner_callback(|| {
-            tracing::error!(target: "flui_native::android", "a drag's provider panicked");
-        });
-        None
-    })
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| provider(index).ok())).unwrap_or_else(
+        |payload| {
+            flui_foundation::panic::discard_payload(payload);
+            contain_owner_callback(|| {
+                tracing::error!(target: "flui_native::android", "a drag's provider panicked");
+            });
+            None
+        },
+    )
 }
 
 #[cfg(target_os = "android")]
@@ -1615,24 +1614,24 @@ impl PlatformDragSource for AndroidDragSource {
         } else {
             None
         };
-        let OsDragRequest {
-            key,
-            representations,
-            allowed,
+        let OsDragParts {
+            terms,
             mut provider,
             on_end,
             ..
-        } = request;
+        } = request.into_parts();
         if let Some(reason) = refused {
             contain_owner_callback(|| drop(provider));
             contain_owner_callback(|| drop(on_end));
             return Err(Unsupported::new(reason).into());
         }
-        let payloads: Vec<Option<TransferPayload>> = (0..representations.len())
-            .map(|index| serve(&mut provider, u16::try_from(index).unwrap_or(u16::MAX)))
+        let (key, allowed) = (terms.key(), terms.allowed());
+        let payloads: Vec<Option<TransferPayload>> = terms
+            .indexed()
+            .map(|(index, _)| serve(&mut provider, index))
             .collect();
         contain_owner_callback(|| drop(provider));
-        let parts = clip_parts(&representations, &payloads);
+        let parts = clip_parts(terms.representations(), &payloads);
         if let Err(Running { on_end, .. }) =
             self.running.replace(Running { allowed, on_end }).map(drop)
         {

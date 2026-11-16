@@ -915,6 +915,26 @@ pub fn headless_platform() -> Box<dyn Platform> {
     Box::new(HeadlessPlatform::new())
 }
 
+/// What the Android host hands the runner at start ([`android_platform`]).
+#[cfg(target_os = "android")]
+#[non_exhaustive]
+pub struct AndroidStart {
+    /// The platform over the Activity.
+    pub platform: Box<dyn Platform>,
+    /// The bridge of that Activity, which the composition root installs in
+    /// its `HostBridge` for capability providers (`ProviderContext::activity`,
+    /// ADR-0154 §9) while the platform runs. Every Android platform has one:
+    /// one whose `FluiHost` cannot give it an epoch does not start.
+    pub activity: std::rc::Rc<dyn flui_platform::capability::ActivityBridge>,
+}
+
+#[cfg(target_os = "android")]
+impl std::fmt::Debug for AndroidStart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AndroidStart").finish_non_exhaustive()
+    }
+}
+
 /// The Android platform over the Activity the system handed `android_main`.
 ///
 /// The one public item of the core host that names an `android-activity`
@@ -926,11 +946,17 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// ```rust,ignore
 /// #[unsafe(no_mangle)]
 /// fn android_main(app: android_activity::AndroidApp) {
-///     let platform = flui_native::android_platform(app).expect("API level at FLUI's floor");
+///     let platform = flui_native::android_platform(app)
+///         .expect("API level at FLUI's floor")
+///         .platform;
 ///     // `App` implements `AppHandler`: its `ready` is the bootstrap.
 ///     let _ = platform.run(Rc::new(App::default()));
 /// }
 /// ```
+///
+/// Beside the platform comes the bridge of the Activity it runs in
+/// ([`AndroidStart::activity`]). It is the Android host's alone, so it is no
+/// position of the host table and no method of [`Platform`].
 ///
 /// # Errors
 ///
@@ -940,12 +966,13 @@ pub fn headless_platform() -> Box<dyn Platform> {
 /// Java classes come from another FLUI version, are missing, or the manifest
 /// names another Activity than `dev.flui.platform.FluiActivity` (ADR-0255).
 #[cfg(target_os = "android")]
-pub fn android_platform(
-    app: android_activity::AndroidApp,
-) -> Result<Box<dyn Platform>, PlatformError> {
-    Ok(Box::new(HostPlatform::<hosts::android::Android>::try_new(
-        app,
-    )?))
+pub fn android_platform(app: android_activity::AndroidApp) -> Result<AndroidStart, PlatformError> {
+    let platform = HostPlatform::<hosts::android::Android>::try_new(app)?;
+    let activity = platform.owner().activity();
+    Ok(AndroidStart {
+        platform: Box::new(platform),
+        activity,
+    })
 }
 
 #[cfg(test)]

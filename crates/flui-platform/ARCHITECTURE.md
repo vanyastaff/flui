@@ -182,7 +182,8 @@ this one path (ADR-0151 §9).
   answers `CommandRefusal` (`Admission` or `Apply`). `successor` refuses
   only at the last revision (`WindowRevisionExhausted`); with no publication
   left, it withdraws changed capabilities (`WindowCapabilities::withdraw`:
-  they honour nothing, admit nothing and stay so) while the window's other
+  every command absent as `CapabilityAbsence::WITHDRAWN`, reports kept, nothing
+  admitted, and so in every later snapshot) while the window's other
   facts publish on.
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,
@@ -337,6 +338,28 @@ Text input, haptics, clipboard and system chrome are typed capability traits
 live apart from their implementations, so a crate that names a capability links no OS code and a
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
+
+What only the host owns reaches a provider through its `ProviderContext`
+(ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
+`window()`, and `activity()`, the running Android Activity, read from the
+`HostBridge` the composition root fills for each run's host and `None`
+elsewhere. The Activity is scoped by the `CapabilityId` the registrar minted
+for the provider's registration, which only its `RegisteredProvider` puts in
+the context, so no caller names another capability by its string; the
+values the host hands providers (`ResultTicket`, `ResultData`,
+`ActivityResult`, `ResultRequest`) are made only with the `ResultMint`
+`HostBridge::install_activity` hands the bridge. `capability::activity_result` holds that vocabulary and no JNI
+type: a request is identified by a `ResultToken` the host mints per call and
+named by a `RequestKey`, the acquiring capability's `NAME` and the
+provider's `ResultKey` kept apart, which outlives an Activity Android
+replaces; it ends exactly once, with an `ActivityResult` or a typed
+`ResultRefused`, and lasts while the provider holds its `ResultTicket`, whose
+`Drop` the host reads as a cancel (the `Resolver` answers no liveness query);
+an answer's `Intent` stays with the host until the provider
+hands its `ResultData` back, and a `ResultData` dropped unread releases it;
+and the provider's own `jni` crate works on raw pointers the
+host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
+made instead of handing the host a reference it would have to trust.
 
 ### A provider learns that its window closed, and a system failure names its source
 

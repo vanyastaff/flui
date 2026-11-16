@@ -28,9 +28,12 @@
 //! past them is answered 503 on a thread of its own, at most `MAX_REFUSALS`
 //! at once and each for at most `REFUSAL`, and closed unanswered past those;
 //! a refused request has its bytes read before the close, so the client
-//! reads the status. At most `MAX_POLLS` of the connections served may be
-//! reload long polls; one past them is a short poll, answered at once with
-//! the current generation. The page is served with the generation it
+//! reads the status. A connection's place is given back before its socket
+//! closes, so a client that has read an answer to its close finds the place
+//! free; an answer that drains the request after it (a 503, 431 or 400) is
+//! counted until its drain ends. At most `MAX_POLLS` of the connections
+//! served may be reload long polls; one past them is a short poll, answered
+//! at once with the current generation. The page is served with the generation it
 //! is, which its first poll waits past. A request's head must arrive
 //! within `REQUEST_HEAD`. Every response is `nosniff`.
 //!
@@ -206,16 +209,16 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
         // a connection is refused with a 503 on its own thread, at most
         // `MAX_REFUSALS` at once; past those it is closed at once, so a client
         // that opens connections without end gets no thread for each.
-        let (held, work): (Held, fn(TcpStream, &Shared)) =
+        let (held, work): (Held, fn(&mut TcpStream, &Shared)) =
             if let Some(held) = Held::take(shared, Count::Connections) {
                 (held, |stream, shared| {
                     let _ = serve_connection(stream, shared);
                 })
             } else if let Some(held) = Held::take(shared, Count::Refusals) {
-                (held, |mut stream, _| {
+                (held, |stream, _| {
                     let busy = Response::text("503 Service Unavailable", "too many connections\n");
                     if stream.set_write_timeout(Some(REFUSAL)).is_ok() {
-                        refuse(&mut stream, &busy, Instant::now() + REFUSAL);
+                        refuse(stream, &busy, Instant::now() + REFUSAL);
                     }
                 })
             } else {
@@ -224,7 +227,15 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
         // A thread that cannot start drops `held` with its closure.
         let _ = thread::Builder::new()
             .name("flui-dev-server-conn".into())
-            .spawn(move || work(stream, &held.shared));
+            .spawn(move || {
+                let mut stream = stream;
+                work(&mut stream, &held.shared);
+                // The place is given back before the socket closes: a client
+                // that has read its answer to the close finds it free when it
+                // connects again.
+                drop(held);
+                drop(stream);
+            });
     }
 }
 
@@ -281,27 +292,27 @@ impl Drop for Held {
 }
 
 /// One HTTP/1.x exchange, then the connection closes.
-fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
+fn serve_connection(stream: &mut TcpStream, shared: &Shared) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
-    let request = match read_request(&mut stream)? {
+    let request = match read_request(stream)? {
         Head::Request(request) => request,
         Head::Closed => return Ok(()),
         Head::TooLarge => {
             let refused = Response::text("431 Request Header Fields Too Large", "too large\n");
-            refuse(&mut stream, &refused, Instant::now() + REQUEST_HEAD);
+            refuse(stream, &refused, Instant::now() + REQUEST_HEAD);
             return Ok(());
         }
         Head::NoHost => {
             let refused = Response::text("400 Bad Request", "exactly one Host header\n");
-            refuse(&mut stream, &refused, Instant::now() + REQUEST_HEAD);
+            refuse(stream, &refused, Instant::now() + REQUEST_HEAD);
             return Ok(());
         }
     };
     // The method and the `Host` are checked before any path's own answer,
     // the reload poll's included.
     if let Some(refused) = refusal(&request) {
-        return write_response(&mut stream, &refused, request.method == "HEAD");
+        return write_response(stream, &refused, request.method == "HEAD");
     }
     // A long poll holds its connection for up to `LONG_POLL`: past its own
     // smaller bound it is answered at once with the current generation (a
@@ -316,7 +327,7 @@ fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
                 content_type: "application/json",
                 body: format!("{{\"generation\":{generation},\"short\":true}}").into_bytes(),
             };
-            return write_response(&mut stream, &short, false);
+            return write_response(stream, &short, false);
         };
         Some(slot)
     } else {
@@ -332,7 +343,7 @@ fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
             response.body.len()
         ));
     }
-    write_response(&mut stream, &response, request.method == "HEAD")
+    write_response(stream, &response, request.method == "HEAD")
 }
 
 struct Request {
@@ -1145,16 +1156,37 @@ mod tests {
             &format!("GET /pkg/app.js HTTP/1.1\r\nHost: {local}\r\n\r\n"),
         );
         assert!(answer.starts_with("HTTP/1.1 503"), "{answer:.80}");
-        // Refused clients that send nothing and never read: each one's drain
+        // Refused clients that send nothing and never close: each one's drain
         // waits out `REFUSAL`, which on the accepting thread would hold every
-        // later accept back by that much.
+        // later accept back by that much. Each reads the first byte of its
+        // answer (its 503, or the close when every refusal is taken), so all
+        // are accepted before a place frees and none of them takes it.
         let silent: Vec<TcpStream> = (0..MAX_REFUSALS)
-            .map(|_| TcpStream::connect(server.addr).expect("connect"))
+            .map(|_| {
+                let mut stream = TcpStream::connect(server.addr).expect("connect");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .expect("a timeout");
+                let _ = stream.read(&mut [0_u8; 1]);
+                stream
+            })
             .collect();
         let started = Instant::now();
-        drop(held.pop());
-        // The freed place's thread sees the close.
-        std::thread::sleep(Duration::from_millis(100));
+        // A held connection's exchange ends: its place is free once its
+        // client has read the answer to the close.
+        let mut freed = held.pop().expect("a held connection");
+        freed
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("a timeout");
+        freed
+            .write_all(format!("GET /pkg/app.js HTTP/1.1\r\nHost: {local}\r\n\r\n").as_bytes())
+            .expect("a request");
+        let mut answer = Vec::new();
+        freed.read_to_end(&mut answer).expect("an answer");
+        assert!(
+            answer.starts_with(b"HTTP/1.1 200"),
+            "a held connection is served"
+        );
         let (served, _) = get(server.addr, "GET", "/pkg/app.js");
         assert!(served.starts_with("HTTP/1.1 200"), "{served}");
         assert!(
@@ -1163,6 +1195,23 @@ mod tests {
             started.elapsed()
         );
         drop(silent);
+        drop(held);
+    }
+
+    /// A client that has read an answer to its close holds no place: with
+    /// every place but one taken, requests one after another, several times
+    /// `MAX_CONNECTIONS` of them, are each served.
+    fn a_closed_exchange_gives_its_place_back_before_the_client_sees_the_close() {
+        let (_dir, server) = fixture();
+        // Accepted, and counted, in the order they connect: before the first
+        // request below.
+        let held: Vec<TcpStream> = (0..MAX_CONNECTIONS - 1)
+            .map(|_| TcpStream::connect(server.addr).expect("connect"))
+            .collect();
+        for round in 0..MAX_CONNECTIONS * 4 {
+            let (head, _) = get(server.addr, "GET", "/pkg/app.js");
+            assert!(head.starts_with("HTTP/1.1 200"), "request {round}: {head}");
+        }
         drop(held);
     }
 
@@ -1335,6 +1384,10 @@ mod tests {
             (
                 "a connection over the cap reads its 503 and delays no other",
                 a_connection_over_the_cap_reads_its_503_and_delays_no_other,
+            ),
+            (
+                "a closed exchange gives its place back before the client sees the close",
+                a_closed_exchange_gives_its_place_back_before_the_client_sees_the_close,
             ),
             (
                 "a request for another host is refused",

@@ -11,6 +11,9 @@
 //!   reported since the loop's last turn (ADR-0247);
 //! - `activity`: the Activity reached through JNI, which every feature asks
 //!   through the same call;
+//! - `activity_results`: the requests the Activity takes for results and how
+//!   each answer finds its request, and `result_bridge`, the Activity a
+//!   capability provider reaches through them (ADR-0154 §9);
 //! - [`activity_callbacks`]: the Activity's lifecycle callbacks as the looper
 //!   hands them to the hook the table registers, and what it delivers for
 //!   each;
@@ -31,6 +34,8 @@
 #[cfg(target_os = "android")]
 pub(crate) mod activity;
 pub(crate) mod activity_callbacks;
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod activity_results;
 pub(crate) mod bridge_slot;
 pub(crate) mod frame_clock;
 pub(crate) mod intent;
@@ -41,8 +46,18 @@ pub(crate) mod java_view;
 mod launch;
 #[cfg(target_os = "android")]
 mod looper;
+// The panic boundary it runs posted work inside exists on Android and, for
+// its tests, on every native host; wasm32 has none.
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) mod main_thread;
 pub(crate) mod ndk;
 pub(crate) mod poll;
+#[cfg(target_os = "android")]
+pub(crate) mod result_bridge;
+// The decision `FluiActivity` applies, as data; its test holds the Java side
+// to it.
+#[cfg(test)]
+pub(crate) mod window_setup;
 
 #[cfg(target_os = "android")]
 pub(crate) use looper::{ActivityFlags, ActivityRef, ActivityWindow, AndroidLoop};

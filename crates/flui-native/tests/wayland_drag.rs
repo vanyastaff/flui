@@ -55,7 +55,9 @@ mod cases {
         DropFeedback, RepresentationDescriptor, RepresentationIndex, TransferActions,
         TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
     };
-    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+    use flui_platform::drag::{
+        DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
+    };
     use flui_platform::{DragDropEvent, PlatformInput, PointerEvent};
     use flui_testing::window_commands::AdmitAndApply as _;
     use wayland_client::protocol::wl_data_device_manager::DndAction;
@@ -528,6 +530,16 @@ mod cases {
         served: &Rc<Cell<u32>>,
         ended: &Rc<Cell<Option<OsDragEnd>>>,
     ) -> OsDragRequest {
+        let ended = Rc::clone(ended);
+        session_ending(text, served, Box::new(move |end| ended.set(Some(end))))
+    }
+
+    /// [`session`], telling `on_end` how it ended.
+    fn session_ending(
+        text: &str,
+        served: &Rc<Cell<u32>>,
+        on_end: flui_platform::drag::OsDragEndHook,
+    ) -> OsDragRequest {
         let key = DragSessionKey::new(
             ProcessNonce::from_raw(NonZeroU64::new(0xF1A1).expect("non-zero")),
             UiRuntimeId::new_gen(
@@ -538,28 +550,29 @@ mod cases {
             ),
             DragSessionId::from_wire(NonZeroU64::new(7).expect("non-zero")),
         );
-        let (served, ended) = (Rc::clone(served), Rc::clone(ended));
+        let served = Rc::clone(served);
         let text = text.to_owned();
-        OsDragRequest {
+        let terms = OsDragTerms::try_new(
             key,
-            pointer: None,
-            representations: vec![
-                RepresentationDescriptor {
-                    format: TransferFormat::Text,
-                    declared_len: None,
-                },
-                key.representation(),
-            ],
-            allowed: TransferActions::COPY | TransferActions::MOVE,
-            provider: Box::new(move |RepresentationIndex(index)| {
+            vec![RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            }],
+            TransferActions::COPY | TransferActions::MOVE,
+        )
+        .expect("one text representation under COPY and MOVE");
+        OsDragRequest::new(
+            terms,
+            None,
+            Box::new(move |RepresentationIndex(index)| {
                 served.set(served.get() + 1);
                 match index {
                     0 => Ok(TransferPayload::Text(text.clone())),
                     _ => Err(TransferError::Cancelled),
                 }
             }),
-            on_end: Box::new(move |end| ended.set(Some(end))),
-        }
+            on_end,
+        )
     }
 
     /// Press on the window and start a session from it under that press,
@@ -663,13 +676,15 @@ mod cases {
         let (served, ended) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(None)));
         let ends = Rc::new(Cell::new(0_u32));
         let counted = || {
-            let mut request = session(DRAGGED, &served, &ended);
             let (ends, ended) = (Rc::clone(&ends), Rc::clone(&ended));
-            request.on_end = Box::new(move |end| {
-                ends.set(ends.get() + 1);
-                ended.set(Some(end));
-            });
-            request
+            session_ending(
+                DRAGGED,
+                &served,
+                Box::new(move |end| {
+                    ends.set(ends.get() + 1);
+                    ended.set(Some(end));
+                }),
+            )
         };
         pointer.to(ON_WINDOW);
         client.turn();
