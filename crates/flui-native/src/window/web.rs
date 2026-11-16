@@ -1240,7 +1240,7 @@ impl host::Window<WebLoop> for WebWindow {
                     if state
                         .window
                         .as_ref()
-                        .is_some_and(|(_, current)| Arc::ptr_eq(current, &retiring))
+                        .is_some_and(|current| Arc::ptr_eq(current, &retiring))
                     {
                         state.window.take()
                     } else {
@@ -1251,7 +1251,7 @@ impl host::Window<WebLoop> for WebWindow {
             },
         )?;
         owner.with_state(|s| {
-            s.window = Some((id, delivery));
+            s.window = Some(delivery);
         });
 
         let window = Rc::new(window);

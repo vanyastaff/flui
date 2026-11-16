@@ -1,4 +1,4 @@
-//! The keyboard layout callback (`Platform::on_keyboard_layout_change`), as
+//! The keyboard layout callback (`host::Input::on_keyboard_layout_change`), as
 //! every loop keeps it: one slot, reached through the call point.
 //!
 //! A registration replaces the callback before it, which is dropped outside

@@ -35,7 +35,7 @@ use crate::{
 };
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::drag::PlatformDragSource;
-use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowId, WindowIdMint};
+use flui_platform::{DisplayId, DisplaySnapshot, SystemPreferences, WindowIdMint};
 
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::watch::Watch;
@@ -481,10 +481,10 @@ pub struct WebLoop {
 pub(crate) struct WebState {
     pub(crate) clipboard: Arc<dyn crate::host::SharedClipboard>,
     is_running: bool,
-    /// The page's open window: its id and the callbacks the RAF loop
+    /// The page's open window: the callbacks the RAF loop
     /// dispatches frames to. Set when `open_window` creates the single
     /// browser window, taken when it retires.
-    pub(crate) window: Option<(WindowId, Arc<WindowDelivery>)>,
+    pub(crate) window: Option<Arc<WindowDelivery>>,
     /// Issues the id of every window the page opens, never one twice: a
     /// window opened after the first retired is another window.
     pub(crate) window_ids: WindowIdMint,
@@ -493,9 +493,7 @@ pub(crate) struct WebState {
 impl WebState {
     /// The callbacks of the page's open window.
     fn window_delivery(&self) -> Option<Arc<WindowDelivery>> {
-        self.window
-            .as_ref()
-            .map(|(_, delivery)| Arc::clone(delivery))
+        self.window.clone()
     }
 }
 

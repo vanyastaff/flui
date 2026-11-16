@@ -78,6 +78,8 @@
   [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (deferred dispatch),
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (backend conformance),
   [ADR-0244](ADR-0244-os-version-floors-and-gates.md) (version gates).
+- **Revised:** 2026-11-15 — decision 4 states where `on_keyboard_layout_change` lives as built:
+  the core host's input position (ADR-0151 §9), not a `pub(crate)` method.
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`:
   winit 0.31.0-beta.3 (`rust-windowing/winit@1893565716`), GPUI (`zed-industries/zed@fae8a35482`),
   Slint (`slint-ui/slint@277e7676ce`), Masonry (`linebender/xilem@271a27a6d4`), SDL3
@@ -363,8 +365,8 @@ end the loop, the headless host keeps it running). `AppHandler` is a trait of th
 contract: it names `OwnerPlatform`, so only code that runs a host itself implements it — `flui-app`,
 and an example or a test that drives `flui-native` directly (ADR-0151 §9). The other
 registrations are not carried over.
-`on_window_event` is deleted below. `on_keyboard_layout_change` becomes `pub(crate)` in the host
-crate with `keyboard_layout`, which nothing above the host reads. `on_open_urls` is deleted: what
+`on_window_event` is deleted below. `on_keyboard_layout_change` and `keyboard_layout`, which
+nothing above the host reads, leave `Platform` for the core host's input position (ADR-0151 §9). `on_open_urls` is deleted: what
 the operating system opens the application with is the report `opened(&OwnerPlatform, Opened)`,
 queued in order with the others. `Opened` (`flui-platform`, beside `SystemNotice`) carries the URLs
 and files as the operating system gave them, where it addressed them (`OpenTarget::Window` or
