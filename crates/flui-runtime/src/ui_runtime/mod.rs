@@ -142,7 +142,7 @@ pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 pub(crate) use presentations::start_os_drags;
-pub(crate) use settlement::PendingFrame;
+pub(crate) use settlement::{IN_FLIGHT_FLOOR, PendingFrame};
 
 // ---------------------------------------------------------------------------
 // Errors

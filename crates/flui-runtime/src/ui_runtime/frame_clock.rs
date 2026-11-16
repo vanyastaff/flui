@@ -521,6 +521,11 @@ impl UiRuntime {
                 // device rebuild was given up has none until a rebuild is asked
                 // for again.
                 let frame_work = match presentation.failure_retry_at() {
+                    // A presentation whose sink holds as many frames as it may produces none
+                    // until a settlement frees a place. That settlement wakes the loop unless a
+                    // backoff still runs or the device was abandoned; the backoff's deadline
+                    // (counted below once the sink frees a place) or a new rebuild wakes it then.
+                    _ if presentation.frames_in_flight().is_saturated() => false,
                     _ if presentation.device_abandoned() => false,
                     Some(at) => presentation.clock().now() >= at,
                     None => {
@@ -566,7 +571,8 @@ impl UiRuntime {
     /// needs the platform loop to wake at, if any — the min over every
     /// presentation's own armed gesture-arena
     /// deadline observation (e.g. a long-press hold or a double-tap give-up)
-    /// and every dropped frame's retry deadline (see
+    /// and every dropped frame's retry deadline but that of a presentation at
+    /// its in-flight limit, which its settlement wakes (ADR-0305 §5; see
     /// [`FAILURE_RETRY_CAP`](crate::frame_failure::FAILURE_RETRY_CAP)), and the
     /// earliest deadline an owner-local task sleeps until.
     /// This getter runs no extension query or diagnostics and is safe while
@@ -610,7 +616,13 @@ impl UiRuntime {
                     presentation.text_preparation.borrow().next_wake(),
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
-                    presentation.failure_retry_at(),
+                    // A presentation at its in-flight limit attempts no frame when its backoff
+                    // ends; the settlement that frees a place wakes it, and the in-flight floor
+                    // bounds the sleep until then (ADR-0305 §5).
+                    presentation
+                        .failure_retry_at()
+                        .filter(|_| !presentation.frames_in_flight().is_saturated()),
+                    presentation.in_flight_floor(),
                 ]
             })
             .flatten()

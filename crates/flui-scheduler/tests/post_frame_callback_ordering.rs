@@ -614,7 +614,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
     );
     clock.set_hidden(true);
     assert_eq!(
-        clock.poll(clock.now()),
+        clock.poll(clock.now(), flui_scheduler::FramesInFlight::NONE),
         PollDecision::Skip(SkipReason::Hidden)
     );
     owner
@@ -623,7 +623,10 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
     assert!(log.get().is_empty(), "hidden completion remains accepted");
 
     clock.set_hidden(false);
-    assert_eq!(clock.poll(clock.now()), PollDecision::Produce);
+    assert_eq!(
+        clock.poll(clock.now(), flui_scheduler::FramesInFlight::NONE),
+        PollDecision::Produce
+    );
     owner
         .drive_frame(
             Instant::now(),
@@ -639,7 +642,7 @@ fn completion_demand_coalesces_and_survives_hidden_presentation_gating() {
         .expect("live owner frame");
     assert_eq!(log.get(), ["coherent completion"]);
     assert_eq!(
-        clock.poll(clock.now()),
+        clock.poll(clock.now(), flui_scheduler::FramesInFlight::NONE),
         PollDecision::Skip(SkipReason::NoDemand)
     );
     owner
