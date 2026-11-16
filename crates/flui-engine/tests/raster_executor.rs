@@ -777,17 +777,16 @@ fn a_panic_takes_the_place_of_a_refusal_held_from_an_earlier_turn() {
 
 /// A panic of a turn with no frame (a resize the owner configured) marks
 /// the slot's next settlement while the owner has not taken it, and not once
-/// it has: a panic the owner took and reported is not a later frame's. A
-/// frame already in flight when the owner takes it keeps the mark, since the
-/// panic may have come with it.
+/// it has, whether or not a frame is in flight: a panic the owner took and
+/// reported is not a later frame's (the owner treats a frame it held at the
+/// take as tainted instead).
 ///
 /// Red-check: leave the mark set when the owner takes the panic and the
-/// frame sent after the take settles marked; clear it whatever is in
-/// flight and the frame sent before the take settles unmarked.
+/// frame settles marked.
 #[test]
 fn a_panic_marks_the_next_settlement_until_the_owner_takes_it() {
     // (when the owner takes the panic, whether the frame settles marked)
-    for (take, marked) in [(None, true), (Some(false), false), (Some(true), true)] {
+    for (take, marked) in [(None, true), (Some(false), false), (Some(true), false)] {
         let mut rig = rig();
         let at = attached(&mut rig, 1);
         rig.backend.script_resize(ScriptedAnswer::Panic);

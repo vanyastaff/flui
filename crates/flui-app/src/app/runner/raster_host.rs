@@ -572,6 +572,10 @@ struct PendingFrame {
     key: SurfaceKey,
     /// Whether it is the retry of a frame whose resize or upload panicked.
     retrying: bool,
+    /// Whether the owner took a panic of the slot while the frame was held:
+    /// its settlement may have lost the mark that pairs it with the panic,
+    /// so the base is not moved to it, and the next frame draws in full.
+    tainted: bool,
 }
 
 impl HostSlot {
@@ -844,9 +848,15 @@ impl RasterHost {
             Executor::Threaded(handle) => {
                 match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
                     Ok(()) => false,
-                    Err(failure) => {
+                    // Only a deadline leaves the surface in the thread's hands; a
+                    // thread that died of anything else refuses the window.
+                    Err(failure @ flui_engine::ExecutorFailure::Wedged { .. }) => {
                         tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach; the window is kept and draws nothing");
                         true
+                    }
+                    Err(failure) => {
+                        tracing::error!(%failure, "raster host: the raster thread died before it answered a window's attach");
+                        false
                     }
                 }
             }
@@ -1845,6 +1855,7 @@ impl RasterHost {
             shown,
             key,
             retrying,
+            tainted: false,
         };
         if placed.executor.inline().is_none() {
             return Self::queue(placed, address, frame, receipt);
@@ -1988,8 +1999,17 @@ impl RasterHost {
         placed.sender.drain_settlements(id, &mut settlements);
         // The slot's failure is taken for its payload, which the window
         // reports; which frame it came with is each settlement's own mark,
-        // since the thread may settle more after this drain.
-        let _payload_held = Self::take_slot_failure(placed, address);
+        // since the thread may settle more after this drain. Taking it ends
+        // the mark, so a frame held now may settle unmarked though the panic
+        // came with its turn: it is tainted, and its settlement does not
+        // move the base.
+        if Self::take_slot_failure(placed, address) == SlotTurn::Panicked
+            && let Some(slot) = placed.slots.get_mut(&address)
+        {
+            for held in &mut slot.pending {
+                held.tainted = true;
+            }
+        }
         let turned = |settlement: &SlotSettlement| {
             if settlement.panicked {
                 SlotTurn::Panicked
@@ -2010,6 +2030,7 @@ impl RasterHost {
                 continue;
             };
             let frame = slot.pending.remove(at);
+            let tainted = frame.tainted;
             let verdict = Self::settle_one(
                 placed,
                 address,
@@ -2018,6 +2039,9 @@ impl RasterHost {
                 turned(settlement),
             )
             .unwrap_or(SubmitVerdict::Failed);
+            if tainted && let Some(slot) = placed.slots.get_mut(&address) {
+                slot.base.forget();
+            }
             into.push(flui_runtime::sink::FrameSettlement::new(
                 address,
                 settlement.epoch,

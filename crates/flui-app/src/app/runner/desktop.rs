@@ -521,10 +521,12 @@ impl DesktopFrameDriver {
     /// submitted it: the first reveals the window, and the pacing fallback
     /// stands down, as for a frame that presented within its wake.
     fn after_presented(&self, at: web_time::Instant) {
+        // The present is recorded before the reveal runs platform code, so
+        // a panic there leaves the pacing it paced.
+        self.deadlines.fallback.record_present(at);
         if self.deadlines.first_reveal.after_frame(true, at) {
             self.reveal();
         }
-        self.deadlines.fallback.record_present(at);
     }
 
     pub(super) fn wake(

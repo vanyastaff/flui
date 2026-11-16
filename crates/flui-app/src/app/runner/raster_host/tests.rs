@@ -1349,6 +1349,48 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
     render.release();
 }
 
+/// A frame held when the owner took a panic of its slot settles without
+/// moving the base to it, since its settlement may have lost the mark that
+/// pairs it with the panic: the window's next frame draws in full.
+///
+/// Red-check: move the base for a tainted frame and the base shows it.
+#[test]
+fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
+    let (shared, slots, _wakes) = threaded_host();
+    let render = slots.hold_next_render();
+    let mut scene = TestScene::new(AT);
+    let (_epoch, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    shared
+        .try_with(|host| {
+            for held in &mut host
+                .placed
+                .as_mut()
+                .expect("placed")
+                .slots
+                .get_mut(&address())
+                .expect("attached")
+                .pending
+            {
+                held.tainted = true;
+            }
+        })
+        .expect("the host is idle");
+    render.release();
+    let settled = settle_threaded(&shared, 1);
+    assert_eq!(settled.len(), 1, "the frame settles");
+    let shown = shared
+        .try_read(|host| {
+            host.placed
+                .as_ref()
+                .and_then(|placed| placed.slots.get(&address()))
+                .and_then(|slot| slot.base.shown_version())
+        })
+        .expect("the host is idle");
+    assert_eq!(shown, None, "the base is forgotten");
+}
+
 /// The placement switch takes `threaded` or `inline`, in any case, and keeps
 /// the executor inline for anything else.
 #[test]

@@ -280,11 +280,12 @@ impl ExecutorHandle {
     /// [`RasterSender::take_failure`] says why it was refused, and at once
     /// for a slot the sender does not hold. The deadline is a detach's
     /// (§9): a thread that does not answer within it is wedged, whatever
-    /// its turn is doing, and refuses every window from then on.
+    /// its turn is doing, and every send answers `Gone` from then on.
     ///
     /// # Errors
     /// [`ExecutorFailure::Wedged`] when the thread did not answer in time:
-    /// the executor is then [`ExecutorHealth::Died`]. The cause the executor
+    /// the executor is then [`ExecutorHealth::Died`], and the thread may still
+    /// hold the slot's target, so the owner keeps the window. The cause the executor
     /// died of, when it was dead already.
     pub fn await_attach(
         &self,
