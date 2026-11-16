@@ -513,7 +513,7 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
 - Threaded, the owner's host waits for the thread's answer to a window's attach
   (`ExecutorHandle::await_attach`), so a window the thread refuses is refused at its attach as it
   is inline; a thread that does not answer within the detach deadline is wedged at the attach as
-  at a detach (§9), and the window is not refused, since the thread may still hold its surface;
+  at a detach (§9), and the window is not refused, since the thread or its queue may still hold its surface;
   it draws nothing until §9's quarantine is built. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
   slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
   surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
@@ -521,7 +521,7 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   not taken it (`SlotSettlement::panicked`), which is how an owner that drains later
   than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
   refusal held before it, since the owner reports the one and only logs the other; a frame the
-  owner held when it took a panic does not move its base. The thread's
+  owner held when it took a panic, or one that replaced it, has its base forgotten. The thread's
   wake asks every attached window for a frame through its
   `RedrawRequester`, each one contained; each window's wake drains its own slot's settlements
   into `UiRuntime::settle_frame` first, before its frame gate and whatever the wake goes on to do,

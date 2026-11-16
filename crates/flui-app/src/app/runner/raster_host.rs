@@ -574,7 +574,8 @@ struct PendingFrame {
     retrying: bool,
     /// Whether the owner took a panic of the slot while the frame was held:
     /// its settlement may have lost the mark that pairs it with the panic,
-    /// so the base is not moved to it, and the next frame draws in full.
+    /// so its settlement forgets the base and the next frame draws in full.
+    /// A frame that replaces it inherits it.
     tainted: bool,
 }
 
@@ -838,25 +839,20 @@ impl RasterHost {
         // A raster thread attaches on its own turn: the owner waits for its
         // answer, so a window the thread refuses is refused here as it is
         // inline. A thread that does not answer within the deadline is
-        // wedged (ADR-0305 §9): the executor is dead, and the window is kept
-        // as a dead executor's windows are, since its surface may still be in
-        // the thread's hands and the native window must outlive it. The
-        // answer decides, not a second read of the record, which a thread
-        // that answers just after the deadline changes.
+        // wedged (ADR-0305 §9), and the executor is dead. The window is not
+        // refused: its surface may still be in the thread's hands or in its
+        // lifecycle queue, which lives as long as the host, and the native
+        // window must outlive it. The answer decides, not a second read of
+        // the record, which a thread that answers just after the deadline
+        // changes.
         #[cfg(not(target_arch = "wasm32"))]
         let wedged = match &placed.executor {
             Executor::Threaded(handle) => {
                 match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
                     Ok(()) => false,
-                    // Only a deadline leaves the surface in the thread's hands; a
-                    // thread that died of anything else refuses the window.
-                    Err(failure @ flui_engine::ExecutorFailure::Wedged { .. }) => {
+                    Err(failure) => {
                         tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach; the window is kept and draws nothing");
                         true
-                    }
-                    Err(failure) => {
-                        tracing::error!(%failure, "raster host: the raster thread died before it answered a window's attach");
-                        false
                     }
                 }
             }
@@ -1886,7 +1882,7 @@ impl RasterHost {
     fn queue(
         placed: &mut Placed,
         address: PresentationAddress,
-        frame: PendingFrame,
+        mut frame: PendingFrame,
         receipt: SendReceipt,
     ) -> SubmitVerdict {
         let slot = placed
@@ -1895,7 +1891,14 @@ impl RasterHost {
             .expect("BUG: `configure` found the slot");
         let verdict = match receipt {
             SendReceipt::Replaced(replaced) => {
+                // A tainted frame's replacement inherits the taint, as it
+                // inherits the replaced frame's damage.
+                let inherited = slot
+                    .pending
+                    .iter()
+                    .any(|held| held.epoch == replaced && held.tainted);
                 slot.pending.retain(|held| held.epoch != replaced);
+                frame.tainted |= inherited;
                 SubmitVerdict::QueuedReplacing(replaced)
             }
             SendReceipt::Accepted | SendReceipt::Configured(_) | SendReceipt::Unconfigured => {

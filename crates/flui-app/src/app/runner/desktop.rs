@@ -687,9 +687,6 @@ impl DesktopFrameDriver {
             AfterPump::Presented => self.after_presented(pace_now),
             AfterPump::Held => {}
             AfterPump::NotPresented { defer } => {
-                if first_reveal.after_frame(false, pace_now) {
-                    self.reveal();
-                }
                 if defer {
                     let deadline =
                         self.deadlines
@@ -701,6 +698,11 @@ impl DesktopFrameDriver {
                         "frame presented nothing with the gate open; deferring the next \
                          ticker wake"
                     );
+                }
+                // The reveal runs platform code: after the deferral is
+                // armed, so a panic there leaves the wake paced.
+                if first_reveal.after_frame(false, pace_now) {
+                    self.reveal();
                 }
             }
         }
