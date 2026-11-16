@@ -217,7 +217,7 @@ impl UiRuntime {
         );
         // The scheduler's `frame` span reports whose frame it is from the moment it opens.
         owner_frame.set_trace_runtime(ui_runtime_id.as_u64());
-        Ok(Self {
+        let ui_runtime = Self {
             id: ui_runtime_id,
             preferences: RefCell::new(preferences),
             motion_override: Cell::new(flui_animation::MotionOverride::FollowSystem),
@@ -233,6 +233,7 @@ impl UiRuntime {
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
             host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
+            lifecycle_passes: Cell::new(0),
             start,
             clock,
             frame_time: Cell::new(None),
@@ -261,7 +262,9 @@ impl UiRuntime {
             press_commit: Cell::new(None),
             frame_failure_detail: Cell::new(FrameFailureDetail::default()),
             _owner_affine: PhantomData,
-        })
+        };
+        ui_runtime.seed_runtime_lifecycle();
+        Ok(ui_runtime)
     }
 
     /// A UI runtime over a focused test window, with a wake that only sets the

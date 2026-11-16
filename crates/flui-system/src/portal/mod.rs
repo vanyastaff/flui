@@ -18,12 +18,13 @@ mod request;
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use flui_platform::capability::WindowRef;
 use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
 use flui_platform::launch::{Launcher, LauncherCapability};
-use flui_platform::{Unsupported, UnsupportedReason};
+use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use crate::dialog::{FileDialogCapability, FileDialogs};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -36,8 +37,8 @@ pub(crate) use launcher::PortalLauncher;
 pub(crate) enum PortalError {
     /// No session bus, or no portal on it.
     Unsupported(Unsupported),
-    /// The portal or the bus answered with an error.
-    Failed,
+    /// The portal or the bus failed, as the [`SystemFailure`] says.
+    Failed(SystemFailure),
 }
 
 impl From<zbus::Error> for PortalError {
@@ -61,7 +62,59 @@ impl From<zbus::Error> for PortalError {
             {
                 Self::Unsupported(Unsupported::new(UnsupportedReason::Unavailable))
             }
-            _ => Self::Failed,
+            zbus::Error::IncorrectType
+            | zbus::Error::SignatureMismatch(..)
+            | zbus::Error::ExcessData
+            | zbus::Error::MissingField
+            | zbus::Error::InvalidReply => Self::Failed(SystemFailure::MalformedAnswer),
+            _ => Self::Failed(SystemFailure::Bus),
+        }
+    }
+}
+
+/// What one request's owner side and its task share: whether the caller let
+/// the request go.
+struct DismissalState {
+    dismissed: AtomicBool,
+    event: zruntime::Event,
+}
+
+/// The owner side of a request: dropping it tells the request's task that
+/// nobody waits for the answer any more, so the task closes the portal's
+/// `Request` (the dialog goes down) instead of waiting for the user.
+pub(crate) struct DismissOnDrop(Arc<DismissalState>);
+
+impl Drop for DismissOnDrop {
+    fn drop(&mut self) {
+        self.0.dismissed.store(true, Ordering::Release);
+        self.0.event.notify(usize::MAX);
+    }
+}
+
+/// The task side of a request: when its caller let it go.
+pub(crate) struct Dismissal(Arc<DismissalState>);
+
+impl Dismissal {
+    /// A request's two sides.
+    pub(crate) fn pair() -> (DismissOnDrop, Self) {
+        let state = Arc::new(DismissalState {
+            dismissed: AtomicBool::new(false),
+            event: zruntime::Event::new(),
+        });
+        (DismissOnDrop(Arc::clone(&state)), Self(state))
+    }
+
+    /// Whether the caller has let the request go.
+    pub(crate) fn is_dismissed(&self) -> bool {
+        self.0.dismissed.load(Ordering::Acquire)
+    }
+
+    /// Completes once the caller has let the request go.
+    pub(crate) async fn dismissed(&self) {
+        // Listen before the check, so a drop the check misses is heard.
+        let listener = self.0.event.listen();
+        if !self.is_dismissed() {
+            listener.await;
         }
     }
 }

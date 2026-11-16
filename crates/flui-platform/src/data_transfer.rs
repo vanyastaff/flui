@@ -70,6 +70,14 @@ impl Mime {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The `type/subtype` alone, lowercased, without parameters.
+    #[must_use]
+    pub fn essence(&self) -> &str {
+        self.0
+            .split_once(';')
+            .map_or(&self.0, |(essence, _)| essence)
+    }
 }
 
 impl std::fmt::Display for Mime {
@@ -109,13 +117,26 @@ pub enum TransferFormat {
 }
 
 impl TransferFormat {
-    /// Whether this is FLUI's private drag-session identity
+    /// The media type a transport offers this format under, without
+    /// parameters: `text/plain`, `text/html`, `text/uri-list`, or the
+    /// essence of an image's or a custom format's MIME.
+    #[must_use]
+    pub fn essence(&self) -> &str {
+        match self {
+            Self::Text => "text/plain",
+            Self::Html => "text/html",
+            Self::UriList => "text/uri-list",
+            Self::Image { mime } | Self::Custom { mime } => mime.essence(),
+        }
+    }
+
+    /// Whether this format is offered under FLUI's private drag-session
+    /// identity media type
     /// ([`DragSessionKey::representation`](crate::drag::DragSessionKey::representation)),
-    /// whatever its parameters.
+    /// whatever its parameters and whichever variant carries it.
     #[must_use]
     pub fn is_drag_identity(&self) -> bool {
-        matches!(self, Self::Custom { mime }
-            if mime.as_str().split(';').next() == Some(crate::drag::IDENTITY_ESSENCE))
+        self.essence() == crate::drag::IDENTITY_ESSENCE
     }
 }
 

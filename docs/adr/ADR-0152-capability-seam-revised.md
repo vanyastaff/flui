@@ -31,6 +31,10 @@
 - **Superseded-by:** [ADR-0338](ADR-0338-the-host-acquires-capabilities-from-the-launch-registry.md)
   for §2 item 2 in part (that providers are acquired only per UI runtime: the composition root also
   acquires for itself, from the launch registry, with no window).
+- **Superseded-by:** [ADR-0344](ADR-0344-a-dialog-lasts-while-its-caller-holds-it-and-ends-with-its-window.md)
+  for §2 items 5 and 6 in part (a request its caller can call off, the file dialog, answers through
+  a `Dialog<T>` that wraps its `Completion<T>` and dismisses on drop; `WindowRef` also carries the
+  window's `WindowLifetime`).
 - **Related:** [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md)
   (the clipboard stays plain text, and the reserved shape of a richer read),
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),

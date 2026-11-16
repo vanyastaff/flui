@@ -280,10 +280,13 @@ impl<B: RasterBackend> RasterExecutor<B> {
         if let Some(level) = self.shared.take_trim() {
             first.contain(|| self.backend.reclaim(level));
         }
-        while let Some(message) = self
-            .lifecycle
-            .as_ref()
-            .and_then(|queue| queue.try_recv().ok())
+        // A call the executor died during ends the turn's work at the next
+        // step: the stop drains what is left (ADR-0305 §9).
+        while self.shared.health() != ExecutorHealth::Died
+            && let Some(message) = self
+                .lifecycle
+                .as_ref()
+                .and_then(|queue| queue.try_recv().ok())
         {
             outcome.commands += 1;
             outcome.settled += match message {
@@ -316,13 +319,23 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 }
             };
         }
-        let mut device_moved = self.recover_device(&mut first);
+        let mut device_moved =
+            self.shared.health() != ExecutorHealth::Died && self.recover_device(&mut first);
         for index in 0..self.slots.len() {
+            // An executor that died while a render held a slot renders nothing
+            // more once that render returns: the owner gave its windows up, and
+            // the stop that follows settles or drops what the inboxes hold
+            // (ADR-0305 §9).
+            if self.shared.health() == ExecutorHealth::Died {
+                break;
+            }
             outcome.settled += self.service(index, &mut first);
         }
         // A loss this turn's own frames met is published now, so the owner
         // knows a rebuild is due without waiting for another turn to see it.
-        device_moved |= self.note_loss(&mut first);
+        if self.shared.health() != ExecutorHealth::Died {
+            device_moved |= self.note_loss(&mut first);
+        }
         if outcome.settled > 0 || device_moved {
             first.contain(|| (self.wake)());
         }
@@ -368,6 +381,10 @@ impl<B: RasterBackend> RasterExecutor<B> {
             settled += close(&inbox, &mut first);
         }
         drop(queue);
+        // A dead executor still takes its slots down here, the one backend
+        // call it makes after the call it died during: the surfaces go with
+        // their slots, and a call that wedges again is covered by the owner,
+        // which settles what the inboxes hold (ADR-0305 §9).
         for entry in &mut self.slots {
             if let Some(slot) = entry.take() {
                 first.contain(|| self.backend.detach(slot.id));
@@ -742,10 +759,19 @@ impl<B: RasterBackend> RasterExecutor<B> {
     /// Apply slot `index`'s pending changes and render its pending frame;
     /// answers how many settlements it wrote.
     fn service(&mut self, index: usize, first: &mut FirstPanic) -> usize {
-        let Self { backend, slots, .. } = self;
+        let Self {
+            backend,
+            slots,
+            shared,
+            ..
+        } = self;
         let Some(slot) = slots.get_mut(index).and_then(Option::as_mut) else {
             return 0;
         };
+        // Once the executor died (a call below wedged past the owner's
+        // deadline, then returned) no further backend call of this service
+        // runs: the owner gave its windows up (ADR-0305 §9).
+        let died = || shared.health() == ExecutorHealth::Died;
         let (size, generation, visibility, color, latency, frame) = {
             let mut state = slot.inbox.lock();
             // A full ring holds the next frame where it is.
@@ -769,7 +795,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
             }
             slot.visibility = visibility;
         }
-        if let Some(latency) = latency {
+        if let Some(latency) = latency
+            && !died()
+        {
             let mut caught = FirstPanic::new();
             if caught
                 .contain(|| backend.set_latency(slot.id, latency))
@@ -778,7 +806,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
                 hold_panic(&slot.inbox, caught, first);
             }
         }
-        if let Some(color) = color {
+        if let Some(color) = color
+            && !died()
+        {
             let mut caught = FirstPanic::new();
             match caught.contain(|| backend.set_display_color(slot.id, color)) {
                 Some(Ok(())) => slot.owe_full(FullReason::SurfaceChanged),
@@ -797,7 +827,9 @@ impl<B: RasterBackend> RasterExecutor<B> {
         // owner sends another size or the device is rebuilt.
         let mut answer = None;
         let mut resize_report = None;
-        if let Some(size) = size {
+        if let Some(size) = size
+            && !died()
+        {
             let mut caught = FirstPanic::new();
             match caught.contain(|| backend.resize(slot.id, size)) {
                 Some(Ok(())) => {
@@ -836,7 +868,7 @@ impl<B: RasterBackend> RasterExecutor<B> {
         let mut discarded = None;
         let textures_report = frame.as_mut().and_then(|frame| {
             let updates = std::mem::take(&mut frame.textures);
-            if updates.is_empty() {
+            if updates.is_empty() || died() {
                 return None;
             }
             let mut caught = FirstPanic::new();
@@ -874,7 +906,14 @@ impl<B: RasterBackend> RasterExecutor<B> {
             report_each([resize_report, textures_report], first);
             return 0;
         };
-        let (verdict, render_failure, surface_loss, render_report) = render(backend, slot, &frame);
+        // A call before the render that the executor died during (a resize or a
+        // texture upload that wedged) does not reach the window the owner gave
+        // up: the frame settles failed, in its slot's order (ADR-0305 §9).
+        let (verdict, render_failure, surface_loss, render_report) = if died() {
+            (RasterVerdict::Failed, None, SurfaceLoss::Kept, None)
+        } else {
+            render(backend, slot, &frame)
+        };
         let discarded_render = if failure.is_none() {
             failure = render_failure;
             None

@@ -452,6 +452,8 @@ fn ui_runtime_and_presentation_isolation_matrix() {
             ("addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys", addressed_input_routing::a_sibling_gaining_focus_forgets_held_keys as fn()),
             ("addressed_input_routing::a_sibling_snapshot_forgets_held_keys", addressed_input_routing::a_sibling_snapshot_forgets_held_keys as fn()),
             ("addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus", addressed_input_routing::a_panicking_key_cancel_still_moves_window_focus as fn()),
+            ("addressed_input_routing::a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own", addressed_input_routing::a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own as fn()),
+            ("addressed_input_routing::a_report_handler_that_changes_a_window_starts_its_own_pass", addressed_input_routing::a_report_handler_that_changes_a_window_starts_its_own_pass as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings", closing_one_presentation_is_invisible_to_siblings::presentation_close_retirement_failures_preserve_focus_ime_and_siblings as fn()),
@@ -475,6 +477,7 @@ fn frame_pacing_and_pump_matrix() {
         &[
             ("frame_clock_segment_gate::starting_an_idle_presentation_animation_requests_its_first_frame", frame_clock_segment_gate::starting_an_idle_presentation_animation_requests_its_first_frame as fn()),
             ("frame_clock_segment_gate::closed_presentation_animation_cannot_wake_a_surviving_window", frame_clock_segment_gate::closed_presentation_animation_cannot_wake_a_surviving_window as fn()),
+            ("frame_clock_segment_gate::an_animation_at_the_in_flight_limit_waits_for_the_settlement", frame_clock_segment_gate::an_animation_at_the_in_flight_limit_waits_for_the_settlement as fn()),
             ("frame_clock_segment_gate::agent_playback_drives_independent_windows_and_one_paused_step_frame", frame_clock_segment_gate::agent_playback_drives_independent_windows_and_one_paused_step_frame as fn()),
             ("frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible", frame_clock_segment_gate::gated_presentations_hold_samples_then_catch_up_when_visible as fn()),
             ("checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission", super::preferences::checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission as fn()),
@@ -544,6 +547,8 @@ fn frame_failure_containment_matrix() {
             ("super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime", super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime as fn()),
             ("super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from", super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from as fn()),
             ("super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded", super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded as fn()),
+            ("super::frame_commit_state_tests::a_frame_in_flight_bounds_the_owners_sleep", super::frame_commit_state_tests::a_frame_in_flight_bounds_the_owners_sleep as fn()),
+            ("super::frame_commit_state_tests::a_settlement_asks_for_work_the_gate_held_back", super::frame_commit_state_tests::a_settlement_asks_for_work_the_gate_held_back as fn()),
             ("super::frame_commit_state_tests::held_input_waits_for_the_settlement_that_commits_the_tree", super::frame_commit_state_tests::held_input_waits_for_the_settlement_that_commits_the_tree as fn()),
         ],
     );

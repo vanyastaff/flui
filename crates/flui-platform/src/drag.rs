@@ -289,17 +289,23 @@ pub enum DragRequestError {
     /// the identity representation the terms add last.
     #[error("an OS drag session offers more representations than an index names")]
     TooManyRepresentations,
-    /// A serialized representation is of the identity's media type
-    /// ([`IDENTITY_ESSENCE`]): a target reading the first identity in the
-    /// offer would take the drag for another session.
+    /// A serialized representation is offered under the identity's media
+    /// type ([`IDENTITY_ESSENCE`]), whichever format variant carries it: a
+    /// target reading the first identity in the offer would take the drag
+    /// for another session.
     #[error("a serialized representation claims the drag identity's media type")]
     ClaimsIdentity,
+    /// Two serialized representations are offered under one media type
+    /// ([`TransferFormat::essence`]): a transport offers each type once, so
+    /// one of them could never be read.
+    #[error("two serialized representations share one media type")]
+    DuplicateFormat,
 }
 
 /// What an OS drag session offers and allows, checked as it is built: at
 /// least one action, every representation addressable by a
-/// [`RepresentationIndex`], and the session's identity representation last
-/// and only there.
+/// [`RepresentationIndex`], each media type once, and the session's identity
+/// representation last and only there.
 #[derive(Clone, Debug)]
 pub struct OsDragTerms {
     key: DragSessionKey,
@@ -316,9 +322,11 @@ impl OsDragTerms {
     ///
     /// [`DragRequestError::NoActions`] when `allowed` is empty,
     /// [`DragRequestError::TooManyRepresentations`] when `serialized` and the
-    /// identity together pass the last index, and
+    /// identity together pass the last index,
     /// [`DragRequestError::ClaimsIdentity`] when a serialized representation
-    /// is of the identity's media type.
+    /// is offered under the identity's media type, and
+    /// [`DragRequestError::DuplicateFormat`] when two are offered under one
+    /// media type.
     pub fn try_new(
         key: DragSessionKey,
         mut serialized: Vec<RepresentationDescriptor>,
@@ -337,6 +345,14 @@ impl OsDragTerms {
             .any(|descriptor| descriptor.format.is_drag_identity())
         {
             return Err(DragRequestError::ClaimsIdentity);
+        }
+        let mut offered: Vec<&str> = serialized
+            .iter()
+            .map(|descriptor| descriptor.format.essence())
+            .collect();
+        offered.sort_unstable();
+        if offered.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(DragRequestError::DuplicateFormat);
         }
         serialized.push(key.representation());
         Ok(Self {

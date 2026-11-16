@@ -63,9 +63,53 @@ pub(crate) trait HeadlessHost: 'static {
     /// The table the simulated system mints its drag offers in, empty.
     fn offers() -> Box<dyn SimulatedOffers>;
 
-    /// The drag source a window opened now in `state`'s system hands out:
-    /// none until a test lets the windows start sessions.
-    fn drag_source(state: &HeadlessState) -> Option<Arc<dyn PlatformDragSource>>;
+    /// The drag source a window opened now in `state`'s system hands out,
+    /// reading the presses the window holds from `held`: none until a test
+    /// lets the windows start sessions.
+    fn drag_source(
+        state: &HeadlessState,
+        held: Arc<HeldPresses>,
+    ) -> Option<Arc<dyn PlatformDragSource>>;
+}
+
+/// The press sequences a headless window holds, as the input injected into it
+/// opened and closed them: what its drag source checks a request's press
+/// against, as a native window checks its contact registry.
+#[derive(Debug, Default)]
+pub(crate) struct HeldPresses(Mutex<Vec<HeldPress>>);
+
+/// One press sequence a headless window holds, and the contact holding it.
+#[derive(Debug, Clone, Copy)]
+struct HeldPress {
+    pointer: flui_platform::PointerId,
+    press: flui_platform::pointer::PressId,
+}
+
+impl HeldPresses {
+    /// Follow `input` delivered to the window: a press that names its
+    /// sequence opens it, and the release that ends it or a cancellation of
+    /// its contact closes it.
+    pub(crate) fn observe(&self, input: &flui_platform::PlatformInput) {
+        use flui_platform::PlatformInput;
+        use flui_platform::pointer::PointerEvent;
+        let PlatformInput::Pointer(event) = input else {
+            return;
+        };
+        let (pointer, opened) = match event {
+            PointerEvent::Down(press) => (press.pointer.id, press.press()),
+            PointerEvent::Up(release) => (release.pointer.id, None),
+            PointerEvent::Cancel(cancel) => (cancel.pointer.id, None),
+            _ => return,
+        };
+        let mut held = self.0.lock();
+        held.retain(|open| open.pointer != pointer);
+        held.extend(opened.map(|press| HeldPress { pointer, press }));
+    }
+
+    /// Whether the window holds the press sequence `press` now.
+    pub(crate) fn holds(&self, press: flui_platform::pointer::PressId) -> bool {
+        self.0.lock().iter().any(|open| open.press == press)
+    }
 }
 
 /// The pointer devices of the simulated system, which the input feature
@@ -298,8 +342,12 @@ pub(crate) struct HeadlessState {
     pub(crate) preferences: Arc<Mutex<SimulatedPreferences>>,
     /// What makes the drag source of a window opened now, as the table names
     /// it ([`HeadlessHost::drag_source`]).
-    drag_source: fn(&HeadlessState) -> Option<Arc<dyn PlatformDragSource>>,
+    drag_source: WindowDragSource,
 }
+
+/// What makes a window's drag source from the system and the presses the
+/// window holds ([`HeadlessHost::drag_source`]).
+type WindowDragSource = fn(&HeadlessState, Arc<HeldPresses>) -> Option<Arc<dyn PlatformDragSource>>;
 
 /// What the simulated system tells a window that opens in it: the displays
 /// it lays out and the drag source it hands out, read from the system's state
@@ -338,9 +386,13 @@ impl HeadlessState {
         ))
     }
 
-    /// The drag source a window opened now hands out.
-    pub(crate) fn window_drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
-        (self.drag_source)(self)
+    /// The drag source a window opened now hands out, reading the presses
+    /// the window holds from `held`.
+    pub(crate) fn window_drag_source(
+        &self,
+        held: Arc<HeldPresses>,
+    ) -> Option<Arc<dyn PlatformDragSource>> {
+        (self.drag_source)(self, held)
     }
 }
 
@@ -1069,6 +1121,7 @@ mod tests {
 
         fn drag_source(
             _: &HeadlessState,
+            _: Arc<HeldPresses>,
         ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
             None
         }

@@ -375,8 +375,11 @@ pub enum ExecutorHealth {
     /// without an executor: every send answers [`RasterSendError::Gone`], and
     /// the owner's sender settles every frame still pending in an inbox
     /// [`RasterVerdict::Failed`] at its next drain, since the thread no longer
-    /// can; the frame a wedged render holds settles only if that render
-    /// returns. Terminal for the application's rendering: the wedged thread
+    /// can; a frame queued behind a render the wedged thread holds settles
+    /// after that render, and only if it returns, so a slot settles in order.
+    /// Once the call it died during returns, it makes no backend call but its
+    /// stop's, which takes each slot down.
+    /// Terminal for the application's rendering: the wedged thread
     /// still holds the context (ADR-0305 §9).
     Died,
 }

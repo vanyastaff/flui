@@ -565,12 +565,24 @@ pub(crate) fn a_panicking_key_cancel_still_moves_window_focus() {
                 false,
             ),
         );
-        let payload = catch_unwind(AssertUnwindSafe(|| match sibling {
+        let reports = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let reported = Rc::clone(&reports);
+        ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
+            move |report| reported.borrow_mut().push(report.address.presentation_id),
+        )));
+        let outcome = catch_unwind(AssertUnwindSafe(|| match sibling {
             Some(sibling) => ui_runtime.update_window_focus(sibling, true),
             None => ui_runtime.update_window_focus(id, false),
-        }))
-        .expect_err("the handler's panic reaches the caller");
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"key cancel handler"));
+        }));
+        if to_sibling {
+            // The handler is the window's that lost the focus, not the
+            // change's: it is reported against that window (ADR-0345 §2).
+            assert!(outcome.is_ok(), "the sibling's focus change completes");
+            assert_eq!(*reports.borrow(), [id]);
+        } else {
+            let payload = outcome.expect_err("the handler's panic reaches the caller");
+            assert_eq!(payload.downcast_ref::<&str>(), Some(&"key cancel handler"));
+        }
         let presentation = ui_runtime.presentations.get(id).expect("installed");
         assert!(!presentation.window_focused.get(), "sibling: {to_sibling}");
         assert_eq!(
@@ -591,6 +603,175 @@ pub(crate) fn a_panicking_key_cancel_still_moves_window_focus() {
             );
         }
     }
+}
+
+/// A window's own failure stays its own in a pass that a callback starts
+/// inside its pass. Window A hides; its key-cancel handler, run by that
+/// change, focuses window B, whose pass walks A's ladder too, and A's
+/// observer fails at `Hidden`. The failure is A's change's, so hiding A
+/// resumes it; it is not reported against A as a sibling of B's pass
+/// (ADR-0345 §2).
+pub(crate) fn a_windows_failure_in_a_pass_nested_in_its_own_stays_its_own() {
+    struct FailsWhenHidden;
+    impl flui_view::WidgetsBindingObserver for FailsWhenHidden {
+        fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
+            assert_ne!(
+                state,
+                flui_scheduler::AppLifecycleState::Hidden,
+                "the hidden window's observer fails"
+            );
+        }
+    }
+
+    let (mut ui_runtime, id, node, _log) = keyboard_ui_runtime();
+    let sibling = ui_runtime.install_second_presentation_for_test();
+    deliver(
+        &ui_runtime,
+        id,
+        key(
+            Code::Enter,
+            Key::Named(NamedKey::Enter),
+            KeyState::Down,
+            false,
+        ),
+    );
+    ui_runtime
+        .presentations
+        .get(id)
+        .expect("installed")
+        .widgets()
+        .add_observer(std::sync::Arc::new(FailsWhenHidden));
+    let reports = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let reported = Rc::clone(&reports);
+    ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
+        move |report| reported.borrow_mut().push(report.address.presentation_id),
+    )));
+    let ui_runtime = Rc::new(ui_runtime);
+    let runtime = Rc::downgrade(&ui_runtime);
+    let _cancel = node.register_on_key_cancel(Rc::new(move |_| {
+        runtime
+            .upgrade()
+            .expect("the runtime outlives its handlers")
+            .update_window_focus(sibling, true);
+    }));
+
+    let payload = catch_unwind(AssertUnwindSafe(|| {
+        ui_runtime.synchronize_window_snapshot(
+            id,
+            flui_platform::WindowExecutionState::Running,
+            false,
+            false,
+        );
+    }))
+    .expect_err("the hidden window's failure reaches its change");
+    assert!(
+        payload
+            .downcast_ref::<String>()
+            .is_some_and(|message| message.contains("the hidden window's observer fails")),
+        "the observer's panic is the one resumed"
+    );
+    assert_eq!(*reports.borrow(), [], "nothing is reported as a sibling's");
+}
+
+/// A pass ends before it reports its siblings' failures, so a report
+/// handler that changes a window starts a pass of its own, which attributes
+/// as any other does. Window B takes the focus from A, whose key-cancel
+/// handler fails; the handler of that report focuses window C, which takes
+/// the focus from B, whose observer fails at `Inactive`. Both failures are
+/// reported against their own windows (ADR-0345 §2).
+pub(crate) fn a_report_handler_that_changes_a_window_starts_its_own_pass() {
+    struct FailsWhenInactive;
+    impl flui_view::WidgetsBindingObserver for FailsWhenInactive {
+        fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
+            assert_ne!(
+                state,
+                flui_scheduler::AppLifecycleState::Inactive,
+                "the window losing the focus fails"
+            );
+        }
+    }
+
+    let (mut ui_runtime, a, node, _log) = keyboard_ui_runtime();
+    let b = ui_runtime.install_second_presentation_for_test();
+    let c = ui_runtime.install_second_presentation_for_test();
+    deliver(
+        &ui_runtime,
+        a,
+        key(
+            Code::Enter,
+            Key::Named(NamedKey::Enter),
+            KeyState::Down,
+            false,
+        ),
+    );
+    let _cancel = node.register_on_key_cancel(Rc::new(|_| panic!("key cancel handler")));
+    let ui_runtime = Rc::new(ui_runtime);
+    let runtime = Rc::downgrade(&ui_runtime);
+    let reports = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let reported = Rc::clone(&reports);
+    ui_runtime.set_frame_failure_handler(Some(crate::frame_failure::FrameFailureHandler::new(
+        move |report| {
+            reported.borrow_mut().push(report.address.presentation_id);
+            if report.address.presentation_id == a {
+                runtime
+                    .upgrade()
+                    .expect("the runtime outlives its handler")
+                    .synchronize_window_snapshot(
+                        c,
+                        flui_platform::WindowExecutionState::Running,
+                        true,
+                        true,
+                    );
+            }
+        },
+    )));
+
+    ui_runtime.synchronize_window_snapshot(
+        b,
+        flui_platform::WindowExecutionState::Running,
+        true,
+        true,
+    );
+    // B is now focused and resumed; only then can it fail on losing focus.
+    ui_runtime
+        .presentations
+        .get(b)
+        .expect("installed")
+        .widgets()
+        .add_observer(std::sync::Arc::new(FailsWhenInactive));
+    assert_eq!(*reports.borrow(), [a], "A's key-cancel failure is A's");
+    reports.borrow_mut().clear();
+
+    // A second round: A holds no key now, so focus A again and hold one,
+    // then let B take the focus once more with B's observer installed.
+    ui_runtime.synchronize_window_snapshot(
+        a,
+        flui_platform::WindowExecutionState::Running,
+        true,
+        true,
+    );
+    deliver(
+        &ui_runtime,
+        a,
+        key(
+            Code::Enter,
+            Key::Named(NamedKey::Enter),
+            KeyState::Down,
+            false,
+        ),
+    );
+    reports.borrow_mut().clear();
+    ui_runtime.synchronize_window_snapshot(
+        b,
+        flui_platform::WindowExecutionState::Running,
+        true,
+        true,
+    );
+    assert_eq!(
+        *reports.borrow(),
+        [a, b],
+        "the pass the report handler started reports B's failure against B"
+    );
 }
 
 /// Hold Enter, run `deactivate`, then send Enter's repeat and release: the
