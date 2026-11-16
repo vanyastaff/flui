@@ -326,7 +326,9 @@ fn a_turn_deadline_gives_the_owner_a_turn_with_no_window() {
         .run(Rc::clone(&log) as Rc<dyn AppHandler>)
         .expect("the loop ends on a quit");
     let due = *due.get().expect("the deadline was asked");
-    let asked = due - std::time::Duration::from_millis(40);
+    let asked = due
+        .checked_sub(std::time::Duration::from_millis(40))
+        .expect("BUG: the deadline was asked 40 ms ahead of a later instant");
     let turns = turns.borrow();
     // The run's start may turn the owner as the deadline is first asked; the
     // deadline itself gives no turn between then and its instant.

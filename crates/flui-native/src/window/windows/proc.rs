@@ -1445,9 +1445,7 @@ impl WindowProc {
                 // user's (ADR-0343). The size-move commands enter the
                 // size-move loop, which says so itself.
                 WM_SYSCOMMAND if is_user_placement_command(wparam) => {
-                    let Some(ctx) = ctx else {
-                        return None;
-                    };
+                    let ctx = ctx?;
                     let was = ctx.in_system_command.replace(true);
                     let answer = DefWindowProcW(hwnd, msg, wparam, lparam);
                     ctx.in_system_command.set(was);
