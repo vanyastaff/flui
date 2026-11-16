@@ -223,7 +223,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `flui build` makes no MSIX package, so a packaged Windows application declares no `uap:Protocol` or `uap:FileTypeAssociation`; an unpackaged run registers its schemes and file types itself ([ADR-0307 §4](#accepted-adr-sections-not-built-yet)).
 - The Apple packagers sign nothing, so the `associated-domains` of the manifest reach no `com.apple.developer.associated-domains` entitlement and a universal link does not open the application ([ADR-0307 §4](#accepted-adr-sections-not-built-yet)).
 - On X11 neither the first launch nor a forwarded one completes its startup notification, so a launcher that shows one waits for its own timeout.
-- A Linux window carries the application id as its Wayland app id and X11 class, and the desktop entry `flui build linux` writes matches it (ADR-0348); no shell (GNOME, KDE) has matched one on a desktop yet, and Windows sets no AppUserModelID ([App identity](platform-parity.md#app-lifecycle)).
+- A Linux window carries the application id as its Wayland app id and X11 class, and the desktop entry `flui build linux` writes matches it (ADR-0349); no shell (GNOME, KDE) has matched one on a desktop yet, and Windows sets no AppUserModelID ([App identity](platform-parity.md#app-lifecycle)).
 
 ### A later launch is acknowledged before its link is routed
 

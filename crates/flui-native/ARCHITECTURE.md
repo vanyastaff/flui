@@ -4596,7 +4596,7 @@ executable's stem. A Wayland window sets it with `xdg_toplevel.set_app_id`
 before its first commit; an X11 window writes it as both halves of `WM_CLASS`,
 claims it as `_GTK_APPLICATION_ID` when it is an id, and writes `WM_HINTS`
 with `InputHint` set. The desktop entry `flui build linux` writes is named by
-the same id and names it as `StartupWMClass` (ADR-0348). The single-instance
+the same id and names it as `StartupWMClass` (ADR-0349). The single-instance
 bus name, mutex and pipe are the id itself: its grammar is a D-Bus name's, so
 the host checks nothing again. Tests:
 `a_window_is_classed_by_the_application_id_or_the_executable`, and

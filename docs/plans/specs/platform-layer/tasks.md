@@ -7180,7 +7180,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `owner/apple/metal_layer.rs`, `owner/apple/macos/content_view.rs`, `window/apple/{macos,ios,mod}.rs`,
   `window/android.rs`, `window/web.rs`, `tests/appkit_window.rs`.
 
-- [x] **LY128** — ветка `native/linux-app-identity`, решение — ADR-0348 (заменяет условие desktop
+- [x] **LY128** — ветка `native/linux-app-identity`, решение — ADR-0349 (заменяет условие desktop
   entry в ADR-0307 §4, оговорку ADR-0254 §4 о неверном id и сигнатуру `start_with` в ADR-0327 §3).
   Подтверждено на `main` @ `ac3b1ee58`: `set_app_id` в `flui-native` нет, X11 писал `WM_CLASS` из
   основы имени исполняемого файла и не писал `WM_HINTS`, desktop entry писалась только при схеме
