@@ -384,6 +384,9 @@ pub struct PresentationState {
     pub(super) window_display: Rc<Cell<Option<flui_platform::WindowDisplay>>>,
     pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
+    /// Tells the providers that answer this window later (a dialog modal to
+    /// it) that it closed: closed when the close begins, and on drop.
+    pub(super) window_closer: flui_platform::capability::WindowCloser,
     /// The request of the frame being delivered, on the event timeline
     /// (`HostInput::Frame`): the interaction layer samples motion at its vsync and the pump takes
     /// the frame's time and idle deadline from it (ADR-0257).
@@ -899,6 +902,7 @@ impl PresentationState {
 
         // Frames and retirements wake the runtime so the raster executor applies them.
         let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
+        let (window_closer, window_lifetime) = flui_platform::capability::WindowCloser::new();
         let close_guard = CloseGuardSource::new(
             &capabilities.close.vetoes,
             capabilities.close.notify.clone(),
@@ -928,6 +932,7 @@ impl PresentationState {
                     completions: capabilities.completions,
                     locals: capabilities.locals,
                     window: Rc::downgrade(&window),
+                    lifetime: window_lifetime,
                 }));
             presentation.close_guard = Some(close_guard.guard());
             presentation.url_owner = Some(url_owner.clone());
@@ -1089,6 +1094,7 @@ impl PresentationState {
             window_display,
             window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
+            window_closer,
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
             scene: crate::presentation_scene::SceneSlot::default(),
             textures,
@@ -1234,6 +1240,7 @@ impl PresentationState {
             window_display,
             window_execution: Cell::new(snapshot.execution),
             closing_requested: Cell::new(false),
+            window_closer: flui_platform::capability::WindowCloser::new().0,
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
             scene: crate::presentation_scene::SceneSlot::default(),
             textures,

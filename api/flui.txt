@@ -13311,6 +13311,21 @@ variant flui::platform::SystemNotice::SessionLocked // at 2
 variant flui::platform::SystemNotice::SessionUnlocked // at 3
 variant flui::platform::SystemNotice::Sleep // at 0
 variant flui::platform::SystemNotice::Wake // at 1
+#[non_exhaustive] pub enum flui::platform::SystemFailure
+impl Clone for flui::platform::SystemFailure
+impl Copy for flui::platform::SystemFailure
+impl Eq for flui::platform::SystemFailure
+impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
+impl PartialEq for flui::platform::SystemFailure
+impl core::error::Error for flui::platform::SystemFailure
+impl core::fmt::Debug for flui::platform::SystemFailure
+impl core::fmt::Display for flui::platform::SystemFailure
+impl core::hash::Hash for flui::platform::SystemFailure
+impl core::marker::StructuralPartialEq for flui::platform::SystemFailure
+variant flui::platform::SystemFailure::Bus // at 2
+variant flui::platform::SystemFailure::MalformedAnswer // at 3
+variant flui::platform::SystemFailure::Os(i32) // at 0
+variant flui::platform::SystemFailure::PortalResponse(u32) // at 1
 pub struct flui::platform::SystemPreferences { .. }
 impl Clone for flui::platform::SystemPreferences
 impl Default for flui::platform::SystemPreferences
@@ -14188,13 +14203,26 @@ impl core::fmt::Debug for flui::platform::capability::RuntimeLocals
 pub fn flui::platform::capability::RuntimeLocals::get_or_default<T: Default + 'static>(&self) -> alloc::rcs::rc::Rc<T>
 pub fn flui::platform::capability::RuntimeLocals::new() -> Self
 pub fn flui::platform::capability::RuntimeLocals::retire(&self) -> Option<Box<dyn core::any::Any + Send>>
+pub struct flui::platform::capability::WindowCloseWatch(_)
+impl core::fmt::Debug for flui::platform::capability::WindowCloseWatch
+pub struct flui::platform::capability::WindowCloser(_)
+impl Drop for flui::platform::capability::WindowCloser
+impl core::fmt::Debug for flui::platform::capability::WindowCloser
+pub fn flui::platform::capability::WindowCloser::close(&self)
+pub fn flui::platform::capability::WindowCloser::new() -> (Self, flui::platform::capability::WindowLifetime)
+pub struct flui::platform::capability::WindowLifetime(_)
+impl Clone for flui::platform::capability::WindowLifetime
+impl core::fmt::Debug for flui::platform::capability::WindowLifetime
+pub fn flui::platform::capability::WindowLifetime::is_closed(&self) -> bool
+pub fn flui::platform::capability::WindowLifetime::on_close(&self, listener: impl Fn() + 'static) -> flui::platform::capability::WindowCloseWatch
 pub struct flui::platform::capability::WindowRef { .. }
 impl Clone for flui::platform::capability::WindowRef
 impl core::fmt::Debug for flui::platform::capability::WindowRef
 impl raw_window_handle::borrowed::HasDisplayHandle for flui::platform::capability::WindowRef
 impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::capability::WindowRef
 pub fn flui::platform::capability::WindowRef::id(&self) -> flui::platform::WindowId
-pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>) -> Self
+pub fn flui::platform::capability::WindowRef::lifetime(&self) -> &flui::platform::capability::WindowLifetime
+pub fn flui::platform::capability::WindowRef::new(id: flui::platform::WindowId, scale: f64, target: alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>, lifetime: flui::platform::capability::WindowLifetime) -> Self
 pub fn flui::platform::capability::WindowRef::scale(&self) -> f64
 pub mod flui::platform::capability::scripted
 pub struct flui::platform::capability::scripted::AlreadyDriven;
@@ -14237,6 +14265,9 @@ impl core::fmt::Debug for flui::platform::capability::scripted::FailureReport
 pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure) -> bool
 pub const flui::platform::capability::scripted::MAX_RECORDED_REQUESTS: usize = 4096
 pub const flui::platform::capability::scripted::MAX_REPORTS: usize = 256
+pub struct flui::platform::capability::scripted::RequestTicket { .. }
+impl Drop for flui::platform::capability::scripted::RequestTicket
+impl core::fmt::Debug for flui::platform::capability::scripted::RequestTicket
 pub struct flui::platform::capability::scripted::Scenario { .. }
 impl Clone for flui::platform::capability::scripted::Scenario
 impl Default for flui::platform::capability::scripted::Scenario
@@ -14293,12 +14324,14 @@ pub fn flui::platform::capability::scripted::Script::on_answer(&self, observe: i
 pub fn flui::platform::capability::scripted::Script::otherwise(&self, answer: impl Fn(&R) -> A + 'static) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::otherwise_value(&self, value: A) where A: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::receive(&self, request: R, resolver: flui::platform::capability::Resolver<A>) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::receive_with_ticket(&self, request: R, resolver: flui::platform::capability::Resolver<A>) -> flui::platform::capability::scripted::RequestTicket // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::received(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::release_held(&self, answer: impl FnMut(&R) -> A) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::release_oldest(&self, value: A) -> bool // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::requests(&self) -> Vec<R> where R: Clone // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::resume(&self) // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Script::scenario(&self) -> &flui::platform::capability::scripted::Scenario // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
+pub fn flui::platform::capability::scripted::Script::withdrawn(&self) -> usize // impl<R, A> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub enum flui::platform::capability::scripted::ServiceState
 impl Clone for flui::platform::capability::scripted::ServiceState
 impl Copy for flui::platform::capability::scripted::ServiceState
@@ -15084,7 +15117,8 @@ impl core::fmt::Display for flui::platform::launch::LaunchError
 impl core::marker::StructuralPartialEq for flui::platform::launch::LaunchError
 pub const fn flui::platform::launch::LaunchError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::platform::launch::LaunchError::Denied // at 3
-variant flui::platform::launch::LaunchError::Failed { code: i32 } // at 5
+impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
+variant flui::platform::launch::LaunchError::Failed(flui::platform::SystemFailure) // at 5
 variant flui::platform::launch::LaunchError::NoHandler // at 2
 variant flui::platform::launch::LaunchError::NotFound // at 1
 variant flui::platform::launch::LaunchError::RelativePath // at 0
@@ -23096,11 +23130,17 @@ impl core::fmt::Debug for flui::services::system::SystemPlugin
 impl flui::platform::capability::Plugin for flui::services::system::SystemPlugin
 pub fn flui::services::system::SystemPlugin::new() -> Self
 pub mod flui::services::system::dialog
+pub struct flui::services::system::dialog::Dialog<T: 'static> { .. }
+impl<T: 'static> core::fmt::Debug for flui::services::system::dialog::Dialog<T>
+pub fn flui::services::system::dialog::Dialog::into_future(self) -> impl core::future::future::Future<Output = Result<T, flui::platform::capability::Abandoned>> // impl<T: 'static> flui::services::system::dialog::Dialog<T>
+pub fn flui::services::system::dialog::Dialog::on_complete(self, f: impl FnMut(Result<T, flui::platform::capability::Abandoned>) + 'static) // impl<T: 'static> flui::services::system::dialog::Dialog<T>
+pub fn flui::services::system::dialog::Dialog::poll(&mut self) -> Option<Result<T, flui::platform::capability::Abandoned>> // impl<T: 'static> flui::services::system::dialog::Dialog<T>
 #[non_exhaustive] pub enum flui::services::system::dialog::DialogError
 impl Clone for flui::services::system::dialog::DialogError
 impl Copy for flui::services::system::dialog::DialogError
 impl Eq for flui::services::system::dialog::DialogError
 impl From<flui::platform::Unsupported> for flui::services::system::dialog::DialogError
+impl From<flui::platform::SystemFailure> for flui::services::system::dialog::DialogError
 impl PartialEq for flui::services::system::dialog::DialogError
 impl core::error::Error for flui::services::system::dialog::DialogError
 impl core::fmt::Debug for flui::services::system::dialog::DialogError
@@ -23108,22 +23148,25 @@ impl core::fmt::Display for flui::services::system::dialog::DialogError
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::DialogError
 pub const fn flui::services::system::dialog::DialogError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::services::system::dialog::DialogError::Busy // at 0
-variant flui::services::system::dialog::DialogError::Failed { code: i32 } // at 5
+variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 5
 variant flui::services::system::dialog::DialogError::InvalidRequest // at 1
 variant flui::services::system::dialog::DialogError::NotAFile // at 4
 variant flui::services::system::dialog::DialogError::Unsupported(flui::platform::Unsupported) // at 2
 variant flui::services::system::dialog::DialogError::WindowClosed // at 3
+pub struct flui::services::system::dialog::DialogHold(_)
+impl core::fmt::Debug for flui::services::system::dialog::DialogHold
+pub fn flui::services::system::dialog::DialogHold::new(keep: impl core::any::Any) -> Self
 pub trait flui::services::system::dialog::FileDialogBackend: 'static
-fn flui::services::system::dialog::FileDialogBackend::open(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::OpenRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::OpenResult>)
-fn flui::services::system::dialog::FileDialogBackend::save(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::SaveRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::SaveResult>)
+fn flui::services::system::dialog::FileDialogBackend::open(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::OpenRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::OpenResult>) -> flui::services::system::dialog::DialogHold
+fn flui::services::system::dialog::FileDialogBackend::save(&self, window: &flui::platform::capability::WindowRef, request: flui::services::system::dialog::SaveRequest, answer: flui::platform::capability::Resolver<flui::services::system::dialog::SaveResult>) -> flui::services::system::dialog::DialogHold
 pub enum flui::services::system::dialog::FileDialogCapability
 impl core::fmt::Debug for flui::services::system::dialog::FileDialogCapability
 impl flui::platform::capability::Capability for flui::services::system::dialog::FileDialogCapability { type Handle = flui::services::system::dialog::FileDialogs; }
 pub struct flui::services::system::dialog::FileDialogs { .. }
 impl Clone for flui::services::system::dialog::FileDialogs
 impl core::fmt::Debug for flui::services::system::dialog::FileDialogs
-pub fn flui::services::system::dialog::FileDialogs::open(&self, request: flui::services::system::dialog::OpenRequest) -> flui::platform::capability::Completion<flui::services::system::dialog::OpenResult>
-pub fn flui::services::system::dialog::FileDialogs::save(&self, request: flui::services::system::dialog::SaveRequest) -> flui::platform::capability::Completion<flui::services::system::dialog::SaveResult>
+pub fn flui::services::system::dialog::FileDialogs::open(&self, request: flui::services::system::dialog::OpenRequest) -> flui::services::system::dialog::Dialog<flui::services::system::dialog::OpenResult>
+pub fn flui::services::system::dialog::FileDialogs::save(&self, request: flui::services::system::dialog::SaveRequest) -> flui::services::system::dialog::Dialog<flui::services::system::dialog::SaveResult>
 pub fn flui::services::system::dialog::FileDialogs::try_new(backend: impl flui::services::system::dialog::FileDialogBackend, ctx: &flui::platform::capability::ProviderContext<'_>) -> Result<Self, flui::platform::Unsupported>
 #[non_exhaustive] pub struct flui::services::system::dialog::FileFilter { .. }
 impl Clone for flui::services::system::dialog::FileFilter
@@ -23156,15 +23199,28 @@ pub fn flui::services::system::dialog::OpenRequest::folders() -> Self
 pub fn flui::services::system::dialog::OpenRequest::is_multiple(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::picks_folders(&self) -> bool
 pub fn flui::services::system::dialog::OpenRequest::title(self, title: impl Into<String>) -> Self
-pub type flui::services::system::dialog::OpenResult = Result<Option<Vec<flui::services::system::dialog::PickedFile>>, flui::services::system::dialog::DialogError>
+pub type flui::services::system::dialog::OpenResult = Result<Option<flui::services::system::dialog::Picks>, flui::services::system::dialog::DialogError>
 #[non_exhaustive] pub struct flui::services::system::dialog::PickedFile { .. }
 impl Clone for flui::services::system::dialog::PickedFile
 impl Eq for flui::services::system::dialog::PickedFile
 impl PartialEq for flui::services::system::dialog::PickedFile
 impl core::fmt::Debug for flui::services::system::dialog::PickedFile
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::PickedFile
-pub fn flui::services::system::dialog::PickedFile::new(path: impl Into<std::path::PathBuf>) -> Self
 pub fn flui::services::system::dialog::PickedFile::path(&self) -> &std::path::Path
+pub fn flui::services::system::dialog::PickedFile::try_new(path: impl Into<std::path::PathBuf>) -> Option<Self>
+pub struct flui::services::system::dialog::Picks { .. }
+impl Clone for flui::services::system::dialog::Picks
+impl Eq for flui::services::system::dialog::Picks
+impl IntoIterator for flui::services::system::dialog::Picks { type IntoIter = core::iter::adapters::chain::Chain<core::iter::sources::once::Once<flui::services::system::dialog::PickedFile>, alloc::vec::into_iter::IntoIter<flui::services::system::dialog::PickedFile>>; type Item = flui::services::system::dialog::PickedFile; }
+impl PartialEq for flui::services::system::dialog::Picks
+impl core::fmt::Debug for flui::services::system::dialog::Picks
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::Picks
+impl<'a> IntoIterator for &'a flui::services::system::dialog::Picks { type IntoIter = core::iter::adapters::chain::Chain<core::iter::sources::once::Once<&'a flui::services::system::dialog::PickedFile>, core::slice::iter::Iter<'a, flui::services::system::dialog::PickedFile>>; type Item = &'a flui::services::system::dialog::PickedFile; }
+pub fn flui::services::system::dialog::Picks::first(&self) -> &flui::services::system::dialog::PickedFile
+pub fn flui::services::system::dialog::Picks::is_empty(&self) -> bool
+pub fn flui::services::system::dialog::Picks::iter(&self) -> impl Iterator<Item = &flui::services::system::dialog::PickedFile>
+pub fn flui::services::system::dialog::Picks::len(&self) -> usize
+pub fn flui::services::system::dialog::Picks::try_new(picks: Vec<flui::services::system::dialog::PickedFile>) -> Option<Self>
 #[non_exhaustive] pub struct flui::services::system::dialog::SaveRequest
 field flui::services::system::dialog::SaveRequest::accept_label: Option<String> // at 4
 field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 1
@@ -23206,6 +23262,7 @@ impl core::fmt::Debug for flui::services::system::testing::ScriptedFileDialogs
 impl flui::services::system::dialog::FileDialogBackend for flui::services::system::testing::ScriptedFileDialogs
 pub fn flui::services::system::testing::ScriptedFileDialogs::answer_next_open(&self, result: flui::services::system::dialog::OpenResult)
 pub fn flui::services::system::testing::ScriptedFileDialogs::answer_next_save(&self, result: flui::services::system::dialog::SaveResult)
+pub fn flui::services::system::testing::ScriptedFileDialogs::dismissed(&self) -> usize
 pub fn flui::services::system::testing::ScriptedFileDialogs::hold(&self)
 pub fn flui::services::system::testing::ScriptedFileDialogs::new() -> Self
 pub fn flui::services::system::testing::ScriptedFileDialogs::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self

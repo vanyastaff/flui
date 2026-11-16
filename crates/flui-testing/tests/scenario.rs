@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_platform::capability::scripted::{
-    AlreadyDriven, Answer, EventSubscription, Events, Expect, MAX_REPORTS, Scenario,
+    AlreadyDriven, Answer, EventSubscription, Events, Expect, MAX_REPORTS, RequestTicket, Scenario,
     ScenarioFailure, Script, ServiceState, StreamEnd, StreamItem, Track,
 };
 use flui_platform::capability::{
@@ -74,6 +74,18 @@ impl CameraHandle {
         self.captures
             .receive(CameraRequest::Capture { width }, resolver);
         completion
+    }
+
+    /// A capture its caller can call off: it waits while the ticket is held.
+    fn capture_until_dropped(
+        &self,
+        width: u32,
+    ) -> (Completion<Result<Vec<u8>, CaptureError>>, RequestTicket) {
+        let (completion, resolver) = self.completions.pending();
+        let ticket = self
+            .captures
+            .receive_with_ticket(CameraRequest::Capture { width }, resolver);
+        (completion, ticket)
     }
 
     fn access_changed(&self) -> Completion<Access> {
@@ -255,6 +267,57 @@ fn a_step_answers_the_request_it_matches_not_the_next_one_in_line() {
         ]
     );
     scenario.verify().expect("both steps were used");
+}
+
+#[test]
+fn a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+
+    // Held, then called off.
+    camera.captures.hold();
+    let (held, ticket) = handle.capture_until_dropped(64);
+    let held = land(held);
+    assert_eq!(camera.captures.held(), 1);
+    drop(ticket);
+    assert_eq!(camera.captures.held(), 0, "a withdrawn request is not held");
+    assert!(
+        !camera.captures.release_oldest(Ok(vec![1])),
+        "nothing to release"
+    );
+    camera.captures.resume();
+
+    // Scheduled, then called off before its instant.
+    camera
+        .captures
+        .answer_next(Answer::value(Ok(vec![2])).after(Duration::from_millis(500)));
+    let (scheduled, ticket) = handle.capture_until_dropped(32);
+    let scheduled = land(scheduled);
+    drop(ticket);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&held), Some(Err(Abandoned::ProviderDropped)));
+    assert_eq!(taken(&scheduled), Some(Err(Abandoned::ProviderDropped)));
+    assert_eq!(camera.captures.withdrawn(), 2);
+    scenario
+        .verify()
+        .expect("the withdrawn answer is off the timeline before its instant");
+
+    // Answered, then the ticket dropped: nothing to withdraw.
+    camera.captures.answer_next(Answer::value(Ok(vec![3])));
+    let (answered, ticket) = handle.capture_until_dropped(16);
+    let answered = land(answered);
+    drop(ticket);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&answered), Some(Ok(Ok(vec![3]))));
+    assert_eq!(
+        camera.captures.withdrawn(),
+        2,
+        "an answered request stays answered"
+    );
+
+    scenario
+        .verify()
+        .expect("a withdrawn request is neither unanswered nor a change not reached");
 }
 
 #[test]

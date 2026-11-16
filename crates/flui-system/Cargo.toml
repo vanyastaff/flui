@@ -16,6 +16,7 @@ autotests = false
 # only, and its own OS code. Nothing but the facade names it.
 [dependencies]
 flui-platform = { workspace = true }
+rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 
 # The Linux providers: the XDG desktop portal over the session bus, on zbus's
