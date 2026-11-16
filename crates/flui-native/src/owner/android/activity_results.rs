@@ -398,7 +398,10 @@ impl<D> ResultRouter<D> {
     /// Whether [`end`](Self::end) ran.
     #[cfg_attr(
         not(target_os = "android"),
-        expect(dead_code, reason = "the Android bridge lends no Activity once it ended")
+        expect(
+            dead_code,
+            reason = "the Android bridge lends no Activity once it ended"
+        )
     )]
     pub(crate) fn has_ended(&self) -> bool {
         self.ended
