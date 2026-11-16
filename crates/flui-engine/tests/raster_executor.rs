@@ -777,13 +777,17 @@ fn a_panic_takes_the_place_of_a_refusal_held_from_an_earlier_turn() {
 
 /// A panic of a turn with no frame (a resize the owner configured) marks
 /// the slot's next settlement while the owner has not taken it, and not once
-/// it has: a panic the owner took and reported is not a later frame's.
+/// it has: a panic the owner took and reported is not a later frame's. A
+/// frame already in flight when the owner takes it keeps the mark, since the
+/// panic may have come with it.
 ///
 /// Red-check: leave the mark set when the owner takes the panic and the
-/// frame after it settles marked.
+/// frame sent after the take settles marked; clear it whatever is in
+/// flight and the frame sent before the take settles unmarked.
 #[test]
 fn a_panic_marks_the_next_settlement_until_the_owner_takes_it() {
-    for taken in [false, true] {
+    // (when the owner takes the panic, whether the frame settles marked)
+    for (take, marked) in [(None, true), (Some(false), false), (Some(true), true)] {
         let mut rig = rig();
         let at = attached(&mut rig, 1);
         rig.backend.script_resize(ScriptedAnswer::Panic);
@@ -798,7 +802,7 @@ fn a_panic_marks_the_next_settlement_until_the_owner_takes_it() {
             panic!("a positive size mints a generation");
         };
         let _ = rig.executor.turn();
-        if taken {
+        let taken = |rig: &Rig| {
             assert!(
                 matches!(
                     rig.sender.take_failure(at.slot),
@@ -806,17 +810,23 @@ fn a_panic_marks_the_next_settlement_until_the_owner_takes_it() {
                 ),
                 "the resize's panic is held"
             );
+        };
+        if take == Some(false) {
+            taken(&rig);
         }
         let resized = Attached { generation, ..at };
         let _ = rig.sender.send(frame(resized, 1)).expect("accepted");
+        if take == Some(true) {
+            taken(&rig);
+        }
         let _ = rig.executor.turn();
         let settled = drain(&rig.sender, at.slot);
         assert!(!settled.is_empty(), "the frame settles");
         assert!(
             settled
                 .iter()
-                .all(|settlement| settlement.panicked != taken),
-            "taken {taken}: {settled:?}"
+                .all(|settlement| settlement.panicked == marked),
+            "taken {take:?}: {settled:?}"
         );
     }
 }

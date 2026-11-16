@@ -1303,6 +1303,52 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
     assert!(attached.is_err(), "the refusal reaches the window's attach");
 }
 
+/// A window whose attach the raster thread does not answer within the
+/// deadline is kept, not refused: the executor is dead, but the thread may
+/// still hold the window's surface, so the native window outlives it as a
+/// dead executor's windows do. Its frames draw nothing.
+///
+/// Red-check: decide from the slot's record after the deadline and the
+/// window is refused (`did not attach the slot`) while its surface is in
+/// the thread's hands.
+#[test]
+fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
+    let (shared, slots, _wakes) = threaded_host();
+    let render = slots.hold_next_render();
+    let mut scene = TestScene::new(AT);
+    let (_epoch, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    let other = PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(1),
+        presentation_id: PresentationId::new(2),
+    };
+    let attached = shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(2)),
+                None,
+                other,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle");
+    assert!(attached.is_ok(), "the window is kept: {:?}", attached.err());
+    let mut other_scene = TestScene::new(AT);
+    let publication = other_scene.publication();
+    let epoch = other_scene.next_epoch();
+    let verdict = shared
+        .try_with(|host| host.submit(other, SIZE, epoch, publication))
+        .expect("the host is idle");
+    assert!(
+        matches!(verdict, SubmitVerdict::Failed | SubmitVerdict::NotShown),
+        "a dead executor draws nothing: {verdict:?}"
+    );
+    render.release();
+}
+
 /// The placement switch takes `threaded` or `inline`, in any case, and keeps
 /// the executor inline for anything else.
 #[test]

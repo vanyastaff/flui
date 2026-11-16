@@ -834,15 +834,28 @@ impl RasterHost {
         // A raster thread attaches on its own turn: the owner waits for its
         // answer, so a window the thread refuses is refused here as it is
         // inline. A thread that does not answer within the deadline is
-        // wedged (ADR-0305 §9) and refuses this window and every later one.
+        // wedged (ADR-0305 §9): the executor is dead, and the window is kept
+        // as a dead executor's windows are, since its surface may still be in
+        // the thread's hands and the native window must outlive it. The
+        // answer decides, not a second read of the record, which a thread
+        // that answers just after the deadline changes.
         #[cfg(not(target_arch = "wasm32"))]
-        if let Executor::Threaded(handle) = &placed.executor
-            && let Err(failure) =
-                handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE)
-        {
-            tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach");
-        }
+        let wedged = match &placed.executor {
+            Executor::Threaded(handle) => {
+                match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
+                    Ok(()) => false,
+                    Err(failure) => {
+                        tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach; the window is kept and draws nothing");
+                        true
+                    }
+                }
+            }
+            Executor::Inline(_) => false,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let wedged = false;
         let refusal = match placed.sender.record(slot).map(|record| record.phase) {
+            _ if wedged => None,
             // A panic of the turn alone (not of the slot's attach) leaves the
             // slot attached; the window reports it after its first frame.
             Some(flui_engine::SlotPhase::Attached) => None,

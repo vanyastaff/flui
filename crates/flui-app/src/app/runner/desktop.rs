@@ -540,12 +540,11 @@ impl DesktopFrameDriver {
         // panic of the code the settlements ran is this window's: the rest
         // of the wake runs, then it resumes here.
         let (settled, mut caught) = self.raster.settle(ui_runtime);
-        // The reveal runs platform code: contained with the rest of the wake,
-        // so a panic there does not drop the settlements' first one.
-        let _ran = caught.contain(|| {
-            self.after_settled(settled, web_time::Instant::now());
-            self.turn(ui_runtime, presentation);
-        });
+        // The reveal runs platform code: contained on its own, so a panic
+        // there neither drops the settlements' first one nor skips the
+        // wake's frame.
+        let _paced = caught.contain(|| self.after_settled(settled, web_time::Instant::now()));
+        let _ran = caught.contain(|| self.turn(ui_runtime, presentation));
         caught.resume();
     }
 

@@ -9,8 +9,8 @@
 //!
 //! A turn's panic outside a slot's command cannot be resumed on the owner's
 //! thread: the thread contains it, keeps serving, and hands its text to the
-//! owner as [`ExecutorFailure::TurnPanicked`]. A thread that does not answer a
-//! detach or a stop within [`DETACH_DEADLINE`] is marked
+//! owner as [`ExecutorFailure::TurnPanicked`]. A thread that does not answer an
+//! attach, a detach or a stop within [`DETACH_DEADLINE`] is marked
 //! [`ExecutorHealth::Died`] and left running: it holds the context, and the
 //! owner neither joins it nor builds a second context beside it.
 
