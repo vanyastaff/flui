@@ -425,8 +425,8 @@ pub(crate) trait ClassWindows: OpenWindows + std::fmt::Debug {
     /// while a modal loop stands in for it.
     fn paint_invalid(&self);
 
-    /// Whether any window is shown: a launch another process forwarded asks
-    /// an application that shows none to reopen.
+    /// Whether any window is shown: a launch another process forwarded that
+    /// opens nothing asks an application that shows none to reopen.
     #[cfg(feature = "single-instance")]
     fn shows_any(&self) -> bool;
 

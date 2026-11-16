@@ -29,7 +29,10 @@ use flui_platform::drag::{
 };
 use flui_platform::keyboard::{ImeComposition, KeyEvent};
 use flui_platform::pointer::{PanZoomPhase, PointerEvent, PointerKind};
-use flui_platform::text_store::{TextStore, TextStoreHost, Utf16Offset, Utf16Range};
+use flui_platform::text_store::{
+    CommitGate, CompositionEnd, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+    TextStoreHost, TextStoreObserver, TextStoreStatus, Utf16Offset, Utf16Range,
+};
 use flui_platform::{DispatchEventResult, WindowOptions};
 use flui_platform::{DragDropEvent, PlatformInput};
 use flui_testing::text_store_kit::InMemoryTextStore;
@@ -46,7 +49,31 @@ mod accessibility;
 
 #[wasm_bindgen(inline_js = r#"
 function canvas() { return document.getElementById('flui-canvas'); }
-export function freshCanvas() { canvas()?.remove(); }
+// A canvas the window makes is in a root of the window's own, which goes with
+// it; a test that failed left both.
+export function freshCanvas() { (canvas()?.closest('flui-view') ?? canvas())?.remove(); }
+// The tags of the canvas's parent's children, and whether that parent is a
+// root of the window's own; null with no canvas.
+export function canvasSiblings() {
+    const parent = canvas()?.parentElement;
+    if (!parent) return null;
+    const second = canvas().nextElementSibling;
+    const third = second?.nextElementSibling;
+    return JSON.stringify({
+        root: parent.tagName === 'FLUI-VIEW',
+        order: [canvas(), second, third].map(element => element?.tagName.toLowerCase() ?? null),
+        // A root holds the three alone, the semantics host last.
+        last: parent.tagName === 'FLUI-VIEW' ? parent.lastElementChild === third : null,
+    });
+}
+// Whether the page holds a root of a window's own, or any of its hosts.
+export function hostElementsInPage() {
+    return document.querySelectorAll('flui-view, flui-text-input, flui-semantics').length;
+}
+// The page canvas's `style`, `tabindex`, `width` and `height` attributes.
+export function canvasAttributes() {
+    return JSON.stringify(['style', 'tabindex', 'width', 'height'].map(name => canvas().getAttribute(name)));
+}
 // A canvas the page put in the document, styled as a page would.
 export function pageCanvas() {
     canvas()?.remove();
@@ -192,13 +219,161 @@ export function keyAtFocus(key, keyCode) {
     document.activeElement.dispatchEvent(event);
     return event.defaultPrevented;
 }
-function editor() { return canvas().nextElementSibling?.tagName === 'TEXTAREA' ? canvas().nextElementSibling : null; }
+// The hidden textarea, in the text-input host that follows the canvas.
+function editor() {
+    const host = canvas().nextElementSibling;
+    return host?.tagName === 'FLUI-TEXT-INPUT' ? host.querySelector('textarea') : null;
+}
 export function editorState() {
     const area = editor();
     return JSON.stringify(area ? {
         value: area.value, start: area.selectionStart, end: area.selectionEnd,
         focused: document.activeElement === area,
+        fontSize: parseFloat(getComputedStyle(area).fontSize),
     } : null);
+}
+// A touch contact going down at the canvas at (x0, y0) and lifting at
+// (x1, y1): a tap where the two are the same.
+export function touchStroke(x0, y0, x1, y1) {
+    const at = (type, x, y) => canvas().dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 3, pointerType: 'touch', isPrimary: true,
+        button: 0, buttons: type === 'pointerdown' ? 1 : 0, clientX: x, clientY: y,
+    }));
+    at('pointerdown', x0, y0);
+    at('pointerup', x1, y1);
+}
+// A page canvas with an `inputmode` of the page's own and no `style`
+// attribute at all.
+export function bareCanvas() {
+    canvas()?.remove();
+    const element = document.createElement('canvas');
+    element.id = 'flui-canvas';
+    element.setAttribute('inputmode', 'decimal');
+    document.body.append(element);
+}
+export function canvasAttribute(name) { return canvas().getAttribute(name); }
+// Mark the textarea, to tell later whether it is the same element.
+export function markEditor() { editor().dataset.mark = 'kept'; }
+export function editorIsMarked() { return editor()?.dataset.mark === 'kept'; }
+export function textareaCount() { return canvas().nextElementSibling.querySelectorAll('textarea').length; }
+export function editorAriaHidden() { return editor().getAttribute('aria-hidden'); }
+// The soft keyboard as the page reads it: 'up' is a `navigator.virtualKeyboard`
+// that overlays the page and covers its lower part, as Chromium on Android
+// reports a shown keyboard (its `show()` counted, which shows nothing for an
+// element without `virtualkeyboardpolicy="manual"`); 'hidden' is the same API
+// reporting an empty rectangle, as Chromium on Android does after Back;
+// 'inferred' is the page as headless Chrome has it, no `virtualKeyboard` and a
+// visual viewport over the whole layout viewport (an inset of zero, which
+// Safari also reads with its keyboard up); 'unknown' is a page with neither.
+let shows = 0;
+// Stop the canvas's own `focus` listeners (the window's forwarding to the
+// editor) from hearing a focus, by a capturing listener above it.
+const blockForwarding = event => { if (event.target === canvas()) event.stopPropagation(); };
+export function blockCanvasFocusForwarding(blocked) {
+    if (blocked) {
+        window.addEventListener('focus', blockForwarding, true);
+    } else {
+        window.removeEventListener('focus', blockForwarding, true);
+    }
+}
+// The page's own `visualViewport`, an own property of the global object
+// that a plain `delete` would remove for good: the fakes put it back.
+const ownViewport = Object.getOwnPropertyDescriptor(window, 'visualViewport');
+function restoreViewport() {
+    if (ownViewport) {
+        Object.defineProperty(window, 'visualViewport', ownViewport);
+    } else {
+        delete window.visualViewport;
+    }
+}
+export function fakeKeyboard(state) {
+    shows = 0;
+    const rect = state === 'up' ? new DOMRect(0, innerHeight / 2, innerWidth, innerHeight / 2)
+        : state === 'hidden' ? new DOMRect(0, 0, 0, 0) : undefined;
+    const keyboard = rect ? Object.assign(new EventTarget(), {
+        overlaysContent: true,
+        boundingRect: rect,
+        show() { shows += 1; },
+    }) : undefined;
+    Object.defineProperty(navigator, 'virtualKeyboard', { value: keyboard, configurable: true });
+    if (state === 'unknown') {
+        Object.defineProperty(window, 'visualViewport', { value: null, configurable: true });
+    } else {
+        restoreViewport();
+    }
+}
+export function restoreKeyboard() {
+    delete navigator.virtualKeyboard;
+    restoreViewport();
+}
+// Type `text` into the focused textarea as a keyboard does, through the
+// browser's editing, so it enters the textarea's undo history.
+export function insertIntoEditor(text) {
+    editor().focus();
+    document.execCommand('insertText', false, text);
+}
+// A tap as Chrome on a phone delivers it: the pointer events, then the
+// compatibility mouse events, whose `mousedown` focuses the canvas
+// (`tabindex=0`), then `click`.
+export function tapWithCompatibilityEvents(x, y) {
+    const pointer = (type, buttons) => canvas().dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 4, pointerType: 'touch', isPrimary: true,
+        button: 0, buttons, clientX: x, clientY: y,
+    }));
+    const mouse = type => canvas().dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y,
+    }));
+    pointer('pointerdown', 1);
+    pointer('pointerup', 0);
+    mouse('mousedown');
+    canvas().focus({ preventScroll: true });
+    mouse('mouseup');
+    mouse('click');
+}
+// The browser's undo in the focused textarea; its value afterwards.
+export function undoInEditor() {
+    editor().focus();
+    document.execCommand('undo');
+    return editor().value;
+}
+export function keyboardShows() { return shows; }
+// Count the focus and blur events the textarea gets from now on.
+let editorFocuses = 0;
+let editorBlurs = 0;
+export function countEditorFocus() {
+    editorFocuses = 0;
+    editorBlurs = 0;
+    const area = editor();
+    if (!area.dataset.counted) {
+        area.dataset.counted = 'yes';
+        area.addEventListener('focus', () => { editorFocuses += 1; });
+        area.addEventListener('blur', () => { editorBlurs += 1; });
+    }
+}
+export function editorFocusCount() { return editorFocuses; }
+export function editorBlurCount() { return editorBlurs; }
+// Resolve after `count` animation frames.
+export function frames(count) {
+    return new Promise(resolve => {
+        const step = left => (left === 0 ? resolve() : requestAnimationFrame(() => step(left - 1)));
+        step(count);
+    });
+}
+// What holds the page's focus: the canvas, the textarea, or the tag.
+export function pageFocus() {
+    const active = document.activeElement;
+    if (active === canvas()) return 'canvas';
+    if (active && active === editor()) return 'editor';
+    return active ? active.tagName.toLowerCase() : 'nothing';
+}
+// Move the page's focus to the body, as a tap on a canvas a mobile browser
+// does not focus leaves it.
+export function blurAll() { document.activeElement?.blur(); }
+// The textarea's hints as [inputmode, autocomplete, enterkeyhint], each null
+// when absent.
+export function editorHints() {
+    const area = editor();
+    return JSON.stringify(['inputmode', 'autocomplete', 'enterkeyhint'].map(name => area.getAttribute(name)));
 }
 // The input method types into the textarea: its value becomes `value`.
 export function typeIntoEditor(value, caret, composing) {
@@ -281,6 +456,53 @@ extern "C" {
     fn type_into_editor(value: &str, caret: u32, composing: bool);
     #[wasm_bindgen(js_name = editorComposition)]
     fn editor_composition(kind: &str);
+    #[wasm_bindgen(js_name = canvasSiblings)]
+    fn canvas_siblings() -> Option<String>;
+    #[wasm_bindgen(js_name = hostElementsInPage)]
+    fn host_elements_in_page() -> u32;
+    #[wasm_bindgen(js_name = canvasAttributes)]
+    fn canvas_attributes() -> String;
+    #[wasm_bindgen(js_name = touchStroke)]
+    fn touch_stroke(x0: f64, y0: f64, x1: f64, y1: f64);
+    #[wasm_bindgen(js_name = pageFocus)]
+    fn page_focus() -> String;
+    #[wasm_bindgen(js_name = bareCanvas)]
+    fn bare_canvas();
+    #[wasm_bindgen(js_name = canvasAttribute)]
+    fn canvas_attribute(name: &str) -> Option<String>;
+    #[wasm_bindgen(js_name = markEditor)]
+    fn mark_editor();
+    #[wasm_bindgen(js_name = editorIsMarked)]
+    fn editor_is_marked() -> bool;
+    #[wasm_bindgen(js_name = textareaCount)]
+    fn textarea_count() -> u32;
+    #[wasm_bindgen(js_name = editorAriaHidden)]
+    fn editor_aria_hidden() -> Option<String>;
+    #[wasm_bindgen(js_name = fakeKeyboard)]
+    fn fake_keyboard(state: &str);
+    #[wasm_bindgen(js_name = restoreKeyboard)]
+    fn restore_keyboard();
+    #[wasm_bindgen(js_name = blockCanvasFocusForwarding)]
+    fn block_canvas_focus_forwarding(blocked: bool);
+    #[wasm_bindgen(js_name = insertIntoEditor)]
+    fn insert_into_editor(text: &str);
+    #[wasm_bindgen(js_name = tapWithCompatibilityEvents)]
+    fn tap_with_compatibility_events(x: f64, y: f64);
+    #[wasm_bindgen(js_name = undoInEditor)]
+    fn undo_in_editor() -> String;
+    #[wasm_bindgen(js_name = keyboardShows)]
+    fn keyboard_shows() -> u32;
+    #[wasm_bindgen(js_name = countEditorFocus)]
+    fn count_editor_focus();
+    #[wasm_bindgen(js_name = editorFocusCount)]
+    fn editor_focus_count() -> u32;
+    #[wasm_bindgen(js_name = editorBlurCount)]
+    fn editor_blur_count() -> u32;
+    fn frames(count: u32) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = blurAll)]
+    fn blur_all();
+    #[wasm_bindgen(js_name = editorHints)]
+    fn editor_hints() -> String;
 }
 
 /// What one dispatched drag event did.
@@ -1159,7 +1381,13 @@ struct HostedCanvas {
 
 impl HostedCanvas {
     fn open() -> Self {
-        fresh_canvas();
+        Self::open_on(fresh_canvas)
+    }
+
+    /// The window on the canvas `place` leaves in the page: none, so the
+    /// window makes its own, or the page's.
+    fn open_on(place: fn()) -> Self {
+        place();
         let slot = Rc::new(RefCell::new(None));
         let out = Rc::clone(&slot);
         Box::new(WebPlatform::try_new().expect("a browser platform"))
@@ -1332,6 +1560,9 @@ struct EditorState {
     start: u32,
     end: u32,
     focused: bool,
+    /// Its computed `font-size` in CSS pixels.
+    #[serde(rename = "fontSize")]
+    font_size: f64,
 }
 
 fn editor() -> Option<EditorState> {
@@ -1353,8 +1584,13 @@ fn a_textarea_serves_the_field_without_edit_context() {
         let store = InMemoryTextStore::new("ab");
         let reported = canvas.active.lock().expect("focus log").len();
         canvas.host.focus_store(Some(as_store(&store)));
-        let state = editor().expect("a textarea beside the canvas");
+        let state = editor().expect("a textarea in the text-input host after the canvas");
         assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+        assert!(
+            state.font_size >= 16.0,
+            "iOS Safari zooms into a focused field below 16 px: {}",
+            state.font_size
+        );
         assert!(
             canvas.active.lock().expect("focus log")[reported..].is_empty(),
             "focus moved within the canvas's area: no window focus change"
@@ -1400,12 +1636,493 @@ fn a_textarea_serves_the_field_without_edit_context() {
         );
 
         canvas.host.focus_store(None);
-        assert!(editor().is_none(), "the textarea is gone");
+        let state = editor().expect("the window keeps its one editor");
+        assert!(
+            !state.focused && state.value.is_empty(),
+            "released: unfocused and empty"
+        );
         assert!(
             canvas.window.state().focused,
             "focus went back to the canvas"
         );
     }
+}
+
+/// A tap with no field served focuses the window's editor in the tap's
+/// handler with `inputmode="none"` and `aria-hidden`, so a tap on a button
+/// opens no keyboard and shows a screen reader no field; the field the
+/// application focuses for that tap after the handler (at its next frame)
+/// takes the editor over with its focus and writes its own hints.
+///
+/// The test driver has no trusted input from the page, so the taps are
+/// constructed events; what a real tap opens on iOS Safari and Android is a
+/// device run.
+#[wasm_bindgen_test]
+fn a_tap_focuses_an_editor_the_field_attached_after_it_takes_over() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    blur_all();
+    touch_stroke(5.0, 5.0, 5.0, 5.0);
+    assert_eq!(page_focus(), "editor", "focused in the tap's handler");
+    assert_eq!(editor_hints(), r#"["none","off",null]"#, "no keyboard yet");
+    assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    let state = editor().expect("the editor the tap focused");
+    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+    assert_eq!(
+        editor_hints(),
+        r#"["text","off",null]"#,
+        "the field's hints"
+    );
+    assert_eq!(editor_aria_hidden(), None);
+    canvas.host.focus_store(None);
+}
+
+/// A tap no field follows within two animation frames gives the focus back
+/// to the canvas, having opened no keyboard; a second tap inside the first
+/// one's two frames keeps its own two.
+#[wasm_bindgen_test]
+async fn a_tap_no_field_follows_gives_the_focus_back_to_the_canvas() {
+    let _hidden = EditContextHidden::hide();
+    let _canvas = HostedCanvas::open();
+    blur_all();
+    touch_stroke(200.0, 100.0, 200.0, 100.0);
+    assert_eq!(page_focus(), "editor");
+    assert_eq!(editor_hints(), r#"["none","off",null]"#, "no keyboard");
+    js_sys::futures::JsFuture::from(frames(1))
+        .await
+        .expect("a frame");
+    touch_stroke(200.0, 100.0, 200.0, 100.0);
+    js_sys::futures::JsFuture::from(frames(1))
+        .await
+        .expect("a frame");
+    assert_eq!(page_focus(), "editor", "the second tap's frames still run");
+    js_sys::futures::JsFuture::from(frames(2))
+        .await
+        .expect("two frames");
+    assert_eq!(page_focus(), "canvas");
+}
+
+/// Moving from one field to the next keeps the window's one editor and its
+/// focus, so a phone's keyboard stays up; releasing the last field gives the
+/// focus back to the canvas.
+#[wasm_bindgen_test]
+fn moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let first = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&first)));
+    assert_eq!(page_focus(), "editor");
+    mark_editor();
+    let second = InMemoryTextStore::new("xyz");
+    canvas.host.focus_store(Some(as_store(&second)));
+    let state = editor().expect("the editor");
+    assert_eq!((state.value.as_str(), state.focused), ("xyz", true));
+    assert!(editor_is_marked(), "the same element");
+    assert_eq!(textarea_count(), 1);
+    canvas.host.focus_store(None);
+    assert_eq!(page_focus(), "canvas");
+}
+
+/// A tap on the field whose editor kept its focus moves focus only when the
+/// browser reports the keyboard hidden (`navigator.virtualKeyboard`'s empty
+/// rectangle; Android's Back keeps the focus): the editor gives its focus to
+/// the canvas and takes it back inside the tap's handler, the second focus
+/// its own, so the editor ends focused with the canvas's forwarding
+/// stopped. With the keyboard reported up (typing, perhaps
+/// mid-composition), with an inset of zero inferred from the visual
+/// viewport (Safari reads that with its keyboard up) or with nothing to
+/// read, it changes no focus. `navigator.virtualKeyboard`'s `show()` is
+/// never called.
+#[wasm_bindgen_test]
+fn a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard() {
+    struct Keyboard;
+    impl Drop for Keyboard {
+        fn drop(&mut self) {
+            block_canvas_focus_forwarding(false);
+            restore_keyboard();
+        }
+    }
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    assert_eq!(page_focus(), "editor");
+    let _keyboard = Keyboard;
+    for (state, forwarding, focuses) in [
+        ("up", true, 0),
+        ("inferred", true, 0),
+        ("unknown", true, 0),
+        ("hidden", true, 1),
+        ("hidden", false, 1),
+    ] {
+        block_canvas_focus_forwarding(!forwarding);
+        fake_keyboard(state);
+        count_editor_focus();
+        touch_stroke(5.0, 5.0, 5.0, 5.0);
+        let case = format!("keyboard {state}, forwarding {forwarding}");
+        assert_eq!(editor_focus_count(), focuses, "{case}");
+        assert_eq!(page_focus(), "editor", "{case}");
+        assert_eq!(keyboard_shows(), 0, "show() is never relied on");
+    }
+    block_canvas_focus_forwarding(false);
+    fake_keyboard("hidden");
+    count_editor_focus();
+    touch_stroke(200.0, 100.0, 200.0, 100.0);
+    assert_eq!(editor_focus_count(), 0, "a tap off the field does nothing");
+    canvas.host.focus_store(None);
+}
+
+/// A tap with nothing served, as Chrome on a phone delivers it (the pointer
+/// events, then the compatibility `mousedown`, which focuses the canvas):
+/// the canvas hands the focus on to the editor the tap focused, so the field
+/// attached after it finds the editor focused rather than the canvas.
+#[wasm_bindgen_test]
+fn a_tap_s_compatibility_mousedown_leaves_the_focus_on_the_editor() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    blur_all();
+    tap_with_compatibility_events(5.0, 5.0);
+    assert_eq!(page_focus(), "editor", "handed on from the canvas");
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    let state = editor().expect("the editor");
+    assert_eq!((state.value.as_str(), state.focused), ("ab", true));
+    canvas.host.focus_store(None);
+}
+
+/// The window's editor's attributes follow its state on every change: a
+/// served field's hints with no `aria-hidden`; between fields `aria-hidden`,
+/// `inputmode="none"`, `autocomplete="off"` and no value, so a password
+/// field's text and hints do not linger. What each assertion pins:
+/// `idle.value == ""` the idle state's clearing in `set_hidden_state`; the
+/// undo assertion that the next field's value is replaced from script, in
+/// `EditorElement::show` (the password, typed through the browser's
+/// editing, is in the textarea's undo history, which a script write
+/// empties). The undo assertion alone would stay green with the idle
+/// clearing reverted: `show`'s write empties the history too.
+#[wasm_bindgen_test]
+fn the_hidden_editor_s_attributes_follow_its_state() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let password = InMemoryTextStore::new("");
+    password.set_protected(true);
+    canvas.host.focus_store(Some(as_store(&password)));
+    assert_eq!(editor_hints(), r#"["text","new-password",null]"#);
+    assert_eq!(editor_aria_hidden(), None);
+    insert_into_editor("secret");
+    assert_eq!(password.text(), "secret", "typed through the browser");
+    canvas.host.focus_store(None);
+    let idle = editor().expect("the window's editor");
+    assert_eq!(idle.value, "", "no value between fields");
+    assert_eq!(editor_hints(), r#"["none","off",null]"#);
+    assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
+    let plain = InMemoryTextStore::new("ab");
+    plain.set_purpose(flui_platform::text_store::TextInputPurpose::Search);
+    canvas.host.focus_store(Some(as_store(&plain)));
+    assert_eq!(editor_hints(), r#"["search","off","search"]"#);
+    assert_eq!(editor_aria_hidden(), None);
+    let undone = undo_in_editor();
+    assert!(
+        !undone.contains("secret"),
+        "the browser's undo does not bring the password back: {undone:?}"
+    );
+    canvas.host.focus_store(None);
+}
+
+/// A composition still live in one field when another takes the editor is
+/// committed in place to the first, and the browser's late composition
+/// events land in no store: the second field keeps its text.
+#[wasm_bindgen_test]
+fn a_composition_left_in_one_field_lands_in_no_other() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let first = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&first)));
+    editor_composition("compositionstart");
+    type_into_editor("abに", 3, true);
+    assert!(first.composition().is_some(), "the first field composes");
+    let second = InMemoryTextStore::new("xyz");
+    canvas.host.focus_store(Some(as_store(&second)));
+    assert_eq!(first.composition(), None, "committed in place");
+    assert_eq!(first.text(), "abに");
+    editor_composition("compositionend");
+    let state = editor().expect("the editor");
+    type_into_editor(&state.value, 3, false);
+    assert_eq!(
+        second.text(),
+        "xyz",
+        "nothing of the first field's composition"
+    );
+    canvas.host.focus_store(None);
+}
+
+/// An application that completes the composition in the hidden editor ends
+/// the browser's by rewriting the editor's value from script, with no blur
+/// or focus that would close a phone's keyboard outside a tap, and keeps
+/// showing the store's text, which the application then commits in place.
+#[wasm_bindgen_test]
+fn completing_a_composition_in_the_hidden_editor_moves_no_focus() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let store = InMemoryTextStore::new("ab");
+    let served = as_store(&store);
+    canvas.host.focus_store(Some(Rc::clone(&served)));
+    editor_composition("compositionstart");
+    type_into_editor("abに", 3, true);
+    assert!(store.composition().is_some(), "the field composes");
+    count_editor_focus();
+    let end = canvas
+        .host
+        .complete_composition(&served)
+        .expect("the focused store");
+    assert_eq!(end, CompositionEnd::Abandoned, "the browser's discarded");
+    assert_eq!(
+        (editor_blur_count(), editor_focus_count()),
+        (0, 0),
+        "no focus move"
+    );
+    assert_eq!(page_focus(), "editor");
+    // The application commits the store's composition in place, as
+    // `Abandoned` asks.
+    let committed = flui_platform::text_store::commit_composition_in_place(&*served, |_| {})
+        .expect("the store commits");
+    assert_eq!(committed, LockOutcome::Granted, "committed now");
+    assert_eq!(store.composition(), None);
+    assert_eq!(store.text(), "abに");
+    let state = editor().expect("the editor");
+    assert_eq!(state.value, "abに");
+    // The browser's own end of the composition, after the rewrite, adds
+    // nothing.
+    editor_composition("compositionend");
+    type_into_editor(&state.value, 3, false);
+    assert_eq!(store.text(), "abに");
+    canvas.host.focus_store(None);
+}
+
+/// A store that refuses its next `refusals` asynchronous locks (the
+/// browser's edits), as one whose frame transaction cannot take them, so
+/// the host republishes the store to the editor.
+struct RefusingStore {
+    inner: Rc<InMemoryTextStore>,
+    refusals: Cell<usize>,
+}
+
+impl TextStore for RefusingStore {
+    fn status(&self) -> TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        if self.refusals.get() > 0 && timing == LockTiming::Async {
+            self.refusals.set(self.refusals.get() - 1);
+            return Err(TextStoreError::DeferredQueueFull);
+        }
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.inner.set_commit_gate(gate);
+    }
+
+    fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// A composition live when the host republishes the store (an edit the
+/// store refused) is committed in place once, and the browser's end of it
+/// in the synchronous order (its `compositionend` and `input` after the
+/// value reset) lands the composed text once. An input method that commits
+/// asynchronously after the reset is not covered here (the parity source
+/// keeps it owed).
+#[wasm_bindgen_test]
+async fn a_composition_live_during_a_resync_lands_once() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    let inner = InMemoryTextStore::new("ab");
+    let store = Rc::new(RefusingStore {
+        inner: Rc::clone(&inner),
+        refusals: Cell::new(0),
+    });
+    canvas
+        .host
+        .focus_store(Some(Rc::clone(&store) as Rc<dyn TextStore>));
+    editor_composition("compositionstart");
+    type_into_editor("abに", 3, true);
+    assert!(inner.composition().is_some(), "the field composes");
+    store.refusals.set(1);
+    type_into_editor("abにほ", 4, true);
+    // The republish runs once the task that refused the edit ends.
+    js_sys::futures::JsFuture::from(frames(1))
+        .await
+        .expect("a frame");
+    assert_eq!(inner.composition(), None, "committed in place");
+    assert_eq!(inner.text(), "abに");
+    let state = editor().expect("the editor");
+    assert_eq!(state.value, "abに", "the store republished");
+    editor_composition("compositionend");
+    type_into_editor(&state.value, 3, false);
+    assert_eq!(inner.text(), "abに", "the composed text once");
+    canvas.host.focus_store(None);
+}
+
+/// With a field served and its keyboard hidden (the textarea blurred), a tap
+/// on the field focuses the textarea again; a tap elsewhere, a drag over
+/// the field (the end of a scroll) and a mouse leave it unfocused.
+#[wasm_bindgen_test]
+fn a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone() {
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    // The kit's field "ab" lies over (0, 0)–(20, 20) of the canvas.
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    assert_eq!(page_focus(), "editor");
+    blur_all();
+    for (what, stroke) in [
+        ("a tap off the field", [200.0, 100.0, 200.0, 100.0]),
+        ("a drag ending on the field", [5.0, 60.0, 5.0, 5.0]),
+    ] {
+        touch_stroke(stroke[0], stroke[1], stroke[2], stroke[3]);
+        assert_ne!(page_focus(), "editor", "{what}");
+    }
+    press_mouse("pointerdown", 5.0, 5.0);
+    press_mouse("pointerup", 5.0, 5.0);
+    assert_ne!(page_focus(), "editor", "a mouse");
+    touch_stroke(5.0, 5.0, 6.0, 6.0);
+    assert_eq!(page_focus(), "editor", "a tap on the field");
+    canvas.host.focus_store(None);
+}
+
+/// The hidden editor tells the browser, for each purpose, each enter action
+/// and protection, which keyboard to show (`inputmode`), what it may fill the
+/// field with (`autocomplete`: nothing beside the canvas, `new-password` for a
+/// protected field) and how to label Return (`enterkeyhint`: a search, a new
+/// line for a field of many lines, else the browser's own).
+#[wasm_bindgen_test]
+fn the_hidden_editor_states_each_purpose_and_enter_action() {
+    use flui_platform::text_store::TextInputPurpose::{Email, Number, Phone, Search, Text, Url};
+
+    let _hidden = EditContextHidden::hide();
+    let canvas = HostedCanvas::open();
+    assert!(focus_canvas());
+    // (purpose, single line, protected, [inputmode, autocomplete, enterkeyhint])
+    let cases = [
+        (Text, true, false, r#"["text","off",null]"#),
+        (Text, false, false, r#"["text","off","enter"]"#),
+        (Email, true, false, r#"["email","off",null]"#),
+        (Email, false, false, r#"["email","off","enter"]"#),
+        (Url, true, false, r#"["url","off",null]"#),
+        (Phone, true, false, r#"["tel","off",null]"#),
+        (Number, true, false, r#"["numeric","off",null]"#),
+        (Search, true, false, r#"["search","off","search"]"#),
+        (Search, false, false, r#"["search","off","search"]"#),
+        (Text, true, true, r#"["text","new-password",null]"#),
+        (Number, true, true, r#"["numeric","new-password",null]"#),
+    ];
+    for (purpose, single_line, protected, expected) in cases {
+        let store = InMemoryTextStore::new("ab");
+        store.set_purpose(purpose);
+        store.set_single_line(single_line);
+        store.set_protected(protected);
+        canvas.host.focus_store(Some(as_store(&store)));
+        let case = format!("{purpose:?}, single line {single_line}, protected {protected}");
+        assert_eq!(editor_hints(), expected, "attached: {case}");
+        canvas.host.focus_store(None);
+    }
+    // A status that changes while the field is served reaches the element.
+    let store = InMemoryTextStore::new("ab");
+    canvas.host.focus_store(Some(as_store(&store)));
+    store.set_purpose(Search);
+    assert_eq!(editor_hints(), r#"["search","off","search"]"#, "refreshed");
+    store.set_purpose(Text);
+    store.set_single_line(false);
+    assert_eq!(editor_hints(), r#"["text","off","enter"]"#, "refreshed");
+    canvas.host.focus_store(None);
+}
+
+/// An `EditContext` serving a field on the page's own canvas writes its
+/// `inputmode`, and the page's own value comes back once the field goes;
+/// closing the window leaves a canvas that had no `style` attribute with
+/// none.
+#[wasm_bindgen_test]
+fn a_page_canvas_gets_back_the_inputmode_and_the_style_it_had() {
+    let canvas = HostedCanvas::open_on(bare_canvas);
+    let store = InMemoryTextStore::new("ab");
+    store.set_purpose(flui_platform::text_store::TextInputPurpose::Email);
+    canvas.host.focus_store(Some(as_store(&store)));
+    assert_eq!(
+        canvas_attribute("inputmode").as_deref(),
+        Some("email"),
+        "the field's"
+    );
+    canvas.host.focus_store(None);
+    assert_eq!(
+        canvas_attribute("inputmode").as_deref(),
+        Some("decimal"),
+        "the page's"
+    );
+    canvas.window.close_now();
+    assert_eq!(canvas_attribute("style"), None, "no style attribute");
+    assert_eq!(canvas_attribute("tabindex"), None);
+    assert_eq!(canvas_attribute("width"), None);
+    drop(canvas);
+    fresh_canvas();
+}
+
+/// A window on a page with no canvas puts one root in the page holding the
+/// canvas, the text-input host and the semantics host, the semantics host
+/// last; on the page's own canvas the two hosts follow it. Closing the window
+/// takes out what it added and gives the page's canvas back its own `style`
+/// and `tabindex`.
+#[wasm_bindgen_test]
+fn the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out() {
+    for (canvas, place, expected) in [
+        (
+            "made by the window",
+            fresh_canvas as fn(),
+            r#"{"root":true,"order":["canvas","flui-text-input","flui-semantics"],"last":true}"#,
+        ),
+        (
+            "the page's own",
+            page_canvas,
+            r#"{"root":false,"order":["canvas","flui-text-input","flui-semantics"],"last":null}"#,
+        ),
+    ] {
+        place();
+        let page = canvas_siblings().map(|_| canvas_attributes());
+        let platform = WebPlatform::try_new().expect("a browser platform");
+        let window = platform
+            .open_window(WindowOptions::default(), RecordingWindowHandler::new())
+            .expect("the canvas opens");
+        assert_eq!(canvas_siblings().as_deref(), Some(expected), "{canvas}");
+        window.close_now();
+        assert_eq!(
+            host_elements_in_page(),
+            0,
+            "{canvas}: what the window added"
+        );
+        if let Some(page) = page {
+            assert_eq!(canvas_attributes(), page, "{canvas}: the page's attributes");
+        }
+    }
+    fresh_canvas();
 }
 
 /// A frame request carries the browser's own frame time, not the moment the callback ran: a frame

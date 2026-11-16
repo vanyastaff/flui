@@ -51,6 +51,8 @@ pub(crate) mod util;
 mod tests;
 /// Web/WASM platform build support
 pub(crate) mod web;
+/// The page a web build writes
+pub(crate) mod web_page;
 
 pub(crate) use android::AndroidBuilder;
 pub(crate) use context_builder::BuilderContextBuilder;

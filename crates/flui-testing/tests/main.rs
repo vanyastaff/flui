@@ -261,6 +261,28 @@ fn capability_seam() {
                 capability_seam::copy_and_paste_round_trip_through_the_headless_clipboard as fn(),
             ),
             (
+                "capability_seam::a_refused_write_answers_its_refusal",
+                capability_seam::a_refused_write_answers_its_refusal as fn(),
+            ),
+            (
+                "capability_seam::a_scripted_write_step_refuses_that_write_alone",
+                capability_seam::a_scripted_write_step_refuses_that_write_alone as fn(),
+            ),
+            (
+                "capability_seam::every_ok_answer_to_a_scripted_write_lands_its_text",
+                capability_seam::every_ok_answer_to_a_scripted_write_lands_its_text as fn(),
+            ),
+            (
+                "capability_seam::the_scripted_clipboard_keeps_one_order_across_reads_and_writes",
+                capability_seam::the_scripted_clipboard_keeps_one_order_across_reads_and_writes
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_tests_observer_and_two_holds_leave_the_clipboard_serving",
+                capability_seam::a_tests_observer_and_two_holds_leave_the_clipboard_serving
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_concealed_write_reaches_the_host_marked",
                 capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
             ),

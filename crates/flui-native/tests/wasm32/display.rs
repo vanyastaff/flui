@@ -77,20 +77,52 @@ function screen(label, left, dppx, primary) {
     return made;
 }
 
+// An element of the fake page: any tag the platform makes is one, the canvas
+// included. It keeps its attributes and its place among its parent's
+// children, which is all the window reads of the tree.
 class FakeCanvas extends EventTarget {
-    constructor() {
+    constructor(tag = 'canvas') {
         super();
-        this.style = { setProperty() {} };
+        this.tagName = tag.toUpperCase();
+        this.style = { setProperty() {}, cssText: '' };
         this.clientWidth = 300;
         this.clientHeight = 150;
         this.width = 300;
         this.height = 150;
         this.ownerDocument = document;
         this.padding = 0;
+        this.attrs = {};
+        this.children = [];
+        this.parentNode = null;
     }
     getRootNode() { return document; }
     contains(node) { return node === this; }
-    setAttribute() {}
+    // A canvas's `width` and `height` attributes are its backing store's size.
+    setAttribute(name, value) {
+        this.attrs[name] = String(value);
+        if (name === 'width' || name === 'height') this[name] = Number(value);
+    }
+    getAttribute(name) { return this.attrs[name] ?? null; }
+    removeAttribute(name) { delete this.attrs[name]; }
+    get parentElement() { return this.parentNode instanceof FakeCanvas ? this.parentNode : null; }
+    get nextSibling() {
+        const siblings = this.parentNode?.children ?? [];
+        return siblings[siblings.indexOf(this) + 1] ?? null;
+    }
+    insertBefore(child, before) {
+        child.remove();
+        const at = before ? this.children.indexOf(before) : -1;
+        child.parentNode = this;
+        if (at < 0) this.children.push(child);
+        else this.children.splice(at, 0, child);
+        return child;
+    }
+    appendChild(child) { return this.insertBefore(child, null); }
+    remove() {
+        if (!this.parentNode) return;
+        this.parentNode.children = this.parentNode.children.filter(child => child !== this);
+        this.parentNode = null;
+    }
     // Laid out at the page's left edge, `top` below its top (0 unless a test
     // scrolls it), drawn `scale` times its size (1 unless a test transforms it).
     getBoundingClientRect() {
@@ -114,6 +146,7 @@ class PageCanvas extends FakeCanvas {
         this.writes = [];
         const canvas = this;
         this.style = {
+            cssText: '',
             setProperty(name, value) {
                 canvas.declared[name] = value;
                 if (name === 'width' || name === 'height') canvas.writes.push(`${name}: ${value}`);
@@ -206,12 +239,12 @@ export function installDisplayProbe(windowManagement) {
     Object.defineProperty(document, 'hidden', { get: () => hidden });
     document.hasFocus = () => true;
     document.title = '';
-    document.body = { appendChild() {} };
+    document.body = new FakeCanvas('body');
     document.getElementById = () => null;
-    // The window's canvas; any other element (the accessibility placeholder
-    // beside it) is a stand-in that is not the canvas.
+    // The window's canvas; any other element (its root and hosts, the
+    // accessibility placeholder) is a stand-in that is not the canvas.
     document.createElement = tag => {
-        const element = new FakeCanvas();
+        const element = new FakeCanvas(tag);
         if (tag === 'canvas') lastCanvas = element;
         return element;
     };
@@ -219,6 +252,9 @@ export function installDisplayProbe(windowManagement) {
     define('HTMLCanvasElement', FakeCanvas);
     define('getComputedStyle', element => {
         const padding = `${element.padding ?? 0}px`;
+        // The padding `env(safe-area-inset-*)` computes to: the bands a test
+        // gives the element as `safeArea` ([top, right, bottom, left]).
+        const band = side => (element.safeArea ? `${element.safeArea[side]}px` : padding);
         return {
             paddingTop: padding, paddingRight: padding, paddingBottom: padding, paddingLeft: padding,
             writingMode: 'horizontal-tb',
@@ -226,6 +262,10 @@ export function installDisplayProbe(windowManagement) {
             getPropertyValue: name => ({
                 width: `${element.clientWidth - 2 * (element.padding ?? 0)}px`,
                 height: `${element.clientHeight - 2 * (element.padding ?? 0)}px`,
+                'padding-top': band(0),
+                'padding-right': band(1),
+                'padding-bottom': band(2),
+                'padding-left': band(3),
             })[name] ?? '',
         };
     });
@@ -358,6 +398,7 @@ export function changeCanvasBoxes(width, height, deviceWidth, deviceHeight, padd
 // (`undefined` for none) and `padding`.
 export function putCanvasInPage(cssWidth, minHeight, padding) {
     lastCanvas = new PageCanvas({ cssWidth, minHeight, padding });
+    document.body.appendChild(lastCanvas);
     document.getElementById = id => (id === 'flui-canvas' ? lastCanvas : null);
 }
 // The browser lays the canvas out again: every observer reports the box it has
@@ -471,7 +512,7 @@ extern "C" {
         changed: &str,
     );
     #[wasm_bindgen(js_name = putCanvasInPage)]
-    fn put_canvas_in_page(css_width: Option<u32>, min_height: Option<u32>, padding: u32);
+    pub(super) fn put_canvas_in_page(css_width: Option<u32>, min_height: Option<u32>, padding: u32);
     #[wasm_bindgen(js_name = reportCanvasBox)]
     fn report_canvas_box();
     #[wasm_bindgen(js_name = canvasSizeWrites)]

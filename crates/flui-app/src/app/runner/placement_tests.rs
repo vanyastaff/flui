@@ -58,7 +58,10 @@ fn start_on_manual_clock(application: Application) -> (HeadlessRunHandle, Manual
     let ingress = APP_RUNTIME
         .with(|slot| slot.borrow().main_ingress.clone())
         .expect("a running loop has its main window's ingress");
-    ingress.request_native_show();
+    assert!(
+        ingress.request_native_show(),
+        "the running loop takes the reopen"
+    );
     run.run_owner_turn();
     (run, clock)
 }

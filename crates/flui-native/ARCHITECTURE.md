@@ -538,8 +538,8 @@ trait depends on `flui-platform` instead.
   platform, and `[package.metadata.flui.modules]` lists the four as
   `features`: `cargo xtask module-dag` holds a platform file to its own model,
   `owner/`, `version/` and other features' models. The models are
-  `clipboard::lock` (the process-wide lock every Win32 clipboard session
-  runs under), `drag::offers` (the offer table every data-transfer source mints its
+  `clipboard::patience` (the schedule on which the Win32 clipboard tries
+  again to open a clipboard another process holds), `drag::offers` (the offer table every data-transfer source mints its
   ids in, `TransferUri`,
   a URI list as the hosts that read paths or URIs write it, and what a media
   type offers and its bytes carry, shared
@@ -1620,6 +1620,53 @@ retain the legacy US keycode fallback, including Shift and Caps Lock. A successf
 map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
 pins the projection, while actual layout and Shift mapping require live input.
 
+### The web window keeps its canvas and two hosts in one order, and takes them out
+
+`window::web::root::PageRoot` is what a web window puts in the page
+(ADR-0255 decision 16). A page with no canvas of its own gets a root,
+`flui-view`, appended to the body and fixed over the layout viewport
+(`position: fixed; inset: 0`, not `100vh`, which on a phone runs under the
+browser's toolbars), holding the canvas, the text-input host
+(`flui-text-input`) and the semantics slot (`flui-semantics`), in that
+order. A page that supplies `<canvas id="flui-canvas">` owns its layout: the
+two hosts are inserted after the canvas, and when the window retires the
+canvas gets back everything the window wrote on it: the attributes of one list
+(`owner::web::CANVAS_ATTRIBUTES`: `width`, `height`, `tabindex`, `inputmode`, which every writer goes through, `CanvasWrites`) and its inline
+style, restored through the CSSOM, which a Content Security Policy that
+refuses inline style attributes allows. For the window's life the canvas has
+two more siblings, which selectors such as `canvas:last-child` see; they
+change no layout, since they generate no box and all they hold is
+`position: fixed`. They stay beside the canvas so what the semantics slot
+holds is hidden by the canvas's ancestors and placed in the containing block
+a transformed ancestor gives it. A `#flui-canvas`
+inside another window's `flui-view` (another FLUI instance on the page) is
+not the page's: the window makes a root of its own, whose canvas takes the id
+only while no element has it. The hosts are `display: contents`, so they give
+no box, ancestor or containing block the canvas does not have; the text input
+and the accessibility put their elements only into them (`HostSlots`, on
+`CanvasRef`), so the semantics slot stays last whichever of the two adds its
+element first. Dropping the `PageRoot` takes out what it added, on a close and
+on an open that failed after the root was made.
+
+The safe area is the part of each band `env(safe-area-inset-*)` names
+unsafe that the canvas lies under. The text-input host's padding is those
+`env()` values, so its computed padding is the bands in CSS pixels;
+`window::safe_area::within` intersects them with the canvas's box in the
+layout viewport (the window's `innerWidth`×`innerHeight`, which quirks mode
+does not change) and scales them into the window's logical pixels, as the
+keyboard's occlusion is. The bands are zero unless the page covers the display
+(`viewport-fit=cover`, which the page `flui build` writes asks for). They are
+read once and kept (`HostSlots::unsafe_edges`), since reading them is a style
+recalculation every state sample would pay, and read again after a window
+resize, a turn of the screen (`screen.orientation`'s `change`, or `orientationchange`: half a turn changes no size yet swaps the side bands) or a visual-viewport or scroll change.
+
+`a_window_takes_the_part_of_each_band_over_it` pins the intersection on
+Linux; the Node suite's `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+and `web_window_reads_the_safe_area_from_the_viewport` drive the fake page,
+and the headless-Chrome `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+checks the order, the teardown and the page canvas's attributes. No mobile
+browser has run the safe area.
+
 ### Web subscriptions belong to one actual canvas registration
 
 The canvas owns an exact DOM-object registration claim. Another live owner of
@@ -2032,7 +2079,7 @@ quiescent point is still inside that dispatch.
 `OwnerPlatform::text_store_host` as Win32's text services are. The focused
 field's store is mirrored into an `EditContext` on the canvas where the
 browser has one (Chromium; web-sys binds none, so the crate declares it) and
-into a hidden `<textarea>` beside the canvas where it does not. The browser
+into a hidden `<textarea>` in the window's text-input host where it does not. The browser
 edits its copy and reports each edit (`textupdate`, or the textarea's
 `input`, diffed against the text the host last gave it by
 `text::ime::diff`, the mirror's one edit); the host applies it to the store under an
@@ -2061,6 +2108,62 @@ change, its keys reach the window through the canvas's key route
 (`CanvasKeys`), focusing the canvas forwards focus to it, and detaching gives
 focus back to the canvas.
 
+A mobile browser shows its keyboard only for an element focused inside the
+handler of a tap, and iOS Safari zooms the page into a focused field whose
+text is below 16 CSS pixels. Every element the host focuses for editing (the
+textarea, a semantics field) has `font-size: 16px`
+(`owner::web::EDITOR_FONT_SIZE`), and every focus the text input makes
+passes `preventScroll`. The window has one hidden editor for its whole life,
+as Flutter's web engine keeps one editing element: a field change rewrites
+its content and hints and leaves its focus, so the keyboard stays up from one
+field to the next, and a store released with no field after it gives the
+focus back to the canvas. In the `pointerup` handler of a touch or pen tap (a
+contact that travelled at most `TAP_SLOP`), after the canvas's input
+dispatched it: a tap on the served field's box gives the focus back to an
+editor that lost it (iOS hides the keyboard by blurring). An editor that kept
+its focus is the normal state while typing and moves no focus, which would
+commit a live composition and reset the keyboard's shift and page; it gives
+its focus to the canvas and takes it back inside the handler only when the
+browser reports the keyboard hidden (Android's Back keeps the focus):
+`navigator.virtualKeyboard`'s empty rectangle while the window has it overlay
+the page (`window::keyboard::page::keyboard_state`). An inset inferred from the
+visual viewport is no report (Safari pans the viewport over a field near the
+bottom, a resizing or hardware keyboard leaves no inset), so where only that
+exists a tap moves no focus. `navigator.virtualKeyboard.show()` shows nothing without
+`virtualkeyboardpolicy="manual"`, a policy under which no focus opens the
+keyboard by itself, so it is not used; a tap elsewhere or a drag leaves the
+keyboard. The canvas hands the focus it takes (a click, the compatibility
+`mousedown` after a tap, the host's own round trip) on to the editor that
+serves a field or that a tap focused, through one listener for the window's
+life (`forward_canvas_focus`). The hidden editor's attributes follow its
+state and are written only by `set_hidden_state`: a served field's hints, or,
+idle, `aria-hidden`, `inputmode="none"`, `autocomplete="off"` and no value. A
+composition still live when a field gives the editor up is committed in place
+to it, once, and the idle state's value, replaced from script, ends it in the
+browser with no focus move (`the_hidden_editor_s_attributes_follow_its_state`,
+`a_composition_left_in_one_field_lands_in_no_other`,
+`a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
+`a_tap_s_compatibility_mousedown_leaves_the_focus_on_the_editor`).
+With nothing served (and no `EditContext`) the editor is focused with
+`inputmode="none"` and `aria-hidden`, which opens no keyboard and announces
+nothing; the field that attaches writes its hints, and two animation frames
+of that tap without one give the focus back. A field attached outside a tap
+focuses the editor only while the canvas has the page's focus.
+`navigator.userActivation.isActive` is not used: it stays true for seconds
+after a tap, outside its handler. The `EditContext` path writes the canvas's
+`inputmode` through `owner::web::CanvasWrites` and puts the page's value and
+the canvas's own `editContext` back when it lets the field go. The
+headless-Chrome tests (constructed events; the test driver has no trusted
+input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
+`a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
+`moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus`,
+`a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
+`a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
+`a_page_canvas_gets_back_the_inputmode_and_the_style_it_had` and
+`the_hidden_editor_states_each_purpose_and_enter_action` pin the rule; whether
+Safari on iOS and Chrome on Android open the keyboard is a device run
+(`platform-parity.toml`, "Input purpose and hints").
+
 `the_purpose_picks_the_input_mode`,
 `a_key_of_the_input_method_is_marked_composing` and `mirror_text_table` pin
 the rules in Linux CI, and the conformance table's
@@ -2076,9 +2179,9 @@ input method, candidate window or soft keyboard has run.
 ### The web window's accessibility is a parallel ARIA DOM over the canvas
 
 AccessKit has no adapter for the browser, so `accessibility::web` writes the
-browser's accessibility tree itself (ADR-0255 decision 18): one `flui-node`
+browser's accessibility tree itself (ADR-0255 decision 18; the tree is the host's own, ADR-0336): one `flui-node`
 element per AccessKit node, nested as the tree is, inside a
-`flui-semantics-host` beside the canvas. The pure part runs on the Linux
+`flui-semantics-host` in the window's semantics slot. The pure part runs on the Linux
 host: `aria::describe` maps a node to its element (`role`, the name as
 `aria-label` or as the element's text for a role named by its content,
 states, ranges, `data-flui-id` from `author_id`, relations such as
@@ -2108,9 +2211,9 @@ and writes only what changed between two specs.
   transform is dropped, since CSS pixels are already logical. The host covers
   the canvas's client box, inside its border, the box the window's layout
   size reads.
-- **What stands beside the canvas is hidden with it.** As the canvas's
-  sibling, the placeholder and the host share every ancestor's `display` and
-  `visibility`; the canvas's own are copied on each placement and whenever a
+- **What stands in the semantics slot is hidden with the canvas.** In a
+  `display: contents` slot after the canvas, the placeholder and the host
+  share every ancestor's `display` and `visibility`; the canvas's own are copied on each placement and whenever a
   `MutationObserver` sees its `style`, `class` or `hidden` change.
 - **Work is queued.** A publish, an activation, a DOM event's action and a
   re-placement run in order from one queue. A listener that publishes from
@@ -2590,38 +2693,90 @@ creates its message-only window; the row `platform_identity_exhaustion_acquires_
 retries an exhausted platform admission and checks that the thread's COM
 apartment and the message-only windows are unchanged.
 
-### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
+### The Win32 clipboard is served by a thread of its own
 
-`WindowsClipboard` has no single owning thread: any thread may read or
-write. Opening with a `NULL` owner, as FLUI used to,
-does not exclude other threads of the process, since all `NULL` openers count
-as one owner (see "Win32 clipboard: cross-thread sessions" in
-[`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+Every `WindowsClipboard` read and write is a request to one `flui-clipboard`
+thread per process (ADR-0337 §3), started with the first request and never
+stopped. The owner thread only queues, into a channel bounded at
+`MAX_WAITING` requests and `MAX_QUEUED_BYTES` of write text (a write that comes
+to an empty queue is taken whatever its size); a request past either is refused
+`Unavailable` at once. The thread
+owns one message-only window (`HWND_MESSAGE` parent) and is the only place
+`ClipboardSession` opens the clipboard, always with that window as the owner,
+serving the requests in the order they were made, so a read after a write
+answers what the write left. Each answer goes to its request's resolver after
+the clipboard is closed again. A read whose readers all went away is still
+performed: a handle's shared read waits for it whatever its readers do. A
+request's patience to open counts from its turn; the wait for its turn is
+bounded apart (`clipboard::patience::LONGEST_QUEUED`), past which it answers
+`Timeout`. Waiting is a state of its own (`patience::Waiting`), which the turn
+consumes: a request attempting is never measured against the bound again.
+That bounds the turn, not the answer: a request whose turn comes
+just inside it still waits its own call to Win32, so the worst case is
+`LONGEST_QUEUED`, `PATIENCE` and Win32's thirty seconds.
 
-`ClipboardSession` therefore opens with one message-only window
-(`HWND_MESSAGE` parent), created lazily on the first session and never
-destroyed. The window lives on a dedicated `flui-clipboard-owner` thread whose
-only job is `GetMessageW`/`DispatchMessageW`; every message goes to
-`DefWindowProcW`. The owner must be pumped because `EmptyClipboard` in any
-process *sends* `WM_DESTROYCLIPBOARD` to the current owner and waits for it.
+- **Nothing the thread does not own can stop it.** A request's task (its
+  conversions and `tracing` events: a subscriber is user code), its answer's
+  delivery and the report of a failure each run contained. The resolver is
+  kept apart from the task, so a task that panics still answers its request
+  `Unavailable`; the first failure is reported and discarded, a panicking
+  report is discarded too, and the thread goes on to the next request.
+  Nothing else in its loop runs code it does not own (the window's messages
+  cross `os_entry`), so the loop has no failure to restart from; were it to
+  end all the same, a request's answer is owed until settled (`Owed`), so the
+  request at its turn and those queued answer `ClipboardError::Gone` as they
+  drop, its channel closes and every later request answers `Gone`, as every
+  request does when the thread could not start. A full queue answers
+  `Unavailable`, worth a retry.
+- **A write is made before the clipboard is emptied.** Every format's global
+  memory is allocated and filled first, the text encoded into it directly, so
+  a write that cannot be made leaves the clipboard as it was; after
+  `EmptyClipboard` only `SetClipboardData` itself can fail, which leaves the
+  clipboard without text.
 
-Rejected: reusing the owner thread's loop. It exists only on the Win32
-backend, not while a headless test drives the process, and
-not before `run`. A session on a worker thread would also block on a
-`SendMessage` to the UI thread, which deadlocks whenever the UI thread waits
-on that worker. A thread per process costs one idle stack and removes all of
-this.
+- **Two waits are another process's.** `OpenClipboard` fails while another
+  window holds the clipboard (clipboard managers and `rdpclip.exe` open it
+  after every change): the request tries again on `clipboard::patience`'s
+  schedule and is refused `Unavailable` when its patience runs out (ADR-0337
+  §2). `GetClipboardData` of text its owner renders on demand waits for that
+  owner's `WM_RENDERFORMAT` answer, measured at the owner's own delay and at
+  thirty seconds, Win32's bound, for one that never answers, which answers
+  `Timeout`. Both waits happen on the clipboard thread, never on the owner's.
+- **The thread pumps while it waits.** Between attempts it waits in
+  `MsgWaitForMultipleObjectsEx` on its wake event and its message queue and
+  dispatches what arrives: another process's `EmptyClipboard` *sends*
+  `WM_DESTROYCLIPBOARD` to the current owner and waits for it.
+- **The owner window shuts other openers out.** Win32 refuses a concurrent
+  `OpenClipboard` from any other owner, `NULL` included; with a `NULL` owner
+  every `NULL` opener of the process counts as the same owner, so another
+  thread's `EmptyClipboard` could free a handle a read is scanning (see "Win32
+  clipboard: cross-thread sessions" in
+  [`docs/safety-review.md`](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/safety-review.md)).
+  Since one thread opens every session, FLUI's own sessions never overlap and
+  need no process-wide lock.
+- **No COM.** The thread reads with `GetClipboardData`, which needs no
+  apartment; `OleGetClipboard` would tie its data object to the calling
+  thread's apartment.
 
-The process-wide `clipboard::lock` stays: `OpenClipboard` does not exclude other threads that
-open with the same owner window, so it serializes every `WindowsClipboard` session.
-`OpenClipboard(NULL)` also leaves `SetClipboardData` without an owner to
-record, which Win32 documents as liable to fail; with an owner it is on the
-documented path. If the window cannot be created, sessions fall back to a
-`NULL` owner and log an error.
+Rejected: reusing the owner thread's loop, which waits on another process for
+as long as it takes (above) and exists only on the Win32 backend, not while a
+headless test drives the process and not before `run`; and a bounded wait on
+the owner thread for a worker, which still freezes the owner for the bound and
+cannot cancel the worker's `GetClipboardData`.
 
-Test: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
-(fails with a `NULL` owner). The owner thread's message pump is not covered by
-a test.
+Tests (`clipboard::windows::tests`, on Windows):
+`a_write_and_a_read_while_the_clipboard_is_held_for_a_moment_land_once_it_is_let_go`,
+`a_clipboard_held_past_the_patience_refuses_the_write`,
+`a_write_that_cannot_be_made_leaves_the_clipboard_as_it_was`,
+`a_panicking_subscriber_leaves_the_clipboard_thread_serving`,
+`a_read_of_text_rendered_late_never_holds_the_caller`,
+`a_read_of_text_never_rendered_in_time_answers_timeout`,
+`a_burst_of_clipboard_writes_is_answered_in_full` and
+`a_null_owner_open_on_another_thread_fails_while_a_session_is_open`. Each takes
+the module's lock and puts back the standard formats it found (text, DIBs, the
+file list, the locale), never forcing another owner's delayed rendering of
+anything else and never setting OLE's private formats again; a restore that
+fails is reported, never panicked on.
 
 ### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
 
@@ -4708,12 +4863,127 @@ so a failure of another kind is refused
 `window_recordings_replay_on_the_headless_host`,
 `platform_recordings_replay_on_the_headless_host`,
 `window_state_recordings_replay_on_the_headless_host`,
-`captured_streams_replay_to_what_the_session_delivered`). An input method that
-edits the focused text store directly (TSF, the Android and web mirrors)
-delivers no event and is not journaled yet; the `ime` row's payload is tagged
-so a store edit can join it. A window's `close_request` and `closed` are not
-journaled yet: their rows will carry the vetoable reason and whether the close
-guard vetoed or delivered it.
+`captured_streams_replay_to_what_the_session_delivered`).
+
+The `window` stream also holds what the window's close and its text store host
+did. `WindowDelivery` journals a `close_request` row when its handler (the
+application's close guard, in `flui-app`) has answered, before the answer is
+acted on: `close`, `keep_open`, `closing` (an earlier request was granted, the
+handler not asked), `no_handler` or `panicked`, and whether the request waited
+behind a running method. It journals `closed` with its cause: `granted_request`,
+or `no_request` (the application's close command or the system taking the
+window away, which ask no veto). Both go through `contain_owner_callback`, so a
+sink that panics ends its capture and never drops a granted close. A replay asks
+its window's handler only where the live one was asked (`close`, `keep_open`)
+and compares the decision; `closing` and `no_handler` replay without asking,
+`panicked` is refused as incomplete, and `closed` closes the window unless the
+replayed request already did.
+
+A pull-model input method (TSF, AppKit, UIKit, the Android and web mirrors, the
+Linux text inputs) edits the focused store with no event, so its edits are
+journaled at the store: in debug builds with `native-capture`,
+`OwnerPlatform::text_store_host`, the one place a host is handed out, wraps it
+in `journal::store_capture::JournaledHost` when a capture was installed as the
+window opened (otherwise the host is handed out as it is). Every host handed out
+for a window shares the window's `StoreJournal`, held in an `OwnerSlot` of its
+delivery: the focused store and the `IdMint` of `RecordedStore` keys, never
+reissued, so a lock deferred past a focus change names the store it ran on. The
+wrapper serves a `JournaledStore` in place of each focused store and maps
+`complete_composition` back by the presented store's identity. Each lock the
+input method is granted becomes one `store_lock` row: every read and edit in
+order with the store's answer (a refusal by its kind), and the document the lock
+found when the recording does not hold it yet (the first lock after the focus,
+and the first after the application changed the store, which the wrapped
+observer notices). Geometry reads change nothing in the store and are not
+recorded; an offset asked at a point is kept and not asked again on replay.
+A document the recording already holds the store at (what the last lock found
+and left unchanged) is not written again, so a store nobody observes does not
+copy its text into every row. Whenever a lock runs unrecorded, for any reason
+(nobody wants the row, the store is protected, the store's status panicked),
+the journal forgets the document it held, so the next recorded lock records the
+document it finds.
+
+What the journal holds of a field is bounded by what the field allows and what
+anyone wants. A protected store gives one `protected` row, with no text, range,
+offset, length or lock kind, for as long as it stays protected, however many
+locks its input method was granted: the count of locks would count the keys
+typed. The row carries one bit, that a lock was granted on the protected field,
+at the row's position: that something was typed or read there, never what or
+how much. Its replay is refused as withheld. When the field stops being
+protected, the next lock records its document like any other's, in full when the
+recording keeps text: that is the text the user chose to reveal. A document
+longer than `MAX_STORE_TEXT_BYTES` UTF-16 units is never read; a row holds at
+most `MAX_STORE_STEPS` calls and `MAX_STORE_TEXT_BYTES` of text; a lock past
+either, or whose body unwound, is written `incomplete` and refused on replay.
+Whether the sink wants rows is a value the capture holds (`capture_wanting`'s
+`AtomicBool`, which `capture_lines` updates from `LineSink::wants` at each row
+that is not a setup row, a store's focus among them): a lock reads it with no
+lock taken and no code of the sink's run, and while it is `false` the lock runs
+untouched. Every call the journal makes into code it does not own runs
+contained, and the host's own work happens whatever it does: in a lock the
+store's status runs under `FirstPanic`, the granted body runs, and the first
+failure is raised after it; at a focus the store's status, the sink and the drop
+of the store let go run under `FirstPanic`, the host is told of the focus
+(serving the store unjournaled when its focus row could not be written), and the
+first failure is raised after; every row a lock or a window's close writes goes
+through `contain_owner_callback`.
+
+`store_focus` is not a setup row a late reader is handed, so focus changes never
+crowd window state out of that prefix; a stream's `cut` is one, made whether or
+not a reader wants rows, so a reader that joins after it is handed the cut with
+the stream's setup. A reader that joins late gets the header with `joined_late`
+set (`flui-runtime`'s `NativeLines::join`), and the recording begins at that
+point. A reader relaxes an order rule only for context that would have come
+before it: a lock on a store no focus row in the recording named (focused
+before the join), and a first close row that follows a grant the recording did
+not see; a store focused after the join, and every close row after the first,
+are held to every rule. A replay refuses a lock on a store focused before the
+join with `ReplayError::JoinedLate`. In any other case the reader refuses what no
+live stream writes: a store focused twice, a lock on a store with no focus row,
+a lock before the recording holds its store's document, and close rows in an
+order no delivery writes (a second close, a request after the close, `closing`
+with nothing granted, a request after a grant, a cause that contradicts the
+requests). The in-process writers never write what their reader refuses, and
+the recorder never holds more: `Recorder` counts each row's bytes and the rows
+as they arrive, under the rule `NativeRecording::write` applies (`CutBudget`),
+replaces the first row past either bound with a `cut` row naming why and keeps
+nothing its source reports after it, so a recording holds at most `MAX_ROWS`
+rows and `MAX_RECORDING_BYTES` of lines however long the capture runs.
+`NativeRecording::write` writes a recording that fits whole, and otherwise ends
+it at the last row that fits with room for a `cut` row, encoding nothing past
+it, so a value the format does not mirror past the cut does not fail the write;
+a header that grew after the recorder's first row (a device it declares) can
+move that cut a few rows earlier. A line sink drops what a source reports after
+its cut. `flui record --native` in `flui-cli` writes
+lines as they come and applies neither bound (`docs/gaps.md`). A replay of a cut
+recording replays every row before the cut and returns `Replayed::Cut` with its
+line and reason, never plain success. When a window's store journal cannot be
+kept (no owner slot left), its stream is cut (`store_journal`) instead of a host
+keying stores on its own. `StoreLock::replay_on` replays a lock under a
+synchronous lock of the recorded kind, restoring the found document first, and
+compares every answer: a read that answers otherwise is a
+`ReplayError::Diverged` naming the row. The reader treats a recording as
+untrusted input: a line past `MAX_LINE_BYTES` is refused before it is parsed, as
+is a row past `MAX_ROWS` and a line that takes the recording past
+`MAX_RECORDING_BYTES`, and a store lock's bounds, ranges, answer-or-error shape,
+lock kind and protected emptiness are checked before any call is built
+(`a_native_recording_past_its_bounds_is_refused`,
+`window_store_and_close_recordings_replay_on_the_headless_host`,
+`a_row_replayed_otherwise_is_a_divergence`,
+`a_store_lock_the_recording_joined_after_is_refused`,
+`close_rows_out_of_order_are_refused`, `a_recording_past_its_bound_is_written_cut`,
+`a_live_recording_past_its_bound_holds_one_cut_and_nothing_after`,
+`captured_store_locks_replay_to_the_document_they_left`,
+`a_protected_store_journals_nothing_of_its_content`,
+`a_protected_store_journals_one_row_whatever_was_typed`,
+`the_granted_body_runs_when_the_store_status_panics`,
+`the_host_is_told_of_a_focus_when_the_store_status_panics`,
+`an_unchanged_document_is_not_written_again`,
+`the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
+`a_store_lock_past_its_bounds_or_unwound_is_incomplete`,
+`every_close_answer_and_cause_replays`, and `lines`'
+`a_cut_is_a_setup_line_and_nothing_follows_it`). The driver's own `--record` of
+these rows waits for the `flui-driver` crate.
 
 On a Windows host the injected goldens are recorded: each child row of the native window contract
 (`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch

@@ -23,7 +23,7 @@
 //! `owner::apple::macos::owner_lane` module — this file only decides what
 //! runs on the lane.
 
-use flui_platform::{ClipboardRead, ClipboardWrite, Concealment};
+use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
 use objc2::rc::Retained;
 use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardType};
 use objc2_foundation::NSString;
@@ -172,7 +172,7 @@ impl SyncClipboard for MacOSClipboard {
         })
     }
 
-    fn write_now(&self, write: ClipboardWrite) {
+    fn write_now(&self, write: ClipboardWrite) -> ClipboardWritten {
         let concealed = write.is_concealed();
         let text = write.into_text();
         self.with_pasteboard_on_owner(|pasteboard| {
@@ -199,7 +199,7 @@ impl SyncClipboard for MacOSClipboard {
                             marker,
                             "a concealed clipboard write was dropped: its marker could not be set"
                         );
-                        return;
+                        return Err(ClipboardError::Unavailable);
                     }
                 }
             }
@@ -207,14 +207,13 @@ impl SyncClipboard for MacOSClipboard {
             let ns_string = NSString::from_str(&text);
             let string_type = string_type();
             // The pasteboard copies the string's contents during the set.
-            let success = pasteboard.setString_forType(&ns_string, &string_type);
-
-            if success {
-                tracing::debug!(len = text.len(), concealed, "Wrote text to clipboard");
+            if pasteboard.setString_forType(&ns_string, &string_type) {
+                Ok(())
             } else {
                 tracing::error!(len = text.len(), "Failed to write text to clipboard");
+                Err(ClipboardError::Unavailable)
             }
-        });
+        })
     }
 
     fn concealment(&self) -> Concealment {
@@ -277,7 +276,9 @@ mod tests {
         let sentinel = "stable-sentinel";
 
         let sentinel_guard = MacOSClipboard::for_test(test_owner_queue(), board.clone());
-        sentinel_guard.write_now(ClipboardWrite::text(sentinel));
+        sentinel_guard
+            .write_now(ClipboardWrite::text(sentinel))
+            .expect("a pasteboard write on the serialized lane succeeds");
 
         let known_payloads: Vec<String> = std::iter::once(sentinel.to_string())
             .chain((0..8).map(|i| format!("payload-{i}")))
@@ -290,7 +291,9 @@ mod tests {
             let clipboard = MacOSClipboard::for_test(test_owner_queue(), board.clone());
             let known_payloads = known_payloads.clone();
             threads.push(std::thread::spawn(move || {
-                clipboard.write_now(ClipboardWrite::text(format!("payload-{i}")));
+                clipboard
+                    .write_now(ClipboardWrite::text(format!("payload-{i}")))
+                    .expect("a pasteboard write on the serialized lane succeeds");
                 let read = clipboard
                     .read_now()
                     .expect("a pasteboard read on the serialized lane succeeds");
@@ -313,7 +316,9 @@ mod tests {
         }
 
         let final_guard = MacOSClipboard::for_test(test_owner_queue(), board);
-        final_guard.write_now(ClipboardWrite::text("final"));
+        final_guard
+            .write_now(ClipboardWrite::text("final"))
+            .expect("a pasteboard write on the serialized lane succeeds");
         assert_eq!(
             final_guard.read_now().ok().flatten().as_deref(),
             Some("final")

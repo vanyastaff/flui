@@ -43,13 +43,24 @@ use flui_platform::{
 use crate::owner::web::listener::CanvasListener;
 use crate::owner::web::{
     Accepting, CanvasEditor, CanvasFocus, CanvasRef, CanvasRegistration, CanvasTimer, HostDisplays,
-    PointerCustody,
+    HostSlots, PointerCustody,
 };
+
+mod root;
+
+use crate::window::keyboard::page::{overlaid_keyboard, viewport_keyboard, virtual_keyboard};
+
+use root::PageRoot;
 
 /// Web window wrapping a `<canvas>` element
 pub struct WebWindow {
     id: WindowId,
     canvas: web_sys::HtmlCanvasElement,
+    /// What the window put in the page: the canvas's root or the page
+    /// canvas's hosts. `None` once the window retired, which took them out.
+    root: RefCell<Option<PageRoot>>,
+    /// The hosts after the canvas, which the root keeps.
+    slots: HostSlots,
     state: Arc<Mutex<WebWindowState>>,
     delivery: Arc<WindowDelivery>,
     registration: RefCell<Option<Registration>>,
@@ -73,6 +84,7 @@ pub struct WebWindow {
 pub(crate) struct StatePublisher {
     cell: Arc<WindowStateCell>,
     canvas: web_sys::HtmlCanvasElement,
+    slots: HostSlots,
     state: Arc<Mutex<WebWindowState>>,
     delivery: Arc<WindowDelivery>,
     displays: Arc<dyn HostDisplays>,
@@ -84,6 +96,7 @@ impl StatePublisher {
     fn sample(&self) -> Sample {
         sample_state(
             &self.canvas,
+            &self.slots,
             &self.state,
             self.displays.current_display(),
             self.delivery.hovered(),
@@ -115,6 +128,7 @@ impl StatePublisher {
 /// position and no limits of its own; the layout sets its size.
 fn sample_state(
     canvas: &web_sys::HtmlCanvasElement,
+    slots: &HostSlots,
     state: &Mutex<WebWindowState>,
     display: Option<flui_platform::DisplayId>,
     hovered: bool,
@@ -168,8 +182,11 @@ fn sample_state(
         ReportedFacts {
             metrics,
             appearance: page_appearance(),
-            // The page owns the viewport; the canvas has no safe area of its own.
+            // The viewport's unsafe bands where they cover the canvas, and the
+            // keyboard over it.
             insets: flui_platform::WindowInsets::ZERO
+                .try_with_safe_area(safe_area_over(canvas, slots, size))
+                .unwrap_or(flui_platform::WindowInsets::ZERO)
                 .with_keyboard(keyboard_over(canvas, size.height)),
             execution,
             occluded: hidden,
@@ -229,53 +246,48 @@ fn keyboard_over(
         .unwrap_or(flui_platform::KeyboardInset::HIDDEN)
 }
 
-/// `navigator.virtualKeyboard`, where the browser has it.
-fn virtual_keyboard(window: &web_sys::Window) -> Option<web_sys::EventTarget> {
-    js_sys::Reflect::get(&window.navigator(), &JsValue::from_str("virtualKeyboard"))
-        .ok()?
-        .dyn_into::<web_sys::EventTarget>()
-        .ok()
-}
-
-/// The keyboard's rectangle from `navigator.virtualKeyboard`, which the
-/// browser reports only while the page has the keyboard overlay its content;
-/// an empty one while it is hidden.
-fn overlaid_keyboard(window: &web_sys::Window) -> Option<crate::window::keyboard::Frame> {
-    let keyboard = virtual_keyboard(window)?;
-    let overlays = js_sys::Reflect::get(&keyboard, &JsValue::from_str("overlaysContent"))
-        .ok()?
-        .as_bool()?;
-    if !overlays {
-        return None;
+/// The safe area of `canvas`, a window `logical` in size: the bands of the
+/// layout viewport that `env(safe-area-inset-*)` names unsafe (a notch, the
+/// rounded corners, a home indicator), read from the text-input host's
+/// padding, where they cover the canvas (`safe_area::within`). The bands
+/// are all zero unless the page asks to cover the whole display
+/// (`viewport-fit=cover`, which the page `flui-cli` writes does), and the
+/// canvas is not measured then.
+fn safe_area_over(
+    canvas: &web_sys::HtmlCanvasElement,
+    slots: &HostSlots,
+    logical: Size<f64>,
+) -> flui_foundation::geometry::EdgeInsets {
+    use crate::window::safe_area;
+    let zero = flui_foundation::geometry::EdgeInsets::ZERO;
+    let edges = slots.unsafe_edges();
+    if edges == zero {
+        return zero;
     }
-    // The API gives a `DOMRect`; only its four sides are read.
-    let rect = js_sys::Reflect::get(&keyboard, &JsValue::from_str("boundingRect"))
-        .ok()
-        .filter(JsValue::is_object)?
-        .unchecked_into::<web_sys::DomRect>();
-    Some(crate::window::keyboard::Frame {
-        x: rect.x(),
-        y: rect.y(),
-        width: rect.width(),
-        height: rect.height(),
-    })
-}
-
-/// The layout viewport below the visual viewport, in client coordinates;
-/// `None` while the page is zoomed in.
-fn viewport_keyboard(window: &web_sys::Window) -> Option<crate::window::keyboard::Frame> {
-    let visual = window.visual_viewport()?;
-    if visual.scale() > 1.0 + 1e-3 {
-        return None;
-    }
-    let layout = window.document()?.document_element()?;
-    let bottom = visual.offset_top() + visual.height();
-    Some(crate::window::keyboard::Frame {
-        x: 0.0,
-        y: bottom,
-        width: f64::from(layout.client_width()),
-        height: f64::from(layout.client_height()) - bottom,
-    })
+    // The bands are edges of the layout viewport, whose size is the
+    // window's inner size; `documentElement.clientHeight` is the document's
+    // height in quirks mode, which would put the bottom band below the page.
+    let Some(window) = web_sys::window() else {
+        return zero;
+    };
+    let side = |size: Result<JsValue, JsValue>| size.ok().as_ref().and_then(JsValue::as_f64);
+    let (Some(width), Some(height)) = (side(window.inner_width()), side(window.inner_height()))
+    else {
+        return zero;
+    };
+    let viewport = Size::new(width, height);
+    let bounds = canvas.get_bounding_client_rect();
+    safe_area::within(
+        viewport,
+        edges,
+        safe_area::Placement {
+            x: bounds.left(),
+            y: bounds.top(),
+            width: bounds.width(),
+            height: bounds.height(),
+        },
+        logical,
+    )
 }
 
 /// The user's color scheme as the page sees it (`prefers-color-scheme`).
@@ -345,15 +357,11 @@ impl DeviceSize {
 }
 
 /// Size the canvas's backing store so the surface renders one texel per
-/// device pixel. Skipped when unchanged: assigning `width`/`height` clears a
-/// canvas even to the same value.
-fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
-    if canvas.width() != size.width {
-        canvas.set_width(size.width);
-    }
-    if canvas.height() != size.height {
-        canvas.set_height(size.height);
-    }
+/// device pixel, through the canvas's one writer (`CanvasWrites`), which
+/// skips an unchanged side: assigning `width`/`height` clears a canvas even to
+/// the same value.
+fn apply_backing_size(writes: &crate::owner::web::CanvasWrites, size: DeviceSize) {
+    writes.set_store_size(size.width, size.height);
 }
 
 /// Pin, as its inline CSS size, each side of a page canvas's box that is the
@@ -371,7 +379,11 @@ fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, size: DeviceSize) {
 /// is set once, when the window opens, before any surface draws into the
 /// store the probe clears, and as an inline style it outranks a page rule
 /// that applies later: a page that restyles the canvas gives it a CSS size.
-fn pin_store_sized_box(window: &web_sys::Window, canvas: &web_sys::HtmlCanvasElement) {
+fn pin_store_sized_box(
+    window: &web_sys::Window,
+    canvas: &web_sys::HtmlCanvasElement,
+    writes: &crate::owner::web::CanvasWrites,
+) {
     let store = (canvas.width(), canvas.height());
     let before = (canvas.client_width(), canvas.client_height());
     // One whole factor for both sides keeps the store's aspect ratio.
@@ -382,11 +394,9 @@ fn pin_store_sized_box(window: &web_sys::Window, canvas: &web_sys::HtmlCanvasEle
         .div_ceil(width)
         .max(before.1.unsigned_abs().div_ceil(height))
         .saturating_add(1);
-    canvas.set_width(width.saturating_mul(factor));
-    canvas.set_height(height.saturating_mul(factor));
+    writes.set_store_size(width.saturating_mul(factor), height.saturating_mul(factor));
     let after = (canvas.client_width(), canvas.client_height());
-    canvas.set_width(store.0);
-    canvas.set_height(store.1);
+    writes.set_store_size(store.0, store.1);
     if after == before {
         return;
     }
@@ -408,8 +418,10 @@ fn pin_store_sized_box(window: &web_sys::Window, canvas: &web_sys::HtmlCanvasEle
 impl WebWindow {
     /// Create a new WebWindow backed by a `<canvas>` element.
     ///
-    /// Looks for an existing `<canvas id="flui-canvas">` in the document,
-    /// or creates one and appends it to `<body>`.
+    /// The page's own `<canvas id="flui-canvas">` when it supplies one, with
+    /// the text-input and semantics hosts inserted after it; otherwise a root
+    /// of the host's own (`flui-view`, fixed over the viewport) appended to
+    /// `<body>`, holding a canvas and the two hosts (see `root`).
     ///
     /// # Size: the canvas's CSS box is the window
     ///
@@ -418,9 +430,11 @@ impl WebWindow {
     /// the live layout, and it is the page's to set: a canvas the page put
     /// in the document keeps whatever styling the page gave it (`width:
     /// 100vw; height: 100vh`, a fixed frame, a flex child — all fine), and
-    /// a canvas this constructor creates is styled to fill the viewport
-    /// (`display: block; width: 100vw; height: 100vh`), which is what an
-    /// application with no page of its own means. A side the page leaves to
+    /// a canvas this constructor creates fills its root, which covers the
+    /// layout viewport (`position: fixed; inset: 0`) rather than `100vh`,
+    /// which on a phone is the viewport with the browser's toolbars hidden
+    /// and runs under them while they show; that is what an application
+    /// with no page of its own means. A side the page leaves to
     /// the canvas's own size is the backing store's, which the window
     /// writes, so it is pinned at the box it has when the window opens (see
     /// `pin_store_sized_box`). The requested
@@ -454,38 +468,29 @@ impl WebWindow {
         let window = web_sys::window().ok_or_else(|| backend("no global window"))?;
         let document = window.document().ok_or_else(|| backend("no document"))?;
 
-        // Find existing canvas or create a new one
-        let (canvas, from_page) = if let Some(el) = document.get_element_by_id("flui-canvas") {
-            let canvas = el
-                .dyn_into::<web_sys::HtmlCanvasElement>()
-                .map_err(|_| backend("element 'flui-canvas' is not a canvas"))?;
-            (canvas, true)
+        // The page's own canvas, or a root of the host's own. A page canvas
+        // with a live owner is refused before anything is added beside it or
+        // its sizing, focusability or title changes; the claim compares the
+        // actual DOM object, never its label.
+        let (root, claim) = if let Some(canvas) =
+            PageRoot::page_canvas(&document).map_err(backend)?
+        {
+            let claim = CanvasClaim::acquire(&canvas)?;
+            let root = PageRoot::adopt(&document, canvas).map_err(|error| {
+                backend(format!("the page's canvas could not be hosted: {error:?}"))
+            })?;
+            (root, claim)
         } else {
-            let canvas = document
-                .create_element("canvas")
-                .map_err(|e| backend(format!("failed to create canvas: {e:?}")))?
-                .dyn_into::<web_sys::HtmlCanvasElement>()
-                .map_err(|_| backend("failed to cast to HtmlCanvasElement"))?;
-            canvas.set_id("flui-canvas");
-            // No page of its own: the canvas is the viewport.
-            let style = canvas.style();
-            let _ = style.set_property("display", "block");
-            let _ = style.set_property("width", "100vw");
-            let _ = style.set_property("height", "100vh");
-            document
-                .body()
-                .ok_or_else(|| backend("no body element"))?
-                .append_child(&canvas)
-                .map_err(|e| backend(format!("failed to append canvas: {e:?}")))?;
-            (canvas, false)
+            let root = PageRoot::make(&document)
+                .map_err(|error| backend(format!("the page root could not be made: {error:?}")))?;
+            let claim = CanvasClaim::acquire(root.canvas())?;
+            (root, claim)
         };
+        let canvas = root.canvas().clone();
+        let slots = root.slots().clone();
 
-        // Refuse an existing live owner before changing its sizing, focusability
-        // or title. The claim compares the actual DOM object, never its label.
-        let claim = CanvasClaim::acquire(&canvas)?;
-
-        if from_page {
-            pin_store_sized_box(&window, &canvas);
+        if root.is_page_canvas() {
+            pin_store_sized_box(&window, &canvas, &slots.canvas_writes);
         }
 
         // The layout's box is the size; the requested size is the fallback
@@ -507,10 +512,12 @@ impl WebWindow {
             refused.report();
         }
         let backing = DeviceSize::estimate(width, height, scale_factor.get());
-        apply_backing_size(&canvas, backing);
+        apply_backing_size(&slots.canvas_writes, backing);
 
         // Make canvas focusable for keyboard events
-        canvas.set_tab_index(0);
+        if let Err(error) = slots.canvas_writes.set("tabindex", "0") {
+            tracing::debug!(?error, "the canvas takes no focus from the keyboard");
+        }
 
         // Every touch on the canvas is the application's: with the default
         // `touch-action`, the browser claims a touch that moves past its
@@ -535,7 +542,7 @@ impl WebWindow {
         };
 
         let state = Arc::new(Mutex::new(state));
-        let initial = sample_state(&canvas, &state, displays.current_display(), false);
+        let initial = sample_state(&canvas, &slots, &state, displays.current_display(), false);
         Ok(Self {
             id,
             registration: RefCell::new(Some(Registration::new(&canvas, claim))),
@@ -543,6 +550,8 @@ impl WebWindow {
             drag: RefCell::new(None),
             facets: RefCell::new(None),
             canvas,
+            root: RefCell::new(Some(root)),
+            slots,
             state,
             delivery: Arc::new(delivery),
             displays,
@@ -556,6 +565,7 @@ impl WebWindow {
         StatePublisher {
             cell: Arc::clone(&self.snapshot),
             canvas: self.canvas.clone(),
+            slots: self.slots.clone(),
             state: Arc::clone(&self.state),
             delivery: Arc::clone(&self.delivery),
             displays: Arc::clone(&self.displays),
@@ -611,6 +621,7 @@ impl WebWindow {
         let focus = self.register_focus_events(&mut registration)?;
         let canvas = CanvasRef {
             canvas: self.canvas.clone(),
+            slots: self.slots.clone(),
             accepting: registration.accepting(),
             keys,
             editor: Rc::clone(&focus) as Rc<dyn CanvasEditor>,
@@ -699,6 +710,7 @@ impl WebWindow {
         );
         let browser =
             web_sys::window().expect("BUG: window construction verified browser environment");
+        let slots = self.slots.clone();
         registration.listen(
             browser.as_ref(),
             "resize",
@@ -706,7 +718,49 @@ impl WebWindow {
                 if let Some(ratio) = &ratio {
                     ratio.arm_if_unarmed();
                 }
+                // A rotation resizes the viewport and moves the safe area.
+                slots.forget_unsafe_edges();
                 sync.sync();
+            }),
+        )?;
+        self.register_orientation_events(registration)
+    }
+
+    /// A turn of the screen half a circle (landscape left to landscape
+    /// right) changes no size, so no resize reports it, yet swaps the
+    /// left and right safe-area bands: `screen.orientation`'s `change`, or
+    /// the window's `orientationchange` where the browser has no
+    /// `screen.orientation`, reads them again.
+    fn register_orientation_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let browser =
+            web_sys::window().expect("BUG: window construction verified browser environment");
+        let orientation = browser
+            .screen()
+            .ok()
+            .and_then(|screen| {
+                js_sys::Reflect::get(&screen, &JsValue::from_str("orientation")).ok()
+            })
+            .and_then(|orientation| orientation.dyn_into::<web_sys::EventTarget>().ok());
+        let (target, kind) = orientation.as_ref().map_or_else(
+            || {
+                (
+                    AsRef::<web_sys::EventTarget>::as_ref(&browser),
+                    "orientationchange",
+                )
+            },
+            |orientation| (orientation, "change"),
+        );
+        let slots = self.slots.clone();
+        let publisher = self.publisher();
+        registration.listen(
+            target,
+            kind,
+            Rc::new(move |_: web_sys::Event| {
+                slots.forget_unsafe_edges();
+                publisher.publish();
             }),
         )
     }
@@ -808,9 +862,15 @@ impl WebWindow {
             )?;
         }
         let publisher = self.publisher();
+        let slots = self.slots.clone();
         let moved = crate::owner::web::listener::viewport_listeners(
             &Accepting::reading(&registration.accepting),
-            move || publisher.publish(),
+            move || {
+                // A visual-viewport change or an orientation change can move
+                // the safe area.
+                slots.forget_unsafe_edges();
+                publisher.publish();
+            },
         )?;
         registration.listeners.extend(moved);
         Ok(())
@@ -909,6 +969,10 @@ impl WebWindow {
             retire();
         }
         drop(registration);
+        // Every listener is gone and the text input and accessibility took
+        // their elements out: the root goes, or the page canvas's hosts.
+        let root = self.root.borrow_mut().take();
+        drop(root);
         struct Clear<'a>(&'a WindowDelivery);
         impl Drop for Clear<'_> {
             fn drop(&mut self) {
@@ -1117,7 +1181,7 @@ impl LayoutSync {
         if !changed {
             return;
         }
-        apply_backing_size(&self.canvas, backing);
+        apply_backing_size(&self.publisher.slots.canvas_writes, backing);
         self.publisher.publish();
         self.delivery.dispatch_request_frame();
     }
