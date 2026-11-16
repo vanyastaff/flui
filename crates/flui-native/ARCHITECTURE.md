@@ -983,7 +983,7 @@ trait depends on `flui-platform` instead.
   `tests/app_handler.rs::app_handler_obligation_table` and the application
   rows of `tests/handler_reentry.rs`.
 - **A quit the user asks for is the application's to decide; a phone holds
-  its background for its writes (ADR-0349).** AppKit cancels
+  its background for its writes (ADR-0350).** AppKit cancels
   `applicationShouldTerminate:` for a quit outside a session end and asks
   `AppHandler::quit_asked` in a task of its own on the owner lane: `Quit`
   stops the loop in order, `KeepRunning` leaves every window and its handler
@@ -993,10 +993,10 @@ trait depends on `flui-platform` instead.
   hear no application-wide quit. iOS and Android report
   `SessionEndSupport::Background`: `Ending` once per trip to the background,
   whose `Block` iOS holds as a UIKit background task, ended exactly once on
-  release, expiry or the scene's return (`lifecycle::background`), and
+  release, expiry or the scene's return (`owner::background`), and
   Android needs no task for. Tests: the row "a quit the user asks for is the
   handler's to decide" of `app_handler_obligation_table`,
-  `lifecycle::background` tests.
+  `owner::background` tests.
 - **The OS enters the crate through one boundary (ADR-0151 §16).** An entry is
   code the operating system calls, or a library from inside its own entry: a
   function with a foreign ABI (a window procedure, an enumeration callback, a

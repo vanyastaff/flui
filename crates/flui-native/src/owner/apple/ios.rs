@@ -51,7 +51,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::lifecycle::background::BackgroundWindow;
+use crate::owner::background::BackgroundWindow;
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use crate::owner::wake_deadline::{FrameCount, TurnDeadline, WakeDeadline};
 use objc2::rc::{Allocated, Retained};
@@ -1980,7 +1980,14 @@ impl FluiSceneDelegate {
     /// The boundary of the scene's lifecycle methods: `action` of the scene's
     /// origin is queued, while the scene is the one this delegate connected.
     fn scene_event(&self, scene: &UIScene, action: impl FnOnce(SceneOrigin) -> SceneAction) {
-        self.scene_event_then(scene, action, |_| {});
+        os_entry(
+            "a UIKit scene event",
+            (),
+            AfterPanic::Answer(|()| ()),
+            || {
+                self.deliver_scene_event(scene, action, |_| {});
+            },
+        );
     }
 
     /// [`Self::scene_event`], then `then` on the loop, inside the same
@@ -1998,22 +2005,34 @@ impl FluiSceneDelegate {
             (),
             AfterPanic::Answer(|()| ()),
             || {
-                use objc2::DefinedClass;
-                let origin = self
-                    .ivars()
-                    .origin
-                    .borrow()
-                    .as_ref()
-                    .and_then(|(origin, weak)| {
-                        weak.load()
-                            .filter(|current| std::ptr::eq::<UIScene>(&raw const **current, scene))
-                            .map(|_| origin.clone())
-                    });
-                if let Some(origin) = origin {
-                    FluiAppDelegate::with_platform(|platform| platform.enqueue(action(origin)));
-                    FluiAppDelegate::with_platform(then);
-                }
+                self.deliver_scene_event(scene, action, then);
             },
         );
+    }
+
+    /// The body of both boundaries: queue `action` of the scene's origin and
+    /// run `then` on the loop, while the scene is the one this delegate
+    /// connected.
+    fn deliver_scene_event(
+        &self,
+        scene: &UIScene,
+        action: impl FnOnce(SceneOrigin) -> SceneAction,
+        then: fn(&IOSLoop),
+    ) {
+        use objc2::DefinedClass;
+        let origin = self
+            .ivars()
+            .origin
+            .borrow()
+            .as_ref()
+            .and_then(|(origin, weak)| {
+                weak.load()
+                    .filter(|current| std::ptr::eq::<UIScene>(&raw const **current, scene))
+                    .map(|_| origin.clone())
+            });
+        if let Some(origin) = origin {
+            FluiAppDelegate::with_platform(|platform| platform.enqueue(action(origin)));
+            FluiAppDelegate::with_platform(then);
+        }
     }
 }

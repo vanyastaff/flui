@@ -1,4 +1,4 @@
-# ADR-0349: A quit the user asks for asks every window, and a phone holds its background for the writes in flight
+# ADR-0350: A quit the user asks for asks every window, and a phone holds its background for the writes in flight
 
 - **Status:** Implemented (2026-11-16)
 - **Date:** 2026-11-16
@@ -134,7 +134,7 @@ pub enum SessionEndSupport {
   `a_quit_the_window_stays_open_for_is_cancelled`, each for a quit from the application and from
   the platform.
 - `runner_teardown`: `a_phone_holds_its_background_for_the_writes_in_flight`.
-- `lifecycle::background` tests: `background_window_ends_each_task_exactly_once`,
+- `owner::background` tests: `background_window_ends_each_task_exactly_once`,
   `background_window_hands_back_a_task_it_cannot_hold`.
 - The AppKit and UIKit paths are compiled by CI only; their device runs are rows of
   `crates/flui-native/platform-parity.toml`.
@@ -160,7 +160,7 @@ pub enum SessionEndSupport {
 
 ## More information
 
-Raven (`src/platform/cocoa/cocoa_platform.m`) answers `NSTerminateCancel` while the core
+Raven's Cocoa platform (`cocoa_platform.m`) answers `NSTerminateCancel` while the core
 decides; Flutter's macOS embedder asks the framework through `System.requestAppExit`; Rune runs
 every window's `on_quit` before any closes. No embedder of Flutter holds a UIKit background task
 for the application's writes; that is left to plugins.

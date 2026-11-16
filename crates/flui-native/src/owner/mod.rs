@@ -74,6 +74,8 @@ pub(crate) mod animation_frame;
 pub(crate) mod app_delivery;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 pub(crate) mod apple;
+#[cfg(any(target_os = "android", target_os = "ios", test))]
+pub(crate) mod background;
 pub(crate) mod call_point;
 #[cfg(any(
     windows,

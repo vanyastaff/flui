@@ -7011,7 +7011,7 @@ GPU-память простаивающего или невидимого окн
   истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
   AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
 
-- [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0349 (заменяет первое предложение
+- [x] **LY133** — ветка `native/quit-contract`, решение — ADR-0350 (заменяет первое предложение
   §4 ADR-0259). Обе находки подтверждены на `main` @ `ac3b1ee58`: `LoopControl::terminate_requested`
   на выход вне конца сессии ставил явный выход, и `finish` снимал доставку каждого окна до
   `Close`; iOS сообщал конец сессии только из `applicationWillTerminate:` и не держал фоновой
@@ -7025,7 +7025,7 @@ GPU-память простаивающего или невидимого окн
   отменяет. Фон телефона: `SessionEndSupport::Background { window }` у iOS и Android; iOS сообщает
   `Ending` на `sceneDidEnterBackground:` раз за поход в фон, `Block` держит фоновую задачу UIKit,
   которая кончается ровно раз — отпусканием, истечением (с предупреждением) или возвратом сцены
-  (`lifecycle::background`); Android задачи не держит. `flui-app` после встроенного сброса с
+  (`owner::background`); Android задачи не держит. `flui-app` после встроенного сброса с
   записями в пути отвечает `Block`, поток ждёт их (`WritesInFlight::wait_until`) до окна,
   называет в журнале неспасённые значения и будит владельца, чей ход отпускает платформу.
   Тесты, в скобках результат с откатом: строка «a quit the user asks for is the handler's to

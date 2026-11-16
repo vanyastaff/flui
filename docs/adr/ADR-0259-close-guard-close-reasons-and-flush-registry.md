@@ -7,7 +7,7 @@
 - **Superseded-by:** [ADR-0274](ADR-0274-a-flush-publisher-writes-to-the-storage-its-document-acquired.md)
   for §5 only (the registry's storage, `publisher`, `committed`, `state`, `FlushHost::new`, and
   the "edits are one line" clause);
-  [ADR-0349](ADR-0349-a-quit-the-user-asks-for-asks-every-window-and-a-phone-holds-its-background-for-the-writes-in-flight.md)
+  [ADR-0350](ADR-0350-a-quit-the-user-asks-for-asks-every-window-and-a-phone-holds-its-background-for-the-writes-in-flight.md)
   for §4's first sentence only (a `Program` quit is also the user's quit through the platform)
 - **Related:** [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) (the exit order
   that flushes the registry; what a panic on a close path does),
