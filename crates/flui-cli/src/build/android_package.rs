@@ -3,23 +3,28 @@
 //!
 //! 1. `aapt2 link` turns `AndroidManifest.xml` into a base archive (no
 //!    resources: the manifest carries no icon, the platform's default one
-//!    applies).
+//!    applies), stating the package, the version and
+//!    `android:extractNativeLibs="false"`, which the Android Gradle plugin
+//!    adds on its own and the scaffolded manifest therefore leaves out.
 //! 2. The native libraries go in as `lib/<abi>/lib<name>.so`, stored
-//!    uncompressed: with `targetSdk >= 23` the platform maps them straight
-//!    out of the archive instead of extracting, which needs page alignment.
-//!    The dex files the linked crates declare go in as `classes.dex`,
-//!    `classes2.dex`, … (`flui-native`'s holds `FluiActivity`, ADR-0255), so
-//!    no `javac` or `d8` runs.
+//!    uncompressed: with `extractNativeLibs="false"` the platform maps them
+//!    straight out of the archive instead of extracting a copy, which needs
+//!    page alignment. The dex files the linked crates declare go in as
+//!    `classes.dex`, `classes2.dex`, … (`flui-native`'s holds `FluiActivity`,
+//!    ADR-0255), so no `javac` or `d8` runs.
 //! 3. `zipalign -P 16` provides that alignment for 16 KB pages, which Google
 //!    Play requires of 64-bit libraries (a 4 KB alignment fails to map on a
 //!    16 KB device); `-P` needs build-tools 35.
-//! 4. `apksigner` signs with the debug keystore every Android SDK user has
-//!    (`~/.android/debug.keystore`, created with `keytool` when absent).
+//! 4. `apksigner` signs with the key `android_signing` chose: the debug key,
+//!    in the keystore Android Studio and Gradle share (created with
+//!    `keytool` when absent), or the release key `flui.toml` names. The
+//!    intermediate archives, unsigned, are removed once the APK is signed.
 //!
 //! A project that grows a Java/Kotlin side keeps working: when
 //! `platforms/android/gradlew` exists the builder uses Gradle instead and
 //! this module is never called.
 
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -28,7 +33,9 @@ use tokio::process::Command;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::build::android_signing::{self, SigningKey};
 use crate::build::error::{BuildError, BuildResult};
+use crate::build::util::environment::newest_version_dir_where;
 use crate::build::util::process;
 
 /// What the packager needs to know about the app.
@@ -49,6 +56,12 @@ pub(crate) struct ApkSpec<'a> {
     /// The `minSdk` the APK declares: FLUI's floor, or the application's
     /// when `flui.toml` raises it (ADR-0244 §10).
     pub(crate) min_sdk: u32,
+    /// The `versionCode` the APK declares, from `[app] version`.
+    pub(crate) version_code: u32,
+    /// The `versionName` the APK declares, from `[app] version`.
+    pub(crate) version_name: &'a str,
+    /// The key the APK is signed with.
+    pub(crate) signing: &'a SigningKey,
 }
 
 /// The SDK pieces the packager runs, resolved once.
@@ -92,13 +105,11 @@ fn zipalign_args(base: &Path, aligned: &Path) -> Vec<std::ffi::OsString> {
         aligned.as_os_str().to_owned(),
     ]
 }
-const DEBUG_ALIAS: &str = "androiddebugkey";
-const DEBUG_PASSWORD: &str = "android";
 
 impl BuildTools {
     /// The highest installed `build-tools` and `platforms` of `sdk_root`.
     pub(crate) fn locate(sdk_root: &Path, java_home: Option<PathBuf>) -> BuildResult<Self> {
-        let build_tools = newest_subdir(&sdk_root.join("build-tools"), |name| {
+        let build_tools = newest_version_dir_where(&sdk_root.join("build-tools"), |name| {
             name.split(['.', '-'])
                 .next()
                 .and_then(|major| major.parse::<u32>().ok())
@@ -142,54 +153,60 @@ impl BuildTools {
         })
     }
 
-    /// Build, align and sign `spec.output`.
+    /// Build, align and sign `spec.output`, then remove the unsigned
+    /// intermediates of `spec.work_dir`.
     pub(crate) async fn package(&self, spec: &ApkSpec<'_>) -> BuildResult<()> {
         std::fs::create_dir_all(spec.work_dir)?;
         let manifest = spec.work_dir.join("AndroidManifest.xml");
         std::fs::write(
             &manifest,
-            manifest_with_package(&std::fs::read_to_string(spec.manifest)?, spec.package),
+            manifest_for_aapt2(&std::fs::read_to_string(spec.manifest)?, spec.package)?,
         )?;
         let base = spec.work_dir.join("base.apk");
         let aligned = spec.work_dir.join("aligned.apk");
 
-        process::run(Command::new(&self.aapt2).args(self.link_args(
-            &manifest,
-            &base,
-            spec.min_sdk,
-        )))
-        .await?;
+        process::run(Command::new(&self.aapt2).args(self.link_args(&manifest, &base, spec)))
+            .await?;
         add_code(&base, spec.native_libs, spec.dex)?;
         process::run(Command::new(&self.zipalign).args(zipalign_args(&base, &aligned))).await?;
 
-        let keystore = debug_keystore_path()?;
-        if !keystore.is_file() {
-            self.create_debug_keystore(&keystore).await?;
+        if let SigningKey::Debug { keystore, .. } = spec.signing
+            && !keystore.is_file()
+        {
+            self.create_debug_keystore(keystore).await?;
         }
         if let Some(parent) = spec.output.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let mut sign = Command::new(&self.apksigner);
-        sign.args(sign_args(&keystore, spec.output, &aligned));
+        sign.args(sign_args(spec.signing, spec.output, &aligned));
         if let Some(java_home) = &self.java_home {
             sign.env("JAVA_HOME", java_home);
         }
-        process::run(&mut sign).await
+        process::run(&mut sign).await?;
+        // The aligned archive is the APK without its signature: left in the
+        // output directory, it is one more APK no device installs.
+        std::fs::remove_dir_all(spec.work_dir)?;
+        Ok(())
     }
 
-    fn link_args(&self, manifest: &Path, output: &Path, min_sdk: u32) -> Vec<String> {
+    fn link_args(&self, manifest: &Path, output: &Path, spec: &ApkSpec<'_>) -> Vec<OsString> {
         vec![
             "link".into(),
             "--manifest".into(),
-            manifest.display().to_string(),
+            manifest.as_os_str().to_owned(),
             "-I".into(),
-            self.android_jar.display().to_string(),
+            self.android_jar.as_os_str().to_owned(),
             "--min-sdk-version".into(),
-            min_sdk.to_string(),
+            spec.min_sdk.to_string().into(),
             "--target-sdk-version".into(),
-            TARGET_SDK.to_string(),
+            TARGET_SDK.to_string().into(),
+            "--version-code".into(),
+            spec.version_code.to_string().into(),
+            "--version-name".into(),
+            spec.version_name.into(),
             "-o".into(),
-            output.display().to_string(),
+            output.as_os_str().to_owned(),
         ]
     }
 
@@ -205,74 +222,62 @@ impl BuildTools {
             "creating the Android debug keystore at {}",
             keystore.display()
         ));
-        process::run(Command::new(keytool).args(keytool_args(keystore))).await
+        process::run(
+            Command::new(keytool).args(android_signing::debug_keystore_creation_args(keystore)),
+        )
+        .await
     }
 }
 
-/// `~/.android/debug.keystore`, the path Android Studio and Gradle share.
-fn debug_keystore_path() -> BuildResult<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| BuildError::EnvVarError {
-            var: "HOME".into(),
-            reason: "not set; needed to find ~/.android/debug.keystore".into(),
-        })?;
-    Ok(PathBuf::from(home).join(".android").join("debug.keystore"))
-}
-
-fn keytool_args(keystore: &Path) -> Vec<String> {
-    vec![
-        "-genkeypair".into(),
-        "-keystore".into(),
-        keystore.display().to_string(),
-        "-storepass".into(),
-        DEBUG_PASSWORD.into(),
-        "-alias".into(),
-        DEBUG_ALIAS.into(),
-        "-keypass".into(),
-        DEBUG_PASSWORD.into(),
-        "-keyalg".into(),
-        "RSA".into(),
-        "-keysize".into(),
-        "2048".into(),
-        "-validity".into(),
-        "10000".into(),
-        "-dname".into(),
-        "CN=Android Debug,O=Android,C=US".into(),
-    ]
-}
-
-fn sign_args(keystore: &Path, output: &Path, input: &Path) -> Vec<String> {
-    vec![
-        "sign".into(),
-        "--ks".into(),
-        keystore.display().to_string(),
-        "--ks-pass".into(),
-        format!("pass:{DEBUG_PASSWORD}"),
-        "--ks-key-alias".into(),
-        DEBUG_ALIAS.into(),
-        "--key-pass".into(),
-        format!("pass:{DEBUG_PASSWORD}"),
+fn sign_args(key: &SigningKey, output: &Path, input: &Path) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["sign".into()];
+    args.extend(key.apksigner_args());
+    args.extend([
         "--out".into(),
-        output.display().to_string(),
-        input.display().to_string(),
-    ]
+        output.as_os_str().to_owned(),
+        input.as_os_str().to_owned(),
+    ]);
+    args
 }
 
-/// `aapt2` wants the application id on the `<manifest>` tag; the scaffolded
-/// file leaves it out because Gradle's `namespace` forbids it there.
-fn manifest_with_package(manifest: &str, package: &str) -> String {
-    match manifest.find("<manifest ") {
-        Some(at) => {
-            let insert = at + "<manifest ".len();
-            format!(
-                "{}package=\"{package}\" {}",
-                &manifest[..insert],
-                &manifest[insert..]
-            )
-        }
-        None => manifest.to_string(),
+/// The manifest `aapt2` links: the scaffolded one with the application id
+/// on the `<manifest>` tag, which the scaffolded file leaves out because
+/// Gradle's `namespace` forbids it there, and
+/// `android:extractNativeLibs="false"` on `<application>`, which the
+/// Android Gradle plugin writes itself and warns about when the source
+/// manifest states it.
+///
+/// # Errors
+///
+/// When the manifest has no `<manifest ` or `<application` tag to state them
+/// on, or already states either: the APK would carry another package or
+/// extract its libraries.
+fn manifest_for_aapt2(manifest: &str, package: &str) -> BuildResult<String> {
+    let refused =
+        |reason: &str| BuildError::invalid_config("AndroidManifest.xml", reason.to_owned());
+    if manifest.contains(" package=") || manifest.contains("android:extractNativeLibs") {
+        return Err(refused(
+            "states `package` or `android:extractNativeLibs`, which `flui build` writes itself",
+        ));
     }
+    let after = |tag: &str| {
+        manifest
+            .find(tag)
+            .map(|at| at + tag.len())
+            .ok_or_else(|| refused(&format!("has no `{}` tag", tag.trim())))
+    };
+    let package_at = after("<manifest ")?;
+    let application_at = after("<application")?;
+    if application_at < package_at {
+        return Err(refused("opens `<application>` before `<manifest>`"));
+    }
+    Ok(format!(
+        "{}package=\"{}\" {}\n        android:extractNativeLibs=\"false\"{}",
+        &manifest[..package_at],
+        crate::build::util::xml::xml_escape(package),
+        &manifest[package_at..application_at],
+        &manifest[application_at..]
+    ))
 }
 
 /// The archive entry for a native library.
@@ -334,29 +339,9 @@ pub(crate) fn archive_entries(apk: &Path) -> BuildResult<Vec<String>> {
         .collect()
 }
 
-/// The subdirectory with the highest version-like name.
-fn newest_subdir(parent: &Path, accept: impl Fn(&str) -> bool) -> Option<PathBuf> {
-    let mut best: Option<(Vec<u32>, PathBuf)> = None;
-    for entry in std::fs::read_dir(parent).ok()?.filter_map(Result::ok) {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if !accept(name) || !entry.path().is_dir() {
-            continue;
-        }
-        let key: Vec<u32> = name
-            .split(['.', '-'])
-            .map(|part| part.parse().unwrap_or(0))
-            .collect();
-        if best.as_ref().is_none_or(|(k, _)| key > *k) {
-            best = Some((key, entry.path()));
-        }
-    }
-    best.map(|(_, path)| path)
-}
-
 /// `platforms/android-<N>` with the highest `N` that has an `android.jar`.
 fn newest_platform(platforms: &Path) -> Option<(PathBuf, u32)> {
-    let dir = newest_subdir(platforms, |name| {
+    let dir = newest_version_dir_where(platforms, |name| {
         name.starts_with("android-") && platforms.join(name).join("android.jar").is_file()
     })?;
     let level = dir
@@ -412,18 +397,112 @@ mod tests {
             "{}",
             tools.android_jar.display()
         );
-        let args = tools.link_args(Path::new("AndroidManifest.xml"), Path::new("base.apk"), 26);
-        let target = TARGET_SDK.to_string();
-        assert!(
-            args.windows(2)
-                .any(|pair| pair == ["--min-sdk-version", "26"]),
-            "{args:?}"
+        let signing = SigningKey::Debug {
+            keystore: PathBuf::from("debug.keystore"),
+            for_release: false,
+        };
+        let spec = ApkSpec {
+            manifest: Path::new("AndroidManifest.xml"),
+            package: "com.example.notes",
+            native_libs: &[],
+            dex: &[],
+            work_dir: Path::new("work"),
+            output: Path::new("notes.apk"),
+            min_sdk: 26,
+            version_code: 10_203,
+            version_name: "1.2.3-beta.1",
+            signing: &signing,
+        };
+        let args = tools.link_args(
+            Path::new("AndroidManifest.xml"),
+            Path::new("base.apk"),
+            &spec,
         );
-        assert!(
+        let target = TARGET_SDK.to_string();
+        let states = |flag: &str, value: &str| {
             args.windows(2)
-                .any(|pair| pair == ["--target-sdk-version", target.as_str()]),
+                .any(|pair| pair[0] == flag && pair[1] == value)
+        };
+        assert!(states("--min-sdk-version", "26"), "{args:?}");
+        assert!(
+            states("--target-sdk-version", &target),
             "the newest installed platform must not become the target: {args:?}"
         );
+        assert!(
+            states("--version-code", "10203") && states("--version-name", "1.2.3-beta.1"),
+            "the APK declares the application's version: {args:?}"
+        );
+    }
+
+    /// The manifest `aapt2` links names the package and keeps the libraries
+    /// in the archive, where they are page-aligned to be mapped; a manifest
+    /// that states either itself, or has nowhere to state them, is refused.
+    #[test]
+    fn the_linked_manifest_maps_the_libraries_from_the_archive() {
+        let scaffolded = include_str!("../../templates/android/AndroidManifest.xml");
+        let linked = manifest_for_aapt2(scaffolded, "com.example.notes").expect("linked");
+        let manifest_tag = linked
+            .split("<manifest ")
+            .nth(1)
+            .and_then(|rest| rest.split('>').next())
+            .expect("a <manifest> tag");
+        assert!(
+            manifest_tag.contains("package=\"com.example.notes\""),
+            "{manifest_tag}"
+        );
+        let application_tag = linked
+            .split("<application")
+            .nth(1)
+            .and_then(|rest| rest.split('>').next())
+            .expect("an <application> tag");
+        assert!(
+            application_tag.contains("android:extractNativeLibs=\"false\"")
+                && application_tag.contains("android:hasCode=\"true\""),
+            "{application_tag}"
+        );
+        for refused in [
+            scaffolded.replace(
+                "<application",
+                "<application android:extractNativeLibs=\"true\"",
+            ),
+            scaffolded.replace("<manifest ", "<manifest package=\"com.other\" "),
+            scaffolded.replace("<application", "<app"),
+        ] {
+            assert!(
+                manifest_for_aapt2(&refused, "com.example.notes").is_err(),
+                "accepted {refused}"
+            );
+        }
+    }
+
+    /// The APK is signed with the key the build chose, its arguments around
+    /// the input and the output.
+    #[test]
+    fn the_apk_is_signed_with_the_chosen_key() {
+        let key = SigningKey::Release {
+            keystore: PathBuf::from("upload.jks"),
+            alias: "upload".to_owned(),
+            key_password_env: android_signing::STORE_PASSWORD_ENV,
+        };
+        let args = sign_args(&key, Path::new("out.apk"), Path::new("aligned.apk"));
+        let expected: Vec<OsString> = [
+            "sign",
+            "--ks",
+            "upload.jks",
+            "--ks-pass",
+            "env:FLUI_ANDROID_KEYSTORE_PASSWORD",
+            "--ks-key-alias",
+            "upload",
+            "--key-pass",
+            "env:FLUI_ANDROID_KEYSTORE_PASSWORD",
+            "--out",
+            "out.apk",
+            "aligned.apk",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert_eq!(args, expected);
     }
 
     fn a_platform_older_than_the_target_is_refused() {

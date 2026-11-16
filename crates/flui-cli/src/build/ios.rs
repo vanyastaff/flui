@@ -3,7 +3,7 @@ use tokio::process::Command;
 
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts};
-use crate::build::util::{check_command_exists, process};
+use crate::build::util::{check_command_exists, environment, process};
 
 /// Builder for iOS platform (.app bundles via Xcode).
 #[derive(Debug, Default)]
@@ -22,17 +22,19 @@ impl IosBuilder {
         // Check xcodebuild
         check_command_exists("xcodebuild")?;
 
-        // Check for iOS targets
-        let output = std::process::Command::new("rustup")
-            .args(["target", "list", "--installed"])
-            .output()?;
-
-        let installed_targets = String::from_utf8_lossy(&output.stdout);
-
-        // Check for at least one iOS target
-        if !installed_targets.contains("aarch64-apple-ios")
-            && !installed_targets.contains("x86_64-apple-ios")
-        {
+        // At least one iOS target: a device's or a simulator's.
+        let mut any_installed = false;
+        for triple in [
+            "aarch64-apple-ios",
+            "aarch64-apple-ios-sim",
+            "x86_64-apple-ios",
+        ] {
+            if environment::rust_target_installed(Path::new("."), triple)? {
+                any_installed = true;
+                break;
+            }
+        }
+        if !any_installed {
             return Err(BuildError::TargetNotInstalled {
                 target: "aarch64-apple-ios".to_string(),
                 install_cmd: "rustup target add aarch64-apple-ios".to_string(),

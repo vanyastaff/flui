@@ -97,6 +97,25 @@ pub(crate) enum BuildError {
         alignment: u64,
     },
 
+    /// The key an Android package would be signed with cannot sign it
+    #[error("signing the APK: {0}")]
+    AndroidSigning(#[from] crate::build::android_signing::AndroidSigningError),
+
+    /// The application's version has no form a package can state
+    #[error("flui.toml: [app] {0}")]
+    AppVersion(#[from] crate::build::app_version::AppVersionError),
+
+    /// Gradle wrote an APK that is not signed, which no device installs
+    #[error(
+        "Gradle wrote the unsigned {}: the project's app/build.gradle.kts gives its release \
+         build type no signing config",
+        .apk.display()
+    )]
+    UnsignedApk {
+        /// The APK Gradle wrote
+        apk: PathBuf,
+    },
+
     /// I/O error occurred
     #[error("I/O error")]
     Io(#[from] std::io::Error),

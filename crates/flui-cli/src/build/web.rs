@@ -38,18 +38,7 @@ impl WebBuilder {
 
     /// The wasm target, `wasm-bindgen`, and its version against the project's.
     pub(crate) fn validate_environment(&self) -> BuildResult<()> {
-        let output = std::process::Command::new("rustup")
-            .args(["target", "list", "--installed"])
-            .output()?;
-        if !String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|line| line.trim() == WASM_TARGET)
-        {
-            return Err(BuildError::TargetNotInstalled {
-                target: WASM_TARGET.to_string(),
-                install_cmd: format!("rustup target add {WASM_TARGET}"),
-            });
-        }
+        crate::build::util::environment::require_rust_target(&self.workspace_root, WASM_TARGET)?;
 
         let wanted = resolved_wasm_bindgen_version(&self.workspace_root)?;
         let installed = installed_wasm_bindgen_version();

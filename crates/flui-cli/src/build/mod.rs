@@ -34,7 +34,11 @@ mod linux_desktop;
 pub(crate) mod output;
 mod platform_floor;
 
+/// Which key signs an Android package.
+pub(crate) mod android_signing;
 pub(crate) mod app_floor;
+/// The application's version and each package's form of it.
+pub(crate) mod app_version;
 
 mod gradle_project;
 

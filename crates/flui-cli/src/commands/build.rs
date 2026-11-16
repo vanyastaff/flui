@@ -381,7 +381,7 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating Android environment...");
     android_builder
-        .validate_environment("arm64-v8a")
+        .validate_environment("arm64-v8a", profile)
         .context("Android environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
