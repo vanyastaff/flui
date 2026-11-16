@@ -814,6 +814,7 @@ impl host::Loop for WebLoop {
                 .opened(crate::owner::opened::bounded(
                     [address],
                     [],
+                    0,
                     flui_platform::OpenTarget::Application,
                     flui_platform::Launch::Cold,
                 ))

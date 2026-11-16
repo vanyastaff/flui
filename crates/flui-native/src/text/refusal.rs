@@ -26,7 +26,7 @@ pub(crate) fn report(error: TextStoreError) {
     tracing::warn!(
         target: LOG_TARGET,
         %error,
-        "a text store refused to commit its composition in place"
+        "a text store refused the commit in place the native host asked for"
     );
 }
 

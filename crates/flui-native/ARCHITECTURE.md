@@ -912,7 +912,7 @@ trait depends on `flui-platform` instead.
   tests run a platform with are `testing::app` (the `testing` feature). The
   lifecycle position keeps only the release of a held session end and the
   activation; the keyboard layout callback belongs to the input position
-  (`host::Input`, which `Platform` does not publish, ADR-0151 §9): one
+  (`host::Input`, sealed: nothing outside the crate calls it, ADR-0151 §9): one
   `LayoutCallback` per loop, where a registration
   replaces the callback before it on every host, and a callback's panic is
   its turn's failure (below). Tests: `owner::app_delivery::tests::app_delivery_contracts`,

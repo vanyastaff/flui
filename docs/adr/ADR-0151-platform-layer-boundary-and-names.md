@@ -18,9 +18,7 @@
 - **Revised:** 2026-11-15 — sections 10 and 16 name the journal's feature as built,
   `native-capture` (it was `driver`), and say where the code differs from section 16; section 16
   names Android's presentation time as `VK_GOOGLE_display_timing`, not its frame timelines, which
-  give a deadline; section 9 states where the keyboard layout lives as built: the core host's
-  input position, not a `pub(crate)` method, because the host table that names it is public for
-  the compile-fail fixture that shows a table must fill every position.
+  give a deadline.
 - **Supersedes:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §1 (what the contract crate
   holds), §2 (the crates' names and what the core host keeps), §4 step 2 (callbacks without
   `Send`, jointly with [ADR-0254](ADR-0254-window-contract.md)) and §5's Linux row (winit as the
@@ -480,11 +478,9 @@ Removed from `Platform`: `background_executor` (`BackgroundExecutor` and `Task` 
 `active_window`, `write_to_clipboard`, `read_from_clipboard`, `on_window_event`,
 `compositor_name`, and `on_open_urls`, which has no producer. Moved to `flui-system`: `open_url`,
 `reveal_path`, `open_path`, `prompt_for_paths`, `prompt_for_new_path`, `app_path`.
-`keyboard_layout` and `on_keyboard_layout_change` leave `Platform` and `OwnerPlatform` and stay
-in the core host, as its input position (`host::Input`, which the host table names and nothing
-outside the crate can reach through a platform): nothing above the host reads them today. The
-host's own tests reach them through its `testing` support. The menu feature, which labels
-shortcuts, publishes them with that consumer.
+`keyboard_layout` and `on_keyboard_layout_change` become `pub(crate)` in the core host: nothing
+above the host reads them today. The menu feature, which labels shortcuts, publishes them with
+that consumer.
 
 The application-level registrations that remain (`on_quit`, `on_reopen`, `on_session_end`,
 `on_host_notice`, `set_exit_policy_hook`, `set_wake_deadline_hook`) and the one-shot

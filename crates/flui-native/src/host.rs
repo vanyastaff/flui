@@ -368,24 +368,32 @@ pub trait Displays<O> {
     fn snapshot(owner: &O) -> Result<DisplaySnapshot, PlatformError>;
 }
 
-/// The input position above a window: the keyboard layout. Pointer, key and
-/// gesture input reach a window through its own callbacks.
-///
-/// Nothing above the host reads the layout yet, so [`Platform`] does not
-/// publish it (ADR-0151 §9): the menu feature, which labels shortcuts, does,
-/// with that consumer. Until then the host's tests reach it through
-/// `testing::keyboard_layout`.
-pub trait Input<O> {
-    /// The current keyboard layout's name as the operating system gives it;
-    /// empty where the host does not read the layout.
-    fn keyboard_layout(owner: &O) -> String;
+pub(crate) use input::Input;
 
-    /// Call `callback` on each keyboard layout change. A registration
-    /// replaces the callback before it, which is dropped then; a host that
-    /// does not read the layout never calls it. The callback is called with
-    /// no lock of the platform held, and its panic is the failure of the turn
-    /// that heard the change, as a window handler's is.
-    fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut()>);
+/// The input position, sealed: public in a crate-private module, so a table
+/// outside the crate can name [`Absent`] for it but nothing outside the crate
+/// can call it (ADR-0151 §9).
+mod input {
+    /// The input position above a window: the keyboard layout. Pointer, key
+    /// and gesture input reach a window through its own callbacks.
+    ///
+    /// Nothing above the host reads the layout yet, so it stays in the core
+    /// host (ADR-0151 §9): the menu feature, which labels shortcuts,
+    /// publishes it with that consumer. The host's integration tests reach it
+    /// through `testing::keyboard_layout`.
+    pub trait Input<O> {
+        /// The current keyboard layout's name as the operating system gives
+        /// it; empty where the host does not read the layout.
+        fn keyboard_layout(owner: &O) -> String;
+
+        /// Call `callback` on each keyboard layout change. A registration
+        /// replaces the callback before it, which is dropped then; a host
+        /// that does not read the layout never calls it. The callback is
+        /// called with no lock of the platform held, and its panic is the
+        /// failure of the turn that heard the change, as a window handler's
+        /// is.
+        fn on_keyboard_layout_change(owner: &O, callback: Box<dyn FnMut()>);
+    }
 }
 
 /// The clipboard position.

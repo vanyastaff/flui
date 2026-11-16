@@ -15,20 +15,35 @@ use flui_platform::{
 pub(crate) const LOG_TARGET: &str = "flui_native::opened";
 
 /// What the operating system opened, bounded ([`Opened::bounded`]), with
-/// what bounding dropped reported ([`report`]).
+/// what bounding dropped reported. `unread` counts the items past the bound
+/// the host never turned into files (an Android document it does not open
+/// once no room is left); they are reported as past the limit.
 pub(crate) fn bounded(
     urls: impl IntoIterator<Item = String>,
     files: impl IntoIterator<Item = OpenedFile>,
+    unread: usize,
     target: OpenTarget,
     launch: Launch,
 ) -> Opened {
-    let (opened, overflow) = Opened::bounded(urls, files, target, launch);
+    let (opened, mut overflow) = Opened::bounded(urls, files, target, launch);
+    overflow.past_limit = overflow.past_limit.saturating_add(unread);
     report(overflow);
     opened
 }
 
+/// The room an [`Opened`] leaves for files after `urls`: the items it takes
+/// less the URLs it keeps (an over-long URL takes no room).
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn room_for_files<'a>(urls: impl IntoIterator<Item = &'a String>) -> usize {
+    let kept = urls
+        .into_iter()
+        .filter(|url| url.len() <= MAX_OPENED_URL_LEN)
+        .count();
+    MAX_OPENED_ITEMS.saturating_sub(kept)
+}
+
 /// Log `overflow` unless nothing was dropped.
-pub(crate) fn report(overflow: OpenedOverflow) {
+fn report(overflow: OpenedOverflow) {
     if !overflow.is_empty() {
         tracing::warn!(
             target: LOG_TARGET,

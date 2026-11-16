@@ -239,6 +239,7 @@ impl Forwarded {
                     )))
                 })
                 .collect::<Vec<OpenedFile>>(),
+            0,
             OpenTarget::Application,
             Launch::Running,
         )

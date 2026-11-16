@@ -1,8 +1,11 @@
-//! The keyboard layout a host reads and the callback its change reaches.
+//! The one way in to a host's keyboard layout from outside the crate.
 //!
-//! Nothing above the host reads the layout yet, so [`Platform`](crate::Platform)
-//! does not publish it (ADR-0151 §9); a host's tests reach its input position
-//! here.
+//! The layout is the core host's sealed input position: nothing above the
+//! host reads it, so [`Platform`](crate::Platform) does not publish it and no
+//! code outside the crate can call it (ADR-0151 §9). The host's integration
+//! tests in `tests/` still drive it through real loops, with fixtures that
+//! live there (Xvfb and Weston sessions, the Win32 message pump), so they
+//! reach it here, behind the `testing` feature.
 
 use crate::host::{Host, Input as _};
 use crate::platform::HostPlatform;

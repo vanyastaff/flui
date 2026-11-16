@@ -276,7 +276,10 @@ fn report_refused_ime_event(error: TextStoreError) {
 
 /// Report that a store refused to commit its composition in place.
 fn report_refused_commit(error: TextStoreError) {
-    tracing::warn!(%error, "a text store refused to commit its composition in place");
+    tracing::warn!(
+        %error,
+        "a text store refused the commit in place the text input owner asked for"
+    );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
