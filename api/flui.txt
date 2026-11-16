@@ -14012,28 +14012,26 @@ pub struct flui::platform::capability::scripted::FailureReport { .. }
 impl Clone for flui::platform::capability::scripted::FailureReport
 impl Default for flui::platform::capability::scripted::FailureReport
 impl core::fmt::Debug for flui::platform::capability::scripted::FailureReport
-pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure)
+pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure) -> bool
 pub struct flui::platform::capability::scripted::Scenario { .. }
 impl Clone for flui::platform::capability::scripted::Scenario
 impl Default for flui::platform::capability::scripted::Scenario
 impl core::fmt::Debug for flui::platform::capability::scripted::Scenario
-pub fn flui::platform::capability::scripted::Scenario::clock(&self) -> &flui::foundation::ManualClock
 pub fn flui::platform::capability::scripted::Scenario::drive(&self) -> Result<flui::platform::capability::scripted::ScenarioDriver, flui::platform::capability::scripted::AlreadyDriven>
 pub fn flui::platform::capability::scripted::Scenario::events<E>(&self, name: &'static str) -> flui::platform::capability::scripted::Events<E> where E: Clone + core::fmt::Debug + 'static
 pub fn flui::platform::capability::scripted::Scenario::failure_report(&self) -> flui::platform::capability::scripted::FailureReport
 pub fn flui::platform::capability::scripted::Scenario::new() -> Self
 pub fn flui::platform::capability::scripted::Scenario::next_due(&self) -> Option<core::time::Duration>
 pub fn flui::platform::capability::scripted::Scenario::now(&self) -> core::time::Duration
-pub fn flui::platform::capability::scripted::Scenario::run_due(&self) -> usize
 pub fn flui::platform::capability::scripted::Scenario::script<R, A>(&self, name: &'static str) -> flui::platform::capability::scripted::Script<R, A> where R: core::fmt::Debug + 'static, A: 'static
 pub fn flui::platform::capability::scripted::Scenario::service(&self, name: &'static str) -> flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
 pub fn flui::platform::capability::scripted::Scenario::track<T>(&self, name: &'static str, initial: T) -> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
 pub fn flui::platform::capability::scripted::Scenario::verify(&self) -> Result<(), flui::platform::capability::scripted::ScenarioFailures>
-pub fn flui::platform::capability::scripted::Scenario::with_clock(clock: flui::foundation::ManualClock) -> Self
 pub struct flui::platform::capability::scripted::ScenarioDriver { .. }
 impl Drop for flui::platform::capability::scripted::ScenarioDriver
 impl core::fmt::Debug for flui::platform::capability::scripted::ScenarioDriver
 pub fn flui::platform::capability::scripted::ScenarioDriver::advance(&self, dt: core::time::Duration) -> usize
+pub fn flui::platform::capability::scripted::ScenarioDriver::clock(&self) -> &flui::foundation::ManualClock
 pub fn flui::platform::capability::scripted::ScenarioDriver::scenario(&self) -> &flui::platform::capability::scripted::Scenario
 #[non_exhaustive] pub enum flui::platform::capability::scripted::ScenarioFailure
 impl Clone for flui::platform::capability::scripted::ScenarioFailure
@@ -14044,6 +14042,7 @@ impl core::fmt::Display for flui::platform::capability::scripted::ScenarioFailur
 impl core::marker::StructuralPartialEq for flui::platform::capability::scripted::ScenarioFailure
 variant flui::platform::capability::scripted::ScenarioFailure::AfterEnd { stream: &'static str, sent: String } // at 4
 variant flui::platform::capability::scripted::ScenarioFailure::NotReached { what: alloc::borrow::Cow<'static, str>, at: core::time::Duration } // at 3
+variant flui::platform::capability::scripted::ScenarioFailure::ReportsDropped { dropped: u64 } // at 5
 variant flui::platform::capability::scripted::ScenarioFailure::Unanswered { script: &'static str, request: String } // at 1
 variant flui::platform::capability::scripted::ScenarioFailure::Unconsumed { script: &'static str, step: alloc::borrow::Cow<'static, str> } // at 2
 variant flui::platform::capability::scripted::ScenarioFailure::Unexpected { script: &'static str, request: String } // at 0
@@ -23310,7 +23309,7 @@ pub fn flui::testing::TestWindow::without_storage(self) -> Self
 pub struct flui::testing::Tester { .. }
 impl core::fmt::Debug for flui::testing::Tester
 pub fn flui::testing::Tester::cancel_composition(&mut self)
-pub fn flui::testing::Tester::clock(&self) -> &flui::foundation::ManualClock
+pub fn flui::testing::Tester::clock(&self) -> &flui::testing::HostClock
 pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
 pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)

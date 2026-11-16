@@ -326,14 +326,24 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   A double keeps a standing answer only where it models the service's state (the clipboard's
   text), never as a default.
 - **Debts outlive handles, and an unverified run fails.** A script dropped with a held request
-  or an unused step hands them to the scenario's ledger. The scenario panics as its last clone
-  drops when a failure is left that no `verify` returned, unless the thread is already
-  unwinding (ADR-0281), so a test that never calls `verify` cannot pass with work undone.
-- **One driver moves the clock.** `Scenario::drive` hands out the one `ScenarioDriver`; a
-  second is refused (`AlreadyDriven`), so two hosts never move each other's time.
-  `ScenarioDriver::advance` moves the clock and applies what fell due in one call, and every
-  path of `HeadlessHost` that moves time (`pump`, `advance`, a replayed recording or pointer
-  script) goes through it. `Scenario::next_due` is a deadline of the host's loop like a
+  or an unused step hands them to the scenario's ledger, every one before a panic of a request's
+  `Debug` is resumed. The scenario panics as its last clone drops when a failure is left that
+  no `verify` returned, unless the thread is already unwinding (ADR-0281), so a test that never
+  calls `verify` cannot pass with work undone. What `verify` returned is acknowledged by
+  position and identity, never by value: how far the owner-thread failures and the cross-thread
+  reports had been read, and the ids of the debts and scheduled changes it listed; a failure
+  recorded after it is new even when it equals one it returned.
+- **Reports from other threads are bounded.** A `FailureReport` keeps `MAX_REPORTS` and counts
+  the rest as one `ReportsDropped`; once the scenario has ended, `report` answers `false` and
+  nothing accumulates. A script keeps its first `MAX_RECORDED_REQUESTS` requests and counts
+  the rest.
+- **One driver holds the clock.** The scenario shows only `now()`; the `ManualClock` is the
+  `ScenarioDriver`'s, which `Scenario::drive` hands out once (a second is `AlreadyDriven`, so
+  two hosts never move each other's time). `ScenarioDriver::advance` moves the clock and applies
+  what fell due in one call, and nothing else can move it: `HeadlessHost::clock()` and
+  `Tester::clock()` hand out a `HostClock` that reads the time and advances only through the
+  driver, and every path of the host that moves time (`pump`, `advance`, a replayed recording or
+  pointer script) goes through it. `Scenario::next_due` is a deadline of the host's loop like a
   gesture's: `time_to_next_frame` and `pump_until_settled` wait for it.
 - **Every answer is a `Completion`.** A script, a track's `changed` and a stream's `next`
   answer through a `Resolver`, so an answer settles at an owner turn and never inside the call

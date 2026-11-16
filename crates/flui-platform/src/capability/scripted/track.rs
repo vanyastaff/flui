@@ -13,8 +13,8 @@ use crate::Unsupported;
 use crate::capability::{Completion, CompletionSource, Resolver};
 
 /// A value the platform owns and changes while the application runs: a
-/// permission the user grants and later revokes, a service that goes away
-/// and comes back ([`ServiceState`]).
+/// service that goes away and comes back ([`ServiceState`]), or any state a
+/// capability's simulator reads and its handles watch.
 ///
 /// A double reads it when it answers ([`get`](Self::get)) and a handle
 /// watches it ([`changed`](Self::changed)). The test changes it now
