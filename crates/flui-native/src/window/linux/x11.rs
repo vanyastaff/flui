@@ -689,7 +689,11 @@ pub(crate) mod support {
         #[test]
         fn a_refused_command_says_where_it_is_missing() {
             let honoured = capabilities(WindowManagerSupport::default());
-            let reason = |command: WindowCommand| match command.admit(&honoured) {
+            let reason = |command: WindowCommand| match command.admit(
+                &honoured
+                    .publish()
+                    .expect("the process has publications left"),
+            ) {
                 Err(AdmissionError::Unsupported(refused)) => Some(refused.reason),
                 _ => None,
             };

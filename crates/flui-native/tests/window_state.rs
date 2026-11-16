@@ -545,13 +545,10 @@ fn a_command_admitted_for_another_window_is_superseded() {
             command: title.clone()
         })
     );
-    let by_hand = title
-        .clone()
-        .admit(&WindowCapabilities::ALL)
-        .expect("capabilities built by hand take titles");
     assert_eq!(
-        first.apply(by_hand),
-        Err(ApplyError::Superseded { command: title })
+        title.admit(&WindowCapabilities::ALL),
+        Err(AdmissionError::Unpublished),
+        "capabilities built by hand admit nothing"
     );
     assert_ne!(first.state().title.as_deref(), Some("for the first"));
     assert_ne!(second.state().title.as_deref(), Some("for the first"));

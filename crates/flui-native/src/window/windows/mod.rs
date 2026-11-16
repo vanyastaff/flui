@@ -245,8 +245,11 @@ pub(crate) mod material {
             ];
             for (build, wanted) in cases {
                 let capabilities = below_the_gate(WindowCapabilities::ALL, &gate(build));
-                let admission =
-                    WindowCommand::SetMaterial(WindowMaterial::System).admit(&capabilities);
+                let admission = WindowCommand::SetMaterial(WindowMaterial::System).admit(
+                    &capabilities
+                        .publish()
+                        .expect("the process has publications left"),
+                );
                 let answer_holds = match (&admission, wanted) {
                     (Ok(_), Availability::Native) => true,
                     (Err(AdmissionError::Unsupported(refused)), Availability::Unavailable) => {

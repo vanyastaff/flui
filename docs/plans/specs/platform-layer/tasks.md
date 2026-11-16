@@ -364,7 +364,7 @@ GPU-память простаивающего или невидимого окн
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY114** | **Команда допускается против возможностей самого окна.** Сейчас `AdmittedCommand::against` (`crates/flui-platform/src/window_state.rs`) сверяет только владельца и ревизию: копия опубликованных `WindowCapabilities` (тип `Copy`, поля `pub`) с правленым слотом даёт токен, который окно исполняет вопреки своему снимку (Android отвечает `Ok(())` на no-op); `CapabilitiesOwner::new(NonZeroU64)` публичен, а хосты берут владельцев из счётчика с 1, так что токен первого окна подделывается. После: окно, держа свои опубликованные возможности, проверяет и саму команду; владельца чеканит крейт (`IdMint`), публичного `new` нет | — | `crates/flui-platform/src/{window_state.rs,window_capabilities.rs}`, `crates/flui-native/src/window/state.rs` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck` | строка `window_command_validate`: допуск против правленой копии отвечает `Superseded`; `api/flui.txt` без `CapabilitiesOwner::new`; падает при откате | L + T |
+| **LY114** | **Команда допускается против возможностей самого окна.** Сейчас `AdmittedCommand::against` (`crates/flui-platform/src/window_state.rs`) сверяет только владельца и ревизию: копия опубликованных `WindowCapabilities` (тип `Copy`, поля `pub`) с правленым слотом даёт токен, который окно исполняет вопреки своему снимку (Android отвечает `Ok(())` на no-op); `CapabilitiesOwner::new(NonZeroU64)` публичен, а хосты берут владельцев из счётчика с 1, так что токен первого окна подделывается. После (ADR-0341): токен связан с публикацией возможностей, которую чеканит только крейт контракта (`AtomicIdMint`); поля читаются аксессорами и не пишутся, правка и собранное руками — без публикации, и `admit` отказывает им `AdmissionError::Unpublished`; окно открывает токен только под той же публикацией, так что проверять команду второй раз незачем: одна публикация — один набор возможностей; `CapabilitiesOwner` удалён | — | `crates/flui-platform/src/{window_state.rs,window_capabilities.rs}`, `crates/flui-native/src/window/state.rs` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck` | строка `window_command_validate` `an_edit_of_published_capabilities_is_refused_at_admission`: допуск против правленой копии отвечает `Unpublished`, запись поля не компилируется (trybuild `published_capabilities_cannot_be_edited`); `api/flui.txt` без `CapabilitiesOwner`; падает при откате | L + T |
 | **LY115** | **Позиция окна называет свой дисплей; команды и опции несут проверенную геометрию.** Сейчас `outer`, `normal_geometry` и `SetPosition` — «глобальные логические пиксели», которых на столе со смешанным масштабом нет: Win32 переводит их текущим масштабом окна (`crates/flui-native/src/window/windows/window.rs`), так что одно значение `SetPosition` попадает на разные экраны, а сохранённый `outer` не восстанавливается; `WindowOptions::position` при этом уже относителен дисплею, и один `WindowGeometry` несёт два пространства. `DisplayInfo::bounds` — пиксели устройства, на Wayland логические пиксели композитора, а `usable_bounds` не обязан лежать внутри. `SetSize`, `SetPosition`, `WindowOptions::size` и `position` — сырые `Size<f64>`/`Point<f64>` со второй проверкой. После: `WindowPosition { display, at }` в логических пикселях дисплея от начала его рабочей области — в опциях, снимке и команде; границы дисплея логические, `try_new` держит рабочую область внутри; размер содержимого — проверенный newtype, `validate` сводится к отношению min/max | LY108, LY112 | `crates/flui-platform/src/{window_geometry.rs,window.rs,window_state.rs,display.rs,placement.rs}`, перевод позиции в каждом хосте `crates/flui-native/src/window/*`, кодек журнала и схема записи | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck`, `recording-vocabulary` | Win32, два дисплея разного масштаба: одно значение `SetPosition` из окна на каждом попадает в одну физическую точку, `outer` возвращается тем же; строка таблицы `display`, отказывающая рабочей области вне дисплея; каждый падает при откате | L + W + T; Dev: macOS, Linux (Wayland) |
 | **LY116** | **Отчёт о показе называет кадр, который описывает.** Сейчас `FrameRequest::presented` — «новейший более ранний кадр», о показе которого сообщила платформа (`crates/flui-platform/src/frame_request.rs`): при цепочке в два-три буфера или пропущенном кадре задержка ввод→фотон приписывается не тому кадру — ответ сопоставлен «текущему», а не своему билету; `FramePresented::refresh` — сырой `Duration`, хотя проверенный `RefreshPeriod` есть. После: `SurfaceTarget::pre_present_notify` чеканит `PresentId` на каждый present, `FramePresented { frame, at, refresh: Option<RefreshPeriod> }`; DXGI `PresentCount`, `wp_presentation_feedback` и обработчик drawable Metal отвечают своим id | — | `crates/flui-platform/src/{frame_request.rs,surface_target.rs}`, пути показа Win32, Wayland и Apple в `crates/flui-native/src/`, вызов презентера в `crates/flui-engine` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck` | строка headless-хоста с двумя present в полёте: отчёт называет первый; период вне диапазона `RefreshPeriod` не строится; каждый падает при откате | L + W + T; Dev: macOS, Linux (Wayland) |
 | **LY117** | **Ревизии указателя, состояние клавиши и мёртвые клавиши — один однозначный словарь.** Сейчас `PointerRevision` называет чтение парой `(PointerId, time)`, а `PointerId` переиспользуется после `Up` и одна грубая метка бывает у разных чтений; производителя нет ни у него, ни у `PointerEvent::PenSqueeze`, а `docs/gaps.md` («Input latency modes and high-rate sampling are partial») говорит, что варианта нет, и планирует другую форму. `KeyEvent` держит `state`, `repeat` и `release` тремя полями, и `with_repeat`/`with_release` на `Up` молча теряют значение. Прокрутка не говорит, инвертировал ли её пользователь (natural scrolling); `NamedKey::Dead` не несёт комбинирующего символа, и Android превращает `CombiningAccent` в голый `Dead` (`crates/flui-native/src/input/android.rs`): акцент не сочетается со следующей клавишей. После: ревизия ключуется билетом оценки, который хост выдал вместе с чтением (или оба варианта удаляются до производителя на iOS), запись gaps описывает настоящую форму; `KeyState::Down { repeat, release } \| Up`; флаг инверсии у прокрутки; мёртвая клавиша несёт свой символ, и Android сочетает его со следующей клавишей | — | `crates/flui-platform/src/{pointer/*,keyboard/*}`, переводчики ввода `crates/flui-native/src/input/*`, `crates/flui-runtime/src/recording_wire.rs`, `docs/gaps.md` | `key-vocabulary`, `recording-vocabulary`, гейт API-замыкания, `public-api`, `cross-typecheck` | ревизия после переиспользования `PointerId` находит своё чтение; событие `Up` с повтором не строится; чистая функция сочетания мёртвой клавиши Android по подставной раскладке; каждый падает при откате | L + T; Dev: Android |
@@ -6000,35 +6000,46 @@ GPU-память простаивающего или невидимого окн
   Не запущено: macOS-код не компилировался здесь (только CI) и не запускался на Mac
   (`docs/gaps.md`); кнопки примера не нажимались.
 
-- [ ] **LY114** — ветка `platform/admission-integrity`, на ревью (строки LY114 в таблице на `main`
-  ещё нет: она придёт отдельным PR документов).
-  Подтверждено на `main` @ `ab45cd94c` тестом через публичный API (три подделки, все открывались
-  на окне): копия опубликованных возможностей с включённым `pub`-полем `material`; владелец,
-  выпущенный `CapabilitiesOwner::new(7)`; `WindowState::successor`, вычисленный вызывающим от
-  снимка окна, — он нёс владельца окна на той ревизии, которую займёт следующее изменение
-  возможностей самого окна. Построено: жетон связан с *публикацией* возможностей — идентичностью,
-  которую выпускает только `flui-platform` (один `AtomicIdMint`, без повторов; запись `globals`
-  `window_capabilities::PUBLICATIONS`); `WindowCapabilities::publish` ставит её на первый снимок
-  окна, `successor` сохраняет её, пока возможности те же, и выпускает новую при изменении.
-  `WindowCapabilities` только для чтения (поля читаются через `Deref` к `CapabilityParts`), любая
-  правка (`into_parts`, `unavailable`) и всё собранное руками — без публикации; `against`
-  открывает жетон только под той же публикацией. `CapabilitiesOwner`, `owned_by` и счётчик
-  `window::state::NEXT_CAPABILITIES_OWNER` удалены. Класс: окна Android, UIKit и headless (оба)
-  на команду, которую не исполняют, отвечают `ApplyError::Platform` (`not_carried_out`), а не
-  `Ok`; двойники `flui-testing` и `flui-app` публикуют возможности один раз.
-  Тесты, в скобках результат без исправления: `an_edit_of_published_capabilities_belongs_to_no_window`
-  и `a_successor_a_caller_computes_opens_nothing` (`window_command_validate`; на `main` правка
-  копии и вычисленный преемник открывались, `Ok`); trybuild
-  `published_capabilities_cannot_be_edited` (на `main` компилируется); пример «окно из одного
-  контракта» в `PlatformWindow` (жетон от возможностей без публикации — `Superseded`);
-  `parts_leave_the_revision_and_publication_to_the_publishing_window` (снимок, разобранный на
-  части и опубликованный снова, сохраняет публикацию).
-  Проверки на Windows: clippy рабочего пространства `--all-targets -D warnings`; nextest
-  `-p flui-platform -p flui-native -p flui-testing -p flui-app` (падают тесты, которые падают и на
-  базе: Android intent, trybuild `owner_platform_is_not_send`, `the_driver_agent_contains_every_failure`;
-  `native_window_commands` и таймерный тест пера проходят отдельно); trybuild контракта —
-  новые и изменённый случаи. Не скомпилировано здесь (только CI): код Android, iOS, macOS и wasm32
-  (правки чтения и сборки возможностей, `apply` Android и UIKit).
+- [x] **LY114** — ветка `platform/admission-integrity`, решение — ADR-0341 (заменяет связку токена
+  из ADR-0254 §2). Подтверждено на `main` @ `ab45cd94c` тестом через публичный API: три подделки
+  открывались на окне — копия опубликованных возможностей с включённым `pub`-полем `material`;
+  владелец из `CapabilitiesOwner::new(7)`; `WindowState::successor`, вычисленный вызывающим от
+  снимка окна (владелец окна на ревизии, которую займёт следующее изменение возможностей самого
+  окна). Построено: токен несёт *публикацию* возможностей — идентичность, которую чеканит только
+  `flui-platform` (`AtomicIdMint`, запись `globals` `window_capabilities::PUBLICATIONS`);
+  `WindowCapabilities::publish` ставит её на первый снимок окна, `successor` сохраняет её, пока
+  возможности те же, и чеканит новую при изменении, а снимок без публикации наследник не
+  публикует. Поля `WindowCapabilities` закрыты и читаются аксессорами (`material()`), `Deref`
+  нет, так что ничто, прочитанное из опубликованного значения, не превращается в значение без
+  публикации; единственный выход — `into_parts`. `admit` отказывает значению без публикации
+  `AdmissionError::Unpublished` (повторный допуск его не лечит), поэтому `Superseded` значит
+  только «другая публикация того же или чужого окна». Проверка команды в `against` (`permits`)
+  не нужна: одна публикация — один набор возможностей, который читатель не меняет, а `successor`
+  при изменении выпускает новую, так что набор, против которого `admit` проверил команду, и есть
+  набор окна при совпадении публикации. Исчерпание — `WindowStateExhausted { Revisions,
+  Publications }`. Удалены `CapabilitiesOwner`, `owned_by`, `WindowRevisionExhausted` и счётчик
+  `window::state::NEXT_CAPABILITIES_OWNER`. Класс: окна Android, UIKit и оба headless отвечают
+  на неисполняемую команду `ApplyError::Platform`, а не `Ok`; публикуют возможности один раз
+  двойники `flui-testing`, `flui-app`, публичный `flui_runtime::testing::TestWindow` и двойники
+  тестов `flui-runtime`, `flui-interaction`, `flui-app` (фикстура trybuild
+  `platform_and_host_window_are_sealed` не компилируется по замыслу и не тронута).
+  Прочие «проверенные» значения контракта осмотрены и подделке не поддаются (закрытые поля,
+  проверяющие конструкторы): `RefreshPeriod`, `Locale`, `GestureGeometry`, `HapticPattern`,
+  `WindowExtent`, `WindowGeometry`, `DisplayId`, `WindowId`, `KeyText`, `PointerFrame`,
+  `ScrollDelta`; `OsDragRequest` — строка LY120.
+  Тесты (в скобках — какой откат их роняет): `an_edit_of_published_capabilities_is_refused_at_admission`
+  (`admit` принимает значение без публикации; `unavailable` сохраняет публикацию);
+  `a_successor_a_caller_computes_opens_nothing` и
+  `a_token_opens_only_under_the_capabilities_it_was_admitted_against` (`successor` не чеканит
+  новую публикацию при изменении); `a_successor_of_unpublished_capabilities_stays_unpublished`
+  (`successor` чеканит публикацию для неопубликованного предшественника; `admit` принимает
+  неопубликованное); `parts_leave_the_revision_and_publication_to_the_publishing_window` (`admit`
+  принимает неопубликованное); trybuild `published_capabilities_cannot_be_edited` (на `main`
+  компилируется). Проверки: на Windows `check` и clippy рабочего пространства, nextest
+  затронутых крейтов, trybuild `flui-platform` и `flui-native`, `doc-strict`, `checks`,
+  `expectations`; в WSL clippy `flui-native --all-targets`. Только CI компилирует правки в
+  `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,
+  `tests/wasm32/web_page_lifecycle.rs`.
 
 ## Отступление от порядка, решённое владельцем
 

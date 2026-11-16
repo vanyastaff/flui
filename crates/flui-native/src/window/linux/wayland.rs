@@ -719,7 +719,11 @@ pub(crate) mod configure {
             ] {
                 let refused = command
                     .clone()
-                    .admit(&unannounced)
+                    .admit(
+                        &unannounced
+                            .publish()
+                            .expect("the process has publications left"),
+                    )
                     .expect_err("refused at admission");
                 assert_eq!(
                     refused.unsupported().map(|unsupported| unsupported.reason),
@@ -739,7 +743,11 @@ pub(crate) mod configure {
             assert!(announced.enters_fullscreen().is_available());
             assert_eq!(
                 WindowCommand::SetMode(WindowMode::Maximized)
-                    .admit(&announced)
+                    .admit(
+                        &announced
+                            .publish()
+                            .expect("the process has publications left")
+                    )
                     .expect_err("the compositor offers no maximize")
                     .unsupported()
                     .map(|unsupported| unsupported.reason),
@@ -754,7 +762,11 @@ pub(crate) mod configure {
         fn a_tiled_window_takes_no_size() {
             let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
             let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
-                .admit(&capabilities(None, None, None, tiled, Activation::Missing))
+                .admit(
+                    &capabilities(None, None, None, tiled, Activation::Missing)
+                        .publish()
+                        .expect("the process has publications left"),
+                )
                 .expect_err("the tiling holds the size");
             assert_eq!(
                 refused.unsupported().map(|unsupported| unsupported.reason),
