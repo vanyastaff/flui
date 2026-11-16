@@ -2525,7 +2525,7 @@ either SDK admission or sentinel handling makes its corresponding case fail.
 This portable test and Android cross-target checking do not prove JNI execution
 or configuration-change delivery on a device.
 
-### Native Win32 owner delivery survives message-post refusal
+### Native Win32 delivery survives message-post refusal
 
 Owner turns ordinarily use the internal HWND's posted message, including inside
 native modal loops. If posting fails, the transport signals an unnamed auto-reset
@@ -2534,11 +2534,34 @@ and frame/source deadlines, including an infinite idle wait without user windows
 Both paths drive the same owner-turn slot and quit policy. A strong `OwnedHandle`
 owner spans every wait; closing admission prevents a retired proxy from posting.
 The event contains no callback or UI state and requires no polling thread.
-`failed_native_posts_still_deliver_owner_turns_and_quit` injects physical post
-refusal and verifies worker admission, reentrant continuation and quit through
-the actual native loop. If both the post and kernel signal fail, the caller still
-receives an error and OwnerSignal retains its debt. A third-party modal loop does
-not wait on this private event; fallback delivery resumes when FLUI regains its loop.
+If both the post and kernel signal fail, the caller still receives an error and
+OwnerSignal retains its debt. A third-party modal loop does not wait on this
+private event; fallback delivery resumes when FLUI regains its loop.
+
+Every other message the host posts to a window of its owner thread carries
+accepted work: a hidden or minimized window's frame request, the deliveries
+another thread raised for a window, a close the handler granted behind a running
+method, the fullscreen hotkey's toggle, the exit policy's request and the
+low-memory report. Each goes through `OwnerQueue::post`. A post the thread's
+queue refuses (it holds the posted-message quota) is handed to the owner
+signal, which inherits the event fallback above; the owner's next turn sends
+the message, which on the owner thread calls the window procedure past the full
+queue, and the procedure answers it as it answers the posted one. So every such
+message names its window by identity in its parameters, and nothing is logged
+where a post is asked for. A hidden or minimized window's frame request is
+posted at most once until the window takes it (`FramePost`), as Win32 folds a
+painted window's invalidations into one `WM_PAINT`, so a burst of wakes is one
+frame and cannot fill the queue.
+
+`failed_native_posts_still_deliver_owner_turns_and_quit` refuses posts both ways:
+by injection into the owner signal's own post (worker admission, reentrant
+continuation and quit through the actual native loop), and by filling the
+thread's queue to its quota, under which a thousand frame requests on a hidden
+window from a worker are one frame, a delivery a worker raised reaches the
+window, and closing the last window still ends the loop.
+`a_burst_of_frame_requests_on_a_hidden_window_is_one_frame` shows the folding
+with posts accepted, and `host_event_sources` shows a refused low-memory report
+sent from the owner's turn.
 
 ### Native Win32 delivers admitted idle deadlines through live window paints
 

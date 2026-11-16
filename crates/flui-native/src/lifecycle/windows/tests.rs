@@ -10,15 +10,27 @@ use super::HostEvents;
 use super::host_events::LOW_MEMORY;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::app_delivery::testing::{AppLog, Bound, bound};
+use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use crate::owner::windows::broadcast::{Receiver, Subscriber};
+use crate::owner::windows::control::{OwnerQueue, testing::FullQueue};
 
 /// A receiver wired to a host, with the notices it delivers heard by a
 /// recording application handler.
 fn hosted_receiver() -> (Receiver, Rc<HostEvents>, Rc<AppLog>, Bound) {
+    hosted_receiver_of(&OwnerSignal::new(Arc::new(|| Ok(()))))
+}
+
+/// [`hosted_receiver`] on the owner thread of `signal`, whose turns run what
+/// the thread's queue refused.
+fn hosted_receiver_of(signal: &Arc<OwnerSignal>) -> (Receiver, Rc<HostEvents>, Rc<AppLog>, Bound) {
     let app = AppLog::new();
     let run = bound(app.clone());
     let notices = Arc::new(SystemNotices::new(Arc::clone(&run.delivery)));
-    let host = Rc::new(HostEvents::new(Arc::clone(&run.delivery), notices));
+    let host = Rc::new(HostEvents::new(
+        Arc::clone(&run.delivery),
+        notices,
+        OwnerQueue::new(Arc::downgrade(signal)),
+    ));
     let receiver = Receiver::try_new([Rc::clone(&host) as Rc<dyn Subscriber>]).expect("receiver");
     (receiver, host, app, run)
 }
@@ -48,15 +60,22 @@ fn low_memory_is_reported_once_per_hold() {
     assert_eq!(heard.notices(), [critical, critical]);
 }
 
-fn a_wake_that_could_not_be_posted_is_delivered_with_the_next_message() {
-    let (receiver, host, heard, _run) = hosted_receiver();
-    host.fail_low_memory_post_for_test();
-    assert_eq!(heard.notices(), []);
-    receiver.send_with_for_test(windows::Win32::UI::WindowsAndMessaging::WM_NULL, 0, 0);
+fn a_report_the_queue_refuses_is_sent_from_the_owners_turn() {
+    let signal = OwnerSignal::new(Arc::new(|| Ok(())));
+    signal.start().expect("the owner starts its turns");
+    let (_receiver, host, heard, _run) = hosted_receiver_of(&signal);
+    {
+        // The thread's queue holds its posted-message quota: the pool
+        // thread's post of the report is refused.
+        let _full = FullQueue::fill();
+        host.fire_low_memory_for_test();
+    }
+    assert_eq!(heard.notices(), [], "no message carried the report");
+    assert!(!signal.drive_in(&OwnerTurnSlot::default()));
     assert_eq!(
         heard.notices(),
         [SystemNotice::MemoryPressure(MemoryPressureLevel::Critical)],
-        "the report was owed, not lost"
+        "the owner's turn sent the report the queue refused"
     );
 }
 
@@ -79,8 +98,8 @@ fn host_event_sources() {
                 low_memory_is_reported_once_per_hold as fn(),
             ),
             (
-                "a_wake_that_could_not_be_posted_is_delivered_with_the_next_message",
-                a_wake_that_could_not_be_posted_is_delivered_with_the_next_message as fn(),
+                "a_report_the_queue_refuses_is_sent_from_the_owners_turn",
+                a_report_the_queue_refuses_is_sent_from_the_owners_turn as fn(),
             ),
             (
                 "a_refused_rearm_timer_is_set_again_by_the_next_message",

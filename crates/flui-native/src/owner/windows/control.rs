@@ -10,7 +10,8 @@
 //! The owner window is also where the exit policy is decided: a request for
 //! it (the last tracked window's `WM_DESTROY`, or
 //! `Platform::request_exit_policy_reevaluation` from any thread) is posted
-//! here as one coalesced message, so the hook always runs on a fresh owner
+//! here as one coalesced message (sent from the owner's next turn when the
+//! queue refuses it, [`OwnerQueue`]), so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
 use super::modal_loop::ModalFrames;
 use super::{ClassWindows, FrameCount, WindowIdentity};
@@ -56,7 +57,11 @@ use windows::{
     core::{PCWSTR, w},
 };
 const WAKE: u32 = WM_APP + 19;
+mod queue;
 mod wake;
+pub(crate) use queue::OwnerQueue;
+#[cfg(test)]
+pub(crate) use queue::testing;
 /// Asks the owner to consult the exit policy; see [`ExitPolicyRequest`].
 const EXIT_POLICY: u32 = WM_APP + 20;
 const OWNER_CLASS: PCWSTR = w!("FLUIOwnerSignalWindow");
@@ -249,12 +254,14 @@ pub(crate) struct OwnerShares {
 /// exit policy: if the platform tracks no top-level window, the
 /// application's handler (or, with none bound, the default "exit when the last
 /// window closes") decides whether the message loop quits. Requests made while
-/// one is already queued cost nothing; once the owner window is closed they
-/// are refused, like a wake.
+/// one is already queued cost nothing, and one the owner's queue refuses is
+/// decided in the owner's next turn ([`OwnerQueue`]); once the owner window is
+/// closed they are refused, like a wake.
 #[derive(Clone)]
 pub(crate) struct ExitPolicyRequest {
     address: Arc<Mutex<Option<isize>>>,
     pending: Arc<AtomicBool>,
+    queue: OwnerQueue,
 }
 
 impl ExitPolicyRequest {
@@ -264,19 +271,14 @@ impl ExitPolicyRequest {
         }
         let address = self.address.lock();
         let Some(raw) = *address else {
-            tracing::debug!("exit-policy request refused: the owner message window is closed");
             return;
         };
-        // SAFETY: the address is read under the lock `OwnerControl::close`
-        // takes it out under before destroying the window, so it names the
-        // live owner window; posting carries no pointer or closure and never
-        // runs the procedure synchronously.
-        let posted =
-            unsafe { PostMessageW(Some(HWND(raw as *mut _)), EXIT_POLICY, WPARAM(0), LPARAM(0)) };
-        if let Err(error) = posted {
-            self.pending.store(false, Ordering::Release);
-            tracing::warn!(%error, "exit-policy request could not be posted to the owner");
-        }
+        // Read under the lock `OwnerControl::close` takes the address out
+        // under before destroying the window, so it names the live owner
+        // window; the post never runs the procedure synchronously, and the
+        // owner's signal, which a refused post falls back on, is closed
+        // before that window is destroyed.
+        self.queue.post(HWND(raw as *mut _), EXIT_POLICY, 0, 0);
     }
 }
 
@@ -288,6 +290,7 @@ pub(crate) struct OwnerGate {
     address: Arc<Mutex<Option<isize>>>,
     identity: WindowIdentity,
     exit_policy_pending: Arc<AtomicBool>,
+    queue: OwnerQueue,
 }
 
 /// The owner's objects a host makes its broadcast subscribers from
@@ -506,6 +509,7 @@ impl OwnerControl {
                 address: Arc::clone(&address),
             });
         }
+        let queue = OwnerQueue::new(Arc::downgrade(&signal));
         Ok(Self {
             signal,
             wake,
@@ -513,6 +517,7 @@ impl OwnerControl {
                 address,
                 identity,
                 exit_policy_pending,
+                queue,
             },
         })
     }
@@ -578,6 +583,7 @@ impl OwnerGate {
         ExitPolicyRequest {
             address: Arc::clone(&self.address),
             pending: Arc::clone(&self.exit_policy_pending),
+            queue: self.queue.clone(),
         }
     }
 
