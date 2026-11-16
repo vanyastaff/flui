@@ -8,22 +8,22 @@
 //! `StartupWMClass`, so both hosts carry the application id the host was
 //! started with ([`AppId`]), the same on every window, decided here once per
 //! host. An application started without one carries its executable's file
-//! stem, as it did before it had an identifier, and claims no application id
-//! (`_GTK_APPLICATION_ID`).
+//! stem in ASCII (`flui_foundation::executable_class`), which names its desktop
+//! entry then, and claims no application id (`_GTK_APPLICATION_ID`).
 
 #![forbid(unsafe_code)]
 
 use std::path::Path;
 
-use flui_foundation::AppId;
+use flui_foundation::{AppId, executable_class};
 
 /// The class every window of a Linux host carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AppClass {
     /// The application id the host was started with.
     Application(AppId),
-    /// The executable's file stem, for an application started without an id
-    /// (`flui` when the executable cannot be named).
+    /// The executable's file stem in ASCII, for an application started
+    /// without an id (`flui` when the executable cannot be named).
     Executable(Box<str>),
 }
 
@@ -36,8 +36,8 @@ impl AppClass {
         }
         let stem = executable
             .and_then(Path::file_stem)
-            .map_or_else(|| "flui".into(), |stem| stem.to_string_lossy().into());
-        Self::Executable(stem)
+            .map_or_default(|stem| stem.to_string_lossy());
+        Self::Executable(executable_class(&stem).into_boxed_str())
     }
 
     /// The class of a host started with `app_id` in this process.
@@ -89,7 +89,7 @@ mod tests {
 
     /// A window carries the application id it was started with, as its name,
     /// its claimed id and both halves of `WM_CLASS`; without one, the
-    /// executable's stem, which claims no id.
+    /// executable's stem in ASCII, which claims no id.
     #[test]
     fn a_window_is_classed_by_the_application_id_or_the_executable() {
         let notes = AppId::try_new("com.example.Notes").expect("an application id");
@@ -112,6 +112,7 @@ mod tests {
                 "notes-app",
                 None,
             ),
+            (None, Some(Path::new("/opt/nötes")), "n_tes", None),
             (None::<&AppId>, None::<&Path>, "flui", None::<&str>),
         ];
         for (app_id, executable, name, application_id) in cases {

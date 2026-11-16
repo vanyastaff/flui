@@ -4592,13 +4592,15 @@ so one leaving lets go of nothing another holds. Tests:
 A Linux host is started with the application's `flui_foundation::AppId`, or
 without one (`CurrentHost::start_with`, `start_single`), and decides at start
 the `window::linux::class::AppClass` every window carries: the id, or the
-executable's stem. A Wayland window sets it with `xdg_toplevel.set_app_id`
-before its first commit; an X11 window writes it as both halves of `WM_CLASS`,
-claims it as `_GTK_APPLICATION_ID` when it is an id, and writes `WM_HINTS`
-with `InputHint` set. The desktop entry `flui build linux` writes is named by
-the same id and names it as `StartupWMClass` (ADR-0351). The single-instance
-bus name, mutex and pipe are the id itself: its grammar is a D-Bus name's, so
-the host checks nothing again. Tests:
+executable's stem in ASCII (`flui_foundation::executable_class`). A Wayland
+window sets it with `xdg_toplevel.set_app_id` before its first commit; an X11
+window writes it as both halves of `WM_CLASS`, claims it as
+`_GTK_APPLICATION_ID` when it is an id, and writes `WM_HINTS` with `InputHint`
+set. The desktop entry `flui build linux` writes is named by the same class and
+names it as `StartupWMClass` (ADR-0351). The single-instance bus name, mutex
+and pipe are the id itself: its grammar is a D-Bus name's and its length fits
+the pipe's 256 characters (`APP_ID_MAX_LEN`), so the host checks nothing
+again. Tests:
 `a_window_is_classed_by_the_application_id_or_the_executable`, and
 `a_window_carries_the_application_id_it_was_started_with` on Xvfb with
 openbox and under sway (read through `zwlr_foreign_toplevel_manager_v1`).

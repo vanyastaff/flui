@@ -813,9 +813,9 @@ where
     {
         return unregistered;
     }
-    let single = application
+    let one_instance = application
         .opening
-        .single_instance_id(&application.config.application_identity);
+        .keeps_one_instance(&application.config.application_identity);
     let app_id = application.config.application_identity.app_id().cloned();
     // Held for the main window's first frame; a launch the running instance
     // takes drops it, so only the instance that runs registers.
@@ -833,7 +833,7 @@ where
             let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
             // Before the platform, whose registries report only to a capture already installed.
             super::begin_native_journal(host.backend());
-            start_host(host, single.as_ref(), app_id.as_ref())
+            start_host(host, app_id.as_ref(), one_instance)
         },
         Rc::default(),
         RasterFactory::Gpu,
@@ -842,8 +842,9 @@ where
 }
 
 /// Start `host` for the application identified by `app_id` (which its Linux
-/// windows carry as their class and app id), as one instance named `single`
-/// when it is given (`CurrentHost::start_single`):
+/// windows carry as their class and app id), as its one instance when
+/// `one_instance` holds and there is an id to name it by
+/// (`CurrentHost::start_single`):
 /// `None` when another process of the application took this launch. The
 /// Wayland and X11 hosts run their IO sources (XIM, IBus, logind, the
 /// settings portal, the session bus), and the Windows host its single-instance
@@ -852,9 +853,10 @@ where
 /// starts on the host's own.
 fn start_host(
     host: flui_native::CurrentHost,
-    single: Option<&flui_log::AppId>,
-    app_id: Option<&flui_log::AppId>,
+    app_id: Option<&crate::AppId>,
+    one_instance: bool,
 ) -> Result<Option<Box<dyn flui_native::Platform>>, LaunchError> {
+    let single = app_id.filter(|_| one_instance);
     let executor =
         host_executor(host, single.is_some())?.unwrap_or_else(flui_native::NativeExecutor::own);
     #[cfg(feature = "single-instance")]
@@ -2100,7 +2102,7 @@ mod tests {
     /// directory, so the run's default storage directory never refuses one.
     #[test]
     fn every_app_id_names_a_data_dir() {
-        let long = format!("com.{}", "a".repeat(flui_log::APP_ID_MAX_LEN - 4));
+        let long = format!("com.{}", "a".repeat(flui_foundation::APP_ID_MAX_LEN - 4));
         for id in [
             "com.example.notes",
             "com.aux.notes",

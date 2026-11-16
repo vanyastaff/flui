@@ -1,30 +1,33 @@
-//! What a Linux desktop knows the application by (ADR-0307 §4): a desktop
-//! entry named by the application's identifier, which names it again as
-//! `StartupWMClass` and whose `MimeType` names each URL scheme as
-//! `x-scheme-handler/<scheme>` and each file type's MIME type, and a
+//! What a Linux desktop knows the application by (ADR-0307 §4, ADR-0351): a
+//! desktop entry named by the class the application's windows carry, which
+//! names it again as `StartupWMClass` and whose `MimeType` names each URL
+//! scheme as `x-scheme-handler/<scheme>` and each file type's MIME type, and a
 //! shared-mime-info package that gives each file type its extension.
 //!
-//! The identifier is the one the application is compiled with
-//! (`FLUI_APP_ID`), which its windows carry as their Wayland app id and their
-//! X11 class: the shell matches a window to this entry by it, so the dock
-//! shows the entry's name and groups the window under its launcher.
+//! The class is the id `flui.toml` declares, which every `flui` command
+//! compiles the application with (`FLUI_APP_ID`); without a declared id, the
+//! executable's stem in ASCII ([`executable_class`]), which a window started
+//! without an id carries. The shell matches a window to this entry by it, so
+//! the dock shows the entry's name and groups the window under its launcher,
+//! and two applications of one directory (two examples) keep two entries.
 //!
 //! `flui build linux` writes them under the output directory at the paths a
 //! package installs them to below its `share` prefix
-//! (`share/applications/<id>.desktop`, `share/mime/packages/<id>.xml`);
+//! (`share/applications/<class>.desktop`, `share/mime/packages/<class>.xml`);
 //! installing them, and running `update-desktop-database` and
 //! `update-mime-database`, is the package's. The entry's `Exec` passes what
 //! is opened as URIs (`%U`), so files arrive as `file:` URIs.
 
 use std::path::{Path, PathBuf};
 
+use crate::app_id::executable_class;
 use crate::build::platform::AppBundle;
 use crate::build::util::xml::xml_escape;
 use crate::declarations::Declarations;
 
-/// The desktop entry for `bundle`, whose executable is `executable`, and the
-/// MIME package when `declarations` gives the application a file type,
-/// written under `output_dir`. The paths written.
+/// The desktop entry for `bundle`, whose executable's file name is
+/// `executable`, and the MIME package when `declarations` gives the
+/// application a file type, written under `output_dir`. The paths written.
 ///
 /// # Errors
 ///
@@ -35,25 +38,41 @@ pub(crate) fn stage(
     executable: &str,
     declarations: &Declarations,
 ) -> std::io::Result<Vec<PathBuf>> {
+    let class = window_class(bundle, executable);
     let mut written = Vec::new();
     let applications = output_dir.join("share").join("applications");
     std::fs::create_dir_all(&applications)?;
-    let entry_path = applications.join(format!("{}.desktop", bundle.identifier));
-    std::fs::write(&entry_path, desktop_entry(bundle, executable, declarations))?;
+    let entry_path = applications.join(format!("{class}.desktop"));
+    std::fs::write(
+        &entry_path,
+        desktop_entry(&bundle.name, &class, executable, declarations),
+    )?;
     written.push(entry_path);
     if let Some(package) = mime_package(declarations) {
         let packages = output_dir.join("share").join("mime").join("packages");
         std::fs::create_dir_all(&packages)?;
-        let package_path = packages.join(format!("{}.xml", bundle.identifier));
+        let package_path = packages.join(format!("{class}.xml"));
         std::fs::write(&package_path, package)?;
         written.push(package_path);
     }
     Ok(written)
 }
 
+/// The class the windows of `bundle`'s executable `executable` carry: the
+/// declared id, else the executable's stem in ASCII.
+fn window_class(bundle: &AppBundle, executable: &str) -> String {
+    if bundle.declared {
+        return bundle.identifier.clone();
+    }
+    let stem = Path::new(executable)
+        .file_stem()
+        .map_or_default(|stem| stem.to_string_lossy());
+    executable_class(&stem)
+}
+
 /// The desktop entry: its `MimeType` line only when the application opens a
 /// URL scheme or a file type.
-fn desktop_entry(bundle: &AppBundle, executable: &str, declarations: &Declarations) -> String {
+fn desktop_entry(name: &str, class: &str, executable: &str, declarations: &Declarations) -> String {
     let mut mime_types: Vec<String> = declarations
         .url_schemes()
         .map(|(scheme, _)| format!("x-scheme-handler/{scheme}"))
@@ -66,9 +85,9 @@ fn desktop_entry(bundle: &AppBundle, executable: &str, declarations: &Declaratio
     let mut entry = format!(
         "[Desktop Entry]\nType=Application\nName={name}\nExec={exec}\nTerminal=false\n\
          StartupWMClass={class}\n",
-        name = string_value(&bundle.name),
+        name = string_value(name),
         exec = string_value(&format!("{} %U", exec_argument(executable))),
-        class = string_value(&bundle.identifier),
+        class = string_value(class),
     );
     if !mime_types.is_empty() {
         entry.push_str("MimeType=");
@@ -167,7 +186,7 @@ mod tests {
              [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
              name = \"Note & Sketch\"\n",
         );
-        let bundle = AppBundle::new("Notes", "com.example.notes".to_owned());
+        let bundle = AppBundle::new("Notes", "com.example.notes".to_owned()).declared();
         let output = tempfile::tempdir().expect("a temporary directory");
         let written =
             stage(output.path(), &bundle, "notes", &declarations).expect("the files are written");
@@ -224,49 +243,60 @@ mod tests {
         assert!(!entry_only.path().join("share").join("mime").exists());
     }
 
-    /// One identifier names the desktop entry's file, is its `StartupWMClass`
-    /// and is what the application is compiled with (`FLUI_APP_ID`), which
-    /// its windows carry as their Wayland app id and X11 class: the shell
-    /// matches the window to the entry, whether the identifier comes from
-    /// `flui.toml` or, without one, from the application's directory.
+    /// The entry's file name and its `StartupWMClass`, read back from what
+    /// `stage` wrote under `output`.
+    fn staged_class(output: &Path, bundle: &AppBundle, executable: &str) -> (String, String) {
+        let written =
+            stage(output, bundle, executable, &Declarations::default()).expect("the entry");
+        let file = written[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a UTF-8 file name")
+            .to_owned();
+        let entry = std::fs::read_to_string(&written[0]).expect("the entry");
+        let class = entry
+            .lines()
+            .find_map(|line| line.strip_prefix("StartupWMClass="))
+            .expect("a StartupWMClass")
+            .to_owned();
+        (file, class)
+    }
+
+    /// The entry is named by what the window carries: the declared id, which
+    /// the application is compiled with, or without one the executable's
+    /// stem in ASCII, as the window then carries it. Two examples of one
+    /// directory, neither declaring an id, keep two entries, neither
+    /// overwriting the other, named by their executables, not by an id derived
+    /// from the directory.
     #[test]
-    fn the_entry_and_the_window_are_named_by_one_identifier() {
-        let configured = crate::app_id::AppId::try_new("com.example.notes").expect("an id");
-        let unconfigured = crate::app_id::AppId::unconfigured("my notes");
-        for app_id in [configured, unconfigured] {
-            let bundle = AppBundle::new("Notes", app_id.desktop_entry_id());
-            let compiled = crate::build::desktop::DesktopBuilder::compiled_identity(
-                "x86_64-unknown-linux-gnu",
-                Some(&bundle),
-            );
-            assert_eq!(
-                compiled,
-                Some((crate::config::APP_ID_ENV, app_id.as_str().to_owned())),
-                "{app_id}: the Linux build compiles the identifier in"
-            );
-            let output = tempfile::tempdir().expect("a temporary directory");
-            let written = stage(output.path(), &bundle, "notes", &Declarations::default())
-                .expect("the entry is written");
-            let entry_name = written[0]
-                .file_name()
-                .and_then(|name| name.to_str())
-                .expect("a UTF-8 file name");
-            assert_eq!(entry_name, format!("{app_id}.desktop"), "{app_id}");
-            let entry = std::fs::read_to_string(&written[0]).expect("the entry");
-            let class = entry
-                .lines()
-                .find_map(|line| line.strip_prefix("StartupWMClass="))
-                .expect("a StartupWMClass");
-            assert_eq!(class, app_id.as_str(), "{app_id}");
-        }
+    fn the_entry_is_named_by_what_the_window_carries() {
+        let declared = crate::app_id::AppId::try_new("com.example.notes").expect("an id");
+        let output = tempfile::tempdir().expect("a temporary directory");
+        let bundle = AppBundle::new("Notes", declared.desktop_entry_id()).declared();
         assert_eq!(
-            crate::build::desktop::DesktopBuilder::compiled_identity(
-                "x86_64-pc-windows-msvc",
-                Some(&AppBundle::new("Notes", "com.example.notes".to_owned()))
-            ),
-            None,
-            "only a Linux build compiles the entry's identifier in"
+            staged_class(output.path(), &bundle, "notes"),
+            (
+                "com.example.notes.desktop".to_owned(),
+                "com.example.notes".to_owned()
+            )
         );
+
+        let examples = tempfile::tempdir().expect("a temporary directory");
+        let undeclared = AppBundle::new(
+            "examples",
+            crate::app_id::AppId::unconfigured("examples").desktop_entry_id(),
+        );
+        for (executable, class) in [("counter", "counter"), ("todo", "todo"), ("nötes", "n_tes")] {
+            assert_eq!(
+                staged_class(examples.path(), &undeclared, executable),
+                (format!("{class}.desktop"), class.to_owned()),
+                "{executable}"
+            );
+        }
+        let entries = std::fs::read_dir(examples.path().join("share").join("applications"))
+            .expect("the entries")
+            .count();
+        assert_eq!(entries, 3, "one entry per executable");
     }
 
     /// A name and an executable are each one value of their key, whatever

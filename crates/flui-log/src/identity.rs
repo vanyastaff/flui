@@ -22,7 +22,7 @@
 
 use thiserror::Error;
 
-pub use flui_foundation::app_id::{APP_ID_MAX_LEN, AppId, AppIdError};
+use flui_foundation::AppId;
 
 /// Subsystem reported to Apple's unified logging when the application has not
 /// declared its identifier.
@@ -43,7 +43,7 @@ pub const APPLE_CATEGORY: &str = "flui";
 pub const DEFAULT_DISPLAY_NAME: &str = "flui";
 
 /// Why a display name cannot name an [`AppIdentity`]; an identifier's own
-/// refusals are [`AppIdError`]'s.
+/// refusals are `flui_foundation::AppIdError`'s.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum IdentityError {

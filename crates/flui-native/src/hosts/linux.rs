@@ -175,10 +175,13 @@ mod wayland {
         /// [`try_new`](Self::try_new) for the application identified by
         /// `app_id`, which every window carries as its class and app id (the
         /// platform [`CurrentHost::start_with`](crate::CurrentHost::start_with)
-        /// starts with `Some(app_id)`, kept concrete).
+        /// starts with `Some(app_id)`, kept concrete for a test that turns its
+        /// loop by hand; an application starts the host through `start_with`).
         ///
         /// # Errors
         /// As [`try_new`](Self::try_new).
+        #[cfg(feature = "testing")]
+        #[doc(hidden)]
         pub fn try_new_for(app_id: &AppId) -> Result<Self, PlatformError> {
             Self::try_new_with(NativeExecutor::own(), None, Some(app_id))
         }
@@ -348,10 +351,13 @@ mod x11 {
         /// [`try_new`](Self::try_new) for the application identified by
         /// `app_id`, which every window carries as its class and app id (the
         /// platform [`CurrentHost::start_with`](crate::CurrentHost::start_with)
-        /// starts with `Some(app_id)`, kept concrete).
+        /// starts with `Some(app_id)`, kept concrete for a test that turns its
+        /// loop by hand; an application starts the host through `start_with`).
         ///
         /// # Errors
         /// As [`try_new`](Self::try_new).
+        #[cfg(feature = "testing")]
+        #[doc(hidden)]
         pub fn try_new_for(app_id: &AppId) -> Result<Self, PlatformError> {
             Self::try_new_with(NativeExecutor::own(), None, Some(app_id))
         }

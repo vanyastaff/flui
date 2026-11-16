@@ -217,9 +217,13 @@ when it declares them (`only_the_application_declares_the_links_it_opens`), sinc
 what `#[flui::main]` reads from the crate it marks. A Linux build writes the desktop entry and the
 shared-mime-info package beside the executable (`build/linux_desktop.rs`,
 `a_linux_desktop_registers_what_the_application_opens`). The entry is written for every Linux
-build (ADR-0351): it is named by the application id, names it again as `StartupWMClass`, and the
-build compiles the same id in as `FLUI_APP_ID`, so the window that carries it matches the entry
-(`the_entry_and_the_window_are_named_by_one_identifier`).
+build (ADR-0351), named by what the window carries and naming it again as `StartupWMClass`: the
+id `flui.toml` declares, else the executable's name in ASCII (`app_id::executable_class`, held to
+`flui_foundation::executable_class`), so two examples keep two entries
+(`the_entry_is_named_by_what_the_window_carries`). No build passes `FLUI_APP_ID` itself
+(`DesktopBuilder::cargo_env`, `a_build_compiles_no_application_id_in_by_itself`): the id reaches
+the application only from the cargo configuration every command writes from `flui.toml`, so one
+application is compiled with one identity whatever command, target or example builds it.
 
 `flui doctor` reads the same declarations for a manifest the CLI does not write
 (`declarations/verify.rs`, `commands/doctor/project.rs`): the project's hand-written Android

@@ -1,8 +1,8 @@
 //! An application identifier is accepted only in the grammar every platform
-//! takes as the application's name, and only as long as a Linux desktop entry
-//! named by it can be.
+//! takes as the application's name, and only as long as the tightest name it is
+//! part of; an application without one is known by its executable.
 
-use flui_foundation::{APP_ID_MAX_LEN, AppId, AppIdError};
+use flui_foundation::{APP_ID_MAX_LEN, AppId, AppIdError, executable_class};
 
 #[test]
 fn an_app_id_is_a_reverse_dns_name_every_platform_accepts() {
@@ -74,8 +74,30 @@ fn an_app_id_is_a_reverse_dns_name_every_platform_accepts() {
         }
     }
     assert_eq!(
-        format!("{long}.desktop").len(),
-        255,
-        "the longest identifier names a desktop entry of the longest file name"
+        format!(r"\\.\pipe\flui-{long}-4294967295").len(),
+        256,
+        "the longest identifier names the longest Windows pipe"
     );
+    assert!(
+        format!("{long}.desktop").len() <= 255,
+        "and a desktop entry"
+    );
+}
+
+/// An application without an id is known by its executable's stem in ASCII,
+/// cut to the identifier's bound, never empty.
+#[test]
+fn an_executable_is_classed_in_ascii() {
+    let long = "a".repeat(APP_ID_MAX_LEN + 10);
+    let cases = [
+        ("notes", "notes".to_owned()),
+        ("notes-app.bin_2", "notes-app.bin_2".to_owned()),
+        ("nötes", "n_tes".to_owned()),
+        ("my notes", "my_notes".to_owned()),
+        ("", "flui".to_owned()),
+        (long.as_str(), "a".repeat(APP_ID_MAX_LEN)),
+    ];
+    for (stem, class) in cases {
+        assert_eq!(executable_class(stem), class, "{stem:?}");
+    }
 }

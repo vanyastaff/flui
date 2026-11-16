@@ -33,14 +33,16 @@ carried on when the check failed. How does one identity reach the window and the
 
 - One identity, parsed once: every consumer takes the same checked value, never a string.
 - The host stays below the composition root: `flui-native` cannot link `flui-log`.
-- An id a desktop entry cannot be named by is refused where it is made, not rewritten.
+- An id a name it is part of cannot hold is refused where it is made, not rewritten.
 - The window and the entry must match in every build, an application without `flui.toml` too.
+- One application has one identity: switching commands, targets or examples does not change what
+  it is compiled with, and two applications of one directory never share one.
 
 ## Considered options
 
 1. `AppId` moves to `flui-foundation`; the host takes `Option<&AppId>` at its start and the Linux
-   windows carry it; the CLI writes the entry for every Linux build with `StartupWMClass` and
-   compiles the entry's id in.
+   windows carry it; the CLI writes the entry for every Linux build, named by what the window
+   carries, with `StartupWMClass`.
 2. The host keeps a `&str` and its own check; only the windows change.
 3. A Linux launch configuration type in `flui-platform` with its own identifier field.
 
@@ -50,21 +52,32 @@ Chosen option: 1, because it is the only one with a single checked identity and 
 
 1. **The identifier is `flui_foundation::AppId`.** Its grammar (reverse DNS, labels of ASCII
    letters, digits and `_` led by a letter, no Java word, no Windows device name first) is a D-Bus
-   well-known name and a desktop-file ID. Its longest form is `APP_ID_MAX_LEN` = 255 bytes less
-   `.desktop`, so `<id>.desktop` is a file name; a longer id is `AppIdError::TooLong` at
-   `AppId::try_new`. `flui-log` re-exports it; `IdentityError` keeps the display name's refusals.
+   well-known name and a desktop-file ID. Its longest form, `APP_ID_MAX_LEN` = 231 bytes, is set
+   by the tightest name it is part of: the Windows single-instance pipe
+   `\\.\pipe\flui-<id>-<session>` (256 characters, a session of up to ten digits), which leaves
+   the mutex, the D-Bus name, the data directory and `<id>.desktop` room as well. A longer id is
+   `AppIdError::TooLong` at `AppId::try_new`. `flui-app` exports it (`flui::app::AppId`,
+   `AppIdError`); `flui-log`'s `IdentityError` keeps only the display name's refusals.
 2. **A host is started with the id.** `CurrentHost::start_with(executor, Option<&AppId>)` and
    `CurrentHost::start_single(executor, &AppId)` take the parsed id; the single-instance name is
    the id itself, with no second check. `flui-app` passes `AppIdentity::app_id`.
 3. **A Linux window carries it.** The host decides its `AppClass` once at start
-   (`window::linux::class`): the id, or without one the executable's stem. A Wayland window calls
-   `xdg_toplevel.set_app_id` before its first commit; an X11 window writes `WM_CLASS` with the
-   class as both instance and class, `_GTK_APPLICATION_ID` when it is an id, and `WM_HINTS` with
-   `InputHint` set and input `True`.
-4. **The entry matches.** `flui build linux` writes `share/applications/<id>.desktop` for every
-   build, with `StartupWMClass=<id>` and `MimeType` only when the application opens something,
-   and compiles the same id in as `FLUI_APP_ID` (an application without `flui.toml` has it from its
-   directory).
+   (`window::linux::class`): the id, or without one the executable's stem in ASCII
+   (`flui_foundation::executable_class`: other characters as `_`, an X11 `STRING` being Latin-1).
+   A Wayland window calls `xdg_toplevel.set_app_id` before its first commit; an X11 window writes
+   `WM_CLASS` with the class as both instance and class, `_GTK_APPLICATION_ID` when it is an id,
+   and `WM_HINTS` with `InputHint` set and input `True`.
+4. **An identity is compiled in only when the project declares it.** `FLUI_APP_ID` reaches a
+   build only from the project's cargo configuration, which every `flui` command (`flui run`,
+   `flui build <any target>`) writes from the `[app] id` of `flui.toml`; no command passes an id of
+   its own, and an id derived from the directory (`dev.flui.<dir>`, which names an unconfigured
+   Apple bundle) is never compiled in. So one application has one identity whichever command or
+   target builds it, and two examples of one directory do not share a data directory, a class or a
+   single-instance name.
+5. **The entry is named by what the window carries.** `flui build linux` writes
+   `share/applications/<class>.desktop` for every build, with `StartupWMClass=<class>` and
+   `MimeType` only when the application opens something: `<class>` is the declared id, else the
+   executable's stem as `executable_class` writes it, so two examples keep two entries.
 
 ### Consequences
 
@@ -72,7 +85,8 @@ Chosen option: 1, because it is the only one with a single checked identity and 
   token is tied to the right application.
 - Good, because an invalid id cannot reach a host: the host's own grammar and its warning path are
   gone.
-- Bad, because an identifier between 248 and 255 bytes, accepted before, is refused.
+- Bad, because an application without a declared id is matched by its executable's name only, and
+  gets no data directory and no single instance until `flui.toml` declares one.
 - Neutral, because the other hosts take the application's identity from their package and ignore
   the id; a Windows AppUserModelID is not set (a process id that no shortcut carries would break
   pinning), which `platform-parity.toml` records.
@@ -80,11 +94,13 @@ Chosen option: 1, because it is the only one with a single checked identity and 
 ### Confirmation
 
 The compiler: `start_with` and `start_single` take `AppId`, which only `try_new` makes. Tests:
-`an_app_id_is_a_reverse_dns_name_every_platform_accepts` (flui-foundation),
-`a_window_is_classed_by_the_application_id_or_the_executable` (flui-native, pure),
-`a_window_carries_the_application_id_it_was_started_with` (flui-native's `x11_window` on Xvfb with
-openbox, and `wayland_window::optional` under a headless sway, which lists toplevels to another
-client), `the_entry_and_the_window_are_named_by_one_identifier` and
+`an_app_id_is_a_reverse_dns_name_every_platform_accepts` and `an_executable_is_classed_in_ascii`
+(flui-foundation), `a_window_is_classed_by_the_application_id_or_the_executable` (flui-native,
+pure), `a_window_carries_the_application_id_it_was_started_with` (flui-native's `x11_window` on
+Xvfb with openbox, and `wayland_window::optional` under a headless sway, which lists toplevels to
+another client), `the_entry_is_named_by_what_the_window_carries`,
+`a_build_compiles_no_application_id_in_by_itself`,
+`the_cli_and_the_framework_class_an_executable_alike` and
 `a_linux_desktop_registers_what_the_application_opens` (flui-cli).
 
 ## Pros and cons of the options

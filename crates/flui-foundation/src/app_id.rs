@@ -2,22 +2,28 @@
 //! every platform, parsed once.
 //!
 //! The application's composition root learns it (from `FLUI_APP_ID`, which
-//! `flui build` compiles in from `flui.toml`) and hands the same value to each
-//! consumer: the storage host names the data directory after it, Apple's
-//! unified logging files events under it, a desktop host names its single
-//! instance by it, and a Linux window carries it as its class and app id, which
-//! the desktop entry installed as `<id>.desktop` matches. A consumer takes an
-//! [`AppId`], never a string it would have to check again.
+//! every `flui` command compiles in from the `[app] id` of `flui.toml`, and
+//! only from there) and hands the same value to each consumer: the storage
+//! host names the data directory after it, Apple's unified logging files
+//! events under it, a desktop host names its single instance by it, and a
+//! Linux window carries it as its class and app id, which the desktop entry
+//! installed as `<id>.desktop` matches. A consumer takes an [`AppId`], never a
+//! string it would have to check again.
+//!
+//! An application without one is known on Linux by its executable's name, as
+//! [`executable_class`] writes it, the same in its windows and in its desktop
+//! entry.
 
 use std::fmt;
 
 use thiserror::Error;
 
-/// The longest [`AppId`], in bytes: the longest file name the desktop file
-/// systems accept (255 bytes) less the `.desktop` a Linux desktop entry named
-/// by the identifier adds. Every shorter identifier also names a data
-/// directory and a D-Bus well-known name.
-pub const APP_ID_MAX_LEN: usize = 255 - ".desktop".len();
+/// The longest [`AppId`], in bytes: the tightest name the id is part of, the
+/// Windows single-instance pipe `\\.\pipe\flui-<id>-<session>` (256
+/// characters at most, a session of up to ten digits). Every shorter
+/// identifier also fits the instance's mutex, a D-Bus well-known name (255),
+/// a data directory and the Linux desktop entry `<id>.desktop` (255 each).
+pub const APP_ID_MAX_LEN: usize = 256 - r"\\.\pipe\flui-".len() - "-4294967295".len();
 
 /// Words Java reserves, which Android refuses as a package-name label.
 const JAVA_RESERVED: &[&str] = &[
@@ -204,6 +210,32 @@ impl fmt::Display for AppId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
+}
+
+/// The name an application without an [`AppId`] is known by on Linux, from
+/// its executable's file stem `stem`: each character outside ASCII letters,
+/// digits, `-`, `_` and `.` becomes `_`, the result is cut to
+/// [`APP_ID_MAX_LEN`] bytes, and an empty stem is `flui`. Its windows carry it
+/// as their Wayland app id and X11 `WM_CLASS` (an X11 `STRING` is Latin-1, so
+/// only ASCII reads back the same on every side), and `flui build linux`
+/// names the desktop entry after it, so both sides write the same bytes.
+#[must_use]
+pub fn executable_class(stem: &str) -> String {
+    let mut class: String = stem
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    class.truncate(APP_ID_MAX_LEN);
+    if class.is_empty() {
+        class.push_str("flui");
+    }
+    class
 }
 
 /// What is wrong with one label, before the identifier it belongs to is

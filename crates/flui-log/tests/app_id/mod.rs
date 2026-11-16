@@ -1,7 +1,8 @@
 //! The Apple subsystem is the application identifier, or the fixed unidentified
 //! one (the identifier's grammar is `flui-foundation`'s, tested there).
 
-use flui_log::{AppId, AppIdentity, UNIDENTIFIED_APPLE_SUBSYSTEM};
+use flui_foundation::AppId;
+use flui_log::{AppIdentity, UNIDENTIFIED_APPLE_SUBSYSTEM};
 
 #[test]
 fn the_apple_subsystem_is_the_app_id_or_the_unidentified_one() {

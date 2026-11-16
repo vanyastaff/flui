@@ -7228,26 +7228,31 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   Подтверждено на `main` @ `ac3b1ee58`: `set_app_id` в `flui-native` нет, X11 писал `WM_CLASS` из
   основы имени исполняемого файла и не писал `WM_HINTS`, desktop entry писалась только при схеме
   или типе файла и без `StartupWMClass`; хост брал id строкой и проверял своей грамматикой
-  (`instance_name`), предупреждая и продолжая при отказе. Одно тождество: `AppId` переехал в
-  `flui-foundation` (`flui-log` реэкспортирует его, `IdentityError` оставил отказы имени показа),
-  длина — не больше `APP_ID_MAX_LEN` = 255 − `.desktop`, так что `<id>.desktop` — имя файла, а
-  более длинный id — `AppIdError::TooLong` в `AppId::try_new` (CLI держит ту же границу, тест
+  (`instance_name`), предупреждая и продолжая при отказе. Одно тождество: `AppId` и `AppIdError`
+  переехали в `flui-foundation` (`flui::app` экспортирует оба, реэкспорта из `flui-log` нет,
+  `IdentityError` оставил отказы имени показа); длина — не больше `APP_ID_MAX_LEN` = 231, по самому
+  тесному имени, где стоит id: канал Windows `\.\pipe\flui-<id>-<сессия>` (256 знаков), а более
+  длинный id — `AppIdError::TooLong` в `AppId::try_new` (CLI держит ту же границу, тест
   `the_cli_and_the_framework_accept_the_same_identifiers`). `CurrentHost::start_with(executor,
   Option<&AppId>)` и `start_single(executor, &AppId)`; `instance_name` и путь предупреждения
   удалены. Хост Linux решает `window::linux::class::AppClass` один раз при старте (id или основа
-  имени); Wayland зовёт `set_app_id` до первого commit, X11 пишет `WM_CLASS` (экземпляр и класс —
-  id), `_GTK_APPLICATION_ID` при id и `WM_HINTS` (`InputHint`, input `True`). `flui build linux`
-  пишет `<id>.desktop` для каждой сборки со `StartupWMClass=<id>` (`MimeType` — только когда
-  есть что открывать) и компилирует тот же id как `FLUI_APP_ID`, так что приложение без
-  `flui.toml` совпадает с записью тоже. Тесты: `a_window_carries_the_application_id_it_was_started_with`
-  в `x11_window` (Xvfb + openbox: при откате `WM_CLASS` к основе имени — падает на «the instance
-  and the class», при откате `WM_HINTS` — на «32-bit hints») и в `wayland_window::optional`
-  (headless sway 1.9, другой клиент читает app id через `zwlr_foreign_toplevel_manager_v1`, новый
-  предмет `foreign-toplevel` в `SWAY_OFFERS`; без `set_app_id` — `None` вместо id; Weston
-  пропускает), `a_window_is_classed_by_the_application_id_or_the_executable`,
-  `the_entry_and_the_window_are_named_by_one_identifier` (из одного id: имя файла записи,
-  `StartupWMClass` и компилируемый `FLUI_APP_ID`; с id из `flui.toml` и без него),
-  `a_linux_desktop_registers_what_the_application_opens`,
+  имени в ASCII, `flui_foundation::executable_class`); Wayland зовёт `set_app_id` до первого
+  commit, X11 пишет `WM_CLASS` (экземпляр и класс), `_GTK_APPLICATION_ID` при id и `WM_HINTS`
+  (`InputHint`, input `True`). Тождество компилируется только объявленное: `FLUI_APP_ID` приходит
+  лишь из конфигурации cargo, которую каждая команда пишет из `[app] id` в `flui.toml`; выведенный
+  из каталога `dev.flui.<каталог>` не компилируется никогда. `flui build linux` пишет
+  `<класс>.desktop` для каждой сборки со `StartupWMClass=<класс>` (`MimeType` — только когда есть
+  что открывать), где класс — объявленный id или основа имени исполняемого файла, как её несёт окно.
+  Тесты: `a_window_carries_the_application_id_it_was_started_with` в `x11_window` (Xvfb + openbox:
+  при откате `WM_CLASS` к основе имени — падает на «the instance and the class», при откате
+  `WM_HINTS` — на «32-bit hints») и в `wayland_window::optional` (headless sway 1.9, другой клиент
+  читает app id через `zwlr_foreign_toplevel_manager_v1`, новый предмет `foreign-toplevel` в
+  `SWAY_OFFERS`; без `set_app_id` — `None` вместо id; Weston пропускает),
+  `a_window_is_classed_by_the_application_id_or_the_executable`,
+  `the_entry_is_named_by_what_the_window_carries` (два примера одного каталога без id — две записи,
+  `counter.desktop` и `todo.desktop`), `a_build_compiles_no_application_id_in_by_itself` (окружение
+  cargo ни одной цели не несёт `FLUI_APP_ID`), `the_cli_and_the_framework_class_an_executable_alike`,
+  `an_executable_is_classed_in_ascii`, `a_linux_desktop_registers_what_the_application_opens`,
   `an_app_id_is_a_reverse_dns_name_every_platform_accepts` (перенесён в `flui-foundation`).
   Прогоны 2026-11-16 (WSL Ubuntu 24.04): весь `x11_window` (38 случаев), весь
   `wayland_window::optional` под sway с `FLUI_REQUIRE_COMPOSITOR` из `SWAY_OFFERS`, clippy Linux

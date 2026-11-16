@@ -10,8 +10,8 @@ pub use flui_app::app::DevReload;
 #[cfg(not(target_os = "ios"))]
 pub use flui_app::run_direct;
 pub use flui_app::{
-    AppConfig, AppId, AppIdentity, Application, BackendFailure, DiagnosticsProfile, EXIT_CODE_HUNG,
-    FontRegistrationError, FrameLatency, GpuBackend, LaunchError, MotionOverride,
+    AppConfig, AppId, AppIdError, AppIdentity, Application, BackendFailure, DiagnosticsProfile,
+    EXIT_CODE_HUNG, FontRegistrationError, FrameLatency, GpuBackend, LaunchError, MotionOverride,
     PointerResampling, UnsupportedSystem, main, register_font, run_app,
 };
 
