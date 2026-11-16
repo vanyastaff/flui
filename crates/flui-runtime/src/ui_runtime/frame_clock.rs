@@ -639,18 +639,13 @@ impl UiRuntime {
 
     /// The earliest instant a presentation that dropped a frame tries it
     /// again: until then every frame it asks for waits, so a host that would
-    /// run a frame at once sleeps until this instant instead. A presentation
-    /// whose sink holds as many frames as it may is left out: its settlement
-    /// wakes it (ADR-0305 §5). `None` when no
+    /// run a frame at once sleeps until this instant instead. `None` when no
     /// dropped frame is waiting.
     #[must_use]
     pub fn failure_retry_deadline(&self) -> Option<web_time::Instant> {
         self.presentations
             .iter()
             .filter(|presentation| !presentation.closing_requested.get())
-            // A presentation at its in-flight limit waits for its settlement, not its deadline,
-            // as in `next_wake_excluding_agent_waits`.
-            .filter(|presentation| !presentation.frames_in_flight().is_saturated())
             .filter_map(PresentationState::failure_retry_at)
             .min()
     }
