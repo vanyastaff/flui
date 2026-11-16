@@ -80,6 +80,14 @@ pub(crate) use host::{
     AppRoutes, OwnerHostClearGuard, app_handler, install_owner_platform, opening_app_handler,
     route_exit_policy, route_quit, with_owner_platform,
 };
+// The desktop main-window controller asks for the turn that routes opened
+// URLs bound to its opening (`Ingress::settle`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use host::request_owner_turn;
 pub(in crate::app) use installed_host::InstalledHost;
 #[cfg(target_os = "ios")]
 use ios::run_ios;

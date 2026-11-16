@@ -2,6 +2,7 @@
 
 - **Status:** Accepted (2026-11-13)
 - **Date:** 2026-11-13
+- **Revised:** 2026-11-16 — the runner row of §5's confirmation that checked the window focused last is named for the rule ADR-0339 §2 put in its place (a URL for the application goes to the main window).
 - **Supersedes:** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) in full (it stated
   the Router as the one navigation API, with its handle acquired only in a lifecycle hook and
   dialogs moved to a modal surface outside routes); through it,
@@ -466,7 +467,7 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   (`crates/flui-native/tests/wasm32/page_address.rs`: the address is one cold link heard after
   `ready`, and the page answers its origin). Through the application runner, `flui-app`'s `runner_open` table:
   `a_link_that_launched_the_app_opens_its_first_router_on_it` (the initial page never built),
-  `a_link_goes_to_the_window_focused_last`, `an_undeclared_scheme_opens_nothing`,
+  `a_link_goes_to_the_main_window_whichever_window_is_focused` (ADR-0339 §2), `an_undeclared_scheme_opens_nothing`,
   `opened_files_reach_on_open_files` and
   `a_panic_in_the_first_urls_navigation_does_not_lose_the_second`; in `flui-native`,
   `ready_takes_what_launched_the_application`.

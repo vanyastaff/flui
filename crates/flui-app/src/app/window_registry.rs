@@ -78,20 +78,6 @@ pub(crate) struct WindowRegistry {
 /// refused, as a window that is not open.
 const RETIRED_WINDOWS_KEPT: usize = flui_platform::MAX_OPENED_ITEMS;
 
-/// Where a URL for the application as a whole goes when no shown window was
-/// focused last.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ApplicationFallback {
-    /// The run's main window, open at this address.
-    To(PresentationAddress),
-    /// The run's main window, not open: the URL waits and the window is
-    /// reopened for it.
-    Reopen,
-    /// The run has no main window (iOS, Android, the web): its window opened
-    /// first.
-    FirstOpened,
-}
-
 /// Where what the operating system opened for an [`OpenTarget`] goes now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OpenDestination {
@@ -171,31 +157,27 @@ impl WindowRegistry {
     /// Where what the operating system opened goes (`flui_platform::Opened`):
     /// the window's own presentation for [`OpenTarget::Window`], once it has
     /// one, and [`OpenDestination::Closed`] once it closed; for the
-    /// application as a whole, `active` (the shown window focused last) while
-    /// it is still mapped, else what `fallback` names, and
-    /// [`OpenDestination::Pending`] while that has no presentation.
+    /// application as a whole, `main` (the run's main window) while it is
+    /// mapped, and [`OpenDestination::Pending`] while it is not.
     pub(crate) fn open_target(
         &self,
         target: OpenTarget,
-        active: Option<PresentationAddress>,
-        fallback: ApplicationFallback,
+        main: Option<PresentationAddress>,
     ) -> OpenDestination {
         let address = match target {
             OpenTarget::Window(id) if self.retired.contains(&id) => {
                 return OpenDestination::Closed;
             }
             OpenTarget::Window(id) => self.resolve(id),
-            OpenTarget::Application | _ => active
-                .filter(|address| self.contains_address(*address))
-                .or_else(|| match fallback {
-                    ApplicationFallback::To(main) => self.contains_address(main).then_some(main),
-                    ApplicationFallback::Reopen => None,
-                    ApplicationFallback::FirstOpened => {
-                        self.entries.first().map(|(_, address)| *address)
-                    }
-                }),
+            OpenTarget::Application | _ => main.filter(|address| self.contains_address(*address)),
         };
         address.map_or(OpenDestination::Pending, OpenDestination::Presentation)
+    }
+
+    /// The presentation registered first: the runner's one window on a
+    /// runner with no main-window controller.
+    pub(crate) fn first_address(&self) -> Option<PresentationAddress> {
+        self.entries.first().map(|(_, address)| *address)
     }
 
     /// Whether what the operating system opened for `target` goes to

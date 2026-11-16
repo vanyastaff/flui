@@ -107,7 +107,8 @@ impl OpeningWindow {
     }
 }
 
-/// Install `root` in `host`, the window `opening` opened.
+/// Install `root` in `host`, the window `opening` opened, as the run's main
+/// window or another (`role`: which opened URLs its runtime takes).
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -115,6 +116,7 @@ pub(super) fn install_desktop_window<V>(
     host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
     opening: OpeningWindow,
+    role: super::opened::WindowRole,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
     V: View + Clone + 'static,
@@ -149,7 +151,7 @@ where
     // The opened URLs its runtime took are on loan until the installation
     // commits; a return before it is prepared gives them back.
     let (ui_runtime, opened) =
-        match super::host::build_lending_ui_runtime(presentation_window, scale_factor) {
+        match super::host::build_lending_ui_runtime(presentation_window, scale_factor, role) {
             Ok(built) => built,
             Err(e) => {
                 tracing::error!(error = %e, "UiRuntime construction failed");

@@ -80,10 +80,17 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: 
   runtime applies again, before it routes it. A URL the application does not open is refused as it
   arrives: it is never held and never opens a window.
 - **§2. One destination.** A URL for a window goes to that window's presentation. One for the
-  application goes to the window focused last while that window is shown, else to the run's main
-  window, the one its `run` or `run_resident` factory builds, reopened when it is not open (§4),
-  never to whichever window happens to have opened first; a run with no main window (iOS,
-  Android, the web) gives it to its window opened first. URLs held for that target open first, so
+  application goes to the run's main window, and only to it: on the desktop the window its `run`
+  or `run_resident` factory builds, on iOS, Android and the web the runner's one window (the
+  first scene, the Activity's window, the page). No other window takes it, whether it has the
+  focus (a palette, an inspector, a document window) or opened first (a hidden helper): an
+  application that wants a URL in another window navigates there from the main window's Router.
+  The main window is open, being opened or closed (`MainWindow`), on every runner: open, the URL
+  goes in; being opened, the URL is bound to that opening, delivered when it commits and refused
+  when it fails; closed, the desktop opens it for the URL (§4) and the other runners wait for the
+  window their host opens. The one function that answers this (`destination`) is what the routing
+  step, the loans of §5 and the reopen ask: a window being built takes the application's URL only
+  when it is the main window being opened. URLs held for that target open first, so
   the order is the platform's. The window a URL reaches is made visible to the user, on every host:
   shown if hidden (a tray application's), restored if minimized, and brought forward under the
   system's focus rules; only that window, and nothing for a URL the runner refuses. A URL for a
@@ -108,14 +115,20 @@ struct OpenedLoan { routing: Rc<OpenRouting>, urls: Vec<HeldUrl> }  // HeldUrl: 
   the installation becomes ready, is held by an `OpenedLoan` the installation owns from the moment
   the URL leaves the hold. The installation's commit keeps them; every other end of it (a failure
   before or after it is submitted, a cancel, a window closed before it commits) drops the guard.
-  The guard's drop only returns the URLs to the router and asks the owner for a turn: it runs no
-  code it does not own, so it may run in any destructor, an unwind included. The owner's next turn
+  The guard's drop only returns the URLs to the router and asks the owner for a turn through the
+  owner's signal (`PlatformProxy::wake`, which every runner serves and which needs no window), so
+  the next turn runs the routing step whether a window exists or not: it runs no code it does not
+  own, so it may run in any destructor, an unwind included. The owner's next turn
   routes what came back once: a URL whose window was closed before it committed is refused (its
   window closed); one whose installation failed goes into a window open now, unless a newer URL
   for the application was admitted since (each admitted URL has its place in an order the router
   keeps, and the older is refused as superseded), and is refused otherwise (its window could not be
-  opened). A URL causes at most one opening of the main window: a failed one is never retried for
-  it, and the user's next action (a Dock click, a later launch) starts a new attempt. A loan is
+  opened). A URL causes at most one opening of the main window. The attempt belongs to the URL, not
+  to a loan: the URL is bound to the opening it asked for or found under way, and when that opening
+  fails, before its UI runtime was built or after, the URL is refused on the next turn (the main
+  window's failed openings are counted, and a URL bound before the count grew is the one refused).
+  A failed opening is never retried for it; the user's next action (a Dock click, a later launch)
+  starts a new attempt. A loan is
   never inferred from what the registry holds, so a URL never opens in two windows.
 - **§6. Every other end is reported.** What is held is refused in the log, by reason and never with
   the URL, when the bootstrap fails or panics (with the launch's files, which the application then
@@ -150,6 +163,10 @@ bound, the window opens on the ninth),
 `a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applications_link` and
 `a_link_for_a_closed_window_is_refused_as_it_arrives` and
 `a_link_shows_the_hidden_window_it_opens_in` (§2),
+`a_link_goes_to_the_main_window_whichever_window_is_focused`,
+`a_link_goes_to_the_main_window_not_a_window_its_files_open`,
+`a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt` (§5: the attempt
+belongs to the URL),
 `a_link_goes_to_the_main_window_never_a_hidden_helper` and
 `a_link_restores_the_minimized_window_it_opens_in` (§2),
 `a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused` (§5: every window refused

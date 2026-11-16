@@ -1131,6 +1131,7 @@ where
                         window,
                         host,
                         carried,
+                        super::opened::WindowRole::Main,
                     )
                 });
                 APP_RUNTIME.with(|slot| {
@@ -1439,6 +1440,7 @@ mod tests {
                             let (runtime, opened) = super::super::host::build_lending_ui_runtime(
                                 super::super::presentation_window(Rc::clone(&window)),
                                 1.0,
+                                super::super::opened::WindowRole::Main,
                             )
                             .expect("the window's runtime is built");
                             assert!(opened.is_some(), "the held link is lent to the window");

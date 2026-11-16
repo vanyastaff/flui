@@ -5,16 +5,21 @@
 //! each one in that presentation's `Router` (`UiRuntime::open_url`).
 //!
 //! The presentation is the window's own for [`OpenTarget::Window`] (an iOS
-//! scene), and for the application as a whole the one whose window was
-//! focused last, else the window opened first. A URL is admitted here first,
-//! so one the application does not open is refused before it is held or can
-//! make a window open. URLs that arrive before their presentation exists (a
-//! link that launched the application, one that came while it had no window)
-//! are held by their target's rule ([`HeldUrls`]) and opened in its UI
-//! runtime as it is installed, ahead of its first frame, so its first
-//! `Router` opens on the link instead of its initial page; for the
-//! application as a whole the run opens its main window for them
-//! ([`OpenRouting::route_held`]).
+//! scene), and for the application as a whole the main window's
+//! ([`destination`], the one authority the routing step, the loans and the
+//! reopen ask). A URL is admitted here first, so one the application does
+//! not open is refused before it is held or can make a window open. URLs
+//! that arrive before their presentation exists (a link that launched the
+//! application, one that came while it had no window) are held by their
+//! target's rule ([`HeldUrls`]) and opened in its UI runtime as it is
+//! installed, ahead of its first frame, so its first `Router` opens on the
+//! link instead of its initial page; for the application as a whole the run
+//! opens its main window for them ([`OpenRouting::route_held`]).
+//!
+//! What waits is routed from the owner's turn, which
+//! [`request_owner_turn`](super::host::request_owner_turn) asks for through
+//! the owner's signal on every runner: once asked, the next turn runs the
+//! routing step, with or without a window.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -27,7 +32,7 @@ use flui_runtime::ui_runtime::UiRuntime;
 use flui_view::navigation::{OpenDeclarations, OpenedUrl};
 
 use super::host::{APP_RUNTIME, MainWindow};
-use crate::app::window_registry::{ApplicationFallback, OpenDestination, WindowRegistry};
+use crate::app::window_registry::{OpenDestination, WindowRegistry};
 
 /// The callback an application hears its opened files with.
 pub(crate) type OpenFilesCallback = Rc<dyn Fn(&[OpenedFile])>;
@@ -134,7 +139,7 @@ impl std::fmt::Debug for OpenSettings {
 }
 
 /// One run's routing of what the operating system opened: the application's
-/// settings, the presentation focused last, the URLs held for a presentation
+/// settings, the main window being installed, the URLs held for a presentation
 /// that does not exist yet and those an installation gave back. Owned by the
 /// run's application handler, so a run never sees another's.
 ///
@@ -148,8 +153,10 @@ impl std::fmt::Debug for OpenSettings {
 /// the main window at most.
 pub(crate) struct OpenRouting {
     settings: OpenSettings,
-    /// The presentation whose window was focused last.
-    active: Cell<Option<PresentationAddress>>,
+    /// The presentation of the main window whose UI runtime was built last:
+    /// the installation a URL for the application is bound to while the
+    /// main window is opening.
+    main_installing: Cell<Option<PresentationAddress>>,
     /// URLs admitted for a presentation that does not exist yet.
     held: RefCell<HeldUrls>,
     /// URLs a loan returned, with how it ended, for the owner's next turn.
@@ -178,6 +185,22 @@ struct HeldUrl {
     target: OpenTarget,
     url: String,
     order: u64,
+    /// The opening of the main window this URL is bound to, by the count of
+    /// failed openings when it was bound (`host::main_window_failures`):
+    /// once that count grows the opening failed and the URL is refused. A
+    /// URL causes one opening at most.
+    bound: Option<u64>,
+}
+
+/// Which window of the run a UI runtime is built for: what decides whether
+/// the URL for the application is lent to it ([`destination`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowRole {
+    /// The run's main window: the desktop main-window controller's, or the
+    /// one window of iOS, Android and the web.
+    Main,
+    /// Any other window: a secondary or document window, a helper.
+    Other,
 }
 
 /// How a loan ended without its installation committing.
@@ -193,7 +216,7 @@ impl OpenRouting {
     pub(crate) fn new(settings: OpenSettings) -> Self {
         Self {
             settings,
-            active: Cell::new(None),
+            main_installing: Cell::new(None),
             held: RefCell::new(HeldUrls::default()),
             returned: RefCell::new(Vec::new()),
             next_order: Cell::new(0),
@@ -239,11 +262,6 @@ impl OpenRouting {
         }
     }
 
-    /// The window of `address` gained focus.
-    pub(crate) fn focused(&self, address: PresentationAddress) {
-        self.active.set(Some(address));
-    }
-
     /// Route what the operating system opened: its files to the
     /// application's callback; each URL the application opens to its
     /// presentation, behind the URLs held for it, making its window visible,
@@ -263,7 +281,7 @@ impl OpenRouting {
         self.files_to_callback(files, &mut first);
         let urls = self.admitted(urls, target);
         if !urls.is_empty() {
-            match destination(target, self.active.get()) {
+            match destination(target) {
                 Destination::Open(host, address) => {
                     self.route_held_into(&mut first);
                     let urls = urls.into_iter().map(|held| held.url);
@@ -271,7 +289,7 @@ impl OpenRouting {
                         reveal(address);
                     }
                 }
-                Destination::Pending => {
+                Destination::Waiting(_) => {
                     self.hold(urls);
                     self.route_held_into(&mut first);
                 }
@@ -281,33 +299,35 @@ impl OpenRouting {
         first.resume();
     }
 
-    /// Route what waits: first what a loan returned, once (into an open
-    /// window, else refused, never opening one); then every held URL by
-    /// where its target goes now: into its open presentation (made visible),
+    /// Route what waits, by [`destination`] alone: first what a loan
+    /// returned, once (into an open window, else refused, never opening
+    /// one); then every held URL: into its open presentation (made visible),
     /// kept while its window is coming, refused when its window closed or is
-    /// not opening; and when a URL waits for the application as a whole with
-    /// no window, the run's main window is opened for it through the reopen
-    /// route, as a Dock click does. Called as URLs arrive, when the
-    /// bootstrap returns and from the owner's turn after a loan returned.
+    /// not opening. The URL held for the application is bound to the main
+    /// window's opening: to the one under way, or to the one the reopen route
+    /// starts for it (as a Dock click does), once; when that opening fails it
+    /// is refused. Called as URLs arrive, when the bootstrap returns and from
+    /// every owner turn while anything waits.
     pub(crate) fn route_held(&self) {
         let mut first = FirstPanic::new();
         self.route_held_into(&mut first);
         first.resume();
     }
 
-    /// [`route_held`](Self::route_held), when a loan returned URLs since the
-    /// last routing: the owner's turn calls it.
+    /// [`route_held`](Self::route_held), while anything waits: the owner's
+    /// turn calls it.
     pub(crate) fn route_owed(&self) {
-        if !self.returned.borrow().is_empty() {
+        if !self.returned.borrow().is_empty() || !self.held.borrow().is_empty() {
             self.route_held();
         }
     }
 
     fn route_held_into(&self, first: &mut FirstPanic) {
         self.route_returned(first);
+        let failures = super::host::main_window_failures();
         let targets = self.held.borrow().targets();
         for target in targets {
-            match destination(target, self.active.get()) {
+            match destination(target) {
                 Destination::Open(host, address) => {
                     let urls = self.held.borrow_mut().take(&[target]);
                     let urls = urls.into_iter().map(|held| held.url);
@@ -315,20 +335,50 @@ impl OpenRouting {
                         reveal(address);
                     }
                 }
-                Destination::Pending => {}
+                Destination::Waiting(wait) => self.bind_to_opening(wait, failures),
                 Destination::Refused(refusal) => {
                     let count = self.held.borrow_mut().take(&[target]).len();
                     refusal.report_urls(count);
                 }
             }
         }
-        let waits = self.held.borrow().holds_for_application()
-            && matches!(
-                destination(OpenTarget::Application, self.active.get()),
-                Destination::Pending
-            );
-        if waits {
-            super::host::reopen_current_run();
+    }
+
+    /// Bind the URL held for the application to the main window's opening,
+    /// while `wait` is for the main window: the one under way, or one the
+    /// reopen route starts now; a URL bound to an opening that failed since
+    /// (`failures` grew) is refused. A URL for a window waits for it.
+    fn bind_to_opening(&self, wait: Wait, failures: u64) {
+        let failed = {
+            let mut held = self.held.borrow_mut();
+            let Some(url) = held.application.as_mut() else {
+                return;
+            };
+            match (url.bound, wait) {
+                (Some(bound), _) if failures > bound => true,
+                (Some(_), _) | (None, Wait::Later) => false,
+                (None, Wait::MainOpening) => {
+                    url.bound = Some(failures);
+                    false
+                }
+                (None, Wait::MainClosed) => {
+                    drop(held);
+                    if super::host::reopen_current_run()
+                        && let Some(url) = self.held.borrow_mut().application.as_mut()
+                    {
+                        url.bound = Some(failures);
+                    }
+                    false
+                }
+            }
+        };
+        if failed {
+            let count = self
+                .held
+                .borrow_mut()
+                .take(&[OpenTarget::Application])
+                .len();
+            Refusal::WindowFailed.report_urls(count);
         }
     }
 
@@ -342,14 +392,14 @@ impl OpenRouting {
             let refusal = match end {
                 LoanEnd::WindowClosed => Refusal::WindowClosed,
                 LoanEnd::Failed if self.superseded(&held) => Refusal::Superseded,
-                LoanEnd::Failed => match destination(held.target, self.active.get()) {
+                LoanEnd::Failed => match destination(held.target) {
                     Destination::Open(host, address) => {
                         if open_urls(&host, address, [held.url], first) > 0 {
                             reveal(address);
                         }
                         continue;
                     }
-                    Destination::Pending | Destination::Refused(_) => Refusal::WindowFailed,
+                    Destination::Waiting(_) | Destination::Refused(_) => Refusal::WindowFailed,
                 },
             };
             refusal.report_urls(1);
@@ -438,7 +488,12 @@ impl OpenRouting {
                     if target == OpenTarget::Application {
                         self.newest_for_application.set(Some(order));
                     }
-                    admitted.push(HeldUrl { target, url, order });
+                    admitted.push(HeldUrl {
+                        target,
+                        url,
+                        order,
+                        bound: None,
+                    });
                 }
                 Err(refused) => refusals.push(refused.reason()),
             }
@@ -451,24 +506,38 @@ impl OpenRouting {
 
     /// Open the URLs held for the presentation `ui_runtime` is built for in
     /// `window`, in that runtime before its root mounts, so its first Router
-    /// opens on them (`UrlOwnerSlot::open_at`'s cold start). They are on loan
-    /// to the installation, which owns the returned guard.
+    /// opens on them (`UrlOwnerSlot::open_at`'s cold start). Only what
+    /// [`destination`] gives this window is lent: the URL for the application
+    /// to the main window while it is being opened (`role`), never to another
+    /// window that happens to be built first. They are on loan to the
+    /// installation, which owns the returned guard.
     pub(crate) fn open_held_in(
         self: &Rc<Self>,
         ui_runtime: &UiRuntime,
         window: &dyn PlatformWindow,
+        role: WindowRole,
     ) -> Option<OpenedLoan> {
-        let targets = self.held.borrow().targets();
-        if targets.is_empty() {
-            return None;
-        }
-        // The window is platform code: asked with nothing borrowed.
-        let opening: Vec<OpenTarget> = targets
-            .into_iter()
-            .filter(|target| WindowRegistry::opens_in(*target, window))
-            .collect();
-        let loan = self.lend(&opening)?;
         let presentation = ui_runtime.presentation_id();
+        let builds_main =
+            role == WindowRole::Main && !matches!(super::host::main_window(), MainWindow::Open(_));
+        if builds_main {
+            self.main_installing.set(Some(PresentationAddress {
+                ui_runtime_id: ui_runtime.id(),
+                presentation_id: presentation,
+            }));
+        }
+        let targets = self.held.borrow().targets();
+        // `destination` and the window, platform code, asked with nothing
+        // borrowed.
+        let lent: Vec<OpenTarget> = targets
+            .into_iter()
+            .filter(|target| match destination(*target) {
+                Destination::Waiting(Wait::MainOpening | Wait::MainClosed) => builds_main,
+                Destination::Waiting(Wait::Later) => WindowRegistry::names_window(*target, window),
+                Destination::Open(..) | Destination::Refused(_) => false,
+            })
+            .collect();
+        let loan = self.lend(&lent)?;
         let mut first = FirstPanic::new();
         for held in &loan.urls {
             first.contain(|| {
@@ -481,23 +550,24 @@ impl OpenRouting {
         Some(loan)
     }
 
-    /// Open the URLs held for the presentation at `address`, whose
-    /// installation is about to commit, on loan to it like those
-    /// [`open_held_in`](Self::open_held_in) opened.
+    /// Open the URLs [`destination`] gives the presentation at `address`,
+    /// whose installation is about to commit, on loan to it like those
+    /// [`open_held_in`](Self::open_held_in) opened: its window's own, and the
+    /// URL for the application when it is the main window being opened.
     pub(crate) fn lend_to_installing(
         self: &Rc<Self>,
         address: PresentationAddress,
     ) -> Option<OpenedLoan> {
+        let installs_main = self.main_installing.get() == Some(address);
         let targets: Vec<OpenTarget> = self
             .held
             .borrow()
             .targets()
             .into_iter()
-            .filter(|target| {
-                matches!(
-                    destination(*target, self.active.get()),
-                    Destination::Open(_, opened) if opened == address
-                )
+            .filter(|target| match destination(*target) {
+                Destination::Open(_, opened) => opened == address,
+                Destination::Waiting(Wait::MainOpening | Wait::MainClosed) => installs_main,
+                Destination::Waiting(Wait::Later) | Destination::Refused(_) => false,
             })
             .collect();
         let loan = self.lend(&targets)?;
@@ -599,9 +669,13 @@ impl OpenedLoan {
         if urls.is_empty() {
             return;
         }
-        if let Ok(mut returned) = self.routing.returned.try_borrow_mut() {
-            returned.extend(urls.into_iter().map(|held| (held, end)));
-        }
+        // The router borrows its returned list only to move it, running no
+        // code meanwhile, so a loan never finds it borrowed.
+        self.routing
+            .returned
+            .try_borrow_mut()
+            .expect("BUG: a loan ends while the router moves its returned URLs")
+            .extend(urls.into_iter().map(|held| (held, end)));
         super::host::request_owner_turn();
     }
 }
@@ -811,9 +885,9 @@ impl HeldUrls {
             .collect()
     }
 
-    /// Whether a URL is held for the application as a whole.
-    fn holds_for_application(&self) -> bool {
-        self.application.is_some()
+    /// Whether nothing is held.
+    fn is_empty(&self) -> bool {
+        self.application.is_none() && self.windows.is_empty()
     }
 
     /// Take the URLs held for any of `targets`, each window's in the order
@@ -851,14 +925,28 @@ impl std::fmt::Debug for HeldUrls {
     }
 }
 
-/// Where URLs for a target go now.
+/// Where URLs for a target go now: the one answer the routing step, the
+/// loans and the reopen all ask for.
 enum Destination {
     /// The installed host and the presentation that takes them.
     Open(super::InstalledHost, PresentationAddress),
-    /// No presentation yet, or the loop's state is busy: they wait.
-    Pending,
+    /// No presentation takes them yet: they wait, as `Wait` says.
+    Waiting(Wait),
     /// They are refused for this reason.
     Refused(Refusal),
+}
+
+/// What a URL with no presentation yet waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wait {
+    /// The main window, being opened: the URL is bound to that opening.
+    MainOpening,
+    /// The main window, not open and not being opened: the reopen route
+    /// starts its opening for the URL, where the run has one.
+    MainClosed,
+    /// Its own window's installation, under way, or a later turn while the
+    /// loop's state is busy.
+    Later,
 }
 
 /// The run's installed host, unless the loop's state is busy or gone.
@@ -873,28 +961,26 @@ fn installed_host() -> Option<super::InstalledHost> {
         .flatten()
 }
 
-/// Where what the operating system opened for `target` goes now. A URL for
-/// the application goes to the window focused last while it is shown, else
-/// to the run's main window, reopened when it is not open
-/// ([`OpenDestination::Pending`]); a run with no main window (iOS, Android,
-/// the web) gives it to its window opened first.
-fn destination(target: OpenTarget, active: Option<PresentationAddress>) -> Destination {
+/// Where what the operating system opened for `target` goes now (ADR-0339
+/// §2): a URL for a window to that window; a URL for the application to the
+/// run's main window ([`MainWindow`]), whatever window was focused or opened
+/// first, waiting while it is being opened or closed.
+fn destination(target: OpenTarget) -> Destination {
     let Some(host) = installed_host() else {
-        return Destination::Pending;
+        return Destination::Waiting(Wait::Later);
     };
-    let shown_active = active.filter(|address| {
-        super::window_handle(*address)
-            .and_then(|handle| handle.state().ok())
-            .is_some_and(|state| state.visible)
-    });
-    let fallback = match super::host::main_window() {
-        MainWindow::Open(address) => ApplicationFallback::To(address),
-        MainWindow::Closed => ApplicationFallback::Reopen,
-        MainWindow::None => ApplicationFallback::FirstOpened,
+    let main = super::host::main_window();
+    let main_address = match main {
+        MainWindow::Open(address) => Some(address),
+        MainWindow::Opening | MainWindow::Closed => None,
     };
-    match host.open_target(target, shown_active, fallback) {
+    match host.open_target(target, main_address) {
         OpenDestination::Presentation(address) => Destination::Open(host, address),
-        OpenDestination::Pending => Destination::Pending,
+        OpenDestination::Pending => Destination::Waiting(match (target, main) {
+            (OpenTarget::Window(_), _) => Wait::Later,
+            (_, MainWindow::Opening) => Wait::MainOpening,
+            (_, MainWindow::Open(_) | MainWindow::Closed) => Wait::MainClosed,
+        }),
         OpenDestination::Closed => Destination::Refused(Refusal::WindowClosed),
         OpenDestination::NotOpen => Destination::Refused(Refusal::WindowNotOpen),
     }
@@ -1055,7 +1141,7 @@ mod loan_tests {
             [("myapp:///b".to_owned(), LoanEnd::Failed)]
         );
         assert!(
-            !routing.held.borrow().holds_for_application(),
+            routing.held.borrow().application.is_none(),
             "a returned URL is not held again: it caused its one opening"
         );
         routing.returned.borrow_mut().clear();

@@ -27,7 +27,9 @@
 - **`flui-app`**: the window a link opens in is made visible on every host: shown if the
   application hid it (a tray application), restored if minimized, brought forward; a link it
   refuses shows nothing. A link for the application goes to its main window, reopened when
-  closed, never to a hidden helper window that happened to open first.
+  closed, never to another window, whether that one has the focus, opened first or was opened for
+  a file in the same batch.
 - **`flui-app`**: a link causes at most one opening of the main window. If that window fails to
-  open, the link goes to another open window or is refused ("its window could not be opened"), and
+  open, before or after its UI runtime is built, the link is refused ("its window could not be
+  opened"), and
   a window the user closes before it finished opening does not come back for the link.

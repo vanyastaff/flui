@@ -149,14 +149,17 @@ where
         // `UiRuntime::try_new` applies the DPR to the freshly built pipeline
         // before returning.
         let scale_factor = geometry.scale;
-        let (ui_runtime, opened) =
-            match super::host::build_lending_ui_runtime(presentation_window, scale_factor) {
-                Ok(built) => built,
-                Err(error) => {
-                    tracing::error!(%error, "UiRuntime construction failed");
-                    return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
-                }
-            };
+        let (ui_runtime, opened) = match super::host::build_lending_ui_runtime(
+            presentation_window,
+            scale_factor,
+            super::opened::WindowRole::Main,
+        ) {
+            Ok(built) => built,
+            Err(error) => {
+                tracing::error!(%error, "UiRuntime construction failed");
+                return Err(anyhow::anyhow!(error).context("UiRuntime construction failed"));
+            }
+        };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.

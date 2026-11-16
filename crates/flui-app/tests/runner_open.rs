@@ -116,7 +116,7 @@ pub(crate) fn a_link_that_launched_the_app_opens_its_first_router_on_it() {
     drop(run);
 }
 
-pub(crate) fn a_link_goes_to_the_window_focused_last() {
+pub(crate) fn a_link_goes_to_the_main_window_whichever_window_is_focused() {
     let built = Built::default();
     let secondary = router("secondary", &built);
     let application = Application::new()
@@ -133,8 +133,9 @@ pub(crate) fn a_link_goes_to_the_window_focused_last() {
     let windows = run.open_windows();
     assert_eq!(windows.len(), 2, "both windows are open");
 
-    // Which headless window is which is the platform's order: the window
-    // that built the link's page names the one it reached.
+    // Whichever window has the focus, a link for the application opens in
+    // the main window (ADR-0339 §2): another window takes only links that
+    // address it.
     for window in &windows {
         window.simulate_focus(false);
     }
@@ -145,22 +146,14 @@ pub(crate) fn a_link_goes_to_the_window_focused_last() {
         run.run_owner_turn();
         run.open(link(&format!("myapp:///note/{id}"), Launch::Running));
         run.run_owner_turn();
-        let page = Page::Note { id };
-        let built_it = windows_that_built(&built, &page);
-        assert_eq!(
-            built_it.len(),
-            1,
-            "one window opened {page:?}: {built_it:?}"
-        );
-        reached.extend(built_it);
+        reached.extend(windows_that_built(&built, &Page::Note { id }));
         window.simulate_focus(false);
         run.run_owner_turn();
     }
-    reached.sort_unstable();
     assert_eq!(
         reached,
-        ["main", "secondary"],
-        "each link reached the window focused last"
+        ["main", "main"],
+        "each link reached the main window, whichever window was focused"
     );
     drop(run);
 }
@@ -628,6 +621,85 @@ fn closed_main_window(built: &Built) -> (HeadlessRunHandle, flui_app::testing::S
     assert!(run.open_windows().is_empty(), "no window is left");
     built.borrow_mut().clear();
     (run, renderer)
+}
+
+pub(crate) fn a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt() {
+    flui_testing::disarm_interest_cache();
+    let built = Built::default();
+    let fail = Rc::new(std::cell::Cell::new(false));
+    let attempts = Rc::new(std::cell::Cell::new(0_u32));
+    let (failing, counted, factory_built) =
+        (Rc::clone(&fail), Rc::clone(&attempts), Rc::clone(&built));
+    let run = HeadlessRun::start_resident(
+        Application::new()
+            .declares(DECLARES)
+            .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit)),
+        move |_: &AppHandle| {
+            counted.set(counted.get() + 1);
+            // The main window fails before its UI runtime is built, so no
+            // loan exists: as a platform that refuses the window does.
+            assert!(!failing.get(), "the main window cannot be built");
+            router("main", &factory_built)
+        },
+    );
+    turns(&run, 2);
+    fail.set(true);
+    let ((), log) = flui_testing::capture(|| {
+        run.open(link("myapp:///note/3", Launch::Running));
+        turns(&run, 30);
+    });
+    assert_eq!(attempts.get(), 1, "the link caused one opening: {log}");
+    assert_eq!(
+        log.count_containing("its window could not be opened"),
+        1,
+        "and is refused once that opening failed: {log}"
+    );
+    assert!(run.open_windows().is_empty(), "no window is open");
+    drop(run);
+}
+
+pub(crate) fn a_link_goes_to_the_main_window_not_a_window_its_files_open() {
+    let built = Built::default();
+    let document_built = Rc::clone(&built);
+    let run = resident(
+        &built,
+        Application::new().on_open_files(move |_: &[OpenedFile]| {
+            // The application opens a document window for the file in the
+            // batch the link came in.
+            drop(
+                flui_app::open_window(
+                    AppConfig::new(),
+                    WindowPolicy::Isolated,
+                    router("document", &document_built),
+                )
+                .expect("an isolated window opens on the headless platform"),
+            );
+        }),
+    );
+    turns(&run, 2);
+    run.open(Opened::new(
+        ["myapp:///note/3".to_owned()],
+        [OpenedFile::new("/a.note")],
+        OpenTarget::Application,
+        Launch::Running,
+    ));
+    turns(&run, 6);
+    assert_eq!(
+        run.open_windows().len(),
+        2,
+        "the document and the main window"
+    );
+    assert!(
+        built_page(&built, "main", &Page::Note { id: 3 }),
+        "the main window opened on the link: {:?}",
+        built.borrow()
+    );
+    assert!(
+        !built_page(&built, "document", &Page::Note { id: 3 }),
+        "the document window never took it: {:?}",
+        built.borrow()
+    );
+    drop(run);
 }
 
 pub(crate) fn a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused() {

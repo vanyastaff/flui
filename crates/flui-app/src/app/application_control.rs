@@ -137,6 +137,9 @@ struct State {
     /// A reopen asked while a quit was asked, consulted or deferred: shown
     /// once the quit is abandoned, dropped once it commits.
     reopen_after_quit: bool,
+    /// How many openings of the main window failed (`settle` with an error,
+    /// `fail_pending`), saturating.
+    failed_openings: u64,
     active: bool,
     batch: Option<Arc<()>>,
     superseded: bool,
@@ -315,6 +318,7 @@ impl Ingress {
                 quit: QuitAsk::None,
                 intent: startup_open,
                 reopen_after_quit: false,
+                failed_openings: 0,
                 active: false,
                 batch: None,
                 superseded: false,
@@ -392,6 +396,19 @@ impl Ingress {
         self.state.lock().open_address
     }
 
+    /// How many openings of the main window have failed: an opened URL bound
+    /// to an opening is refused once this grows.
+    pub(crate) fn failed_openings(&self) -> u64 {
+        self.state.lock().failed_openings
+    }
+
+    /// Whether a main window is being opened, or is asked for and about to
+    /// be: an opened URL that arrives now is bound to that opening.
+    pub(crate) fn is_opening(&self) -> bool {
+        let state = self.state.lock();
+        state.phase == Phase::Accepting && (state.active || state.intent)
+    }
+
     /// The quit was abandoned: show the main window a reopen asked for while
     /// it was pending.
     fn quit_abandoned(mut state: parking_lot::MutexGuard<'_, State>, proxy: &PlatformProxy) {
@@ -451,10 +468,12 @@ impl Ingress {
             state.active = false;
             state.batch = None;
             state.superseded = false;
-            if state.phase == Phase::Accepting
-                && let Ok(address) = &result
-            {
-                state.open_address = Some(*address);
+            match &result {
+                Ok(address) if state.phase == Phase::Accepting => {
+                    state.open_address = Some(*address);
+                }
+                Ok(_) => {}
+                Err(_) => state.failed_openings = state.failed_openings.saturating_add(1),
             }
             let replies = std::mem::take(&mut state.active_replies);
             state.outstanding = state
@@ -464,6 +483,9 @@ impl Ingress {
             (replies, result)
         };
         Self::deliver(replies, result);
+        // The main window opened or failed to: opened URLs bound to this
+        // opening are delivered or refused on the next owner turn.
+        crate::app::runner::request_owner_turn();
         // A close/dispose callback may have reserved the next generation.
         let pending = {
             let state = self.state.lock();
@@ -493,6 +515,7 @@ impl Ingress {
             }
             state.active = false;
             state.batch = None;
+            state.failed_openings = state.failed_openings.saturating_add(1);
             let replies = std::mem::take(&mut state.active_replies);
             state.outstanding = state
                 .outstanding
@@ -501,6 +524,8 @@ impl Ingress {
             replies
         };
         Self::deliver(replies, Err(error));
+        // Opened URLs bound to this opening are refused on the next turn.
+        crate::app::runner::request_owner_turn();
         true
     }
     fn deliver(replies: Vec<Reply>, result: Result<PresentationAddress, AppWindowError>) {

@@ -232,8 +232,8 @@ fn runner_open() {
                 runner_open::a_link_that_launched_the_app_opens_its_first_router_on_it as fn(),
             ),
             (
-                "runner_open::a_link_goes_to_the_window_focused_last",
-                runner_open::a_link_goes_to_the_window_focused_last as fn(),
+                "runner_open::a_link_goes_to_the_main_window_whichever_window_is_focused",
+                runner_open::a_link_goes_to_the_main_window_whichever_window_is_focused as fn(),
             ),
             (
                 "runner_open::an_undeclared_scheme_opens_nothing",
@@ -286,6 +286,15 @@ fn runner_open() {
             (
                 "runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link",
                 runner_open::a_panic_in_on_open_files_ends_the_run_and_refuses_the_link as fn(),
+            ),
+            (
+                "runner_open::a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt",
+                runner_open::a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt
+                    as fn(),
+            ),
+            (
+                "runner_open::a_link_goes_to_the_main_window_not_a_window_its_files_open",
+                runner_open::a_link_goes_to_the_main_window_not_a_window_its_files_open as fn(),
             ),
             (
                 "runner_open::a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused",
