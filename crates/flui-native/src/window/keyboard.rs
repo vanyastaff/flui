@@ -170,16 +170,34 @@ pub(crate) mod page {
         })
     }
 
-    /// Whether the page's soft keyboard is shown now: `Some(true)` while
-    /// `navigator.virtualKeyboard` (where the page has the keyboard overlay its
-    /// content) or the visual viewport (the layout viewport below it) says a
-    /// keyboard covers part of the page, `Some(false)` while it says none does,
-    /// `None` where neither can tell (no visual viewport, or a page zoomed in by a
-    /// pinch, whose smaller visual viewport is no keyboard).
-    pub(crate) fn keyboard_shown() -> Option<bool> {
-        let window = web_sys::window()?;
-        let frame = overlaid_keyboard(&window).or_else(|| viewport_keyboard(&window))?;
-        Some(frame.width > 0.0 && frame.height > 0.0)
+    /// What the page knows of its soft keyboard now.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum KeyboardState {
+        /// The browser reports a keyboard over part of the page.
+        Shown,
+        /// The browser reports no keyboard.
+        Hidden,
+        /// Nothing the page reads says: an inset inferred from the visual
+        /// viewport is no report (Safari pans the visual viewport over a
+        /// field near the bottom and the inset reads zero with the keyboard
+        /// up, a keyboard that resizes the layout leaves none, a hardware
+        /// keyboard shows none).
+        Unknown,
+    }
+
+    /// The page's soft keyboard as the browser reports it: only
+    /// `navigator.virtualKeyboard`'s geometry, read while the page has the
+    /// keyboard overlay its content (the window asks for that while it
+    /// lives), where an empty rectangle is a hidden keyboard.
+    pub(crate) fn keyboard_state() -> KeyboardState {
+        let Some(frame) = web_sys::window().and_then(|window| overlaid_keyboard(&window)) else {
+            return KeyboardState::Unknown;
+        };
+        if frame.width > 0.0 && frame.height > 0.0 {
+            KeyboardState::Shown
+        } else {
+            KeyboardState::Hidden
+        }
     }
 }
 

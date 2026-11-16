@@ -2089,10 +2089,12 @@ editor that lost it (iOS hides the keyboard by blurring). An editor that kept
 its focus is the normal state while typing and moves no focus, which would
 commit a live composition and reset the keyboard's shift and page; it gives
 its focus to the canvas and takes it back inside the handler only when the
-page says the keyboard is hidden (Android's Back keeps the focus), from the
-same `navigator.virtualKeyboard` and visual-viewport reading the window's
-keyboard inset uses (`window::keyboard::page::keyboard_shown`), and not where the page
-cannot tell. `navigator.virtualKeyboard.show()` shows nothing without
+browser reports the keyboard hidden (Android's Back keeps the focus):
+`navigator.virtualKeyboard`'s empty rectangle while the window has it overlay
+the page (`window::keyboard::page::keyboard_state`). An inset inferred from the
+visual viewport is no report (Safari pans the viewport over a field near the
+bottom, a resizing or hardware keyboard leaves no inset), so where only that
+exists a tap moves no focus. `navigator.virtualKeyboard.show()` shows nothing without
 `virtualkeyboardpolicy="manual"`, a policy under which no focus opens the
 keyboard by itself, so it is not used; a tap elsewhere or a drag leaves the
 keyboard. The canvas hands the focus it takes (a click, the compatibility

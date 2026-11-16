@@ -496,12 +496,16 @@ spelled as the request spells it (so no type is decided on another case of a
 name). The `Host` check runs on a whole head with exactly one `Host`: a head
 that reaches `MAX_HEAD` without its end is 431, none or two `Host`s 400, and
 a `Host` other than the loopback (`localhost`, `127.0.0.1`, `[::1]`) 421,
-against a page whose name is rebound to 127.0.0.1. It serves at most
-`MAX_CONNECTIONS` connections at once, of which at most `MAX_POLLS` reload
-long polls; one connection past the first bound is answered 503, one poll
-past the second at once with the current generation (a short poll, which the
-page asks again a second later), and a refused client has its request bytes
-read before the close, so it reads the status. The page is served with the
+against a page whose name is rebound to 127.0.0.1; with the method check, it
+runs before any path's own answer, the reload poll's included. It serves at
+most `MAX_CONNECTIONS` connections at once, of which at most `MAX_POLLS`
+reload long polls; one poll past the second bound is answered at once with
+the current generation (a short poll, which the page asks again a second
+later). One connection past the first bound is answered 503 on a thread of
+its own, counted until it closes, at most `MAX_REFUSALS` at once for at most
+`REFUSAL` each, and past those closed unanswered, so the accepting thread
+never waits on a refused client; a refused client has its request bytes read
+before the close, so it reads the status. The page is served with the
 generation it is (`reload.js?generation=N`), which its first poll waits past,
 so a rebuild before that poll still reloads it. It cuts a request head off
 at `REQUEST_HEAD` however slowly it arrives, and sends

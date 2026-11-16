@@ -405,9 +405,12 @@ mod input {
     //!   it is the normal state while typing, and changes no focus, which
     //!   would commit a live composition and reset the keyboard's shift and
     //!   page; it gives its focus to the canvas and takes it back only when
-    //!   the page says the keyboard is hidden (Chromium on Android hides it
-    //!   with Back and keeps the focus), and not where the page cannot tell
-    //!   (`keyboard_shown`). `navigator.virtualKeyboard.show()` is not used:
+    //!   the browser reports the keyboard hidden: `navigator.virtualKeyboard`
+    //!   with an empty rectangle while it overlays the page (Chromium on
+    //!   Android hides it with Back and keeps the focus). An inset inferred
+    //!   from the visual viewport is no report, so where only that exists
+    //!   (Safari, Firefox) a tap moves no focus (`keyboard_state`).
+    //!   `navigator.virtualKeyboard.show()` is not used:
     //!   it shows nothing for an element without
     //!   `virtualkeyboardpolicy="manual"`, a policy under which no focus opens
     //!   the keyboard by itself. A tap elsewhere or a drag leaves it as it is;
@@ -463,7 +466,7 @@ mod input {
     };
     use crate::text::host_queue::{HostQueue, MirrorHostOp};
     use crate::text::ime::{document_text, scalar_spans};
-    use crate::window::keyboard::page::keyboard_shown;
+    use crate::window::keyboard::page::{KeyboardState, keyboard_state};
 
     #[wasm_bindgen(inline_js = "
     export function hasEditContext() { return typeof globalThis.EditContext === 'function'; }
@@ -676,6 +679,10 @@ mod input {
         /// The stores whose re-attach, republishing them to the surface, is
         /// queued.
         resync_queued: RefCell<Vec<Rc<dyn TextStore>>>,
+        /// The host is rewriting the editor's value from script to end the
+        /// browser's composition: the editing events that may fire inside it
+        /// report the host's own write, not an edit, and are not read.
+        rewriting: Cell<bool>,
         /// Where the touch or pen contact that may end in a tap went down.
         tap_start: Cell<Option<TapStart>>,
         /// The window's one hidden editor, made when a field first needs it
@@ -782,6 +789,7 @@ mod input {
                 queue: HostQueue::new(),
                 retired: Cell::new(false),
                 resync_queued: RefCell::default(),
+                rewriting: Cell::new(false),
                 tap_start: Cell::new(None),
                 hidden: RefCell::new(None),
                 taps: Cell::new(Some(0)),
@@ -946,16 +954,17 @@ mod input {
         /// An editor that lost its focus takes it. One that kept it is the
         /// normal state while typing, and a focus move would commit a live
         /// composition and reset the keyboard's shift and page: it gives its
-        /// focus to the canvas and takes it back only when the page says the
-        /// keyboard is hidden (Android's Back keeps the focus), and changes no
-        /// focus while the keyboard is up or the page cannot tell
-        /// (`keyboard_shown`). `navigator.virtualKeyboard.show()` is not used:
+        /// focus to the canvas and takes it back, the second focus its own,
+        /// only when the browser reports the keyboard hidden (Android's Back
+        /// keeps the focus); with the keyboard reported up, or nothing
+        /// reported (`keyboard_state`), it changes no focus.
+        /// `navigator.virtualKeyboard.show()` is not used:
         /// it shows nothing without `virtualkeyboardpolicy="manual"`, a policy
         /// under which no focus opens the keyboard by itself.
         fn reopen(&self, editor: &web_sys::HtmlElement) {
             if !self.page_focus_is(editor.as_ref()) {
                 focus_unscrolled(editor);
-            } else if keyboard_shown() == Some(false) {
+            } else if keyboard_state() == KeyboardState::Hidden {
                 focus_unscrolled(self.canvas.as_ref());
                 focus_unscrolled(editor);
             }
@@ -1546,6 +1555,9 @@ mod input {
                         let Some(this) = this.upgrade() else {
                             return;
                         };
+                        if this.rewriting.get() {
+                            return;
+                        }
                         let composing = event.type_() == "compositionstart";
                         this.keys.set_composing(composing);
                         if !composing {
@@ -1560,7 +1572,9 @@ mod input {
                     target,
                     kind,
                     Box::new(move |_| {
-                        if let Some(this) = this.upgrade() {
+                        if let Some(this) = this.upgrade()
+                            && !this.rewriting.get()
+                        {
                             this.read_editor(this.keys.composing());
                         }
                     }),
@@ -1902,8 +1916,9 @@ mod input {
         }
 
         /// End the browser's composition in the focused store: the browser has
-        /// no call that commits it, so its own is discarded by re-attaching the
-        /// surface and the caller commits the store's in place.
+        /// no call that commits it, so its own is discarded (an `EditContext`
+        /// re-attached, an editor's value rewritten from script, neither
+        /// moving the focus) and the caller commits the store's in place.
         fn end_composition(&self) -> CompositionEnd {
             if !self.keys.composing() {
                 return CompositionEnd::Committed;
@@ -1920,9 +1935,20 @@ mod input {
                     let _ = attach_edit_context(element, &JsValue::NULL);
                     let _ = attach_edit_context(element, context.as_ref());
                 }
-                Some(Surface::Editor { element, .. }) => {
-                    let _ = element.html().blur();
-                    focus_unscrolled(element.html());
+                // A value written from script ends the browser's composition
+                // with no focus move, which would close a phone's keyboard
+                // outside a tap: the value is cleared, then what the editor
+                // showed comes back with its selection.
+                Some(Surface::Editor {
+                    element, mirror, ..
+                }) => {
+                    let shown = mirror.borrow().clone();
+                    let selection = element.selection(&shown);
+                    self.rewriting.set(true);
+                    element.set_shown(&FieldValue::default());
+                    element.set_shown(&shown);
+                    element.select(&shown, selection);
+                    self.rewriting.set(false);
                 }
                 None => {}
             }

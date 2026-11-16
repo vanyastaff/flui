@@ -23,11 +23,14 @@
 //! `MAX_HEAD` without its end is answered 431, one with no `Host` or with
 //! two is answered 400, and only a `Host` of this machine's loopback
 //! (`localhost`, `127.0.0.1`, `[::1]`) is served, so a page of another site
-//! whose name is rebound to 127.0.0.1 gets a 421. At most `MAX_CONNECTIONS`
-//! are served at once (one past them is answered 503, and a refused request
-//! has its bytes read before the close, so the client reads the status) and
-//! at most `MAX_POLLS` of them may be reload long polls; one past them is a
-//! short poll, answered at once. The page is served with the generation it
+//! whose name is rebound to 127.0.0.1 gets a 421; these checks come before
+//! any path's own answer. At most `MAX_CONNECTIONS` are served at once. One
+//! past them is answered 503 on a thread of its own, at most `MAX_REFUSALS`
+//! at once and each for at most `REFUSAL`, and closed unanswered past those;
+//! a refused request has its bytes read before the close, so the client
+//! reads the status. At most `MAX_POLLS` of the connections served may be
+//! reload long polls; one past them is a short poll, answered at once with
+//! the current generation. The page is served with the generation it
 //! is, which its first poll waits past. A request's head must arrive
 //! within `REQUEST_HEAD`. Every response is `nosniff`.
 //!
@@ -93,6 +96,8 @@ struct Shared {
     stop: AtomicBool,
     /// The connections being served now, at most `MAX_CONNECTIONS`.
     connections: AtomicUsize,
+    /// The connections past them being refused now, at most `MAX_REFUSALS`.
+    refusals: AtomicUsize,
     /// The reload long polls being held now, at most `MAX_POLLS`.
     polls: AtomicUsize,
 }
@@ -110,6 +115,7 @@ impl DevServer {
             lock: Mutex::new(()),
             stop: AtomicBool::new(false),
             connections: AtomicUsize::new(0),
+            refusals: AtomicUsize::new(0),
             polls: AtomicUsize::new(0),
         });
         let accept = {
@@ -194,45 +200,83 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
         if shared.stop.load(Ordering::SeqCst) {
             return;
         }
-        let Ok(mut stream) = stream else { continue };
-        // Past the bound the connection is answered 503 from here and closed:
-        // a client that opens connections without end gets no thread for
-        // each, and a short write timeout keeps it from holding this loop.
-        if shared.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
-            shared.connections.fetch_sub(1, Ordering::SeqCst);
-            let busy = Response::text("503 Service Unavailable", "too many connections\n");
-            if stream
-                .set_write_timeout(Some(Duration::from_millis(250)))
-                .is_ok()
-            {
-                refuse(
-                    &mut stream,
-                    &busy,
-                    Instant::now() + Duration::from_millis(250),
-                );
-            }
-            continue;
-        }
-        let shared = Arc::clone(shared);
-        let spawned = thread::Builder::new()
-            .name("flui-dev-server-conn".into())
-            .spawn({
-                let shared = Arc::clone(&shared);
-                move || {
-                    // Given back however the connection ends, a panic included.
-                    struct Held(Arc<Shared>);
-                    impl Drop for Held {
-                        fn drop(&mut self) {
-                            self.0.connections.fetch_sub(1, Ordering::SeqCst);
-                        }
+        let Ok(stream) = stream else { continue };
+        // Every connection the server holds is counted until it closes, on a
+        // thread of its own, so this loop only accepts. Past `MAX_CONNECTIONS`
+        // a connection is refused with a 503 on its own thread, at most
+        // `MAX_REFUSALS` at once; past those it is closed at once, so a client
+        // that opens connections without end gets no thread for each.
+        let (held, work): (Held, fn(TcpStream, &Shared)) =
+            if let Some(held) = Held::take(shared, Count::Connections) {
+                (held, |stream, shared| {
+                    let _ = serve_connection(stream, shared);
+                })
+            } else if let Some(held) = Held::take(shared, Count::Refusals) {
+                (held, |mut stream, _| {
+                    let busy = Response::text("503 Service Unavailable", "too many connections\n");
+                    if stream.set_write_timeout(Some(REFUSAL)).is_ok() {
+                        refuse(&mut stream, &busy, Instant::now() + REFUSAL);
                     }
-                    let held = Held(shared);
-                    let _ = serve_connection(stream, &held.0);
-                }
-            });
-        if spawned.is_err() {
-            shared.connections.fetch_sub(1, Ordering::SeqCst);
+                })
+            } else {
+                continue;
+            };
+        // A thread that cannot start drops `held` with its closure.
+        let _ = thread::Builder::new()
+            .name("flui-dev-server-conn".into())
+            .spawn(move || work(stream, &held.shared));
+    }
+}
+
+/// What a [`Held`] place counts.
+#[derive(Clone, Copy)]
+enum Count {
+    /// A connection being served, at most `MAX_CONNECTIONS`.
+    Connections,
+    /// A connection past them being refused, at most `MAX_REFUSALS`.
+    Refusals,
+}
+
+impl Count {
+    fn of(self, shared: &Shared) -> &AtomicUsize {
+        match self {
+            Self::Connections => &shared.connections,
+            Self::Refusals => &shared.refusals,
         }
+    }
+
+    fn max(self) -> usize {
+        match self {
+            Self::Connections => MAX_CONNECTIONS,
+            Self::Refusals => MAX_REFUSALS,
+        }
+    }
+}
+
+/// A connection's place, given back however its thread ends, a panic
+/// included.
+struct Held {
+    shared: Arc<Shared>,
+    count: Count,
+}
+
+impl Held {
+    /// A place of `count`, or `None` when all are taken.
+    fn take(shared: &Arc<Shared>, count: Count) -> Option<Self> {
+        if count.of(shared).fetch_add(1, Ordering::SeqCst) >= count.max() {
+            count.of(shared).fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self {
+            shared: Arc::clone(shared),
+            count,
+        })
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.count.of(&self.shared).fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -254,6 +298,11 @@ fn serve_connection(mut stream: TcpStream, shared: &Shared) -> io::Result<()> {
             return Ok(());
         }
     };
+    // The method and the `Host` are checked before any path's own answer,
+    // the reload poll's included.
+    if let Some(refused) = refusal(&request) {
+        return write_response(&mut stream, &refused, request.method == "HEAD");
+    }
     // A long poll holds its connection for up to `LONG_POLL`: past its own
     // smaller bound it is answered at once with the current generation (a
     // short poll, which the page's script asks again a second later), so
@@ -401,6 +450,12 @@ enum Head {
 const REQUEST_HEAD: Duration = Duration::from_secs(10);
 /// How many connections are served at once; one past them is answered 503.
 const MAX_CONNECTIONS: usize = 64;
+/// How many connections past them are refused with a 503 at once, each on
+/// its own thread for at most `REFUSAL`; one past them is closed unanswered.
+const MAX_REFUSALS: usize = 8;
+/// How long a refused connection's 503 may take to write and its request's
+/// bytes to be drained.
+const REFUSAL: Duration = Duration::from_millis(500);
 /// How many of those may be reload long polls, each held for up to
 /// `LONG_POLL`; one past them is answered at once with the current
 /// generation (a short poll).
@@ -463,16 +518,26 @@ fn is_loopback_host(host: &str) -> bool {
     })
 }
 
-fn respond(request: &Request, shared: &Shared) -> Response {
+/// The answer to a request the server serves on no path: a method other
+/// than `GET` or `HEAD`, or a `Host` that is not this machine's loopback.
+fn refusal(request: &Request) -> Option<Response> {
     if request.method != "GET" && request.method != "HEAD" {
-        return Response::text("405 Method Not Allowed", "GET or HEAD only\n");
+        return Some(Response::text(
+            "405 Method Not Allowed",
+            "GET or HEAD only\n",
+        ));
     }
     if !is_loopback_host(&request.host) {
-        return Response::text(
+        return Some(Response::text(
             "421 Misdirected Request",
             "this server answers localhost only\n",
-        );
+        ));
     }
+    None
+}
+
+/// The answer to a request [`refusal`] lets through.
+fn respond(request: &Request, shared: &Shared) -> Response {
     match request.path.as_str() {
         RELOAD_PATH => {
             let since = request
@@ -1039,8 +1104,65 @@ mod tests {
             "{answer}"
         );
         assert!(started.elapsed() < LONG_POLL / 5, "answered at once");
+        // The method and `Host` checks come before the short poll: a page of
+        // another site rebound to 127.0.0.1 or a `POST` learns no generation.
+        for (what, request, status) in [
+            (
+                "another host",
+                format!("GET {RELOAD_PATH}?since=1 HTTP/1.1\r\nHost: evil.example\r\n\r\n"),
+                "HTTP/1.1 421",
+            ),
+            (
+                "a POST",
+                format!(
+                    "POST {RELOAD_PATH}?since=1 HTTP/1.1\r\nHost: {local}\r\nContent-Length: 0\r\n\r\n"
+                ),
+                "HTTP/1.1 405",
+            ),
+        ] {
+            let answer = raw(server.addr, &request);
+            assert!(answer.starts_with(status), "{what}: {answer:.80}");
+            assert!(!answer.contains("generation"), "{what}: {answer}");
+        }
         let (head, _) = get(server.addr, "GET", "/pkg/app.js");
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        drop(held);
+    }
+
+    /// A connection past `MAX_CONNECTIONS` reads its 503, and refused
+    /// clients that never read hold no thread the server accepts on: once a
+    /// place is free, the next request is served while they drain.
+    fn a_connection_over_the_cap_reads_its_503_and_delays_no_other() {
+        let (_dir, server) = fixture();
+        let mut held: Vec<TcpStream> = (0..MAX_CONNECTIONS)
+            .map(|_| TcpStream::connect(server.addr).expect("connect"))
+            .collect();
+        // Each held connection has its thread, waiting for a head.
+        std::thread::sleep(Duration::from_millis(500));
+        let local = server.addr.to_string();
+        let answer = raw(
+            server.addr,
+            &format!("GET /pkg/app.js HTTP/1.1\r\nHost: {local}\r\n\r\n"),
+        );
+        assert!(answer.starts_with("HTTP/1.1 503"), "{answer:.80}");
+        // Refused clients that send nothing and never read: each one's drain
+        // waits out `REFUSAL`, which on the accepting thread would hold every
+        // later accept back by that much.
+        let silent: Vec<TcpStream> = (0..MAX_REFUSALS)
+            .map(|_| TcpStream::connect(server.addr).expect("connect"))
+            .collect();
+        let started = Instant::now();
+        drop(held.pop());
+        // The freed place's thread sees the close.
+        std::thread::sleep(Duration::from_millis(100));
+        let (served, _) = get(server.addr, "GET", "/pkg/app.js");
+        assert!(served.starts_with("HTTP/1.1 200"), "{served}");
+        assert!(
+            started.elapsed() < REFUSAL * 2,
+            "served while the refusals drain: {:?}",
+            started.elapsed()
+        );
+        drop(silent);
         drop(held);
     }
 
@@ -1209,6 +1331,10 @@ mod tests {
             (
                 "long polls cannot take every slot",
                 long_polls_cannot_take_every_slot,
+            ),
+            (
+                "a connection over the cap reads its 503 and delays no other",
+                a_connection_over_the_cap_reads_its_503_and_delays_no_other,
             ),
             (
                 "a request for another host is refused",
