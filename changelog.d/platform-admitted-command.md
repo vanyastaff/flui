@@ -1,12 +1,12 @@
 ### Added
 
 - `AdmittedCommand`: the only thing `PlatformWindow::apply` takes, built only by
-  `WindowCommand::admit(&WindowCapabilities)`. It is bound to the window and the capabilities
-  revision it was admitted against; `AdmittedCommand::against` opens it under a window's current
+  `WindowCommand::admit(&WindowCapabilities)`. It is bound to the publication of the capabilities
+  it was admitted against; `AdmittedCommand::against` opens it under a window's current
   capabilities.
-- `WindowCapabilities::revision` and `CapabilitiesOwner` (`WindowCapabilities::owned_by`): the
-  snapshot revision at which what the window honours last changed, and the window, unique in the
-  process, whose snapshots publish the capabilities. `WindowState::successor` keeps both.
+- `WindowCapabilities::revision` and `WindowCapabilities::publish`: the snapshot revision at which
+  what the window honours last changed, and the publication a host stamps on a window's first
+  snapshot. `WindowState::successor` keeps both while the capabilities stay the same.
 - `AdmissionError { Unsupported, InvalidGeometry }`,
   `ApplyError { Closed, Superseded { command }, Platform(PlatformFailure) }`,
   `PlatformFailure { OutOfRange, Failed { message } }` and `SubmitError { Admission, Closed }`.

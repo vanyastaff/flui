@@ -85,7 +85,8 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// ```
 /// # use std::sync::Arc;
 /// # use flui_platform::*;
-/// struct Double(WindowId);
+/// // Its id, and what it honours, published once when it was made.
+/// struct Double(WindowId, WindowCapabilities);
 ///
 /// impl PlatformWindow for Double {
 ///     flui_platform::window_takes_no_frame_verbs!();
@@ -94,10 +95,10 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #   fn surface_target(&self) -> Arc<dyn SurfaceTarget> { Arc::new(testing::NoNativeSurface) }
 /// #   fn redraw_requester(&self) -> Arc<dyn RedrawRequester> { Arc::new(|| {}) }
 /// #   fn state(&self) -> WindowState {
-/// #       WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
+/// #       WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO).with_capabilities(self.1)
 /// #   }
 /// #   fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-/// #       command.against(&WindowCapabilities::NONE)?;
+/// #       command.against(&self.1)?;
 /// #       Ok(())
 /// #   }
 /// #   fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> { Ok(()) }
@@ -107,7 +108,10 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #   fn drag_source(&self) -> Option<Arc<dyn drag::PlatformDragSource>> { None }
 /// }
 ///
-/// # let double = Double(WindowIdMint::new().next().expect("a fresh mint issues an id"));
+/// # let double = Double(
+/// #     WindowIdMint::new().next().expect("a fresh mint issues an id"),
+/// #     WindowCapabilities::NONE.publish().expect("the process has publications left"),
+/// # );
 /// let refused = double.set_frame_rate_hint(FrameRateHint::High).unwrap_err();
 /// assert_eq!(refused.reason, UnsupportedReason::NotOnThisPlatform);
 /// assert!(double.set_input_regions(&[]).is_err());

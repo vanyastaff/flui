@@ -62,6 +62,10 @@ pub struct TestWindow {
     /// Last cursor set through [`PlatformWindow::set_cursor`]; read back via
     /// [`Self::cursor`].
     cursor: parking_lot::Mutex<CursorIcon>,
+    /// What the window honours, nothing but the normal mode every window has,
+    /// published once when it was made: what its commands are admitted against
+    /// and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 impl std::fmt::Debug for TestWindow {
@@ -80,8 +84,8 @@ impl Default for TestWindow {
 }
 
 impl TestWindow {
-    /// Window 1, scale factor 1, zero sizes, unfocused and visible, with no
-    /// capabilities.
+    /// Window 1, scale factor 1, zero sizes, unfocused and visible, honouring
+    /// no command but the normal mode, its capabilities published.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -99,6 +103,9 @@ impl TestWindow {
             system_chrome: None,
             accessibility: None,
             cursor: parking_lot::Mutex::new(CursorIcon::Default),
+            capabilities: flui_platform::WindowCapabilities::NONE
+                .publish()
+                .expect("BUG: a test opens far fewer than u64::MAX windows"),
         }
     }
 
@@ -243,7 +250,8 @@ impl PlatformWindow for TestWindow {
         Ok(())
     }
 
-    /// What the builder set, honouring no command; a size or scale that is
+    /// What the builder set, honouring no command but the normal mode it is
+    /// always in; a size or scale that is
     /// not a drawable area reports no metrics.
     fn state(&self) -> flui_platform::WindowState {
         let extent = self.logical_size;
@@ -257,13 +265,14 @@ impl PlatformWindow for TestWindow {
                 )
                 .ok(),
             )
+            .with_capabilities(self.capabilities)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
 }

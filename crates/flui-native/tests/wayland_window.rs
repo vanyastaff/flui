@@ -1024,7 +1024,7 @@ mod optional {
         };
         let mut fixture = WaylandFixture::open(platform, "activated on request");
         let capabilities = fixture.window.state().capabilities;
-        let activates = capabilities.activates;
+        let activates = capabilities.activates();
         if !offers_activation(&fixture.platform) {
             let refused = WindowCommand::Activate
                 .admit(&capabilities)

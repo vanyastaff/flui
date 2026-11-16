@@ -436,7 +436,12 @@ fn capture_release_refuses_only_its_own_device_tail() {
     });
 }
 
-struct CaptureWakeWindow(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+struct CaptureWakeWindow(
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    flui_platform::WindowCapabilities,
+);
 
 impl flui_platform::PlatformWindow for CaptureWakeWindow {
     fn id(&self) -> flui_platform::WindowId {
@@ -469,13 +474,14 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
         )
         .with_focused(true)
         .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
+        .with_capabilities(self.1)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.1)?;
         Ok(())
     }
 
@@ -518,7 +524,12 @@ fn assert_capture_wake_failure(active_unwind: bool) {
 
     let lane = InteractionLane::try_new().expect("lane");
     let binding = GestureBinding::new();
-    let window = Rc::new(CaptureWakeWindow(Arc::new(AtomicUsize::new(0))));
+    let window = Rc::new(CaptureWakeWindow(
+        Arc::new(AtomicUsize::new(0)),
+        flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
+    ));
     let capability: Rc<dyn flui_platform::PlatformWindow> = window.clone();
     flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&capability));
     let held = Rc::new(RefCell::new(None::<PointerCapture>));

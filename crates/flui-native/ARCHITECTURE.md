@@ -1148,14 +1148,18 @@ trait depends on `flui-platform` instead.
   opens the token against the capabilities of its last published snapshot
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
   a capability change the snapshot published (the headless `simulate_capabilities`) answers
-  `ApplyError::Superseded`. `WindowStateCell::new` stamps the window's first
-  snapshot with a `CapabilitiesOwner` from one process-wide counter
-  (`window::state::NEXT_CAPABILITIES_OWNER`, checked, never reissued), so a
-  token admitted for another window, or against capabilities built by hand,
-  never opens on this one. The conformance check
-  `a_command_admitted_before_a_revision_is_superseded` holds a host to it
-  where its fixture can revise capabilities. A command no host arm carries
-  out answers `ApplyError::Platform` (`window::state::not_carried_out`), and
+  `ApplyError::Superseded`. `WindowStateCell::open` publishes the window's
+  first capabilities (`WindowCapabilities::publish`, ADR-0341: the contract's
+  publication, never reissued), so a token admitted for another window opens
+  nothing on this one, and capabilities built by hand or edited admit nothing. A
+  cell that freezes at its last revision withdraws its capabilities, whether or
+  not they moved, and announces that once; a window opened with no publication
+  left opens with withdrawn capabilities (`WindowCapabilities::withdraw`), so a
+  window takes no command it may have lost (`a_frozen_window_withdraws_its_capabilities`). The
+  conformance check `a_command_admitted_before_a_revision_is_superseded`
+  holds a host to it where its fixture can revise capabilities. A command no
+  host arm carries out, the Android and UIKit windows' included, answers
+  `ApplyError::Platform` (`window::state::not_carried_out`), never `Ok`, and
   a Win32 position beyond its device range is `PlatformFailure::OutOfRange`:
   admission held it finite, the range is the window system's. A size past the
   largest surface is not refused: the Win32, X11 and headless hosts clamp it by

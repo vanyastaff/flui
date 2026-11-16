@@ -742,12 +742,12 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
         WindowGeometry::try_new(
             bounds
                 .position
-                .filter(|_| capabilities.observes_position.is_available()),
+                .filter(|_| capabilities.observes_position().is_available()),
             bounds.size,
         )
     };
     let mode = match model.mode {
-        WindowMode::Minimized if !capabilities.observes_minimized.is_available() => {
+        WindowMode::Minimized if !capabilities.observes_minimized().is_available() => {
             WindowMode::Normal
         }
         mode => mode,
@@ -849,7 +849,7 @@ impl HeadlessHostWindow {
             title: options.title.clone(),
             position: opening
                 .position
-                .filter(|_| capabilities.places_at_open.is_available())
+                .filter(|_| capabilities.places_at_open().is_available())
                 .unwrap_or_default(),
             size: opening.content.get(),
             mode: WindowMode::Normal,
@@ -1010,11 +1010,11 @@ impl HeadlessHostWindow {
     /// (`REPORT_LEAD`); and a time further ahead is no time of a frame, and
     /// the report is dropped. A closed window ignores it, as does one whose
     /// capabilities say its window system reports no presentation
-    /// ([`WindowCapabilities::reports_presentation`]).
+    /// ([`WindowCapabilities::reports_presentation`](flui_platform::WindowCapabilities::reports_presentation)).
     pub fn simulate_presented(&self, presented: flui_platform::FramePresented) {
         {
             let state = self.state.borrow_mut();
-            if state.closed || !state.capabilities.reports_presentation.is_available() {
+            if state.closed || !state.capabilities.reports_presentation().is_available() {
                 return;
             }
         }
@@ -1072,7 +1072,8 @@ impl HeadlessHostWindow {
     /// of the window system is, through [`WindowState::successor`]: the
     /// revision is the one this window's history earns, not `state`'s, a
     /// snapshot with the same facts publishes nothing, and the capabilities
-    /// keep this window's owner. Fires the handler's `state_changed` when the
+    /// stay this window's publication, or become a new one of its own when
+    /// they differ (ADR-0341). Fires the handler's `state_changed` when the
     /// snapshot differs, and returns what was published.
     ///
     /// Reads answer with `state` until a simulation or a command changes the
@@ -1366,9 +1367,9 @@ impl PlatformWindow for HeadlessHostWindow {
                 WindowCommand::Hide => state.visible = false,
                 WindowCommand::Activate => state.focused = true,
                 WindowCommand::SetMaterial(material) => state.materials.push(material),
-                // A command this host does not know is refused by `admit`
-                // through its capability, and `Close` returned above.
-                _ => {}
+                // `Close` returned above; a command the contract gained
+                // before this host learnt it is not carried out, and says so.
+                other => return Err(crate::window::state::not_carried_out(&other)),
             }
         }
         self.publish_state();
@@ -1378,7 +1379,7 @@ impl PlatformWindow for HeadlessHostWindow {
     fn set_frame_rate_hint(&self, hint: flui_platform::FrameRateHint) -> Result<(), Unsupported> {
         // The snapshot's lock is taken before the model's, never inside it:
         // a publication holds the snapshot while it reads the model.
-        let availability = self.window_state.published_capabilities().frame_rate_hint;
+        let availability = self.window_state.published_capabilities().frame_rate_hint();
         let mut state = self.state.borrow_mut();
         takes(&state, availability)?;
         state.frame_rate_hints.push(hint);

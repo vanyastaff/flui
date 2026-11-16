@@ -22,10 +22,24 @@ use flui_view::{BuildOwner, RebuildReason};
 use flui_view::{WindowClosed, WindowHandle};
 
 /// A control that records the commands it was handed.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct StubControl {
     submitted: Rc<RefCell<Vec<WindowCommand>>>,
     closes: Rc<Cell<usize>>,
+    /// What the window honours, published once when the control was made.
+    capabilities: WindowCapabilities,
+}
+
+impl Default for StubControl {
+    fn default() -> Self {
+        Self {
+            submitted: Rc::default(),
+            closes: Rc::default(),
+            capabilities: WindowCapabilities::ALL
+                .publish()
+                .expect("the process has publications left"),
+        }
+    }
 }
 
 impl WindowControl for StubControl {
@@ -36,7 +50,7 @@ impl WindowControl for StubControl {
             flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         )
         .with_title(Some("Stub".to_owned()))
-        .with_capabilities(WindowCapabilities::ALL)
+        .with_capabilities(self.capabilities)
     }
     fn submit(&self, command: WindowCommand) -> Result<(), SubmitError> {
         let admitted = command.admit(&self.state().capabilities)?;
