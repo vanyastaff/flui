@@ -1198,7 +1198,7 @@ mod toplevel {
     use super::foreign::PortalParent;
     use super::frame::{Pacing, Sight, first_live, waiting_on_callback};
     use super::presented;
-    use super::scale::{self, BufferScale, ScaleTold, buffer_scale};
+    use super::scale::{self, BufferScale, ScaleTold, ToldScale, buffer_scale};
     use crate::executor::NativeExecutor;
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
@@ -1270,18 +1270,13 @@ mod toplevel {
         close_requested: bool,
         /// The outputs the surface is on, in the order entered.
         outputs: Vec<OutputName>,
-        /// The buffer scale the compositor prefers for the surface, when it
-        /// is a ratio a screen can have (the hosts' one rule, at the event).
-        preferred_scale: Option<i32>,
+        /// The buffer scale the compositor prefers for the surface: the last
+        /// one that was a ratio a screen can have (the hosts' one rule, at the
+        /// event; a refused one leaves it).
+        preferred_scale: ToldScale<i32>,
         /// The fractional scale the compositor prefers, as a numerator over
-        /// 120, when it is a ratio a screen can have.
-        fractional_scale: Option<u32>,
-        /// Whether the last preferred buffer scale was refused, so a run of
-        /// refusals is reported once.
-        preferred_streak: crate::display::scale::ScaleStreak,
-        /// Whether the last fractional scale was refused, so a run of
-        /// refusals is reported once.
-        fractional_streak: crate::display::scale::ScaleStreak,
+        /// 120, held the same way.
+        fractional_scale: ToldScale<u32>,
         /// Who draws the frame, as the compositor last said.
         frame: Option<FrameDrawer>,
         /// The compositor answered the window's last frame request since the
@@ -1560,8 +1555,8 @@ mod toplevel {
             let scale = buffer_scale(
                 self.viewported,
                 ScaleTold {
-                    fractional: applied.told.fractional_scale,
-                    preferred: applied.told.preferred_scale,
+                    fractional: applied.told.fractional_scale.ratio(),
+                    preferred: applied.told.preferred_scale.ratio(),
                     output: output.map(|output| output.scale),
                 },
                 // The content is the one surface drawn at the scale: the
@@ -3006,12 +3001,13 @@ mod toplevel {
                     }
                 }
                 wl_surface::Event::PreferredBufferScale { factor } => {
-                    // By the hosts' one rule, as the fractional scale is.
-                    let checked = told
-                        .preferred_streak
-                        .check(f64::from(factor), "wl_surface preferred_buffer_scale");
-                    told.preferred_scale = checked.is_ok().then_some(factor);
-                    refused = checked.err().flatten();
+                    // By the hosts' one rule, as the fractional scale is: a
+                    // refused one leaves the scale held.
+                    refused = told.preferred_scale.tell(
+                        factor,
+                        f64::from(factor),
+                        "wl_surface preferred_buffer_scale",
+                    );
                 }
                 _ => {}
             }
@@ -3212,18 +3208,14 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
-                // By the hosts' one rule: a scale no screen has is not taken,
-                // so the window falls back to the next scale the compositor
-                // says, and a run of them is reported once, with the lock let
-                // go.
-                let refused = {
-                    let mut told = record.protocol.lock();
-                    let checked = told
-                        .fractional_streak
-                        .check(f64::from(scale) / 120.0, "wp_fractional_scale_v1");
-                    told.fractional_scale = checked.is_ok().then_some(scale);
-                    checked.err().flatten()
-                };
+                // By the hosts' one rule: a scale no screen has is refused and
+                // the window keeps the one it held, and a run of them is
+                // reported once, with the lock let go.
+                let refused = record.protocol.lock().fractional_scale.tell(
+                    scale,
+                    f64::from(scale) / 120.0,
+                    "wp_fractional_scale_v1",
+                );
                 if let Some(refused) = refused {
                     refused.report();
                 }
@@ -3322,8 +3314,8 @@ mod toplevel {
                 size: told.size,
                 raw_states: told.raw_states.clone(),
                 configures: told.configures,
-                preferred_scale: told.preferred_scale,
-                fractional_scale: told.fractional_scale,
+                preferred_scale: told.preferred_scale.raw(),
+                fractional_scale: told.fractional_scale.raw(),
                 frame_mode: told.raw_frame_mode,
                 outputs: told.outputs.clone(),
                 activation_tokens,

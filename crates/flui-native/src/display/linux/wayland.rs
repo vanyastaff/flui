@@ -105,7 +105,7 @@ impl WaylandDisplays for WaylandDisplaySource {
         let info = snapshot.displays().iter().find(|info| info.id == display)?;
         Some(OutputFacts {
             display,
-            scale: info.scale_factor.get(),
+            scale: info.scale_factor,
         })
     }
 

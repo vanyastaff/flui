@@ -1567,7 +1567,7 @@ impl Clone for flui::app::RecordingStart
 impl core::fmt::Debug for flui::app::RecordingStart
 #[non_exhaustive] pub struct flui::app::RecordingWindow
 field flui::app::RecordingWindow::gesture_profiles: flui::interaction::GestureProfiles // at 2
-field flui::app::RecordingWindow::scale_factor: f64 // at 1
+field flui::app::RecordingWindow::scale_factor: flui::geometry::DevicePixelRatio // at 1
 field flui::app::RecordingWindow::window: flui::platform::WindowId // at 0
 impl Clone for flui::app::RecordingWindow
 impl core::fmt::Debug for flui::app::RecordingWindow
@@ -19749,7 +19749,7 @@ pub fn flui::rendering::PipelineOwner::debug_doing_paint(&self) -> bool // impl<
 pub fn flui::rendering::PipelineOwner::debug_doing_semantics(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::decode_semantics_action(&self, request: &accesskit::ActionRequest) -> Result<flui_semantics::action::SemanticsActionRequest, flui_semantics::action::ActionDecodeError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::rendering::PipelineOwner::detach_render_subtrees(&mut self, root_ids: &[flui::foundation::RenderId]) -> Result<flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees, flui_rendering::pipeline::owner::relocation::DetachRenderSubtreesError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui::rendering::PipelineOwner::device_pixel_ratio(&self) -> f64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::device_pixel_ratio(&self) -> flui::geometry::DevicePixelRatio // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::dirty_node_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::drain_mid_layout_marks(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::drain_pending_dirty(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
@@ -23792,7 +23792,7 @@ pub fn flui::testing::harness::widgets::LaidOut::root(&self) -> flui::foundation
 pub fn flui::testing::harness::widgets::LaidOut::run_background(&mut self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::scheduler(&self) -> flui::view::UpdateScheduler
 pub fn flui::testing::harness::widgets::LaidOut::set_motion_override(&self, preference: flui::animation::MotionOverride)
-pub fn flui::testing::harness::widgets::LaidOut::set_scale_factor(&mut self, scale_factor: f64)
+pub fn flui::testing::harness::widgets::LaidOut::set_scale_factor(&mut self, scale_factor: flui::geometry::DevicePixelRatio)
 pub fn flui::testing::harness::widgets::LaidOut::set_system_preferences(&self, values: flui::platform::SystemPreferences)
 pub fn flui::testing::harness::widgets::LaidOut::set_window_focused(&self, focused: bool)
 pub fn flui::testing::harness::widgets::LaidOut::set_window_visible(&self, visible: bool)
@@ -23804,6 +23804,7 @@ pub fn flui::testing::harness::widgets::LaidOut::text_baseline(&self, id: flui::
 pub fn flui::testing::harness::widgets::LaidOut::tick(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::transform_layer_matrices(&self) -> Vec<flui::geometry::Matrix4>
 pub fn flui::testing::harness::widgets::LaidOut::try_find_by_render_type(&self, render_type_name: &str) -> Option<flui::foundation::RenderId>
+pub fn flui::testing::harness::widgets::LaidOut::try_set_scale_factor(&mut self, scale_factor: f64) -> Result<(), flui::geometry::InvalidMetrics>
 pub fn flui::testing::harness::widgets::LaidOut::try_size(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Size>
 pub fn flui::testing::harness::widgets::LaidOut::window(&self) -> &flui_testing::host::HeadlessWindow
 pub fn flui::testing::harness::widgets::LaidOut::with_build_owner_mut<R>(&mut self, f: impl FnOnce(&mut flui::prelude::BuildOwner) -> R) -> R
@@ -35727,7 +35728,6 @@ pub fn flui_runtime::ui_runtime::UiRuntime::request_redraw(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::retry_render_device(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::scheduler(&self) -> &flui::view::UpdateScheduler
 pub fn flui_runtime::ui_runtime::UiRuntime::service_text_sizing_source_for(&self, id: flui::foundation::PresentationId, source: &flui_painting::text_painter::sizing::TextSizingSource) -> bool
-pub fn flui_runtime::ui_runtime::UiRuntime::set_device_pixel_ratio_for(&self, id: flui::foundation::PresentationId, device_pixel_ratio: f64) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::set_error_view_builder(&self, builder: Option<flui::view::ErrorViewBuilder>)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_detail(&self, detail: flui::app::FrameFailureDetail)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_handler(&self, handler: Option<flui::app::FrameFailureHandler>)
@@ -35771,7 +35771,7 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::UiRuntimeError
 impl core::fmt::Display for flui_runtime::ui_runtime::UiRuntimeError
 impl core::marker::StructuralPartialEq for flui_runtime::ui_runtime::UiRuntimeError
 variant flui_runtime::ui_runtime::UiRuntimeError::InteractionLane(flui_interaction::pointer::interaction_lane::InteractionDispatchError) // at 0
-variant flui_runtime::ui_runtime::UiRuntimeError::PixelRatio // at 1
+variant flui_runtime::ui_runtime::UiRuntimeError::PixelRatio { bits: u64 } // at 1
 #[non_exhaustive] pub struct flui_runtime::ui_runtime::agent_record::NativeForms
 field flui_runtime::ui_runtime::agent_record::NativeForms::kept: bool // at 0
 field flui_runtime::ui_runtime::agent_record::NativeForms::redacted: bool // at 1

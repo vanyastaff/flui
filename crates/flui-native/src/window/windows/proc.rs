@@ -1953,23 +1953,24 @@ impl WindowContext {
         // them for this window (each report is a call into the subscriber,
         // with nothing borrowed here), and the window keeps its scale.
         let mut streak = self.dpi_streak.get();
-        let checked = streak.check(
+        let told = streak.admit(
+            crate::owner::windows::WindowDpi::try_new(u32::from(dpi)),
             crate::owner::windows::dpi_scale(u32::from(dpi)),
             "WM_DPICHANGED",
         );
         self.dpi_streak.set(streak);
-        if let Err(refused) = checked {
-            if let Some(refused) = refused {
-                refused.report();
+        let dpi = match told {
+            Ok(dpi) => dpi,
+            Err(refused) => {
+                if let Some(refused) = refused {
+                    refused.report();
+                }
+                return;
             }
-            return;
-        }
-        let old_scale = self
-            .scale
-            .rescale(u32::from(dpi))
-            .expect("BUG: a DPI the scale rule took is one the window scale takes");
+        };
+        let old_scale = self.scale.rescale(dpi);
         let new_scale = self.scale.scale();
-        tracing::info!(dpi, new_scale, "DPI changed");
+        tracing::info!(dpi = dpi.get(), new_scale, "DPI changed");
         // The display's scale changed, so its snapshot entry did.
         self.displays.invalidate();
         self.step(hwnd, WindowStep::Rescaled);

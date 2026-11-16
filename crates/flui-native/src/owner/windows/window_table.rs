@@ -3,7 +3,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use flui_foundation::geometry::DevicePixelRatio;
@@ -108,31 +107,55 @@ impl<T> WindowTable<T> {
     }
 }
 
+/// A window DPI whose ratio to the 96 of 100% is one a screen can have
+/// (`DevicePixelRatio::MIN..=MAX`, 3 to 3072), held with that ratio: zero and
+/// every DPI past the range build none, so a window holds no other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WindowDpi {
+    dpi: u32,
+    ratio: DevicePixelRatio,
+}
+
+impl WindowDpi {
+    /// The DPI of 100% (`USER_DEFAULT_SCREEN_DPI`).
+    const DEFAULT: Self = Self {
+        dpi: USER_DEFAULT_SCREEN_DPI,
+        ratio: DevicePixelRatio::ONE,
+    };
+
+    /// `dpi`, when its ratio is one a screen can have.
+    pub(crate) fn try_new(dpi: u32) -> Option<Self> {
+        let ratio = DevicePixelRatio::try_new(super::dpi_scale(dpi))?;
+        Some(Self { dpi, ratio })
+    }
+
+    /// The DPI.
+    pub(crate) fn get(self) -> u32 {
+        self.dpi
+    }
+}
+
 /// A window's DPI: one value per window, which the window's procedure sets
 /// as the window takes a new DPI, before it tells its class's hooks
 /// ([`WindowStep::Rescaled`](super::WindowStep::Rescaled)), and which the
 /// window and every hook read. No hook keeps a copy that could lag behind it.
 ///
-/// The DPI is never zero, so the scale is never zero and nothing divided by
-/// it (the window's rectangles in logical pixels, a pointer position) leaves
-/// the finite numbers.
+/// The DPI is a [`WindowDpi`], so the scale is a ratio a screen can have and
+/// nothing divided by it (the window's rectangles in logical pixels, a pointer
+/// position) leaves the finite numbers.
 #[derive(Clone, Debug)]
-pub(crate) struct WindowScale(Rc<Cell<NonZeroU32>>);
-
-/// The DPI of 100% (`USER_DEFAULT_SCREEN_DPI`).
-const DEFAULT_DPI: NonZeroU32 =
-    NonZeroU32::new(USER_DEFAULT_SCREEN_DPI).expect("BUG: the DPI of 100% is 96");
+pub(crate) struct WindowScale(Rc<Cell<WindowDpi>>);
 
 impl WindowScale {
     /// A window at `dpi`.
-    fn new(dpi: NonZeroU32) -> Self {
+    fn new(dpi: WindowDpi) -> Self {
         Self(Rc::new(Cell::new(dpi)))
     }
 
     /// A window at 100%.
     #[cfg(test)]
     pub(crate) fn unscaled() -> Self {
-        Self::new(DEFAULT_DPI)
+        Self::new(WindowDpi::DEFAULT)
     }
 
     /// The DPI a window opens at: the one the system reports for it, or, when
@@ -143,7 +166,7 @@ impl WindowScale {
 
     /// Its DPI.
     pub(crate) fn dpi(&self) -> u32 {
-        self.0.get().get()
+        self.0.get().dpi
     }
 
     /// Its scale: its DPI over the 96 of 100%.
@@ -151,42 +174,28 @@ impl WindowScale {
         self.ratio().get()
     }
 
-    /// Its scale as a device pixel ratio: the window holds only a DPI whose
-    /// ratio is in range ([`opening_dpi`] and [`Self::rescale`] take no other).
+    /// Its scale as a device pixel ratio.
     pub(crate) fn ratio(&self) -> DevicePixelRatio {
-        DevicePixelRatio::try_new(super::dpi_scale(self.dpi()))
-            .expect("BUG: a window scale holds only a DPI whose ratio is in range")
+        self.0.get().ratio
     }
 
-    /// The window is now at `dpi`; answers the scale it was at. A DPI whose
-    /// ratio is no ratio a screen can have (zero, or past `DevicePixelRatio`'s
-    /// range, from a `WM_DPICHANGED` whose sender made it up) is not taken:
-    /// the window keeps the one it has, and the answer is `None`.
-    pub(crate) fn rescale(&self, dpi: u32) -> Option<f64> {
-        let dpi = in_range(dpi)?;
-        Some(super::dpi_scale(self.0.replace(dpi).get()))
+    /// The window is now at `dpi`; answers the scale it was at.
+    pub(crate) fn rescale(&self, dpi: WindowDpi) -> f64 {
+        self.0.replace(dpi).ratio.get()
     }
 }
 
 /// The DPI a window opens at, from the DPI the system reports for it (0 when
 /// it reports none) and the scale it was placed at.
-pub(super) fn opening_dpi(reported_dpi: u32, placed_at: f64) -> NonZeroU32 {
-    if let Some(reported) = in_range(reported_dpi) {
+pub(super) fn opening_dpi(reported_dpi: u32, placed_at: f64) -> WindowDpi {
+    if let Some(reported) = WindowDpi::try_new(reported_dpi) {
         return reported;
     }
     let dpi = (placed_at * f64::from(USER_DEFAULT_SCREEN_DPI)).round();
     if dpi.is_finite() && dpi >= 1.0 && dpi <= f64::from(u16::MAX) {
         // A whole number in `u16`'s range by the check above.
-        in_range(dpi as u32).unwrap_or(DEFAULT_DPI)
+        WindowDpi::try_new(dpi as u32).unwrap_or(WindowDpi::DEFAULT)
     } else {
-        DEFAULT_DPI
+        WindowDpi::DEFAULT
     }
-}
-
-/// `dpi` when its ratio to the 96 of 100% is one a screen can have
-/// (`DevicePixelRatio::MIN..=MAX`, 3 to 3072); `None` for zero and every DPI
-/// past that range, which no window holds.
-fn in_range(dpi: u32) -> Option<NonZeroU32> {
-    NonZeroU32::new(dpi)
-        .filter(|dpi| DevicePixelRatio::try_new(super::dpi_scale(dpi.get())).is_some())
 }

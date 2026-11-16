@@ -451,7 +451,7 @@ fn a_title_bar_is_drawn_with_its_buttons_and_title() {
 
     let dark = paint_header(
         &frame,
-        BufferScale::try_new(2.0).expect("a scale"),
+        BufferScale::of(DevicePixelRatio::try_new(2.0).expect("a ratio")),
         HeaderLook {
             look: Look {
                 dark: true,
@@ -483,7 +483,7 @@ fn a_hostile_scale_draws_no_gibibyte() {
         content: Size::new(37.0, 300.0),
         ..floating()
     };
-    let hostile = BufferScale::try_new(DevicePixelRatio::MAX.get()).expect("a scale");
+    let hostile = BufferScale::of(DevicePixelRatio::MAX);
     let pixels = paint_header(&narrow, hostile, PLAIN).expect("drawn");
     assert_eq!(
         (pixels.width, pixels.height),
@@ -523,7 +523,7 @@ fn a_hostile_scale_draws_no_gibibyte() {
 fn a_window_that_publishes_metrics_draws_its_whole_frame() {
     use crate::window::linux::wayland::scale::metrics;
 
-    let largest = BufferScale::try_new(BufferScale::MAX).expect("a scale");
+    let largest = BufferScale::of(DevicePixelRatio::MAX);
     let cap = f64::from(MAX_SURFACE_EXTENT);
     for (width, height) in [
         (cap / BufferScale::MAX, 300.0),
@@ -783,7 +783,7 @@ fn a_title_is_shaped_and_rasterized() {
         .mask(
             "Client frame",
             300.0,
-            BufferScale::try_new(2.0).expect("a scale"),
+            BufferScale::of(DevicePixelRatio::try_new(2.0).expect("a ratio")),
         )
         .expect("shaped");
     assert!(double.width >= mask.width * 2 - 2 && double.width <= mask.width * 2 + 2);

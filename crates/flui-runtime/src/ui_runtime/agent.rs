@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use flui_foundation::PresentationId;
-use flui_foundation::geometry::DevicePixelRatio;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     ActOutcome, ActionName, ActionRequest, Actionability, ActionabilityParams, Effect, EffectKind,
@@ -857,11 +856,9 @@ impl PendingActRead {
 
 /// How `state` places its semantics on the wire: its device pixel ratio, and `window`.
 fn placement_of(state: &PresentationState, window: WindowId) -> Placement {
-    state.pipeline().with(|pipeline| {
-        let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-            .unwrap_or(DevicePixelRatio::ONE);
-        Placement::new(ratio, window)
-    })
+    state
+        .pipeline()
+        .with(|pipeline| Placement::new(pipeline.device_pixel_ratio(), window))
 }
 
 /// The owner half of `semantics.read`: the committed tree as wire nodes.

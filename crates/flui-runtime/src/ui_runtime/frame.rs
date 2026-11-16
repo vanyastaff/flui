@@ -676,7 +676,8 @@ impl UiRuntime {
                         crate::presentation_scene::OverlayFrame {
                             layer,
                             device_pixel_ratio: pipeline
-                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio),
+                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio)
+                                .get(),
                             owner: pipeline
                                 .with(flui_rendering::pipeline::PipelineOwner::root_id)
                                 .expect("BUG: a frame that painted has a root"),
@@ -962,7 +963,10 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
-        let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
+        let constraints = BoxConstraints::tight(Size::new(
+            dpr.to_logical(width as f64),
+            dpr.to_logical(height as f64),
+        ));
         let mut drawing = FirstPanic::new();
         let drawn = drawing.contain(|| self.draw_frame_entered(constraints));
         // A receiver this build unmounted no longer answers for the drag it accepted: the OS is
@@ -1596,8 +1600,6 @@ impl<'a> PhaseStopwatch<'a> {
 /// largest surface is a host's policy, applied where it sizes the window, and
 /// the renderer refuses a surface past its device's limit; the runtime holds
 /// neither, so it does not clamp.
-fn device_extent(logical: f64, device_pixel_ratio: f64) -> u32 {
-    let ratio = flui_foundation::geometry::DevicePixelRatio::try_new(device_pixel_ratio)
-        .expect("BUG: the pipeline holds only a ratio its typed setter took, or its initial 1.0");
+fn device_extent(logical: f64, ratio: flui_foundation::geometry::DevicePixelRatio) -> u32 {
     flui_foundation::geometry::device_extent(logical, ratio).unwrap_or(0)
 }

@@ -5554,7 +5554,7 @@ GPU-память простаивающего или невидимого окн
   `handle_for`) падают: `window_handle_contract` (`looking_a_window_up_reads_nothing_of_it`,
   «RefCell already borrowed»), `window_handler_obligation_table`
   (`a_revision_a_read_published_is_announced_at_the_owners_turn`),
-  `a_window_takes_no_dpi_of_zero`, `native_recording_contracts` (четыре случая на проверке
+  `a_window_takes_no_dpi_no_screen_has`, `native_recording_contracts` (четыре случая на проверке
   чтения) и `the_win32_window_conforms` (три нарушения: `a_closed_window_refuses`,
   `a_report_that_describes_no_window_publishes_nothing`, расхождение метрик); с исправлениями
   все зелёные. Новые conformance-строки ловят свои дефекты на headless-фикстуре с
@@ -6036,17 +6036,19 @@ GPU-память простаивающего или невидимого окн
   в `flui-runtime` (было `ceil`: 400,9 × 1,5 давало 602, хост — 601). Чистая часть вставок
   Android — `window::activity_insets`, её тесты идут на Linux.
   Каждое число масштаба идёт одним из трёх путей. От ОС — через правило `display::scale`:
-  `read` (негодное — базовое отношение) у дисплеев и окон, `check` (негодное отвергнуто, прежний
-  масштаб остаётся) у `WM_DPICHANGED` Win32 и у событий `preferred_scale` и
-  `preferred_buffer_scale` Wayland; `wl_output` Wayland читается правилом при каждом принятии
-  состояния (`done` или логический размер, завершающий первое), `buffer_scale` при негодной
-  дроби берёт следующий источник по порядку; Android держит серии всех прочитанных дисплеев, а
-  не только перечисленных. От API — типизированный отказ: `UiRuntime::try_new` и
-  `with_capacity` — `UiRuntimeError::PixelRatio`, `set_device_pixel_ratio_for` — `false`,
-  `PipelineOwner::set_device_pixel_ratio` принимает `DevicePixelRatio`. Константы —
-  `DevicePixelRatio::try_new` стал `const`, `BufferScale::LARGEST` строится при компиляции.
-  Конвейер держит только отношение из типизированного сеттера, поэтому его чтение в рантайме —
-  `expect("BUG: …")`.
+  `read`/`try_read` (негодное — базовое отношение) у дисплеев и окон, `check` (негодное
+  отвергнуто, окно держит последний принятый масштаб) у `WM_DPICHANGED` Win32 (`ScaleStreak::admit` над `WindowDpi::try_new`,
+  `WindowScale` держит `WindowDpi`) и у `preferred_scale` и `preferred_buffer_scale` Wayland
+  (`ToldScale`); отказ несёт `Refusal`, и предупреждение говорит, что сделал вызвавший. Вывод
+  Wayland читает размер и отношение вместе (`scaled_extent`): при отказе границы — пиксели режима
+  при отношении 1. Android держит серии всех прочитанных дисплеев. От API — типизированный
+  отказ: `UiRuntime::try_new` и `with_capacity` — `UiRuntimeError::PixelRatio { bits }`; запись
+  с масштабом окна вне диапазона отвергается при чтении; `HeadlessHost` и
+  `LaidOut::set_scale_factor` берут `DevicePixelRatio`, `try_set_scale_factor` отвечает
+  `InvalidMetrics`. `UiRuntime::set_device_pixel_ratio_for` удалён (вызывали только тесты).
+  Константы — `DevicePixelRatio::try_new` стал `const`. Конвейер хранит и отдаёт
+  `DevicePixelRatio` (`PipelineOwner::device_pixel_ratio`), как и `JavaView` Android и
+  `OutputFacts` Wayland, так что повторных проверок при чтении нет.
   Кодек записи держит число и отказывает в числе вне диапазона при чтении; формат не менялся.
   Тесты, в скобках результат с откатом: `every_window_system_decides_the_mode_alike` (чтение
   Wayland без `fullscreen` — столбец Wayland); `every_backend_steps_a_turn_alike` (шаг X11 с
@@ -6069,9 +6071,13 @@ GPU-память простаивающего или невидимого окн
   `a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale` (Win32, DPI 1 и 4000: без
   правила — паника в масштабе окна); `owner_metrics_contract` (64 и 1/64 — отказ, границы
   приняты: с зажимом вместо отказа — падает); `a_scale_no_screen_has_reads_as_the_base_ratio`
-  (Wayland, масштаб 64: без правила — не базовое отношение); `a_display_read_but_not_listed_keeps_its_streak`
-  (серии только перечисленных — второй отказ сообщён снова); строка «a fraction below the
-  smallest falls back to the preferred» (первый источник без отката — 1, не 2). Строки,
+  (Wayland, масштаб 64 и границы: без правила — не базовое отношение, с логическим размером
+  при отказе — границы 30×16); `a_display_read_but_not_listed_keeps_its_streak`
+  (серии только перечисленных — второй отказ сообщён снова); строки «a refused fraction keeps
+  the one held» и соседние (сброс при отказе — 2, не 1,5); `a_refusal_names_what_its_caller_did`;
+  `a_recording_whose_window_scale_no_screen_has_is_refused_on_its_line`;
+  `a_scale_no_window_can_have_is_answered_and_changes_nothing`;
+  `a_window_takes_no_dpi_no_screen_has`. Строки,
   которые тип делает невозможными (NaN, ноль, бесконечность, масштаб вне диапазона), сняты из
   таблиц или переписаны на границы диапазона.
   Проверки: Windows — clippy `--affected --all-targets -D warnings`, `check --workspace`,

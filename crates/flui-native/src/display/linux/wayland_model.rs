@@ -40,7 +40,7 @@ use flui_platform::{
 };
 
 use super::view::{Identity, OutputView};
-use crate::display::scale::ScaleStreak;
+use crate::display::scale::{RefusedScale, ScaleStreak};
 
 /// One event of an output, in the terms the model needs. The adapter maps the
 /// protocol's events onto these.
@@ -205,9 +205,9 @@ struct Output {
     /// The image description being described; replaced by a newer one, so an
     /// older description never overwrites a newer colour.
     describing: Option<(u64, ColorDescription)>,
-    /// The scale of the state last taken over, read by the hosts'
-    /// one rule.
-    ratio: DevicePixelRatio,
+    /// The logical size and ratio of the state last taken over, read together
+    /// by the hosts' one rule; `None` for a state with no usable mode.
+    extent: Option<ScaledExtent>,
     /// Whether the last scale read for this output was refused, so a run of
     /// refusals is reported once.
     scale_streak: ScaleStreak,
@@ -229,12 +229,13 @@ impl Output {
     fn apply_pending(&mut self) -> bool {
         let changed = self.applied.as_ref() != Some(&self.pending);
         self.applied = Some(self.pending.clone());
-        if let Some(reported) = reported_scale(&self.pending) {
-            let (ratio, refused) = self.scale_streak.read(reported, "wl_output scale");
-            self.ratio = ratio;
-            if let Some(refused) = refused {
-                refused.report();
-            }
+        let (extent, refused) = match scaled_extent(&self.pending, &mut self.scale_streak) {
+            Some((extent, refused)) => (Some(extent), refused),
+            None => (None, None),
+        };
+        self.extent = extent;
+        if let Some(refused) = refused {
+            refused.report();
         }
         changed
     }
@@ -260,7 +261,7 @@ impl WaylandOutputs {
             awaiting_logical_size: false,
             color: Err(CapabilityAbsence::NOT_ON_THIS_DEVICE),
             describing: None,
-            ratio: DevicePixelRatio::ONE,
+            extent: None,
             scale_streak: ScaleStreak::default(),
         });
     }
@@ -433,7 +434,8 @@ impl WaylandOutputs {
             if let Some(name) = key_name {
                 taken_names.push(name);
             }
-            if let Some(view) = view_of(output.global, state, key_name, output.color, output.ratio)
+            if let Some(extent) = output.extent
+                && let Some(view) = view_of(output.global, state, key_name, output.color, extent)
             {
                 views.push(view);
             }
@@ -442,30 +444,62 @@ impl WaylandOutputs {
     }
 }
 
-/// The scale an output's state says, as the compositor reports it: its mode
-/// over its `xdg_output` logical size where it has one, else its
-/// `wl_output.scale`; `None` for an output with no usable mode. Whether the
-/// number is a ratio a screen can have is the hosts' one rule's
-/// (`display::scale`), applied at the output's `done`.
-fn reported_scale(state: &OutputState) -> Option<f64> {
+/// An output's logical size and the ratio of its device pixels to it, read
+/// together so the two cannot disagree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScaledExtent {
+    size: Size<i32>,
+    ratio: DevicePixelRatio,
+}
+
+/// The logical size and ratio an output's state says: its `xdg_output`
+/// logical size and its mode over it where it has one, else its mode over its
+/// `wl_output.scale` at that scale. The ratio goes through the hosts' one
+/// rule (`display::scale`): a ratio no screen has reads as the base ratio, and
+/// the size is then the mode's own pixels, so the bounds a snapshot publishes
+/// are the ones its scale describes. With the refusal to report when it
+/// starts a run; `None` for an output with no usable mode.
+fn scaled_extent(
+    state: &OutputState,
+    streak: &mut ScaleStreak,
+) -> Option<(ScaledExtent, Option<RefusedScale>)> {
     let mode = state.mode?;
     if mode.width <= 0 || mode.height <= 0 {
         return None;
     }
-    let pixel_width = if state.swaps_axes {
-        mode.height
+    let pixels = if state.swaps_axes {
+        Size::new(mode.height, mode.width)
     } else {
-        mode.width
+        Size::new(mode.width, mode.height)
     };
-    Some(
-        match state
-            .logical_size
-            .filter(|&(width, height)| width > 0 && height > 0)
-        {
-            Some((width, _)) => f64::from(pixel_width) / f64::from(width),
-            None => f64::from(state.scale.max(1)),
-        },
-    )
+    let (size, reported) = if let Some((width, height)) = state
+        .logical_size
+        .filter(|&(width, height)| width > 0 && height > 0)
+    {
+        (
+            Size::new(width, height),
+            f64::from(pixels.width) / f64::from(width),
+        )
+    } else {
+        let scale = state.scale.max(1);
+        (
+            Size::new(
+                (pixels.width / scale).max(1),
+                (pixels.height / scale).max(1),
+            ),
+            f64::from(scale),
+        )
+    };
+    Some(match streak.try_read(reported, "wl_output scale") {
+        Ok(ratio) => (ScaledExtent { size, ratio }, None),
+        Err(refused) => (
+            ScaledExtent {
+                size: pixels,
+                ratio: DevicePixelRatio::ONE,
+            },
+            refused,
+        ),
+    })
 }
 
 fn view_of(
@@ -473,33 +507,15 @@ fn view_of(
     state: &OutputState,
     key_name: Option<&str>,
     color: Result<DisplayColor, CapabilityAbsence>,
-    ratio: DevicePixelRatio,
+    extent: ScaledExtent,
 ) -> Option<OutputView> {
     let mode = state.mode?;
-    if mode.width <= 0 || mode.height <= 0 {
-        return None;
-    }
-    let (pixel_width, pixel_height) = if state.swaps_axes {
-        (mode.height, mode.width)
-    } else {
-        (mode.width, mode.height)
-    };
-    let integer_scale = state.scale.max(1);
-    let logical = state
-        .logical_size
-        .filter(|&(width, height)| width > 0 && height > 0);
-    let (width, height) = match logical {
-        Some((width, height)) => (width, height),
-        None => (
-            (pixel_width / integer_scale).max(1),
-            (pixel_height / integer_scale).max(1),
-        ),
-    };
     let (x, y) = state
         .logical_position
         .or(state.position)
         .unwrap_or_default();
-    let bounds = Bounds::new(Point::new(x, y), Size::new(width, height));
+    let bounds = Bounds::new(Point::new(x, y), extent.size);
+    let ratio = extent.ratio;
     let identity = match key_name {
         Some(name) => Identity::Keyed(DisplayKey::WaylandOutput(name.to_owned())),
         None => Identity::Fresh { slot: global },
@@ -826,10 +842,11 @@ mod tests {
 
     /// A scale no screen has, whether the compositor says it in
     /// `wl_output.scale` or makes it of a mode over a logical size, reads as
-    /// the base ratio by the hosts' one rule: the output is still listed.
+    /// the base ratio by the hosts' one rule: the output is still listed, at
+    /// the bounds that ratio gives its mode.
     fn a_scale_no_screen_has_reads_as_the_base_ratio() {
-        // (case, events, scale)
-        let rows: [(&str, Vec<OutputEvent>, f64); 4] = [
+        // (case, events, scale, bounds)
+        let rows = [
             (
                 "a wl_output scale of 64",
                 vec![
@@ -838,6 +855,7 @@ mod tests {
                     OutputEvent::Scale(64),
                 ],
                 1.0,
+                (1920, 1080),
             ),
             (
                 "a mode far wider than its logical size",
@@ -850,6 +868,7 @@ mod tests {
                     },
                 ],
                 1.0,
+                (7680, 4320),
             ),
             (
                 "a logical size far wider than its mode",
@@ -862,6 +881,7 @@ mod tests {
                     },
                 ],
                 1.0,
+                (10, 10),
             ),
             (
                 "the largest ratio a screen has",
@@ -871,12 +891,17 @@ mod tests {
                     OutputEvent::Scale(32),
                 ],
                 32.0,
+                (100, 100),
             ),
         ];
-        for (case, events, scale) in rows {
+        for (case, events, scale, (width, height)) in rows {
             let mut outputs = WaylandOutputs::default();
             announce(&mut outputs, GLOBAL, events);
-            assert_eq!(only(&outputs).scale_factor.get(), scale, "{case}");
+            let view = only(&outputs);
+            assert_eq!(view.scale_factor.get(), scale, "{case}");
+            // The bounds are the ones the scale describes: a mode read at the
+            // base ratio is its own pixels.
+            assert_eq!(view.bounds.size, Size::new(width, height), "{case}");
         }
     }
 

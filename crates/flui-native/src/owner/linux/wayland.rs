@@ -1316,7 +1316,7 @@ mod event_loop {
         /// The display it is.
         pub(crate) display: DisplayId,
         /// Its device pixels per logical pixel.
-        pub(crate) scale: f64,
+        pub(crate) scale: flui_foundation::geometry::DevicePixelRatio,
     }
 
     /// What the loop asks of a window it holds: the window feature's

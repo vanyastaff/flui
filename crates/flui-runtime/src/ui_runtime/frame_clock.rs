@@ -4,7 +4,7 @@ use super::UiRuntime;
 use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
-use flui_foundation::{PresentationId, panic::FirstPanic};
+use flui_foundation::PresentationId;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -472,42 +472,6 @@ impl UiRuntime {
     #[must_use]
     pub(crate) fn haptics(&self) -> flui_interaction::HapticsHandle {
         self.presentations.primary().haptics().handle()
-    }
-
-    /// Apply a new device pixel ratio to presentation `id`'s render pipeline,
-    /// semantics owner and inherited window data. Mounted consumers observe
-    /// the new ratio on their next build; logical window size is unchanged.
-    ///
-    /// Each window has its own scale (monitors differ), so the ratio reaches
-    /// only the presentation whose window reported it; its siblings keep
-    /// theirs. Returns `false`, changing nothing, for a ratio outside the range a
-    /// screen can have (`DevicePixelRatio::try_new` refuses it), or when `id` names no
-    /// presentation this UI runtime hosts — for example, when its close was
-    /// delivered before the scale change.
-    pub fn set_device_pixel_ratio_for(&self, id: PresentationId, device_pixel_ratio: f64) -> bool {
-        // The type's one rule refuses a ratio outside the range a screen can
-        // have before anything changes.
-        let Some(ratio) = flui_foundation::geometry::DevicePixelRatio::try_new(device_pixel_ratio)
-        else {
-            return false;
-        };
-        if !self.set_pipeline_device_pixel_ratio_for(id, ratio) {
-            return false;
-        }
-        // Each step runs contained so the first failure is kept.
-        let mut first = FirstPanic::new();
-        first.contain(|| {
-            self.refresh_gesture_context_for(id);
-        });
-        first.contain(|| {
-            if let Some(source) = self.media_query_for(id) {
-                source.update(|data| data.device_pixel_ratio = device_pixel_ratio);
-            }
-        });
-        if let Some(payload) = first.into_payload() {
-            std::panic::resume_unwind(payload);
-        }
-        true
     }
 
     /// The native resize batch updates render scale before publishing size,

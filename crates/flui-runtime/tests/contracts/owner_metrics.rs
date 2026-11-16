@@ -632,7 +632,7 @@ fn initial_inherited_scale_matches_the_renderer() {
         assert!(
             matches!(
                 UiRuntime::try_new(crate::owner_publication::window(), refused, services()),
-                Err(flui_runtime::ui_runtime::UiRuntimeError::PixelRatio)
+                Err(flui_runtime::ui_runtime::UiRuntimeError::PixelRatio { bits }) if bits == refused.to_bits()
             ),
             "{refused}"
         );
@@ -765,79 +765,27 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         .deliver(crate::VSYNC, &effects)
         .expect("restored surface frame");
     assert_eq!(effects.sink.borrow().submitted, 3);
-    // The direct host scale entry must keep inherited data in step with the
-    // renderer, without a caller obtaining and mutating the root's source.
+    // A scale the host reports reaches the renderer and the inherited
+    // consumer alike, without a caller obtaining and mutating the root's
+    // source.
+    effects.size.set((200, 100));
+    effects.expects_present.set(None);
     owner
         .presentation_dispatcher(address)
         .expect("window authority")
-        .test_callback(
-            Box::new(move |runtime| {
-                assert!(runtime.set_device_pixel_ratio_for(address.presentation_id, 1.0));
-            }),
+        .observe(
+            WindowObservation::Metrics(crate::window_metrics(200.0, 100.0, 1.0)),
             &effects,
         )
-        .expect("direct scale update");
-    effects.size.set((200, 100));
-    effects.expects_present.set(None);
+        .expect("rescale");
     frames
         .deliver(crate::VSYNC, &effects)
-        .expect("direct scale frame");
+        .expect("rescaled frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(200.0, 100.0), 1.0)),
-        "the host scale entry updates the real inherited consumer",
+        "the host's scale updates the real inherited consumer",
     );
-    // Each bound of the range a screen can have is a ratio; set back to 1.0
-    // before any frame, so what follows sees the scale it had.
-    owner
-        .presentation_dispatcher(address)
-        .expect("window authority")
-        .test_callback(
-            Box::new(move |runtime| {
-                let id = address.presentation_id;
-                for bound in [DevicePixelRatio::MIN.get(), DevicePixelRatio::MAX.get()] {
-                    assert!(runtime.set_device_pixel_ratio_for(id, bound), "{bound}");
-                    assert_eq!(
-                        runtime.presentation_device_pixel_ratio_for_test(id),
-                        Some(bound)
-                    );
-                }
-                assert!(runtime.set_device_pixel_ratio_for(id, 1.0));
-            }),
-            &effects,
-        )
-        .expect("accept the bounds");
-    for invalid in [
-        0.0,
-        -1.0,
-        f64::NAN,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        64.0,
-        1.0 / 64.0,
-    ] {
-        owner
-            .presentation_dispatcher(address)
-            .expect("window authority")
-            .test_callback(
-                Box::new(move |runtime| {
-                    assert!(!runtime.set_device_pixel_ratio_for(address.presentation_id, invalid));
-                    assert_eq!(
-                        runtime.presentation_device_pixel_ratio_for_test(address.presentation_id),
-                        Some(1.0),
-                    );
-                }),
-                &effects,
-            )
-            .expect("reject invalid direct scale");
-        frames
-            .deliver(crate::VSYNC, &effects)
-            .expect("frame after rejection");
-        assert_eq!(
-            observed.borrow().last(),
-            Some(&(Size::new(200.0, 100.0), 1.0))
-        );
-    }
     assert!(
         owner.next_wake().is_ok(),
         "deadline snapshot resumes after the frame"

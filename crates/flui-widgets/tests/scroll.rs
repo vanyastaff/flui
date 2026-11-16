@@ -3698,7 +3698,10 @@ pub(crate) fn nested_fling_parent_boundary_policy_receives_presentation_pixel_ra
                 SizedBox::new(300.0, 4800.0).boxed(),
             ]));
         let mut host = HeadlessHost::new(HeadlessWindow::new(300, 300));
-        host.set_scale_factor(host.primary_window(), 2.0);
+        host.set_scale_factor(
+            host.primary_window(),
+            flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+        );
         host.attach(&parent)
             .expect("mount dense nested scroll owner");
         let _ = host.pump(Duration::ZERO);

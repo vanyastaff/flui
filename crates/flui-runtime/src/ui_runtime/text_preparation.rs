@@ -175,7 +175,7 @@ fn accepts(presentation: &PresentationState, saved: &SavedTextSegment) -> bool {
         && presentation.pipeline().with(|owner| {
             owner.accepts_layout_premise(&saved.layout)
                 && owner.text_sizing() == &saved.policy
-                && owner.device_pixel_ratio().to_bits() == saved.dpr.get().to_bits()
+                && owner.device_pixel_ratio().get().to_bits() == saved.dpr.get().to_bits()
         })
         && presentation
             .widgets()
@@ -300,11 +300,9 @@ pub(crate) fn admit(
             .expect("BUG: admitted segment has a sampled tick"),
         host_time: now,
         constraints,
-        dpr: presentation.pipeline().with(|owner| {
-            DevicePixelRatio::try_new(owner.device_pixel_ratio()).expect(
-                "BUG: the pipeline holds only a ratio its typed setter took, or its initial 1.0",
-            )
-        }),
+        dpr: presentation
+            .pipeline()
+            .with(PipelineOwner::device_pixel_ratio),
         policy,
         cohort,
         layout: presentation.pipeline().with(PipelineOwner::layout_premise),

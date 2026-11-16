@@ -157,8 +157,15 @@ pub enum UiRuntimeError {
     InteractionLane(#[from] flui_interaction::InteractionDispatchError),
     /// The device pixel ratio is outside the range a screen can have
     /// (`DevicePixelRatio::MIN..=MAX`).
-    #[error("the device pixel ratio is outside the range a screen can have")]
-    PixelRatio,
+    #[error(
+        "device pixel ratio {} is outside the range a screen can have",
+        f64::from_bits(*bits)
+    )]
+    PixelRatio {
+        /// The refused ratio, as [`f64::to_bits`] gives it, so the error stays
+        /// `Eq`.
+        bits: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -166,7 +166,10 @@ fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
 
     let (bytes, fired) = recorded(Privacy::Redact, |host| {
         press(host, 1, 3);
-        host.set_scale_factor(host.primary_window(), 1.5);
+        host.set_scale_factor(
+            host.primary_window(),
+            flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
+        );
         press(host, 2, 40);
     });
     assert_eq!(fired, ["tap", "long_press"]);
@@ -246,7 +249,10 @@ fn a_move_through_the_window_state_records_the_move() {
 fn a_replay_starts_at_the_recorded_scale() {
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut recorder = host(&log);
-    recorder.set_scale_factor(recorder.primary_window(), 2.0);
+    recorder.set_scale_factor(
+        recorder.primary_window(),
+        flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
+    );
     let _ = recorder.pump(Duration::from_millis(16));
     let writer = RecordingWriter::try_new(Vec::new(), &recorder.recording_header(Privacy::Redact))
         .expect("the header writes");
@@ -254,7 +260,7 @@ fn a_replay_starts_at_the_recorded_scale() {
     press(&mut recorder, 1, 3);
     let bytes = recording.finish().expect("a complete recording");
     let recording = replayable(&bytes).expect("a whole recording");
-    assert!((recording.header().windows[0].scale_factor - 2.0).abs() < f64::EPSILON);
+    assert!((recording.header().windows[0].scale_factor.get() - 2.0).abs() < f64::EPSILON);
 
     let mut fresh = host(&Rc::new(RefCell::new(Vec::new())));
     assert!((scale(fresh.window()) - 1.0).abs() < f64::EPSILON);
@@ -451,6 +457,35 @@ fn a_recording_naming_window_zero_is_refused_on_its_line() {
     );
 }
 
+/// A header whose window scale is no ratio a screen can have is refused with
+/// a typed error on its line, never replayed at whatever scale the host has.
+#[test]
+fn a_recording_whose_window_scale_no_screen_has_is_refused_on_its_line() {
+    let (bytes, _) = recorded(Privacy::Redact, |host| press(host, 1, 1));
+    let text = std::str::from_utf8(&bytes).expect("utf-8 recording");
+    let header = text.lines().next().expect("a header");
+    assert!(
+        header.contains(r#""scale_factor":1.0"#),
+        "the header names the window's scale: {header}"
+    );
+    for refused in ["64.0", "0.0", "-2.0", "0.015625"] {
+        let rescaled = with_line(
+            &bytes,
+            0,
+            &header.replacen(
+                r#""scale_factor":1.0"#,
+                &format!(r#""scale_factor":{refused}"#),
+                1,
+            ),
+        );
+        let read = RecordingReader::try_new(&rescaled[..]);
+        assert!(
+            matches!(&read, Err(RecordingError::Json { line: 1, source }) if source.to_string().contains("scale")),
+            "a window scale of {refused} is refused on the header's line: {read:?}"
+        );
+    }
+}
+
 #[test]
 fn replay_stops_at_a_gap_with_non_replayable() {
     let (bytes, _) = recorded(Privacy::Redact, |host| press(host, 1, 1));
@@ -535,8 +570,12 @@ fn written(privacy: Privacy) -> Vec<u8> {
 
     let mut header = RecordingHeader::new(RecordingClock::Virtual)
         .with_window(
-            RecordedWindow::new(WindowId::try_from_raw(1).expect("a nonzero window id"), 1.5)
-                .with_title("Private window"),
+            RecordedWindow::new(
+                WindowId::try_from_raw(1).expect("a nonzero window id"),
+                flui_foundation::geometry::DevicePixelRatio::try_new(1.5)
+                    .expect("a ratio in range"),
+            )
+            .with_title("Private window"),
         )
         .with_device(
             DeviceId::try_from(3_u64).expect("nonzero"),
@@ -699,7 +738,10 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
     let (done, handed_over) = std::sync::mpsc::channel();
     let log = Rc::new(RefCell::new(Vec::new()));
     let mut host = host(&log);
-    host.set_scale_factor(host.primary_window(), 1.5);
+    host.set_scale_factor(
+        host.primary_window(),
+        flui_foundation::geometry::DevicePixelRatio::try_new(1.5).expect("a ratio in range"),
+    );
     let headless = host.recording_header(Privacy::Redact);
     let factory = flui_testing::recording::tap_factory(move |header| {
         RecordingWriter::try_new(
@@ -726,7 +768,7 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
         (&headless.windows, &headless.preferences),
         "the runner's header is the headless host's"
     );
-    assert!((header.windows[0].scale_factor - 1.5).abs() < f64::EPSILON);
+    assert!((header.windows[0].scale_factor.get() - 1.5).abs() < f64::EPSILON);
     assert!(header.windows[0].gesture_profiles.is_some());
     assert_eq!(
         accepted(&recording.decisions()),
@@ -1335,7 +1377,8 @@ fn header_gesture_values_read_back_exactly() {
         let header = RecordingHeader::new(RecordingClock::Virtual).with_window(
             RecordedWindow::new(
                 WindowId::try_from_raw(3).expect("a nonzero window id"),
-                1.25,
+                flui_foundation::geometry::DevicePixelRatio::try_new(1.25)
+                    .expect("a ratio in range"),
             )
             .with_gesture_profiles(profiles.clone()),
         );

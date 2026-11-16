@@ -251,12 +251,14 @@ host.
   reads those values through a mounted `MediaQuery` consumer, then renders a
   subsequent successful resize.
 - **Inherited window data is runtime-owned.** Hosts do not obtain the mutable
-  `MediaQuerySource`. A direct `set_device_pixel_ratio_for` updates both render
-  scale and inherited data; the native resize batch uses an internal render-only
-  step before publishing the complete accepted size/DPI/appearance batch.
-  `resize_and_surface_restore_reach_the_product_frame` reads the new ratio from
-  a mounted consumer after either entry. The headless host uses that same direct
-  scale entry without separately repairing the inherited state.
+  `MediaQuerySource`. A scale reaches the runtime only in a window's metrics
+  observation: the resize batch updates render scale through an internal
+  render-only step (`set_pipeline_device_pixel_ratio_for`, which takes a
+  `DevicePixelRatio`) before publishing the complete accepted size/DPI/appearance
+  batch. `resize_and_surface_restore_reach_the_product_frame` reads the new ratio
+  from a mounted consumer. The headless host's `set_scale_factor` sends the same
+  observation. The pipeline holds its ratio as a `DevicePixelRatio`, so no reader
+  checks it again.
 - **Every entry composes every presentation.** `UiRuntime::enter` activates a
   `GlobalKey` registry composite over all the UI runtime's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own

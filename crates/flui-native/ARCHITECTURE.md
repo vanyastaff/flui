@@ -624,10 +624,16 @@ trait depends on `flui-platform` instead.
   A scale a window is told after it opens (Win32's `WM_DPICHANGED`, Wayland's
   `preferred_scale` and `preferred_buffer_scale`) goes through
   `ScaleStreak::check` instead: one that is no ratio is refused, reported once
-  per run, and the window keeps the scale it has
-  (`a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale`). A ratio an
-  application hands the runtime is refused typed (`UiRuntimeError::PixelRatio`,
-  `set_device_pixel_ratio_for` answering `false`).
+  per run as kept, and the window keeps the scale it has: the last one it took
+  (`a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale`; Wayland's
+  `ToldScale`, `a_buffer_is_drawn_at_the_scale_the_compositor_prefers`). The
+  refusal carries which of the two its caller did (`Refusal`), so its report
+  says it (`a_refusal_names_what_its_caller_did`). Where a source's other
+  facts follow from its ratio (a Wayland output's logical size),
+  `ScaleStreak::try_read` hands the refusal back and the caller derives them
+  from the base ratio, so a display's bounds and scale agree
+  (`a_scale_no_screen_has_reads_as_the_base_ratio`). A ratio an application
+  hands the runtime is refused typed (`UiRuntimeError::PixelRatio`).
   `display::source::mapping` reads one table of cadences through the
   Android sample, the Windows rule, the Wayland and RandR models, the
   display link and the estimator; the macOS source hands CoreGraphics' rate

@@ -649,8 +649,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &mut self.render_tree
     }
 
-    /// Device pixel ratio threaded into every paint pass.
-    pub fn device_pixel_ratio(&self) -> f64 {
+    /// Device pixel ratio threaded into every paint pass:
+    /// [`DevicePixelRatio::ONE`] until [`Self::set_device_pixel_ratio`] sets
+    /// another.
+    ///
+    /// [`DevicePixelRatio::ONE`]: flui_foundation::geometry::DevicePixelRatio::ONE
+    pub fn device_pixel_ratio(&self) -> flui_foundation::geometry::DevicePixelRatio {
         self.device_pixel_ratio
     }
 
@@ -1479,8 +1483,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// [`DevicePixelRatio`]: flui_foundation::geometry::DevicePixelRatio
     pub fn set_device_pixel_ratio(&mut self, ratio: flui_foundation::geometry::DevicePixelRatio) {
+        self.device_pixel_ratio = ratio;
         let dpr = ratio.get();
-        self.device_pixel_ratio = dpr;
         // Assistive technology reads bounds in physical pixels: the
         // semantics owner republishes its root under the new scale, and
         // the root is marked so a frame with nothing else dirty still
@@ -2022,7 +2026,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     .clone()
                     .unwrap_or_else(no_op_semantics_update_callback);
                 let mut owner = flui_semantics::SemanticsOwner::new(callback);
-                owner.set_device_pixel_ratio(self.device_pixel_ratio);
+                owner.set_device_pixel_ratio(self.device_pixel_ratio.get());
                 owner.set_route_change_sink(self.semantics_route_change_sink.clone());
                 if let Some(announcements) = self.semantics_regions.existing_announcements() {
                     owner.set_announcements(announcements.clone());
@@ -2209,7 +2213,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }) {
                 owner.clear();
             }
-            owner.set_device_pixel_ratio(self.device_pixel_ratio);
+            owner.set_device_pixel_ratio(self.device_pixel_ratio.get());
         }
         // A tree assembled elsewhere has no containment known here, so the
         // next pass assembles it whole.

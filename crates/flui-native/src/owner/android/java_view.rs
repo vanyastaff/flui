@@ -25,7 +25,7 @@
 //! ([`ViewEvent::RunOnWindow`]).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
@@ -299,8 +299,9 @@ pub(crate) struct JavaView {
     /// Whether the input method composes, as the view last reported.
     composing: AtomicBool,
     /// The window's scale factor, as the owner last read it, for the view's
-    /// pixel coordinates.
-    scale: AtomicU64,
+    /// pixel coordinates. A lock held only to copy the value: its type, not a
+    /// check at each read, keeps it a ratio.
+    scale: Mutex<DevicePixelRatio>,
 }
 
 impl std::fmt::Debug for JavaView {
@@ -330,7 +331,7 @@ impl JavaView {
                 handle: None,
             }),
             composing: AtomicBool::new(false),
-            scale: AtomicU64::new(DevicePixelRatio::ONE.get().to_bits()),
+            scale: Mutex::new(DevicePixelRatio::ONE),
         });
         let installing = Arc::clone(&view);
         view.app
@@ -359,12 +360,11 @@ impl JavaView {
     /// The window's scale, which the loop read by the hosts' one rule, for
     /// the Java threads' callbacks.
     pub(super) fn set_scale(&self, scale: DevicePixelRatio) {
-        self.scale.store(scale.get().to_bits(), Ordering::Relaxed);
+        *self.scale.lock() = scale;
     }
 
     pub(crate) fn scale(&self) -> DevicePixelRatio {
-        DevicePixelRatio::try_new(f64::from_bits(self.scale.load(Ordering::Relaxed)))
-            .expect("BUG: the view holds only a ratio the loop set, or its first one")
+        *self.scale.lock()
     }
 
     /// Everything the view reported since the last call, oldest first.

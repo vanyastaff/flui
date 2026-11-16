@@ -660,11 +660,36 @@ impl LaidOut {
 
     /// Move the window to a monitor of scale `scale_factor` and run a frame at it; see
     /// [`HeadlessHost::set_scale_factor`](crate::HeadlessHost::set_scale_factor).
-    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+    ///
+    /// # Panics
+    ///
+    /// If the window's logical size at `scale_factor` is no drawable area;
+    /// [`try_set_scale_factor`](Self::try_set_scale_factor) answers that
+    /// instead.
+    pub fn set_scale_factor(&mut self, scale_factor: flui_foundation::geometry::DevicePixelRatio) {
+        self.try_set_scale_factor(scale_factor.get()).expect(
+            "a scale the window's size has metrics at; try_set_scale_factor answers one it has not",
+        );
+    }
+
+    /// [`set_scale_factor`](Self::set_scale_factor) for a scale that may make
+    /// no metrics; see
+    /// [`HeadlessHost::try_set_scale_factor`](crate::HeadlessHost::try_set_scale_factor).
+    /// A frame runs only when the window changed.
+    ///
+    /// # Errors
+    ///
+    /// The [`InvalidMetrics`](flui_foundation::geometry::InvalidMetrics) the
+    /// window's size at `scale_factor` makes; nothing changes.
+    pub fn try_set_scale_factor(
+        &mut self,
+        scale_factor: f64,
+    ) -> Result<(), flui_foundation::geometry::InvalidMetrics> {
         let host = self.host.ui_runtime_mut();
         let window = host.primary_window();
-        host.set_scale_factor(window, scale_factor);
+        host.try_set_scale_factor(window, scale_factor)?;
         self.host.pump(Duration::ZERO);
+        Ok(())
     }
 
     /// Move the window to `display` at its current scale; see
