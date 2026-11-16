@@ -39,10 +39,22 @@ pub(crate) struct LayerDispatcher<'frame> {
     /// the open and records it in the same call, so a push cannot open a layer
     /// it did not record or record one it did not open.
     clip_frames: Vec<ClipFrame>,
+    /// How many times a command's transform was compared with the installed
+    /// one by value, which a test reads to see the address test answer first.
+    #[cfg(test)]
+    value_comparisons: std::cell::Cell<usize>,
 }
 
 struct CommandTransform {
     matrix: Matrix4,
+    /// The entry of the list the matrix was read from. Commands under one
+    /// entry yield the same reference (ADR-0306 §5), so a command whose
+    /// transform is this address skips the value comparison. The address is
+    /// only compared, never read, and only while its list is borrowed: a
+    /// list's dispatch opens and closes with `save_state` and
+    /// `restore_state`, which flush the installed transform, and so does the
+    /// scene walk at every node it enters and leaves.
+    source: *const Matrix4,
     parent: Matrix4,
 }
 
@@ -69,6 +81,8 @@ impl<'frame> LayerDispatcher<'frame> {
             painter,
             active_transform: None,
             clip_frames: Vec::new(),
+            #[cfg(test)]
+            value_comparisons: std::cell::Cell::new(0),
         }
     }
 
@@ -145,7 +159,10 @@ impl<'frame> LayerDispatcher<'frame> {
             return;
         }
 
-        if self.active_transform.as_ref().map(|active| &active.matrix) == Some(transform) {
+        if let Some(active) = &self.active_transform
+            && (std::ptr::eq(active.source, transform)
+                || self.same_value(&active.matrix, transform))
+        {
             draw_fn(self.painter);
             return;
         }
@@ -155,9 +172,32 @@ impl<'frame> LayerDispatcher<'frame> {
         self.painter.transform(transform);
         self.active_transform = Some(CommandTransform {
             matrix: *transform,
+            source: transform,
             parent,
         });
         draw_fn(self.painter);
+    }
+
+    /// How many times a command's transform was compared with the installed
+    /// one by value.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn value_comparisons(&self) -> usize {
+        self.value_comparisons.get()
+    }
+
+    /// Whether the installed matrix equals `transform` by value: the test for
+    /// a command under another entry that holds the same matrix.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "only a test build counts the comparisons on self"
+        )
+    )]
+    fn same_value(&self, installed: &Matrix4, transform: &Matrix4) -> bool {
+        #[cfg(test)]
+        self.value_comparisons.set(self.value_comparisons.get() + 1);
+        installed == transform
     }
 
     /// Return to the ambient layer CTM without restoring captured clips.
