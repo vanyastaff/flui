@@ -606,6 +606,57 @@ stays released and skips GPU work. Existing device recovery does not imply an
 automatic surface recreation retry; another availability request is currently
 required. Scene migration and background owner waking remain explicit follow-ups.
 
+### What the operating system opens has one destination, decided at the runner
+
+The rule is [ADR-0339](../../docs/adr/ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md);
+here is where the code keeps it.
+
+- `OpenRouting` (`runner/opened.rs`) is the one place that decides, for every host and the
+  headless one. A host reports what it opened (`AppHandler::opened`, or `take_launch_opened` in
+  `ready`) and does nothing else for it.
+- Admission is `OpenDeclarations::admit`, the rule `UiRuntime::open_url` applies again; the runner
+  applies it before it holds a URL or asks for a window.
+- `InstalledHost::open_target` names the destination (`OpenDestination`): the window registry's
+  answer, with a window that has no presentation told apart by whether its installation is pending
+  or initializing. The registry remembers the last `MAX_OPENED_ITEMS` closed windows.
+- `HeldUrls` states each target's rule in its shape: the application's newest URL alone, and per
+  window being installed at most `MAX_HELD_PER_WINDOW`. Its `Debug` prints counts, never a URL.
+- Every URL that enters a window before its installation commits is on loan: `OpenedLoan`, a guard
+  `build_lending_ui_runtime` returns and the runner hands to its `WindowInstall`
+  (`lend_opened`); `finish_install` adds the URLs it opens as the installation becomes ready
+  (`lend_to_installing`). `InstallationWindow::publish` commits it; any other end drops the
+  `InstallationWindow` (`OpenedLoan::window_closed` when the window was closed) or the guard,
+  before the installation is prepared. The drop only moves the URLs into `OpenRouting::returned`
+  and wakes the owner through the `PlatformProxy` `OpenRouting` keeps (`bind_owner`, set in
+  `ready`), on every runner, from any borrow of the loop's state (no window needed): no log line,
+  no route, no navigation, so it is safe in an unwinding destructor. A loan whose navigation
+  panicked (`OpenedLoan::open_each`) ends as that panic, and its URLs are refused for it. Nothing
+  infers a loan from the registry; `finish_install` lends only its own presentation's URLs and
+  navigates no other window.
+- `destination` is the one authority: the routing step, the loans (`open_held_in`,
+  `lend_to_installing`) and the reopen ask it. A URL for the application goes to the main window
+  alone (`host::main_window`: `Open`, `Opening`, `Closed` on every runner, `Busy` while the loop's
+  state is borrowed, when the URL is held and `deliver` asks for the owner turn that routes it
+  (`Wait::Busy`); the desktop reads its
+  `Ingress`, the other runners their one window), never a focused or first-opened other window;
+  a window being built takes it only as the main window being opened (`is_main_window`, which each runner states).
+- Each owner turn calls `host::route_owed_opened_urls` (desktop and web in the owner-turn hook,
+  iOS in `drive_owner`, Android in its wake) while anything waits. What a loan returned is routed
+  once; the URL held for the application is bound to the main window's opening (`HeldUrl::bound`,
+  by `host::main_window_failures`) and refused when that opening fails, before or after its
+  runtime was built. `Ingress::settle` and `fail_pending` ask for that turn through the ingress's
+  own proxy, from any thread. Never a second
+  opening for one URL.
+- `OpenRouting::route_held` is the one step for "a URL is in the hold": into an open presentation
+  (made visible by `reveal`: shown, restored, brought forward), kept, bound, refused, or the main
+  window reopened through `host::reopen_current_run`, whose `ReopenAnswer` says whether the
+  controller took it; a URL whose reopen was not taken is refused (`Refusal::ReopenNotTaken`).
+- `Ingress::request_native_show` keeps a reopen asked during a quit and shows it only if the quit
+  is abandoned.
+- Every refusal is one `tracing` warning with the count and `Refusal::reason`, never the URL.
+
+Pinned by `runner_open`'s rows and the failed-bootstrap rows of `app_handler_routes`.
+
 ### UIKit process and session ownership
 
 The owner-only background turn drains the addressed UI runtime's owner inbox,

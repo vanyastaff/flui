@@ -25606,7 +25606,7 @@ pub const fn flui::view::navigation::OpenDeclarations::declared_url_schemes(&sel
 pub const fn flui::view::navigation::OpenDeclarations::file_types(self, file_types: &'static [flui::view::navigation::FileTypeDeclaration]) -> Self
 pub const fn flui::view::navigation::OpenDeclarations::new() -> Self
 pub const fn flui::view::navigation::OpenDeclarations::url_schemes(self, url_schemes: &'static [&'static str]) -> Self
-pub fn flui::view::navigation::OpenDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl) -> Result<(), flui::view::navigation::OpenUrlRefused>
+pub fn flui::view::navigation::OpenDeclarations::admit(&self, url: &flui::view::navigation::OpenedUrl, page_origin: Option<&flui::view::navigation::OpenedUrl>) -> Result<(), flui::view::navigation::OpenUrlRefused>
 #[non_exhaustive] pub enum flui::view::navigation::OpenUrlRefused
 impl Clone for flui::view::navigation::OpenUrlRefused
 impl Eq for flui::view::navigation::OpenUrlRefused

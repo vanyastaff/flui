@@ -207,11 +207,25 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** Windows, Apple · **Who it hurts:** Apps installed from a package, apps opened from a universal link · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
 
-- Every host reports what the system opens the application with, and `flui-app` routes it to the window's Router and to `Application::on_open_files` (ADR-0330 §5). One instance keeps a later launch's links and files on Linux and Windows (ADR-0254 §4). What has run where, and the device runs still owed, are the rows of [App lifecycle](platform-parity.md#app-lifecycle).
+- Every host reports what the system opens the application with, and `flui-app` routes it to the window's Router and to `Application::on_open_files` ([ADR-0339](adr/ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)). One instance keeps a later launch's links and files on Linux and Windows (ADR-0254 §4). What has run where, and the device runs still owed, are the rows of [App lifecycle](platform-parity.md#app-lifecycle).
 - `flui build` makes no MSIX package, so a packaged Windows application declares no `uap:Protocol` or `uap:FileTypeAssociation`; an unpackaged run registers its schemes and file types itself ([ADR-0307 §4](#accepted-adr-sections-not-built-yet)).
 - The Apple packagers sign nothing, so the `associated-domains` of the manifest reach no `com.apple.developer.associated-domains` entitlement and a universal link does not open the application ([ADR-0307 §4](#accepted-adr-sections-not-built-yet)).
 - On X11 neither the first launch nor a forwarded one completes its startup notification, so a launcher that shows one waits for its own timeout.
 - Packaging (app identity) not audited.
+
+### A later launch is acknowledged before its link is routed
+
+> **Environments:** Linux, Windows · **Who it hurts:** A user who opens a link the running application refuses · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
+
+- A later launch of a single-instance application hands its links to the running instance, which answers it as taken once the application holds the launch, before the runner admits each link ([ADR-0339](adr/ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md) §6). A link the runner then refuses (one the application does not declare, one for a window that closed) is only logged: the later process has exited believing its link was opened, and the user sees nothing.
+- Telling it needs the hand-back to wait for the runner's answer and carry a refusal: a new answer in the Windows pipe frame and the Linux `org.freedesktop.Application` reply, and an `AppHandler::opened` that returns what became of each URL to the host. Until the hand-back carries it, a refusal reaches no host.
+
+### Some exits of a window's installation have no test
+
+> **Environments:** Headless · **Who it hurts:** Nobody at run time; a test of a window's installation exits · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle)
+
+- An opened URL that enters a window before its installation commits is on loan to it, and every end of the installation but its commit returns the URL ([ADR-0339](adr/ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md) §5). Tested: the GPU refusing the window's slot, through the headless kit (`a_link_whose_window_cannot_open_causes_one_attempt_and_is_refused`); a window closed after its installation was submitted during an owner turn and before it commits, in-crate on the runner's deferred publication (`a_link_into_a_window_closed_before_it_commits_is_refused`); a main window that fails before its UI runtime is built, so no loan exists, through the kit (`a_link_whose_window_fails_before_its_runtime_is_refused_after_one_attempt`); a link that arrives while the main window is opening for another reason (the application asked for it), bound to that opening and refused when it fails, through the kit (`a_link_that_finds_the_main_window_opening_is_refused_when_that_opening_fails`); the guard's commit, drop, drop while unwinding, drop under a borrow of the loop's state and a panic in its navigation, in its model.
+- Not tested: a panic that escapes the window's UI runtime while `finish_install` opens a lent URL into it (`navigation_panicked`): no application code reaches it, since the URL is queued as owner work, whose panics the runtime contains, and the Router resolves it in a post-frame callback the runtime contains (`a_panic_in_the_navigation_of_a_link_that_reopens_the_main_window_is_contained_by_its_runtime`); the loan's side of it is tested in its model. Also not tested: a root that fails to attach, a cancelled installation (its `Installation` dropped unanswered), a logical or native publication refused in `commit_install`, and an initialization that ends other than ready. The headless kit installs and commits a window within one owner turn, and these failures have no injection point; an installation that drops its window takes the same exit as the tested ones (`InstallationWindow`'s drop).
 
 ### System preferences missing or never run
 
