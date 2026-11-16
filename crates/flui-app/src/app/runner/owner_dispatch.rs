@@ -1327,6 +1327,17 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
             }
         }
     });
+    // The windows' last placements, handed to storage when they closed above,
+    // are waited for within the same part of the deadline, before the pools
+    // that write them close; one not stored by then is reported. Then the
+    // host's capabilities retire.
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+    {
+        first_panic.contain(|| super::placement::flush_all_by(exit.services()));
+        if let Some(retired) = first_panic.contain(super::placement::retire) {
+            first_panic.absorb(retired);
+        }
+    }
     log(TeardownStep::Flush);
 
     // Service-lifecycle shutdown BEFORE the pools close: the

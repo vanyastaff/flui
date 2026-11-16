@@ -1553,6 +1553,14 @@ pub struct WindowState {
     pub hovered: bool,
     /// Whether it is the active window of its desktop.
     pub active: bool,
+    /// Whether the user is placing it through the window system, where the
+    /// host can tell; absent where it cannot, and in recordings older than
+    /// the fact, which a reader takes as not the user.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub user_placing: Option<bool>,
     /// Which commands it honours.
     pub capabilities: Capabilities,
 }

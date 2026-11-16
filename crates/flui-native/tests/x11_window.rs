@@ -101,6 +101,10 @@ mod cases {
             a_wake_deadline_no_frame_serviced_is_delivered_once,
         ),
         (
+            "a_turn_deadline_gives_the_owner_a_turn_with_no_window",
+            a_turn_deadline_gives_the_owner_a_turn_with_no_window,
+        ),
+        (
             "a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one",
             a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one,
         ),
@@ -1295,6 +1299,52 @@ mod cases {
         let calls = log.calls();
         assert!(calls.contains(&AppCall::ExitPolicy), "{calls:?}");
         assert_eq!(calls.last(), Some(&AppCall::Quit), "{calls:?}");
+    }
+
+    /// A turn deadline asked with no window open gives the owner a turn at
+    /// its instant, within a second of it, and is asked a few times, not
+    /// polled.
+    fn a_turn_deadline_gives_the_owner_a_turn_with_no_window() {
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
+        let log = AppLog::new();
+        let due = Rc::new(std::cell::OnceCell::new());
+        let answer = Rc::clone(&due);
+        log.answer_turn_deadline_with(move || {
+            Some(*answer.get_or_init(|| web_time::Instant::now() + Duration::from_millis(80)))
+        });
+        let turns = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = Rc::clone(&turns);
+        let quit_at = Rc::clone(&due);
+        log.bootstrap(move |owner| {
+            // The run ends anyway after three seconds, so a loop that never
+            // gives the turn fails the assertion below instead of hanging.
+            quit_after(owner.proxy(), Duration::from_secs(3));
+            let quit = owner.proxy();
+            owner
+                .on_wake(Box::new(move || {
+                    let now = web_time::Instant::now();
+                    seen.borrow_mut().push(now);
+                    if quit_at.get().is_some_and(|due| now >= *due) {
+                        let _ = quit.request_quit();
+                    }
+                }))
+                .expect("the owner takes a wake callback");
+            Ok(())
+        });
+        platform
+            .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+            .expect("the loop runs");
+        let due = *due.get().expect("the deadline was asked");
+        assert!(
+            turns
+                .borrow()
+                .iter()
+                .any(|turn| *turn >= due && *turn < due + Duration::from_secs(1)),
+            "the deadline gave the owner its turn: {:?}",
+            turns.borrow()
+        );
+        let questions = log.count(AppCall::TurnDeadline);
+        assert!(questions < 20, "asked {questions} times: polled");
     }
 
     /// A wake deadline whose frame no handler ran is delivered once, not on

@@ -429,12 +429,6 @@ impl StorageSlot {
             )))
             .ok()
     }
-
-    /// The installed storage, if the run has one.
-    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    pub(crate) fn storage(&self) -> Option<Arc<dyn Storage>> {
-        self.storage.borrow().as_ref().ok().map(Arc::clone)
-    }
 }
 
 /// The built-in storage: the host's, under the run's data directory.

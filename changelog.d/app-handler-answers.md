@@ -11,11 +11,7 @@
   ahead of it.
 - A window that remembers its placement (`AppConfig::restore_placement`) reads
   the stored placement once, before it opens; the second, blocking read while
-  the window was being installed is gone. The placement is still kept in the
-  host's own store, whatever storage provider the application registers
-  (`docs/gaps.md`, "Window placement bypasses an application's storage
-  provider"). The warning for a run without storage names
-  `AppConfig::storage_dir`.
+  the window was being installed is gone.
 - Android and the Web: a window's surface target answers
   `HandleError::Unavailable` for its display handle wherever it does for its
   window handle (Android: off the looper thread, with no native window, after

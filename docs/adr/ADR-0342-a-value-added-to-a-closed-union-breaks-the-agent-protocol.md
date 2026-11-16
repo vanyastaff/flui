@@ -1,4 +1,4 @@
-# ADR-0342: A variant or value added to a closed union breaks the agent protocol, and 0.13 is such a break
+# ADR-0342: A variant or value added to a closed union breaks the agent protocol, and 0.14 is such a break
 
 - **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16
@@ -6,7 +6,7 @@
   is), [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §1 (the protocol version and its
   golden schemas), [ADR-0238](ADR-0238-flui-driver-protocol.md) §2 (events reach a connection by
   subscription, which does not open their union), [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §4 (the native
-  recording whose new rows make 0.13 a break)
+  recording whose new rows make 0.14 a break)
 
 ## Context and problem statement
 
@@ -20,7 +20,7 @@ value it does not know and fails the whole message: an older client that meets a
 a union it reads unasked cannot read that message at all. The native recording rows `store_focus`,
 `store_lock`, `close_request`, `closed` and `cut` reach a client that started a recording of the
 `native` layer inside `record_native` events, which no older client can read. Which growth of a
-union is additive, and what is 0.13?
+union is additive, and what is 0.14?
 
 ## Decision drivers
 
@@ -35,7 +35,7 @@ union is additive, and what is 0.13?
 ## Considered options
 
 1. A variant or value added to a union is a break, except in a union whose reader has a fallback;
-   0.13 is listed in `BREAKING`.
+   0.14 is listed in `BREAKING`.
 2. Every new variant or value is additive, because an older reader refuses it by name.
 3. Give every union a catch-all variant (`#[serde(other)]`) so that a new one always reads.
 
@@ -62,8 +62,8 @@ list in the test with what each added (0.7: the `announcement` event; 0.8:
 `InspectValue::NonFinite`; 0.9: `DeviceClass::Other`, `HandleKind::Recording`; 0.10:
 `RecordLayer::Native`). No later version is added to it.
 
-§4. Protocol 0.13 is a break: `BREAKING` lists it with this record. An app speaking 0.13 refuses
-a client of 0.12 or older.
+§4. Protocol 0.14 is a break: `BREAKING` lists it with this record. An app speaking 0.14 refuses
+a client of 0.13 or older.
 
 ### Consequences
 
@@ -72,7 +72,7 @@ a client of 0.12 or older.
   so in `BREAKING`, or the test fails.
 - Bad, because each such addition costs older clients their connection until they update; the
   driver and the CLI build from the same tree, so in practice they move together.
-- Neutral, because the published versions before 0.13 are not re-judged.
+- Neutral, because the published versions before 0.14 are not re-judged.
 
 ### Confirmation
 

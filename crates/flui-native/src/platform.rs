@@ -111,6 +111,24 @@ pub trait AppHandler: 'static {
     /// AppKit, X11, Wayland, Android, iOS); the headless and web hosts have no idle
     /// wait to bound.
     fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
+
+    /// The earliest wall-clock instant the owner must get a turn at, with or
+    /// without a window open, for work that is no frame (a bounded wait, a
+    /// held write), or `None` (ADR-0343 §1). At that instant the loop gives
+    /// the owner one turn, as [`PlatformProxy::wake`](crate::PlatformProxy::wake)
+    /// does, and asks no window for a frame. An instant delivered once is
+    /// delivered again only after an owner turn ran, so the obligation stays
+    /// until the handler moves it at its turn.
+    ///
+    /// Every host asks it after every owner turn: the Win32 loop and its modal
+    /// loops and the X11, Wayland and Android loops before each wait, which
+    /// follows every turn; AppKit, UIKit and the web after each turn and once
+    /// the handler bootstrapped, through a timer of the main queue or the
+    /// page; the headless host when a test drives
+    /// [`HeadlessOwnerTurns::drive_at`](crate::HeadlessOwnerTurns::drive_at).
+    /// A handler that moves its turn deadline outside an owner turn asks for
+    /// one ([`PlatformProxy::wake`](crate::PlatformProxy::wake)).
+    fn turn_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant>;
 }
 
 /// The application's answer to [`AppHandler::exit_policy`].

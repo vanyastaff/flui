@@ -121,6 +121,8 @@ mod failed_frame;
 mod frame_rate_demand;
 #[path = "contracts/frame_settlement.rs"]
 mod frame_settlement;
+#[path = "contracts/host_capabilities.rs"]
+mod host_capabilities;
 #[path = "contracts/input_tap.rs"]
 mod input_tap;
 #[path = "contracts/io_runtime.rs"]
