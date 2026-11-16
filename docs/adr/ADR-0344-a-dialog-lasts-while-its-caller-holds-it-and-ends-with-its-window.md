@@ -2,6 +2,10 @@
 
 - **Status:** Accepted (2026-11-16)
 - **Date:** 2026-11-16
+- **Supersedes:** [ADR-0152](ADR-0152-capability-seam-revised.md) §2 items 5 and 6 in part (a
+  request its caller can call off answers through a `Dialog<T>` wrapping its `Completion<T>`, not
+  the bare completion; `WindowRef` exposes the window's `WindowLifetime` beside its id, scale and
+  raw handles)
 - **Related:** [ADR-0152](ADR-0152-capability-seam-revised.md) §2 items 5 and 6 (the
   `Completion` and the `WindowRef` this extends), [ADR-0154](ADR-0154-capability-crates.md) §10
   and §11 (the scenario primitive and `flui-system`), ADR-0340 (an Android activity result

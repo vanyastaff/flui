@@ -107,9 +107,9 @@ fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Picks, DialogError> 
     let files = uris
         .iter()
         .map(|uri| {
-            request::file_path(uri)
-                .map(PickedFile::new)
-                .ok_or(DialogError::NotAFile)
+            let path = request::file_path(uri).ok_or(DialogError::NotAFile)?;
+            // A path with a NUL byte (`%00`) names no file: outside the contract.
+            PickedFile::try_new(path).ok_or(malformed)
         })
         .collect::<Result<Vec<PickedFile>, DialogError>>()?;
     Picks::try_new(files).ok_or(malformed)

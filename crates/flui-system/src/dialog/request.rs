@@ -278,15 +278,6 @@ pub struct Picks {
 }
 
 impl Picks {
-    /// The one pick `first`.
-    #[must_use]
-    pub fn one(first: PickedFile) -> Self {
-        Self {
-            first,
-            rest: Vec::new(),
-        }
-    }
-
     /// `picks`, in the order the user picked them; `None` when there are
     /// none.
     #[must_use]
@@ -322,23 +313,15 @@ impl Picks {
     pub fn iter(&self) -> impl Iterator<Item = &PickedFile> {
         std::iter::once(&self.first).chain(self.rest.iter())
     }
-
-    /// The picks as a list, in order; never empty.
-    #[must_use]
-    pub fn into_vec(self) -> Vec<PickedFile> {
-        let mut picks = Vec::with_capacity(self.len());
-        picks.push(self.first);
-        picks.extend(self.rest);
-        picks
-    }
 }
 
+/// The picks, in the order the user picked them.
 impl IntoIterator for Picks {
     type Item = PickedFile;
-    type IntoIter = std::vec::IntoIter<PickedFile>;
+    type IntoIter = std::iter::Chain<std::iter::Once<PickedFile>, std::vec::IntoIter<PickedFile>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.into_vec().into_iter()
+        std::iter::once(self.first).chain(self.rest)
     }
 }
 
@@ -364,10 +347,14 @@ pub struct PickedFile {
 }
 
 impl PickedFile {
-    /// The pick at `path`, as a backend reports it.
+    /// The pick at `path`, as a backend reports it; `None` when `path` is
+    /// relative or holds a NUL byte, which no file the system picked has
+    /// and no file API accepts.
     #[must_use]
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+    pub fn try_new(path: impl Into<PathBuf>) -> Option<Self> {
+        let path: PathBuf = path.into();
+        let nul = path.as_os_str().as_encoded_bytes().contains(&0);
+        (path.is_absolute() && !nul).then_some(Self { path })
     }
 
     /// Where it is.

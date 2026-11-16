@@ -599,8 +599,8 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     assert_eq!(
         settle(&mut host, dialogs.open(request)),
         Ok(Ok(Picks::try_new(vec![
-            PickedFile::new("/home/me/a b.png"),
-            PickedFile::new("/home/me/c.png"),
+            PickedFile::try_new("/home/me/a b.png").expect("an absolute path"),
+            PickedFile::try_new("/home/me/c.png").expect("an absolute path"),
         ])))
     );
 
@@ -644,6 +644,12 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     assert_eq!(
         settle(&mut host, dialogs.save(SaveRequest::new())),
         Ok(Err(malformed))
+    );
+    portal.answer(0, uris(&["file:///tmp/a%00b"]));
+    assert_eq!(
+        settle(&mut host, dialogs.save(SaveRequest::new())),
+        Ok(Err(malformed)),
+        "an escaped NUL names no file"
     );
 
     let calls = portal.calls();

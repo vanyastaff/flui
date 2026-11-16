@@ -501,7 +501,9 @@ where
     /// # Panics
     ///
     /// As [`receive`](Self::receive); the ticket is dropped on the way out,
-    /// so a request the panic left held is withdrawn.
+    /// so a request the panic left held is withdrawn. An observer that
+    /// panics during that withdrawal has its panic discarded: the first one
+    /// goes on.
     pub fn receive_with_ticket(&self, request: R, resolver: Resolver<A>) -> RequestTicket {
         let id = EntryId(self.cell.scenario.mint());
         let script: Rc<dyn Withdraw> = Rc::clone(&self.cell) as Rc<dyn Withdraw>;
@@ -741,8 +743,19 @@ impl<R: fmt::Debug + 'static, A: 'static> Withdraw for ScriptCell<R, A> {
                 first.contain(|| observe(&waiting.request, None));
             }
         }
-        drop(withdrawn);
-        first.resume();
+        // The request's and the resolver's drops run contained too, so an
+        // observer's earlier panic stays the first.
+        first.contain(|| drop(withdrawn));
+        // A ticket dropped while its thread unwinds (the panic of the code
+        // that received the request) must not raise a second panic from a
+        // destructor: that one is discarded, and the first goes on.
+        if std::thread::panicking() {
+            if let Some(payload) = first.into_payload() {
+                flui_foundation::panic::discard_payload(payload);
+            }
+        } else {
+            first.resume();
+        }
     }
 }
 

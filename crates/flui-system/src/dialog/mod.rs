@@ -279,9 +279,10 @@ impl FileDialogs {
     /// backend's answer reaches the caller through `check`.
     ///
     /// The window is marked busy until the dialog ends: the backend's answer
-    /// settles (a backend that panics or drops its resolver unanswered ends
-    /// it too, and the caller's completion ends as `ProviderDropped`), the
-    /// caller drops its [`Dialog`], or the window closes.
+    /// settles (a backend that drops its resolver unanswered ends it too,
+    /// and the caller's completion ends as `ProviderDropped`), the backend
+    /// panics while it shows the dialog, the caller drops its [`Dialog`], or
+    /// the window closes.
     fn show<T: 'static>(
         &self,
         valid: bool,
@@ -357,6 +358,13 @@ impl FileDialogs {
             // the caller's completion ends as the backend's did.
         });
 
+        // Built before the backend runs: a backend that panics while it shows
+        // the dialog leaves no handle, so the guard ends the dialog on the way
+        // out and the window is not left busy.
+        let guard = DialogGuard {
+            open: Rc::downgrade(&self.open),
+            shown: Rc::downgrade(&shown),
+        };
         let hold = ask(&*self.backend, &self.window, backend_answer);
         if self
             .open
@@ -370,13 +378,7 @@ impl FileDialogs {
             // The dialog ended while the backend showed it.
             drop(hold);
         }
-        Dialog {
-            completion,
-            guard: DialogGuard {
-                open: Rc::downgrade(&self.open),
-                shown: Rc::downgrade(&shown),
-            },
-        }
+        Dialog { completion, guard }
     }
 }
 

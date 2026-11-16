@@ -35,9 +35,13 @@ fn scripted() -> (ScriptedFileDialogs, ScriptedSystem) {
     (dialogs, plugin)
 }
 
-fn picks(paths: &[&str]) -> Picks {
-    Picks::try_new(paths.iter().copied().map(PickedFile::new).collect())
-        .expect("the test names a pick")
+/// The file `name` in the temporary folder: an absolute path on every host.
+fn file(name: &str) -> PickedFile {
+    PickedFile::try_new(std::env::temp_dir().join(name)).expect("an absolute path is a pick")
+}
+
+fn picks(names: &[&str]) -> Picks {
+    Picks::try_new(names.iter().copied().map(file).collect()).expect("the test names a pick")
 }
 
 #[test]
@@ -45,7 +49,7 @@ fn an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks() {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
-    let picked = picks(&["/home/a.png", "/home/b.png"]);
+    let picked = picks(&["a.png", "b.png"]);
     dialogs.answer_next_open(Ok(Some(picked.clone())));
 
     let request = OpenRequest::files()
@@ -101,16 +105,23 @@ fn picks_are_never_empty_and_keep_their_order() {
         None,
         "nothing picked is no pick"
     );
-    let picked = picks(&["/a", "/b", "/c"]);
+    let picked = picks(&["a", "b", "c"]);
     assert_eq!(picked.len(), 3);
-    assert_eq!(picked.first().path(), std::path::Path::new("/a"));
+    assert_eq!(*picked.first(), file("a"));
     assert_eq!(
-        picked.iter().map(PickedFile::path).collect::<Vec<_>>(),
-        ["/a", "/b", "/c"].map(std::path::Path::new)
+        picked.into_iter().collect::<Vec<PickedFile>>(),
+        [file("a"), file("b"), file("c")]
+    );
+
+    assert_eq!(
+        PickedFile::try_new("relative/name.txt"),
+        None,
+        "a pick is absolute"
     );
     assert_eq!(
-        Picks::one(PickedFile::new("/only")).into_vec(),
-        [PickedFile::new("/only")]
+        PickedFile::try_new(std::env::temp_dir().join("a\0b")),
+        None,
+        "no file has a NUL byte in its path"
     );
 }
 
@@ -120,7 +131,7 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
 
-    dialogs.answer_next_open(Ok(Some(picks(&["/a", "/b"]))));
+    dialogs.answer_next_open(Ok(Some(picks(&["a", "b"]))));
     let single = land(handle.open(OpenRequest::files()));
     turn(&mut host);
     turn(&mut host);
@@ -129,11 +140,11 @@ fn several_picks_for_a_single_pick_request_are_a_malformed_answer() {
         Some(Ok(Err(DialogError::Failed(SystemFailure::MalformedAnswer))))
     );
 
-    dialogs.answer_next_open(Ok(Some(picks(&["/a"]))));
+    dialogs.answer_next_open(Ok(Some(picks(&["a"]))));
     let one = land(handle.open(OpenRequest::files()));
     turn(&mut host);
     turn(&mut host);
-    assert_eq!(*one.borrow(), Some(Ok(Ok(Some(picks(&["/a"]))))));
+    assert_eq!(*one.borrow(), Some(Ok(Ok(Some(picks(&["a"]))))));
 }
 
 #[test]
@@ -178,18 +189,12 @@ fn a_window_shows_one_dialog_at_a_time() {
     assert_eq!(
         dialogs
             .save_script()
-            .release_held(|_| Ok(Some(PickedFile::new("/tmp/out.txt")))),
+            .release_held(|_| Ok(Some(file("out.txt")))),
         2
     );
     turn(&mut host);
-    assert_eq!(
-        *third.borrow(),
-        Some(Ok(Ok(Some(PickedFile::new("/tmp/out.txt")))))
-    );
-    assert_eq!(
-        *other.borrow(),
-        Some(Ok(Ok(Some(PickedFile::new("/tmp/out.txt")))))
-    );
+    assert_eq!(*third.borrow(), Some(Ok(Ok(Some(file("out.txt"))))));
+    assert_eq!(*other.borrow(), Some(Ok(Ok(Some(file("out.txt"))))));
 }
 
 #[test]
@@ -370,6 +375,77 @@ fn a_backend_that_drops_its_answer_ends_the_dialog_and_frees_the_window() {
         *second.borrow(),
         Some(Err(Abandoned::ProviderDropped)),
         "not Busy: the dropped answer freed the window"
+    );
+}
+
+/// A backend that keeps the resolver it was handed, then panics before it
+/// returns its hold, as one whose OS call unwinds after it registered the
+/// request does.
+#[derive(Clone, Default)]
+struct PanickingBackend {
+    kept: Rc<RefCell<Vec<Resolver<OpenResult>>>>,
+}
+
+impl FileDialogBackend for PanickingBackend {
+    fn open(
+        &self,
+        _window: &WindowRef,
+        _request: OpenRequest,
+        answer: Resolver<OpenResult>,
+    ) -> DialogHold {
+        self.kept.borrow_mut().push(answer);
+        panic!("the backend failed while showing the dialog");
+    }
+
+    fn save(
+        &self,
+        _window: &WindowRef,
+        _request: SaveRequest,
+        answer: Resolver<SaveResult>,
+    ) -> DialogHold {
+        drop(answer);
+        DialogHold::new(())
+    }
+}
+
+struct PanickingPlugin(PanickingBackend);
+
+impl Plugin for PanickingPlugin {
+    fn register(&self, registrar: &mut CapabilityRegistrar) {
+        let backend = self.0.clone();
+        registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(backend.clone(), ctx)
+        });
+    }
+}
+
+#[test]
+fn a_backend_that_panics_while_showing_leaves_the_window_free() {
+    let backend = PanickingBackend::default();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&PanickingPlugin(backend.clone()));
+    let handle = handle.expect("the plugin provides dialogs");
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test catches the backend's panic to show what the handle left behind"
+    )]
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(handle.open(OpenRequest::files()));
+    }));
+    assert!(unwound.is_err(), "the backend's panic reaches the caller");
+    assert_eq!(
+        backend.kept.borrow().len(),
+        1,
+        "the backend kept its resolver"
+    );
+
+    let next = land(handle.save(SaveRequest::new()));
+    turn(&mut host);
+    turn(&mut host);
+    assert_eq!(
+        *next.borrow(),
+        Some(Err(Abandoned::ProviderDropped)),
+        "not Busy: the unwound dialog freed the window"
     );
 }
 
