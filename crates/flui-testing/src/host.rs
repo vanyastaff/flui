@@ -817,7 +817,7 @@ impl HostClock {
 }
 
 impl flui_foundation::MonotonicClock for HostClock {
-    fn now(&self) -> std::time::Instant {
+    fn now(&self) -> flui_scheduler::Instant {
         flui_foundation::MonotonicClock::now(self.driver.clock())
     }
 }
