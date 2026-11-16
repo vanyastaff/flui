@@ -71,6 +71,12 @@ impl<C: Capability> ViewState<Acquire<C>> for AcquireState<C> {
 /// a widget in its window acquired of `C`.
 fn acquire<C: Capability>(plugin: &dyn Plugin) -> (HeadlessHost, Result<C::Handle, Unsupported>) {
     let mut host = HeadlessHost::with_plugin(HeadlessWindow::new(10, 10), plugin);
+    let acquired = acquire_on::<C>(&mut host);
+    (host, acquired)
+}
+
+/// What a widget mounted on `host` acquired of `C`.
+fn acquire_on<C: Capability>(host: &mut HeadlessHost) -> Result<C::Handle, Unsupported> {
     let slot: Acquired<C> = Rc::new(RefCell::new(None));
     host.attach(&Acquire::<C> {
         slot: Rc::clone(&slot),
@@ -78,11 +84,9 @@ fn acquire<C: Capability>(plugin: &dyn Plugin) -> (HeadlessHost, Result<C::Handl
     })
     .expect("root attaches");
     let _ = host.pump(Duration::ZERO);
-    let acquired = slot
-        .borrow_mut()
+    slot.borrow_mut()
         .take()
-        .expect("the widget acquired in init_state");
-    (host, acquired)
+        .expect("the widget acquired in init_state")
 }
 
 /// Run the owner's next turn, where completions settle.

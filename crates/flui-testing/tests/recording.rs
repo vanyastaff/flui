@@ -287,7 +287,7 @@ fn a_decision_row_carries_its_commit_time() {
         .expect("the header writes");
     let recording = record(host.input_taps(), writer).expect("first tap registration");
     touch(&host, 1, true);
-    host.clock().advance(Duration::from_millis(30));
+    host.advance(Duration::from_millis(30));
     let committed = flui_platform::EventTime::from_nanos(
         u64::try_from(host.clock().elapsed().as_nanos()).expect("small"),
     );
