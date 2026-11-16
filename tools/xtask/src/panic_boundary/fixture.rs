@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 35] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 41] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -42,6 +42,32 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 35] = [
     (APPLE, "Lookalike::dealloc", Unguarded),
     (APPLE, "Finalized::drop", Unguarded),
     (ANDROID, "Java_dev_flui_Planted_run", Unguarded),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_bare",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_by_path",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_by_value",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in fn post_in_a_macro",
+        Unguarded,
+    ),
+    (
+        ANDROID,
+        "run_on_java_main_thread in macro_rules! post_later",
+        Unguarded,
+    ),
+    (POSTER, "run_on_java_main_thread in fn run", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
     (IDENTITY_FILE, "struct ContainedIvars", Identity),
@@ -54,6 +80,7 @@ const WINDOWS: &str = "fixture/src/feature/windows.rs";
 const APPLE: &str = "fixture/src/feature/apple.rs";
 const ANDROID: &str = "fixture/src/feature/android.rs";
 const IDENTITY_FILE: &str = "fixture/src/feature/identity.rs";
+const POSTER: &str = "fixture/src/owner/android/main_thread.rs";
 const SECOND_MODULE: &str = "fixture/src/feature/panic_boundary.rs";
 
 /// The crate.
@@ -66,9 +93,17 @@ pub(super) fn source() -> Memory {
     )
 }
 
-const FILES: [(&str, &str); 10] = [
+const FILES: [(&str, &str); 12] = [
     (ROOT, LIB),
-    ("fixture/src/owner.rs", "pub(crate) mod panic_boundary;\n"),
+    (
+        "fixture/src/owner.rs",
+        "pub(crate) mod android;\npub(crate) mod panic_boundary;\n",
+    ),
+    (
+        "fixture/src/owner/android.rs",
+        "pub(crate) mod main_thread;\n",
+    ),
+    (POSTER, POSTER_FILE),
     ("fixture/src/owner/panic_boundary.rs", BOUNDARY),
     ("fixture/src/feature.rs", FEATURE),
     (WINDOWS, WINDOWS_FILE),
@@ -455,6 +490,52 @@ extern "system" fn Java_dev_flui_Guarded_run(_env: JNIEnv, _class: JClass, handl
 #[unsafe(no_mangle)]
 extern "system" fn Java_dev_flui_Planted_run(_env: JNIEnv, _class: JClass, handle: i64) -> i64 {
     handle + 1
+}
+
+// planted: a closure posted to the Java main thread outside the posting module
+fn post_bare(app: &AndroidApp) {
+    app.run_on_java_main_thread(Box::new(|| {}));
+}
+
+// planted: the same post in the path form
+fn post_by_path(app: &AndroidApp) {
+    AndroidApp::run_on_java_main_thread(app, Box::new(|| {}));
+}
+
+// planted: the post taken as a function value
+fn post_by_value(app: &AndroidApp) {
+    let post = android_activity::AndroidApp::run_on_java_main_thread;
+    post(app, Box::new(|| {}));
+}
+
+// planted: the post inside a macro call, whose tokens syn leaves unparsed
+fn post_in_a_macro(app: &AndroidApp) {
+    let _ = format!("{:?}", app.run_on_java_main_thread(Box::new(|| {})));
+}
+
+// planted: the post in a `macro_rules!` body
+macro_rules! post_later {
+    ($app:expr) => {
+        $app.run_on_java_main_thread(Box::new(|| {}))
+    };
+}
+"#;
+
+const POSTER_FILE: &str = r#"
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+
+// silent: the posting module posts, its closure inside the boundary
+pub(crate) fn post(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
+    app.run_on_java_main_thread(Box::new(move || {
+        os_entry("posted", (), AfterPanic::Answer(|()| ()), body)
+    }));
+}
+
+// planted: the posting module itself, outside its one posting function
+pub(crate) fn run(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
+    AndroidApp::run_on_java_main_thread(app, Box::new(move || {
+        os_entry("run", (), AfterPanic::Answer(|()| ()), body)
+    }));
 }
 "#;
 

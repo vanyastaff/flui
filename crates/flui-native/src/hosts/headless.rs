@@ -15,7 +15,7 @@ use crate::lifecycle::headless::HeadlessHostEvents;
 use crate::lifecycle::notice::SystemNotices;
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::headless::{
-    HeadlessHost, HeadlessLoop, HeadlessState, SimulatedDevices, SimulatedOffers,
+    HeadlessHost, HeadlessLoop, HeadlessState, HeldPresses, SimulatedDevices, SimulatedOffers,
 };
 use crate::owner::notices::NoticeChannel;
 use crate::platform::HostPlatform;
@@ -66,8 +66,9 @@ impl HeadlessHost for Headless {
 
     fn drag_source(
         state: &HeadlessState,
+        held: Arc<HeldPresses>,
     ) -> Option<Arc<dyn flui_platform::drag::PlatformDragSource>> {
-        HeadlessDragSource::of(state)
+        HeadlessDragSource::of(state, held)
     }
 }
 

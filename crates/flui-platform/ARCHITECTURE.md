@@ -139,7 +139,7 @@ this one path (ADR-0151 §9).
   minimized window, so the three never overlap, and `WindowState::is_seen`
   (shown, not minimized, not occluded) is the one reading of "the surface is
   seen" that frame scheduling, haptics and the lifecycle aggregate
-  (ADR-0035 §4) take. Folding occlusion into `visible` made the hosts
+  (ADR-0345 §1) take. Folding occlusion into `visible` made the hosts
   disagree (X11 read a minimized window hidden, Win32 shown); a separate fact
   is what winit (`Occluded`), AppKit (`occlusionState` beside `isVisible`)
   and Chromium (`OcclusionState` visible/occluded/hidden) keep too.
@@ -339,6 +339,44 @@ live apart from their implementations, so a crate that names a capability links 
 plugin can implement one without the backends. The contract of each
 capability is that of its own ADR.
 
+What only the host owns reaches a provider through its `ProviderContext`
+(ADR-0152 §2, item 6; ADR-0154 §9), which grows by methods: `owner()`,
+`window()`, and `activity()`, the running Android Activity, read from the
+`HostBridge` the composition root fills for each run's host and `None`
+elsewhere. The Activity is scoped by the `CapabilityId` the registrar minted
+for the provider's registration, which only its `RegisteredProvider` puts in
+the context, so no caller names another capability by its string; the
+values the host hands providers (`ResultTicket`, `ResultData`,
+`ActivityResult`, `ResultRequest`) are made only with the `ResultMint`
+`HostBridge::install_activity` hands the bridge. `capability::activity_result` holds that vocabulary and no JNI
+type: a request is identified by a `ResultToken` the host mints per call and
+named by a `RequestKey`, the acquiring capability's `NAME` and the
+provider's `ResultKey` kept apart, which outlives an Activity Android
+replaces; it ends exactly once, with an `ActivityResult` or a typed
+`ResultRefused`, and lasts while the provider holds its `ResultTicket`, whose
+`Drop` the host reads as a cancel (the `Resolver` answers no liveness query);
+an answer's `Intent` stays with the host until the provider
+hands its `ResultData` back, and a `ResultData` dropped unread releases it;
+and the provider's own `jni` crate works on raw pointers the
+host lends for one call (`JniFrame`, `IntentFrame`), filling objects the host
+made instead of handing the host a reference it would have to trust.
+
+### A provider learns that its window closed, and a system failure names its source
+
+A UI runtime outlives each of its windows but one, so a provider that answers a window later
+cannot take "the runtime retired" as the end of the window. `WindowRef::lifetime` is the
+window's `WindowLifetime`: `is_closed`, and `on_close`, whose `WindowCloseWatch` runs a
+listener once when the window closes. The runtime keeps the window's `WindowCloser` in the
+presentation and closes it when the presentation's close begins, before its state drops, from
+the one function every close path calls (`begin_close`: a window closed alone, the last window
+of a runtime, the headless host's close); a closer dropped unclosed closes too. A listener that
+panics does not keep the window open. The file dialogs end their dialog there (ADR-0344).
+
+What a service's own error does not name is `SystemFailure`: an OS error code, a portal's
+response code, a bus failure, or an answer outside the system's contract. `LaunchError::Failed`
+and `flui-system`'s `DialogError::Failed` carry it, so no backend invents a number or guesses a
+named variant for a code it cannot read.
+
 ### A capability's double is built from one scenario primitive
 
 `capability::scripted`, under the `scripted` feature (which `testing` turns on), is what every
@@ -390,6 +428,13 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   script idle. When that code panics, the request it served stays held, every other request
   is still answered and the first panic is resumed (`FirstPanic`). A stream ends once, with a
   `StreamEnd`, and an ended stream answers its end to every later `next`.
+- **A request its caller calls off is withdrawn, not owed.** `Script::receive_with_ticket`
+  hands back a `RequestTicket`, the scenario's form of a system request that lives while its
+  requester holds it (a portal's `Request` object, an activity result's `ResultTicket`).
+  Dropping it while the request is held or scheduled removes the request, drops its resolver,
+  takes a scheduled answer off the timeline, tells the observers it ended unanswered and counts
+  it in `Script::withdrawn`; a withdrawn
+  request is neither `Unanswered` nor `NotReached`, and an answered one is untouched.
 
 The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
 doubles are not, each for its contract's sake. `testing::FakeHaptics` answers synchronously

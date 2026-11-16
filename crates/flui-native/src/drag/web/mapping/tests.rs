@@ -18,7 +18,7 @@ use flui_platform::data_transfer::{
     DataTransferOffer, DropFeedback, Mime, RepresentationDescriptor, RepresentationIndex,
     TransferActions, TransferError, TransferFormat, TransferPayload,
 };
-use flui_platform::drag::{DragSessionKey, OsDragProvider, ProcessNonce};
+use flui_platform::drag::{DragSessionKey, OsDragProvider, OsDragTerms, ProcessNonce};
 
 fn effect_names_round_trip_the_actions() {
     for actions in [
@@ -202,7 +202,21 @@ fn a_provider_panic_at_dragstart_is_contained_and_reported() {
         format: TransferFormat::Html,
         declared_len: None,
     };
-    let representations = [text.clone(), html, text];
+    let uris = RepresentationDescriptor {
+        format: TransferFormat::UriList,
+        declared_len: None,
+    };
+    let key = DragSessionKey::new(
+        ProcessNonce::from_raw(NonZeroU64::MIN),
+        UiRuntimeId::new(1),
+        DragSessionId::from_wire(NonZeroU64::MIN),
+    );
+    let terms = OsDragTerms::try_new(key, vec![text, html, uris], TransferActions::COPY)
+        .expect("three media types under COPY");
+    let identity = key.representation().format;
+    let TransferFormat::Custom { mime: identity } = identity else {
+        panic!("the identity is a custom media type")
+    };
     let asked = Rc::new(RefCell::new(Vec::new()));
     let serving = |panics: bool| -> OsDragProvider {
         let asked = Rc::clone(&asked);
@@ -212,21 +226,26 @@ fn a_provider_panic_at_dragstart_is_contained_and_reported() {
                 0 => Ok(TransferPayload::Text("dragged".to_owned())),
                 1 if panics => panic!("a lazy payload panicked"),
                 1 => Err(TransferError::SourceGone),
-                _ => Ok(TransferPayload::Text("again".to_owned())),
+                2 => Ok(TransferPayload::Text("https://example.com".to_owned())),
+                _ => Ok(TransferPayload::Custom {
+                    mime: Mime::new(flui_platform::drag::IDENTITY_ESSENCE),
+                    bytes: Arc::from(Vec::new()),
+                }),
             }
         })
     };
     assert_eq!(
-        serve_stored(&representations, &mut serving(false)),
+        serve_stored(&terms, &mut serving(false)),
         Ok(vec![
             ("text/plain".to_owned(), "dragged".to_owned()),
-            ("text/plain".to_owned(), "again".to_owned()),
+            ("text/uri-list".to_owned(), "https://example.com".to_owned()),
+            (identity.as_str().to_owned(), String::new()),
         ]),
-        "a refused representation is left out"
+        "a refused representation is left out; the identity is stored last"
     );
     asked.borrow_mut().clear();
     assert_eq!(
-        serve_stored(&representations, &mut serving(true)),
+        serve_stored(&terms, &mut serving(true)),
         Err(ProviderPanicked)
     );
     assert_eq!(*asked.borrow(), [0, 1], "nothing is asked after the panic");

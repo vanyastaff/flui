@@ -386,7 +386,7 @@ fn mount_root_here() -> UiRuntime {
 
 /// END-STATE INVARIANT: at N=1 -- a clock that is
 /// never hidden and never backpressured -- the segment gate's
-/// decision (`clock.poll().should_run_segment()`, fed `Dirty`
+/// decision (`clock.poll(, flui_scheduler::FramesInFlight::NONE).should_run_segment()`, fed `Dirty`
 /// demand from `take_redraw_pending() || has_pending_work()`) is
 /// equivalent to that same union read directly, the predicate it
 /// replaces, over every reachable combination of the two inputs.
@@ -476,7 +476,11 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
     let clock = ui_runtime.presentations.primary().clock();
     // One produce opens a throttle window that outlasts the whole loop below.
     clock.mark_demand(flui_scheduler::DemandKind::Host);
-    assert!(clock.poll(clock.now()).should_run_segment());
+    assert!(
+        clock
+            .poll(clock.now(), flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     clock.set_min_produce_interval(Some(Duration::from_secs(3600)));
     wake_count.store(0, Ordering::Relaxed);
 
@@ -703,4 +707,54 @@ pub(crate) fn surface_lost_retry_preserves_the_original_input_epoch_for_the_pres
              it across the failed attempt must not have lost it"
         );
     }
+}
+
+/// A running animation does not keep a presentation at its in-flight limit pumping: the gated
+/// pump leaves no redraw owed, and the settlement that frees a place asks for the next frame
+/// (ADR-0305 §5).
+pub(crate) fn an_animation_at_the_in_flight_limit_waits_for_the_settlement() {
+    use crate::pump::SampledClock;
+    use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
+    use flui_animation::AnimationController;
+    use flui_foundation::PresentationAddress;
+    use std::time::Duration;
+
+    let mut runtime = mount_root_here();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued)
+        .holding(std::num::NonZeroUsize::new(2).expect("BUG: two is not zero"));
+    let origin = web_time::Instant::now();
+    runtime.set_now_secs_for_test(0.0);
+    let owner =
+        AnimationController::builder(Duration::from_secs(10)).build_on(Some(&runtime.vsync()));
+    owner.controller().forward().expect("fresh run");
+    for step in 1..=3_u64 {
+        // Each frame of the animation has something to paint.
+        runtime.mark_primary_needs_full_repaint();
+        runtime.set_now_secs_for_test(0.016 * step as f64);
+        let _ = runtime.pump(
+            &mut SampledClock(origin + Duration::from_millis(16 * step)),
+            &mut sink,
+        );
+    }
+    assert_eq!(sink.epochs.len(), 2, "two frames fill the sink's depth");
+    assert!(
+        !runtime.needs_redraw() && !runtime.has_pending_work(),
+        "the gated presentation asks for no frame while the animation runs"
+    );
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: runtime.presentation_id(),
+    };
+    assert_eq!(
+        runtime.settle_frame(FrameSettlement::new(
+            address,
+            sink.epochs[0],
+            SubmitVerdict::Presented
+        )),
+        Settled::Applied
+    );
+    assert!(
+        runtime.needs_redraw(),
+        "the freed place asks for the animation's next frame"
+    );
 }

@@ -1695,19 +1695,23 @@ pub(crate) mod sizing {
             // Dropping an unposted callback settles its owned receipt. If posting
             // succeeded before a panic, its queued callback still owns the ticket.
             contain_os_entry("android text sizing post", || {
-                app.run_on_java_main_thread(Box::new(move || {
-                    let result =
-                        contain_os_entry("android text sizing capture", || capture(&activity))
-                            .unwrap_or_else(|| {
-                                Err(Error::Native {
-                                    message: "Android text sizing capture panicked".into(),
+                crate::owner::android::main_thread::run(
+                    app,
+                    "android text sizing capture",
+                    move || {
+                        let result =
+                            contain_os_entry("android text sizing capture", || capture(&activity))
+                                .unwrap_or_else(|| {
+                                    Err(Error::Native {
+                                        message: "Android text sizing capture panicked".into(),
+                                    })
                                 })
-                            })
-                            .map(|snapshot| Arc::new(snapshot) as Native);
-                    contain_owner_callback(|| {
-                        receipt.complete(result);
-                    });
-                }));
+                                .map(|snapshot| Arc::new(snapshot) as Native);
+                        contain_owner_callback(|| {
+                            receipt.complete(result);
+                        });
+                    },
+                );
             });
             // This is the remaining original flight deadline, not a reset from
             // posting completion. The owner will consume any immediate receipt

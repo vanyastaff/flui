@@ -1,9 +1,11 @@
 # ADR-0248: Leaving `Detached` enters the lifecycle from the `Paused` side
 
-- **Status:** Accepted (2026-10-19)
+- **Status:** Superseded (2026-11-16)
 - **Date:** 2026-10-19
 - **Amends:** [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) §4 (the ladder
   out of `Detached`)
+- **Superseded-by:** [ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md),
+  which states the ladder out of `Detached` with the rest of the lifecycle rule
 
 ## Context
 

@@ -957,6 +957,7 @@ impl UiRuntime {
         }
 
         let (width, height) = sink.surface_size();
+        let in_flight_limit = sink.in_flight_limit();
         let dpr = self
             .presentations
             .primary()
@@ -1035,6 +1036,8 @@ impl UiRuntime {
             // the layer reads parked for this scene read it now, and are answered once a verdict
             // says the scene was shown.
             let pending = Self::capture_pending_frame(producer, frame_time, &publication.scene);
+            // The sink this frame reaches paces the presentation's next frames (ADR-0305 §5).
+            producer.set_in_flight_limit(in_flight_limit);
             // The verdict is kept apart from the span's teardown: a subscriber that panics when
             // the `submit` span exits must not lose a verdict the sink already returned.
             let mut submitted = None;
@@ -1355,6 +1358,9 @@ impl UiRuntime {
         }
         let late = self.presentations.iter().any(|presentation| {
             presentation.failure_retry_at().is_none()
+                // A presentation at its in-flight limit is woken by the settlement that frees a
+                // place (ADR-0305 §5).
+                && !presentation.frames_in_flight().is_saturated()
                 && !presentation.device_abandoned()
                 && (presentation.redraw_requested_since_watch()
                     || (late_visual_update && presentation.has_pending_work_snapshot()))

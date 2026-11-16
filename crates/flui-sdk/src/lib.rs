@@ -105,16 +105,30 @@ pub mod platform {
     /// capability with `view::LifecycleContextExt::capability`.
     pub mod capability {
         pub use flui_platform::capability::Abandoned;
+        pub use flui_platform::capability::Activity;
+        pub use flui_platform::capability::ActivityResult;
         pub use flui_platform::capability::Capability;
         pub use flui_platform::capability::CapabilityProvider;
         pub use flui_platform::capability::CapabilityRegistrar;
         pub use flui_platform::capability::Completion;
         pub use flui_platform::capability::CompletionSource;
+        pub use flui_platform::capability::DataRefused;
+        pub use flui_platform::capability::IntentFrame;
+        pub use flui_platform::capability::InvalidResultKey;
+        pub use flui_platform::capability::JniFrame;
         pub use flui_platform::capability::OwnerPoster;
         pub use flui_platform::capability::OwnerRetired;
         pub use flui_platform::capability::Plugin;
         pub use flui_platform::capability::ProviderContext;
         pub use flui_platform::capability::Resolver;
+        pub use flui_platform::capability::ResultCode;
+        pub use flui_platform::capability::ResultData;
+        pub use flui_platform::capability::ResultKey;
+        pub use flui_platform::capability::ResultOutcome;
+        pub use flui_platform::capability::ResultRefused;
+        pub use flui_platform::capability::ResultRequest;
+        pub use flui_platform::capability::ResultTicket;
+        pub use flui_platform::capability::ResultToken;
         pub use flui_platform::capability::WindowRef;
     }
 

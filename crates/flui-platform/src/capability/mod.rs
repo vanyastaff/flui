@@ -23,18 +23,28 @@
 //! values and event streams on a virtual clock, every answer settling at an
 //! owner turn through a `Completion` (ADR-0154 §10).
 
+mod activity_result;
 mod completion;
 mod owner;
 mod registrar;
 mod runtime_local;
 #[cfg(feature = "scripted")]
 pub mod scripted;
+mod window_lifetime;
 mod window_ref;
 
+pub use activity_result::{
+    Activity, ActivityBridge, ActivityResult, CapabilityId, DataRefused, HostBridge, IntentFrame,
+    InvalidResultKey, JniFrame, MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY,
+    MAX_RESULT_KEY_LEN, RequestKey, ResultCode, ResultData, ResultDataHold, ResultKey, ResultMint,
+    ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultTicketHold, ResultToken,
+    ResultTokenMint,
+};
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
 pub use registrar::{CapabilityRegistrar, Plugin, RegisteredProvider};
 pub use runtime_local::RuntimeLocals;
+pub use window_lifetime::{WindowCloseWatch, WindowCloser, WindowLifetime};
 pub use window_ref::WindowRef;
 
 use std::rc::Rc;
@@ -51,7 +61,10 @@ pub trait Capability: 'static {
     /// What a widget holds. Owner-local handles stay `!Send`.
     type Handle: Clone + 'static;
     /// The capability's name, unique within one application: two capabilities
-    /// sharing it refuse to run.
+    /// sharing it refuse to run. It is a [`ResultKey`] (1 to
+    /// [`MAX_RESULT_KEY_LEN`] bytes of printable ASCII), since the Android
+    /// host keys a provider's requests for results under it: a registry
+    /// refuses any other name when it is built.
     const NAME: &'static str;
 }
 
@@ -89,24 +102,55 @@ pub struct ProviderContext<'a> {
     owner: &'a OwnerPoster,
     completions: &'a CompletionSource,
     locals: &'a RuntimeLocals,
+    host: &'a HostBridge,
+    /// The capability being provided: set by its [`RegisteredProvider`] as
+    /// it calls the provider, never by the context's maker.
+    capability: Option<&'a CapabilityId>,
     window: Option<WindowRef>,
 }
 
 impl<'a> ProviderContext<'a> {
-    /// The context a UI runtime hands its providers.
+    /// The context a UI runtime hands a provider: `host` is what the running
+    /// host offers beyond the window. The capability it is scoped to is the
+    /// one whose [`RegisteredProvider`] the context is handed to.
     #[must_use]
     pub fn new(
         owner: &'a OwnerPoster,
         completions: &'a CompletionSource,
         locals: &'a RuntimeLocals,
+        host: &'a HostBridge,
         window: Option<WindowRef>,
     ) -> Self {
         Self {
             owner,
             completions,
             locals,
+            host,
+            capability: None,
             window,
         }
+    }
+
+    /// This context, scoped to `capability`.
+    pub(crate) fn scoped<'s>(&'s self, capability: &'s CapabilityId) -> ProviderContext<'s> {
+        ProviderContext {
+            owner: self.owner,
+            completions: self.completions,
+            locals: self.locals,
+            host: self.host,
+            capability: Some(capability),
+            window: self.window.clone(),
+        }
+    }
+
+    /// The running Android Activity, which starts activities for results
+    /// ([`Activity::launch_for_result`]) keyed under the acquiring
+    /// capability; `None` on every other platform, between two Activities,
+    /// for a capability whose name is not a [`ResultKey`], and for a context
+    /// not handed through a [`RegisteredProvider`].
+    #[must_use]
+    pub fn activity(&self) -> Option<Activity> {
+        self.host.activity(self.capability?)
     }
 
     /// A poster that runs a closure on the owner thread; it may be cloned and

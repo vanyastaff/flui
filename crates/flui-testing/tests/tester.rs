@@ -802,7 +802,11 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
     let mut t = Tester::mount(view);
     opened.borrow_mut().lifecycle.clear();
     t.set_window_visible(false);
-    assert_eq!(opened.borrow().lifecycle.last(), Some(&Hidden));
+    assert_eq!(
+        opened.borrow().lifecycle,
+        [Inactive, Hidden],
+        "hidden, the window steps down through Inactive"
+    );
     t.set_window_visible(true);
     assert!(
         opened
@@ -812,6 +816,23 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
         "shown again, the window climbs back through Inactive: {:?}",
         opened.borrow().lifecycle
     );
+}
+
+/// A window opened beside the focused one takes the focus, as a native host
+/// reports it once the window is installed: the first window steps down to
+/// `Inactive`.
+#[test]
+fn opening_a_second_window_makes_the_first_inactive() {
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+    use flui_view::AppLifecycleState::Inactive;
+
+    let (view, opened) = notebook(false);
+    let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+    host.attach(&view).expect("the notebook mounts");
+    let _ = host.pump(Duration::ZERO);
+    opened.borrow_mut().lifecycle.clear();
+    host.open_window(HeadlessWindow::new(100, 100));
+    assert_eq!(opened.borrow().lifecycle, [Inactive]);
 }
 
 #[test]

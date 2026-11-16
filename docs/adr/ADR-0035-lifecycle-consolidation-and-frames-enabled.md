@@ -7,6 +7,8 @@
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §1–§2, for §5's sentence
   "the first panic resumes after restoration and notification" only: a quit observer's panic is
   contained and reported, and resumes only when it is terminal. The rest of §5 stands.
+  [ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md)
+  for §4 whole.
 
 ## Context
 

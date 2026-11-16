@@ -22,7 +22,10 @@
   decision 18's sentence that the Web's `PlatformAccessibility` "consumes `TreeUpdate` through
   `accesskit_consumer`" (the host keeps the tree in a mirror of its own, ADR-0336 §1–§2); the rest
   of decision 18 (the parallel ARIA DOM, one element per node, the lazy placeholder, the semantics
-  host last in the root) stands
+  host last in the root) stands; and
+  [ADR-0340](ADR-0340-the-android-activity-forwards-what-has-a-consumer-and-routes-results-by-token-and-epoch.md)
+  for decision 2's list of forwarded callbacks, the shape of decision 8's `launch_for_result`, and
+  the `windowSoftInputMode` sentence of decision 6 with its Confirmation row
 - **Related:** [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md) (the platform crates and
   where host code lives), [ADR-0152](ADR-0152-capability-seam-revised.md) (the capability seam and
   `Completion`), [ADR-0154](ADR-0154-capability-crates.md) (capability crates and their native

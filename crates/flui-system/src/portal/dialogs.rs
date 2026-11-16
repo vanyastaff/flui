@@ -5,14 +5,15 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::rc::Rc;
 
+use flui_platform::SystemFailure;
 use flui_platform::capability::{Resolver, WindowRef};
 use zbus::{OwnedVariant, Variant};
 
 use super::request::{self, Response};
-use super::{Portal, PortalError, parent_window};
+use super::{Dismissal, Portal, PortalError, parent_window};
 use crate::dialog::{
-    DialogError, FileDialogBackend, FileFilter, OpenRequest, OpenResult, PickedFile, SaveRequest,
-    SaveResult,
+    DialogError, DialogHold, FileDialogBackend, FileFilter, OpenRequest, OpenResult, PickedFile,
+    Picks, SaveRequest, SaveResult,
 };
 
 const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
@@ -27,8 +28,9 @@ impl PortalDialogs {
         Self { portal }
     }
 
-    /// Show `method`'s dialog with `options` and answer `answer` with the
-    /// picks `picked` makes of the URIs the user chose.
+    /// Show `method`'s dialog with `options` and answer `answer` with what
+    /// `picked` makes of the files the user chose. The dialog stays up while
+    /// the returned hold is held; dropping it closes the portal's request.
     fn show<T>(
         &self,
         window: &WindowRef,
@@ -36,13 +38,14 @@ impl PortalDialogs {
         title: Option<&str>,
         mut options: Options,
         answer: Resolver<Result<Option<T>, DialogError>>,
-        picked: fn(Vec<PickedFile>) -> Option<T>,
-    ) where
+        picked: fn(Picks) -> Result<T, DialogError>,
+    ) -> DialogHold
+    where
         T: Send + 'static,
     {
         if let Err(error) = self.portal.start() {
             let _ = answer.resolve(Err(dialog_error(error)));
-            return;
+            return DialogHold::new(());
         }
         let token = self.portal.token();
         options.insert("handle_token", Variant::from(token.clone()));
@@ -51,19 +54,32 @@ impl PortalDialogs {
             title.unwrap_or_default().to_owned(),
             options,
         );
+        let (hold, dismissal) = Dismissal::pair();
         self.portal.spawn(move |bus| async move {
             let result = async {
                 let connection = bus.connection().await?;
-                request::call(&connection, FILE_CHOOSER, method, &token, &body).await
+                request::call(
+                    &connection,
+                    FILE_CHOOSER,
+                    method,
+                    &token,
+                    &body,
+                    Some(&dismissal),
+                )
+                .await
             }
             .await;
-            let _ = answer.resolve(match result {
-                Ok(Response::Answered(results)) => picks(&results).map(picked),
+            let answered = match result {
+                Ok(Response::Answered(results)) => picks(&results).and_then(picked).map(Some),
                 Ok(Response::Cancelled) => Ok(None),
-                Ok(Response::Ended) => Err(DialogError::Failed { code: 2 }),
+                Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
+                // Nobody waits: the resolver drops unanswered.
+                Ok(Response::Dismissed) => return,
                 Err(error) => Err(dialog_error(error)),
-            });
+            };
+            let _ = answer.resolve(answered);
         });
+        DialogHold::new(hold)
     }
 }
 
@@ -72,26 +88,40 @@ type Options = HashMap<&'static str, Variant<'static>>;
 fn dialog_error(error: PortalError) -> DialogError {
     match error {
         PortalError::Unsupported(unsupported) => DialogError::Unsupported(unsupported),
-        PortalError::Failed => DialogError::Failed { code: 0 },
+        PortalError::Failed(failure) => DialogError::Failed(failure),
     }
 }
 
-/// The local files a dialog's `uris` result names; a URI that names no local
+/// The local files a dialog's `uris` result names. A success names one at
+/// least: one that names none, or holds something other than a list of
+/// strings, is outside the portal's contract, and a URI that names no local
 /// file fails the whole answer, since the handle hands out paths only.
-fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Vec<PickedFile>, DialogError> {
+fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Picks, DialogError> {
+    let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
     let uris = results
         .get("uris")
         .map(|uris| Vec::<String>::try_from(uris.clone()))
         .transpose()
-        .map_err(|_| DialogError::Failed { code: 0 })?
+        .map_err(|_| malformed)?
         .unwrap_or_default();
-    uris.iter()
+    let files = uris
+        .iter()
         .map(|uri| {
-            request::file_path(uri)
-                .map(PickedFile::new)
-                .ok_or(DialogError::NotAFile)
+            let path = request::file_path(uri).ok_or(DialogError::NotAFile)?;
+            // A path with a NUL byte (`%00`) names no file: outside the contract.
+            PickedFile::try_new(path).ok_or(malformed)
         })
-        .collect::<Result<Vec<PickedFile>, DialogError>>()
+        .collect::<Result<Vec<PickedFile>, DialogError>>()?;
+    Picks::try_new(files).ok_or(malformed)
+}
+
+/// The one file a save dialog answers; several are outside the portal's
+/// contract.
+fn one_file(picks: Picks) -> Result<PickedFile, DialogError> {
+    if picks.len() > 1 {
+        return Err(SystemFailure::MalformedAnswer.into());
+    }
+    Ok(picks.first().clone())
 }
 
 /// The portal's `a(sa(us))` filters: `0` with a glob, `1` with a MIME type.
@@ -156,7 +186,12 @@ fn common(
 }
 
 impl FileDialogBackend for PortalDialogs {
-    fn open(&self, window: &WindowRef, request: OpenRequest, answer: Resolver<OpenResult>) {
+    fn open(
+        &self,
+        window: &WindowRef,
+        request: OpenRequest,
+        answer: Resolver<OpenResult>,
+    ) -> DialogHold {
         let mut options = Options::new();
         options.insert("multiple", Variant::from(request.is_multiple()));
         options.insert("directory", Variant::from(request.picks_folders()));
@@ -172,11 +207,16 @@ impl FileDialogBackend for PortalDialogs {
             request.title.as_deref(),
             options,
             answer,
-            |picks| (!picks.is_empty()).then_some(picks),
-        );
+            Ok,
+        )
     }
 
-    fn save(&self, window: &WindowRef, request: SaveRequest, answer: Resolver<SaveResult>) {
+    fn save(
+        &self,
+        window: &WindowRef,
+        request: SaveRequest,
+        answer: Resolver<SaveResult>,
+    ) -> DialogHold {
         let mut options = Options::new();
         if let Some(name) = request.suggested_name {
             options.insert("current_name", Variant::from(name));
@@ -193,8 +233,8 @@ impl FileDialogBackend for PortalDialogs {
             request.title.as_deref(),
             options,
             answer,
-            |picks| picks.into_iter().next(),
-        );
+            one_file,
+        )
     }
 }
 

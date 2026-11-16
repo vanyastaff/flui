@@ -176,7 +176,8 @@ pub use config::TimingsCallback;
 /// crate's own public field types.
 pub use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 pub use frame_clock::{
-    ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, PollDecision, SkipReason,
+    ClockSource, DemandKind, DemandMask, FrameClock, FrameTimes, FramesInFlight, PollDecision,
+    SkipReason,
 };
 pub use frame_histogram::{
     FRAME_RUN_GAP, FramePace, LatencyHistogram, frame_interval_histogram, frame_pace,

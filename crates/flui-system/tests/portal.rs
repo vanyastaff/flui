@@ -14,10 +14,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use flui_platform::SystemFailure;
 use flui_platform::capability::{Abandoned, Completion};
 use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability};
 use flui_system::dialog::{
-    DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile, SaveRequest,
+    Dialog, DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile,
+    Picks, SaveRequest,
 };
 use flui_system::testing::PortalOnBus;
 use flui_testing::HeadlessHost;
@@ -136,6 +138,27 @@ struct Script {
     holding: AtomicBool,
     /// The held requests: the caller's unique name and the `Request` path.
     held: Mutex<Vec<(String, String)>>,
+    /// The `Request` paths a caller closed, oldest first.
+    closed: Mutex<Vec<String>>,
+}
+
+/// A held request's `org.freedesktop.portal.Request` object, which records
+/// a caller's `Close` and leaves the bus, as the portal's does.
+struct RequestObject {
+    script: Arc<Script>,
+    path: String,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.Request")]
+impl RequestObject {
+    async fn close(&self, #[zbus(object_server)] server: &zbus::ObjectServer) {
+        self.script
+            .closed
+            .lock()
+            .expect("closed")
+            .push(self.path.clone());
+        let _ = server.remove::<Self, _>(self.path.as_str()).await;
+    }
 }
 
 impl Script {
@@ -154,7 +177,7 @@ impl Script {
     /// Answer the request `token` names for `header`'s sender, as the
     /// portal does: a `Response` signal on the `Request` object.
     async fn respond(
-        &self,
+        self: &Arc<Self>,
         connection: &zbus::Connection,
         header: &Header<'_>,
         options: &Results,
@@ -175,6 +198,17 @@ impl Script {
                 .expect("a method call has a sender")
                 .to_string();
             self.held.lock().expect("held").push((caller, path.clone()));
+            connection
+                .object_server()
+                .at(
+                    path.as_str(),
+                    RequestObject {
+                        script: Arc::clone(self),
+                        path: path.clone(),
+                    },
+                )
+                .await
+                .expect("the held request's object is served");
             return OwnedObjectPath::try_from(path).expect("a valid request path");
         }
         let answer = self.next();
@@ -398,13 +432,35 @@ impl StandIn {
     fn calls(&self) -> Vec<Call> {
         self.script.calls.lock().expect("calls").clone()
     }
+
+    /// The `Request` paths a caller closed, oldest first.
+    fn closed(&self) -> Vec<String> {
+        self.script.closed.lock().expect("closed").clone()
+    }
 }
 
-/// Land `completion`'s outcome, pumping `host` until it settles.
-fn settle<T: 'static>(host: &mut HeadlessHost, completion: Completion<T>) -> Result<T, Abandoned> {
+/// What [`settle`] waits on: a launcher's completion or a dialog.
+trait Settles<T: 'static> {
+    fn land(self, f: impl FnMut(Result<T, Abandoned>) + 'static);
+}
+
+impl<T: 'static> Settles<T> for Completion<T> {
+    fn land(self, f: impl FnMut(Result<T, Abandoned>) + 'static) {
+        self.on_complete(f);
+    }
+}
+
+impl<T: 'static> Settles<T> for Dialog<T> {
+    fn land(self, f: impl FnMut(Result<T, Abandoned>) + 'static) {
+        self.on_complete(f);
+    }
+}
+
+/// Land `pending`'s outcome, pumping `host` until it settles.
+fn settle<T: 'static>(host: &mut HeadlessHost, pending: impl Settles<T>) -> Result<T, Abandoned> {
     let slot = outcome_slot::<Result<T, Abandoned>>();
     let into = Rc::clone(&slot);
-    completion.on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+    pending.land(move |outcome| *into.borrow_mut() = Some(outcome));
     let deadline = Instant::now() + Duration::from_secs(10);
     while slot.borrow().is_none() {
         assert!(Instant::now() < deadline, "the portal answered within 10 s");
@@ -453,7 +509,8 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
     portal.answer(2, Results::new());
     assert_eq!(
         settle(&mut host, launcher.reveal_path(&file)),
-        Ok(Err(LaunchError::NoHandler))
+        Ok(Err(LaunchError::Failed(SystemFailure::PortalResponse(2)))),
+        "an interaction ended some other way names the portal's response, not a guess"
     );
 
     *portal.script.trashed.lock().expect("trashed") = 1;
@@ -541,9 +598,9 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
         .filter(FileFilter::new("Images").with_extension("png"));
     assert_eq!(
         settle(&mut host, dialogs.open(request)),
-        Ok(Ok(Some(vec![
-            PickedFile::new("/home/me/a b.png"),
-            PickedFile::new("/home/me/c.png"),
+        Ok(Ok(Picks::try_new(vec![
+            PickedFile::try_new("/home/me/a b.png").expect("an absolute path"),
+            PickedFile::try_new("/home/me/c.png").expect("an absolute path"),
         ])))
     );
 
@@ -566,7 +623,33 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     portal.answer(2, Results::new());
     assert_eq!(
         settle(&mut host, dialogs.open(OpenRequest::folders())),
-        Ok(Err(DialogError::Failed { code: 2 }))
+        Ok(Err(DialogError::Failed(SystemFailure::PortalResponse(2))))
+    );
+
+    // A success is a pick: one without `uris`, or with an empty list, or
+    // with several for a save, is outside the portal's contract, not a
+    // cancel.
+    let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
+    portal.answer(0, Results::new());
+    assert_eq!(
+        settle(&mut host, dialogs.open(OpenRequest::files())),
+        Ok(Err(malformed))
+    );
+    portal.answer(0, uris(&[]));
+    assert_eq!(
+        settle(&mut host, dialogs.open(OpenRequest::files())),
+        Ok(Err(malformed))
+    );
+    portal.answer(0, uris(&["file:///a", "file:///b"]));
+    assert_eq!(
+        settle(&mut host, dialogs.save(SaveRequest::new())),
+        Ok(Err(malformed))
+    );
+    portal.answer(0, uris(&["file:///tmp/a%00b"]));
+    assert_eq!(
+        settle(&mut host, dialogs.save(SaveRequest::new())),
+        Ok(Err(malformed)),
+        "an escaped NUL names no file"
     );
 
     let calls = portal.calls();
@@ -823,4 +906,32 @@ fn a_portal_that_leaves_before_answering_ends_the_dialog_and_frees_the_window() 
         matches!(next, Ok(Err(DialogError::Unsupported(_)))),
         "{next:?}"
     );
+}
+
+#[test]
+fn a_dropped_dialog_closes_its_portal_request_and_frees_the_window() {
+    let portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    portal.hold();
+
+    let dialog = dialogs.open(OpenRequest::files());
+    pump_until(&mut host, "the dialog reached the portal", || {
+        !portal.held().is_empty()
+    });
+    let (_, path) = portal.held().remove(0);
+    drop(dialog);
+    pump_until(&mut host, "the portal's request was closed", || {
+        !portal.closed().is_empty()
+    });
+    assert_eq!(portal.closed(), [path], "the dropped dialog's own request");
+
+    // Not `Busy`: the next dialog reaches the portal.
+    let next = dialogs.save(SaveRequest::new());
+    pump_until(&mut host, "the next dialog reached the portal", || {
+        portal.held().len() == 2
+    });
+    let (_, next_path) = portal.held().remove(1);
+    portal.release(&next_path, 1, Results::new());
+    assert_eq!(settle(&mut host, next), Ok(Ok(None)));
 }

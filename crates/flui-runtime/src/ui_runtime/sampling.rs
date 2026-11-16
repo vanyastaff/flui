@@ -206,7 +206,7 @@ impl<'runtime> PresentationSampling<'runtime> {
             }
             let now = presentation.clock().now();
             let segment_start = presentation.text_preparation.borrow().segment.as_ref().map_or(now, |saved| saved.host_time);
-            let decision = presentation.clock().poll(now);
+            let decision = presentation.clock().poll(now, presentation.frames_in_flight());
             if decision.should_run_segment() && !(blocked && !pending && !resuming) {
                 selected = Some(AdmittedSegment { decision, segment_start, woken, pending, resuming, completion });
                 if runtime.scheduler.phase() == flui_scheduler::SchedulerPhase::PersistentCallbacks {

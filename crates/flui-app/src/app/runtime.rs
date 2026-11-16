@@ -486,6 +486,10 @@ pub(crate) struct AppRuntime {
     /// The platform's primary selection, installed and cleared with the
     /// clipboard; empty where the platform has none.
     platform_primary_selection: crate::app::capability::PrimarySelectionSlot,
+    /// What the installed platform offers capability providers beyond the
+    /// window (its Android Activity), installed and cleared with the
+    /// clipboard; every registry this host builds reads it.
+    host_bridge: flui_platform::capability::HostBridge,
     /// The providers every UI runtime this host builds acquires platform
     /// capabilities from (ADR-0152): the application's, checked for conflicts
     /// before the loop starts, or the built-ins alone when a runner starts
@@ -607,6 +611,7 @@ impl AppRuntime {
             redraw_requester: Arc::new(Mutex::new(None)),
             platform_clipboard: Rc::default(),
             platform_primary_selection: Rc::default(),
+            host_bridge: flui_platform::capability::HostBridge::new(),
             capabilities: None,
             platform_data_transfer: Arc::new(Mutex::new(None)),
             execution_slot: Rc::default(),
@@ -1388,6 +1393,20 @@ impl AppRuntime {
         let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_primary_selection.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
+        let _prev = self.host_bridge.install_activity(None);
+    }
+
+    /// What the installed platform offers capability providers beyond the
+    /// window, shared with every registry this host builds.
+    #[cfg_attr(
+        not(target_os = "android"),
+        expect(
+            dead_code,
+            reason = "only the Android host offers an Activity to install"
+        )
+    )]
+    pub(super) fn host_bridge(&self) -> flui_platform::capability::HostBridge {
+        self.host_bridge.clone()
     }
 
     /// Install the platform's data-transfer source, minting the nonce of this
@@ -1475,6 +1494,7 @@ impl AppRuntime {
             execution: Rc::clone(&self.execution_slot),
             clipboard: Rc::clone(&self.platform_clipboard),
             primary_selection: Rc::clone(&self.platform_primary_selection),
+            host: self.host_bridge.clone(),
         }
     }
 }
@@ -1632,6 +1652,7 @@ impl Drop for AppRuntime {
         let _prev = self.platform_clipboard.borrow_mut().take();
         let _prev = self.platform_primary_selection.borrow_mut().take();
         let _prev = self.platform_data_transfer.lock().take();
+        let _prev = self.host_bridge.install_activity(None);
     }
 }
 

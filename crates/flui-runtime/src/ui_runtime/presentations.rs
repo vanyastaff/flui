@@ -194,17 +194,18 @@ impl UiRuntime {
                 .map_or(&unknown, |snapshot| &snapshot.values),
             flui_foundation::MonotonicClock::now(&self.clock),
         );
-        if presentation.window_focused.get() && presentation.window_visible.get() {
-            for previous in self.presentations.iter() {
-                previous.window_focused.set(false);
-            }
-            self.focus_coordinator.note_focus_gained(presentation_id);
-        }
         self.drag.attach_presentation(
             presentation_id,
             presentation.window_id(),
             presentation.hit_test_handle(),
         );
+        // Installing runs no user code and moves no focus: the window's
+        // snapshot, which the host delivers next inside the owner's turn,
+        // takes the focus from its siblings (forgetting their held keys and
+        // cancelling their pointer sequences) and delivers the change to the
+        // application's lifecycle (ADR-0345 §2). Clearing the siblings'
+        // focus here would leave that transfer nothing to do.
+        self.seed_presentation_lifecycle(&presentation);
         self.presentations.install(presentation);
         presentation_id
     }

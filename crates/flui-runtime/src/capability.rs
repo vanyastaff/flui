@@ -28,8 +28,9 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     PlatformWindow, Unsupported, UnsupportedReason,
     capability::{
-        Capability, CapabilityRegistrar, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired,
-        OwnerScope, PendingCompletions, Plugin, ProviderContext, RegisteredProvider, WindowRef,
+        Capability, CapabilityRegistrar, CompletionSource, HostBridge, OwnerJob, OwnerPoster,
+        OwnerRetired, OwnerScope, PendingCompletions, Plugin, ProviderContext, RegisteredProvider,
+        WindowRef,
     },
 };
 use flui_view::CapabilitySource;
@@ -78,6 +79,16 @@ pub enum CapabilityConflict {
         /// The name both declare.
         name: &'static str,
     },
+    /// A capability's `NAME` is not a `ResultKey` (1 to 64 bytes of
+    /// printable ASCII), under which the Android host keys its provider's
+    /// requests for results.
+    #[error("capability `{name}` has a name that is not a result key: {reason}")]
+    InvalidName {
+        /// The name.
+        name: &'static str,
+        /// Why it is not a key.
+        reason: flui_platform::capability::InvalidResultKey,
+    },
 }
 
 /// The providers a UI runtime acquires platform capabilities from, keyed by
@@ -89,6 +100,9 @@ pub enum CapabilityConflict {
 #[derive(Clone, Default)]
 pub struct CapabilityRegistry {
     providers: Rc<HashMap<TypeId, RegisteredProvider>>,
+    /// What the running host offers providers beyond the window; the
+    /// composition root fills it for each run's host.
+    host: HostBridge,
 }
 
 impl CapabilityRegistry {
@@ -123,6 +137,13 @@ impl CapabilityRegistry {
             None => Err(Unsupported::named(name, UnsupportedReason::NotRegistered)),
         }
     }
+
+    /// What the running host offers providers beyond the window, which every
+    /// acquisition's [`ProviderContext`] reads.
+    #[must_use]
+    pub(crate) fn host(&self) -> &HostBridge {
+        &self.host
+    }
 }
 
 impl fmt::Debug for CapabilityRegistry {
@@ -135,6 +156,7 @@ impl fmt::Debug for CapabilityRegistry {
         names.sort_unstable();
         f.debug_struct("CapabilityRegistry")
             .field("capabilities", &names)
+            .field("host", &self.host)
             .finish()
     }
 }
@@ -144,9 +166,19 @@ impl fmt::Debug for CapabilityRegistry {
 #[derive(Debug, Default)]
 pub struct CapabilityRegistryBuilder {
     registrations: Vec<(ProviderTier, RegisteredProvider)>,
+    host: HostBridge,
 }
 
 impl CapabilityRegistryBuilder {
+    /// The bridge through which the composition root offers what each run's
+    /// host has beyond the window (its Android Activity); without it, no
+    /// provider is offered any.
+    #[must_use]
+    pub fn host(mut self, host: HostBridge) -> Self {
+        self.host = host;
+        self
+    }
+
     /// The application's overrides.
     #[must_use]
     pub fn overrides(mut self, registrar: CapabilityRegistrar) -> Self {
@@ -196,6 +228,9 @@ impl CapabilityRegistryBuilder {
         let mut chosen: HashMap<TypeId, RegisteredProvider> = HashMap::new();
         for (tier, provider) in self.registrations {
             let (capability, name) = (provider.capability(), provider.name());
+            if let Err(reason) = flui_platform::capability::ResultKey::try_new(name) {
+                return Err(CapabilityConflict::InvalidName { name, reason });
+            }
             if *names.entry(name).or_insert(capability) != capability {
                 return Err(CapabilityConflict::SharedName { name });
             }
@@ -209,6 +244,7 @@ impl CapabilityRegistryBuilder {
         }
         Ok(CapabilityRegistry {
             providers: Rc::new(chosen),
+            host: self.host,
         })
     }
 }
@@ -418,6 +454,8 @@ pub(crate) struct PresentationCapabilities {
     pub(crate) completions: CompletionSource,
     pub(crate) locals: flui_platform::capability::RuntimeLocals,
     pub(crate) window: std::rc::Weak<dyn PlatformWindow>,
+    /// Whether the window is still open, handed to its providers.
+    pub(crate) lifetime: flui_platform::capability::WindowLifetime,
 }
 
 impl CapabilitySource for PresentationCapabilities {
@@ -427,7 +465,12 @@ impl CapabilitySource for PresentationCapabilities {
                 .state()
                 .metrics
                 .map_or(1.0, |metrics| metrics.scale().get());
-            WindowRef::new(window.id(), scale, window.surface_target())
+            WindowRef::new(
+                window.id(),
+                scale,
+                window.surface_target(),
+                self.lifetime.clone(),
+            )
         });
         acquire_with(
             &self.registry,
@@ -452,7 +495,13 @@ fn acquire_with(
     capability: TypeId,
     name: &'static str,
 ) -> Result<Box<dyn Any>, Unsupported> {
-    let ctx = ProviderContext::new(completions.poster(), completions, locals, window);
+    let ctx = ProviderContext::new(
+        completions.poster(),
+        completions,
+        locals,
+        registry.host(),
+        window,
+    );
     registry.acquire(capability, name, &ctx)
 }
 

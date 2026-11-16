@@ -13,7 +13,8 @@
   with `SessionEnd` and flushes the registry inline),
   [ADR-0254](ADR-0254-window-contract.md) decision 4 (`WindowHandler::close_requested` answers a
   `CloseDecision`), [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) (a capability is acquired
-  in a lifecycle hook), [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) §4 and §6
+  in a lifecycle hook), [ADR-0345](ADR-0345-the-lifecycle-starts-where-its-window-is-and-every-change-walks-the-ladder.md) §4 and
+  [ADR-0035](ADR-0035-lifecycle-consolidation-and-frames-enabled.md) §6
   (closing delivers `Detached` while the tree lives; begin-close fences subscriptions),
   [ADR-0123](ADR-0123-exceptional-presentation-close.md) and
   [ADR-0127](ADR-0127-exceptional-path-retention.md) (how a close that holds a failure withdraws
