@@ -121,6 +121,7 @@ pub mod platform {
         pub use flui_platform::capability::ProviderContext;
         pub use flui_platform::capability::Resolver;
         pub use flui_platform::capability::ResultCode;
+        pub use flui_platform::capability::ResultData;
         pub use flui_platform::capability::ResultKey;
         pub use flui_platform::capability::ResultOutcome;
         pub use flui_platform::capability::ResultRefused;

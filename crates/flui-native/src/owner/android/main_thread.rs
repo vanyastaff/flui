@@ -2,13 +2,19 @@
 //! boundary and with the report it owes when it does not finish.
 //!
 //! `AndroidApp::run_on_java_main_thread` runs a closure under
-//! android-activity's own guard, which aborts the process on a panic, and
-//! drops the closure unrun when it cannot deliver it. [`MainThreadWork`] runs
-//! its body inside [`os_entry`] and owes its `failed` report on every exit
-//! but success: the body's error, a panic in it, and being dropped unrun.
-//! The report runs inside the boundary too, so a panic there is logged and
-//! the thread goes on. [`post`] hands one to the Java main thread; every
-//! closure the Android host posts there goes through it.
+//! android-activity's own guard, which aborts the process on a panic.
+//! [`MainThreadWork`] runs its body inside [`os_entry`] and owes its `failed`
+//! report on every exit but success: the body's error, a panic in it, and
+//! being dropped unrun. The report runs inside the boundary too, so a panic
+//! there is logged and the thread goes on. [`post`] hands one to the Java
+//! main thread; every closure the Android host posts there goes through it,
+//! which `cargo xtask panic-boundary` holds.
+//!
+//! android-activity keeps a closure it cannot deliver (its callback state is
+//! leaked, not dropped), so on Android the report for work dropped unrun may
+//! never come: nothing settles a request through it alone. A request for a
+//! result has its own deadline on the owner's side
+//! (`activity_results::HAND_OFF_LIMIT`).
 
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
@@ -100,6 +106,33 @@ pub(crate) fn post(
 ) {
     let work = MainThreadWork::new(entry, body, failed);
     app.run_on_java_main_thread(Box::new(move || work.run()));
+}
+
+/// [`post`] a step whose only report is its failure, which is logged under
+/// `entry`; a step that owes more (an obligation, an answer) reports it
+/// through [`post`] itself.
+#[cfg(target_os = "android")]
+pub(crate) fn run(
+    app: &android_activity::AndroidApp,
+    entry: &'static str,
+    body: impl FnOnce() + Send + 'static,
+) {
+    post(
+        app,
+        entry,
+        move || {
+            body();
+            Ok(())
+        },
+        move |failure| {
+            tracing::warn!(
+                target: "flui_native::android",
+                entry,
+                ?failure,
+                "work posted to the Java main thread did not finish"
+            );
+        },
+    );
 }
 
 #[cfg(test)]

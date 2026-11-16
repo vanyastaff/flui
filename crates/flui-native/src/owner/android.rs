@@ -54,7 +54,9 @@ pub(crate) mod ndk;
 pub(crate) mod poll;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;
-#[cfg(any(target_os = "android", test))]
+// The decision `FluiActivity` applies, as data; its test holds the Java side
+// to it.
+#[cfg(test)]
 pub(crate) mod window_setup;
 
 #[cfg(target_os = "android")]

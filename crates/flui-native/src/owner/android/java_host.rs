@@ -193,7 +193,7 @@ pub(crate) enum HostEntry {
     TrimMemory(i32),
     /// An intent `onCreate` or `onNewIntent` received.
     #[cfg_attr(
-        not(target_os = "android"),
+        all(not(target_os = "android"), not(test)),
         expect(dead_code, reason = "only the Android queue drains intents")
     )]
     Intent(ReceivedIntent),
@@ -222,6 +222,31 @@ impl HostEntry {
             })
             .collect()
     }
+
+    /// The intents of the records `FluiHost.peekOpened` returned, oldest
+    /// first, each read on its own: a record that could not be read
+    /// (`None`) or does not read as an intent is skipped and logged, and the
+    /// others are delivered.
+    #[cfg_attr(
+        all(not(target_os = "android"), not(test)),
+        expect(dead_code, reason = "only the Android queue drains intents")
+    )]
+    pub(crate) fn from_records(records: Vec<Option<Vec<String>>>) -> Vec<Self> {
+        records
+            .into_iter()
+            .filter_map(|record| {
+                if record.is_none() {
+                    tracing::warn!(
+                        target: "flui_native::android",
+                        "an intent FluiHost queued could not be read; it is dropped"
+                    );
+                }
+                record
+            })
+            .filter_map(ReceivedIntent::from_record)
+            .map(Self::Intent)
+            .collect()
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -245,6 +270,7 @@ mod queue {
     use crate::owner::android::activity::with_activity;
     use crate::owner::android::activity_results::Answer;
     use crate::owner::android::java_view::strings;
+    use crate::owner::android::main_thread;
     use crate::owner::android::result_bridge::{HeldIntent, drain_answers};
     use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::owner::signal::OwnerSignal;
@@ -307,9 +333,7 @@ mod queue {
                 binding: Mutex::new(Binding::Pending),
             });
             let binding = Arc::clone(&queue);
-            queue
-                .app
-                .run_on_java_main_thread(Box::new(move || binding.bind()));
+            main_thread::run(&queue.app, "FluiHost.bind", move || binding.bind());
             queue
         }
 
@@ -346,7 +370,7 @@ mod queue {
         /// next platform of the process.
         pub(crate) fn detach(self: &Arc<Self>) {
             let this = Arc::clone(self);
-            self.app.run_on_java_main_thread(Box::new(move || {
+            main_thread::run(&self.app, "FluiHost.unbind", move || {
                 let previous = std::mem::replace(&mut *this.binding.lock(), Binding::Detached);
                 let Binding::Bound { handle, class } = previous else {
                     return;
@@ -368,7 +392,7 @@ mod queue {
                         "FluiHost's queue was not unbound; its wake handle is kept"
                     ),
                 }
-            }));
+            });
         }
 
         /// Every entry queued since the last call, oldest first, then every
@@ -393,13 +417,7 @@ mod queue {
                     answers
                 });
             let mut entries = HostEntry::from_pairs(&pairs.unwrap_or_default());
-            entries.extend(
-                records
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(ReceivedIntent::from_record)
-                    .map(HostEntry::Intent),
-            );
+            entries.extend(HostEntry::from_records(records.unwrap_or_default()));
             (entries, answers.unwrap_or_default())
         }
 
@@ -584,7 +602,7 @@ mod queue {
     fn drain_opened(
         env: &mut Env<'_>,
         activity: &JObject<'_>,
-    ) -> jni::errors::Result<Vec<Vec<String>>> {
+    ) -> jni::errors::Result<Vec<Option<Vec<String>>>> {
         let class = host_class(env, activity)?;
         let records = env
             .call_static_method(
@@ -598,12 +616,17 @@ mod queue {
         let len = records.len(env)?;
         let mut out = Vec::with_capacity(len);
         for index in 0..len {
-            let record = env.with_local_frame(4, |env| {
+            // A record that cannot be read is `None`, taken off the queue
+            // with the rest: it would fail the same way on every turn.
+            let record = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
                 let record = records.get_element(env, index)?;
                 let record = env.cast_local::<JObjectArray<'_>>(record)?;
                 strings(env, &record)
-            })?;
-            out.push(record);
+            });
+            if record.is_err() {
+                env.exception_clear();
+            }
+            out.push(record.ok());
         }
         let read = i32::try_from(len).map_err(|_| jni::errors::Error::JavaException)?;
         env.call_static_method(
@@ -809,5 +832,43 @@ mod tests {
             HostEntry::from_pairs(&[TRIM_MEMORY, 5, TRIM_MEMORY]),
             [HostEntry::TrimMemory(5)]
         );
+    }
+
+    /// One entry or intent record that cannot be read does not hold the rest
+    /// back: at the head, in the middle and at the end of a drain, an entry
+    /// of a kind this library does not know and an intent record that could
+    /// not be read, or does not read as an intent, are skipped, and every
+    /// other one is delivered in order.
+    #[test]
+    fn a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered() {
+        let cold = || {
+            Some(vec![
+                super::super::intent::COLD.to_owned(),
+                "android.intent.action.VIEW".to_owned(),
+                "https://example.com/a".to_owned(),
+            ])
+        };
+        for at in [0, 1, 2] {
+            let mut pairs = vec![TRIM_MEMORY, 10, TRIM_MEMORY, 20];
+            pairs.splice(at * 2..at * 2, [TRIM_MEMORY + 98, 0]);
+            assert_eq!(
+                HostEntry::from_pairs(&pairs),
+                [HostEntry::TrimMemory(10), HostEntry::TrimMemory(20)],
+                "an unknown entry at {at}"
+            );
+
+            for poison in [None, Some(vec!["neither".to_owned()])] {
+                let mut records = vec![cold(), cold()];
+                records.insert(at, poison.clone());
+                let intents = HostEntry::from_records(records);
+                assert_eq!(intents.len(), 2, "{poison:?} at {at}");
+                assert!(
+                    intents
+                        .iter()
+                        .all(|entry| matches!(entry, HostEntry::Intent(_))),
+                    "{intents:?}"
+                );
+            }
+        }
     }
 }

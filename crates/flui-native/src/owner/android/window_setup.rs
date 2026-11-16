@@ -10,6 +10,13 @@
 //! surface keeps its size and the keyboard reaches layout as its inset
 //! (ADR-0277). `NativeActivity.onCreate` sets the mode itself, which is why
 //! a manifest attribute could not.
+//!
+//! This is the decision as data, the table of record. `FluiActivity.onCreate`
+//! applies it, after `NativeActivity.onCreate` and before the window's first
+//! layout, from its constants `SOFT_INPUT_MODE`, `DECOR_DOES_NOT_FIT_FROM_API`
+//! and `EDGE_TO_EDGE_LAYOUT_FLAGS`; `fluiactivity_applies_this_table` holds
+//! those constants to what [`window_setup`] answers on each side of the
+//! boundary.
 
 use crate::version::gate::android::{AndroidApi, DecorFitsSystemWindows};
 
@@ -59,76 +66,6 @@ pub(crate) fn window_setup(api: AndroidApi) -> WindowSetup {
     }
 }
 
-/// Set `app`'s window up for API level `api`. Java main thread.
-///
-/// # Errors
-///
-/// A JNI call failed; the window keeps what `NativeActivity` set.
-#[cfg(target_os = "android")]
-pub(crate) fn apply(
-    app: &android_activity::AndroidApp,
-    api: AndroidApi,
-) -> Result<(), flui_platform::PreferenceQueryError> {
-    use jni::{JValue, jni_sig, jni_str};
-
-    let setup = window_setup(api);
-    crate::owner::android::activity::with_activity(app, |env, activity| {
-        env.with_local_frame(8, |env| {
-            let window = env
-                .call_method(
-                    activity,
-                    jni_str!("getWindow"),
-                    jni_sig!("()Landroid/view/Window;"),
-                    &[],
-                )?
-                .l()?;
-            env.call_method(
-                &window,
-                jni_str!("setSoftInputMode"),
-                jni_sig!("(I)V"),
-                &[JValue::Int(setup.soft_input)],
-            )?;
-            match setup.edge_to_edge {
-                EdgeToEdge::DecorDoesNotFit => {
-                    env.call_method(
-                        &window,
-                        jni_str!("setDecorFitsSystemWindows"),
-                        jni_sig!("(Z)V"),
-                        &[JValue::Bool(false)],
-                    )?;
-                }
-                EdgeToEdge::LayoutFlags(layout) => {
-                    let decor = env
-                        .call_method(
-                            &window,
-                            jni_str!("getDecorView"),
-                            jni_sig!("()Landroid/view/View;"),
-                            &[],
-                        )?
-                        .l()?;
-                    // Added to what is set: the status bar's appearance
-                    // lives in the same flags.
-                    let flags = env
-                        .call_method(
-                            &decor,
-                            jni_str!("getSystemUiVisibility"),
-                            jni_sig!("()I"),
-                            &[],
-                        )?
-                        .i()?;
-                    env.call_method(
-                        &decor,
-                        jni_str!("setSystemUiVisibility"),
-                        jni_sig!("(I)V"),
-                        &[JValue::Int(flags | layout)],
-                    )?;
-                }
-            }
-            Ok(())
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -158,6 +95,33 @@ mod tests {
             let setup = window_setup(AndroidApi::from_level(level));
             assert_eq!(setup.soft_input, SOFT_INPUT_ADJUST_RESIZE, "API {level}");
             assert_eq!(setup.edge_to_edge, edge_to_edge, "API {level}");
+        }
+    }
+
+    /// `FluiActivity` applies this table: its soft input mode, the level
+    /// from which it stops the decor fitting the system windows, and the
+    /// layout flags it adds below that level are what [`window_setup`]
+    /// answers on each side of the boundary.
+    #[test]
+    fn fluiactivity_applies_this_table() {
+        let activity = crate::owner::android::java_host::java_source(
+            crate::owner::android::java_host::ACTIVITY_CLASS,
+        );
+        let below = window_setup(AndroidApi::from_level(29));
+        let from = window_setup(AndroidApi::from_level(30));
+        let EdgeToEdge::LayoutFlags(flags) = below.edge_to_edge else {
+            panic!("below API 30 the window lays out through the flags");
+        };
+        assert_eq!(from.edge_to_edge, EdgeToEdge::DecorDoesNotFit);
+        assert_eq!(below.soft_input, from.soft_input, "one mode on every level");
+        for stated in [
+            format!("static final int SOFT_INPUT_MODE = {};", from.soft_input),
+            "static final int DECOR_DOES_NOT_FIT_FROM_API = 30;".to_owned(),
+            format!("static final int EDGE_TO_EDGE_LAYOUT_FLAGS = {flags};"),
+            "if (Build.VERSION.SDK_INT >= DECOR_DOES_NOT_FIT_FROM_API) {".to_owned(),
+            "getWindow().setSoftInputMode(SOFT_INPUT_MODE);".to_owned(),
+        ] {
+            assert!(activity.contains(&stated), "{stated:?} in FluiActivity");
         }
     }
 }

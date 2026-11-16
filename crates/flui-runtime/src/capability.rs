@@ -78,6 +78,16 @@ pub enum CapabilityConflict {
         /// The name both declare.
         name: &'static str,
     },
+    /// A capability's `NAME` is not a `ResultKey` (1 to 64 bytes of
+    /// printable ASCII), under which the Android host keys its provider's
+    /// requests for results.
+    #[error("capability `{name}` has a name that is not a result key: {reason}")]
+    InvalidName {
+        /// The name.
+        name: &'static str,
+        /// Why it is not a key.
+        reason: flui_platform::capability::InvalidResultKey,
+    },
 }
 
 /// The providers a UI runtime acquires platform capabilities from, keyed by
@@ -217,6 +227,9 @@ impl CapabilityRegistryBuilder {
         let mut chosen: HashMap<TypeId, RegisteredProvider> = HashMap::new();
         for (tier, provider) in self.registrations {
             let (capability, name) = (provider.capability(), provider.name());
+            if let Err(reason) = flui_platform::capability::ResultKey::try_new(name) {
+                return Err(CapabilityConflict::InvalidName { name, reason });
+            }
             if *names.entry(name).or_insert(capability) != capability {
                 return Err(CapabilityConflict::SharedName { name });
             }

@@ -430,46 +430,59 @@ impl Drop for Answering {
 fn perform_on_view(app: &AndroidApp, constant: i32, answers: &Arc<AndroidViewAnswers>) {
     let answering = Answering(Some(Arc::clone(answers)));
     let app = app.clone();
-    app.clone().run_on_java_main_thread(Box::new(move || {
-        let result = crate::owner::android::activity::with_activity(&app, |env, activity| {
-            let window = env
-                .call_method(
-                    activity,
-                    jni_str!("getWindow"),
-                    jni_sig!("()Landroid/view/Window;"),
-                    &[],
+    let poster = app.clone();
+    crate::owner::android::main_thread::post(
+        &poster,
+        "performHapticFeedback",
+        move || {
+            let result = crate::owner::android::activity::with_activity(&app, |env, activity| {
+                let window = env
+                    .call_method(
+                        activity,
+                        jni_str!("getWindow"),
+                        jni_sig!("()Landroid/view/Window;"),
+                        &[],
+                    )?
+                    .l()?;
+                let decor = env
+                    .call_method(
+                        &window,
+                        jni_str!("getDecorView"),
+                        jni_sig!("()Landroid/view/View;"),
+                        &[],
+                    )?
+                    .l()?;
+                env.call_method(
+                    &decor,
+                    jni_str!("performHapticFeedback"),
+                    jni_sig!("(I)Z"),
+                    &[JValue::Int(constant)],
                 )?
-                .l()?;
-            let decor = env
-                .call_method(
-                    &window,
-                    jni_str!("getDecorView"),
-                    jni_sig!("()Landroid/view/View;"),
-                    &[],
-                )?
-                .l()?;
-            env.call_method(
-                &decor,
-                jni_str!("performHapticFeedback"),
-                jni_sig!("(I)Z"),
-                &[JValue::Int(constant)],
-            )?
-            .z()
-        });
-        let answer = match result {
-            Ok(true) => AndroidFeedbackAnswer::Played,
-            Ok(false) => AndroidFeedbackAnswer::Declined,
-            Err(error) => {
-                tracing::warn!(
-                    target: "flui_native::android",
-                    %error,
-                    "haptic feedback did not reach the decor view"
-                );
-                AndroidFeedbackAnswer::Failed
-            }
-        };
-        answering.answer(answer);
-    }));
+                .z()
+            });
+            let answer = match result {
+                Ok(true) => AndroidFeedbackAnswer::Played,
+                Ok(false) => AndroidFeedbackAnswer::Declined,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "flui_native::android",
+                        %error,
+                        "haptic feedback did not reach the decor view"
+                    );
+                    AndroidFeedbackAnswer::Failed
+                }
+            };
+            answering.answer(answer);
+            Ok(())
+        },
+        |failure: crate::owner::android::main_thread::PostFailure| {
+            tracing::warn!(
+                target: "flui_native::android",
+                ?failure,
+                "haptic feedback was not posted to the decor view"
+            );
+        },
+    );
 }
 
 impl PlatformHaptics for AndroidHaptics {

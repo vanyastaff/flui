@@ -1,37 +1,47 @@
 //! The requests one Activity takes for results, and how each answer finds
-//! its request (ADR-0154 §9, ADR-0255 decision 8).
+//! its request (ADR-0154 §9, ADR-0340 §2).
 //!
 //! A provider's request is minted a [`ResultToken`] here and handed to
 //! `FluiHost.launch` on the Java main thread with this Activity's epoch, a
 //! number `FluiHost.nextEpoch` gives each platform of the process. Java picks
 //! the request code Android sees from the range it keeps for the host, keeps
-//! the epoch, the token and the key beside it, saves the open requests with
-//! the Activity's state, and queues the answer `onActivityResult` brings with
-//! all three. The owner drains the queue ([`Answer::from_drained`]) and
-//! [`ResultRouter::answer`] routes it:
+//! the epoch, the token and the key's two parts beside it, saves the started
+//! requests with the Activity's state, and queues the answer
+//! `onActivityResult` brings with all of them. The owner drains the queue
+//! ([`Answer::from_drained`]) and [`ResultRouter::answer`] routes it:
 //!
-//! - an answer of this epoch settles the open request with its token, once;
-//!   an answer for a token that is not open (cancelled, already answered) is
-//!   stale and dropped;
+//! - an answer of this epoch settles the open request with its token, once,
+//!   whatever its key reads as; an answer for a token that is not open
+//!   (cancelled, already answered) is stale and dropped;
 //! - an answer of another epoch belongs to an earlier Activity, whose runtime
 //!   ended with it: it settles a [`reattach`](ResultRouter::open_reattach)
 //!   waiting under its key, or waits for one, at most [`MAX_EARLIER`] at
 //!   once. Epoch 0 names a request Java restored from the saved state of a
-//!   process that died.
+//!   process that died. Whether anything is still to come under a key is
+//!   Java's to say (`FluiHost.stillToCome`): `FluiActivity` restores the
+//!   saved requests before `NativeActivity.onCreate` starts `android_main`,
+//!   so no provider asks before they are known.
 //!
-//! A request the host could not hand to Android (its call failed or
-//! panicked, or its posted work was dropped) ends through
-//! [`ResultRouter::hand_off_failed`]. The router is owner-local and runs no
-//! user code: what it settles comes back as a [`Delivery`], which the caller
+//! The `Intent` an answer carries is held here, under its request's token,
+//! until the provider hands its [`ResultData`] to `Activity::take_data` or
+//! drops it: a result nobody receives (a dropped completion, a retired
+//! runtime, a provider that went) releases it when its `ResultData` drops,
+//! which [`ResultRouter::sweep`] sees. A launch the Java main thread never
+//! takes within [`HAND_OFF_LIMIT`] ends as `HandOffFailed`
+//! ([`ResultRouter::overdue`]). The router is owner-local and runs no user
+//! code: what it settles comes back as a [`Delivery`], which the caller
 //! resolves once its own borrow has ended.
 
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
+use std::time::Duration;
 
 use flui_platform::capability::{
-    ActivityResult, CompletionSource, MAX_OPEN_REQUESTS, MAX_REQUEST_KEY_LEN, RequestKey, Resolver,
-    ResultCode, ResultOutcome, ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
+    ActivityResult, CompletionSource, MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY,
+    RequestKey, Resolver, ResultCode, ResultData, ResultDataHold, ResultKey, ResultOutcome,
+    ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
 };
+use web_time::Instant;
 
 /// `FluiHost.ANSWER_RESULT`: `onActivityResult` answered the request.
 pub(crate) const ANSWER_RESULT: i64 = 1;
@@ -40,11 +50,15 @@ pub(crate) const ANSWER_NOT_LAUNCHED: i64 = 2;
 /// `FluiHost.ANSWER_TOO_MANY`: the host held as many requests across the
 /// process as it holds.
 pub(crate) const ANSWER_TOO_MANY: i64 = 3;
-/// The numbers of one answer in `FluiHost.drainAnswers`: epoch, token, kind,
+/// The numbers of one answer in `FluiHost.peekAnswers`: epoch, token, kind,
 /// result code.
 pub(crate) const ANSWER_NUMBERS: usize = 4;
 /// The most answers of earlier Activities that wait for a reattachment.
 pub(crate) const MAX_EARLIER: usize = MAX_OPEN_REQUESTS;
+/// How long a launch may wait for the Java main thread to take it before it
+/// ends as `HandOffFailed`: longer than Android lets the main thread stall
+/// before it reports the application not responding.
+pub(crate) const HAND_OFF_LIMIT: Duration = Duration::from_secs(10);
 
 /// What one request was answered with; `D` is the `Intent` as the host holds
 /// it.
@@ -54,7 +68,7 @@ pub(crate) enum Reply<D> {
     Result {
         /// The code it finished with.
         code: ResultCode,
-        /// The `Intent` it answered with, if any.
+        /// The `Intent` it answered with, if any, and readable.
         data: Option<D>,
     },
     /// Android refused to start it.
@@ -71,46 +85,34 @@ pub(crate) struct Answer<D> {
     pub(crate) epoch: u64,
     /// The request's token, as the Java side carried it.
     pub(crate) token: u64,
-    /// The request's key, as [`RequestKey`] spells it.
-    pub(crate) key: Box<str>,
+    /// The request's capability and key, each as a [`ResultKey`]; `None`
+    /// when either could not be read or is not one.
+    pub(crate) key: Option<(Box<str>, Box<str>)>,
     /// What it was answered with.
     pub(crate) reply: Reply<D>,
 }
 
-/// Whether `key` could spell a [`RequestKey`]: what a drained key is held to
-/// before it is kept.
-pub(crate) fn key_fits(key: &str) -> bool {
-    !key.is_empty() && key.len() <= MAX_REQUEST_KEY_LEN && key.bytes().all(|b| b.is_ascii_graphic())
-}
-
 impl<D> Answer<D> {
-    /// The answers `FluiHost.drainAnswers` returned: [`ANSWER_NUMBERS`]
-    /// numbers each, oldest first, with one key and one `Intent` (or none)
-    /// each. Lengths that disagree are a defect of one side, which the
-    /// handshake rules out: nothing is read, and it is logged. An answer of
-    /// a kind this library does not know, or whose key could not spell a
-    /// [`RequestKey`], is skipped.
+    /// The answers `FluiHost.peekAnswers` returned: [`ANSWER_NUMBERS`]
+    /// numbers each, oldest first, with each one's capability, key and
+    /// `Intent`, each `None` where it could not be read. Each answer is read
+    /// on its own: one whose key could not be read still settles this
+    /// Activity's request by its token, and one of a kind this library does
+    /// not know is skipped and logged; the rest are delivered. Where the
+    /// lengths disagree (a defect of one side), the answers all of them hold
+    /// are read.
     pub(crate) fn from_drained(
         numbers: &[i64],
+        capabilities: Vec<Option<String>>,
         keys: Vec<Option<String>>,
         data: Vec<Option<D>>,
     ) -> Vec<Self> {
-        let (rows, rest) = numbers.as_chunks::<ANSWER_NUMBERS>();
-        if !rest.is_empty() || rows.len() != keys.len() || rows.len() != data.len() {
-            tracing::warn!(
-                target: "flui_native::android",
-                numbers = numbers.len(),
-                keys = keys.len(),
-                data = data.len(),
-                "FluiHost's answers are not laid out as this library reads them"
-            );
-            return Vec::new();
-        }
+        let (rows, _) = numbers.as_chunks::<ANSWER_NUMBERS>();
         rows.iter()
+            .zip(capabilities)
             .zip(keys)
             .zip(data)
-            .filter_map(|((&[epoch, token, kind, code], key), data)| {
-                let key = key.filter(|key| key_fits(key))?;
+            .filter_map(|(((&[epoch, token, kind, code], capability), key), data)| {
                 let reply = match kind {
                     ANSWER_RESULT => Reply::Result {
                         code: ResultCode::from_raw(i32::try_from(code).ok()?),
@@ -127,10 +129,16 @@ impl<D> Answer<D> {
                         return None;
                     }
                 };
+                let key = capability
+                    .zip(key)
+                    .filter(|(capability, key)| {
+                        ResultKey::check(capability).is_ok() && ResultKey::check(key).is_ok()
+                    })
+                    .map(|(capability, key)| (capability.into_boxed_str(), key.into_boxed_str()));
                 Some(Self {
                     epoch: epoch.cast_unsigned(),
                     token: token.cast_unsigned(),
-                    key: key.into_boxed_str(),
+                    key,
                     reply,
                 })
             })
@@ -152,7 +160,18 @@ struct Open {
     token: ResultToken,
     key: RequestKey,
     purpose: Purpose,
+    /// When the launch was posted to the Java main thread, until it took it;
+    /// `None` once taken, and for a reattachment.
+    posted: Option<Instant>,
     resolver: Resolver<ResultOutcome>,
+}
+
+/// An `Intent` held for its provider.
+struct Held<D> {
+    token: ResultToken,
+    capability: ResultKey,
+    data: D,
+    hold: ResultDataHold,
 }
 
 /// What became of an answer, for the owner's log and the tests.
@@ -167,8 +186,9 @@ pub(crate) enum Routed {
     /// This Activity's, for a token that is not open: cancelled or already
     /// answered.
     Stale,
-    /// An earlier Activity's that nothing can receive: a refused launch,
-    /// [`MAX_EARLIER`] answers already waiting, or this Activity has ended.
+    /// An earlier Activity's that nothing can receive: a refused launch, a
+    /// key that could not be read, [`MAX_EARLIER`] answers already waiting,
+    /// or this Activity has ended.
     LetGo,
 }
 
@@ -182,8 +202,8 @@ impl Delivery {
         self.0.push((resolver, outcome));
     }
 
-    /// Resolve each outcome. A runtime that retired since the request was
-    /// taken receives nothing; its completion already ended.
+    /// Resolve each outcome. A completion nobody holds any more drops what
+    /// it would have received, which releases an `Intent` in it.
     pub(crate) fn deliver(self) {
         for (resolver, outcome) in self.0 {
             let _ = resolver.resolve(outcome);
@@ -198,26 +218,28 @@ impl Delivery {
 
 /// An earlier Activity's answer waiting for its key.
 struct Earlier<D> {
+    capability: Box<str>,
     key: Box<str>,
     code: ResultCode,
     data: Option<D>,
 }
 
 /// The requests of one Activity, the answers of earlier ones that wait for
-/// their key, and the answered `Intent`s, of type `D`, held for
-/// [`take_data`](Self::take_data).
+/// their key, and the answered `Intent`s, of type `D`, held for their
+/// providers.
 pub(crate) struct ResultRouter<D> {
     /// This Activity's epoch, which `FluiHost.nextEpoch` minted.
     epoch: NonZeroU64,
     mint: ResultTokenMint,
-    /// With `held`, at most [`MAX_OPEN_REQUESTS`].
+    /// With `held`, at most [`MAX_OPEN_REQUESTS`], and per capability
+    /// [`MAX_OPEN_REQUESTS_PER_CAPABILITY`].
     open: Vec<Open>,
     /// Earlier Activities' answers, oldest first; at most [`MAX_EARLIER`].
     earlier: VecDeque<Earlier<D>>,
-    /// The `Intent` each answered request received, oldest first, until it
-    /// is taken. Each came from an admitted request, so with `open` it stays
-    /// within [`MAX_OPEN_REQUESTS`] and none is ever let go to make room.
-    held: Vec<(ResultToken, D)>,
+    /// The `Intent` each answered request received, until its provider takes
+    /// it or lets its `ResultData` go. Each came from an admitted request, so
+    /// none is ever let go to make room.
+    held: Vec<Held<D>>,
     ended: bool,
 }
 
@@ -243,18 +265,37 @@ impl<D> ResultRouter<D> {
         self.epoch
     }
 
-    /// Whether another request may open now.
+    /// Release every held `Intent` whose provider let its `ResultData` go.
+    pub(crate) fn sweep(&mut self) {
+        self.held.retain(|held| !held.hold.is_released());
+    }
+
+    /// Whether `capability` may open another request now.
     ///
     /// # Errors
     ///
     /// [`ResultRefused::ActivityEnded`] once [`end`](Self::end) ran, and
     /// [`ResultRefused::TooManyOpen`] while the open requests and the
-    /// `Intent`s not taken yet number [`MAX_OPEN_REQUESTS`].
-    pub(crate) fn admits(&self) -> Result<(), ResultRefused> {
+    /// `Intent`s not taken yet number [`MAX_OPEN_REQUESTS`], or
+    /// [`MAX_OPEN_REQUESTS_PER_CAPABILITY`] of `capability`'s.
+    pub(crate) fn admits(&mut self, capability: ResultKey) -> Result<(), ResultRefused> {
         if self.ended {
             return Err(ResultRefused::ActivityEnded);
         }
-        if self.open.len() + self.held.len() >= MAX_OPEN_REQUESTS {
+        self.sweep();
+        let mine = self
+            .open
+            .iter()
+            .filter(|open| open.key.capability() == capability)
+            .count()
+            + self
+                .held
+                .iter()
+                .filter(|held| held.capability == capability)
+                .count();
+        if self.open.len() + self.held.len() >= MAX_OPEN_REQUESTS
+            || mine >= MAX_OPEN_REQUESTS_PER_CAPABILITY
+        {
             return Err(ResultRefused::TooManyOpen);
         }
         Ok(())
@@ -262,10 +303,11 @@ impl<D> ResultRouter<D> {
 
     /// A token and a pending completion for one more request, if admitted.
     fn take_token(
-        &self,
+        &mut self,
         completions: &CompletionSource,
+        capability: ResultKey,
     ) -> Result<(ResultToken, ResultRequest, Resolver<ResultOutcome>), ResultRefused> {
-        self.admits()?;
+        self.admits(capability)?;
         let token = self
             .mint
             .next()
@@ -274,17 +316,31 @@ impl<D> ResultRouter<D> {
         Ok((token, ResultRequest::new(token, completion), resolver))
     }
 
-    /// The answer `code` for the request `token`, holding `data` under it.
-    fn settle(&mut self, token: ResultToken, code: ResultCode, data: Option<D>) -> ActivityResult {
-        let carried = data.is_some();
-        if let Some(data) = data {
-            self.held.push((token, data));
-        }
-        ActivityResult::new(code, carried)
+    /// The answer `code` for the request `token` of `capability`, holding
+    /// `data` under it.
+    fn settle(
+        &mut self,
+        token: ResultToken,
+        capability: ResultKey,
+        code: ResultCode,
+        data: Option<D>,
+    ) -> ActivityResult {
+        let data = data.map(|data| {
+            let (handed, hold) = ResultData::new(token);
+            self.held.push(Held {
+                token,
+                capability,
+                data,
+                hold,
+            });
+            handed
+        });
+        ActivityResult::new(code, data)
     }
 
-    /// Open a request for an activity this Activity is about to start under
-    /// `key`; the caller hands Java its token with [`epoch`](Self::epoch).
+    /// Open a request for an activity this Activity posts to the Java main
+    /// thread at `now` under `key`; the caller hands Java its token with
+    /// [`epoch`](Self::epoch).
     ///
     /// # Errors
     ///
@@ -293,15 +349,57 @@ impl<D> ResultRouter<D> {
         &mut self,
         completions: &CompletionSource,
         key: RequestKey,
+        now: Instant,
     ) -> Result<ResultRequest, ResultRefused> {
-        let (token, request, resolver) = self.take_token(completions)?;
+        let (token, request, resolver) = self.take_token(completions, key.capability())?;
         self.open.push(Open {
             token,
             key,
             purpose: Purpose::Launched,
+            posted: Some(now),
             resolver,
         });
         Ok(request)
+    }
+
+    /// The Java main thread took the launch `token`: it no longer has a
+    /// deadline.
+    pub(crate) fn handed(&mut self, token: ResultToken) {
+        if let Some(open) = self.open.iter_mut().find(|open| open.token == token) {
+            open.posted = None;
+        }
+    }
+
+    /// When the oldest launch not yet taken by the Java main thread is due.
+    pub(crate) fn next_deadline(&self) -> Option<Instant> {
+        self.open
+            .iter()
+            .filter_map(|open| open.posted)
+            .min()
+            .map(|posted| posted + HAND_OFF_LIMIT)
+    }
+
+    /// The launches the Java main thread has not taken within
+    /// [`HAND_OFF_LIMIT`] of `now`: each ends as
+    /// [`ResultRefused::HandOffFailed`], and their tokens are returned for
+    /// the caller to cancel on the Java side, should the work run late.
+    pub(crate) fn overdue(&mut self, now: Instant) -> (Vec<ResultToken>, Delivery) {
+        let mut delivery = Delivery::default();
+        let mut tokens = Vec::new();
+        let mut index = 0;
+        while index < self.open.len() {
+            let due = self.open[index]
+                .posted
+                .is_some_and(|posted| now.saturating_duration_since(posted) >= HAND_OFF_LIMIT);
+            if due {
+                let open = self.open.remove(index);
+                tokens.push(open.token);
+                delivery.push(open.resolver, Err(ResultRefused::HandOffFailed));
+            } else {
+                index += 1;
+            }
+        }
+        (tokens, delivery)
     }
 
     /// Open a reattachment under `key`: settled with the oldest earlier
@@ -320,25 +418,26 @@ impl<D> ResultRouter<D> {
         key: RequestKey,
         still_to_come: bool,
     ) -> Result<(ResultRequest, Delivery), ResultRefused> {
-        self.admits()?;
+        self.admits(key.capability())?;
         let waiting = self
             .earlier
             .iter()
-            .position(|earlier| key.is_spelled(&earlier.key));
+            .position(|earlier| key.matches(&earlier.capability, &earlier.key));
         if waiting.is_none() && !still_to_come {
             return Err(ResultRefused::NothingPending);
         }
-        let (token, request, resolver) = self.take_token(completions)?;
+        let (token, request, resolver) = self.take_token(completions, key.capability())?;
         let mut delivery = Delivery::default();
         match waiting.and_then(|index| self.earlier.remove(index)) {
             Some(earlier) => {
-                let outcome = Ok(self.settle(token, earlier.code, earlier.data));
+                let outcome = Ok(self.settle(token, key.capability(), earlier.code, earlier.data));
                 delivery.push(resolver, outcome);
             }
             None => self.open.push(Open {
                 token,
                 key,
                 purpose: Purpose::Reattached,
+                posted: None,
                 resolver,
             }),
         }
@@ -357,26 +456,29 @@ impl<D> ResultRouter<D> {
             };
             let open = self.open.swap_remove(index);
             let outcome = match answer.reply {
-                Reply::Result { code, data } => Ok(self.settle(open.token, code, data)),
+                Reply::Result { code, data } => {
+                    Ok(self.settle(open.token, open.key.capability(), code, data))
+                }
                 Reply::NotLaunched => Err(ResultRefused::NotLaunched),
                 Reply::TooMany => Err(ResultRefused::TooManyOpen),
             };
             delivery.push(open.resolver, outcome);
             return (Routed::Settled, delivery);
         }
-        let Reply::Result { code, data } = answer.reply else {
-            // The earlier Activity's request never started; its runtime
-            // ended with it, and nothing waits for a refusal.
+        let (Reply::Result { code, data }, Some((capability, key))) = (answer.reply, answer.key)
+        else {
+            // The earlier Activity's request never started, or its key could
+            // not be read: its runtime ended with it, and nothing can claim it.
             return (Routed::LetGo, delivery);
         };
         let waiting = self.open.iter().position(|open| {
-            open.purpose == Purpose::Reattached && open.key.is_spelled(&answer.key)
+            open.purpose == Purpose::Reattached && open.key.matches(&capability, &key)
         });
         if let Some(index) = waiting {
             // `remove`, not `swap_remove`: of two reattachments under one
             // key, the older receives the older answer.
             let open = self.open.remove(index);
-            let outcome = Ok(self.settle(open.token, code, data));
+            let outcome = Ok(self.settle(open.token, open.key.capability(), code, data));
             delivery.push(open.resolver, outcome);
             return (Routed::Reattached, delivery);
         }
@@ -384,7 +486,8 @@ impl<D> ResultRouter<D> {
             return (Routed::LetGo, delivery);
         }
         self.earlier.push_back(Earlier {
-            key: answer.key,
+            capability,
+            key,
             code,
             data,
         });
@@ -393,7 +496,7 @@ impl<D> ResultRouter<D> {
 
     /// The host could not hand the launched request `token` to Android: it
     /// ends as [`ResultRefused::HandOffFailed`]. `None` when it is not open
-    /// (answered or cancelled meanwhile).
+    /// (answered, cancelled or overdue meanwhile).
     pub(crate) fn hand_off_failed(&mut self, token: ResultToken) -> Option<Delivery> {
         let index = self
             .open
@@ -405,11 +508,12 @@ impl<D> ResultRouter<D> {
         Some(delivery)
     }
 
-    /// The `Intent` the request `token` was answered with, once; `None` when
-    /// it carried none, it was taken, or the Activity ended.
-    pub(crate) fn take_data(&mut self, token: ResultToken) -> Option<D> {
-        let index = self.held.iter().position(|(held, _)| *held == token)?;
-        Some(self.held.remove(index).1)
+    /// The `Intent` `data` names, once; `None` when the Activity ended.
+    pub(crate) fn take_data(&mut self, data: ResultData) -> Option<D> {
+        let token = data.token();
+        drop(data);
+        let index = self.held.iter().position(|held| held.token == token)?;
+        Some(self.held.remove(index).data)
     }
 
     /// End the open request `token` as [`ResultRefused::Cancelled`]; what it
@@ -454,6 +558,11 @@ impl<D> ResultRouter<D> {
     fn open_len(&self) -> usize {
         self.open.len()
     }
+
+    #[cfg(test)]
+    fn held_len(&self) -> usize {
+        self.held.len()
+    }
 }
 
 #[cfg(test)]
@@ -462,14 +571,16 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use flui_platform::capability::{
-        Abandoned, Completion, CompletionSource, MAX_OPEN_REQUESTS, MAX_REQUEST_KEY_LEN, OwnerJob,
-        OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions, RequestKey, ResultCode,
-        ResultKey, ResultOutcome, ResultRefused, ResultRequest, ResultToken,
+        Abandoned, ActivityResult, Completion, CompletionSource, MAX_OPEN_REQUESTS,
+        MAX_OPEN_REQUESTS_PER_CAPABILITY, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
+        PendingCompletions, RequestKey, ResultCode, ResultKey, ResultOutcome, ResultRefused,
+        ResultRequest, ResultToken,
     };
+    use web_time::Instant;
 
     use super::{
         ANSWER_NOT_LAUNCHED, ANSWER_NUMBERS, ANSWER_RESULT, ANSWER_TOO_MANY, Answer, Delivery,
-        MAX_EARLIER, Purpose, Reply, ResultRouter, Routed,
+        HAND_OFF_LIMIT, MAX_EARLIER, Purpose, Reply, ResultRouter, Routed,
     };
 
     const fn key(name: &'static str) -> ResultKey {
@@ -479,7 +590,7 @@ mod tests {
         }
     }
 
-    /// One capability's key, and the same key under another capability.
+    /// One capability's keys, and the same key under another capability.
     const PICK: RequestKey = RequestKey::new(key("files"), key("pick"));
     const SHARE: RequestKey = RequestKey::new(key("files"), key("share"));
     const OTHER_PICK: RequestKey = RequestKey::new(key("camera"), key("pick"));
@@ -549,6 +660,14 @@ mod tests {
         fn outcome(&mut self) -> Option<Result<ResultOutcome, Abandoned>> {
             self.completion.poll()
         }
+
+        /// The answer it settled with; panics when it settled otherwise.
+        fn answered(&mut self) -> ActivityResult {
+            match self.outcome() {
+                Some(Ok(Ok(result))) => result,
+                other => panic!("an answer: {other:?}"),
+            }
+        }
     }
 
     /// The `Intent` a test's answer carries: a name the router holds as it
@@ -559,7 +678,11 @@ mod tests {
     type Router = ResultRouter<Held>;
 
     fn launch(router: &mut Router, owner: &Owner, key: RequestKey) -> Asked {
-        Asked::of(router.open_launch(&owner.source, key).expect("admitted"))
+        Asked::of(
+            router
+                .open_launch(&owner.source, key, Instant::now())
+                .expect("admitted"),
+        )
     }
 
     /// A reattachment under `key` while an earlier request is still to come.
@@ -570,13 +693,17 @@ mod tests {
         (Asked::of(request), delivery)
     }
 
+    fn parts(key: RequestKey) -> (Box<str>, Box<str>) {
+        (key.capability().as_str().into(), key.key().as_str().into())
+    }
+
     /// An answer of `code` for the request `token` of `epoch` under `key`,
     /// carrying the `Intent` `"intent"`.
     fn result(epoch: u64, token: u64, key: RequestKey, code: ResultCode) -> Answer<Held> {
         answer(
             epoch,
             token,
-            key,
+            Some(parts(key)),
             Reply::Result {
                 code,
                 data: Some("intent"),
@@ -584,19 +711,17 @@ mod tests {
         )
     }
 
-    fn answer(epoch: u64, token: u64, key: RequestKey, reply: Reply<Held>) -> Answer<Held> {
+    fn answer(
+        epoch: u64,
+        token: u64,
+        key: Option<(Box<str>, Box<str>)>,
+        reply: Reply<Held>,
+    ) -> Answer<Held> {
         Answer {
             epoch,
             token,
-            key: key.to_string().into_boxed_str(),
+            key,
             reply,
-        }
-    }
-
-    fn code_of(settled: Option<Result<ResultOutcome, Abandoned>>) -> Result<ResultCode, String> {
-        match settled {
-            Some(Ok(Ok(result))) => Ok(result.code()),
-            other => Err(format!("{other:?}")),
         }
     }
 
@@ -608,9 +733,10 @@ mod tests {
     }
 
     /// Each answer settles the request whose token it carries, once, at the
-    /// next owner turn and not inside the drain; a second answer for that
-    /// token and one for a token never minted are stale. Two requests in
-    /// flight settle in the order their answers arrive.
+    /// next owner turn and not inside the drain, even when its key could not
+    /// be read; a second answer for that token and one for a token never
+    /// minted are stale. Two requests in flight settle in the order their
+    /// answers arrive.
     #[test]
     fn an_answer_settles_the_request_its_token_names_once() {
         let owner = Owner::new();
@@ -625,7 +751,7 @@ mod tests {
         delivery.deliver();
         assert!(second.outcome().is_none(), "settles at an owner turn");
         owner.turn();
-        assert_eq!(code_of(second.outcome()), Ok(ResultCode::Ok));
+        assert_eq!(second.answered().code(), ResultCode::Ok);
         assert!(first.outcome().is_none(), "the other request still waits");
 
         let (routed, delivery) =
@@ -635,12 +761,19 @@ mod tests {
         let (routed, _) = router.answer(result(7, u64::MAX, PICK, ResultCode::Ok));
         assert_eq!(routed, Routed::Stale, "a token never minted");
 
-        let (routed, delivery) =
-            router.answer(result(7, first.token().get(), PICK, ResultCode::Other(5)));
-        assert_eq!(routed, Routed::Settled);
+        let (routed, delivery) = router.answer(answer(
+            7,
+            first.token().get(),
+            None,
+            Reply::Result {
+                code: ResultCode::Other(5),
+                data: None,
+            },
+        ));
+        assert_eq!(routed, Routed::Settled, "its own key unread, by token");
         delivery.deliver();
         owner.turn();
-        assert_eq!(code_of(first.outcome()), Ok(ResultCode::Other(5)));
+        assert_eq!(first.answered().code(), ResultCode::Other(5));
         assert_eq!(router.open_len(), 0);
     }
 
@@ -648,25 +781,46 @@ mod tests {
     /// own reason: Android refused (`NotLaunched`), the host's Java side was
     /// full (`TooManyOpen`), the host could not hand it over
     /// (`HandOffFailed`, for a failed call, a dropped closure or a panic
-    /// alike), or the provider cancelled it (`Cancelled`, and Java finishes
-    /// the activity, whose later answer is stale). A token handled twice
-    /// does nothing the second time.
+    /// alike, and for a launch the Java main thread never took within the
+    /// limit, whose token comes back to cancel), or the provider cancelled it
+    /// (`Cancelled`, and Java finishes the activity, whose later answer is
+    /// stale). A token handled twice does nothing the second time.
     #[test]
     fn each_launch_that_is_not_answered_ends_with_its_reason() {
         let owner = Owner::new();
         let mut router = Router::new(epoch(1));
+        let start = Instant::now();
         let mut refused = launch(&mut router, &owner, PICK);
         let mut full = launch(&mut router, &owner, PICK);
         let mut lost = launch(&mut router, &owner, PICK);
         let mut cancelled = launch(&mut router, &owner, SHARE);
+        let mut stuck = Asked::of(
+            router
+                .open_launch(&owner.source, SHARE, start)
+                .expect("admitted"),
+        );
+        for taken in [&refused, &full, &lost, &cancelled] {
+            router.handed(taken.token());
+        }
 
-        let (routed, delivery) =
-            router.answer(answer(1, refused.token().get(), PICK, Reply::NotLaunched));
-        assert_eq!(routed, Routed::Settled);
-        delivery.deliver();
-        let (routed, delivery) = router.answer(answer(1, full.token().get(), PICK, Reply::TooMany));
-        assert_eq!(routed, Routed::Settled);
-        delivery.deliver();
+        router
+            .answer(answer(
+                1,
+                refused.token().get(),
+                Some(parts(PICK)),
+                Reply::NotLaunched,
+            ))
+            .1
+            .deliver();
+        router
+            .answer(answer(
+                1,
+                full.token().get(),
+                Some(parts(PICK)),
+                Reply::TooMany,
+            ))
+            .1
+            .deliver();
         router
             .hand_off_failed(lost.token())
             .expect("open")
@@ -684,6 +838,14 @@ mod tests {
         ));
         assert_eq!(routed, Routed::Stale);
 
+        assert_eq!(router.next_deadline(), Some(start + HAND_OFF_LIMIT));
+        let (tokens, delivery) = router.overdue(start + HAND_OFF_LIMIT / 2);
+        assert!(tokens.is_empty() && delivery.len() == 0, "not yet due");
+        let (tokens, delivery) = router.overdue(start + HAND_OFF_LIMIT);
+        assert_eq!(tokens, [stuck.token()], "only the launch never taken");
+        delivery.deliver();
+        assert_eq!(router.next_deadline(), None);
+
         owner.turn();
         assert_eq!(
             refusal_of(refused.outcome()),
@@ -698,52 +860,111 @@ mod tests {
             refusal_of(cancelled.outcome()),
             Some(ResultRefused::Cancelled)
         );
+        assert_eq!(
+            refusal_of(stuck.outcome()),
+            Some(ResultRefused::HandOffFailed)
+        );
         assert_eq!(router.open_len(), 0);
     }
 
-    /// At most `MAX_OPEN_REQUESTS` are open, reattachments and answered
-    /// `Intent`s not taken yet included; the next is refused and takes no
-    /// token. An `Intent` is never let go to make room: taking it does.
+    /// At most `MAX_OPEN_REQUESTS_PER_CAPABILITY` are one capability's, open
+    /// or answered with an `Intent` not taken, and at most
+    /// `MAX_OPEN_REQUESTS` in all: a capability at its bound is refused while
+    /// another still asks, and an `Intent` is never let go to make room;
+    /// taking it, or dropping its `ResultData`, does.
     #[test]
     fn the_open_requests_and_untaken_intents_are_bounded() {
         let owner = Owner::new();
         let mut router = Router::new(epoch(1));
-        let mut open: Vec<Asked> = (1..MAX_OPEN_REQUESTS)
+        let files: Vec<Asked> = (0..MAX_OPEN_REQUESTS_PER_CAPABILITY)
             .map(|_| launch(&mut router, &owner, PICK))
             .collect();
-        let (reattached, delivery) = reattach(&mut router, &owner, SHARE);
-        assert_eq!(delivery.len(), 0, "no earlier answer waits");
-        assert_eq!(router.admits(), Err(ResultRefused::TooManyOpen));
+        assert_eq!(router.admits(key("files")), Err(ResultRefused::TooManyOpen));
         assert!(matches!(
-            router.open_launch(&owner.source, PICK),
+            router.open_reattach(&owner.source, SHARE, true),
             Err(ResultRefused::TooManyOpen)
         ));
-        assert!(matches!(
-            router.open_reattach(&owner.source, PICK, true),
-            Err(ResultRefused::TooManyOpen)
-        ));
+        let mut others: Vec<Asked> = (MAX_OPEN_REQUESTS_PER_CAPABILITY..MAX_OPEN_REQUESTS)
+            .map(|_| launch(&mut router, &owner, OTHER_PICK))
+            .collect();
+        assert_eq!(
+            router.admits(key("maps")),
+            Err(ResultRefused::TooManyOpen),
+            "every place is taken"
+        );
 
-        let last = open.pop().expect("one open");
+        let mut last = others.pop().expect("one open");
         router
-            .answer(result(1, last.token().get(), PICK, ResultCode::Ok))
+            .answer(result(1, last.token().get(), OTHER_PICK, ResultCode::Ok))
             .1
             .deliver();
+        owner.turn();
+        let mut answered = last.answered();
         assert_eq!(
-            router.admits(),
+            router.admits(key("maps")),
             Err(ResultRefused::TooManyOpen),
-            "the answered Intent still counts until it is taken"
+            "the answered Intent still counts while its provider holds it"
         );
-        assert_eq!(router.take_data(last.token()), Some("intent"));
-        let next = launch(&mut router, &owner, PICK);
-        assert!(next.token() > reattached.token(), "tokens keep increasing");
+        let data = answered.take_data().expect("it carried an Intent");
+        assert_eq!(router.take_data(data), Some("intent"));
+        assert_eq!(router.admits(key("maps")), Ok(()), "taking it made room");
+        drop(files);
+    }
+
+    /// An `Intent` nobody can receive is released: its request's completion
+    /// was dropped before the answer, so the answer is dropped with it, and
+    /// the place it took is free again; one whose runtime retired, and one a
+    /// provider received and dropped unread, too.
+    #[test]
+    fn an_intent_nobody_receives_is_released() {
+        let owner = Owner::new();
+        let mut router = Router::new(epoch(2));
+        let dropped = launch(&mut router, &owner, PICK);
+        let token = dropped.token().get();
+        drop(dropped);
+        router
+            .answer(result(2, token, PICK, ResultCode::Ok))
+            .1
+            .deliver();
+        owner.turn();
+        router.sweep();
+        assert_eq!(router.held_len(), 0, "a dropped completion holds nothing");
+
+        let mut received = launch(&mut router, &owner, PICK);
+        router
+            .answer(result(2, received.token().get(), PICK, ResultCode::Ok))
+            .1
+            .deliver();
+        owner.turn();
+        let answered = received.answered();
+        router.sweep();
+        assert_eq!(router.held_len(), 1, "held while the provider holds it");
+        drop(answered);
+        router.sweep();
+        assert_eq!(router.held_len(), 0, "released once it is dropped unread");
+
+        let retiring = Owner::new();
+        let pending = launch(&mut router, &retiring, PICK);
+        router
+            .answer(result(2, pending.token().get(), PICK, ResultCode::Ok))
+            .1
+            .deliver();
+        retiring.retire();
+        router.sweep();
+        assert_eq!(router.held_len(), 1, "the answer waits in its completion");
+        // A retired runtime's completions go with its states and handles.
+        drop(pending);
+        router.sweep();
+        assert_eq!(router.held_len(), 0, "a retired runtime holds nothing");
     }
 
     /// An answer of another epoch, an earlier Activity's (epoch 0 is one
     /// restored from a process that died), never settles this Activity's
     /// request, even one whose token has the same value: it waits for a
     /// reattachment under its key, which settles it whether it comes first or
-    /// second, the older reattachment taking the older answer. The same key
-    /// of another capability never receives it.
+    /// second, the older reattachment taking the older answer. Keys compare
+    /// part by part: the same key of another capability, and two that would
+    /// read alike joined, never receive it.
     #[test]
     fn an_earlier_activitys_answer_waits_for_its_key() {
         let owner = Owner::new();
@@ -771,8 +992,8 @@ mod tests {
         let (mut second, delivery) = reattach(&mut router, &owner, PICK);
         delivery.deliver();
         owner.turn();
-        assert_eq!(code_of(first.outcome()), Ok(ResultCode::Ok), "oldest first");
-        assert_eq!(code_of(second.outcome()), Ok(ResultCode::Other(2)));
+        assert_eq!(first.answered().code(), ResultCode::Ok, "oldest first");
+        assert_eq!(second.answered().code(), ResultCode::Other(2));
         assert!(ours.outcome().is_none(), "ours still waits for its own");
         assert!(other.outcome().is_none());
 
@@ -783,14 +1004,44 @@ mod tests {
         delivery.deliver();
         owner.turn();
         assert_eq!(
-            code_of(share.outcome()),
-            Ok(ResultCode::Canceled),
+            share.answered().code(),
+            ResultCode::Canceled,
             "the reattachment waiting longest"
         );
         assert!(later.outcome().is_none());
 
-        let (routed, _) = router.answer(answer(1, 3, PICK, Reply::NotLaunched));
+        let (routed, _) = router.answer(answer(1, 3, Some(parts(PICK)), Reply::NotLaunched));
         assert_eq!(routed, Routed::LetGo, "an earlier refusal reaches nobody");
+
+        for (waiting, arriving) in [
+            (("a", "b/c"), ("a/b", "c")),
+            (("a/b", "c"), ("a", "b/c")),
+            (("files", "pick"), ("camera", "pick")),
+        ] {
+            let mut router = Router::new(epoch(3));
+            let (mut asked, delivery) = reattach(
+                &mut router,
+                &owner,
+                RequestKey::new(key(waiting.0), key(waiting.1)),
+            );
+            assert_eq!(delivery.len(), 0);
+            let (routed, _) = router.answer(answer(
+                1,
+                1,
+                Some((arriving.0.into(), arriving.1.into())),
+                Reply::Result {
+                    code: ResultCode::Ok,
+                    data: None,
+                },
+            ));
+            assert_eq!(
+                routed,
+                Routed::Waiting,
+                "{waiting:?} never takes {arriving:?}"
+            );
+            owner.turn();
+            assert!(asked.outcome().is_none());
+        }
     }
 
     /// A reattachment with no earlier answer waiting and none still to come
@@ -821,11 +1072,22 @@ mod tests {
     }
 
     /// At most `MAX_EARLIER` earlier answers wait; one more is let go, and
-    /// the waiting ones are kept.
+    /// the waiting ones are kept. One whose key could not be read is let go:
+    /// nothing could claim it.
     #[test]
     fn the_earlier_answers_that_wait_are_bounded() {
         let owner = Owner::new();
         let mut router = Router::new(epoch(3));
+        let (routed, _) = router.answer(answer(
+            1,
+            1,
+            None,
+            Reply::Result {
+                code: ResultCode::Ok,
+                data: Some("intent"),
+            },
+        ));
+        assert_eq!(routed, Routed::LetGo, "an unread key has no claimant");
         for token in 0..MAX_EARLIER {
             let token = u64::try_from(token).expect("BUG: a small count");
             assert_eq!(
@@ -866,7 +1128,7 @@ mod tests {
             );
         }
         assert!(matches!(
-            router.open_launch(&owner.source, PICK),
+            router.open_launch(&owner.source, PICK, Instant::now()),
             Err(ResultRefused::ActivityEnded)
         ));
         assert_eq!(
@@ -875,29 +1137,10 @@ mod tests {
         );
     }
 
-    /// An answer that arrives after the runtime that asked retired settles
-    /// nothing and does not fail: the request already ended as
-    /// `OwnerRetired`.
-    #[test]
-    fn an_answer_after_the_runtime_retired_reaches_nobody() {
-        let owner = Owner::new();
-        let mut router = Router::new(epoch(5));
-        let mut request = launch(&mut router, &owner, PICK);
-        owner.retire();
-        assert!(matches!(
-            request.outcome(),
-            Some(Err(Abandoned::OwnerRetired))
-        ));
-        let (routed, delivery) =
-            router.answer(result(5, request.token().get(), PICK, ResultCode::Ok));
-        assert_eq!(routed, Routed::Settled);
-        delivery.deliver();
-        assert!(request.outcome().is_none(), "settled once, before");
-    }
-
     /// The `Intent` an answer carries stays with the router, under the token
     /// of the request it settled (a reattachment's own, for an earlier
-    /// Activity's answer), and is taken once; the end lets every one go.
+    /// Activity's answer), and is taken once through its `ResultData`; the
+    /// end lets every one go.
     #[test]
     fn an_answered_intent_is_taken_once_under_its_request() {
         let owner = Owner::new();
@@ -908,31 +1151,38 @@ mod tests {
             .1
             .deliver();
         owner.turn();
-        match asked.outcome() {
-            Some(Ok(Ok(result))) => assert!(result.has_data(), "the answer says it carried one"),
-            other => panic!("the answer: {other:?}"),
-        }
-        assert_eq!(router.take_data(asked.token()), Some("intent"));
-        assert_eq!(router.take_data(asked.token()), None, "taken once");
+        let mut answered = asked.answered();
+        assert!(answered.has_data(), "the answer says it carried one");
+        let data = answered.take_data().expect("an Intent");
+        assert_eq!(data.token(), asked.token());
+        assert_eq!(router.take_data(data), Some("intent"));
+        assert!(!answered.has_data(), "taken once");
 
         let _ = router.answer(result(1, 1, SHARE, ResultCode::Ok));
-        let (reattached, delivery) = reattach(&mut router, &owner, SHARE);
+        let (mut reattached, delivery) = reattach(&mut router, &owner, SHARE);
         delivery.deliver();
-        assert_eq!(router.take_data(reattached.token()), Some("intent"));
+        owner.turn();
+        let data = reattached.answered().take_data().expect("an Intent");
+        assert_eq!(data.token(), reattached.token(), "the reattachment's token");
+        assert_eq!(router.take_data(data), Some("intent"));
 
-        let untaken = launch(&mut router, &owner, PICK);
+        let mut untaken = launch(&mut router, &owner, PICK);
         router
             .answer(result(6, untaken.token().get(), PICK, ResultCode::Ok))
             .1
             .deliver();
+        owner.turn();
+        let data = untaken.answered().take_data().expect("an Intent");
         let _ = router.end();
-        assert_eq!(router.take_data(untaken.token()), None, "the end lets go");
+        assert_eq!(router.take_data(data), None, "the end lets go");
     }
 
     /// The answers are read as `FluiHost` lays them out, with the kinds and
-    /// the bound the Java side states; an unknown kind and a key that could
-    /// not spell a `RequestKey` are skipped, and lengths that disagree read
-    /// nothing.
+    /// the bound the Java side states, one by one: an answer of a kind this
+    /// library does not know is skipped and one whose key or `Intent` could
+    /// not be read keeps its other fields, at the head, in the middle and at
+    /// the end of a drain, and the others are read; lengths that disagree
+    /// read the answers all of them hold.
     #[test]
     fn answers_are_read_as_the_java_classes_lay_them_out() {
         let host = super::super::java_host::java_source(super::super::java_host::HOST_CLASS);
@@ -946,71 +1196,49 @@ mod tests {
             assert!(host.contains(&stated), "{stated:?} in FluiHost");
         }
 
-        let long_key = "k".repeat(MAX_REQUEST_KEY_LEN + 1);
-        let answers = Answer::from_drained(
-            &[
+        let some = |text: &str| Some(text.to_owned());
+        let too_long = "k".repeat(flui_platform::capability::MAX_RESULT_KEY_LEN + 1);
+        for at in [0, 1, 3] {
+            let mut numbers = vec![
                 7,
                 1,
                 ANSWER_RESULT,
-                -1, //
+                -1,
                 7,
                 2,
                 ANSWER_NOT_LAUNCHED,
-                0, //
-                7,
-                3,
-                99,
-                0, //
-                7,
-                4,
-                ANSWER_RESULT,
-                0, //
+                0,
                 0,
                 5,
                 ANSWER_RESULT,
-                3, //
-                7,
-                6,
-                ANSWER_TOO_MANY,
-                0,
-            ],
-            vec![
-                Some("files/pick".to_owned()),
-                Some("files/pick".to_owned()),
-                Some("files/pick".to_owned()),
-                Some(long_key),
-                Some("files/share".to_owned()),
-                Some("files/pick".to_owned()),
-            ],
-            vec![Some("intent"), None, None, None, None, None],
+                3,
+            ];
+            let mut capabilities = vec![some("files"), some("files"), some("files")];
+            let mut keys = vec![some("pick"), some("pick"), some("share")];
+            let mut data = vec![Some("intent"), None, None];
+            // A record of an unknown kind and one whose key cannot be read,
+            // at the head, in the middle or at the end.
+            numbers.splice(at * 4..at * 4, [7, 8, 99, 0, 7, 9, ANSWER_RESULT, 0]);
+            capabilities.splice(at..at, [some("files"), some("files")]);
+            keys.splice(at..at, [some("pick"), Some(too_long.clone())]);
+            data.splice(at..at, [None, None]);
+            let answers = Answer::from_drained(&numbers, capabilities, keys, data);
+            let read: Vec<_> = answers
+                .iter()
+                .map(|answer| (answer.epoch, answer.token, answer.key.is_some()))
+                .collect();
+            let mut expected = vec![(7, 1, true), (7, 2, true), (0, 5, true)];
+            expected.insert(at, (7, 9, false));
+            assert_eq!(read, expected, "poisoned at {at}");
+        }
+
+        let answers = Answer::<Held>::from_drained(
+            &[7, 1, ANSWER_TOO_MANY, 0, 7, 2, ANSWER_RESULT],
+            vec![some("files"), some("files")],
+            vec![some("pick"), some("pick")],
+            vec![None, None],
         );
-        let read: Vec<_> = answers
-            .iter()
-            .map(|answer| {
-                let reply = match &answer.reply {
-                    Reply::Result { code, data } => Some((*code, data.is_some())),
-                    Reply::NotLaunched | Reply::TooMany => None,
-                };
-                (answer.epoch, answer.token, &*answer.key, reply)
-            })
-            .collect();
-        assert_eq!(
-            read,
-            [
-                (7, 1, "files/pick", Some((ResultCode::Ok, true))),
-                (7, 2, "files/pick", None),
-                (0, 5, "files/share", Some((ResultCode::Other(3), false))),
-                (7, 6, "files/pick", None),
-            ]
-        );
-        assert!(matches!(answers[3].reply, Reply::TooMany));
-        assert!(
-            Answer::<Held>::from_drained(&[7, 1, ANSWER_RESULT], vec![None], vec![None]).is_empty(),
-            "half an answer"
-        );
-        assert!(
-            Answer::<Held>::from_drained(&[7, 1, ANSWER_RESULT, 0], vec![], vec![None]).is_empty(),
-            "a key short"
-        );
+        assert_eq!(answers.len(), 1, "half an answer is not read");
+        assert!(matches!(answers[0].reply, Reply::TooMany));
     }
 }

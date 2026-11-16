@@ -3503,7 +3503,7 @@ GPU-память простаивающего или невидимого окн
   кладёт свой `app/proguard-rules.pro`. Golden: `the_generated_manifest_matches_its_golden`,
   `the_scaffolded_gradle_script_matches_its_golden` (insta). `windowSoftInputMode` решён в ветке
   `native/android-activity-results` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края
-  до края, ставит хост на старте (`owner::android::window_setup`), счёт `WindowResized` — прогон
+  до края, ставит `FluiActivity.onCreate` (таблица — `owner::android::window_setup`), счёт `WindowResized` — прогон
   в parity «Soft-keyboard insets». Остаток LY63: `locale|layoutDirection` в `configChanges`
   шаблона и доставка смены языка хостом (сегодня он не читает языки, а цепочка резервных шрифтов
   выбирается по локали один раз при скане шрифтов среды), с тестом сгенерированного манифеста и
@@ -6008,9 +6008,12 @@ GPU-память простаивающего или невидимого окн
   Построено: провайдер возможности получает Activity из контекста (`ProviderContext::activity`;
   `HostBridge` реестра наполняет Android-раннер `flui-app` на время цикла, на других хостах —
   `None`). Activity — только Android-хоста: это не позиция таблицы хоста и не метод `Platform`,
-  `android_platform` отдаёт её мост рядом с платформой. Activity привязана к имени возможности,
-  которая её взяла (`RequestKey` — `NAME` возможности и `ResultKey` провайдера), так что две
-  возможности не получают ответы друг друга. `Activity::launch_for_result` одалживает провайдеру
+  `android_platform` отдаёт `AndroidStart` — платформу и мост Activity; мост есть у каждой
+  Android-платформы (эпоха читается до старта, и без неё старт отказывает). Activity привязана к
+  имени возможности, которая её взяла; реестр проверяет `NAME` по правилу `ResultKey`
+  (`CapabilityConflict::InvalidName`). `RequestKey` — две части, `NAME` возможности и ключ
+  провайдера, которые хранятся и сравниваются раздельно в Rust, Java и сохранённом состоянии, так
+  что две возможности не получают ответы друг друга. `Activity::launch_for_result` одалживает провайдеру
   пустой `Intent`, сделанный хостом (`IntentFrame`), так что ссылка из JNI-кода провайдера в хост
   не попадает; JNI-типов и `unsafe` в контракте нет. Запрос — `ResultToken` (`ResultTokenMint` над
   `IdMint`) и эпоха Activity (`FluiHost.nextEpoch`); код запроса Android — из диапазона хоста
@@ -6019,31 +6022,41 @@ GPU-память простаивающего или невидимого окн
   `IntentNotMade`, `NotLaunched`, `HandOffFailed`, `Cancelled`, `NothingPending`,
   `ActivityEnded`. Каждое замыкание на Java main thread идёт через
   `owner::android::main_thread::post`: тело внутри `os_entry`, отчёт о каждом выходе, кроме
-  успеха (ошибка JNI, паника, замыкание выброшено), и неудачная передача кончает запрос
-  `HandOffFailed`. Ответный `Intent` не покидает хост и owner-поток, держится под токеном до
-  `Activity::take_data` и считается в `MAX_OPEN_REQUESTS`, поэтому ничего принятого не
-  вытесняется. Очереди Java (записи, интенты, ответы) читаются целиком до того, как `FluiHost`
-  их отпускает (`peek…`/`commit…`): неудачное чтение ничего не теряет. Ответ прежней Activity
-  (эпоха 0 — процесс после смерти) ждёт `reattach` по ключу; без ожидаемого ответа `reattach`
-  отвечает `NothingPending` и места не держит (`FluiHost.stillToCome`). `flui-sdk` переэкспортирует
-  всё, что пишет провайдер. `windowSoftInputMode` (ADR-0340 §3): `adjustResize` на всех уровнях с
-  окном от края до края, решение — чистая функция уровня API (`owner::android::window_setup`),
-  ставится на Java main thread на старте. Записи без потребителя — в «Чего нет в этой серии» со
-  своими функциями.
+  успеха (ошибка JNI, паника, замыкание выброшено); `xtask panic-boundary` отмечает
+  `run_on_java_main_thread` вне этого модуля. Неудачная передача кончает запрос `HandOffFailed`
+  сразу, а не взятая Java main thread за `HAND_OFF_LIMIT` — к этому сроку, которого ждёт poll
+  цикла. Ответный `Intent` не покидает хост и owner-поток: провайдер читает его один раз, отдав
+  `ResultData` ответа в `Activity::take_data`; `ResultData`, выброшенный непрочитанным, отпускает
+  `Intent`. Удерживаемые `Intent` считаются в `MAX_OPEN_REQUESTS` и, на возможность, в
+  `MAX_OPEN_REQUESTS_PER_CAPABILITY`, поэтому ничего принятого не вытесняется и один провайдер не
+  закрывает запросы остальным. Очереди Java (записи, интенты, ответы) читаются до того, как
+  `FluiHost` их отпускает (`peek…`/`commit…`), каждая запись отдельно: неудачное чтение ничего не
+  теряет, нечитаемая запись пропускается и очередь не держит. Коды и части ключей начатых
+  запросов сохраняются с состоянием Activity и восстанавливаются до `NativeActivity.onCreate`.
+  Ответ прежней Activity (эпоха 0 — процесс после смерти) ждёт `reattach` по ключу; без
+  ожидаемого ответа `reattach` отвечает `NothingPending` и места не держит
+  (`FluiHost.stillToCome`). `flui-sdk` переэкспортирует всё, что пишет провайдер.
+  `windowSoftInputMode` (ADR-0340 §3): `adjustResize` на всех уровнях с окном от края до края,
+  ставит `FluiActivity.onCreate`; решение как данные — чистая функция уровня API
+  (`owner::android::window_setup`), и тест сверяет с ней константы `FluiActivity`. Записи без
+  потребителя — в «Чего нет в этой серии» со своими функциями.
   Тесты: `an_answer_settles_the_request_its_token_names_once`,
   `each_launch_that_is_not_answered_ends_with_its_reason`,
-  `the_open_requests_and_untaken_intents_are_bounded`,
+  `the_open_requests_and_untaken_intents_are_bounded`, `an_intent_nobody_receives_is_released`,
   `an_earlier_activitys_answer_waits_for_its_key` (с маршрутизацией без сравнения эпохи падает:
-  ответ прежней Activity закрывает свой запрос с тем же числом токена; ключ другой возможности не
-  получает ответ), `a_reattachment_with_nothing_pending_holds_nothing`,
+  ответ прежней Activity закрывает свой запрос с тем же числом токена; ключи `("a", "b/c")` и
+  `("a/b", "c")` не совпадают), `a_reattachment_with_nothing_pending_holds_nothing`,
   `the_earlier_answers_that_wait_are_bounded`, `the_end_refuses_every_open_request`,
-  `an_answer_after_the_runtime_retired_reaches_nobody`,
   `an_answered_intent_is_taken_once_under_its_request`,
-  `answers_are_read_as_the_java_classes_lay_them_out`, `posted_work_reports_every_exit_but_success`,
-  `a_report_that_panics_is_contained`, `the_window_resizes_its_insets_not_its_surface_on_every_level`,
-  `os_version_gate_table` (ворота `DecorFitsSystemWindows`); в `flui-platform` —
+  `answers_are_read_as_the_java_classes_lay_them_out` (нечитаемые записи в начале, середине и
+  конце), `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`,
+  `posted_work_reports_every_exit_but_success`, `a_report_that_panics_is_contained`,
+  `the_window_resizes_its_insets_not_its_surface_on_every_level`,
+  `fluiactivity_applies_this_table`, `os_version_gate_table` (ворота `DecorFitsSystemWindows`),
+  самопроверка `xtask panic-boundary`; в `flui-platform` —
   `a_provider_reaches_the_activity_the_host_offers`, `result_keys_and_codes_hold_their_rules`; в
-  `flui-testing` — `a_provider_sees_the_activity_the_host_offers`; в `flui-sdk` —
+  `flui-testing` — `a_provider_sees_the_activity_the_host_offers`,
+  `conflicting_registrations_fail_when_the_registry_is_built` (`InvalidName`); в `flui-sdk` —
   `a_package_provides_activity_results_against_the_sdk_alone`.
   Dex собирает workflow `Android dex` и берётся из его артефакта без правок.
   LY63 не закрыта: `locale|layoutDirection` в `configChanges` и доставка смены языка хостом

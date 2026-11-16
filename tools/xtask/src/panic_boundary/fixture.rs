@@ -8,7 +8,7 @@ pub(super) use crate::source_tree::Memory;
 pub(super) const ROOT: &str = "fixture/src/lib.rs";
 
 /// `(file, entry or item, kind)` of every planted finding.
-pub(super) const EXPECTED: [(&str, &str, Problem); 35] = [
+pub(super) const EXPECTED: [(&str, &str, Problem); 36] = [
     (WINDOWS, "planted", Unguarded),
     (WINDOWS, "first_then", Unguarded),
     (WINDOWS, "eager", Argument),
@@ -42,6 +42,7 @@ pub(super) const EXPECTED: [(&str, &str, Problem); 35] = [
     (APPLE, "Lookalike::dealloc", Unguarded),
     (APPLE, "Finalized::drop", Unguarded),
     (ANDROID, "Java_dev_flui_Planted_run", Unguarded),
+    (ANDROID, ".run_on_java_main_thread", Unguarded),
     (IDENTITY_FILE, "fn os_entry", Identity),
     (IDENTITY_FILE, "use other::os_entry", Identity),
     (IDENTITY_FILE, "struct ContainedIvars", Identity),
@@ -66,9 +67,17 @@ pub(super) fn source() -> Memory {
     )
 }
 
-const FILES: [(&str, &str); 10] = [
+const FILES: [(&str, &str); 12] = [
     (ROOT, LIB),
-    ("fixture/src/owner.rs", "pub(crate) mod panic_boundary;\n"),
+    (
+        "fixture/src/owner.rs",
+        "pub(crate) mod android;\npub(crate) mod panic_boundary;\n",
+    ),
+    (
+        "fixture/src/owner/android.rs",
+        "pub(crate) mod main_thread;\n",
+    ),
+    ("fixture/src/owner/android/main_thread.rs", POSTER_FILE),
     ("fixture/src/owner/panic_boundary.rs", BOUNDARY),
     ("fixture/src/feature.rs", FEATURE),
     (WINDOWS, WINDOWS_FILE),
@@ -455,6 +464,22 @@ extern "system" fn Java_dev_flui_Guarded_run(_env: JNIEnv, _class: JClass, handl
 #[unsafe(no_mangle)]
 extern "system" fn Java_dev_flui_Planted_run(_env: JNIEnv, _class: JClass, handle: i64) -> i64 {
     handle + 1
+}
+
+// planted: a closure posted to the Java main thread outside the posting module
+fn post_bare(app: &AndroidApp) {
+    app.run_on_java_main_thread(Box::new(|| {}));
+}
+"#;
+
+const POSTER_FILE: &str = r#"
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+
+// silent: the posting module posts, its closure inside the boundary
+pub(crate) fn post(app: &AndroidApp, body: impl FnOnce() + Send + 'static) {
+    app.run_on_java_main_thread(Box::new(move || {
+        os_entry("posted", (), AfterPanic::Answer(|()| ()), body)
+    }));
 }
 "#;
 

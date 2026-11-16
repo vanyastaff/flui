@@ -5040,42 +5040,58 @@ and wakes and never waits for the owner; the lock guards the deques alone.
 
 A capability provider reaches the Activity through its context (`ProviderContext::activity`,
 ADR-0154 §9, ADR-0340 §2). It is the Android host's alone, so it is no position of the host table
-and no method of `Platform`: `android_platform` hands the bridge of the Android loop's
-`owner::android::result_bridge::ResultBridge` out beside the platform, and `flui-app`'s Android
-runner installs it in the registry's `HostBridge` for the loop's life; on every other host the
-bridge offers none. The `Activity` a provider gets is scoped by the acquiring capability's `NAME`,
-which the registry holds unique, so the `RequestKey` of a request (capability and the provider's
-`ResultKey`) never meets another capability's. A request is a `ResultToken` the bridge mints per
-call (`ResultTokenMint`, never reissued) and the loop's epoch, which `FluiHost.nextEpoch` gives
-each platform of the process. The provider fills an `Intent` the bridge made and lends it
-(`IntentFrame`), so no reference flows from a provider's JNI code into the host. The start is
-posted to the Java main thread through `owner::android::main_thread::post`, which runs every
-closure the host sends there inside `os_entry` and reports each exit but success (the body's
-error, a panic, the closure dropped unrun); a failed hand-off comes back to the owner and ends the
-request as `HandOffFailed`. There `FluiHost.launch` picks the request code Android sees from the
-range it keeps for the host (`FIRST_HOST_CODE..=LAST_HOST_CODE`, within 16 bits; an application's
-own codes below it pass through untouched), holds the start until `onStart` while the Activity is
-stopped, and answers `ANSWER_TOO_MANY` past `MAX_OPEN` open requests across the process.
-`FluiActivity.onSaveInstanceState` saves the started requests' codes and keys, and a recreated
-Activity whose process died restores them with epoch 0. `onActivityResult` queues the answer with
-its epoch, token and key. Every Java queue is read before `FluiHost` lets go of what was read
-(`peekEntries`/`commitEntries`, `peekOpened`/`commitOpened`, `peekAnswers`/`commitAnswers`), so a
-failed drain loses nothing and the next turn reads it again. The result `Intent` never leaves the
-owner thread or the host: the router holds it by a global reference under the token of the
-request it settled, and the provider reads only what it asked for, once, through
-`Activity::take_data`; an untaken `Intent` counts against `MAX_OPEN_REQUESTS`, so none accepted is
-ever let go to make room, and the Activity's end lets them go. The pure model,
-`owner::android::activity_results::ResultRouter`, routes each drained `Answer`: one of this epoch
-settles the open request with its token once, and one for a token that is not open is stale; one
-of another epoch belongs to an earlier Activity, whose runtime ended with it, and waits, at most
-`MAX_EARLIER`, for `Activity::reattach` under its key, which answers `NothingPending` when nothing
-waits and `FluiHost.stillToCome` says nothing is to come. At the loop's exit every open request
+and no method of `Platform`: `android_platform` returns an `AndroidStart` with the platform and
+the bridge of the Android loop's `owner::android::result_bridge::ResultBridge`, and `flui-app`'s
+Android runner installs the bridge in the registry's `HostBridge` for the loop's life. Every
+Android platform has one: the epoch its requests carry, which `FluiHost.nextEpoch` gives each
+platform of the process, is read before the platform starts, and one that cannot be read refuses
+the start. The `Activity` a provider gets is scoped by the acquiring capability's `NAME`, which
+the registry holds unique and to the `ResultKey` rule (`CapabilityConflict::InvalidName`), so a
+request's `RequestKey` is two parts, the capability and the provider's key, kept and compared
+apart in Rust, in Java and in the saved state. A request is a `ResultToken` the bridge mints per
+call (`ResultTokenMint`, never reissued) and the epoch. The provider fills an `Intent` the bridge
+made and lends it (`IntentFrame`), so no reference flows from a provider's JNI code into the
+host.
+
+Every closure the host sends to Android's Java main thread goes through
+`owner::android::main_thread::post` (or `run`, for a step whose only report is its failure), which
+runs it inside `os_entry` and reports each exit but success; `cargo xtask panic-boundary` flags a
+call of `run_on_java_main_thread` anywhere else. android-activity keeps work it cannot deliver
+rather than dropping it, so the dropped-unrun report may never come on Android: a launch reports
+`taken` from its body, and one the Java main thread has not taken within `HAND_OFF_LIMIT` ends as
+`HandOffFailed` at that deadline, which the loop's poll waits for (`LoopTurn::hand_off_deadline`);
+a failed or panicked hand-off ends it at once. There `FluiHost.launch` picks the request code
+Android sees from the range it keeps for the host (`FIRST_HOST_CODE..=LAST_HOST_CODE`, within 16
+bits; an application's own codes below it pass through untouched), holds the start until
+`onStart` while the Activity is stopped, and answers `ANSWER_TOO_MANY` past `MAX_OPEN` open
+requests across the process. `FluiActivity.onSaveInstanceState` saves the started requests' codes
+and key parts, and a recreated Activity restores them, with epoch 0 when its process died, before
+`NativeActivity.onCreate` starts `android_main`, so `FluiHost.stillToCome` already knows them when
+a provider reattaches. `onActivityResult` queues the answer with its epoch, token and key parts.
+Every Java queue is read before `FluiHost` lets go of what was read (`peekEntries`/`commitEntries`,
+`peekOpened`/`commitOpened`, `peekAnswers`/`commitAnswers`), each record on its own: a record that
+cannot be read is skipped and logged, and taken off with the rest, so it never holds its queue;
+an answer whose key cannot be read still settles this Activity's request by its token. The result
+`Intent` never leaves the owner thread or the host: the router holds it by a global reference under
+its request's token, and the provider reads it once by handing the answer's `ResultData` to
+`Activity::take_data`. A `ResultData` dropped unread (a completion nobody receives, a retired
+runtime, a provider that went) releases it, which the router sweeps; held `Intent`s count against
+`MAX_OPEN_REQUESTS` and, per capability, `MAX_OPEN_REQUESTS_PER_CAPABILITY`, so one provider that
+never reads its data cannot keep the others from asking, and none accepted is ever let go to make
+room.
+
+The pure model, `owner::android::activity_results::ResultRouter`, routes each drained `Answer`:
+one of this epoch settles the open request with its token once, and one for a token that is not
+open is stale; one of another epoch belongs to an earlier Activity, whose runtime ended with it,
+and waits, at most `MAX_EARLIER`, for `Activity::reattach` under its key, which answers
+`NothingPending` when nothing waits and nothing is to come. At the loop's exit every open request
 ends as `ResultRefused::ActivityEnded` and later ones are refused; the router resolves nothing
-under its own borrow (`Delivery`). Its tests run on every host beside it
+under its own borrow (`Delivery`). Its tests run on every native host beside it
 (`an_answer_settles_the_request_its_token_names_once`,
-`each_launch_that_is_not_answered_ends_with_its_reason`,
+`each_launch_that_is_not_answered_ends_with_its_reason`, `an_intent_nobody_receives_is_released`,
 `an_earlier_activitys_answer_waits_for_its_key` and the rest of its table), as do the posting
-function's (`posted_work_reports_every_exit_but_success`). A permission request
+function's (`posted_work_reports_every_exit_but_success`) and the drains' record by record
+(`a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`). A permission request
 (`onRequestPermissionsResult`) is the same shape, a request code answered once, and joins as one
 more `FluiHost` method and answer kind on this router with the first capability that needs a
 permission (ADR-0152 §2, item 8).
@@ -5083,15 +5099,16 @@ permission (ADR-0152 §2, item 8).
 The window keeps one soft input mode on every level (ADR-0340 §3): `adjustResize`, with the window
 edge to edge, `Window.setDecorFitsSystemWindows(false)` from API 30 and the decor view's
 `SYSTEM_UI_FLAG_LAYOUT_STABLE | _LAYOUT_HIDE_NAVIGATION | _LAYOUT_FULLSCREEN` below it.
-`owner::android::window_setup` decides it as a pure function of the API level
-(`the_window_resizes_its_insets_not_its_surface_on_every_level`) and sets it on the Java main thread
-at start, after `NativeActivity.onCreate` has set its own `adjustResize` (so the manifest's
-attribute would change nothing); the layout flags are added to the decor view's, where the status
-bar's appearance also lives. In that state Android dispatches the input method's inset to the
-views (`Type.ime()` and its `WindowInsetsAnimation` from API 30, the system window inset below it)
-and leaves the content, and so the surface, at its size. The count of `WindowResized` during a
-keyboard animation on both sides of API 30 is owed on a device (`docs/platform-parity.md`,
-"Soft-keyboard insets").
+`FluiActivity.onCreate` applies it after `NativeActivity.onCreate` has set its own `adjustResize`
+(so the manifest's attribute would change nothing) and before the window's first layout; the
+layout flags are added to the decor view's, where the status bar's appearance also lives. The
+decision as data is `owner::android::window_setup` (a pure function of the API level,
+`the_window_resizes_its_insets_not_its_surface_on_every_level`), and
+`fluiactivity_applies_this_table` holds `FluiActivity`'s constants to it. In that state Android
+dispatches the input method's inset to the views (`Type.ime()` and its `WindowInsetsAnimation`
+from API 30, the system window inset below it) and leaves the content, and so the surface, at its
+size. The count of `WindowResized` during a keyboard animation on both sides of API 30 is owed on
+a device (`docs/platform-parity.md`, "Soft-keyboard insets").
 
 The window's `TextStoreHost` is `text::android::AndroidTextInput`. The input method edits the
 view's mirror; `text::android::ime::Mirror` turns each report into one edit against the

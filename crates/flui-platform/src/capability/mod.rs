@@ -27,8 +27,9 @@ mod window_ref;
 
 pub use activity_result::{
     Activity, ActivityBridge, ActivityResult, HostBridge, IntentFrame, InvalidResultKey, JniFrame,
-    MAX_OPEN_REQUESTS, MAX_REQUEST_KEY_LEN, MAX_RESULT_KEY_LEN, RequestKey, ResultCode, ResultKey,
-    ResultOutcome, ResultRefused, ResultRequest, ResultToken, ResultTokenMint,
+    MAX_OPEN_REQUESTS, MAX_OPEN_REQUESTS_PER_CAPABILITY, MAX_RESULT_KEY_LEN, RequestKey,
+    ResultCode, ResultData, ResultDataHold, ResultKey, ResultOutcome, ResultRefused, ResultRequest,
+    ResultToken, ResultTokenMint,
 };
 pub use completion::{Abandoned, Completion, CompletionSource, Resolver};
 pub use owner::{OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions};
@@ -50,7 +51,10 @@ pub trait Capability: 'static {
     /// What a widget holds. Owner-local handles stay `!Send`.
     type Handle: Clone + 'static;
     /// The capability's name, unique within one application: two capabilities
-    /// sharing it refuse to run.
+    /// sharing it refuse to run. It is a [`ResultKey`] (1 to
+    /// [`MAX_RESULT_KEY_LEN`] bytes of printable ASCII), since the Android
+    /// host keys a provider's requests for results under it: a registry
+    /// refuses any other name when it is built.
     const NAME: &'static str;
 }
 

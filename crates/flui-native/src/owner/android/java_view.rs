@@ -38,6 +38,7 @@ use parking_lot::Mutex;
 
 use super::EditorState;
 use super::bridge_slot::BridgeSlot;
+use super::main_thread;
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::owner::signal::OwnerSignal;
 use crate::version::gate::android::AndroidApi;
@@ -332,8 +333,7 @@ impl JavaView {
             scale: AtomicU64::new(1.0_f64.to_bits()),
         });
         let installing = Arc::clone(&view);
-        view.app
-            .run_on_java_main_thread(Box::new(move || installing.install()));
+        main_thread::run(&view.app, "FluiView.install", move || installing.install());
         view
     }
 
@@ -466,9 +466,9 @@ impl JavaView {
         failed: impl FnOnce(&Self) + Send + 'static,
     ) {
         let this = Arc::clone(self);
-        self.app.run_on_java_main_thread(Box::new(move || {
-            // Contained here, not by the main-thread loop around this closure,
-            // which would swallow the panic before `failed` ran.
+        main_thread::run(&self.app, "a FluiView call", move || {
+            // Contained here, not by the boundary around this closure, which
+            // would end the work before `failed` ran.
             let worked = jni_native("a FluiView call", || {
                 this.view().is_some_and(|view| {
                     this.attached(|env| call(env, view.as_ref()))
@@ -481,7 +481,7 @@ impl JavaView {
             if !worked {
                 failed(&this);
             }
-        }));
+        });
     }
 
     /// The installed view, cloned out of the lock so no JNI call runs under it.
@@ -556,7 +556,7 @@ impl JavaView {
     /// code, and its handle is freed after that, on the Java main thread.
     pub(super) fn detach(self: &Arc<Self>) {
         let this = Arc::clone(self);
-        self.app.run_on_java_main_thread(Box::new(move || {
+        main_thread::run(&self.app, "FluiView.detach", move || {
             let (view, handle) = {
                 let mut state = this.state.lock();
                 let previous = std::mem::replace(&mut state.install, Install::Detached);
@@ -575,7 +575,7 @@ impl JavaView {
             if let Some(handle) = handle {
                 free_handle(handle as *mut Weak<JavaView>);
             }
-        }));
+        });
     }
 }
 

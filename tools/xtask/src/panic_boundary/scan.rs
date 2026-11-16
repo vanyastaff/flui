@@ -105,6 +105,15 @@ const GCD_METHODS: [&str; 6] = [
     "barrier_sync",
 ];
 
+/// android-activity's method that runs a closure on Android's Java main
+/// thread under its own guard, which aborts the process on a panic. Only the
+/// posting module calls it: everything else posts through its `post`, which
+/// runs the closure inside the boundary and owes a report on each exit.
+const JAVA_MAIN_THREAD: &str = "run_on_java_main_thread";
+
+/// The one file that may call [`JAVA_MAIN_THREAD`].
+const JAVA_MAIN_THREAD_POSTER: &str = "owner/android/main_thread.rs";
+
 /// AccessKit's handler traits: an adapter calls them from inside its own UIA,
 /// NSAccessibility or AT-SPI entry.
 const HANDLER_TRAITS: [&str; 3] = ["ActionHandler", "ActivationHandler", "DeactivationHandler"];
@@ -1193,6 +1202,19 @@ impl<'ast> Visit<'ast> for Collector<'_> {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == JAVA_MAIN_THREAD && !self.rel.ends_with(JAVA_MAIN_THREAD_POSTER) {
+            self.out.findings.push(Finding {
+                file: self.rel.to_owned(),
+                line: line(call.method.span()),
+                what: format!(".{JAVA_MAIN_THREAD}"),
+                kind: Problem::Unguarded,
+                detail: format!(
+                    "a closure posted to Android's Java main thread outside \
+                     `{JAVA_MAIN_THREAD_POSTER}`, which runs it inside the boundary and reports \
+                     every exit but success"
+                ),
+            });
+        }
         if GCD_METHODS.iter().any(|gcd| call.method == gcd) {
             self.closure_entry(
                 format!(".{}", call.method),

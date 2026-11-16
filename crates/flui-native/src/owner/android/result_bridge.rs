@@ -1,15 +1,17 @@
-//! The Activity a capability provider reaches (ADR-0154 §9, ADR-0255
-//! decision 8): requests for results through `FluiHost`, routed by
-//! [`ResultRouter`], and the Activity lent to a provider's own JNI code.
+//! The Activity a capability provider reaches (ADR-0154 §9, ADR-0340 §2):
+//! requests for results through `FluiHost`, routed by [`ResultRouter`], and
+//! the Activity lent to a provider's own JNI code.
 //!
 //! Owner thread: the provider's closures run here, with the router's borrow
 //! released, and what the router settles is resolved after it. A start is
 //! posted to the Java main thread through [`main_thread::post`], which the
-//! owner never waits for (ADR-0247 item 5); a hand-off that fails there (a
-//! JNI error, a panic, a dropped closure) comes back through [`HandOffs`] and
-//! ends its request as `HandOffFailed`. Answers come back through
-//! `FluiHost`'s queue, which the loop drains each turn and hands to
-//! [`ResultBridge::answer`].
+//! owner never waits for (ADR-0247 item 5). The posted work reports back
+//! through [`HandOffs`]: taken, which lifts the request's deadline, or failed
+//! (a JNI error, a panic), which ends it as `HandOffFailed`; a launch the
+//! Java main thread never takes ends the same way at its deadline, since
+//! android-activity keeps work it cannot run rather than dropping it.
+//! Answers come back through `FluiHost`'s queue, which the loop drains each
+//! turn and hands to [`ResultBridge::answer`].
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
@@ -19,35 +21,77 @@ use std::sync::{Arc, Weak};
 
 use android_activity::AndroidApp;
 use flui_platform::capability::{
-    ActivityBridge, CompletionSource, IntentFrame, JniFrame, RequestKey, ResultRefused,
+    ActivityBridge, CompletionSource, IntentFrame, JniFrame, RequestKey, ResultData, ResultRefused,
     ResultRequest, ResultToken,
 };
 use jni::objects::{JObject, JString};
 use jni::refs::Global;
 use jni::{Env, JValue, JavaVM, jni_sig, jni_str};
 use parking_lot::Mutex;
+use web_time::Instant;
 
 use super::activity::with_activity;
-use super::activity_results::{ANSWER_NUMBERS, Answer, Purpose, ResultRouter, Routed, key_fits};
+use super::activity_results::{ANSWER_NUMBERS, Answer, Purpose, ResultRouter, Routed};
 use super::java_host::host_class;
 use super::main_thread::{self, PostFailure};
+use crate::PlatformError;
 use crate::owner::signal::OwnerSignal;
 
 /// An answered `Intent`, held by a global reference on the owner thread
-/// until its provider takes it or the Activity ends.
+/// until its provider takes it or lets it go.
 pub(crate) type HeldIntent = Global<JObject<'static>>;
 
-/// The launches the Java main thread could not hand to Android, for the
-/// owner to end; it is woken for each.
+/// The epoch `FluiHost.nextEpoch` gives this platform's requests. On the
+/// thread that starts the platform.
+///
+/// # Errors
+///
+/// [`PlatformError::Init`] when `FluiHost` cannot be read or answers an
+/// epoch that is not positive: the platform does not start.
+pub(crate) fn next_epoch(app: &AndroidApp) -> Result<NonZeroU64, PlatformError> {
+    let epoch = with_activity(app, |env, activity| {
+        env.with_local_frame(4, |env| {
+            let class = host_class(env, activity)?;
+            env.call_static_method(&class, jni_str!("nextEpoch"), jni_sig!("()J"), &[])?
+                .j()
+        })
+    })
+    .map_err(|error| PlatformError::Init {
+        message: format!("reading FluiHost's epoch for requests for results: {error}"),
+    })?;
+    u64::try_from(epoch)
+        .ok()
+        .and_then(NonZeroU64::new)
+        .ok_or_else(|| PlatformError::Init {
+            message: format!("FluiHost gave the epoch {epoch}, which is not positive"),
+        })
+}
+
+/// What the work posted to the Java main thread reports, for the owner to
+/// apply; it is woken for each.
+#[derive(Default)]
+struct Reports {
+    taken: Vec<ResultToken>,
+    failed: Vec<ResultToken>,
+}
+
+/// The Java main thread's side of [`Reports`].
 struct HandOffs {
-    failed: Mutex<Vec<ResultToken>>,
+    reports: Mutex<Reports>,
     signal: Weak<OwnerSignal>,
 }
 
 impl HandOffs {
-    /// Java main thread: `token`'s hand-off failed.
-    fn fail(&self, token: ResultToken) {
-        self.failed.lock().push(token);
+    /// Java main thread: `token`'s launch was taken (`taken`) or failed.
+    fn report(&self, token: ResultToken, taken: bool) {
+        {
+            let mut reports = self.reports.lock();
+            if taken {
+                reports.taken.push(token);
+            } else {
+                reports.failed.push(token);
+            }
+        }
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();
         }
@@ -68,44 +112,17 @@ impl std::fmt::Debug for ResultBridge {
 }
 
 impl ResultBridge {
-    /// The bridge of `app`'s Activity, with an epoch `FluiHost.nextEpoch`
-    /// minted for it, waking `signal` when a hand-off fails; `None`, logged,
-    /// when `FluiHost` cannot be reached, and providers are then offered no
-    /// Activity. Owner thread.
-    pub(crate) fn start(app: &AndroidApp, signal: Weak<OwnerSignal>) -> Option<Rc<Self>> {
-        let epoch = with_activity(app, |env, activity| {
-            env.with_local_frame(4, |env| {
-                let class = host_class(env, activity)?;
-                env.call_static_method(&class, jni_str!("nextEpoch"), jni_sig!("()J"), &[])?
-                    .j()
-            })
-        });
-        let epoch = match epoch.map(|epoch| u64::try_from(epoch).ok().and_then(NonZeroU64::new)) {
-            Ok(Some(epoch)) => epoch,
-            Ok(None) => {
-                tracing::warn!(
-                    target: "flui_native::android",
-                    "FluiHost gave an epoch that is not positive; no Activity is offered"
-                );
-                return None;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    target: "flui_native::android",
-                    %error,
-                    "FluiHost's epoch could not be read; no Activity is offered"
-                );
-                return None;
-            }
-        };
-        Some(Rc::new(Self {
+    /// The bridge of `app`'s Activity, whose requests carry `epoch`, waking
+    /// `signal` when the Java main thread reports on a launch.
+    pub(crate) fn new(app: &AndroidApp, epoch: NonZeroU64, signal: Weak<OwnerSignal>) -> Rc<Self> {
+        Rc::new(Self {
             app: app.clone(),
             router: RefCell::new(ResultRouter::new(epoch)),
             hand_offs: Arc::new(HandOffs {
-                failed: Mutex::new(Vec::new()),
+                reports: Mutex::new(Reports::default()),
                 signal,
             }),
-        }))
+        })
     }
 
     /// What `flui-app` installs in the registry's host bridge.
@@ -113,15 +130,35 @@ impl ResultBridge {
         Rc::clone(self) as Rc<dyn ActivityBridge>
     }
 
-    /// End the requests whose hand-off failed, then route what `FluiHost`
-    /// answered since the last turn. Owner thread, every turn.
+    /// When the oldest launch the Java main thread has not taken is due, for
+    /// the loop's poll.
+    pub(crate) fn next_deadline(&self) -> Option<Instant> {
+        self.router.borrow().next_deadline()
+    }
+
+    /// Apply what the Java main thread reported, end the launches past their
+    /// deadline, then route what `FluiHost` answered since the last turn.
+    /// Owner thread, every turn.
     pub(crate) fn answer(&self, answers: Vec<Answer<HeldIntent>>) {
-        let failed = std::mem::take(&mut *self.hand_offs.failed.lock());
-        for token in failed {
+        let reports = std::mem::take(&mut *self.hand_offs.reports.lock());
+        for token in reports.taken {
+            self.router.borrow_mut().handed(token);
+        }
+        for token in reports.failed {
             let delivery = self.router.borrow_mut().hand_off_failed(token);
             if let Some(delivery) = delivery {
                 delivery.deliver();
             }
+        }
+        let (overdue, delivery) = self.router.borrow_mut().overdue(Instant::now());
+        delivery.deliver();
+        for token in overdue {
+            tracing::warn!(
+                target: "flui_native::android",
+                "the Java main thread did not take a request in time; it ends as HandOffFailed"
+            );
+            // Should the work still run, its activity is finished there.
+            self.post_cancel(token);
         }
         for answer in answers {
             let (routed, delivery) = self.router.borrow_mut().answer(answer);
@@ -138,6 +175,7 @@ impl ResultBridge {
                 ),
             }
         }
+        self.router.borrow_mut().sweep();
     }
 
     /// The Activity ended: every open request ends, and later ones are
@@ -159,21 +197,45 @@ impl ResultBridge {
         self.router.borrow().epoch().get().cast_signed()
     }
 
+    /// Finish the activity `token` started, on the Java main thread.
+    fn post_cancel(&self, token: ResultToken) {
+        let (app, epoch) = (self.app.clone(), self.epoch());
+        main_thread::post(
+            &self.app,
+            "FluiHost.cancel",
+            move || cancel_on_main_thread(&app, epoch, token),
+            |failure: PostFailure| {
+                // The request already ended; the activity's answer, if it
+                // comes, is dropped as stale.
+                tracing::warn!(
+                    target: "flui_native::android",
+                    ?failure,
+                    "an ended request's activity was not finished"
+                );
+            },
+        );
+    }
+
     /// Whether `FluiHost` still holds a request of an earlier Activity under
     /// `key` that has not been answered, or an answer not drained. A read
     /// that fails says yes: the reattachment then waits, and ends with the
     /// Activity at the latest.
-    fn still_to_come(&self, key: &str) -> bool {
+    fn still_to_come(&self, key: RequestKey) -> bool {
         let epoch = self.epoch();
         with_activity(&self.app, |env, activity| {
             env.with_local_frame(4, |env| {
                 let class = host_class(env, activity)?;
-                let key = env.new_string(key)?;
+                let capability = env.new_string(key.capability().as_str())?;
+                let name = env.new_string(key.key().as_str())?;
                 env.call_static_method(
                     &class,
                     jni_str!("stillToCome"),
-                    jni_sig!("(JLjava/lang/String;)Z"),
-                    &[JValue::Long(epoch), JValue::Object(&key)],
+                    jni_sig!("(JLjava/lang/String;Ljava/lang/String;)Z"),
+                    &[
+                        JValue::Long(epoch),
+                        JValue::Object(&capability),
+                        JValue::Object(&name),
+                    ],
                 )?
                 .z()
             })
@@ -199,7 +261,7 @@ impl ActivityBridge for ResultBridge {
         key: RequestKey,
         intent: &mut dyn FnMut(IntentFrame) -> bool,
     ) -> Result<ResultRequest, ResultRefused> {
-        self.router.borrow().admits()?;
+        self.router.borrow_mut().admits(key.capability())?;
         // The provider fills the Intent with no borrow held: its closure may
         // reach this bridge again.
         let made = with_activity(&self.app, |env, activity| {
@@ -238,21 +300,28 @@ impl ActivityBridge for ResultBridge {
             }
         };
         // Admitted again: the provider's closure may have taken requests.
-        let request = self.router.borrow_mut().open_launch(completions, key)?;
+        let request = self
+            .router
+            .borrow_mut()
+            .open_launch(completions, key, Instant::now())?;
         let token = request.token();
-        let (app, epoch, spelled) = (self.app.clone(), self.epoch(), key.to_string());
-        let hand_offs = Arc::clone(&self.hand_offs);
+        let (app, epoch) = (self.app.clone(), self.epoch());
+        let (taken, failed) = (Arc::clone(&self.hand_offs), Arc::clone(&self.hand_offs));
         main_thread::post(
             &self.app,
             "FluiHost.launch",
-            move || launch_on_main_thread(&app, &filled, epoch, token, &spelled),
+            move || {
+                launch_on_main_thread(&app, &filled, epoch, token, key)?;
+                taken.report(token, true);
+                Ok(())
+            },
             move |failure: PostFailure| {
                 tracing::warn!(
                     target: "flui_native::android",
                     ?failure,
                     "a request could not be handed to Android; it ends as HandOffFailed"
                 );
-                hand_offs.fail(token);
+                failed.report(token, false);
             },
         );
         Ok(request)
@@ -263,8 +332,8 @@ impl ActivityBridge for ResultBridge {
         completions: &CompletionSource,
         key: RequestKey,
     ) -> Result<ResultRequest, ResultRefused> {
-        self.router.borrow().admits()?;
-        let still_to_come = self.still_to_come(&key.to_string());
+        self.router.borrow_mut().admits(key.capability())?;
+        let still_to_come = self.still_to_come(key);
         let (request, delivery) =
             self.router
                 .borrow_mut()
@@ -280,28 +349,14 @@ impl ActivityBridge for ResultBridge {
         };
         delivery.deliver();
         if purpose == Purpose::Launched {
-            let (app, epoch) = (self.app.clone(), self.epoch());
-            main_thread::post(
-                &self.app,
-                "FluiHost.cancel",
-                move || cancel_on_main_thread(&app, epoch, token),
-                |failure: PostFailure| {
-                    // The request already ended as cancelled; the activity's
-                    // answer, if it comes, is dropped as stale.
-                    tracing::warn!(
-                        target: "flui_native::android",
-                        ?failure,
-                        "a cancelled request's activity was not finished"
-                    );
-                },
-            );
+            self.post_cancel(token);
         }
     }
 
-    fn take_data(&self, token: ResultToken, f: &mut dyn FnMut(JniFrame)) -> bool {
+    fn take_data(&self, data: ResultData, f: &mut dyn FnMut(JniFrame)) -> bool {
         // Taken out of the router first: the provider's closure runs with no
         // borrow held, and the reference is deleted when it returns.
-        let Some(intent) = self.router.borrow_mut().take_data(token) else {
+        let Some(intent) = self.router.borrow_mut().take_data(data) else {
             return false;
         };
         with_activity(&self.app, |env, _| {
@@ -345,22 +400,26 @@ fn launch_on_main_thread(
     intent: &Global<JObject<'static>>,
     epoch: i64,
     token: ResultToken,
-    key: &str,
+    key: RequestKey,
 ) -> Result<(), String> {
     with_activity(app, |env, activity| {
         env.with_local_frame(8, |env| {
             let class = host_class(env, activity)?;
-            let key = env.new_string(key)?;
+            let capability = env.new_string(key.capability().as_str())?;
+            let name = env.new_string(key.key().as_str())?;
             env.call_static_method(
                 &class,
                 jni_str!("launch"),
-                jni_sig!("(Landroid/app/Activity;Landroid/content/Intent;JJLjava/lang/String;)V"),
+                jni_sig!(
+                    "(Landroid/app/Activity;Landroid/content/Intent;JJLjava/lang/String;Ljava/lang/String;)V"
+                ),
                 &[
                     JValue::Object(activity),
                     JValue::Object(intent.as_obj()),
                     JValue::Long(epoch),
                     JValue::Long(token.get().cast_signed()),
-                    JValue::Object(&key),
+                    JValue::Object(&capability),
+                    JValue::Object(&name),
                 ],
             )
             .map(drop)
@@ -394,19 +453,43 @@ fn cancel_on_main_thread(app: &AndroidApp, epoch: i64, token: ResultToken) -> Re
     .map_err(|error| error.to_string())
 }
 
-/// The most answers one drain reads: what `FluiHost` can hold.
+/// The most answers one drain reads; more wait for the next turn, which the
+/// drain wakes for.
 const MAX_DRAINED: usize = 2 * flui_platform::capability::MAX_OPEN_REQUESTS;
 
-/// The oldest answers `FluiHost` queued, at most [`MAX_DRAINED`], each key's
-/// length checked before it is copied and each `Intent` held as it is, never
-/// read; then `FluiHost` lets go of exactly those, and says how many are
-/// still queued. A failure before that leaves every answer queued for the
-/// next turn.
+/// One string part of an answer's key: `None` when it cannot be read or is
+/// longer than a key, which is checked before it is copied.
+fn key_part<'local>(
+    env: &mut Env<'local>,
+    part: JObject<'local>,
+) -> jni::errors::Result<Option<String>> {
+    use flui_platform::capability::MAX_RESULT_KEY_LEN;
+
+    let part = env.cast_local::<JString<'_>>(part)?;
+    if part.is_null() {
+        return Ok(None);
+    }
+    let length = env
+        .call_method(&part, jni_str!("length"), jni_sig!("()I"), &[])?
+        .i()?;
+    if usize::try_from(length).is_ok_and(|length| length <= MAX_RESULT_KEY_LEN) {
+        Ok(Some(part.try_to_string(env)?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// The oldest answers `FluiHost` queued, at most [`MAX_DRAINED`], each read
+/// on its own: a key part longer than a key is not copied, and a part or an
+/// `Intent` that cannot be read is `None`, so one record never holds the
+/// others back. Each `Intent` is held as it is, never read. `FluiHost` then
+/// lets go of exactly the answers read; where its arrays disagree in length,
+/// the answers all of them hold are read and let go, and the rest wait.
+/// Answers how many are still queued.
 pub(crate) fn drain_answers(
     env: &mut Env<'_>,
     activity: &JObject<'_>,
 ) -> jni::errors::Result<(Vec<Answer<HeldIntent>>, usize)> {
-    use flui_platform::capability::MAX_REQUEST_KEY_LEN;
     use jni::objects::{JLongArray, JObjectArray};
 
     let class = host_class(env, activity)?;
@@ -422,42 +505,50 @@ pub(crate) fn drain_answers(
     let peeked = env.cast_local::<JObjectArray<'_>>(peeked)?;
     let numbers = peeked.get_element(env, 0)?;
     let numbers = JLongArray::cast_local(env, numbers)?;
-    let keys = peeked.get_element(env, 1)?;
+    let capabilities = peeked.get_element(env, 1)?;
+    let capabilities = env.cast_local::<JObjectArray<'_>>(capabilities)?;
+    let keys = peeked.get_element(env, 2)?;
     let keys = env.cast_local::<JObjectArray<'_>>(keys)?;
-    let data = peeked.get_element(env, 2)?;
+    let data = peeked.get_element(env, 3)?;
     let data = env.cast_local::<JObjectArray<'_>>(data)?;
-    let count = keys.len(env)?.min(MAX_DRAINED);
-    let length = numbers.len(env)?;
-    let mut values = vec![0; length.min(count * ANSWER_NUMBERS)];
+    let count = [
+        numbers.len(env)? / ANSWER_NUMBERS,
+        capabilities.len(env)?,
+        keys.len(env)?,
+        data.len(env)?,
+        MAX_DRAINED,
+    ]
+    .into_iter()
+    .min()
+    .unwrap_or(0);
+    let mut values = vec![0; count * ANSWER_NUMBERS];
     numbers.get_region(env, 0, &mut values)?;
+    let mut read_capabilities = Vec::with_capacity(count);
     let mut read_keys = Vec::with_capacity(count);
     let mut read_data = Vec::with_capacity(count);
     for index in 0..count {
-        let (key, held) = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
-            let key = keys.get_element(env, index)?;
-            let key = env.cast_local::<JString<'_>>(key)?;
-            let key = if key.is_null() {
-                None
-            } else {
-                let length = env
-                    .call_method(&key, jni_str!("length"), jni_sig!("()I"), &[])?
-                    .i()?;
-                if usize::try_from(length).is_ok_and(|length| length <= MAX_REQUEST_KEY_LEN) {
-                    Some(key.try_to_string(env)?).filter(|key| key_fits(key))
-                } else {
-                    None
-                }
-            };
+        let capability = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
+            let part = capabilities.get_element(env, index)?;
+            key_part(env, part)
+        });
+        let key = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
+            let part = keys.get_element(env, index)?;
+            key_part(env, part)
+        });
+        let held = env.with_local_frame(4, |env| -> jni::errors::Result<_> {
             let item = data.get_element(env, index)?;
-            let held = if item.is_null() {
-                None
+            if item.is_null() {
+                Ok(None)
             } else {
-                Some(env.new_global_ref(&item)?)
-            };
-            Ok((key, held))
-        })?;
-        read_keys.push(key);
-        read_data.push(held);
+                env.new_global_ref(&item).map(Some)
+            }
+        });
+        if capability.is_err() || key.is_err() || held.is_err() {
+            env.exception_clear();
+        }
+        read_capabilities.push(capability.ok().flatten());
+        read_keys.push(key.ok().flatten());
+        read_data.push(held.ok().flatten());
     }
     let committed = i32::try_from(count).expect("BUG: at most MAX_DRAINED answers");
     let remaining = env
@@ -469,7 +560,7 @@ pub(crate) fn drain_answers(
         )?
         .i()?;
     Ok((
-        Answer::from_drained(&values, read_keys, read_data),
+        Answer::from_drained(&values, read_capabilities, read_keys, read_data),
         usize::try_from(remaining).unwrap_or(0),
     ))
 }

@@ -16,8 +16,8 @@ use flui_platform::{
         Abandoned, ActivityBridge, ActivityResult, Capability, CapabilityProvider,
         CompletionSource, HostBridge, IntentFrame, InvalidResultKey, JniFrame, MAX_RESULT_KEY_LEN,
         OwnerJob, OwnerPoster, OwnerRetired, OwnerScope, PendingCompletions, ProviderContext,
-        RequestKey, Resolver, ResultCode, ResultKey, ResultOutcome, ResultRefused, ResultRequest,
-        ResultToken, ResultTokenMint, RuntimeLocals,
+        RequestKey, Resolver, ResultCode, ResultData, ResultKey, ResultOutcome, ResultRefused,
+        ResultRequest, ResultToken, ResultTokenMint, RuntimeLocals,
     },
 };
 
@@ -628,7 +628,7 @@ impl ActivityBridge for BridgeCalls {
 
     fn cancel(&self, _token: ResultToken) {}
 
-    fn take_data(&self, _token: ResultToken, _f: &mut dyn FnMut(JniFrame)) -> bool {
+    fn take_data(&self, _data: ResultData, _f: &mut dyn FnMut(JniFrame)) -> bool {
         false
     }
 
@@ -695,7 +695,7 @@ fn a_provider_reaches_the_activity_the_host_offers() {
     );
 
     let resolver = bridge.resolvers.borrow_mut().pop().expect("one open");
-    let answer = ActivityResult::new(ResultCode::from_raw(-1), false);
+    let answer = ActivityResult::new(ResultCode::from_raw(-1), None);
     assert!(resolver.resolve(Ok(answer)).is_ok());
     assert!(completion.poll().is_none(), "settles at the owner's turn");
     owner.turn();

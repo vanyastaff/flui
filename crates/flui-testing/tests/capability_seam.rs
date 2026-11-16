@@ -14,8 +14,8 @@ use flui_interaction::{
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
 use flui_platform::capability::{
-    Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, Plugin,
-    ProviderContext, Resolver,
+    Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, InvalidResultKey,
+    Plugin, ProviderContext, Resolver,
 };
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, Concealment, Unsupported, UnsupportedReason,
@@ -471,6 +471,22 @@ impl Plugin for ImpostorPlugin {
     }
 }
 
+/// Declares a capability whose name could not key an activity result.
+enum Unkeyed {}
+
+impl Capability for Unkeyed {
+    type Handle = ();
+    const NAME: &'static str = "two words";
+}
+
+struct UnkeyedPlugin;
+
+impl Plugin for UnkeyedPlugin {
+    fn register(&self, registrar: &mut CapabilityRegistrar) {
+        registrar.provide::<Unkeyed>(|_: &ProviderContext<'_>| Ok(()));
+    }
+}
+
 pub(crate) fn conflicting_registrations_fail_when_the_registry_is_built() {
     let built_in = || registry_registrar(|registrar| ScriptedClipboard::new().register(registrar));
     let two_plugins = CapabilityRegistry::builder()
@@ -497,6 +513,18 @@ pub(crate) fn conflicting_registrations_fail_when_the_registry_is_built() {
         shared_name,
         CapabilityConflict::SharedName {
             name: ClipboardCapability::NAME,
+        }
+    );
+
+    let unkeyed = CapabilityRegistry::builder()
+        .plugin(&UnkeyedPlugin)
+        .build()
+        .expect_err("a name that cannot key a result");
+    assert_eq!(
+        unkeyed,
+        CapabilityConflict::InvalidName {
+            name: "two words",
+            reason: InvalidResultKey::NotPrintable,
         }
     );
 }
@@ -787,7 +815,7 @@ impl flui_platform::capability::ActivityBridge for EndedActivity {
 
     fn take_data(
         &self,
-        _token: flui_platform::capability::ResultToken,
+        _data: flui_platform::capability::ResultData,
         _f: &mut dyn FnMut(flui_platform::capability::JniFrame),
     ) -> bool {
         false

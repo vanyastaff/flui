@@ -220,21 +220,38 @@ impl AndroidWindow {
         let capture = Arc::downgrade(&self.insets);
         let live = Arc::downgrade(&self.geometry_live);
         let signal = self.owner_signal.clone();
-        self.app.run_on_java_main_thread(Box::new(move || {
-            let sample = insets::sample(&app, api);
-            if !live
-                .upgrade()
-                .is_some_and(|live| live.load(Ordering::Acquire))
-            {
-                return;
-            }
-            if let Some(capture) = capture.upgrade() {
-                capture.lock().query = insets::Query::Ready(sample);
-            }
-            if let Some(signal) = signal.upgrade() {
-                let _ = signal.wake();
-            }
-        }));
+        let (unsampled, unsampled_signal) = (capture.clone(), signal.clone());
+        crate::owner::android::main_thread::post(
+            &self.app,
+            "the window's insets sample",
+            move || {
+                let sample = insets::sample(&app, api);
+                if !live
+                    .upgrade()
+                    .is_some_and(|live| live.load(Ordering::Acquire))
+                {
+                    return Ok(());
+                }
+                if let Some(capture) = capture.upgrade() {
+                    capture.lock().query = insets::Query::Ready(sample);
+                }
+                if let Some(signal) = signal.upgrade() {
+                    let _ = signal.wake();
+                }
+                Ok(())
+            },
+            // A sample that never finished answers none, so the query does
+            // not wait for ever.
+            move |failure: crate::owner::android::main_thread::PostFailure| {
+                tracing::warn!(?failure, "the window's insets were not sampled");
+                if let Some(capture) = unsampled.upgrade() {
+                    capture.lock().query = insets::Query::Ready(None);
+                }
+                if let Some(signal) = unsampled_signal.upgrade() {
+                    let _ = signal.wake();
+                }
+            },
+        );
     }
 
     /// Get native window dimensions, returning (0, 0) if window is not
@@ -618,15 +635,19 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             Some(sources) => {
                 let app = owner.app.clone();
                 // The view hierarchy belongs to the Java main thread.
-                owner.app.run_on_java_main_thread(Box::new(move || {
-                    if let Err(error) = unbuffered_input::apply(&app, sources) {
-                        tracing::warn!(
-                            target: "flui_native::android",
-                            %error,
-                            "the window's input dispatch was not changed"
-                        );
-                    }
-                }));
+                crate::owner::android::main_thread::run(
+                    &owner.app,
+                    "unbuffered input dispatch",
+                    move || {
+                        if let Err(error) = unbuffered_input::apply(&app, sources) {
+                            tracing::warn!(
+                                target: "flui_native::android",
+                                %error,
+                                "the window's input dispatch was not changed"
+                            );
+                        }
+                    },
+                );
             }
             None if options.input_latency == flui_platform::InputLatency::Low => {
                 tracing::debug!(
@@ -646,15 +667,19 @@ impl host::Window<AndroidLoop> for AndroidWindow {
             if owner.api.since::<WindowColorMode>().is_some() {
                 let app = owner.app.clone();
                 // The window's attributes belong to the Java main thread.
-                owner.app.run_on_java_main_thread(Box::new(move || {
-                    if let Err(error) = color_mode::apply(&app, mode) {
-                        tracing::warn!(
-                            target: "flui_native::android",
-                            %error,
-                            "the window's colour mode was not set"
-                        );
-                    }
-                }));
+                crate::owner::android::main_thread::run(
+                    &owner.app,
+                    "the window's colour mode",
+                    move || {
+                        if let Err(error) = color_mode::apply(&app, mode) {
+                            tracing::warn!(
+                                target: "flui_native::android",
+                                %error,
+                                "the window's colour mode was not set"
+                            );
+                        }
+                    },
+                );
             } else {
                 tracing::debug!(
                     target: "flui_native::android",
@@ -879,7 +904,7 @@ impl PlatformWindow for AndroidWindow {
         let app = self.app.clone();
         // Posted in call order to the main looper, so the last projection is the one the
         // view keeps.
-        self.app.run_on_java_main_thread(Box::new(move || {
+        crate::owner::android::main_thread::run(&self.app, "system gesture exclusion", move || {
             if let Err(error) = gesture_exclusion::apply(&app, &rects) {
                 tracing::warn!(
                     target: "flui_native::android",
@@ -887,7 +912,7 @@ impl PlatformWindow for AndroidWindow {
                     "system gesture exclusion rectangles were not applied"
                 );
             }
-        }));
+        });
         Ok(())
     }
 }
@@ -1530,11 +1555,15 @@ pub(crate) mod system_chrome {
             let dark_icons = style == SystemUiOverlayStyle::Dark;
             let app = self.app.clone();
             let api = self.api;
-            self.app.run_on_java_main_thread(Box::new(move || {
-                if let Err(error) = apply(&app, api, dark_icons) {
-                    tracing::warn!(%error, "status bar appearance was not applied");
-                }
-            }));
+            crate::owner::android::main_thread::run(
+                &self.app,
+                "status bar appearance",
+                move || {
+                    if let Err(error) = apply(&app, api, dark_icons) {
+                        tracing::warn!(%error, "status bar appearance was not applied");
+                    }
+                },
+            );
         }
 
         fn as_any(&self) -> &dyn std::any::Any {

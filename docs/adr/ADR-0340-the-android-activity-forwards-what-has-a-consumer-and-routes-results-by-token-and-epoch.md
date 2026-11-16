@@ -67,33 +67,41 @@ permission, ADR-0152 §2 item 8). A permission request joins the result bridge b
 `FluiHost` method and answer kind; no second mechanism.
 
 §2. **The result bridge.** `ProviderContext::activity()` hands a provider an `Activity`, scoped by
-the acquiring capability's `NAME`, which the registry holds unique; it is `None` on every host but
-Android's, and the host table and `Platform` gain nothing (`android_platform` returns the Activity's
-bridge beside the platform). `Activity::launch_for_result(completions, key, fill)` lends the
-provider an empty `Intent` the host made (`IntentFrame`), so no reference flows from a provider's
-JNI code into the host, and answers with a `Completion<Result<ActivityResult, ResultRefused>>`. A
-request is a `ResultToken` minted per call (`ResultTokenMint` over `IdMint`) and the Activity's
-epoch, which `FluiHost.nextEpoch` gives each platform of the process; Android sees a request code
-from the range `FluiHost` keeps for the host (`FIRST_HOST_CODE..=LAST_HOST_CODE`, within 16 bits),
-so an application's own codes pass through untouched. The open requests' codes and `RequestKey`s
-(capability and key) are saved with the Activity's state. An answer of the Activity's own epoch
-settles its token's request once; an answer of another epoch (epoch 0 for a process restored after
-death) waits for `Activity::reattach` under its key, which answers `NothingPending` when nothing
-waits and nothing is still to come. Every request ends exactly once: the answer, `NotLaunched`,
-`TooManyOpen`, `HandOffFailed` (a failed, panicked or dropped hand-off to Android's main thread),
-`Cancelled`, `ActivityEnded`. The answered `Intent` stays with the host on the owner thread, under
-its request's token, until `Activity::take_data` reads it once; untaken `Intent`s count against
-`MAX_OPEN_REQUESTS`, so nothing accepted is ever let go to make room. Java's queue is read before
-it lets go of what was read, so a failed drain loses no answer. Work posted to Android's main
-thread goes through one function that runs it inside the panic boundary and reports every exit
-but success to the owner.
+the acquiring capability's `NAME`, which the registry holds unique and to the `ResultKey` rule; it
+is `None` on every host but Android's, and the host table and `Platform` gain nothing:
+`android_platform` returns an `AndroidStart` with the platform and the Activity's bridge, which
+every Android platform has (one whose epoch cannot be read does not start).
+`Activity::launch_for_result(completions, key, fill)` lends the provider an empty `Intent` the host
+made (`IntentFrame`), so no reference flows from a provider's JNI code into the host, and answers
+with a `Completion<Result<ActivityResult, ResultRefused>>`. A request is a `ResultToken` minted per
+call (`ResultTokenMint` over `IdMint`) and the Activity's epoch, which `FluiHost.nextEpoch` gives
+each platform of the process; its key is a `RequestKey`, the capability's name and the provider's
+key, kept and compared apart in Rust, Java and the saved state. Android sees a request code from
+the range `FluiHost` keeps for the host (`FIRST_HOST_CODE..=LAST_HOST_CODE`, within 16 bits), so an
+application's own codes pass through untouched. The started requests' codes and key parts are
+saved with the Activity's state and restored before `NativeActivity.onCreate` starts the library.
+An answer of the Activity's own epoch settles its token's request once; an answer of another
+epoch (epoch 0 for a process restored after death) waits for `Activity::reattach` under its key,
+which answers `NothingPending` when nothing waits and nothing is still to come. Every request ends
+exactly once: the answer, `NotLaunched`, `TooManyOpen`, `HandOffFailed` (a failed or panicked
+hand-off to Android's main thread, or one the main thread has not taken within a deadline the loop
+waits for), `Cancelled`, `ActivityEnded`. The answered `Intent` stays with the host on the owner
+thread until the provider hands the answer's `ResultData` to `Activity::take_data`; a `ResultData`
+dropped unread releases it, so a result nobody receives holds nothing, and held `Intent`s count
+against `MAX_OPEN_REQUESTS` and, per capability, `MAX_OPEN_REQUESTS_PER_CAPABILITY`, so nothing
+accepted is ever let go to make room and one provider cannot keep the others from asking. Java's
+queues are read before Java lets go of what was read, record by record, so a failed drain loses
+nothing and a record that cannot be read never holds its queue. Every closure the host posts to
+Android's main thread goes through one function that runs it inside the panic boundary and reports
+every exit but success, which `cargo xtask panic-boundary` holds.
 
 §3. **The soft-input mode.** `adjustResize` on every level, with the window edge to edge:
 `Window.setDecorFitsSystemWindows(false)` from API 30, the decor view's
 `SYSTEM_UI_FLAG_LAYOUT_STABLE | SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN`
-below it. The host sets it on Android's main thread at start (`owner::android::window_setup`, a
-pure function of the API level). In that state Android dispatches the input method's inset to the
-views and leaves the content, and so the surface, at its size.
+below it. `FluiActivity.onCreate` sets it after `NativeActivity.onCreate` and before the window's
+first layout; the decision as data is `owner::android::window_setup`, a pure function of the API
+level, and a test holds `FluiActivity`'s constants to it. In that state Android dispatches the
+input method's inset to the views and leaves the content, and so the surface, at its size.
 
 ### Consequences
 
@@ -102,7 +110,8 @@ views and leaves the content, and so the surface, at its size.
 - Good, because an answer can never settle a later request that reused a number, two capabilities
   can never receive each other's answers, and an answer outlives the Activity and the process.
 - Good, because every exit of a request is typed and every table is bounded, an `Intent` is never
-  parsed by the host, and a panic on Android's main thread no longer aborts the process there.
+  parsed by the host and is released when nobody can read it, and a panic in work the host posts
+  to Android's main thread is contained there instead of aborting the process.
 - Good, because one soft-input mode holds on the whole supported range, the mode Flutter's
   embedding uses.
 - Bad, because the Java and JNI halves are type-checked by CI and run only on a device, and the
@@ -112,15 +121,18 @@ views and leaves the content, and so the surface, at its size.
 
 ### Confirmation
 
-- The router's table runs on every host beside it (`owner::android::activity_results`):
+- The router's table runs on every native host beside it (`owner::android::activity_results`):
   `an_answer_settles_the_request_its_token_names_once`,
   `each_launch_that_is_not_answered_ends_with_its_reason`,
-  `the_open_requests_and_untaken_intents_are_bounded`,
+  `the_open_requests_and_untaken_intents_are_bounded`, `an_intent_nobody_receives_is_released`,
   `an_earlier_activitys_answer_waits_for_its_key`,
   `a_reattachment_with_nothing_pending_holds_nothing`, `the_end_refuses_every_open_request`,
-  `answers_are_read_as_the_java_classes_lay_them_out`; the posting function's exits,
-  `posted_work_reports_every_exit_but_success`; the soft-input setup,
-  `the_window_resizes_its_insets_not_its_surface_on_every_level`.
+  `answers_are_read_as_the_java_classes_lay_them_out`; the drains record by record,
+  `a_record_that_cannot_be_read_is_skipped_and_the_rest_delivered`; the posting function's exits,
+  `posted_work_reports_every_exit_but_success`; the soft-input table,
+  `the_window_resizes_its_insets_not_its_surface_on_every_level` and
+  `fluiactivity_applies_this_table`; `cargo xtask panic-boundary` and its self-test for posts to
+  the Java main thread.
 - `flui-sdk`'s `a_package_provides_activity_results_against_the_sdk_alone` names every type a
   provider writes; `flui-testing`'s `a_provider_sees_the_activity_the_host_offers` runs the seam.
 - The device runs are rows of `docs/platform-parity.md`: "Activity results for capability

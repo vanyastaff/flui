@@ -22,7 +22,17 @@
 //! whatever version it chooses, and the host lends it raw pointers for the
 //! length of one call ([`JniFrame`]).
 
-use std::{ffi::c_void, fmt, num::NonZeroU64, ptr::NonNull, rc::Rc};
+use std::{
+    ffi::c_void,
+    fmt,
+    num::NonZeroU64,
+    ptr::NonNull,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use flui_foundation::{IdExhausted, IdMint};
 
@@ -111,6 +121,20 @@ impl ResultKey {
     /// [`InvalidResultKey`] when `name` is empty, longer than
     /// [`MAX_RESULT_KEY_LEN`] bytes or holds a byte outside `!` to `~`.
     pub const fn try_new(name: &'static str) -> Result<Self, InvalidResultKey> {
+        match Self::check(name) {
+            Ok(()) => Ok(Self(name)),
+            Err(invalid) => Err(invalid),
+        }
+    }
+
+    /// Whether `name` could be a key, by the rule of
+    /// [`try_new`](Self::try_new): what a host holds a part read back from
+    /// Java to.
+    ///
+    /// # Errors
+    ///
+    /// As [`try_new`](Self::try_new).
+    pub const fn check(name: &str) -> Result<(), InvalidResultKey> {
         let bytes = name.as_bytes();
         if bytes.is_empty() {
             return Err(InvalidResultKey::Empty);
@@ -125,7 +149,7 @@ impl ResultKey {
             }
             index += 1;
         }
-        Ok(Self(name))
+        Ok(())
     }
 
     /// The name.
@@ -252,38 +276,96 @@ impl IntentFrame {
     }
 }
 
-/// What a started activity answered: its code, and whether it carried an
-/// `Intent`.
+/// What a started activity answered: its code, and the `Intent` it carried,
+/// if any, as a [`ResultData`].
 ///
-/// The `Intent` stays with the host, on the owner thread, held for the
-/// request that received it; the provider reads it once with
-/// [`Activity::take_data`] under the request's token. Its extras come from
-/// another application: the provider reads only what it asked for and
-/// checks each size before it copies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The `Intent` stays with the host, on the owner thread; the provider reads
+/// it once by handing the [`ResultData`] to [`Activity::take_data`]. Its
+/// extras come from another application: the provider reads only what it
+/// asked for and checks each size before it copies. Dropping the result, or
+/// its `ResultData`, unread lets the host release the `Intent`: a result
+/// nobody receives (a dropped completion, a retired runtime, a provider that
+/// went) holds nothing.
+#[derive(Debug)]
 pub struct ActivityResult {
     code: ResultCode,
-    data: bool,
+    data: Option<ResultData>,
 }
 
 impl ActivityResult {
-    /// The answer `code`, which carried an `Intent` when `data`.
+    /// The answer `code`, with the `Intent` it carried as `data`.
     #[must_use]
-    pub const fn new(code: ResultCode, data: bool) -> Self {
+    pub fn new(code: ResultCode, data: Option<ResultData>) -> Self {
         Self { code, data }
     }
 
     /// The code the activity finished with.
     #[must_use]
-    pub const fn code(&self) -> ResultCode {
+    pub fn code(&self) -> ResultCode {
         self.code
     }
 
-    /// Whether the activity answered with an `Intent`, which the host holds
-    /// for [`Activity::take_data`].
+    /// Whether the activity answered with an `Intent` not taken yet.
     #[must_use]
-    pub const fn has_data(&self) -> bool {
-        self.data
+    pub fn has_data(&self) -> bool {
+        self.data.is_some()
+    }
+
+    /// The `Intent` the activity answered with, for
+    /// [`Activity::take_data`]; `None` once taken.
+    pub fn take_data(&mut self) -> Option<ResultData> {
+        self.data.take()
+    }
+}
+
+/// The `Intent` one answer carried, held by the host until this value is
+/// handed to [`Activity::take_data`] or dropped.
+#[derive(Debug)]
+pub struct ResultData {
+    token: ResultToken,
+    held: Arc<AtomicBool>,
+}
+
+/// The host's side of a [`ResultData`]: whether the provider still holds it.
+#[derive(Debug)]
+pub struct ResultDataHold {
+    held: Arc<AtomicBool>,
+}
+
+impl ResultData {
+    /// The `Intent` the host holds for the request `token`, and the side the
+    /// host keeps to learn when the provider lets it go.
+    #[must_use]
+    pub fn new(token: ResultToken) -> (Self, ResultDataHold) {
+        let held = Arc::new(AtomicBool::new(true));
+        (
+            Self {
+                token,
+                held: Arc::clone(&held),
+            },
+            ResultDataHold { held },
+        )
+    }
+
+    /// The request whose answer carried it.
+    #[must_use]
+    pub fn token(&self) -> ResultToken {
+        self.token
+    }
+}
+
+impl Drop for ResultData {
+    fn drop(&mut self) {
+        self.held.store(false, Ordering::Release);
+    }
+}
+
+impl ResultDataHold {
+    /// Whether the provider let the [`ResultData`] go unread, so the host
+    /// releases the `Intent`.
+    #[must_use]
+    pub fn is_released(&self) -> bool {
+        !self.held.load(Ordering::Acquire)
     }
 }
 
@@ -292,7 +374,8 @@ impl ActivityResult {
 #[non_exhaustive]
 pub enum ResultRefused {
     /// As many requests are open, or answered with an `Intent` not taken
-    /// yet, as the Activity holds ([`MAX_OPEN_REQUESTS`]), or as the host
+    /// yet, as the Activity holds ([`MAX_OPEN_REQUESTS`]), as one capability
+    /// holds ([`MAX_OPEN_REQUESTS_PER_CAPABILITY`]), or as the host
     /// holds across the process; one must end first.
     #[error("as many activity requests are open as the Activity holds")]
     TooManyOpen,
@@ -326,10 +409,14 @@ pub enum ResultRefused {
     ActivityEnded,
 }
 
-/// The most requests one [`Activity`] holds open at once, reattachments and
-/// answered `Intent`s not taken yet included; one more is refused as
-/// [`ResultRefused::TooManyOpen`].
+/// The most requests one [`Activity`] holds open at once across every
+/// capability, reattachments and answered `Intent`s not taken yet included;
+/// one more is refused as [`ResultRefused::TooManyOpen`].
 pub const MAX_OPEN_REQUESTS: usize = 16;
+
+/// The most of [`MAX_OPEN_REQUESTS`] one capability holds, so one provider
+/// that never takes its data cannot keep the others from asking.
+pub const MAX_OPEN_REQUESTS_PER_CAPABILITY: usize = MAX_OPEN_REQUESTS / 2;
 
 /// What a request answers with.
 pub type ResultOutcome = Result<ActivityResult, ResultRefused>;
@@ -363,24 +450,14 @@ impl RequestKey {
         self.key
     }
 
-    /// Whether `text` spells this key as [`Display`](fmt::Display) writes it
-    /// (`capability/key`), the form the host saves with the Activity's state.
+    /// Whether `capability` and `key` are this key's two parts, compared
+    /// apart: the host stores and compares them apart everywhere, so no two
+    /// keys can meet by how they would read joined.
     #[must_use]
-    pub fn is_spelled(self, text: &str) -> bool {
-        text.strip_prefix(self.capability.as_str())
-            .and_then(|rest| rest.strip_prefix('/'))
-            .is_some_and(|rest| rest == self.key.as_str())
+    pub fn matches(self, capability: &str, key: &str) -> bool {
+        self.capability.as_str() == capability && self.key.as_str() == key
     }
 }
-
-impl fmt::Display for RequestKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.capability.as_str(), self.key.as_str())
-    }
-}
-
-/// The most bytes a [`RequestKey`] spells: two keys and the separator.
-pub const MAX_REQUEST_KEY_LEN: usize = 2 * MAX_RESULT_KEY_LEN + 1;
 
 /// A request the [`Activity`] took: its token, and the completion its answer
 /// settles.
@@ -439,10 +516,9 @@ pub trait ActivityBridge: 'static {
     /// See [`Activity::cancel`].
     fn cancel(&self, token: ResultToken);
 
-    /// Run `f` once with the `Intent` the request `token` was answered with
-    /// lent in the frame, and let it go; `false`, and `f` does not run, when
-    /// the host holds none for `token`.
-    fn take_data(&self, token: ResultToken, f: &mut dyn FnMut(JniFrame)) -> bool;
+    /// Run `f` once with the `Intent` `data` names lent in the frame, and let
+    /// it go; `false`, and `f` does not run, when the host holds none for it.
+    fn take_data(&self, data: ResultData, f: &mut dyn FnMut(JniFrame)) -> bool;
 
     /// Run `f` once with the Activity lent in the frame; `false`, and `f`
     /// does not run, when the Activity has ended or the thread cannot
@@ -535,17 +611,14 @@ impl Activity {
         self.bridge.cancel(token);
     }
 
-    /// `f`'s answer, with the `Intent` the request `token` was answered with
-    /// lent in the frame, on the owner thread; the host lets the `Intent` go
-    /// after. `None`, and `f` does not run, when there is none to read: the
-    /// answer carried none ([`ActivityResult::has_data`]), it was taken
-    /// already, or the Activity ended. An `Intent` not taken counts against
-    /// [`MAX_OPEN_REQUESTS`] until it is, so a provider takes each one it was
-    /// answered with, reading nothing when it needs nothing.
-    pub fn take_data<R>(&self, token: ResultToken, f: impl FnOnce(JniFrame) -> R) -> Option<R> {
+    /// `f`'s answer, with the `Intent` `data` names lent in the frame, on the
+    /// owner thread; the host lets the `Intent` go after. `None`, and `f`
+    /// does not run, when the Activity has ended. An `Intent` counts against
+    /// the bounds until its [`ResultData`] is taken here or dropped.
+    pub fn take_data<R>(&self, data: ResultData, f: impl FnOnce(JniFrame) -> R) -> Option<R> {
         let mut f = Some(f);
         let mut answer = None;
-        self.bridge.take_data(token, &mut |frame| {
+        self.bridge.take_data(data, &mut |frame| {
             if let Some(f) = f.take() {
                 answer = Some(f(frame));
             }

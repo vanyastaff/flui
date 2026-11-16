@@ -112,27 +112,36 @@ public final class FluiHost {
 
     private static final String SAVED_CODES = "dev.flui.platform.requests.codes";
 
+    private static final String SAVED_CAPABILITIES = "dev.flui.platform.requests.capabilities";
+
     private static final String SAVED_KEYS = "dev.flui.platform.requests.keys";
 
     private static final String SAVED_NEXT_CODE = "dev.flui.platform.requests.next";
 
     /**
      * A request the library took: the epoch of its platform ({@link #nextEpoch}), the token the
-     * library minted, and the key that names its purpose across Activities.
+     * library minted, and the key that names its purpose across Activities: the capability's
+     * name and the provider's key, kept and compared apart.
      */
     private static final class Request {
         final long epoch;
         final long token;
+        final String capability;
         final String key;
 
-        Request(long epoch, long token, String key) {
+        Request(long epoch, long token, String capability, String key) {
             this.epoch = epoch;
             this.token = token;
+            this.capability = capability;
             this.key = key;
         }
 
         boolean is(long epoch, long token) {
             return this.epoch == epoch && this.token == token;
+        }
+
+        boolean isEarlierUnder(long epoch, String capability, String key) {
+            return this.epoch != epoch && this.capability.equals(capability) && this.key.equals(key);
         }
     }
 
@@ -354,13 +363,14 @@ public final class FluiHost {
 
     /**
      * Start {@code intent} for a result from {@code activity}; Java main thread. The request is
-     * the library's {@code token} under {@code key}, of the platform whose epoch is
-     * {@code epoch}. While {@code activity} is stopped it waits for {@link #started}. Past
-     * {@link #MAX_OPEN} open requests it is answered with {@link #ANSWER_TOO_MANY}, and when
-     * Android refuses with {@link #ANSWER_NOT_LAUNCHED}.
+     * the library's {@code token} under {@code capability}'s {@code key}, of the platform whose
+     * epoch is {@code epoch}. While {@code activity} is stopped it waits for {@link #started}.
+     * Past {@link #MAX_OPEN} open requests it is answered with {@link #ANSWER_TOO_MANY}, and
+     * when Android refuses with {@link #ANSWER_NOT_LAUNCHED}.
      */
-    static void launch(Activity activity, Intent intent, long epoch, long token, String key) {
-        Request request = new Request(epoch, token, key);
+    static void launch(
+            Activity activity, Intent intent, long epoch, long token, String capability, String key) {
+        Request request = new Request(epoch, token, capability, key);
         synchronized (LOCK) {
             if (STARTED.size() + WAITING.size() + ANSWERS.size() >= MAX_OPEN) {
                 Log.w(TAG, "as many activity requests are open as FLUI holds; this one is refused");
@@ -472,19 +482,20 @@ public final class FluiHost {
     }
 
     /**
-     * Whether a request of another platform than {@code epoch} under {@code key} has not been
-     * answered, or its answer has not been drained; any thread. A reattachment under
-     * {@code key} then waits for it.
+     * Whether a request of another platform than {@code epoch} under {@code capability}'s
+     * {@code key} has not been answered, or its answer has not been drained; any thread. A
+     * reattachment under that key then waits for it. {@link FluiActivity} restores the saved
+     * requests before the library starts, so none is missed here.
      */
-    static boolean stillToCome(long epoch, String key) {
+    static boolean stillToCome(long epoch, String capability, String key) {
         synchronized (LOCK) {
             for (Request request : STARTED.values()) {
-                if (request.epoch != epoch && request.key.equals(key)) {
+                if (request.isEarlierUnder(epoch, capability, key)) {
                     return true;
                 }
             }
             for (Answer answer : ANSWERS) {
-                if (answer.request.epoch != epoch && answer.request.key.equals(key)) {
+                if (answer.request.isEarlierUnder(epoch, capability, key)) {
                     return true;
                 }
             }
@@ -542,20 +553,24 @@ public final class FluiHost {
      */
     static void save(Bundle state) {
         int[] codes;
+        String[] capabilities;
         String[] keys;
         int next;
         synchronized (LOCK) {
             codes = new int[STARTED.size()];
+            capabilities = new String[codes.length];
             keys = new String[codes.length];
             int index = 0;
             for (Map.Entry<Integer, Request> started : STARTED.entrySet()) {
                 codes[index] = started.getKey();
+                capabilities[index] = started.getValue().capability;
                 keys[index] = started.getValue().key;
                 index++;
             }
             next = nextCode;
         }
         state.putIntArray(SAVED_CODES, codes);
+        state.putStringArray(SAVED_CAPABILITIES, capabilities);
         state.putStringArray(SAVED_KEYS, keys);
         state.putInt(SAVED_NEXT_CODE, next);
     }
@@ -568,15 +583,25 @@ public final class FluiHost {
      */
     static void restore(Bundle state) {
         int[] codes = state.getIntArray(SAVED_CODES);
+        String[] capabilities = state.getStringArray(SAVED_CAPABILITIES);
         String[] keys = state.getStringArray(SAVED_KEYS);
-        if (codes == null || keys == null || codes.length != keys.length) {
+        if (codes == null
+                || capabilities == null
+                || keys == null
+                || codes.length != keys.length
+                || codes.length != capabilities.length) {
             return;
         }
         synchronized (LOCK) {
             for (int index = 0; index < codes.length && STARTED.size() < MAX_OPEN; index++) {
                 int code = codes[index];
-                if (isHostCode(code) && keys[index] != null && !STARTED.containsKey(code)) {
-                    STARTED.put(code, new Request(EARLIER_PROCESS, 0, keys[index]));
+                if (isHostCode(code)
+                        && capabilities[index] != null
+                        && keys[index] != null
+                        && !STARTED.containsKey(code)) {
+                    STARTED.put(
+                            code,
+                            new Request(EARLIER_PROCESS, 0, capabilities[index], keys[index]));
                 }
             }
             int next = state.getInt(SAVED_NEXT_CODE, FIRST_HOST_CODE);
@@ -595,15 +620,16 @@ public final class FluiHost {
 
     /**
      * The oldest answers queued, at most {@code max}, oldest first, as
-     * {@code {long[] numbers, String[] keys, Intent[] data}}: {@link #ANSWER_NUMBERS} numbers
-     * each (epoch, token, kind, result code), and one key and one {@code Intent}, or
-     * {@code null}, each; any thread. They stay queued until {@link #commitAnswers}, so a read
-     * that fails loses none.
+     * {@code {long[] numbers, String[] capabilities, String[] keys, Intent[] data}}:
+     * {@link #ANSWER_NUMBERS} numbers each (epoch, token, kind, result code), and one capability,
+     * one key and one {@code Intent}, or {@code null}, each; any thread. They stay queued until
+     * {@link #commitAnswers}, so a read that fails loses none.
      */
     static Object[] peekAnswers(int max) {
         synchronized (LOCK) {
             int count = Math.min(Math.max(max, 0), ANSWERS.size());
             long[] numbers = new long[count * ANSWER_NUMBERS];
+            String[] capabilities = new String[count];
             String[] keys = new String[count];
             Intent[] data = new Intent[count];
             int index = 0;
@@ -616,11 +642,12 @@ public final class FluiHost {
                 numbers[at + 1] = answer.request.token;
                 numbers[at + 2] = answer.kind;
                 numbers[at + 3] = answer.resultCode;
+                capabilities[index] = answer.request.capability;
                 keys[index] = answer.request.key;
                 data[index] = answer.data;
                 index++;
             }
-            return new Object[] {numbers, keys, data};
+            return new Object[] {numbers, capabilities, keys, data};
         }
     }
 
