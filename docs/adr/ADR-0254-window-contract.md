@@ -7,7 +7,7 @@
 - **Superseded-by:** [ADR-0339](ADR-0339-an-opened-url-has-one-destination-decided-at-the-runner.md)
   for §4's clause that the first instance hears a later launch after `reopen` whenever it shows no
   window: only a launch that opens nothing asks for the reopen
-- **Superseded-by:** [ADR-0349](ADR-0349-a-linux-window-and-its-desktop-entry-carry-the-application-id.md)
+- **Superseded-by:** [ADR-0351](ADR-0351-a-linux-window-and-its-desktop-entry-carry-the-application-id.md)
   for §4's clause that an app id outside reverse DNS is warned about at `start_single`: the host
   takes a parsed `AppId`, so no such id reaches it
 - **Superseded-by:** [ADR-0341](ADR-0341-an-admitted-command-is-bound-to-a-publication-of-the-windows-capabilities.md)

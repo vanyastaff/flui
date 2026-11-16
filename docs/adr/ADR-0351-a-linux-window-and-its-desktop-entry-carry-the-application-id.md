@@ -1,4 +1,4 @@
-# ADR-0349: A Linux window and its desktop entry carry the application id
+# ADR-0351: A Linux window and its desktop entry carry the application id
 
 - **Status:** Implemented (2026-11-16)
 - **Date:** 2026-11-16

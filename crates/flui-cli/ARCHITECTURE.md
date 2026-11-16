@@ -217,7 +217,7 @@ when it declares them (`only_the_application_declares_the_links_it_opens`), sinc
 what `#[flui::main]` reads from the crate it marks. A Linux build writes the desktop entry and the
 shared-mime-info package beside the executable (`build/linux_desktop.rs`,
 `a_linux_desktop_registers_what_the_application_opens`). The entry is written for every Linux
-build (ADR-0349): it is named by the application id, names it again as `StartupWMClass`, and the
+build (ADR-0351): it is named by the application id, names it again as `StartupWMClass`, and the
 build compiles the same id in as `FLUI_APP_ID`, so the window that carries it matches the entry
 (`the_entry_and_the_window_are_named_by_one_identifier`).
 
