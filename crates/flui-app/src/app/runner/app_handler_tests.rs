@@ -153,12 +153,15 @@ fn launch_refused_by(
         ..crate::app::runner::OpenSettings::default()
     };
     let platform = HeadlessPlatform::new();
-    platform.host_events().open(Opened::new(
-        ["myapp:///note/3".to_owned()],
-        ["/a.note", "/b.note"].map(OpenedFile::new),
-        OpenTarget::Application,
-        Launch::Cold,
-    ));
+    platform.host_events().open(
+        Opened::bounded(
+            ["myapp:///note/3".to_owned()],
+            ["/a.note", "/b.note"].map(OpenedFile::new),
+            OpenTarget::Application,
+            Launch::Cold,
+        )
+        .0,
+    );
     let (ran, log) = flui_testing::capture(|| {
         Box::new(platform).run(crate::app::runner::opening_app_handler(settings, bootstrap))
     });

@@ -1414,12 +1414,15 @@ mod tests {
         let _owner = OwnerHostClearGuard::arm();
         let _cleanup = LoopTeardown::default();
         let platform = HeadlessPlatform::new();
-        platform.host_events().open(Opened::new(
-            ["myapp:///note/3".to_owned()],
-            [],
-            OpenTarget::Application,
-            Launch::Cold,
-        ));
+        platform.host_events().open(
+            Opened::bounded(
+                ["myapp:///note/3".to_owned()],
+                [],
+                OpenTarget::Application,
+                Launch::Cold,
+            )
+            .0,
+        );
         let settings = crate::app::runner::OpenSettings {
             declarations: Some(
                 flui_view::navigation::OpenDeclarations::new().url_schemes(&["myapp"]),

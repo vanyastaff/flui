@@ -1094,12 +1094,9 @@ mod loan_tests {
     /// Hold `url` for the application, as a launch does.
     fn hold(routing: &Rc<OpenRouting>, url: &str) {
         routing
-            .hold_launch(Opened::new(
-                [url.to_owned()],
-                [],
-                OpenTarget::Application,
-                Launch::Cold,
-            ))
+            .hold_launch(
+                Opened::bounded([url.to_owned()], [], OpenTarget::Application, Launch::Cold).0,
+            )
             .started();
     }
 

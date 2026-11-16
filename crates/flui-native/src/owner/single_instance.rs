@@ -621,22 +621,24 @@ mod inbox {
             use crate::owner::app_delivery::testing::{AppCall, AppLog, bound};
 
             let link = {
-                Opened::new(
+                Opened::bounded(
                     ["notes:///note/3".to_owned()],
                     [],
                     OpenTarget::Application,
                     Launch::Running,
                 )
+                .0
             };
             let file = {
-                Opened::new(
+                Opened::bounded(
                     [],
                     [OpenedFile::new("/a.note")],
                     OpenTarget::Application,
                     Launch::Running,
                 )
+                .0
             };
-            let bare = Opened::new([], [], OpenTarget::Application, Launch::Running);
+            let bare = Opened::bounded([], [], OpenTarget::Application, Launch::Running).0;
             let cases = [
                 ("a bare launch, no window shown", bare.clone(), false, 1),
                 ("a bare launch, a window shown", bare, true, 0),

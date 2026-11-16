@@ -465,7 +465,7 @@ pub(crate) fn a_link_for_a_window_nobody_opens_is_refused_and_leaves_the_applica
     let elsewhere = WindowId::try_from_raw(999).expect("a nonzero id");
     let ((), log) = flui_testing::capture(|| {
         run.open(link("myapp:///note/3", Launch::Running));
-        run.open(Opened::new(
+        run.open(kept(
             ["myapp:///note/4".to_owned()],
             [],
             OpenTarget::Window(elsewhere),
@@ -522,7 +522,7 @@ pub(crate) fn a_link_for_a_closed_window_is_refused_as_it_arrives() {
     assert_eq!(run.open_windows().len(), 1, "one window is left");
 
     let ((), log) = flui_testing::capture(|| {
-        run.open(Opened::new(
+        run.open(kept(
             ["myapp:///note/5".to_owned()],
             [],
             OpenTarget::Window(closed),
@@ -588,7 +588,7 @@ pub(crate) fn a_panic_in_on_open_files_ends_the_run_and_refuses_the_link() {
     );
     turns(&run, 2);
     let ((), log) = flui_testing::capture(|| {
-        run.open(Opened::new(
+        run.open(kept(
             ["myapp:///note/3".to_owned()],
             [OpenedFile::new("/a.note")],
             OpenTarget::Application,
@@ -687,7 +687,7 @@ pub(crate) fn a_link_goes_to_the_main_window_not_a_window_its_files_open() {
         }),
     );
     turns(&run, 2);
-    run.open(Opened::new(
+    run.open(kept(
         ["myapp:///note/3".to_owned()],
         [OpenedFile::new("/a.note")],
         OpenTarget::Application,
