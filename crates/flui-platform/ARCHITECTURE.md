@@ -14,10 +14,11 @@ this one path (ADR-0151 §9).
   crates above from reaching the backends through a side door.
 - **No logging.** A condition the contract meets is the caller's outcome, never a
   log line the contract decides on (ADR-0151 §7): a refusal is an error the
-  function returns, a bound applied to untrusted input is a count the value
-  carries for the host to report (`Opened::overflow`), and an edit refused in a
-  text-store grant that runs after its request returned stays with the store
-  that refused it. `tracing` is in this crate's `reach-forbid`; the one path to
+  function returns, a bound applied to untrusted input returns its count
+  beside the value for the host that bounds to report (`Opened::bounded`), and
+  an edit refused in a text-store grant that runs after its request returned
+  goes to the reporter the caller handed in (`commit_composition_in_place`,
+  `project_ime_event`). `tracing` is in this crate's `reach-forbid`; the one path to
   it, `flui-foundation`'s own instrumentation, is excused there.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
 - **A display id cannot be built from a number, and a period cannot be invalid.**

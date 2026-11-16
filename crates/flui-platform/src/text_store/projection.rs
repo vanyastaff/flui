@@ -46,14 +46,13 @@ type Edit = Box<dyn FnOnce(&mut dyn TextStoreEdit) -> Result<(), TextStoreError>
 /// # Errors
 ///
 /// The store's refusal of the lock, or an edit's error when the grant ran
-/// before this returned. A grant the store queued runs when no caller is
-/// left, and its error stays with the store that refused the edit. Each edit
-/// reads its offsets from the session it runs in, so a store that follows the
-/// [`TextStoreEdit`] rules refuses one only by its own decision (a field that
-/// takes no edits).
+/// before this returned. A grant the store queued runs after this returned:
+/// its refusal goes to `late_refusal`, which the caller supplies to report it
+/// (the contract does not log).
 pub fn project_ime_event(
     store: &dyn TextStore,
     event: &ImeEvent,
+    late_refusal: impl FnOnce(TextStoreError) + 'static,
 ) -> Result<LockOutcome, TextStoreError> {
     let edit: Edit = match event {
         ImeEvent::Preedit { text, cursor } if !text.is_empty() => {
@@ -67,29 +66,31 @@ pub fn project_ime_event(
         }
         ImeEvent::Enabled => return Ok(LockOutcome::Granted),
     };
-    edit_async(store, edit)
+    edit_async(store, edit, late_refusal)
 }
 
 /// Run `edit` under an asynchronous read-write lock on `store`.
 ///
 /// An edit that runs before this returns answers through the result: its
 /// error, or else what the store did with the request. One the store queues
-/// runs at a later commit anchor, when no caller is left, and its error stays
-/// with the store that refused the edit: a grant returns nothing, and the
-/// store is the one that knows why it refused.
+/// runs at a later commit anchor, after this returned, and hands its error to
+/// `late_refusal`; a queued edit that succeeds, or a grant the store drops
+/// unrun, calls nothing.
 pub(super) fn edit_async(
     store: &dyn TextStore,
     edit: impl FnOnce(&mut dyn TextStoreEdit) -> Result<(), TextStoreError> + 'static,
+    late_refusal: impl FnOnce(TextStoreError) + 'static,
 ) -> Result<LockOutcome, TextStoreError> {
     let failure: Rc<Cell<Option<TextStoreError>>> = Rc::new(Cell::new(None));
     // A grant that runs after this returned finds the caller gone.
     let caller = Rc::downgrade(&failure);
     let outcome = store.request_lock(
         LockGrant::read_write(move |session| {
-            if let Err(error) = edit(session)
-                && let Some(failure) = caller.upgrade()
-            {
-                failure.set(Some(error));
+            if let Err(error) = edit(session) {
+                match caller.upgrade() {
+                    Some(failure) => failure.set(Some(error)),
+                    None => late_refusal(error),
+                }
             }
         }),
         LockTiming::Async,

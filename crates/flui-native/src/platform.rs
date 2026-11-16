@@ -75,8 +75,8 @@ pub trait AppHandler: 'static {
 
     /// The operating system opened URLs or files with the application: a
     /// link, a custom-scheme URL, a document, at launch or while it runs.
-    /// `opened` is bounded already ([`Opened::new`]; the host logs what that
-    /// dropped, [`Opened::overflow`]); what it carries is
+    /// `opened` is bounded already ([`Opened::bounded`]; the host logs what
+    /// that dropped); what it carries is
     /// still untrusted text, which the UI runtime parses and admits
     /// (`UiRuntime::open_url`). Reported in order with the other reports, so
     /// one the operating system gives at launch is heard right after `ready`

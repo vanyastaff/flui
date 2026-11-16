@@ -1,6 +1,6 @@
 //! An edit a store refuses inside a grant: a grant that ran before the
 //! request returned hands the refusal to the caller; one the store queued
-//! runs when no caller is left, and its refusal stays with the store.
+//! hands it to the late reporter the caller supplied.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -110,31 +110,58 @@ impl TextStoreEdit for ReadOnlySession {
     }
 }
 
+/// The late refusals a test hears, in order.
+type Heard = Rc<RefCell<Vec<(&'static str, TextStoreError)>>>;
+
+fn hear(heard: &Heard, what: &'static str) -> impl FnOnce(TextStoreError) + 'static {
+    let heard = Rc::clone(heard);
+    move |error| heard.borrow_mut().push((what, error))
+}
+
 /// The commit in place and the projection answer a refusal in a grant that
-/// ran at once with the store's error, not `Granted`; a refusal in a grant
-/// the store queued reaches no caller and the queue still drains.
+/// ran at once with the store's error, not `Granted`, and call no late
+/// reporter; a refusal in a grant the store queued reaches the reporter its
+/// caller supplied, once, when the queue drains.
 #[test]
-fn a_refused_edit_reaches_the_caller_only_while_it_waits() {
+fn a_refused_edit_reaches_the_caller_or_its_late_reporter() {
     let field = ReadOnlyField::new();
+    let heard = Heard::default();
     assert_eq!(
-        commit_composition_in_place(&field),
+        commit_composition_in_place(&field, hear(&heard, "commit")),
         Err(TextStoreError::Protected),
         "the commit's refusal is the caller's"
     );
     assert_eq!(
-        project_ime_event(&field, &ImeEvent::Commit("c".to_owned())),
+        project_ime_event(
+            &field,
+            &ImeEvent::Commit("c".to_owned()),
+            hear(&heard, "projection")
+        ),
         Err(TextStoreError::Protected),
         "the projection's refusal is the caller's"
     );
+    assert!(heard.borrow().is_empty(), "a refusal at once is not late");
 
     field.queues.set(true);
     assert_eq!(
-        commit_composition_in_place(&field),
+        commit_composition_in_place(&field, hear(&heard, "commit")),
         Ok(LockOutcome::Deferred)
     );
     assert_eq!(
-        project_ime_event(&field, &ImeEvent::Disabled),
+        project_ime_event(&field, &ImeEvent::Disabled, hear(&heard, "projection")),
         Ok(LockOutcome::Deferred)
     );
+    assert!(
+        heard.borrow().is_empty(),
+        "nothing refused before the anchor"
+    );
     assert_eq!(field.run_deferred_grants(), 2, "both queued grants ran");
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("commit", TextStoreError::Protected),
+            ("projection", TextStoreError::Protected)
+        ],
+        "each queued refusal reaches its reporter once"
+    );
 }

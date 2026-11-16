@@ -97,6 +97,17 @@ pub(crate) mod linux;
 #[cfg(any(test, windows))]
 pub(crate) mod modal_pace;
 pub(crate) mod notices;
+#[cfg(any(
+    windows,
+    x11_host,
+    wayland_host,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    test
+))]
+pub(crate) mod opened;
 // The rules by which the Win32 loop and its windows reach a window's context
 // across threads: pure, so `test` compiles them on every host. Beside the
 // loop's module rather than in it, which is Windows' alone.

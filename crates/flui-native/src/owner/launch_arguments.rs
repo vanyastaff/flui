@@ -41,7 +41,7 @@ pub(crate) fn opened_by_arguments(
             ),
         }
     }
-    Opened::new(urls, files, OpenTarget::Application, Launch::Cold)
+    super::opened::bounded(urls, files, OpenTarget::Application, Launch::Cold)
 }
 
 /// The process's launch arguments, without its own name: what a desktop

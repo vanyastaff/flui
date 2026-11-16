@@ -87,9 +87,6 @@ trait Reach {
 
     /// Quit the platform.
     fn quit(&self);
-
-    /// A call that takes the platform's state.
-    fn touch(&self);
 }
 
 impl Reach for Rc<dyn Platform> {
@@ -103,10 +100,6 @@ impl Reach for Rc<dyn Platform> {
 
     fn quit(&self) {
         Platform::quit(&**self);
-    }
-
-    fn touch(&self) {
-        let _ = self.window_capabilities();
     }
 }
 
@@ -124,10 +117,6 @@ impl Reach for OwnerPlatform {
 
     fn quit(&self) {
         OwnerPlatform::quit(self);
-    }
-
-    fn touch(&self) {
-        let _ = self.window_capabilities();
     }
 }
 
@@ -292,20 +281,23 @@ fn a_handler_method_reenters(
 }
 
 /// A window lets go of its handler when it closes; the handler's captures,
-/// whose destructor calls the platform, are dropped with none of the
-/// platform's locks held.
+/// whose destructor opens another window, are dropped with none of the
+/// platform's locks held. Opening takes the host's window table for writing
+/// (the headless `HeadlessWindows::tracked`, Win32's `WindowSet::by_handle`),
+/// so a close that dropped the handler with that table still borrowed fails
+/// here.
 fn a_handler_dropped_at_close_reaches_the_platform(
     platform: &Rc<dyn Reach>,
     options: fn() -> WindowOptions,
     settle: &dyn Fn(&dyn Fn() -> bool) -> bool,
 ) {
-    let reached = Rc::new(Cell::new(false));
-    let observed = Rc::clone(&reached);
+    let opened: Rc<RefCell<Vec<Rc<dyn HostWindow>>>> = Rc::default();
+    let observed = Rc::clone(&opened);
     let weak = Rc::downgrade(platform);
     let calls_back = OnDrop::new(move || {
         if let Some(platform) = weak.upgrade() {
-            platform.touch();
-            observed.set(true);
+            let window = platform.open(options(), RecordingWindowHandler::new());
+            observed.borrow_mut().push(window);
         }
     });
     let handler = RecordingWindowHandler::new();
@@ -315,9 +307,12 @@ fn a_handler_dropped_at_close_reaches_the_platform(
     let window = platform.open(options(), handler);
     window.close_now();
     assert!(
-        settle(&|| reached.get()),
+        settle(&|| !opened.borrow().is_empty()),
         "the handler's destructor did not reach the platform"
     );
+    for window in opened.take() {
+        window.close_for_cleanup();
+    }
 }
 
 /// Raises something on a window from inside a handler method.

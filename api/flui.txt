@@ -12788,7 +12788,6 @@ variant flui::platform::OpenTarget::Window(flui::platform::WindowId) // at 0
 #[non_exhaustive] pub struct flui::platform::Opened
 field flui::platform::Opened::files: Vec<flui::platform::OpenedFile> // at 1
 field flui::platform::Opened::launch: flui::platform::Launch // at 3
-field flui::platform::Opened::overflow: flui::platform::OpenedOverflow // at 4
 field flui::platform::Opened::target: flui::platform::OpenTarget // at 2
 field flui::platform::Opened::urls: Vec<String> // at 0
 impl Clone for flui::platform::Opened
@@ -12796,8 +12795,8 @@ impl Eq for flui::platform::Opened
 impl PartialEq for flui::platform::Opened
 impl core::fmt::Debug for flui::platform::Opened
 impl core::marker::StructuralPartialEq for flui::platform::Opened
+pub fn flui::platform::Opened::bounded(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> (Self, flui::platform::OpenedOverflow)
 pub fn flui::platform::Opened::is_empty(&self) -> bool
-pub fn flui::platform::Opened::new(urls: impl IntoIterator<Item = String>, files: impl IntoIterator<Item = flui::platform::OpenedFile>, target: flui::platform::OpenTarget, launch: flui::platform::Launch) -> Self
 #[non_exhaustive] pub struct flui::platform::OpenedFile { .. }
 field flui::platform::OpenedFile::path: std::path::PathBuf // at 0
 impl Clone for flui::platform::OpenedFile

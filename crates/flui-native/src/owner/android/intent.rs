@@ -133,9 +133,12 @@ impl Opening {
     /// surface, so the runner's last focused window is the one the intent
     /// reached. Each provider's document is opened by `open` (the content
     /// resolver, on the owner thread), at most as many as an [`Opened`]
-    /// carries; one it cannot open is left out, and `open` logs why.
+    /// carries; one it cannot open is left out, and `open` logs why. What
+    /// bounding drops, the documents past the room included, is reported
+    /// (`owner::opened::report`), even when nothing is left to open.
     pub(crate) fn opened(self, mut open: impl FnMut(&str) -> Option<OpenedFile>) -> Opened {
         let room = MAX_OPENED_ITEMS.saturating_sub(self.links.len());
+        let unopened = self.documents.len().saturating_sub(room);
         let files: Vec<OpenedFile> = self
             .documents
             .into_iter()
@@ -145,7 +148,11 @@ impl Opening {
                 Document::Content(uri) => open(&uri),
             })
             .collect();
-        Opened::new(self.links, files, OpenTarget::Application, self.launch)
+        let (opened, mut overflow) =
+            Opened::bounded(self.links, files, OpenTarget::Application, self.launch);
+        overflow.past_limit = overflow.past_limit.saturating_add(unopened);
+        crate::owner::opened::report(overflow);
+        opened
     }
 }
 
@@ -174,6 +181,33 @@ mod tests {
         Opening::of(
             ReceivedIntent::from_record(record(fields)).expect("a record FluiHost lays out"),
         )
+    }
+
+    /// An intent whose only link is past the length bound opens nothing, and
+    /// what bounding dropped is still reported, once; so are the documents
+    /// past the room the links leave.
+    #[test]
+    fn an_intent_reports_what_bounding_dropped_even_when_nothing_is_left() {
+        use crate::owner::opened::reports_in;
+
+        let long = format!("notes:///{}", "a".repeat(flui_platform::MAX_OPENED_URL_LEN));
+        let mut opened = None;
+        let reports = reports_in(|| {
+            opened = Some(opening(&["cold", "android.intent.action.VIEW", &long]).opened(|_| None));
+        });
+        assert!(opened.expect("opened").is_empty(), "nothing left to open");
+        assert_eq!(reports, 1, "the dropped link is reported once");
+
+        let mut fields = vec!["running", "android.intent.action.SEND_MULTIPLE"];
+        let documents: Vec<String> = (0..=MAX_OPENED_ITEMS)
+            .map(|n| format!("content://com.example.notes/doc/{n}"))
+            .collect();
+        fields.extend(documents.iter().map(String::as_str));
+        let mut opened = None;
+        let reports =
+            reports_in(|| opened = Some(opening(&fields).opened(|uri| Some(OpenedFile::new(uri)))));
+        assert_eq!(opened.expect("opened").files.len(), MAX_OPENED_ITEMS);
+        assert_eq!(reports, 1, "the document past the room is reported once");
     }
 
     /// A `VIEW` intent's data opens as a link, a custom scheme's or a

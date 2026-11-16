@@ -33,24 +33,21 @@ pub struct Opened {
     pub target: OpenTarget,
     /// Whether they launched the application or reached it running.
     pub launch: Launch,
-    /// What [`Opened::new`] dropped to bring this value within its bounds,
-    /// for the host to report: the operating system offered more than the
-    /// application takes.
-    pub overflow: OpenedOverflow,
 }
 
 impl Opened {
-    /// What the operating system opened, bounded: an item past
-    /// [`MAX_OPENED_ITEMS`] (URLs first, then files) and a URL longer than
-    /// [`MAX_OPENED_URL_LEN`] bytes are dropped, never read further, and
-    /// counted in [`overflow`](Self::overflow).
-    #[must_use]
-    pub fn new(
+    /// What the operating system opened, bounded, and what bounding it
+    /// dropped: an item past [`MAX_OPENED_ITEMS`] (URLs first, then files)
+    /// and a URL longer than [`MAX_OPENED_URL_LEN`] bytes are dropped, never
+    /// read further, and counted. The host that bounds reports the count; the
+    /// value carries only what it kept.
+    #[must_use = "the overflow is the host's to report"]
+    pub fn bounded(
         urls: impl IntoIterator<Item = String>,
         files: impl IntoIterator<Item = OpenedFile>,
         target: OpenTarget,
         launch: Launch,
-    ) -> Self {
+    ) -> (Self, OpenedOverflow) {
         let mut overflow = OpenedOverflow::default();
         let mut kept = 0_usize;
         let mut admit = |is_url_too_long: bool| {
@@ -70,13 +67,13 @@ impl Opened {
             .filter(|url| admit(url.len() > MAX_OPENED_URL_LEN))
             .collect();
         let files: Vec<OpenedFile> = files.into_iter().filter(|_| admit(false)).collect();
-        Self {
+        let opened = Self {
             urls,
             files,
             target,
             launch,
-            overflow,
-        }
+        };
+        (opened, overflow)
     }
 
     /// Whether it carries neither a URL nor a file.
@@ -86,8 +83,9 @@ impl Opened {
     }
 }
 
-/// How many URLs and files [`Opened::new`] dropped, by reason. Each count is
-/// at most the number of items the operating system handed over.
+/// How many URLs and files bounding what was opened dropped, by reason
+/// ([`Opened::bounded`]). Each count is at most the number of items the
+/// operating system handed over.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct OpenedOverflow {

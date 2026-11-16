@@ -111,19 +111,27 @@ impl TextStoreHostError {
 /// owes it a later [`TextStore::run_deferred_grants`], whether or not its
 /// frame transaction was open when it asked, since the grant ahead of it may
 /// fail and leave it queued. A store that queued the commit and then refuses
-/// it keeps that refusal: no caller is left to hear it.
+/// it hands that refusal to `late_refusal`, which the caller supplies to
+/// report it (the contract does not log).
 ///
 /// # Errors
 ///
 /// The store's refusal of the lock ([`TextStore::request_lock`]), or of the
 /// edit that ends the composition when it ran before this returned; the
 /// composition is then left as it was.
-pub fn commit_composition_in_place(store: &dyn TextStore) -> Result<LockOutcome, TextStoreError> {
-    edit_async(store, |session| {
-        if session.composition().is_some() {
-            session.set_composition(None)
-        } else {
-            Ok(())
-        }
-    })
+pub fn commit_composition_in_place(
+    store: &dyn TextStore,
+    late_refusal: impl FnOnce(TextStoreError) + 'static,
+) -> Result<LockOutcome, TextStoreError> {
+    edit_async(
+        store,
+        |session| {
+            if session.composition().is_some() {
+                session.set_composition(None)
+            } else {
+                Ok(())
+            }
+        },
+        late_refusal,
+    )
 }

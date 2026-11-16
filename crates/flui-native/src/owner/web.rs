@@ -811,7 +811,7 @@ impl host::Loop for WebLoop {
         // the location.
         if let Some(address) = web_sys::window().and_then(|window| window.location().href().ok()) {
             self.app
-                .opened(flui_platform::Opened::new(
+                .opened(crate::owner::opened::bounded(
                     [address],
                     [],
                     flui_platform::OpenTarget::Application,

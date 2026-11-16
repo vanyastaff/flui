@@ -40,6 +40,7 @@ fn composing_store() -> Rc<InMemoryTextStore> {
             text: "かな".to_owned(),
             cursor: Some((0, 0)),
         },
+        drop,
     );
     assert_eq!(applied, Ok(LockOutcome::Granted), "preedit applies");
     store
@@ -437,6 +438,7 @@ fn a_refused_completion_reports_its_teardown_before_its_recovery(hwnd: HWND) {
                 text: "かな".to_owned(),
                 cursor: Some((0, 0)),
             },
+            drop,
         ),
         Ok(LockOutcome::Granted),
         "preedit applies"
@@ -639,6 +641,7 @@ fn a_protection_change_whose_termination_is_refused_commits_in_place(hwnd: HWND)
                 text: "かな".to_owned(),
                 cursor: Some((0, 0)),
             },
+            drop,
         ),
         Ok(LockOutcome::Granted),
         "preedit applies"

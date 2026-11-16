@@ -671,7 +671,7 @@ fn text_services_probe() {
         late.inner.composition()
     );
     if shut == Ok(flui_platform::text_store::CompositionEnd::Abandoned) {
-        let _ = flui_platform::text_store::commit_composition_in_place(&*late_store);
+        crate::text::refusal::commit_in_place(&*late_store);
         println!("PROBE (7) owner commits the composition in place");
     }
     gate.set_open(true);

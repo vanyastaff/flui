@@ -68,8 +68,8 @@ use flui_foundation::geometry::Bounds;
 use flui_platform::ImeEvent;
 use flui_platform::PlatformTextInput;
 use flui_platform::text_store::{
-    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, TextChange, TextStore, TextStoreHost,
-    TextStoreObserver, commit_composition_in_place, project_ime_event,
+    CommitGate, CompositionEnd, LockOutcome, OwnerCalls, TextChange, TextStore, TextStoreError,
+    TextStoreHost, TextStoreObserver, commit_composition_in_place, project_ime_event,
 };
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
@@ -252,9 +252,31 @@ fn complete_through(host: &dyn TextStoreHost, store: &Rc<dyn TextStore>) -> bool
 
 /// Commit `store`'s composition in place; whether the commit was queued in
 /// the store (behind its shut gate, or behind a grant running on it) rather
-/// than run or refused.
+/// than run or refused. A refusal leaves the composition where it is and owes
+/// nothing: it is reported, at once or when the queued commit runs.
 fn commit_queued(store: &dyn TextStore) -> bool {
-    commit_composition_in_place(store) == Ok(LockOutcome::Deferred)
+    match commit_composition_in_place(store, report_refused_commit) {
+        Ok(LockOutcome::Deferred) => true,
+        Ok(LockOutcome::Granted) => false,
+        Err(error) => {
+            report_refused_commit(error);
+            false
+        }
+    }
+}
+
+/// Report that a store refused the edits of a push-model IME event, at once
+/// or when the queued grant ran.
+fn report_refused_ime_event(error: TextStoreError) {
+    tracing::warn!(
+        ?error,
+        "an IME event could not be applied to the text store"
+    );
+}
+
+/// Report that a store refused to commit its composition in place.
+fn report_refused_commit(error: TextStoreError) {
+    tracing::warn!(%error, "a text store refused to commit its composition in place");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -999,7 +1021,8 @@ impl TextInputOwner {
     ///
     /// [`ImeEvent::Enabled`] runs the client's session-start callback and
     /// edits nothing; every other event is projected onto the client's store
-    /// ([`project_ime_event`]). A projection the store refuses is logged,
+    /// ([`project_ime_event`]). A projection the store refuses is logged, at
+    /// once or when its queued grant runs,
     /// not propagated: the platform has no one to hand the error back to.
     ///
     /// The client is cloned out before use so the store's grant may
@@ -1037,16 +1060,11 @@ impl TextInputOwner {
                 if let Some(on_session_start) = &client.on_session_start {
                     calls.run_parking(&self.gate, || on_session_start());
                 }
-            } else if let Some(Err(error)) =
-                calls.run_parking(&self.gate, || project_ime_event(&*client.store, event))
-            {
+            } else if let Some(Err(error)) = calls.run_parking(&self.gate, || {
+                project_ime_event(&*client.store, event, report_refused_ime_event)
+            }) {
                 // A diagnostic runs a user-installed subscriber.
-                calls.run(|| {
-                    tracing::warn!(
-                        ?error,
-                        "an IME event could not be applied to the text store"
-                    );
-                });
+                calls.run(|| report_refused_ime_event(error));
             }
             // A grant or callback that detached the client left this clone its
             // last owner, and its destruction may settle a grant of its own.
