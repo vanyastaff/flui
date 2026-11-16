@@ -33,15 +33,18 @@
 //!   [`MAX_WRITERS`] at once, from the text encoded once per form;
 //!   `cancelled` (another client took the selection) ends that seat's
 //!   ownership.
-//! - **Text kept for the application.** With no user input in focus to set
-//!   it under, or no data device to set it on, the text is kept here and
-//!   the write answers `ApplicationOnly` (ADR-0337 §1). The host still owes
-//!   it to the system clipboard: at the loop's turn after the next input in
-//!   focus (the keyboard's `enter` included) it is set as that seat's
-//!   selection. Until then every read in the application answers it, and a
-//!   selection another client sets meanwhile does not drop it, since the
-//!   host has not had the chance to offer it; one arriving after an offer
-//!   no seat took, or a newer write, replaces it ([`Owners`]).
+//! - **No input in focus.** A write with no user input in focus to set it
+//!   under (none yet, or the keyboard left the window it went to) answers
+//!   `Unavailable` and keeps nothing (ADR-0337 §1): the window that holds
+//!   the keyboard again has a serial, the keyboard's `enter` included.
+//!   Keeping the text to offer later could overwrite a copy the user made
+//!   in another application meanwhile, since a compositor tells only the
+//!   focused client about selections.
+//! - **No system clipboard on the seat.** With no data device on the seat,
+//!   or no data device manager, the text is kept here and the write answers
+//!   `ApplicationOnly`: every read in the application answers it until a
+//!   newer write or the first selection that arrives, and it is never
+//!   offered later ([`Owners`]).
 //! - **After the loop releases the clipboard** every read and write answers
 //!   [`ClipboardError::Gone`].
 
@@ -159,13 +162,10 @@ fn read_offer(
 }
 
 impl DeviceListener for Shared {
-    /// Text kept in this process gives way to a selection that arrives once
-    /// the host has tried to offer it, and only then (see [`Owners`]).
+    /// Text kept in this process gives way to the first selection that
+    /// arrives (see [`Owners`]).
     fn selection_arrived(&self) {
-        let replaced = self
-            .state
-            .with(|state| state.owned.selection_arrived())
-            .flatten();
+        let replaced = self.state.with(|state| state.owned.take_kept()).flatten();
         replaced.into_iter().for_each(Owned::release);
     }
 }
@@ -205,9 +205,6 @@ impl Shared {
 /// while it is kept in this process alone, under no seat.
 struct Owned {
     text: Arc<str>,
-    /// Whether the write was concealed: text kept under no seat is offered
-    /// later through a source that offers the hint.
-    concealed: bool,
     source: Option<WlDataSource>,
     serial: Option<u32>,
     /// The sources set before `source` under the same serial, oldest first,
@@ -225,10 +222,9 @@ impl Owned {
     }
 
     /// Text kept in this process alone, under no seat.
-    fn kept(text: Arc<str>, concealed: bool) -> Self {
+    fn kept(text: Arc<str>) -> Self {
         Self {
             text,
-            concealed,
             source: None,
             serial: None,
             superseded: Vec::new(),
@@ -236,10 +232,9 @@ impl Owned {
     }
 
     /// Text set as a seat's selection through `source` under `serial`.
-    fn seated(text: Arc<str>, concealed: bool, source: WlDataSource, serial: u32) -> Self {
+    fn seated(text: Arc<str>, source: WlDataSource, serial: u32) -> Self {
         Self {
             text,
-            concealed,
             source: Some(source),
             serial: Some(serial),
             superseded: Vec::new(),
@@ -258,7 +253,6 @@ impl Owned {
             }
         }
         self.text = text;
-        self.concealed = concealed;
     }
 }
 
@@ -351,43 +345,7 @@ impl WaylandClipboard for SeatClipboard {
     }
 
     fn deliver(&self) {
-        self.offer_kept();
         self.deliver_primary();
-    }
-}
-
-impl SeatClipboard {
-    /// Offer the text kept for the application, which the host owes the
-    /// system clipboard, as the selection of the last input's seat once an
-    /// input in focus gives a serial: a write kept it for want of one. An
-    /// offer no seat takes (no data device) leaves the text kept until the
-    /// next selection arrives.
-    fn offer_kept(&self) {
-        let Some(input) = self.shared.last_input.latest_in_focus() else {
-            return;
-        };
-        let replaced = self
-            .shared
-            .state
-            .with(|state| {
-                if state.released {
-                    return Vec::new();
-                }
-                let Some(owed) = state.owned.owed() else {
-                    return Vec::new();
-                };
-                let (text, concealed) = (Arc::clone(&owed.text), owed.concealed);
-                let Some(source) = self.shared.place(&text, concealed, &input) else {
-                    state.owned.offer_failed();
-                    return Vec::new();
-                };
-                state.owned.set(
-                    input.seat.clone(),
-                    Owned::seated(text, concealed, source, input.serial),
-                )
-            })
-            .unwrap_or_default();
-        replaced.into_iter().for_each(Owned::release);
     }
 }
 
@@ -475,11 +433,13 @@ impl NativeClipboard for SeatClipboard {
 
     /// Answered at once: `Ok` once the seat's selection is set to the
     /// write's source (the compositor may still cancel it for a newer one);
-    /// [`ClipboardError::ApplicationOnly`] with no user input in focus to
-    /// set it under (none yet, or the keyboard left the window it went to)
-    /// or no data device to set it on: the text is kept, every read in the
-    /// application answers it, and it is offered as the selection at the
-    /// next input in focus (see the module docs); and
+    /// [`ClipboardError::Unavailable`] with no user input in focus to set it
+    /// under (none yet, or the keyboard left the window it went to), which
+    /// keeps nothing: the window that holds the keyboard again has a serial;
+    /// [`ClipboardError::ApplicationOnly`] with no data device on the seat or
+    /// no data device manager: there is no system clipboard to go to, and
+    /// the text is kept for the application's reads until a newer write or
+    /// the first selection that arrives (see the module docs); and
     /// [`ClipboardError::Gone`] once the loop released the clipboard.
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
         let concealed = write.is_concealed();
@@ -511,11 +471,13 @@ impl NativeClipboard for SeatClipboard {
                 .and_then(|input| self.shared.place(&text, concealed, input));
             let effect = write_effect(input.is_some(), held_hint, concealed, fresh.is_some());
             match (effect, fresh) {
-                // No serial to set a selection under, or no device to set it
-                // on: the text is kept for the application, owed to the
-                // system clipboard at the next input in focus.
+                // Nothing is kept: the window that holds the keyboard again
+                // has a serial.
+                (WriteEffect::Refuse(error), _) => (Vec::new(), Err(error)),
+                // No system clipboard on this seat: the text is kept for the
+                // application, never offered later.
                 (WriteEffect::KeepForApplication, _) => {
-                    let previous = owned.keep(Owned::kept(text, concealed));
+                    let previous = owned.keep(Owned::kept(text));
                     (
                         previous.into_iter().collect(),
                         Err(ClipboardError::ApplicationOnly),
@@ -548,10 +510,12 @@ impl NativeClipboard for SeatClipboard {
                 // seat keeps the source it reads.
                 (WriteEffect::SetFresh, Some(source)) => {
                     let input = input.expect("BUG: a new source is set only under an input");
-                    let previous = owned.set(
-                        input.seat.clone(),
-                        Owned::seated(text, concealed, source, input.serial),
-                    );
+                    let previous = owned
+                        .set(
+                            input.seat.clone(),
+                            Owned::seated(text, source, input.serial),
+                        )
+                        .collect::<Vec<Owned>>();
                     (previous, Ok(()))
                 }
                 (WriteEffect::SetOver | WriteEffect::SetFresh, None) => {
@@ -563,11 +527,14 @@ impl NativeClipboard for SeatClipboard {
         let (previous, written) =
             outcome.unwrap_or_else(|| (Vec::new(), Err(ClipboardError::Gone)));
         previous.into_iter().for_each(Owned::release);
-        if matches!(written, Err(ClipboardError::ApplicationOnly)) {
-            tracing::debug!(
-                "no input in focus or no data device to set the selection: the text is kept for \
-                 the application and offered at the next input"
-            );
+        match written {
+            Err(ClipboardError::ApplicationOnly) => tracing::debug!(
+                "no data device to set the selection on: the text is kept for the application"
+            ),
+            Err(ClipboardError::Unavailable) => {
+                tracing::debug!("no input in focus to set the selection under: nothing was kept");
+            }
+            _ => {}
         }
         // A retired owner has nobody left to answer.
         let _ = answer.resolve(written);
@@ -583,10 +550,11 @@ enum WriteEffect {
     SetOver,
     /// The new source is the seat's selection, set under this serial.
     SetFresh,
-    /// No serial to set a selection under, or no device to set it on: the
-    /// text is kept for the application (`ApplicationOnly`) and owed to the
-    /// system clipboard.
+    /// No device to set it on, so no system clipboard on this seat: the
+    /// text is kept for the application (`ApplicationOnly`).
     KeepForApplication,
+    /// No serial to set it under: refused, nothing kept.
+    Refuse(ClipboardError),
 }
 
 /// What a write does, from what it found: whether an input in focus gives
@@ -604,7 +572,7 @@ fn write_effect(
     fresh_set: bool,
 ) -> WriteEffect {
     if !has_input {
-        return WriteEffect::KeepForApplication;
+        return WriteEffect::Refuse(ClipboardError::Unavailable);
     }
     match (held_hint, fresh_set) {
         (Some(hint), _) if hint == concealed => WriteEffect::ReplaceInPlace,
@@ -900,12 +868,14 @@ mod tests {
                 "{held_hint:?} {concealed} {fresh_set}"
             );
         }
-        // With no input serial, whatever else holds, the text is kept for the
-        // application alone: its reads answer it, no other client sees it.
+        // With no input in focus, whatever else holds, the write is refused
+        // `Unavailable` and nothing is kept: the window that holds the
+        // keyboard again has a serial, and a selection another client set
+        // meanwhile is what a paste reads.
         for (held_hint, concealed) in [(None, false), (None, true), (Some(false), true)] {
             assert_eq!(
                 write_effect(false, held_hint, concealed, false),
-                KeepForApplication
+                Refuse(ClipboardError::Unavailable)
             );
         }
     }

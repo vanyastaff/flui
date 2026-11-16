@@ -15,12 +15,11 @@ pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 /// The answer to one clipboard write (ADR-0337), the same on every host:
 ///
 /// - `Ok(())`: the system clipboard took the text.
-/// - `Err(`[`ClipboardError::ApplicationOnly`]`)`: the system clipboard
-///   cannot take the text now, and the host keeps it: this application's
-///   later reads answer it, other applications do not see it yet. The host
-///   still owes it to the system clipboard and offers it there as soon as
-///   it can; a system change that arrives before that offer does not drop
-///   it, and only a newer write, or a system change after the offer, does.
+/// - `Err(`[`ClipboardError::ApplicationOnly`]`)`: there is no system
+///   clipboard for the text to go to, and the host keeps it: this
+///   application's later reads answer it until a newer write or a newer
+///   system selection, and other applications never see it. A host answers
+///   it only where it can hold that promise.
 /// - any other error: nothing was kept. The clipboard is as it was, and no
 ///   later read in this process answers the text, with one exception: a host
 ///   that must clear the clipboard before it fills it (Win32's
@@ -32,7 +31,10 @@ pub type ClipboardRead = Result<Option<Arc<str>>, ClipboardError>;
 /// and [`ClipboardError::Timeout`] (a clipboard held, busy or slow now), and
 /// [`ClipboardError::Denied`] once the user acts. Never worth one:
 /// [`ClipboardError::Gone`], the one answer on every host for a clipboard
-/// no retry can reach.
+/// no retry can reach. `Gone` is about this clipboard object (its thread
+/// ended, its loop released it, the calling thread is never served);
+/// `ApplicationOnly` is about where the text can go (no system clipboard
+/// for it), while the clipboard object still works; the two never meet.
 pub type ClipboardWritten = Result<(), ClipboardError>;
 
 /// Why a clipboard or primary-selection read has no answer, or a clipboard
@@ -45,14 +47,15 @@ pub type ClipboardWritten = Result<(), ClipboardError>;
 pub enum ClipboardError {
     /// The host could not reach the clipboard now, and a retry can: another
     /// application held it open past the host's patience, the host's queue
-    /// of requests or of queued text is full, or the selection's owner left
-    /// during the transfer.
+    /// of requests or of queued text is full, the selection's owner left
+    /// during the transfer, or a Wayland window wrote without holding the
+    /// keyboard (a compositor takes a selection only under the serial of an
+    /// input the window holds; nothing is kept).
     #[error("the clipboard could not be reached")]
     Unavailable,
     /// The user or the platform refused this application the clipboard: a
-    /// browser's clipboard permission, a mobile system reading for an
-    /// application without input focus, or a compositor that takes a
-    /// selection only under the serial of the user's input.
+    /// browser's clipboard permission, or a mobile system reading for an
+    /// application without input focus.
     #[error("the clipboard was denied to this application")]
     Denied,
     /// The clipboard did not answer in time: a selection owner, a Win32
@@ -67,24 +70,22 @@ pub enum ClipboardError {
     /// read stops rather than grow without bound.
     #[error("the clipboard's text is larger than the host reads")]
     TooLarge,
-    /// Only a write answers it: the system clipboard cannot take the text
-    /// now (a web page without the Clipboard API, a Wayland write with no
-    /// input serial to set the selection under or no data device to set it
-    /// on), so the host keeps it. This application's later reads answer it;
-    /// no other application can paste it until the host offers it to the
-    /// system clipboard, which it owes and does at its first chance (a
-    /// Wayland window's next input; a page without the Clipboard API has
-    /// none, and sees no system change either). A system change before that
-    /// offer does
-    /// not drop it; a newer write, or a system change after the offer, does.
-    /// Nothing is lost: a cut may delete on it, as a paste in the
-    /// application returns the text.
+    /// Only a write answers it: there is no system clipboard for the text
+    /// to go to (a web page without the Clipboard API; a Wayland seat with
+    /// no data device, or a compositor with no data device manager), so the
+    /// host keeps it. This application's later reads answer it until a newer
+    /// write or a newer system selection; no other application ever sees
+    /// it, and the host never offers it to a system clipboard later. A host
+    /// answers it only where it can hold that, and so nothing is lost: a cut
+    /// may delete on it, as a paste in the application returns the text.
     #[error("only this application can read the text back")]
     ApplicationOnly,
-    /// The host's clipboard is gone, and no retry can reach it: it could not
-    /// be started or has ended (Win32's clipboard thread, X11's selection
-    /// thread), the loop that held it released it (Wayland), or the caller
-    /// is on a thread the platform never serves (UIKit off the main thread).
+    /// This clipboard object is gone, and no retry can reach it: it could
+    /// not be started or has ended (Win32's clipboard thread, X11's
+    /// selection thread), the loop that held it released it (Wayland), the
+    /// platform gave it no service (an Android activity without a clipboard
+    /// manager), or the caller is on a thread the platform never serves
+    /// (UIKit off the main thread).
     #[error("the clipboard is gone for this run")]
     Gone,
 }

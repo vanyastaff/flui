@@ -315,7 +315,9 @@ where
 
     /// Hear every answer as it is given, however it is given (a step, a
     /// delayed step, the standing answer, a release), with the request it
-    /// answers, before the caller's completion is resolved: `Some(value)`,
+    /// answers, before the script resolves the resolver the request came
+    /// with, so before its completion settles at a later owner turn:
+    /// `Some(value)`,
     /// or `None` for a request that ends unanswered (abandoned, or
     /// unexpected). A double keeps the state its answers imply here, in one
     /// place, whoever wrote the answer. Adds an observer beside those added

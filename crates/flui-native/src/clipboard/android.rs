@@ -8,7 +8,8 @@
 //! focus, and from Android 13 the system shows its own notice on a read: both
 //! are the system's policy, not a failure. A failed call is logged; a read
 //! answers [`ClipboardError::Unavailable`], and a write writes nothing and
-//! answers it too.
+//! answers it too. A write where the activity has no clipboard service
+//! answers [`ClipboardError::Gone`]: no retry gives it one.
 
 use android_activity::AndroidApp;
 use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
@@ -132,8 +133,9 @@ impl SyncClipboard for AndroidClipboard {
         let written = with_activity(&self.app, |env, activity| {
             let manager = clipboard_manager(env, activity)?;
             if manager.is_null() {
-                // The system has no clipboard service for this activity.
-                return Ok(Err(ClipboardError::Unavailable));
+                // The system has no clipboard service for this activity, and
+                // no retry will give it one.
+                return Ok(Err(ClipboardError::Gone));
             }
             let label = env.new_string("")?;
             let text = env.new_string(write.as_text())?;

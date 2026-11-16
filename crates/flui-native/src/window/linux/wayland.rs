@@ -2323,6 +2323,8 @@ mod toplevel {
         /// Leave the seats' input, take down the frame the window drew, let
         /// go of the handler, then destroy the role objects.
         fn retire(&self) {
+            // No later request names a serial the closed window took.
+            self.last_input.surface_gone(&self.surface.0);
             self.input.detach(self.id);
             self.drag.detach(self.id);
             if let Some(client_frame) = self.client_frame.borrow_mut().take() {

@@ -39,7 +39,7 @@ use flui_platform::{
 use rustix::event::{EventfdFlags, eventfd};
 use x11rb::rust_connection::RustConnection;
 
-use self::selection::{Command, Generation, Name, Notice, Selections};
+use self::selection::{Command, Generation, Name, Notice, Owed, Selections};
 use crate::clipboard::linux::offered::{SelectionText, answer_with, ask, drop_retired};
 use crate::error::PlatformError;
 use crate::host;
@@ -117,7 +117,8 @@ impl X11Clipboard {
     fn send(&self, command: Command) {
         match self.commands.send(command) {
             Ok(()) => ring(&self.bell),
-            Err(mpsc::SendError(command)) => command.refuse_gone(),
+            // The command drops here, and its read or write answers `Gone`.
+            Err(mpsc::SendError(command)) => drop(command),
         }
     }
 
@@ -195,7 +196,7 @@ fn ring(bell: &OwnedFd) {
 
 impl host::NativeClipboard for X11Clipboard {
     fn read_text(&self, answer: Resolver<ClipboardRead>) {
-        self.send(Command::Read(Name::Clipboard, answer));
+        self.send(Command::Read(Name::Clipboard, Owed::new(answer)));
     }
 
     /// Answered once the clipboard thread owns the selection with the write,
@@ -203,7 +204,7 @@ impl host::NativeClipboard for X11Clipboard {
     ///
     /// [`Gone`]: flui_platform::ClipboardError::Gone
     fn write(&self, write: ClipboardWrite, answer: Resolver<ClipboardWritten>) {
-        self.send(Command::Write(write, answer));
+        self.send(Command::Write(write, Owed::new(answer)));
     }
 
     /// A concealed write is offered with KDE's password-manager hint, which
@@ -242,7 +243,7 @@ impl host::NativePrimarySelection for X11Clipboard {
         match self.current() {
             // Asked with nothing held: the closure may call back in.
             Some(text) => answer_with(text, answer),
-            None => self.send(Command::Read(Name::Primary, answer)),
+            None => self.send(Command::Read(Name::Primary, Owed::new(answer))),
         }
     }
 }

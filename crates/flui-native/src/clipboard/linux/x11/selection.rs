@@ -126,7 +126,7 @@ impl Generation {
 /// What the handle asks of the thread.
 pub(super) enum Command {
     /// Own the clipboard with this write, and answer whether it owned.
-    Write(ClipboardWrite, Resolver<ClipboardWritten>),
+    Write(ClipboardWrite, Owed<()>),
     /// Own the primary selection with the application's offer, whose text
     /// the owner thread answers.
     Offer(Generation),
@@ -136,21 +136,37 @@ pub(super) enum Command {
     /// when the offer is no longer the application's or holds no text.
     Answer(Generation, Option<String>),
     /// Answer with the selection's text.
-    Read(Name, Resolver<ClipboardRead>),
+    Read(Name, Owed<Option<Arc<str>>>),
     /// Let go of everything and end.
     Stop,
 }
 
-impl Command {
-    /// The thread has ended or will take no more commands: a read or write
-    /// is answered [`ClipboardError::Gone`], anything else is dropped.
-    pub(super) fn refuse_gone(self) {
-        // A retired owner has nobody left to answer.
-        let _ = match self {
-            Self::Write(_, answer) => answer.resolve(Err(ClipboardError::Gone)),
-            Self::Read(_, answer) => answer.resolve(Err(ClipboardError::Gone)),
-            Self::Offer(_) | Self::Withdraw(_) | Self::Answer(..) | Self::Stop => Ok(()),
-        };
+/// The answer a read or write command owes its handle. The thread takes the
+/// resolver to settle; a command that drops untaken (sent to a thread that
+/// has ended, or left in its queue as it ends) answers
+/// [`ClipboardError::Gone`], so no exit leaves it without a typed answer.
+pub(super) struct Owed<V: 'static>(Option<Resolver<Result<V, ClipboardError>>>);
+
+impl<V: 'static> Owed<V> {
+    /// The answer `resolver` owes.
+    pub(super) fn new(resolver: Resolver<Result<V, ClipboardError>>) -> Self {
+        Self(Some(resolver))
+    }
+
+    /// The resolver, which the thread settles from here.
+    fn take(mut self) -> Resolver<Result<V, ClipboardError>> {
+        self.0
+            .take()
+            .expect("BUG: an owed answer is taken once, as its command is carried out")
+    }
+}
+
+impl<V: 'static> Drop for Owed<V> {
+    fn drop(&mut self) {
+        if let Some(resolver) = self.0.take() {
+            // A retired owner has nobody left to answer.
+            let _ = resolver.resolve(Err(ClipboardError::Gone));
+        }
     }
 }
 
@@ -889,13 +905,14 @@ impl Selections {
     fn command(&mut self, command: Command) -> Result<bool, ReplyOrIdError> {
         match command {
             Command::Write(write, answer) => {
-                self.clipboard.written.push(answer);
+                self.clipboard.written.push(answer.take());
                 self.claim(Name::Clipboard, Content::Text(Encodings::new(write)))?;
             }
             Command::Offer(offer) => self.claim(Name::Primary, Content::Offered(offer))?,
             Command::Withdraw(offer) => self.withdraw(offer)?,
             Command::Answer(offer, text) => self.answered(offer, text)?,
             Command::Read(name, answer) => {
+                let answer = answer.take();
                 // Past a few handles' reads waiting, a read is refused rather
                 // than queue behind them.
                 let selection = self.split(name).3;
@@ -1443,21 +1460,21 @@ impl Selections {
 
 /// The thread's body: commands and events until `Stop`, or until the
 /// connection fails. A panic is contained here: the thread ends, and the
-/// reads waiting are abandoned, each drop contained, before the state
-/// drops; so are the commands still queued, whose reads were never taken.
-/// What ended the thread is reported after the abandonment, so a report
-/// that fails cannot skip it.
+/// reads and writes waiting are answered `Gone`, each delivery contained,
+/// before the state drops; so are the commands still queued, whose reads
+/// and writes were never taken. What ended the thread is reported after,
+/// so a report that fails cannot skip it.
 pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell: &OwnedFd) {
     #[expect(
         clippy::disallowed_methods,
-        reason = "ADR-0287: a panic ends the clipboard thread but abandons its reads first"
+        reason = "ADR-0287: a panic ends the clipboard thread, which answers its reads and writes `Gone` first"
     )]
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         steps(&mut selections, &commands, bell)
     }));
     #[expect(
         clippy::disallowed_methods,
-        reason = "ADR-0287: pending reads are abandoned even when the thread's body panicked"
+        reason = "ADR-0287: waiting reads and writes are answered `Gone` even when the thread's body panicked"
     )]
     let abandoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut failure = FirstPanic::new();
@@ -1465,10 +1482,10 @@ pub(super) fn run(mut selections: Selections, commands: Receiver<Command>, bell:
         // The connection closes with the thread, and the selections it
         // owned with it: the owner's turn retires the offers.
         failure.contain(|| selections.notice.end());
+        // A read or write answers `Gone` as it drops, here or with the queue.
         while let Ok(command) = commands.try_recv() {
-            failure.contain(|| command.refuse_gone());
+            failure.contain(|| drop(command));
         }
-        // A command sent after the drain drops with the queue.
         failure.contain(|| drop(commands));
         failure.resume();
     }));

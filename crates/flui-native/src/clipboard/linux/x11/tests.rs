@@ -1088,3 +1088,40 @@ fn a_clipboard_whose_thread_ended_answers_gone() {
         Err(ClipboardError::Gone)
     );
 }
+
+/// A read or write command that drops without the thread taking it (sent
+/// as the thread ends, after its last drain) answers `Gone`.
+#[test]
+fn a_command_dropped_untaken_answers_gone() {
+    use super::selection::{Command, Owed};
+    let owner = crate::testing::clipboard::SettlingOwner::new();
+    let (mut written, answer) = owner.pending::<flui_platform::ClipboardWritten>();
+    drop(Command::Write(
+        ClipboardWrite::text("late"),
+        Owed::new(answer),
+    ));
+    let (mut read, answer) = owner.pending::<ClipboardRead>();
+    drop(Command::Read(
+        super::selection::Name::Clipboard,
+        Owed::new(answer),
+    ));
+    for (what, answer) in [
+        (
+            "write",
+            owner
+                .settle_within(&mut written, STEP)
+                .expect("answered in time")
+                .expect("answered, not abandoned"),
+        ),
+        (
+            "read",
+            owner
+                .settle_within(&mut read, STEP)
+                .expect("answered in time")
+                .expect("answered, not abandoned")
+                .map(|_| ()),
+        ),
+    ] {
+        assert_eq!(answer, Err(ClipboardError::Gone), "{what}");
+    }
+}

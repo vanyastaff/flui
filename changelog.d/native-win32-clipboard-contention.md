@@ -2,11 +2,11 @@
 
 - **`flui-platform`**: `ClipboardWritten`, the answer to a clipboard write
   ([ADR-0337](/docs/adr/ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)):
-  `Ok(())` once the system clipboard took the text; `ClipboardError::ApplicationOnly` when it
-  cannot now and the host keeps the text for this application, owing it to the system clipboard
-  at its first chance (a web page without the Clipboard API; a Wayland window with no input in
-  focus or no data device, which offers it at the next input); any other error when nothing was
-  kept. `ClipboardError::Gone` is every host's answer for a clipboard no retry can reach.
+  `Ok(())` once the system clipboard took the text; `ClipboardError::ApplicationOnly` when there
+  is no system clipboard for it and the host keeps the text for this application's reads until a
+  newer write or a newer system selection (a web page without the Clipboard API; a Wayland seat
+  with no data device); any other error when nothing was kept. `ClipboardError::Gone` is every
+  host's answer for a clipboard object no retry can reach.
 - **`flui-platform`**: `Script::on_answer`, which adds an observer that hears every answer a
   scenario script gives, however it is given, before the caller's completion settles.
 - **`flui-testing`**: `ScriptedClipboard::writes`, the script that answers writes (each a
@@ -25,10 +25,11 @@
   drop the completion.
 - **`flui-native`**: `NativeClipboard::write` takes a `Resolver<ClipboardWritten>`, and
   `NativeClipboard::write_text` is gone. Every host answers it: X11 once it owns the selection,
-  `Gone` once its thread has ended; Wayland `ApplicationOnly` with no input in focus (none yet,
-  or the keyboard left the window) or no data device, keeping the text for the application's
-  reads through any selection that arrives before it is offered at the next input, and `Gone`
-  once the loop released it; UIKit `Gone` off the main thread; the web when the browser's
+  `Gone` once its thread has ended; Wayland `Unavailable` with no input in focus (none yet, the
+  keyboard left the window, or the window closed), keeping nothing, `ApplicationOnly` on a seat
+  with no data device, keeping the text until a newer write or a selection arrives, and `Gone`
+  once the loop released it; Android `Gone` where the activity has no clipboard service; UIKit
+  `Gone` off the main thread; the web when the browser's
   promise settles, a page with no Clipboard API keeping the text and answering
   `ApplicationOnly`.
 - **`flui-widgets`**: a cut in an `EditableText` deletes its selection at the owner turn the
@@ -46,3 +47,6 @@
   that application answers; one that never answers ends after Windows' thirty seconds as
   `ClipboardError::Timeout`. A panicking `tracing` subscriber no longer stops the clipboard. The
   requests waiting hold at most 64 MiB of text besides one write of any size.
+- **`flui-native`**: on Wayland, a primary-selection claim and a clipboard write are no longer
+  set under the serial of an input from before the keyboard left the window, or from a window
+  that closed; a stale claim no longer outlives another client's selection.

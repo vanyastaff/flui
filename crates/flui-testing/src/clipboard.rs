@@ -199,6 +199,14 @@ impl ScriptedClipboard {
     /// writes in order before it. Whatever answers a write `Ok` or
     /// [`ApplicationOnly`](ClipboardError::ApplicationOnly) lands its text
     /// on the clipboard; any other answer leaves the clipboard as it was.
+    ///
+    /// The script resolves a stand-in: the clipboard's own observer, which
+    /// runs before any a test adds, lands the write and then answers the
+    /// caller's resolver, in the order the writes were asked. A test's
+    /// observer hears an answer after the clipboard did (its text has landed
+    /// unless an earlier write is still unanswered), and the
+    /// caller's completion settles at a later owner turn, after every
+    /// observer heard it.
     #[must_use]
     pub fn writes(&self) -> &Script<WriteRequest, ClipboardWritten> {
         &self.writes

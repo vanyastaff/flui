@@ -139,6 +139,21 @@ pub(crate) mod user_input {
             self.last.as_ref().filter(|_| !self.last_left)
         }
 
+        /// `surface`'s window closed: an input that went to it names no
+        /// surface any more, so it is no longer the last input, and a grab on
+        /// it ends.
+        pub(crate) fn surface_gone(&mut self, surface: &Surface) {
+            if self
+                .last
+                .as_ref()
+                .is_some_and(|last| last.surface == *surface)
+            {
+                self.last = None;
+                self.last_left = false;
+            }
+            self.grabs.retain(|(grab, _)| grab.surface != *surface);
+        }
+
         /// `seat`'s keyboard left `surface`: the last input, if it was the
         /// seat's on that surface, sets no selection any more. The last input
         /// stays what an activation token names.
@@ -318,6 +333,22 @@ pub(crate) mod user_input {
             assert_eq!(inputs.latest(), Some(&input(1, 5, 3)), "a token names it");
             inputs.record(input(1, 6, 3));
             assert_eq!(inputs.latest_in_focus(), Some(&input(1, 6, 3)));
+        }
+
+        /// A window that closes takes the inputs that went to it along: no
+        /// selection, claim or token names a serial from a destroyed window,
+        /// and a grab on it ends. Another window's input stays.
+        #[test]
+        fn a_closed_window_leaves_no_input_behind() {
+            let mut inputs = Inputs::default();
+            inputs.record(input(1, 5, 3));
+            inputs.pressed(input(1, 5, 3));
+            inputs.surface_gone(&4);
+            assert_eq!(inputs.latest(), Some(&input(1, 5, 3)));
+            inputs.surface_gone(&3);
+            assert_eq!(inputs.latest(), None);
+            assert_eq!(inputs.latest_in_focus(), None);
+            assert_eq!(inputs.grab_on(&3), None);
         }
 
         /// A seat removed with a button held leaves no grab and is not the
@@ -1308,6 +1339,11 @@ mod event_loop {
             self.0
                 .with(|inputs| inputs.latest_in_focus().cloned())
                 .flatten()
+        }
+
+        /// `surface`'s window closed. See [`Inputs::surface_gone`].
+        pub(crate) fn surface_gone(&self, surface: &WlSurface) {
+            self.0.with(|inputs| inputs.surface_gone(surface));
         }
 
         /// `seat`'s keyboard left `surface`. See [`Inputs::keyboard_left`].

@@ -104,26 +104,35 @@ can act on it and keeps the owner thread free of another process's waits.
   return `Completion<ClipboardWritten>`, which settles at an owner turn, never inside the call.
   `NativeClipboard` has no `write_text` shorthand. The answer means the same on every host:
   - `Ok(())`: the system clipboard took the text.
-  - `ApplicationOnly`: the system clipboard cannot take the text now, and the host keeps it for
-    the application's own reads. One situation, one outcome, on every host that can meet it (the
-    table). Kept text is an obligation the host still owes the system clipboard: it offers it
-    there at its first chance (a Wayland window's next serial, the keyboard's `enter` included).
-    Until then every read in the application answers it; a system change that arrives before the
-    offer does not drop it, and only a newer write, or a system change arriving after the offer,
-    replaces it. A web page without the Clipboard API has no chance to offer and sees no system
-    change, so its kept text lasts until a newer write; no other host answers `ApplicationOnly`.
+  - `ApplicationOnly`: there is no system clipboard for the text to go to, and the host keeps it.
+    The promise, the same wherever it is answered: the text stays readable by the application
+    until a newer write or a newer system selection, and no other application sees it. A host
+    answers it only where it can hold that, and never offers the text to a system clipboard
+    later. A cut deletes on it by the shared rule only because of that promise. Checked host by
+    host: a Wayland seat with no data device, or a compositor with no `wl_data_device_manager`,
+    keeps the text until a newer write or the first selection that arrives; a web page without
+    the Clipboard API keeps it until a newer write, and can see no system selection, so its
+    reads never answer anything but its own text; no other host answers `ApplicationOnly`.
   - any other error: nothing was kept, and no later read in the process answers the text. The
     clipboard is as it was, except where a host must clear it before filling it (Win32's
     `EmptyClipboard`, AppKit's `clearContents`) and the system itself then refuses the text:
     the clipboard is then left without text.
 
   A Wayland compositor confirms no selection request, so a request it drops silently still
-  answers `Ok`; a Wayland clipboard sets no selection under an input once the keyboard left the
-  window it went to, so a write after that is kept for the application (`ApplicationOnly`)
-  rather than sent under a stale serial (an activation token still names that input). Worth a
+  answers `Ok`. A Wayland write with no usable input serial (the window does not hold the
+  keyboard: none yet, the keyboard left the window it went to, or that window closed) answers
+  `Unavailable` and keeps nothing; a focused window always has a serial, since the keyboard's
+  `enter` is an input. Keeping that text to offer at the next serial was rejected: a compositor
+  tells only the focused client about selections, so the selection it re-sends as the keyboard
+  enters and a copy the user made meanwhile in another application cannot be told apart, and an
+  offer would overwrite the user's copy. The primary selection follows the same rule for the
+  serial its claim is set under (`LastInput::latest_in_focus`); an activation token still names
+  the last input. Worth a
   retry: `Unavailable` and `Timeout` (a clipboard held, busy or slow now), `Denied` once the user
   acts. `Gone` is the one answer on every host for a clipboard no retry can reach, and
-  `Unavailable` is never used for one; no request is left without a typed answer. A caller
+  `Unavailable` is never used for one; no request is left without a typed answer. `Gone` is
+  about the clipboard object (its thread ended, its loop released it, its caller's thread is
+  never served), `ApplicationOnly` about where the text can go while the object works. A caller
   with nothing to undo (a copy) drops the completion, and treats `ApplicationOnly` as done;
   `EditableText`'s cut deletes the selection once the write answers `Ok` or `ApplicationOnly`
   (nothing is lost: a paste in the application returns the text), and only under the rule its
@@ -138,9 +147,9 @@ can act on it and keeps the owner thread free of another process's waits.
   | Win32 | the text and its markers are set | never | `Unavailable`: held past the patience (§2), memory not made (the clipboard untouched), `EmptyClipboard` or `SetClipboardData` failed (the clipboard left without text), more than `MAX_WAITING` requests or `MAX_QUEUED_BYTES` of text wait; `Timeout`: waited past `LONGEST_QUEUED` for its turn; `Gone`: the clipboard thread could not start or has ended |
   | AppKit | the pasteboard took the string | never | `Unavailable`: a marker or the set failed after `clearContents` (the pasteboard left without text) |
   | UIKit | the pasteboard took the string | never | `Gone`: off its main thread, which UIKit never serves (the set replaces the items in one call) |
-  | Android | `setPrimaryClip` returned | never | `Unavailable`: a JNI failure, no clipboard service (the clip is built and marked before it is set) |
-  | X11 | the clipboard thread owns `CLIPBOARD` at the server's time | never | `Unavailable`: another client took it first; a write a newer one replaced before it owned shares the newer one's answer; `Gone`: the clipboard thread has ended, for a write sent after or still waiting |
-  | Wayland | the seat's selection serves the write: a new source set under the input's serial, or the source set under it answering in place (a plain write through a hinted source is served marked secret) | no input in focus to set it under (none yet, or the keyboard left the window), or no data device on the seat or no `wl_data_device_manager`: kept under no seat and offered at the next input in focus | `Gone`: the loop released the clipboard |
+  | Android | `setPrimaryClip` returned | never | `Unavailable`: a JNI failure (the clip is built and marked before it is set); `Gone`: the activity has no clipboard service |
+  | X11 | the clipboard thread owns `CLIPBOARD` at the server's time | never | `Unavailable`: another client took it first; a write a newer one replaced before it owned shares the newer one's answer; `Gone`: the clipboard thread has ended, for a read or write sent after, still waiting or still queued (a command's answer is owed until the thread takes it) |
+  | Wayland | the seat's selection serves the write: a new source set under the input's serial, or the source set under it answering in place (a plain write through a hinted source is served marked secret) | no data device on the seat, or no `wl_data_device_manager`: kept until a newer write or the first selection that arrives, never offered later | `Unavailable`: no input in focus to set it under (none yet, the keyboard left the window, or the window closed), nothing kept; `Gone`: the loop released the clipboard |
   | Web | `writeText`'s promise resolved | no Clipboard API (an insecure context): the page keeps the text for its own reads | the browser's refusal (`Denied` for a permission), the page keeping its earlier text |
   | Headless, in memory | always | never | never; the scripted double answers through its write script whatever a test scripts, `Gone` included (`ScriptedClipboard::writes`, `fail_writes_with`, `hold_writes`) |
 
@@ -196,9 +205,11 @@ can act on it and keeps the owner thread free of another process's waits.
 - Good, because a copy that another application blocked is no longer lost silently, and a cut
   keeps the text the clipboard did not take.
 - Good, because no other process can freeze the Win32 owner thread through the clipboard.
-- Good, because a host that cannot reach a system clipboard now (an insecure web page, a Wayland
-  window without an input serial) still cuts, copies and pastes inside the application, and says
-  so.
+- Good, because a host with no system clipboard for the text (an insecure web page, a Wayland
+  seat without a data device) still cuts, copies and pastes inside the application, and says so.
+- Bad, because a Wayland copy made by a task while the window does not hold the keyboard is
+  refused (`Unavailable`) rather than delivered later; the caller may retry once the window is
+  focused again.
 - Bad, because a cut deletes its selection one owner turn after the chord rather than inside it.
 - Bad, because every Win32 clipboard answer crosses a thread, and the requests behind a read of a
   late renderer wait up to Win32's thirty seconds.
@@ -220,9 +231,10 @@ can act on it and keeps the owner thread free of another process's waits.
   `a_writes_text_is_encoded_straight_into_its_memory`.
 - `clipboard::linux::wayland::tests::a_write_answers_ok_only_where_the_clipboard_serves_it`,
   `owner::linux::wayland::user_input::tests::the_keyboard_leaving_ends_the_last_input_for_a_selection_alone`,
-  `clipboard::linux::owners::tests::kept_text_outlives_a_selection_that_arrives_before_its_offer`,
-  `a_newer_write_replaces_the_kept_text`,
-  `clipboard::linux::x11::tests::a_clipboard_write_answers_once_it_owns_the_selection` and
+  `a_closed_window_leaves_no_input_behind`,
+  `clipboard::linux::owners::tests::kept_text_gives_way_to_a_newer_write_or_a_selection`,
+  `clipboard::linux::x11::tests::a_command_dropped_untaken_answers_gone`,
+  `a_clipboard_write_answers_once_it_owns_the_selection` and
   `a_clipboard_whose_thread_ended_answers_gone` (Xvfb),
   `clipboard::page::tests::a_refused_write_is_not_read_back`,
   `a_write_the_page_alone_keeps_is_not_ok_but_is_read_back`.
