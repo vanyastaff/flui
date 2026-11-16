@@ -486,7 +486,12 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
 }
 
 /// A window that counts the frames asked of it.
-struct RedrawCounter(Arc<std::sync::atomic::AtomicUsize>);
+struct RedrawCounter(
+    Arc<std::sync::atomic::AtomicUsize>,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    flui_platform::WindowCapabilities,
+);
 
 impl RedrawCounter {
     fn requests(&self) -> usize {
@@ -523,12 +528,13 @@ impl flui_platform::PlatformWindow for RedrawCounter {
         )
         .with_focused(true)
         .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
+        .with_capabilities(self.1)
     }
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.1)?;
         Ok(())
     }
     fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
@@ -575,7 +581,12 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
     for (dragging, hovering, frozen_heard, heard) in cases {
         let lane = InteractionLane::try_new().expect("owner lane");
         let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
-        let window = Rc::new(RedrawCounter(Arc::default()));
+        let window = Rc::new(RedrawCounter(
+            Arc::default(),
+            flui_platform::WindowCapabilities::NONE
+                .publish()
+                .expect("the process has publications left"),
+        ));
         let wake: Rc<dyn flui_platform::PlatformWindow> = window.clone();
         flui_interaction::__runtime::set_pointer_capture_wake(&binding, Rc::downgrade(&wake));
         let arena = binding.arena().clone();

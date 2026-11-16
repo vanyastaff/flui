@@ -4,6 +4,13 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0341](ADR-0341-an-admitted-command-is-bound-to-a-publication-of-the-windows-capabilities.md)
+  for §2's binding of an `AdmittedCommand`, the variants of `AdmissionError` and the meaning of
+  `ApplyError::Superseded` (here and in the Confirmation): the token carries the publication of the
+  capabilities it was admitted against, not their revision; `AdmissionError` also has
+  `Unpublished`, which admission answers for capabilities that are no publication; and
+  `Superseded` means the window holds another publication than the token's, of which a moved
+  capabilities revision is one case.
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
   crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a
@@ -32,6 +39,8 @@
   slot calls the target's `pre_present_notify` itself. The instance a surface is made from takes
   its display from the platform's `DisplayConnection`, never from a window's target, because wgpu
   reads the instance's display at every surface it makes. The target's obligations are unchanged.
+- **Revised:** 2026-11-16 — decision 4: `AppHandler` also answers `turn_deadline`, required like
+  the other queries, by [ADR-0343](ADR-0343-the-owner-promises-turn-deadlines-and-the-window-states-user-placement.md).
 - **Supersedes:**
   - [ADR-0237](ADR-0237-window-state-and-host-notices.md), in part: the window-scoped getters and
     per-fact callbacks that sit beside the snapshot; decision 3's refusal inside `apply` (it moves

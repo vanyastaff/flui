@@ -486,13 +486,14 @@ async fn web_page_events_leave_with_the_window() {
 #[wasm_bindgen_test]
 async fn web_window_reports_what_a_page_can_do() {
     let (_probe, running, window) = page().await;
-    let mut expected = WindowCapabilities::NONE;
+    let mut expected = WindowCapabilities::NONE.into_parts();
     // An estimate from the visual viewport: the page has no
     // `navigator.virtualKeyboard`.
     expected.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
     expected.sets_title = flui_platform::WindowCapability::Native;
     expected.enters_fullscreen = flui_platform::WindowCapability::Native;
     expected.closes = flui_platform::WindowCapability::Emulated;
+    let expected = expected.into_capabilities();
     assert_eq!(window.state().capabilities, expected);
     assert_eq!(
         running
@@ -560,7 +561,7 @@ async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
         "the window asks for the keyboard's rectangle"
     );
     assert_eq!(
-        window.state().capabilities.reports_keyboard_inset,
+        window.state().capabilities.reports_keyboard_inset(),
         flui_platform::WindowCapability::Native
     );
     let keyboard = || window.state().insets.keyboard();

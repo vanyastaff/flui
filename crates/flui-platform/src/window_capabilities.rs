@@ -8,6 +8,8 @@
 
 use std::num::NonZeroU64;
 
+use flui_foundation::{AtomicIdMint, IdExhausted};
+
 use crate::{
     Availability, CapabilityAbsence, WindowCommand, WindowFrame, WindowMode, WindowRevision,
 };
@@ -56,7 +58,9 @@ impl WindowCapability {
     }
 }
 
-/// Which commands a window honours and which reports it makes, and how.
+/// Which commands a window honours and which reports it makes, and how: the
+/// [`CapabilityParts`] a window published, each read by its accessor
+/// (`capabilities.material()`), and which publication they are (ADR-0341).
 ///
 /// A backend reports exactly what it does today. A command is refused by
 /// [`WindowCommand::admit`] as
@@ -67,24 +71,25 @@ impl WindowCapability {
 /// host's where the operating system has it and the host does not implement
 /// it yet. A command the capabilities admit can still fail in the operating
 /// system, which [`ApplyError::Platform`](crate::ApplyError::Platform)
-/// reports: that is a failure, not a missing capability. Fields are public so
-/// a backend can start from [`NONE`](Self::NONE) and name what its window
-/// does.
+/// reports: that is a failure, not a missing capability. A backend names what
+/// its window does as [`CapabilityParts`], starting from
+/// [`NONE`](Self::NONE)'s, and turns them into capabilities with
+/// [`CapabilityParts::into_capabilities`].
 ///
 /// The reports a window makes,
 /// [`reports_presentation`](Self::reports_presentation),
 /// [`reports_keyboard_inset`](Self::reports_keyboard_inset) and
-/// [`reports_system_gestures`](Self::reports_system_gestures), carry their
-/// reason the same way: no verb answers for them, so the field is where a
-/// caller learns why frames come without
+/// [`reports_system_gestures`](Self::reports_system_gestures), carry
+/// their reason the same way: no verb answers for them, so the field is where
+/// a caller learns why frames come without
 /// [`FrameRequest::presented`](crate::FrameRequest::presented) or why those
 /// insets stay zero.
 ///
 /// Four fields are a plain [`Availability`]: what the window observes or can
 /// be placed at ([`observes_position`](Self::observes_position),
 /// [`observes_minimized`](Self::observes_minimized),
-/// [`places_at_open`](Self::places_at_open)), which nothing refuses, and the
-/// one verb a window takes outside the command queue,
+/// [`places_at_open`](Self::places_at_open)), which nothing
+/// refuses, and the one verb a window takes outside the command queue,
 /// [`frame_rate_hint`](Self::frame_rate_hint), which answers
 /// [`Unsupported`](crate::Unsupported) exactly when it is `Unavailable` and
 /// whose reason is the verb's own answer: nothing admits a verb against the
@@ -92,111 +97,110 @@ impl WindowCapability {
 /// host's verb already says. The same holds for the input regions, whose
 /// capability lives in the input capabilities.
 ///
-/// The capabilities in a published snapshot also carry their
-/// [`revision`](Self::revision): the snapshot revision at which what the
-/// window honours last changed. An
-/// [`AdmittedCommand`](crate::AdmittedCommand) is bound to it, so a command
-/// checked against capabilities the window no longer has is
+/// # Publication
+///
+/// Capabilities a window's snapshot publishes are one *publication*: an
+/// identity this crate mints, when a host publishes a window's first snapshot
+/// ([`publish`](Self::publish)) and whenever
+/// [`WindowState::successor`](crate::WindowState::successor) publishes
+/// capabilities that differ from the ones before a published snapshot held.
+/// No caller can name it, build it or move it onto other capabilities: the
+/// fields are read by value and never written through a `WindowCapabilities`,
+/// and every way to change one ([`unavailable`](Self::unavailable),
+/// [`into_parts`](Self::into_parts)) yields capabilities of no publication,
+/// as the constants and [`CapabilityParts::into_capabilities`] are. A copy of
+/// a window's published capabilities is the publication itself, so a value
+/// that carries one holds exactly what that window published.
+///
+/// [`WindowCommand::admit`] refuses capabilities of no publication
+/// ([`AdmissionError::Unpublished`](crate::AdmissionError::Unpublished)), and
+/// an [`AdmittedCommand`](crate::AdmittedCommand) is bound to the publication
+/// it was admitted against and opens only under it: a command checked against
+/// capabilities the window no longer has, or another window's, is
 /// [`ApplyError::Superseded`](crate::ApplyError::Superseded), never applied.
+///
 /// Equality and hashing compare what is honoured and why not, not the
-/// revision: the revision says when the capabilities were published, and it
-/// moves only when they differ.
+/// publication or the [`revision`](Self::revision): those say which window
+/// published the capabilities and when.
 #[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
 pub struct WindowCapabilities {
-    /// [`WindowCommand::SetTitle`].
-    pub sets_title: WindowCapability,
-    /// [`WindowCommand::SetPosition`].
-    pub sets_position: WindowCapability,
-    /// [`WindowCommand::SetSize`].
-    pub sets_size: WindowCapability,
-    /// [`WindowCommand::SetConstraints`].
-    pub sets_constraints: WindowCapability,
-    /// [`WindowCommand::SetResizable`].
-    pub sets_resizable: WindowCapability,
-    /// [`WindowCommand::SetFrame`] to [`WindowFrame::System`] or
-    /// [`WindowFrame::None`]: the system's frame put on or taken off.
-    pub sets_frame: WindowCapability,
-    /// [`WindowFrame::AppTitleBar`], at open ([`WindowOptions::frame`](crate::WindowOptions::frame))
-    /// and through [`WindowCommand::SetFrame`]: the window system keeps the
-    /// resize borders, shadow and snapping of a frame whose title bar the
-    /// application draws. A desktop window opened with it where this is absent
-    /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
-    /// mobile and web, retain their native frame policy.
-    pub app_title_bar: WindowCapability,
-    /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
-    pub minimizes: WindowCapability,
-    /// [`WindowMode::Maximized`] through [`WindowCommand::SetMode`].
-    pub maximizes: WindowCapability,
-    /// [`WindowMode::Fullscreen`] through [`WindowCommand::SetMode`].
-    pub enters_fullscreen: WindowCapability,
-    /// [`WindowCommand::Hide`].
-    pub hides: WindowCapability,
-    /// [`WindowCommand::Show`].
-    pub shows: WindowCapability,
-    /// [`WindowCommand::Activate`]: bring the window to the front and request
-    /// focus, under the window system's focus rules. `Emulated` where the
-    /// window can only ask and the window system decides from what the
-    /// request carries (a Wayland activation token).
-    pub activates: WindowCapability,
-    /// [`WindowCommand::Close`]: destroy the window. A window whose platform
-    /// owns its lifetime (an Android activity) cannot close itself.
-    pub closes: WindowCapability,
-    /// [`WindowCommand::SetMaterial`]: the window system draws every
-    /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
-    pub material: WindowCapability,
-    /// [`FrameRequest::presented`](crate::FrameRequest::presented): the window
-    /// reports when the frames presented into its surface reached the screen,
-    /// on the event timeline.
-    pub reports_presentation: WindowCapability,
-    /// [`WindowInsets::keyboard`](crate::WindowInsets::keyboard): the window
-    /// reports where the soft keyboard covers it. A zero keyboard inset from
-    /// a window that does not report it is unknown, not a hidden keyboard.
-    pub reports_keyboard_inset: WindowCapability,
-    /// [`WindowInsets::system_gestures`](crate::WindowInsets::system_gestures):
-    /// the window reports the edges system gestures take.
-    pub reports_system_gestures: WindowCapability,
-    /// The snapshot's [`WindowGeometry::position`](crate::WindowGeometry::position)
-    /// is reported.
-    pub observes_position: Availability,
-    /// [`WindowMode::Minimized`] is ever published.
-    pub observes_minimized: Availability,
-    /// A saved position can be applied again when the window opens.
-    pub places_at_open: Availability,
-    /// [`PlatformWindow::set_frame_rate_hint`](crate::PlatformWindow::set_frame_rate_hint):
-    /// the window system takes a refresh-rate request for the window.
-    pub frame_rate_hint: Availability,
-    /// The window whose snapshot publishes these capabilities; `None` for
-    /// capabilities built by hand. Kept by
-    /// [`WindowState::successor`](crate::WindowState::successor).
-    pub(crate) owner: Option<CapabilitiesOwner>,
+    /// What the window honours and why not.
+    parts: CapabilityParts,
+    /// Whether these capabilities are a publication, and which, or were
+    /// withdrawn.
+    edition: Edition,
     /// The snapshot revision at which these capabilities were published;
     /// kept by [`WindowState::successor`](crate::WindowState::successor), zero
     /// for capabilities no snapshot has published.
-    pub(crate) revision: WindowRevision,
+    revision: WindowRevision,
 }
 
-/// The window a snapshot's capabilities belong to, unique in the process: a
-/// host mints one per window it opens and stamps the window's first snapshot
-/// with it ([`WindowCapabilities::owned_by`]). An
-/// [`AdmittedCommand`](crate::AdmittedCommand) is bound to it, so a command
-/// admitted for one window is never applied to another, whatever their
-/// revisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CapabilitiesOwner(NonZeroU64);
+/// Whether capabilities are a window's publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edition {
+    /// Built by hand, edited or computed: no window published them.
+    Unpublished,
+    /// This publication.
+    Published(Publication),
+    /// A window held them as a publication and can publish no more
+    /// (`WindowCapabilities::withdraw`): they say nothing is honoured, and
+    /// every later snapshot of the window keeps them so.
+    Withdrawn,
+}
 
-impl CapabilitiesOwner {
-    /// The owner with this number. A host draws the numbers from one
-    /// process-wide source and never reuses one.
-    #[must_use]
-    pub const fn new(number: NonZeroU64) -> Self {
-        Self(number)
+/// One publication of a window's capabilities, unique in the process: minted
+/// only by [`WindowCapabilities::publish`] and
+/// [`WindowState::successor`](crate::WindowState::successor), never built from
+/// a number and never reissued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Publication(NonZeroU64);
+
+/// The publications issued so far in the process.
+static PUBLICATIONS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+
+impl Publication {
+    /// A publication no capabilities had before.
+    ///
+    /// # Errors
+    /// [`IdExhausted`] once the process issued every publication it can; the
+    /// mint never reissues one.
+    pub(crate) fn mint() -> Result<Self, IdExhausted> {
+        PUBLICATIONS.next().map(Self)
     }
+}
+
+/// Declares [`CapabilityParts`] and, from the same field list, one read-only
+/// accessor of [`WindowCapabilities`] per field, by value, so a capability
+/// cannot be added to the parts without its accessor. None of the accessors
+/// yields capabilities, so nothing read from a window's capabilities can stand
+/// in for them.
+macro_rules! capability_parts {
+    (
+        $(#[$meta:meta])*
+        pub struct CapabilityParts {
+            $($(#[$field_meta:meta])* pub $field:ident: $ty:ty,)+
+        }
+    ) => {
+        $(#[$meta])*
+        pub struct CapabilityParts {
+            $($(#[$field_meta])* pub $field: $ty,)+
+        }
+
+        impl WindowCapabilities {
+            $(
+                #[doc = concat!("[`CapabilityParts::", stringify!($field), "`] of these capabilities.")]
+                #[must_use]
+                pub const fn $field(&self) -> $ty {
+                    self.parts.$field
+                }
+            )+
+        }
+    };
 }
 
 impl PartialEq for WindowCapabilities {
     fn eq(&self, other: &Self) -> bool {
-        self.into_parts() == other.into_parts()
+        self.parts == other.parts
     }
 }
 
@@ -204,7 +208,7 @@ impl Eq for WindowCapabilities {}
 
 impl std::hash::Hash for WindowCapabilities {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.into_parts().hash(state);
+        self.parts.hash(state);
     }
 }
 
@@ -220,7 +224,7 @@ macro_rules! command_capabilities {
             $($slot),+
         }
 
-        impl WindowCapabilities {
+        impl CapabilityParts {
             /// The field `slot` reads.
             const fn field(&self, slot: Slot) -> WindowCapability {
                 match slot {
@@ -324,13 +328,82 @@ impl WindowCapabilities {
         self.revision
     }
 
-    /// These capabilities as the ones `owner`'s snapshots publish: what a host
-    /// stamps on a window's first snapshot, which
-    /// [`WindowState::successor`](crate::WindowState::successor) then carries
-    /// to every later one.
+    /// These capabilities as a new publication, one no capabilities in the
+    /// process were before: what a host stamps on a window's first snapshot,
+    /// which [`WindowState::successor`](crate::WindowState::successor) then
+    /// carries while the capabilities stay the same. Publishing again gives
+    /// another publication, which no token admitted before opens under; a
+    /// caller can publish capabilities of its own, but a window opens a token
+    /// only under its own publication (ADR-0341).
+    ///
+    /// # Errors
+    /// [`IdExhausted`] once the process issued every publication it can.
+    pub fn publish(mut self) -> Result<Self, IdExhausted> {
+        self.edition = Edition::Published(Publication::mint()?);
+        Ok(self)
+    }
+
+    /// What a window publishes once it can publish no more of what it
+    /// honours (ADR-0341): capabilities that honour nothing, at this
+    /// revision, which [`WindowState::successor`](crate::WindowState::successor)
+    /// keeps so for every later snapshot. Every token admitted against the
+    /// publication these were answers
+    /// [`ApplyError::Superseded`](crate::ApplyError::Superseded), and admission
+    /// refuses them; as they honour nothing, a reader of the snapshot sees the
+    /// change.
     #[must_use]
-    pub const fn owned_by(mut self, owner: CapabilitiesOwner) -> Self {
-        self.owner = Some(owner);
+    pub const fn withdraw(self) -> Self {
+        Self {
+            parts: Self::NONE.parts,
+            edition: Edition::Withdrawn,
+            revision: self.revision,
+        }
+    }
+
+    /// Whether a window withdrew these capabilities because it can publish no
+    /// more ([`withdraw`](Self::withdraw)).
+    #[must_use]
+    pub const fn is_withdrawn(&self) -> bool {
+        matches!(self.edition, Edition::Withdrawn)
+    }
+
+    /// The publication these capabilities are, for the admission that binds
+    /// a token to it; `None` for capabilities no window published and for
+    /// withdrawn ones.
+    pub(crate) const fn publication(&self) -> Option<Publication> {
+        match self.edition {
+            Edition::Published(publication) => Some(publication),
+            Edition::Unpublished | Edition::Withdrawn => None,
+        }
+    }
+
+    /// These capabilities as a sample of the window that published `previous`:
+    /// the edition and revision `previous` carries, whatever the sample's, and
+    /// nothing honoured where `previous` was withdrawn.
+    pub(crate) const fn carried_from(mut self, previous: &Self) -> Self {
+        if let Edition::Withdrawn = previous.edition {
+            return *previous;
+        }
+        self.edition = previous.edition;
+        self.revision = previous.revision;
+        self
+    }
+
+    /// These capabilities as the snapshot at `revision` holds them after they
+    /// changed from `previous`: a new publication where `previous` was one, or
+    /// withdrawn ones where the process has none left; still none where
+    /// `previous` was none, so a sample of hand-built capabilities never
+    /// becomes admissible by being succeeded.
+    pub(crate) fn changed_from(mut self, previous: &Self, revision: WindowRevision) -> Self {
+        self.revision = revision;
+        match previous.edition {
+            Edition::Published(_) => match Publication::mint() {
+                Ok(publication) => self.edition = Edition::Published(publication),
+                Err(IdExhausted) => return self.withdraw(),
+            },
+            Edition::Unpublished => self.edition = Edition::Unpublished,
+            Edition::Withdrawn => return self.withdraw(),
+        }
         self
     }
 
@@ -342,7 +415,7 @@ impl WindowCapabilities {
     #[must_use]
     pub const fn capability(&self, command: &WindowCommand) -> WindowCapability {
         match Self::slot(command) {
-            Some(slot) => self.field(slot),
+            Some(slot) => self.parts.field(slot),
             None => WindowCapability::Native,
         }
     }
@@ -366,7 +439,8 @@ impl WindowCapabilities {
     /// operating system has it and the host does not implement it yet, and
     /// [`NotOnThisPlatform`](CapabilityAbsence::NOT_ON_THIS_PLATFORM) where no
     /// device of the platform has it. The mode every window has
-    /// ([`WindowMode::Normal`]) cannot be taken away.
+    /// ([`WindowMode::Normal`]) cannot be taken away. The result is an edit, so
+    /// it is of no publication: a host publishes it before admitting against it.
     ///
     /// ```
     /// use flui_platform::{
@@ -375,10 +449,12 @@ impl WindowCapabilities {
     /// };
     ///
     /// let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    /// let capabilities =
-    ///     WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    /// let capabilities = WindowCapabilities::ALL
+    ///     .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+    ///     .publish()
+    ///     .expect("the process has publications left");
     /// assert_eq!(
-    ///     capabilities.material,
+    ///     capabilities.material(),
     ///     WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     /// );
     /// let refused = material.admit(&capabilities).unwrap_err();
@@ -388,15 +464,12 @@ impl WindowCapabilities {
     /// );
     /// ```
     #[must_use]
-    pub const fn unavailable(
-        mut self,
-        command: &WindowCommand,
-        absence: CapabilityAbsence,
-    ) -> Self {
+    pub const fn unavailable(self, command: &WindowCommand, absence: CapabilityAbsence) -> Self {
+        let mut parts = self.parts;
         if let Some(slot) = Self::slot(command) {
-            *self.field_mut(slot) = WindowCapability::Absent(absence);
+            *parts.field_mut(slot) = WindowCapability::Absent(absence);
         }
-        self
+        parts.into_capabilities()
     }
 
     /// The capability `command` is admitted against; `None` for the mode every
@@ -423,175 +496,106 @@ impl WindowCapabilities {
         })
     }
 
-    /// Take the capabilities apart into every capability but the owner and
-    /// the revision, which are the publishing window's.
+    /// Take the capabilities apart into what they honour and why not, leaving
+    /// the publication and the revision behind: parts changed and turned back
+    /// into capabilities are capabilities no window published.
     #[must_use]
     pub const fn into_parts(self) -> CapabilityParts {
-        let Self {
-            sets_title,
-            sets_position,
-            sets_size,
-            sets_constraints,
-            sets_resizable,
-            sets_frame,
-            app_title_bar,
-            minimizes,
-            maximizes,
-            enters_fullscreen,
-            hides,
-            shows,
-            activates,
-            closes,
-            material,
-            reports_presentation,
-            reports_keyboard_inset,
-            reports_system_gestures,
-            observes_position,
-            observes_minimized,
-            places_at_open,
-            frame_rate_hint,
-            owner: _,
-            revision: _,
-        } = self;
-        CapabilityParts {
-            sets_title,
-            sets_position,
-            sets_size,
-            sets_constraints,
-            sets_resizable,
-            sets_frame,
-            app_title_bar,
-            minimizes,
-            maximizes,
-            enters_fullscreen,
-            hides,
-            shows,
-            activates,
-            closes,
-            material,
-            reports_presentation,
-            reports_keyboard_inset,
-            reports_system_gestures,
-            observes_position,
-            observes_minimized,
-            places_at_open,
-            frame_rate_hint,
-        }
+        self.parts
     }
 }
 
-/// Every capability of a [`WindowCapabilities`], public: the boundary every
-/// serialization and mirror of a window's capabilities goes through (a
-/// recording's schema), for the same reason as
-/// [`WindowStateParts`](crate::WindowStateParts).
+capability_parts! {
+/// Every capability of a [`WindowCapabilities`], public: what a backend names
+/// its window's capabilities as, what [`WindowCapabilities::into_parts`] hands
+/// a reader, and the boundary every serialization and mirror of
+/// a window's capabilities goes through (a recording's schema), for the same
+/// reason as [`WindowStateParts`](crate::WindowStateParts).
 ///
-/// Deliberately not `#[non_exhaustive]`, unlike [`WindowCapabilities`]: a
+/// Deliberately not `#[non_exhaustive]`: a
 /// mirror builds and destructures this struct exhaustively, so a capability
 /// the contract gains breaks every mirror at compile time until it carries
-/// the capability. The capabilities' owner and revision are the publishing
-/// window's ([`WindowState::successor`](crate::WindowState::successor)), so
-/// they are not fields here.
+/// the capability. Which publication capabilities are, and at which revision,
+/// is the publishing window's
+/// ([`WindowState::successor`](crate::WindowState::successor)), so it is not a
+/// field here: parts are what any caller may write, and capabilities built from
+/// them belong to no window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CapabilityParts {
-    /// [`WindowCapabilities::sets_title`].
+    /// [`WindowCommand::SetTitle`].
     pub sets_title: WindowCapability,
-    /// [`WindowCapabilities::sets_position`].
+    /// [`WindowCommand::SetPosition`].
     pub sets_position: WindowCapability,
-    /// [`WindowCapabilities::sets_size`].
+    /// [`WindowCommand::SetSize`].
     pub sets_size: WindowCapability,
-    /// [`WindowCapabilities::sets_constraints`].
+    /// [`WindowCommand::SetConstraints`].
     pub sets_constraints: WindowCapability,
-    /// [`WindowCapabilities::sets_resizable`].
+    /// [`WindowCommand::SetResizable`].
     pub sets_resizable: WindowCapability,
-    /// [`WindowCapabilities::sets_frame`].
+    /// [`WindowCommand::SetFrame`] to [`WindowFrame::System`] or
+    /// [`WindowFrame::None`]: the system's frame put on or taken off.
     pub sets_frame: WindowCapability,
-    /// [`WindowCapabilities::app_title_bar`].
+    /// [`WindowFrame::AppTitleBar`], at open ([`WindowOptions::frame`](crate::WindowOptions::frame))
+    /// and through [`WindowCommand::SetFrame`]: the window system keeps the
+    /// resize borders, shadow and snapping of a frame whose title bar the
+    /// application draws. A desktop window opened with it where this is absent
+    /// opens with [`WindowFrame::System`]. Hosts without a system frame, such as
+    /// mobile and web, retain their native frame policy.
     pub app_title_bar: WindowCapability,
-    /// [`WindowCapabilities::minimizes`].
+    /// [`WindowMode::Minimized`] through [`WindowCommand::SetMode`].
     pub minimizes: WindowCapability,
-    /// [`WindowCapabilities::maximizes`].
+    /// [`WindowMode::Maximized`] through [`WindowCommand::SetMode`].
     pub maximizes: WindowCapability,
-    /// [`WindowCapabilities::enters_fullscreen`].
+    /// [`WindowMode::Fullscreen`] through [`WindowCommand::SetMode`].
     pub enters_fullscreen: WindowCapability,
-    /// [`WindowCapabilities::hides`].
+    /// [`WindowCommand::Hide`].
     pub hides: WindowCapability,
-    /// [`WindowCapabilities::shows`].
+    /// [`WindowCommand::Show`].
     pub shows: WindowCapability,
-    /// [`WindowCapabilities::activates`].
+    /// [`WindowCommand::Activate`]: bring the window to the front and request
+    /// focus, under the window system's focus rules. `Emulated` where the
+    /// window can only ask and the window system decides from what the
+    /// request carries (a Wayland activation token).
     pub activates: WindowCapability,
-    /// [`WindowCapabilities::closes`].
+    /// [`WindowCommand::Close`]: destroy the window. A window whose platform
+    /// owns its lifetime (an Android activity) cannot close itself.
     pub closes: WindowCapability,
-    /// [`WindowCapabilities::material`].
+    /// [`WindowCommand::SetMaterial`]: the window system draws every
+    /// [`WindowMaterial`](crate::WindowMaterial) behind the window.
     pub material: WindowCapability,
-    /// [`WindowCapabilities::reports_presentation`].
+    /// [`FrameRequest::presented`](crate::FrameRequest::presented): the window
+    /// reports when the frames presented into its surface reached the screen,
+    /// on the event timeline.
     pub reports_presentation: WindowCapability,
-    /// [`WindowCapabilities::reports_keyboard_inset`].
+    /// [`WindowInsets::keyboard`](crate::WindowInsets::keyboard): the window
+    /// reports where the soft keyboard covers it. A zero keyboard inset from
+    /// a window that does not report it is unknown, not a hidden keyboard.
     pub reports_keyboard_inset: WindowCapability,
-    /// [`WindowCapabilities::reports_system_gestures`].
+    /// [`WindowInsets::system_gestures`](crate::WindowInsets::system_gestures):
+    /// the window reports the edges system gestures take.
     pub reports_system_gestures: WindowCapability,
-    /// [`WindowCapabilities::observes_position`].
+    /// The snapshot's [`WindowGeometry::position`](crate::WindowGeometry::position)
+    /// is reported.
     pub observes_position: Availability,
-    /// [`WindowCapabilities::observes_minimized`].
+    /// [`WindowMode::Minimized`] is ever published.
     pub observes_minimized: Availability,
-    /// [`WindowCapabilities::places_at_open`].
+    /// A saved position can be applied again when the window opens.
     pub places_at_open: Availability,
-    /// [`WindowCapabilities::frame_rate_hint`].
+    /// [`PlatformWindow::set_frame_rate_hint`](crate::PlatformWindow::set_frame_rate_hint):
+    /// the window system takes a refresh-rate request for the window.
     pub frame_rate_hint: Availability,
+}
 }
 
 impl CapabilityParts {
-    /// The capabilities these fields describe, with no owner and at
-    /// [`WindowRevision::ZERO`], as capabilities built by hand are.
+    /// The capabilities these fields describe, of no publication and at
+    /// [`WindowRevision::ZERO`], as capabilities built by hand are: a token
+    /// admitted against them opens on no window.
     #[must_use]
     pub const fn into_capabilities(self) -> WindowCapabilities {
-        let Self {
-            sets_title,
-            sets_position,
-            sets_size,
-            sets_constraints,
-            sets_resizable,
-            sets_frame,
-            app_title_bar,
-            minimizes,
-            maximizes,
-            enters_fullscreen,
-            hides,
-            shows,
-            activates,
-            closes,
-            material,
-            reports_presentation,
-            reports_keyboard_inset,
-            reports_system_gestures,
-            observes_position,
-            observes_minimized,
-            places_at_open,
-            frame_rate_hint,
-        } = self;
         WindowCapabilities {
-            sets_title,
-            sets_position,
-            sets_size,
-            sets_constraints,
-            sets_resizable,
-            sets_frame,
-            app_title_bar,
-            minimizes,
-            maximizes,
-            enters_fullscreen,
-            hides,
-            shows,
-            activates,
-            closes,
-            material,
-            reports_presentation,
-            reports_keyboard_inset,
-            reports_system_gestures,
-            observes_position,
-            observes_minimized,
-            places_at_open,
-            frame_rate_hint,
-            owner: None,
+            parts: self,
+            edition: Edition::Unpublished,
             revision: WindowRevision::ZERO,
         }
     }

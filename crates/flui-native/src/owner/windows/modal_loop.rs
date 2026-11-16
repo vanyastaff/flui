@@ -17,7 +17,8 @@ use std::sync::{Arc, Weak};
 
 use super::{ClassWindows, FrameCount, WindowsLoop};
 use crate::owner::app_delivery::AppDelivery;
-use crate::owner::wake_deadline::WakeDeadline;
+use crate::owner::signal::OwnerSignal;
+use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
 pub(crate) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
@@ -31,7 +32,11 @@ pub(crate) struct ModalFrames {
     app: Arc<AppDelivery>,
     windows: Weak<dyn ClassWindows>,
     frames: Rc<FrameCount>,
+    /// The owner whose turn a due turn deadline brings, through its window
+    /// message, which a modal loop dispatches like any other.
+    signal: Weak<OwnerSignal>,
     deadline: RefCell<WakeDeadline>,
+    turn_deadline: RefCell<TurnDeadline>,
 }
 
 impl ModalFrames {
@@ -39,17 +44,21 @@ impl ModalFrames {
         app: Arc<AppDelivery>,
         windows: Weak<dyn ClassWindows>,
         frames: Rc<FrameCount>,
+        signal: Weak<OwnerSignal>,
     ) -> Self {
         Self {
             app,
             windows,
             frames,
+            signal,
             deadline: RefCell::default(),
+            turn_deadline: RefCell::default(),
         }
     }
 
-    /// A modal loop starts: the deadline an earlier one delivered does not
-    /// hold back its first.
+    /// A modal loop starts: the wake deadline an earlier one delivered does
+    /// not hold back its first. The turn deadline keeps the time its last turn
+    /// served, so an instant served before is not served again.
     pub(crate) fn start(&self) {
         *self.deadline.borrow_mut() = WakeDeadline::default();
     }
@@ -77,10 +86,32 @@ impl ModalFrames {
         if due && let Some(windows) = self.windows.upgrade() {
             windows.redraw_for_deadline();
         }
+        // The turn deadline, as the main loop asks it: only while the owner
+        // accepts work, with no borrow held, then armed and taken by the one
+        // rule ([`TurnDeadline`]).
+        let signal = self.signal.upgrade();
+        let turn_answer = if signal.as_ref().is_some_and(|signal| signal.accepting()) {
+            WindowsLoop::ask_turn_deadline(&self.app)
+        } else {
+            None
+        };
+        let (turn_armed, turn_due) = {
+            let mut turn = self.turn_deadline.borrow_mut();
+            let armed = turn.arm(turn_answer);
+            let due = turn.take_due(now);
+            // A delivered instant is served: nothing is left to wait for.
+            (armed.filter(|_| !due), due)
+        };
+        if turn_due && let Some(signal) = &signal {
+            let _ = signal.wake();
+        }
         if let Some(windows) = self.windows.upgrade() {
             windows.paint_invalid();
         }
-        crate::owner::modal_pace::modal_frame_wait_ms(armed, now)
+        crate::owner::modal_pace::modal_frame_wait_ms(
+            [armed, turn_armed].into_iter().flatten().min(),
+            now,
+        )
     }
 }
 

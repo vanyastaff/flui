@@ -1502,6 +1502,9 @@ impl IOSWindow {
                 // A scene has no activation apart from its focus.
                 active: focused,
                 capabilities: scene_capabilities(),
+                // The user can resize a scene in Stage Manager or split view,
+                // which this host does not read: it cannot tell.
+                interaction: flui_platform::WindowInteraction::Unknown,
             }
             .onto(state)
         });
@@ -1900,14 +1903,18 @@ impl PlatformWindow for IOSWindow {
         if self.closed.load(Ordering::SeqCst) {
             return Err(ApplyError::Closed);
         }
-        // The system owns the surface: every command is refused, except the
-        // ones every window takes. A scene cannot bring itself to the
-        // foreground: the user and the system decide which app is shown.
-        let command = command.against(&self.snapshot.published_capabilities())?;
-        if command == WindowCommand::Close {
-            crate::owner::apple::ios::request_close(self.id);
+        // The system owns the surface: admission refuses every command but a
+        // close and the normal mode, which the scene is always in. A scene
+        // cannot bring itself to the foreground: the user and the system
+        // decide which app is shown.
+        match command.against(&self.snapshot.published_capabilities())? {
+            WindowCommand::Close => {
+                crate::owner::apple::ios::request_close(self.id);
+                Ok(())
+            }
+            WindowCommand::SetMode(flui_platform::WindowMode::Normal) => Ok(()),
+            other => Err(crate::window::state::not_carried_out(&other)),
         }
-        Ok(())
     }
 
     /// The scene's size, visibility and focus. The metrics and lifecycle live

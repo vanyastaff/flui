@@ -698,7 +698,7 @@ mod event_loop {
     use crate::owner::panic_boundary::contain_owner_callback;
     use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
     use crate::owner::slot::OwnerCell;
-    use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
+    use crate::owner::wake_deadline::{FrameCount, TurnDeadline, WakeDeadline};
     use crate::owner::watch::Watch;
     use crate::owner::window_delivery::WindowDelivery;
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
@@ -2007,6 +2007,8 @@ mod event_loop {
         executor: NativeExecutor,
         /// The wake deadline armed and the last one delivered.
         deadline: RefCell<WakeDeadline>,
+        /// The application's turn deadline as the loop armed it.
+        turn_deadline: RefCell<TurnDeadline>,
         /// How many frames the windows' handlers produced, which tells the
         /// deadline a delivery a frame served from one that reached nothing.
         frames: FrameCount,
@@ -2207,6 +2209,7 @@ mod event_loop {
                 display_watch: RefCell::default(),
                 executor,
                 deadline: RefCell::default(),
+                turn_deadline: RefCell::default(),
                 frames: FrameCount::default(),
                 reevaluate: Cell::new(false),
                 ran: Cell::new(false),
@@ -2404,6 +2407,12 @@ mod event_loop {
                 failure.contain(|| window.settle());
             }
             failure.resume();
+            // A due turn deadline is the owner's turn below, window or not,
+            // and asks no window for a frame.
+            let turn_due = self.turn_deadline.borrow_mut().take_due(Instant::now());
+            if turn_due && self.signal.accepting() {
+                let _ = self.signal.wake();
+            }
             let turn = self.signal.begin_turn();
             self.deliver_host_notices();
             if turn.drive_in(&self.turn) || self.exit_due() {
@@ -2431,12 +2440,18 @@ mod event_loop {
                 None
             };
             let wake_deadline = self.deadline.borrow_mut().arm(answer, self.frames.get());
+            let turn_answer = if self.signal.accepting() {
+                self.app.turn_deadline().or_resume(None)
+            } else {
+                None
+            };
+            let turn_deadline = self.turn_deadline.borrow_mut().arm(turn_answer);
             let timeout = poll_timeout(
                 LoopTurn {
                     frame_due,
                     frame_wait,
                     input_due: self.input.next_due(),
-                    wake_deadline,
+                    wake_deadline: [wake_deadline, turn_deadline].into_iter().flatten().min(),
                 },
                 now,
             );

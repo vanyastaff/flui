@@ -51,6 +51,7 @@ fn a_due_deadline_gets_one_modal_frame_per_generation() {
         Arc::clone(&run.delivery),
         Arc::downgrade(&windows) as std::sync::Weak<dyn ClassWindows>,
         Rc::clone(&frames),
+        std::sync::Weak::new(),
     );
 
     assert_eq!(modal.deliver(), 1, "a due deadline asks again at once");
@@ -67,4 +68,70 @@ fn a_due_deadline_gets_one_modal_frame_per_generation() {
     modal.start();
     let _ = modal.deliver();
     assert_eq!(frames_asked(), 3, "a modal loop's first delivery");
+}
+
+/// While a modal loop stands in for the main loop, a due turn deadline wakes
+/// the owner once and asks no window for a frame; an instant that turn served
+/// is not delivered again, however often the handler answers it.
+#[test]
+fn a_due_turn_deadline_wakes_the_owner_from_a_modal_loop() {
+    use crate::owner::app_delivery::testing::{AppLog, bound};
+    use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
+
+    let windows = Arc::new(CountedWindows::default());
+    let app = AppLog::new();
+    let due = web_time::Instant::now();
+    app.answer_turn_deadline_with(move || Some(due));
+    let run = bound(app);
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    let signal = OwnerSignal::new(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }));
+    let modal = ModalFrames::new(
+        Arc::clone(&run.delivery),
+        Arc::downgrade(&windows) as std::sync::Weak<dyn ClassWindows>,
+        Rc::new(FrameCount::default()),
+        Arc::downgrade(&signal),
+    );
+    signal.start().expect("the owner starts");
+    let slot = Rc::new(OwnerTurnSlot::default());
+    signal
+        .register_in(&slot, Box::new(|| {}))
+        .expect("the owner takes a turn callback");
+    wakes.store(0, Ordering::SeqCst);
+
+    let _ = modal.deliver();
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        1,
+        "the due instant woke the owner"
+    );
+    assert_eq!(
+        windows.frames_asked.load(Ordering::Relaxed),
+        0,
+        "and asked no window for a frame"
+    );
+    let _ = modal.deliver();
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        1,
+        "the same instant, served: not delivered again"
+    );
+
+    // The owner's turn runs and the handler leaves the instant in place: the
+    // turn served it, so neither this modal loop nor the next delivers it again.
+    let _ = signal.drive_in(&slot);
+    let before = wakes.load(Ordering::SeqCst);
+    for _ in 0..100 {
+        let _ = modal.deliver();
+    }
+    modal.start();
+    let _ = modal.deliver();
+    assert_eq!(
+        wakes.load(Ordering::SeqCst),
+        before,
+        "an instant a turn served is not delivered again"
+    );
 }

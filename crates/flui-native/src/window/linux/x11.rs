@@ -491,7 +491,7 @@ pub(crate) mod support {
         // present's completion to that connection alone), the keyboard's
         // geometry and system gesture edges (X11 has no on-screen keyboard
         // protocol and no such edges), and a refresh-rate request.
-        let mut capabilities = WindowCapabilities::NONE;
+        let mut capabilities = WindowCapabilities::NONE.into_parts();
         capabilities.sets_title = Native;
         capabilities.sets_position = Native;
         capabilities.sets_size = Native;
@@ -513,7 +513,7 @@ pub(crate) mod support {
         };
         capabilities.maximizes = from_the_window_manager(support.maximizes);
         capabilities.enters_fullscreen = from_the_window_manager(support.fullscreen);
-        capabilities
+        capabilities.into_capabilities()
     }
 
     #[cfg(test)]
@@ -599,42 +599,42 @@ pub(crate) mod support {
                 let honoured =
                     capabilities(WindowManagerSupport::read(*manager, supported, &ATOMS));
                 assert_eq!(
-                    honoured.minimizes.availability(),
+                    honoured.minimizes().availability(),
                     *minimizes,
                     "{case}: minimizes"
                 );
                 assert_eq!(
-                    honoured.maximizes.availability(),
+                    honoured.maximizes().availability(),
                     *maximizes,
                     "{case}: maximizes"
                 );
                 assert_eq!(
-                    honoured.enters_fullscreen.availability(),
+                    honoured.enters_fullscreen().availability(),
                     *fullscreen,
                     "{case}: fullscreen"
                 );
-                assert_eq!(honoured.observes_minimized, *observes, "{case}: observes");
+                assert_eq!(honoured.observes_minimized(), *observes, "{case}: observes");
                 for always in [
-                    honoured.sets_title.availability(),
-                    honoured.sets_position.availability(),
-                    honoured.sets_size.availability(),
-                    honoured.sets_constraints.availability(),
-                    honoured.sets_resizable.availability(),
-                    honoured.sets_frame.availability(),
-                    honoured.hides.availability(),
-                    honoured.shows.availability(),
-                    honoured.activates.availability(),
-                    honoured.closes.availability(),
-                    honoured.observes_position,
-                    honoured.places_at_open,
+                    honoured.sets_title().availability(),
+                    honoured.sets_position().availability(),
+                    honoured.sets_size().availability(),
+                    honoured.sets_constraints().availability(),
+                    honoured.sets_resizable().availability(),
+                    honoured.sets_frame().availability(),
+                    honoured.hides().availability(),
+                    honoured.shows().availability(),
+                    honoured.activates().availability(),
+                    honoured.closes().availability(),
+                    honoured.observes_position(),
+                    honoured.places_at_open(),
                 ] {
                     assert_eq!(always, Native, "{case}: what the server does itself");
                 }
-                assert_eq!(honoured.frame_rate_hint, Unavailable, "{case}");
-                assert_eq!(honoured.material.availability(), Unavailable, "{case}");
+                assert_eq!(honoured.frame_rate_hint(), Unavailable, "{case}");
+                assert_eq!(honoured.material().availability(), Unavailable, "{case}");
                 let moves = *manager == Extended && supported.contains(&ATOMS.moveresize);
                 assert_eq!(
-                    honoured.app_title_bar.availability(),
+                    honoured.app_title_bar().availability(),
                     if moves { Native } else { Unavailable },
                     "{case}: a title bar of the application's"
                 );
@@ -689,7 +689,11 @@ pub(crate) mod support {
         #[test]
         fn a_refused_command_says_where_it_is_missing() {
             let honoured = capabilities(WindowManagerSupport::default());
-            let reason = |command: WindowCommand| match command.admit(&honoured) {
+            let reason = |command: WindowCommand| match command.admit(
+                &honoured
+                    .publish()
+                    .expect("the process has publications left"),
+            ) {
                 Err(AdmissionError::Unsupported(refused)) => Some(refused.reason),
                 _ => None,
             };

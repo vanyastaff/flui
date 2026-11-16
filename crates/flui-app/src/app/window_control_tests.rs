@@ -181,8 +181,9 @@ fn a_material_goes_through_the_window_queue() {
     rig_all.queues.apply_pending();
     assert_eq!(mock.materials(), [flui_platform::WindowMaterial::System]);
 
-    let mut without = WindowCapabilities::ALL;
+    let mut without = WindowCapabilities::ALL.into_parts();
     without.material = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
+    let without = without.into_capabilities();
     let none = headless_window(without);
     let rig_none = rig(&none, 22);
     assert_eq!(
@@ -212,8 +213,9 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
         .set_size(Size::new(300.0, 200.0))
         .expect("accepted");
 
-    let mut revised = WindowCapabilities::ALL;
+    let mut revised = WindowCapabilities::ALL.into_parts();
     revised.maximizes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
+    let revised = revised.into_capabilities();
     host.as_any()
         .downcast_ref::<flui_native::HeadlessHostWindow>()
         .expect("headless window")
@@ -246,8 +248,9 @@ fn a_command_superseded_in_the_queue_is_admitted_again() {
 /// still applies; only a close that goes ahead, or finds the window closed,
 /// ends the batch.
 fn a_refused_close_keeps_the_work_queued_behind_it() {
-    let mut cannot_close = WindowCapabilities::ALL;
+    let mut cannot_close = WindowCapabilities::ALL.into_parts();
     cannot_close.closes = flui_platform::WindowCapability::NOT_ON_THIS_PLATFORM;
+    let cannot_close = cannot_close.into_capabilities();
     let window = headless_window(cannot_close);
     let rig = rig_with(
         &window,
@@ -337,6 +340,8 @@ struct RecordingWindow {
     /// Run once from inside the next read of its state, as a window that
     /// calls its handler from a read does.
     on_read: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// What it honours, published once when it was made.
+    capabilities: WindowCapabilities,
 }
 
 impl PlatformWindow for RecordingWindow {
@@ -366,7 +371,7 @@ impl PlatformWindow for RecordingWindow {
         WindowState::new(flui_platform::WindowGeometry::unplaced(extent), extent)
             .with_visible(true)
             .with_focused(true)
-            .with_capabilities(WindowCapabilities::ALL)
+            .with_capabilities(self.capabilities)
     }
     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
         let command = command.against(&self.state().capabilities)?;
@@ -400,6 +405,9 @@ fn recording(fail_titles: bool, during_apply: Option<fn()>) -> Rc<RecordingWindo
         during_apply,
         reads: Cell::new(0),
         on_read: RefCell::new(None),
+        capabilities: WindowCapabilities::ALL
+            .publish()
+            .expect("the process has publications left"),
     })
 }
 

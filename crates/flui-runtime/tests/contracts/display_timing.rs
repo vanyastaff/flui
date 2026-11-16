@@ -90,6 +90,9 @@ impl OwnerEffects for Effects {
 struct CountingWindow {
     inner: Rc<dyn PlatformWindow>,
     geometry_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 impl PlatformWindow for CountingWindow {
@@ -124,14 +127,14 @@ impl PlatformWindow for CountingWindow {
         self.inner.set_input_regions(regions)
     }
     fn state(&self) -> flui_platform::WindowState {
-        self.inner.state()
+        self.inner.state().with_capabilities(self.capabilities)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
 
@@ -452,6 +455,9 @@ fn display_change_runs_the_dpi_geometry_barrier() {
             )
             .expect("headless window"),
         geometry_reads: Arc::clone(&reads),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     // The presentation holds its window weakly; the platform keeps it alive.
     let _platform_keeps_the_window = Rc::clone(&window);
