@@ -95,8 +95,8 @@ pub(crate) enum Platform {
     },
     /// Web/WASM platform
     Web {
-        /// Target identifier (e.g., "web")
-        target: String,
+        /// The path the build is served from, its page's `<base href>`.
+        base_href: crate::build::web_page::BaseHref,
     },
     /// Desktop platform (Windows, macOS, Linux)
     Desktop {

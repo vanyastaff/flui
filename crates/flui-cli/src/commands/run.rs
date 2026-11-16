@@ -1461,8 +1461,9 @@ impl BrowserSession {
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
             .features(driver_feature)
+            // `flui run` serves the build at its own server's root.
             .platform(Platform::Web {
-                target: "web".to_string(),
+                base_href: crate::build::web_page::BaseHref::root(),
             })
             .profile(if self.release {
                 Profile::Release

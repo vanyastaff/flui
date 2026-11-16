@@ -166,7 +166,7 @@ force-stop the app.
 
 In a browser the project's `fn main` is compiled for `wasm32-unknown-unknown`
 as it is (`run_app` picks the web runner there), `wasm-bindgen --target web`
-produces `pkg/app.js` + `pkg/app_bg.wasm` next to `platforms/web/index.html`,
+produces `pkg/app.js` + `pkg/app_bg.wasm`, the build writes the page that loads them
 and a dev server on `127.0.0.1` serves that directory. Every rebuild reloads
 the open page; `r` rebuilds by hand, `q` stops the server.
 
@@ -441,6 +441,10 @@ min = "15.0"
 
 [platforms.android]
 min = 26
+
+# Optional: the path `flui build` serves the web build from (its `<base href>`).
+[web]
+base_href = "/apps/demo/"
 ```
 
 `[app].id` is the application's one identifier; `flui create` makes it from
@@ -459,6 +463,14 @@ for `windows` (a build number), `macos` and `ios` (a release in quotes) and
 `linux`, fails the build. `flui build` writes the higher of the two into the
 APK, the `Info.plist` and the deployment target rustc links with, and the app
 refuses to start below it. A plain `cargo build` uses FLUI's floor alone.
+
+`flui build web` writes the page (`index.html`) on every build: a loader
+with the module import, the manifest link, `viewport-fit=cover` (so the app
+reads the safe area) and `[web] base_href` as its `<base href>`, the site's
+root when absent; it must start and end with `/`. Edits to the page are lost;
+`platforms/web/manifest.json` and `platforms/web/icons/` are copied as they
+are, and a manifest named after the app is written when the project has none.
+`flui run` serves its build at the root.
 
 Unknown keys are ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends

@@ -30,8 +30,7 @@ const ANDROID_PROGUARD_RULES: &str =
 const IOS_README: &str = include_str!("../../templates/platforms/ios/README.md");
 const IOS_GITIGNORE: &str = include_str!("../../templates/platforms/ios/.gitignore");
 
-// Web
-const WEB_INDEX_HTML: &str = include_str!("../../templates/platforms/web/index.html");
+// Web: the page is written by every build (`build::web_page`), not scaffolded.
 const WEB_MANIFEST_JSON: &str = include_str!("../../templates/platforms/web/manifest.json");
 
 // Desktop
@@ -88,16 +87,10 @@ fn platform_templates(platform: &str) -> &'static [TemplateFile] {
                 content: IOS_GITIGNORE,
             },
         ],
-        "web" => &[
-            TemplateFile {
-                rel_path: "index.html",
-                content: WEB_INDEX_HTML,
-            },
-            TemplateFile {
-                rel_path: "manifest.json",
-                content: WEB_MANIFEST_JSON,
-            },
-        ],
+        "web" => &[TemplateFile {
+            rel_path: "manifest.json",
+            content: WEB_MANIFEST_JSON,
+        }],
         "windows" => &[TemplateFile {
             rel_path: ".gitignore",
             content: WINDOWS_GITIGNORE,

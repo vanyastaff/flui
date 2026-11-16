@@ -22,6 +22,10 @@
 //! # Optional: raise FLUI's floor for one environment (ADR-0244 §10).
 //! [platforms.ios]
 //! min = "15.0"
+//!
+//! # Optional: the path a web build is served from, its page's `<base href>`.
+//! [web]
+//! base_href = "/apps/demo/"
 //! ```
 //!
 //! Unknown keys are ignored on load, so a file from an older version still
@@ -30,6 +34,7 @@
 
 use crate::app_id::AppId;
 use crate::build::app_floor::{AppFloors, PlatformsConfig};
+use crate::build::web_page::BaseHref;
 use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -50,6 +55,24 @@ pub(crate) struct FluiConfig {
     /// raises FLUI's: `[platforms.<environment>] min`.
     #[serde(default, skip_serializing_if = "PlatformsConfig::is_empty")]
     pub(crate) platforms: PlatformsConfig,
+    /// What a web build's page states: `[web] base_href`.
+    #[serde(default, skip_serializing_if = "WebConfig::is_default")]
+    pub(crate) web: WebConfig,
+}
+
+/// The web build's page.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) struct WebConfig {
+    /// The path the build is served from (`/apps/demo/`), which the page
+    /// names as its `<base href>`; the site's root when absent.
+    #[serde(default)]
+    pub(crate) base_href: BaseHref,
+}
+
+impl WebConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl FluiConfig {
@@ -108,14 +131,24 @@ impl FluiConfig {
 /// When `flui.toml` cannot be read or parsed, or a `[platforms]` table is
 /// refused ([`FluiConfig::floors`]).
 pub(crate) fn project_floors(root: &Path) -> CliResult<AppFloors> {
-    match root
-        .ancestors()
-        .map(|dir| dir.join("flui.toml"))
-        .find(|manifest| manifest.is_file())
-    {
-        Some(manifest) => FluiConfig::load_from(&manifest)?.floors(),
+    match nearest_config(root)? {
+        Some(config) => config.floors(),
         None => Ok(AppFloors::default()),
     }
+}
+
+/// The nearest `flui.toml` at or above `root`, the one `flui run` finds the
+/// project by; `None` when there is none (an in-repo example, a plain cargo
+/// package).
+///
+/// # Errors
+/// When `flui.toml` cannot be read or parsed.
+pub(crate) fn nearest_config(root: &Path) -> CliResult<Option<FluiConfig>> {
+    root.ancestors()
+        .map(|dir| dir.join("flui.toml"))
+        .find(|manifest| manifest.is_file())
+        .map(|manifest| FluiConfig::load_from(&manifest))
+        .transpose()
 }
 
 /// Host/worker hot reload layout.
@@ -326,7 +359,24 @@ mod tests {
             },
             hot_reload: None,
             platforms: PlatformsConfig::default(),
+            web: WebConfig::default(),
         }
+    }
+
+    #[test]
+    fn a_web_base_path_is_read_and_a_bad_one_refused() {
+        let with = |web: &str| {
+            format!("[app]\nname = \"a\"\nversion = \"0.1.0\"\nid = \"com.example.a\"\n{web}")
+        };
+        let read = toml::from_str::<FluiConfig>(&with("[web]\nbase_href = \"/apps/demo/\"\n"))
+            .expect("a base path");
+        assert_eq!(read.web.base_href.to_string(), "/apps/demo/");
+        let absent = toml::from_str::<FluiConfig>(&with("")).expect("no web table");
+        assert_eq!(absent.web.base_href, BaseHref::root());
+        assert!(
+            toml::from_str::<FluiConfig>(&with("[web]\nbase_href = \"apps\"\n")).is_err(),
+            "a base path that is not an absolute directory"
+        );
     }
 
     #[test]

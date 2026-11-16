@@ -1,0 +1,26 @@
+---
+source: crates/flui-cli/src/build/web_page.rs
+expression: "render(\"Demo\", &BaseHref::root())"
+---
+<!DOCTYPE html>
+<!-- Written by `flui build` on every build; edits here are lost. -->
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <base href="/">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Demo">
+    <title>Demo</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; }
+    </style>
+</head>
+<body>
+    <script type="module">
+        import init from './pkg/app.js';
+        init();
+    </script>
+</body>
+</html>

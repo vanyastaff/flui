@@ -1,8 +1,8 @@
 //! Web builds: the project's `fn main` binary compiled for
 //! `wasm32-unknown-unknown`, then `wasm-bindgen --target web` turning the
-//! `.wasm` into `pkg/app.js` + `pkg/app_bg.wasm`, the pair the web template's
-//! `index.html` imports. `run_app` dispatches to the web runner on wasm32,
-//! so a generated project needs no web-specific entry point.
+//! `.wasm` into `pkg/app.js` + `pkg/app_bg.wasm`, the pair the page the
+//! build writes (`web_page`) imports. `run_app` dispatches to the web runner
+//! on wasm32, so a generated project needs no web-specific entry point.
 //!
 //! `wasm-bindgen` on `PATH` must match the `wasm-bindgen` crate the project
 //! resolves to; the mismatch error the tool prints otherwise names neither
@@ -14,13 +14,11 @@ use tokio::process::Command;
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::{cargo, process};
+use crate::build::web_page;
 use crate::proc::{PROBE_TIMEOUT, probe_stdout};
 
 const WASM_TARGET: &str = "wasm32-unknown-unknown";
-/// `index.html` imports `./pkg/app.js`; wasm-bindgen names the module after
-/// `--out-name`.
-const PKG_DIR: &str = "pkg";
-const OUT_NAME: &str = "app";
+use web_page::{OUT_NAME, PKG_DIR};
 
 /// Builder for the web platform.
 #[derive(Debug)]
@@ -107,8 +105,27 @@ impl WebBuilder {
         })
     }
 
-    /// `wasm-bindgen` into `<output>/pkg`, then the page assets from
-    /// `platforms/web/` beside it. The output directory is the deliverable.
+    /// The name the page and a default manifest give the application:
+    /// `flui.toml`'s `[app] name`, else the package the build compiled, else
+    /// `FLUI`.
+    fn application_name(&self, artifacts: &BuildArtifacts) -> BuildResult<String> {
+        let config = crate::config::nearest_config(&self.workspace_root)
+            .map_err(|error| BuildError::Other(error.to_string()))?;
+        Ok(config
+            .map(|config| config.app.name)
+            .or_else(|| {
+                artifacts
+                    .package
+                    .as_ref()
+                    .map(|package| package.name.clone())
+            })
+            .unwrap_or_else(|| "FLUI".to_owned()))
+    }
+
+    /// `wasm-bindgen` into `<output>/pkg`, the page written beside it
+    /// (`web_page`), and the project's `platforms/web/manifest.json` and
+    /// icons copied, or a manifest made from the application's name where
+    /// the project has none. The output directory is the deliverable.
     pub(crate) async fn build_platform(
         &self,
         ctx: &BuilderContext,
@@ -131,12 +148,30 @@ impl WebBuilder {
         )
         .await?;
 
+        let crate::build::platform::Platform::Web { base_href } = &ctx.platform else {
+            return Err(BuildError::InvalidPlatform {
+                reason: "expected the web platform".to_string(),
+            });
+        };
+        let name = self.application_name(artifacts)?;
+        let index = dist.join("index.html");
+        std::fs::write(&index, web_page::render(&name, base_href))?;
+
         let web_dir = self.workspace_root.join("platforms").join("web");
-        for name in ["index.html", "manifest.json"] {
-            let source = web_dir.join(name);
-            if source.is_file() {
-                std::fs::copy(&source, dist.join(name))?;
-            }
+        if web_dir.join("index.html").is_file() {
+            crate::ui::warning(format_args!(
+                "{} is no longer read: `flui build` writes the page on every build",
+                web_dir.join("index.html").display()
+            ))?;
+        }
+        let manifest = web_dir.join(web_page::MANIFEST);
+        if manifest.is_file() {
+            std::fs::copy(&manifest, dist.join(web_page::MANIFEST))?;
+        } else {
+            std::fs::write(
+                dist.join(web_page::MANIFEST),
+                web_page::default_manifest(&name),
+            )?;
         }
         let icons = web_dir.join("icons");
         if icons.is_dir() {
@@ -149,14 +184,6 @@ impl WebBuilder {
                 }
             }
         }
-        let index = dist.join("index.html");
-        if !index.is_file() {
-            return Err(BuildError::path_not_found(
-                web_dir.join("index.html"),
-                "the web platform is not scaffolded; run `flui platform add web`",
-            ));
-        }
-
         let size_bytes = std::fs::read_dir(&pkg)?
             .filter_map(Result::ok)
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "wasm"))
