@@ -572,10 +572,34 @@ fn the_originating_reading_lives_for_its_sequence() {
     let PointerEvent::Down(down) = single(&decode(&mut contacts, &press).expect("valid")) else {
         panic!("down")
     };
+    let first = down.press().expect("a decoded press names its sequence");
     decode(&mut contacts, &touch(4, ReadingAction::Move, 2)).expect("valid");
-    assert_eq!(contacts.origin(down.pointer.id), Some(&press));
-    decode(&mut contacts, &touch(4, RELEASE, 3)).expect("valid");
-    assert_eq!(contacts.origin(down.pointer.id), None);
+    assert_eq!(contacts.press_origin(first), Some(&press));
+    let PointerEvent::Up(up) =
+        single(&decode(&mut contacts, &touch(4, RELEASE, 3)).expect("valid"))
+    else {
+        panic!("up")
+    };
+    assert_eq!(
+        up.press(),
+        Some(first),
+        "the release names the sequence it ends"
+    );
+    assert_eq!(contacts.press_origin(first), None);
+    // The next press of the same contact is another sequence: the ended one
+    // finds nothing, though the pointer id may be the same.
+    let again = touch(4, PRESS, 4);
+    let PointerEvent::Down(next) = single(&decode(&mut contacts, &again).expect("valid")) else {
+        panic!("down")
+    };
+    let second = next.press().expect("a decoded press names its sequence");
+    assert_ne!(second, first);
+    assert_eq!(
+        contacts.press_origin(first),
+        None,
+        "an ended press stays ended"
+    );
+    assert_eq!(contacts.press_origin(second), Some(&again));
 }
 
 fn a_hot_plugged_device_is_announced_and_retired() {

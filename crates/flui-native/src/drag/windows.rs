@@ -526,7 +526,7 @@ use flui_platform::{
         DataTransferOffer, DragTransport, DropFeedback, RepresentationDescriptor,
         RepresentationIndex, TransferError, TransferLimits, TransferRequest,
     },
-    drag::{DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource},
+    drag::{DragError, OsDragEnd, OsDragParts, OsDragRequest, OsDragStart, PlatformDragSource},
     pointer::PointerKind,
 };
 #[cfg(windows)]
@@ -647,9 +647,9 @@ impl Drop for OwnerDrag {
 /// (ADR-0281).
 #[cfg(windows)]
 fn cancel_unstarted(request: OsDragRequest) {
-    let OsDragRequest {
+    let OsDragParts {
         provider, on_end, ..
-    } = request;
+    } = request.into_parts();
     contain_owner_callback(|| on_end(OsDragEnd::Cancelled));
     contain_owner_callback(|| drop(provider));
 }
@@ -814,14 +814,14 @@ impl OleTransfer {
         request: OsDragRequest,
         drop_source: windows::Win32::System::Ole::IDropSource,
     ) {
-        let OsDragRequest {
-            representations,
-            allowed,
+        let OsDragParts {
+            terms,
             provider,
             on_end,
             ..
-        } = request;
-        let data: IDataObject = com::SourceData::new(&representations, provider).into();
+        } = request.into_parts();
+        let allowed = terms.allowed();
+        let data: IDataObject = com::SourceData::new(&terms, provider).into();
         owner.running.set(true);
         let running = RunningSession(owner);
         let pacer = ModalPacer::start(owner_window);
@@ -1118,12 +1118,6 @@ impl Win32DragSource {
     fn new(transfer: Arc<OleTransfer>, window: WindowRef) -> Arc<Self> {
         Arc::new(Self { transfer, window })
     }
-
-    /// The kind of the contact whose press began `pointer`'s drag, as the
-    /// window's pointer registry read it.
-    fn contact_kind(&self, pointer: Option<flui_platform::PointerId>) -> Option<PointerKind> {
-        crate::owner::windows::window_inputs()?.press_kind(self.window, pointer?)
-    }
 }
 
 #[cfg(windows)]
@@ -1133,7 +1127,16 @@ impl PlatformDragSource for Win32DragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        let kind = self.contact_kind(request.pointer);
+        let kind = match request.press() {
+            // A press the window no longer holds refuses: the buttons held
+            // now belong to a later press, if to any.
+            Some(press) => Some(
+                crate::owner::windows::window_inputs()
+                    .and_then(|inputs| inputs.press_kind(self.window, press))
+                    .ok_or(Unsupported::new(UnsupportedReason::Unavailable))?,
+            ),
+            None => None,
+        };
         self.transfer.start(request, kind)
     }
 }
