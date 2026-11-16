@@ -5007,8 +5007,8 @@ GPU-память простаивающего или невидимого окн
   (`AppDelivery`: `notice`, `session_end`, `reopen`) и `window` (`WindowDelivery::dispatch_input`:
   `ime`). Каждая доставка открывает свой поток при создании (`Journal::open_stream`), нумерация
   общая с реестрами. Строка `ime` — одно семейство с тегированной `#[non_exhaustive]` нагрузкой
-  `Ime::Event(ImeEvent)`; правка хранилища (TSF, зеркала Android и web) войдёт туда же как
-  `StoreEdit` без смены версии формата. Записывающий по умолчанию редактирует текст IME
+  `Ime::Event(ImeEvent)`; правки хранилища pull-модели пишутся отдельными строками `store_focus` и
+  `store_lock` (запись «Закрытие и правки хранилища» ниже). Записывающий по умолчанию редактирует текст IME
   (`Privacy::Redact`, ADR-0215 §5) и помечает строку `redacted`. **Replay:**
   `NativeRecording::replay_into(&mut dyn ReplayTarget)` проигрывает каждую строку по порядку; цель
   принимает свои виды строк, остальные отказывает по умолчанию; отказ и отредактированная строка
@@ -5073,41 +5073,49 @@ GPU-память простаивающего или невидимого окн
   `journal::store_capture::JournaledHost`, если при открытии окна был захват; все хосты одного
   окна делят его `StoreJournal` (фокус и `IdMint` ключей `RecordedStore`) в `OwnerSlot` доставки.
   Каждая блокировка — строка `store_lock`: вызовы с ответами и документ, который она застала,
-  если запись его ещё не держит (первая после фокуса и после правки приложения). Блокировка
-  защищённого хранилища пишется только как факт (`protected`, без текста, диапазонов, смещений и
-  длин), replay отказывает `Redacted`. Документ длиннее `MAX_STORE_TEXT_BYTES` единиц UTF-16 не
-  читается вовсе (`incomplete`); если приёмник не хочет строк (`capture_wanting`,
-  `LineSink::wants`), блокировка идёт без журнала и ничего не читает. `store_focus` — не
-  setup-строка: смена фокуса не вытесняет состояние окна из префикса позднего читателя, а запись,
-  начатая после фокуса или после блокировки с документом, получает `ReplayError::JoinedLate` с
-  именем строки; второй `store_focus` того же ключа отвергается при чтении. Читатель отвергает
-  строку длиннее `MAX_LINE_BYTES` до разбора, строку сверх `MAX_ROWS` и строку, выводящую запись
-  за `MAX_RECORDING_BYTES` (64 МиБ), а у `store_lock` проверяет границы до построения вызовов.
-  Протокол 0.13 — в `BREAKING` (ADR-0215 §4): клиент 0.12 не читает новые строки в
-  `record_native`, поэтому приложение 0.13 его не обслуживает. Проверка аддитивности теперь
-  называет вариант тегированного объединения тегом: новый вариант не аддитивен, кроме версии из
-  `BREAKING` и подписочного `Event` (ADR-0238 §2); версии до 0.13, вышедшие, когда проверка
-  вариантов не видела (0.8 добавила `InspectValue::NonFinite`), остаются как есть.
-  `assert_backend_conforms` (`crates/flui-testing/src/backend_conformance.rs:494`, ADR-0215 §7)
-  сертифицирует перевод нативного чтения в `HostInput` и строки IME путей ввода; строки журнала —
-  запись тех же путей, их воспроизводимость проверяет `StoreLock::replay_on` в таблице ниже, а не
-  этот гейт. `tools/xtask/src/recording_vocabulary.rs` читает только перечисления записи
-  `HostInput` (`RECORDED`, `flui-runtime`); словари нативной записи — `vocabulary!`, пять новых
+  если запись его ещё не держит (первая после фокуса, после правки приложения или после
+  блокировки, изменившей документ; найденный тем же документ не пишется заново). Защищённое
+  хранилище даёт одну строку `protected` (без текста, диапазонов, смещений, длин и вида
+  блокировки) на всё время, пока оно защищено, сколько бы блокировок ни было. Чтение статуса
+  хранилища (код приложения) идёт под `FirstPanic`: тело, выданное методу ввода, выполняется,
+  первая паника поднимается после. Хочет ли приёмник строки — значение (`capture_wanting`:
+  `AtomicBool`, который `capture_lines` обновляет ответом `LineSink::wants` на каждой
+  не-setup-строке, фокус хранилища в их числе), без замков и чужого кода на пути блокировки;
+  документ длиннее `MAX_STORE_TEXT_BYTES` единиц UTF-16 не читается. `store_focus` — не
+  setup-строка; поздний читатель получает заголовок с `joined_late` (`NativeLines::join`
+  во `flui-runtime`), и только у такой записи блокировка неизвестного хранилища или без документа
+  читается (replay отказывает `JoinedLate`); у остальных это `Invalid` при чтении, как и второй
+  `store_focus` ключа и строки закрытия в порядке, которого доставка не пишет (второе закрытие,
+  запрос после закрытия, `closing` без разрешённого, запрос после разрешённого, причина закрытия
+  против запросов). Писатель (`NativeRecording::write`) не пишет того, что его читатель отвергнет:
+  у границы байтов или строк он ставит строку `cut` с причиной и останавливается; читатель
+  принимает `cut` как конец, строка после неё — `Invalid`. Исчерпание owner-слотов окна — тоже
+  `cut` (`store_journal`), а не второе пространство ключей. Протокол 0.13 — в `BREAKING`
+  (ADR-0342, `Proposed`): клиент 0.12 не читает новые строки в `record_native`. Правило
+  `version.rs` и проверка `wire_schema` теперь одно: новый вариант тегированного объединения и
+  новое значение закрытого строкового (`enum` или `oneOf` констант) — разрыв, кроме объединений с
+  запасным значением (`Role`, имя действия, `ErrorCode`) и подписочных (`Event`, `EventKind`);
+  опубликованные до этого версии, добавившие значения незамеченными, — закрытый список с тем, что
+  каждая добавила (0.8, 0.9, 0.10). `assert_backend_conforms`
+  (`crates/flui-testing/src/backend_conformance.rs:494`, ADR-0215 §7) сертифицирует перевод
+  нативного чтения в `HostInput` и строки IME путей ввода; строки журнала — запись тех же путей, их
+  воспроизводимость проверяет `StoreLock::replay_on`. `tools/xtask/src/recording_vocabulary.rs`
+  читает только перечисления записи `HostInput`; словари нативной записи — `vocabulary!`, новые
   добавлены в `every_vocabulary_enum_is_spelled_as_it_is_named`. Тесты таблицы
-  `native_recording_contracts`: золотой `headless_window_store_and_close.jsonl` и
+  `native_recording_contracts`: золотой `headless_window_store_and_close.jsonl`,
   `window_store_and_close_recordings_replay_on_the_headless_host`,
   `a_row_replayed_otherwise_is_a_divergence`, `a_native_recording_past_its_bounds_is_refused`,
-  `a_store_lock_the_recording_joined_after_is_refused`; с `native-capture` —
-  `captured_store_locks_replay_to_the_document_they_left` (модели TSF, `EditContext`, зеркала
-  Android), `a_protected_store_journals_nothing_of_its_content`,
+  `a_store_lock_the_recording_joined_after_is_refused`, `close_rows_out_of_order_are_refused`,
+  `a_recording_past_its_bound_is_written_cut`; с `native-capture` —
+  `captured_store_locks_replay_to_the_document_they_left`,
+  `a_protected_store_journals_nothing_of_its_content`,
+  `a_protected_store_journals_one_row_whatever_was_typed`,
+  `the_granted_body_runs_when_the_store_status_panics`,
+  `an_unchanged_document_is_not_written_again`,
   `the_journal_reads_no_document_it_cannot_hold_or_nobody_wants`,
-  `a_store_lock_past_its_bounds_or_unwound_is_incomplete`, `every_close_answer_and_cause_replays`.
-  С откатом падают: без отметки правки приложения — `captured_store_locks_…`; без записи закрытия
-  или с прежним `closing` → `keep_open` — `every_close_answer_…`; без проверок длины строки и
-  объёма записи — `a_native_recording_past_its_bounds_…`; со сверкой «всегда равно» —
-  `a_row_replayed_otherwise_…`; без `JoinedLate` — `a_store_lock_the_recording_joined_after_…`;
-  без ветки `protected` — `a_protected_store_…`; без проверки длины документа или `is_wanted` —
-  `the_journal_reads_no_document_…`; без пометки размотанного тела — `a_store_lock_past_its_bounds_or_unwound_…`.
+  `a_store_lock_past_its_bounds_or_unwound_is_incomplete`, `every_close_answer_and_cause_replays`
+  (по `CloseAnswer::ALL` и `CloseCause::ALL`: новый вариант без случая роняет тест). Каждый падает
+  с откатом своей правки; самопроверка `wire_schema` падает без проверки добавленного значения.
   Не построено: `--record` драйвера (ждёт `flui-driver`). Не прогнано: захват настоящего метода
   ввода на устройствах — долг в строке parity.
 

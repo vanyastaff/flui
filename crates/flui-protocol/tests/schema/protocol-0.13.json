@@ -1405,6 +1405,22 @@
       ],
       "type": "object"
     },
+    "CutReason": {
+      "oneOf": [
+        {
+          "const": "bytes",
+          "type": "string"
+        },
+        {
+          "const": "rows",
+          "type": "string"
+        },
+        {
+          "const": "store_journal",
+          "type": "string"
+        }
+      ]
+    },
     "Deadline": {
       "properties": {
         "member": {
@@ -5567,6 +5583,9 @@
           "minimum": 0,
           "type": "integer"
         },
+        "joined_late": {
+          "type": "boolean"
+        },
         "provenance": {
           "type": [
             "string",
@@ -6197,6 +6216,22 @@
           "required": [
             "row",
             "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reason": {
+              "$ref": "#/$defs/CutReason"
+            },
+            "row": {
+              "const": "cut",
+              "type": "string"
+            }
+          },
+          "required": [
+            "row",
+            "reason"
           ],
           "type": "object"
         },

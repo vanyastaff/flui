@@ -79,7 +79,7 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     {
         use flui_protocol::native_recording::{
             Absence, Appearance, Availability, Backend, CancelReason, CloseAnswer, CloseCause,
-            DynamicRange, Execution, FailureKind, Gamut, GestureComponent, GesturePhase,
+            CutReason, DynamicRange, Execution, FailureKind, Gamut, GestureComponent, GesturePhase,
             InputPurpose, MemoryPressureLevel, Modifier, PointerKind, ScrollPhase, ScrollUnit,
             SessionEndPhase, StoreError, StoreLockKind, Stream, ViewportStatus, WheelAxis,
             WindowMode,
@@ -87,6 +87,7 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
         spelled_as_named(Absence::ALL, Absence::name);
         spelled_as_named(CloseAnswer::ALL, CloseAnswer::name);
         spelled_as_named(CloseCause::ALL, CloseCause::name);
+        spelled_as_named(CutReason::ALL, CutReason::name);
         spelled_as_named(InputPurpose::ALL, InputPurpose::name);
         spelled_as_named(StoreError::ALL, StoreError::name);
         spelled_as_named(StoreLockKind::ALL, StoreLockKind::name);

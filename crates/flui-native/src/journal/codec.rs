@@ -51,7 +51,7 @@ use crate::input::assembly::{
 };
 use crate::input::windows::direct_manipulation::manipulation::TouchpadAssembler;
 
-pub use wire::{Backend, CloseAnswer, CloseCause, FORMAT_VERSION, FailureKind, Stream};
+pub use wire::{Backend, CloseAnswer, CloseCause, CutReason, FORMAT_VERSION, FailureKind, Stream};
 
 use super::store::{self, RecordedStore, StoreDivergence, StoreFocus, StoreLock};
 use crate::error::PlatformError;
@@ -173,6 +173,9 @@ pub struct Header {
     /// Where the readings came from, when not a capture: a hand-written
     /// recording says so here.
     pub provenance: Option<String>,
+    /// The recording joined a live stream late: a row may name a text store
+    /// whose focus or document it never saw, which its replay refuses.
+    pub joined_late: bool,
 }
 
 impl Header {
@@ -195,6 +198,7 @@ impl Header {
             first_device: None,
             click_settings: None,
             provenance: None,
+            joined_late: false,
         }
     }
 
@@ -357,6 +361,8 @@ pub enum Row {
         /// from another thread: the window system was told to keep the window.
         queued: bool,
     },
+    /// The writer stopped the recording here; no row follows (any stream).
+    Cut(CutReason),
     /// The window closed (a `window` stream).
     Closed(CloseCause),
 }
@@ -548,6 +554,7 @@ impl Row {
             Self::StoreLock { .. } => "store_lock",
             Self::CloseRequest { .. } => "close_request",
             Self::Closed(_) => "closed",
+            Self::Cut(_) => "cut",
         }
     }
 }
@@ -766,8 +773,7 @@ impl NativeRecording {
         let declared = dto.devices.clone();
         let header = header_from_wire(dto).map_err(|error| error.at(1))?;
         let mut rows = Vec::new();
-        // The stores the recording focused: one focus per key, never two.
-        let mut focused = std::collections::BTreeSet::new();
+        let mut order = RowOrder::new(header.joined_late);
         let mut line: u64 = 1;
         loop {
             line += 1;
@@ -794,14 +800,9 @@ impl NativeRecording {
             let dto: wire::Row =
                 serde_json::from_str(&buffer).map_err(|source| json_error(line, source))?;
             let row = row_from_wire(dto).map_err(|error| error.at(line))?;
-            if let Row::StoreFocus(Some(focus)) = &row
-                && !focused.insert(focus.store)
-            {
-                return Err(CodecError::Invalid {
-                    line,
-                    what: format!("store {} is focused a second time", focus.store.get()),
-                });
-            }
+            order
+                .admit(&row)
+                .map_err(|what| CodecError::Invalid { line, what })?;
             for (device, kind) in row_devices(&row) {
                 let kind = kind_to_wire(kind).map_err(|error| error.at(line))?;
                 if !declared
@@ -849,9 +850,27 @@ impl NativeRecording {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let header = header_to_wire(&self.header, devices).map_err(|error| error.at(1))?;
-        write_line(&mut out, 1, &header)?;
+        let mut line = encode_line(1, &header)?;
+        let mut written = line.len();
+        out.write_all(&line)?;
         for (index, row) in rows.iter().enumerate() {
-            write_line(&mut out, index as u64 + 2, row)?;
+            let number = index as u64 + 2;
+            line = encode_line(number, row)?;
+            // Room for the row and, after it, the cut a later row may need, so
+            // the writer never makes what its reader refuses.
+            let cut = if index + 2 > wire::MAX_ROWS {
+                Some(wire::CutReason::Rows)
+            } else if written + line.len() + CUT_LINE_ROOM > wire::MAX_RECORDING_BYTES {
+                Some(wire::CutReason::Bytes)
+            } else {
+                None
+            };
+            if let Some(reason) = cut {
+                out.write_all(&encode_line(number, &wire::Row::Cut { reason })?)?;
+                break;
+            }
+            written += line.len();
+            out.write_all(&line)?;
         }
         out.flush()?;
         Ok(())
@@ -1016,11 +1035,13 @@ impl NativeRecording {
                 }
                 // The handler was not asked: an earlier request was granted,
                 // or the window had let go of its handler. Nothing is asked on
-                // replay either; the `closed` row closes the window.
+                // replay either; the `closed` row closes the window. A cut ends
+                // a recording that is whole up to it: nothing follows.
                 Row::CloseRequest {
                     answer: CloseAnswer::Closing | CloseAnswer::NoHandler,
                     ..
-                } => {}
+                }
+                | Row::Cut(_) => {}
                 Row::CloseRequest { answer, .. } => {
                     let replayed = target.close_request().map_err(unsupported)?;
                     let recorded = match answer {
@@ -1040,6 +1061,108 @@ impl NativeRecording {
             for input in out {
                 target.input(input).map_err(unsupported)?;
             }
+        }
+        Ok(())
+    }
+}
+
+/// The order a live stream writes its rows in, which a reader checks from the
+/// rows alone: nothing after a cut; a window's close requests and close in an
+/// order its delivery produces; and a text store lock only on a store a focus
+/// row named, with its document recorded before it relies on it, unless the
+/// recording says it joined late.
+struct RowOrder {
+    joined_late: bool,
+    cut: bool,
+    /// A close request was granted (answered `close`, or by no handler).
+    granted: bool,
+    closed: bool,
+    /// The stores focus rows named, and whether the recording holds each
+    /// one's document now.
+    stores: std::collections::BTreeMap<RecordedStore, bool>,
+}
+
+impl RowOrder {
+    const fn new(joined_late: bool) -> Self {
+        Self {
+            joined_late,
+            cut: false,
+            granted: false,
+            closed: false,
+            stores: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Take `row`, or say why no live stream writes it here.
+    fn admit(&mut self, row: &Row) -> Result<(), String> {
+        if self.cut {
+            return Err(format!("a `{}` row follows the cut", row.name()));
+        }
+        match row {
+            Row::Cut(_) => self.cut = true,
+            Row::CloseRequest { answer, .. } => {
+                if self.closed {
+                    return Err("a close request follows the close".to_owned());
+                }
+                // Once a request was granted, every later one is `closing`,
+                // and only then.
+                if (*answer == CloseAnswer::Closing) != self.granted {
+                    return Err(if self.granted {
+                        "a request is asked after an earlier one was granted".to_owned()
+                    } else {
+                        "a request answered `closing` follows no granted request".to_owned()
+                    });
+                }
+                if matches!(answer, CloseAnswer::Close | CloseAnswer::NoHandler) {
+                    self.granted = true;
+                }
+            }
+            Row::Closed(cause) => {
+                if self.closed {
+                    return Err("the window closes a second time".to_owned());
+                }
+                match cause {
+                    CloseCause::GrantedRequest if !self.granted => {
+                        return Err("a close for a granted request follows none".to_owned());
+                    }
+                    CloseCause::NoRequest if self.granted => {
+                        return Err("a close asked nothing after a request was granted".to_owned());
+                    }
+                    _ => {}
+                }
+                self.closed = true;
+            }
+            Row::StoreFocus(Some(focus)) => {
+                if self.stores.insert(focus.store, false).is_some() {
+                    return Err(format!(
+                        "store {} is focused a second time",
+                        focus.store.get()
+                    ));
+                }
+            }
+            Row::StoreLock { lock, .. } => {
+                let Some(documented) = self.stores.get_mut(&lock.store) else {
+                    if self.joined_late {
+                        return Ok(());
+                    }
+                    return Err(format!(
+                        "a lock on store {}, which no focus row named",
+                        lock.store.get()
+                    ));
+                };
+                if lock.protected || lock.incomplete {
+                    // The journal records the document again at the next lock.
+                    *documented = false;
+                } else if lock.opened.is_some() {
+                    *documented = true;
+                } else if !*documented && !self.joined_late {
+                    return Err(format!(
+                        "a lock on store {} before the recording holds its document",
+                        lock.store.get()
+                    ));
+                }
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -1077,7 +1200,8 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::StoreFocus(_)
         | Row::StoreLock { .. }
         | Row::CloseRequest { .. }
-        | Row::Closed(_) => Vec::new(),
+        | Row::Closed(_)
+        | Row::Cut(_) => Vec::new(),
     };
     readings
         .into_iter()
@@ -1157,19 +1281,18 @@ fn json_error(line: u64, source: serde_json::Error) -> CodecError {
     }
 }
 
-fn write_line(out: &mut impl Write, line: u64, value: &impl Serialize) -> Result<(), CodecError> {
-    serde_json::to_writer(&mut *out, value).map_err(|source| {
-        if source.is_io() {
-            CodecError::Io(source.into())
-        } else {
-            CodecError::Json {
-                line,
-                source: MalformedJson(source),
-            }
-        }
+/// How many bytes a writer keeps free for the [`wire::Row::Cut`] line it may
+/// end a recording with: the longest such line and its newline, with room.
+const CUT_LINE_ROOM: usize = 64;
+
+/// `value` as line `line` of a recording, its newline included.
+fn encode_line(line: u64, value: &impl Serialize) -> Result<Vec<u8>, CodecError> {
+    let mut bytes = serde_json::to_vec(value).map_err(|source| CodecError::Json {
+        line,
+        source: MalformedJson(source),
     })?;
-    out.write_all(b"\n")?;
-    Ok(())
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 const fn nanos(time: EventTime) -> u64 {
@@ -1216,6 +1339,7 @@ fn header_to_wire(header: &Header, devices: Vec<wire::Device>) -> DtoResult<wire
             .map(click_settings_to_wire)
             .transpose()?,
         provenance: header.provenance.clone(),
+        joined_late: header.joined_late,
         devices,
     })
 }
@@ -1244,6 +1368,7 @@ fn header_from_wire(header: wire::Header) -> DtoResult<Header> {
             .transpose()?,
         click_settings: header.click_settings.map(click_settings_from_wire),
         provenance: header.provenance,
+        joined_late: header.joined_late,
         ..match (header.stream, header.epoch_ns, header.uptime_ns) {
             (Stream::Registry, Some(epoch), Some(uptime)) => Header::new(
                 header.backend,
@@ -1821,6 +1946,7 @@ fn row_to_wire(row: &Row) -> DtoResult<wire::Row> {
             queued: *queued,
         },
         Row::Closed(cause) => wire::Row::Closed { cause: *cause },
+        Row::Cut(reason) => wire::Row::Cut { reason: *reason },
     })
 }
 
@@ -1989,6 +2115,7 @@ fn row_from_wire(row: wire::Row) -> DtoResult<Row> {
         },
         wire::Row::CloseRequest { answer, queued } => Row::CloseRequest { answer, queued },
         wire::Row::Closed { cause } => Row::Closed(cause),
+        wire::Row::Cut { reason } => Row::Cut(reason),
         _ => return Err(unread("Row")),
     })
 }

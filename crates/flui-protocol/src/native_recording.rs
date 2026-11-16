@@ -385,6 +385,13 @@ pub struct Header {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub provenance: Option<String>,
+    /// The recording joined a live stream late: it begins with the stream's setup, not its
+    /// first row, so a row may name a text store whose focus or document it never saw.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub joined_late: bool,
     /// Every device the rows read, with the kinds they read it as.
     #[cfg_attr(feature = "serde", serde(default))]
     pub devices: Vec<Device>,
@@ -1647,6 +1654,23 @@ vocabulary! {
     }
 }
 
+vocabulary! {
+    /// Why a writer stopped a recording ([`Row::Cut`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum CutReason {
+        /// The next row would have taken it past [`MAX_RECORDING_BYTES`].
+        Bytes => "bytes",
+        /// The next row would have taken it past [`MAX_ROWS`].
+        Rows => "rows",
+        /// The window's text store journal could not be kept (the process has no owner slot
+        /// left for it), so the window's stores are not journaled from here.
+        StoreJournal => "store_journal",
+    }
+}
+
 /// How many calls one [`StoreLock`] row holds; a session that makes more is recorded
 /// [`incomplete`](StoreLock::incomplete).
 pub const MAX_STORE_STEPS: usize = 256;
@@ -1975,9 +1999,10 @@ pub struct StoreLock {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub incomplete: bool,
-    /// The store was protected (a password field): the row records that the lock happened and
-    /// nothing derived from the field's content, no text, range, offset or length, so it has no
-    /// `opened` and no `steps`, and a replay refuses it.
+    /// The store was protected (a password field): one such row stands for every lock until a
+    /// lock finds it unprotected, and holds nothing derived from the field's content (no text,
+    /// range, offset, length or count of keys), so it has no `opened` and no `steps`; a replay
+    /// refuses it.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "std::ops::Not::not")
@@ -2170,6 +2195,12 @@ pub enum Row {
             serde(default, skip_serializing_if = "std::ops::Not::not")
         )]
         queued: bool,
+    },
+    /// The writer stopped here: no row follows, and the recording is whole up to it (any
+    /// stream).
+    Cut {
+        /// Why.
+        reason: CutReason,
     },
     /// The window closed: its handler heard `closed` (a `window` recording).
     Closed {

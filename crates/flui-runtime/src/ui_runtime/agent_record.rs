@@ -370,7 +370,13 @@ impl NativeLines {
             let Some(header) = &prefix.header else {
                 continue;
             };
-            let _ = queue.push_native(stream, header.of(privacy).clone());
+            // The stream's rows began before this recording: its header says
+            // so, so a reader tells a late join from a malformed recording.
+            let mut header = header.of(privacy).clone();
+            if let native_recording::Line::Header(header) = &mut header {
+                header.joined_late = true;
+            }
+            let _ = queue.push_native(stream, header);
             if prefix.dropped > 0 {
                 let _ = queue.push_native(
                     stream,

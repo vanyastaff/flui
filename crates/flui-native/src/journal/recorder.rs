@@ -118,6 +118,10 @@ fn journal(
         return;
     }
     let recording = &mut recordings[index];
+    if matches!(recording.rows.last(), Some(Row::Cut(_))) {
+        // A source journals nothing after its cut.
+        return;
+    }
     let setup = recording.rows.is_empty();
     if let Some(row) = fold(
         &mut recording.header,
@@ -282,6 +286,7 @@ pub(super) fn fold(
         },
         Captured::CloseRequest { answer, queued } => Row::CloseRequest { answer, queued },
         Captured::Closed(cause) => Row::Closed(cause),
+        Captured::Cut(reason) => Row::Cut(reason),
         Captured::Started { .. } | Captured::Opened(_) => {
             unreachable!("BUG: a source opens once, before its other calls")
         }

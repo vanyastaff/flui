@@ -67,20 +67,20 @@ pub struct LineCapture {
 
 /// Installs a capture for `backend` on this thread that hands every source's lines to `sink`.
 ///
-/// A row that costs work to build (a text store lock) is built only while the sink
-/// [`wants`](LineSink::wants) a form of it.
-pub fn capture_lines(backend: Backend, sink: impl LineSink + 'static) -> LineCapture {
-    let sink = std::sync::Arc::new(parking_lot::Mutex::new(sink));
-    let asked = std::sync::Arc::clone(&sink);
+/// A row that costs work to build (a text store lock) is built only while the sink wanted a
+/// form of the last row it was asked about ([`LineSink::wants`], asked for each row that is not
+/// a setup row): the answer is kept as a value the capture reads, never asked again on the way.
+/// A reader that joins can only replay a store focused after it joined, and a store's focus is
+/// such a row, so the answer is current wherever a joined reader could use a lock.
+pub fn capture_lines(backend: Backend, mut sink: impl LineSink + 'static) -> LineCapture {
+    let wanted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let kept = std::sync::Arc::clone(&wanted);
     let mut sources: Vec<Source> = Vec::new();
     let guard = capture_wanting(
         move |source, call| {
-            journal(&mut sources, &mut *sink.lock(), backend, source, call);
+            journal(&mut sources, &mut sink, &kept, backend, source, call);
         },
-        move || {
-            let forms = asked.lock().wants();
-            forms.kept || forms.redacted
-        },
+        wanted,
     );
     LineCapture { _guard: guard }
 }
@@ -94,11 +94,14 @@ struct Source {
     no_pseudonyms: Pseudonyms,
     /// Whether its header was sent: it is, before its first row.
     sent: bool,
+    /// It was cut: nothing it reports later is sent.
+    cut: bool,
 }
 
 fn journal(
     sources: &mut Vec<Source>,
     sink: &mut impl LineSink,
+    wanted: &std::sync::atomic::AtomicBool,
     backend: Backend,
     source: CaptureSource,
     call: Captured<'_>,
@@ -117,12 +120,16 @@ fn journal(
             pseudonyms: Pseudonyms::default(),
             no_pseudonyms: Pseudonyms::default(),
             sent: false,
+            cut: false,
         });
         return;
     }
-    let Some(entry) = sources.get_mut(index) else {
+    let Some(entry) = sources.get_mut(index).filter(|entry| !entry.cut) else {
         return;
     };
+    if matches!(call, Captured::Cut(_)) {
+        entry.cut = true;
+    }
     let setup = is_setup(call);
     let wanted = if setup {
         Forms {
@@ -130,7 +137,12 @@ fn journal(
             redacted: true,
         }
     } else {
-        sink.wants()
+        let forms = sink.wants();
+        wanted.store(
+            forms.kept || forms.redacted,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        forms
     };
     // Until a source has sent its header, every call folds in both forms: a setup call may
     // change the header, and the two headers never part. After it, only the forms wanted.

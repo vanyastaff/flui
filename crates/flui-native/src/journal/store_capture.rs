@@ -19,6 +19,7 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use flui_foundation::geometry::{Bounds, Point};
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::sequence::IdMint;
 use flui_platform::text_store::{
     CommitGate, Composition, CompositionEnd, LockGrant, LockKind, LockOutcome, LockTiming,
@@ -107,6 +108,8 @@ impl JournaledHost {
             key,
             journal: self.journal.clone(),
             document: Rc::new(Cell::new(HeldDocument::Stale)),
+            held: Rc::default(),
+            protected_noted: Rc::default(),
         }))
     }
 }
@@ -174,6 +177,13 @@ pub(crate) struct JournaledStore {
     journal: Journal,
     /// Shared with the observer it installs and the locks it grants.
     document: Rc<Cell<HeldDocument>>,
+    /// The document the recording holds the store at, when known: what the
+    /// last lock found and left unchanged. A lock that finds it again does
+    /// not write it again.
+    held: Rc<RefCell<Option<StoreDocument>>>,
+    /// A lock on the store while protected was recorded; until a lock finds it
+    /// unprotected, later ones are not.
+    protected_noted: Rc<Cell<bool>>,
 }
 
 impl TextStore for JournaledStore {
@@ -190,22 +200,48 @@ impl TextStore for JournaledStore {
             key: self.key,
             journal: self.journal.clone(),
             document: Rc::clone(&self.document),
+            held: Rc::clone(&self.held),
+            protected_noted: Rc::clone(&self.protected_noted),
             store: Rc::downgrade(&self.inner),
         };
+        // The body the input method was granted runs whatever the journal
+        // does: what the tap runs of code it does not own (the store's status)
+        // is contained, the first failure is kept, and it is raised once the
+        // body ran.
         let grant = match grant {
             LockGrant::Read(body) => LockGrant::read(move |session| {
-                let Some(log) = tap.open(LockKind::Read) else {
-                    return body(session);
-                };
-                body(&ReadTap { session, log: &log });
-                log.finish();
+                let mut failure = FirstPanic::new();
+                match failure.contain(|| tap.open(LockKind::Read)).flatten() {
+                    None => {
+                        failure.contain(|| body(session));
+                    }
+                    Some(log) => {
+                        if failure
+                            .contain(|| body(&ReadTap { session, log: &log }))
+                            .is_some()
+                        {
+                            log.finish();
+                        }
+                    }
+                }
+                failure.resume();
             }),
             LockGrant::ReadWrite(body) => LockGrant::read_write(move |session| {
-                let Some(log) = tap.open(LockKind::ReadWrite) else {
-                    return body(session);
-                };
-                body(&mut EditTap { session, log: &log });
-                log.finish();
+                let mut failure = FirstPanic::new();
+                match failure.contain(|| tap.open(LockKind::ReadWrite)).flatten() {
+                    None => {
+                        failure.contain(|| body(session));
+                    }
+                    Some(log) => {
+                        if failure
+                            .contain(|| body(&mut EditTap { session, log: &log }))
+                            .is_some()
+                        {
+                            log.finish();
+                        }
+                    }
+                }
+                failure.resume();
             }),
         };
         self.inner.request_lock(grant, timing)
@@ -245,38 +281,54 @@ struct LockTap {
     key: RecordedStore,
     journal: Journal,
     document: Rc<Cell<HeldDocument>>,
+    held: Rc<RefCell<Option<StoreDocument>>>,
+    protected_noted: Rc<Cell<bool>>,
     store: std::rc::Weak<dyn TextStore>,
 }
 
 impl LockTap {
     /// The journal of a lock of `kind` granted now, or `None` when the lock
     /// runs untouched: no sink wants store rows now (the recording's copy of
-    /// the document goes stale), or the store is protected, when the lock is
-    /// recorded as having happened and nothing derived from the field's
-    /// content is (no text, range, offset or length).
+    /// the document goes stale), or the store is protected. A protected
+    /// store's locks are recorded once, as a lock on a protected store and
+    /// nothing derived from the field's content (no text, range, offset or
+    /// length), until a lock finds it unprotected again: how many locks it was
+    /// granted would count the keys typed into it.
+    ///
+    /// Reads the store's status, which is the application's code: the caller
+    /// contains it.
     fn open(self, kind: LockKind) -> Option<LockLog> {
         if !self.journal.is_wanted() {
             self.forget_document();
             return None;
         }
-        if self
+        let protected = self
             .store
             .upgrade()
-            .is_some_and(|store| store.status().protected)
-        {
+            .is_some_and(|store| store.status().protected);
+        if protected {
             self.forget_document();
-            let lock = StoreLock {
-                store: self.key,
-                kind,
-                opened: None,
-                steps: Vec::new(),
-                incomplete: false,
-                protected: true,
-            };
-            contain_owner_callback(|| self.journal.record(Captured::StoreLock(&lock)));
+            if !self.protected_noted.replace(true) {
+                let lock = StoreLock {
+                    store: self.key,
+                    kind: LockKind::ReadWrite,
+                    opened: None,
+                    steps: Vec::new(),
+                    incomplete: false,
+                    protected: true,
+                };
+                contain_owner_callback(|| self.journal.record(Captured::StoreLock(&lock)));
+            }
             return None;
         }
-        Some(LockLog::open(self.key, kind, self.journal, self.document))
+        self.protected_noted.set(false);
+        Some(LockLog::open(
+            self.key,
+            kind,
+            self.journal,
+            self.document,
+            self.held,
+        ))
     }
 
     /// The recording no longer holds what this lock leaves the document as.
@@ -284,6 +336,7 @@ impl LockTap {
         if self.document.get() == HeldDocument::Current {
             self.document.set(HeldDocument::Stale);
         }
+        self.held.replace(None);
     }
 }
 
@@ -356,6 +409,7 @@ struct LockLog {
     kind: LockKind,
     journal: Journal,
     document: Rc<Cell<HeldDocument>>,
+    held: Rc<RefCell<Option<StoreDocument>>>,
     entries: RefCell<Entries>,
     finished: Cell<bool>,
 }
@@ -366,6 +420,7 @@ impl LockLog {
         kind: LockKind,
         journal: Journal,
         document: Rc<Cell<HeldDocument>>,
+        held: Rc<RefCell<Option<StoreDocument>>>,
     ) -> Self {
         let document_due = document.get() != HeldDocument::Current;
         Self {
@@ -373,6 +428,7 @@ impl LockLog {
             kind,
             journal,
             document,
+            held,
             entries: RefCell::new(Entries {
                 document_due,
                 ..Entries::default()
@@ -406,12 +462,17 @@ impl LockLog {
         let mut entries = self.entries.borrow_mut();
         match text {
             Ok(text) if text.len() <= MAX_STORE_TEXT_BYTES => {
-                entries.text_bytes = text.len();
-                entries.opened = Some(StoreDocument {
+                let found = StoreDocument {
                     text,
                     selection,
                     composition,
-                });
+                };
+                // The recording holds the store at this document already: a
+                // store nobody observes would otherwise write it on every lock.
+                if self.held.borrow().as_ref() != Some(&found) {
+                    entries.text_bytes = found.text.len();
+                    entries.opened = Some(found);
+                }
             }
             // Too long to hold, or not to be read out (a protected field).
             Ok(_) | Err(_) => entries.incomplete = true,
@@ -507,6 +568,13 @@ impl Drop for LockLog {
             } else {
                 HeldDocument::Current
             });
+        }
+        // What the recording holds the store at after this lock: what it found,
+        // if it changed nothing; unknown once it edited or lost a call.
+        if incomplete || entries.steps.iter().any(StoreStep::is_edit) {
+            self.held.replace(None);
+        } else if let Some(found) = &entries.opened {
+            self.held.replace(Some(found.clone()));
         }
         let lock = StoreLock {
             store: self.key,

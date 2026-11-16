@@ -262,12 +262,33 @@ fn variant_segment(item: &Value) -> String {
 /// events sent unasked (`gap`, and `record`/`record_native` to the connection that started a
 /// recording) are the exception the rule leaves to review: a new variant of what those carry,
 /// such as a native recording's row, is checked as any other union's.
-const SUBSCRIBED_UNIONS: &[&str] = &["/$defs/Event/oneOf"];
+const SUBSCRIBED_UNIONS: &[&str] = &["$defs/Event/oneOf", "$defs/EventKind/"];
 
-/// The first version whose new variants the check sees. Before it the check named every array
-/// item `*`, so a variant added with field names other variants already required passed unseen:
-/// 0.8 added `InspectValue::NonFinite` that way, and those published versions stay as they are.
-const VARIANTS_CHECKED_FROM: ProtocolVersion = ProtocolVersion::new(0, 13);
+/// The closed string unions whose unknown value an older reader reads as a fallback, so a value
+/// added to one is additive (`version.rs`, "The rule"; ADR-0342); each with the fallback.
+const TOLERANT_UNIONS: &[(&str, &str)] = &[
+    ("$defs/Role/", "an unknown role reads as `Role::Unknown`"),
+    (
+        "ErrorCode/oneOf",
+        "an unknown error code reads as `ErrorCode::Platform`",
+    ),
+];
+
+/// The published versions that added a variant or a value before the check could see one (it
+/// named every array item `*` and checked strings for loss only), each with what it added. They
+/// were released, and older apps serve them; the list is closed, and a version after the check
+/// learned to see variants (ADR-0342) is never added to it.
+const PUBLISHED_UNSEEN: &[(ProtocolVersion, &str)] = &[
+    (
+        ProtocolVersion::new(0, 8),
+        "the `non_finite` variant of `InspectValue`",
+    ),
+    (
+        ProtocolVersion::new(0, 9),
+        "`DeviceClass::Other` and `HandleKind::Recording`",
+    ),
+    (ProtocolVersion::new(0, 10), "`RecordLayer::Native`"),
+];
 
 /// What makes `newer` not additive to `older`: a property, enumerated string or
 /// method it lost, a field it made required in a type `older` had, or a variant it added to a
@@ -301,6 +322,32 @@ fn additivity_violations(
             }),
     );
     let mut added = BTreeSet::new();
+    // A value added to a closed string union `older` had (an `enum` list, or a `oneOf` of
+    // constants): the same break as a new tagged variant, unless an older reader reads an
+    // unknown value as a fallback.
+    for value in new.strings.difference(&old.strings) {
+        let Some((container, _)) = value.rsplit_once('=') else {
+            continue;
+        };
+        let union_existed = old.strings.iter().any(|known| {
+            known
+                .rsplit_once('=')
+                .is_some_and(|(at, _)| at == container)
+        });
+        // A method is a tool, which the rule names additive: a client calls only what it knows.
+        if union_existed
+            && container != "/methods"
+            && !breaking
+            && !TOLERANT_UNIONS
+                .iter()
+                .any(|(tolerant, _)| container.contains(tolerant))
+            && !SUBSCRIBED_UNIONS
+                .iter()
+                .any(|subscribed| container.contains(subscribed))
+        {
+            added.insert(format!("value added: {value}"));
+        }
+    }
     for path in new.required.difference(&old.required) {
         let segments: Vec<&str> = path.split('/').collect();
         // The type the field is required in: the path up to `required`, or up to the first
@@ -322,7 +369,11 @@ fn additivity_violations(
             let variant = segments[..=at].join("/");
             if !old.required.contains(&format!("{variant}/required/{tag}")) {
                 let union = segments[..at].join("/");
-                if !breaking && !SUBSCRIBED_UNIONS.contains(&union.as_str()) {
+                if !breaking
+                    && !SUBSCRIBED_UNIONS
+                        .iter()
+                        .any(|subscribed| union.contains(subscribed))
+                {
                     added.insert(format!("variant added: {variant}"));
                 }
                 continue;
@@ -365,7 +416,7 @@ fn every_published_schema_is_additive_to_the_next() {
             &read_schema(older_path),
             &read_schema(newer_path),
             renamed,
-            broke.is_some() || *newer < VARIANTS_CHECKED_FROM,
+            broke.is_some() || PUBLISHED_UNSEEN.iter().any(|(version, _)| version == newer),
         );
         assert!(
             violations.is_empty(),
@@ -519,6 +570,59 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         )
         .is_empty(),
         "a new kind of the subscribed `Event` union reaches only a client that names it"
+    );
+
+    // A closed string union, as a `oneOf` of constants or as an `enum` list: a value added to it
+    // is the same break as a new tagged variant, unless an older reader reads an unknown value
+    // as a fallback.
+    let constants = |values: &[&str]| {
+        let values: Vec<Value> = values
+            .iter()
+            .map(|value| serde_json::json!({"type": "string", "const": value}))
+            .collect();
+        serde_json::json!({"CloseAnswer": {"oneOf": values}})
+    };
+    let listed = |values: &[&str]| serde_json::json!({"CloseCause": {"enum": values}});
+    for (shape, older_union, newer_union, added) in [
+        (
+            "a oneOf of constants",
+            constants(&["close", "keep_open"]),
+            constants(&["close", "keep_open", "timeout"]),
+            "value added: /CloseAnswer/oneOf/*/const=timeout",
+        ),
+        (
+            "an enum list",
+            listed(&["granted_request"]),
+            listed(&["granted_request", "no_request"]),
+            "value added: /CloseCause/enum=no_request",
+        ),
+    ] {
+        assert_eq!(
+            additivity_violations(&older_union, &newer_union, &[], false),
+            [added],
+            "a value added to {shape} is not additive"
+        );
+        assert!(
+            additivity_violations(&older_union, &newer_union, &[], true).is_empty(),
+            "a version BREAKING lists may add a value to {shape}"
+        );
+    }
+    let roles = |values: &[&str]| {
+        let values: Vec<Value> = values
+            .iter()
+            .map(|value| serde_json::json!({"type": "string", "const": value}))
+            .collect();
+        serde_json::json!({"$defs": {"Role": {"oneOf": values}}})
+    };
+    assert!(
+        additivity_violations(
+            &roles(&["button"]),
+            &roles(&["button", "heading"]),
+            &[],
+            false
+        )
+        .is_empty(),
+        "an unknown role reads as `Role::Unknown`: a new one is additive"
     );
 
     let mut new_definition = older.clone();

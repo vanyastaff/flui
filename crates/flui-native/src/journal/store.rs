@@ -211,9 +211,9 @@ pub struct StoreLock {
     /// more text than [`MAX_STORE_TEXT_BYTES`], a document the store would not
     /// read out, or a lock body that panicked. A replay refuses it.
     pub incomplete: bool,
-    /// The store was protected: the lock is recorded as having happened and
-    /// nothing derived from the field's content is, so it has no document
-    /// and no calls. A replay refuses it.
+    /// The store was protected: one such row stands for every lock until a
+    /// lock finds it unprotected, and holds nothing derived from the field's
+    /// content, so it has no document and no calls. A replay refuses it.
     pub protected: bool,
 }
 

@@ -932,8 +932,12 @@ fn a_native_recording_past_its_bounds_is_refused() {
             "{case}"
         );
     }
+    let focus = r#"{"row":"store_focus","focus":{"store":1,"status":{}}}"#;
     let within = format!(
-        "{window}\n{{\"row\":\"store_lock\",\"lock\":{{\"store\":1,\"kind\":\"read\",\"steps\":[{}]}}}}\n",
+        r#"{window}
+{focus}
+{{"row":"store_lock","lock":{{"store":1,"kind":"read","opened":{{"text":"","selection":[0,0]}},"steps":[{}]}}}}
+"#,
         steps(MAX_STORE_STEPS)
     );
     assert!(

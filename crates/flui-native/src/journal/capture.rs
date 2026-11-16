@@ -23,6 +23,7 @@
 
 use std::cell::RefCell;
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -31,7 +32,7 @@ use flui_platform::pointer::PointerKind;
 use flui_platform::{
     DisplaySnapshot, ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences, WindowState,
 };
-use flui_protocol::native_recording::{CloseAnswer, CloseCause, Stream};
+use flui_protocol::native_recording::{CloseAnswer, CloseCause, CutReason, Stream};
 use parking_lot::{Mutex, ReentrantMutex};
 
 use crate::error::PlatformError;
@@ -168,6 +169,9 @@ pub enum Captured<'a> {
         /// from another thread: the window system was told to keep the window.
         queued: bool,
     },
+    /// The source journals nothing from here: a sink drops what it reports
+    /// later.
+    Cut(CutReason),
     /// The window closed: its handler heard `closed`.
     Closed(CloseCause),
 }
@@ -187,12 +191,11 @@ type Sink = Box<dyn FnMut(CaptureSource, Captured<'_>) + Send>;
 struct Session {
     sink: ReentrantMutex<RefCell<Option<Sink>>>,
     next_source: Mutex<Option<u32>>,
-    /// Whether the sink wants rows now; a source whose rows cost work to
-    /// build (a text store lock) asks first and builds nothing otherwise.
-    wants: Interest,
+    /// Whether the sink wants rows now, as its owner last said: a source
+    /// whose rows cost work to build (a text store lock) reads it and builds
+    /// nothing while it is `false`. A value, never a question to the sink.
+    wanted: Arc<AtomicBool>,
 }
-
-type Interest = Box<dyn Fn() -> bool + Send + Sync>;
 
 thread_local! {
     /// The capture new registries on this thread report to. Exists only in
@@ -230,21 +233,21 @@ impl Drop for CaptureGuard {
 /// `sink`, until the guard is dropped. A later capture replaces this one for
 /// registries created after it.
 pub fn capture(sink: impl FnMut(CaptureSource, Captured<'_>) + Send + 'static) -> CaptureGuard {
-    capture_wanting(sink, || true)
+    capture_wanting(sink, Arc::new(AtomicBool::new(true)))
 }
 
-/// [`capture`], whose sink wants rows only while `wants` says so: a source
-/// whose rows cost work to build (a text store lock, which copies text)
-/// builds and reports none while it answers `false`. `wants` is called on the
-/// thread of the source that asks, and must not report to the capture.
+/// [`capture`], whose sink wants rows only while `wanted` holds `true`: a
+/// source whose rows cost work to build (a text store lock, which copies
+/// text) builds and reports none while it is `false`. The sink's owner keeps
+/// `wanted` current; reading it takes no lock and runs no code of the sink's.
 pub fn capture_wanting(
     sink: impl FnMut(CaptureSource, Captured<'_>) + Send + 'static,
-    wants: impl Fn() -> bool + Send + Sync + 'static,
+    wanted: Arc<AtomicBool>,
 ) -> CaptureGuard {
     let session = Arc::new(Session {
         sink: ReentrantMutex::new(RefCell::new(Some(Box::new(sink)))),
         next_source: Mutex::new(Some(0)),
-        wants: Box::new(wants),
+        wanted,
     });
     INSTALLED.with(|installed| *installed.borrow_mut() = Arc::downgrade(&session));
     CaptureGuard { session }
@@ -272,7 +275,7 @@ impl Journal {
         self.session
             .as_ref()
             .and_then(|(session, _)| session.upgrade())
-            .is_some_and(|session| (session.wants)())
+            .is_some_and(|session| session.wanted.load(Ordering::Relaxed))
     }
 
     /// The journal of a registry created now on `clock`, which it reports

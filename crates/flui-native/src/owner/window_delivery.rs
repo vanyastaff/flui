@@ -399,17 +399,23 @@ impl WindowDelivery {
         if !self.journal.is_reporting() || !self.store_journal.is_owner_thread() {
             return host;
         }
-        let state = self.store_journal.cloned().unwrap_or_else(|| {
-            let state = Rc::new(crate::journal::store_capture::StoreJournal::default());
-            if self.store_journal.replace(Rc::clone(&state)).is_err() {
-                tracing::error!("a window's store journal is not kept: owner slots are exhausted");
-            }
-            state
-        });
+        if let Some(state) = self.store_journal.cloned() {
+            return crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, state);
+        }
+        let state = Rc::new(crate::journal::store_capture::StoreJournal::default());
+        if self.store_journal.replace(Rc::clone(&state)).is_err() {
+            // A journal only this host held would issue keys another host
+            // issues again: the window's stream says it ends here, and its
+            // stores go unjournaled.
+            self.journal_close(crate::journal::capture::Captured::Cut(
+                flui_protocol::native_recording::CutReason::StoreJournal,
+            ));
+            return host;
+        }
         crate::journal::store_capture::JournaledHost::wrap(host, &self.journal, state)
     }
 
-    /// Journal a close request's answer or the close, in the window's turn and
+    /// Journal a close request's answer, the close or the stream's cut, in the window's turn and
     /// before the delivery acts on it. A sink that panics ends its capture and
     /// does not stop the close.
     #[cfg(all(debug_assertions, feature = "native-capture"))]
