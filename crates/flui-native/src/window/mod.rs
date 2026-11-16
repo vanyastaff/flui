@@ -6,8 +6,7 @@
 //! what the X11 host decides about a window before it opens (`plan`), what an
 //! Activity's window asks of the system when it opens (`activity`), and the
 //! acknowledgement a host waits for before it publishes a window it attached
-//! ([`installation`]); beside it is the window
-//! configuration the Win32 host is built with (`config`). Each platform file
+//! ([`installation`]). Each platform file
 //! implements the window position of its host's table, and its system chrome
 //! (the `Chrome` position) beside it.
 //!
@@ -15,8 +14,6 @@
 //! what it asks of the window feature, a platform file here implements it, and
 //! `hosts/<os>.rs` hands the loop the window feature's object.
 
-#[cfg(windows)]
-pub(crate) mod config;
 pub(crate) mod installation;
 #[cfg(x11_host)]
 pub(crate) mod plan;

@@ -23,8 +23,8 @@
   clear_liquid_glass}`, for now: it comes back through `flui::native::macos`.
 - **`flui-native`**: `WindowConfiguration`, `FullscreenMonitor`, the `flui_native::config` module,
   `WindowsPlatform::with_config` and `MacOSPlatform::with_config`. No host read the resize
-  debounce or the fullscreen monitor; `WindowsPlatform::new()` and `MacOSPlatform::new()` open
-  windows with F11 as the fullscreen key, as the default configuration did.
+  debounce or the fullscreen monitor, and no host has a fullscreen key: an application that
+  wants one calls `WindowHandle::set_mode(WindowMode::Fullscreen)` from its own key handling.
 - **`flui-native`**: `FakeAccessibility::{published, request_action}`, which named AccessKit types,
   and the root names nothing outside the crate used: `HeadlessSystemChrome`, `IOSExecutor` and
   `FakeHaptics`, which is `flui_platform::haptics::FakeHaptics`.

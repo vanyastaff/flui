@@ -6931,6 +6931,43 @@ GPU-память простаивающего или невидимого окн
   текстом: без отбора — `Refused(DuplicateFormat)`); `a_request_from_a_press_the_window_does_not_hold_is_refused`
   в `headless_drag_contracts` (без проверки — сессия закончившегося нажатия принята).
 
+- [ ] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
+  `e166cabd3` запуском на Windows: F11, которое обработчик пропустил, переводило окно в
+  полноэкранный режим; `SetMode(Maximized)` полноэкранного окна, развёрнутого до этого,
+  публиковало `[Fullscreen, Normal, Normal, Maximized]`. Переключатель, терявший «развёрнуто»,
+  достижим был только через F11: без клавиши у него нет вызывающего. Построено: клавиши у
+  хоста нет — удалены `WindowConfiguration` (`window/config.rs`), шаг `KeyLetThrough`,
+  сообщение `TOGGLE_FULLSCREEN` и `toggle_fullscreen`; полноэкранность — только `SetMode`.
+  Вместо переключателя — `enter_fullscreen_for_hwnd` и `leave_fullscreen_for_hwnd(FullscreenExit)`:
+  у окна без рамки нет своего выхода, и каждый выход называет, куда идёт. `Normal` возвращает
+  стиль и прямоугольник до полноэкранного режима, `Maximized` разворачивает одним
+  `SetWindowPlacement` с этим прямоугольником как нормальным, не показывая его по пути; каждый
+  выход — один снимок, без системной команды, так что ни один отчёт круга не говорит
+  `UserPlacing` и размещение не пишется как пользовательское (ADR-0343 §2). Явный
+  `SetMode(Normal)` по-прежнему кончает в `Normal` (`fullscreen_entered_from_maximized_returns_to_normal`).
+  «Режим помнит, во что вернуться» не построено как отдельное поле: без клавиши хоста
+  безымянного выхода не осталось ни у одного хоста, и запоминать нечего; решение и причина — в
+  `## Review` PR. Тесты, в скобках результат на `main`:
+  `a_key_the_application_lets_through_leaves_the_mode_alone` (окно стало `Fullscreen`),
+  `a_fullscreen_window_maximized_again_never_reads_normal` (два снимка `Normal` между
+  `Fullscreen` и `Maximized`) — таблица `native_window_commands`;
+  `leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless, таблица
+  `window_state_contract`) держит то же правило у headless, где оно уже выполнялось.
+  Доведение после чтения: свёрнутое полноэкранное окно выходит прямо из свёрнутого одним
+  `SetWindowPlacement` под удержанием публикации (`a_minimized_fullscreen_window_leaves_in_one_step`;
+  с откатом — `[Minimized, Minimized, Fullscreen, Maximized]`); прямоугольник возврата, чей
+  монитор отключён, вписывается в рабочую область ближайшего (`mode::fit_within`, модельная
+  таблица `a_rectangle_comes_back_inside_a_monitor_that_is_there`: у хоста Windows нет двойника
+  дисплеев); документы говорят правило как есть — ни один хост не переключает полноэкранный
+  режим своим решением, смена системой (зелёная кнопка macOS, Escape браузера) сообщается и не
+  оспаривается; устаревшие фрагменты changelog о F11 переписаны.
+  Остаётся строимое, поэтому строка открыта: X11, Wayland и AppKit исполняют выход несколькими
+  ответами системы окон и публикуют режим между (openbox на Xvfb в WSL: `Normal` трижды до
+  `Maximized`, и при развороте до снятия полноэкранного). Нужно: хост держит режим снимка, пока
+  запрошенная им смена режима в пути, с ограничением по времени и ходом владельца по его
+  истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
+  AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

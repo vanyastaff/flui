@@ -297,7 +297,7 @@ trait depends on `flui-platform` instead.
     (`window::windows::proc::WindowProc`: creation, close and destruction,
     size, position and their limits, DPI, focus, paint, the cursor, the
     title, the modal size-move and menu loops with their deadline timer, the
-    setting changes, the frame and fullscreen requests posted to it and the
+    setting changes, the frame, close and delivery requests posted to it and the
     keyboard's system-menu command), the input
     (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
     characters and the keyboard layout, and the precision touchpad's hit
@@ -332,10 +332,10 @@ trait depends on `flui-platform` instead.
     pen in range), read-only, through the class on their thread
     (`owner::windows::window_inputs`). The text services' state of a window
     is theirs too; the window hands out its text-store host through the
-    class's text (`WindowTexts`, `owner::windows::window_texts`). A keydown
-    the application lets through is a step, which the window answers with its
-    own keys, the fullscreen hotkey; the session's lock is a step the window
-    answers by hiding. Tests:
+    class's text (`WindowTexts`, `owner::windows::window_texts`). The
+    window has no keys of its own: a keydown the application lets through
+    reaches only the default procedure. The session's lock is a step the
+    window answers by hiding. Tests:
     `a_window_message_reaches_the_hooks_in_order`,
     `a_window_a_hook_destroyed_is_announced_to_no_later_hook`,
     `a_second_host_is_refused_the_window_class` (two instances of the owner's
@@ -744,9 +744,7 @@ trait depends on `flui-platform` instead.
   `flui_platform::MAX_SURFACE_EXTENT`; and `window::state::device_limits` for size
   limits, a minimum up and a maximum down and never below it, which Win32 and X11 both
   call; every host that hands its window system an extent or draws a surface of
-  its own reads them), the desktop window configuration
-  (`window::config`, crate-private: its windows open with F11 as the
-  fullscreen key) and the acknowledgement
+  its own reads them) and the acknowledgement
   a host waits for before it publishes a window it attached
   (`window::installation`, public at the crate root as `WindowInstallation`,
   `PendingWindowInstallation`, `InstallationCancelled`).
@@ -2674,7 +2672,7 @@ Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
 another thread raised for a window, a close (granted behind a running method,
 commanded from another thread, or asked by a wrapper dropped off its thread),
-the fullscreen hotkey's toggle, the exit policy's request and the low-memory
+the exit policy's request and the low-memory
 report. Each goes through `OwnerQueue::post`, and names its window by identity
 in its parameters, which the procedure checks. A post to a handle that is no
 window of the owner thread is refused (`PostRefusal`). A post the thread's
@@ -5739,7 +5737,30 @@ window's current DPI with the frame measured for the style the window has
 **Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
 before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
 `WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back
-fullscreen. `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
+fullscreen.
+
+**No host switches fullscreen by its own decision.** No host has a key of its own for it: a key for
+fullscreen is the application's. A change the system makes (the macOS green button and its
+full-screen space, the browser ending fullscreen on Escape, a window manager or a compositor) is
+reported in the snapshot and not fought. A borderless Win32 window has no exit of its own, so every
+exit is a `SetMode` that names where it goes (`proc::FullscreenExit`), from fullscreen or from
+minimized out of fullscreen: `Normal` takes the style and the rectangle it had before fullscreen
+back, `Maximized` maximizes it with that rectangle as the one it is restored to. That rectangle is
+fitted first to the work area of the nearest monitor when the one it was on is gone
+(`mode::fit_within`). A fullscreen window leaving for `Normal` is moved there with one
+`SetWindowPos`; one leaving for `Maximized`, or out of minimized, is placed with one
+`SetWindowPlacement`, which never shows the normal rectangle on the way to maximized nor fullscreen
+on the way out of minimized. Each publishes one snapshot, in
+the mode it ends in, and sends no system command, so no report of the round trip says the user
+placed the window (ADR-0343 §2) and no placement is written as the user's. Tests:
+`a_key_the_application_lets_through_leaves_the_mode_alone`,
+`a_fullscreen_window_maximized_again_never_reads_normal`,
+`a_minimized_fullscreen_window_leaves_in_one_step` (Win32 window commands table),
+`a_rectangle_comes_back_inside_a_monitor_that_is_there` (the fitting rule),
+`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table). X11,
+Wayland and AppKit still publish a mode in between ([gaps](../../docs/gaps.md#leaving-fullscreen-publishes-a-mode-in-between-on-appkit-x11-and-wayland)).
+
+`WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.
 
 **System events** arrive on the hidden top-level receiver (`owner/windows/broadcast.rs`), which a
