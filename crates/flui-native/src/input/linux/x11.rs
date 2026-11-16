@@ -549,9 +549,9 @@ pub mod decode {
         /// is described by `query`, which asks the server for that one
         /// device; `None` when it lists no enabled pointer by that id.
         ///
-        /// A change asks at most [`MAX_DEVICES`] times however many devices
+        /// A change asks at most `MAX_DEVICES` (128) times however many devices
         /// it names, and never for a device it could not know: once
-        /// [`MAX_DEVICES`] are known, only those are asked about again.
+        /// `MAX_DEVICES` are known, only those are asked about again.
         pub fn hierarchy(
             &mut self,
             change: &[HierarchyInfo],
