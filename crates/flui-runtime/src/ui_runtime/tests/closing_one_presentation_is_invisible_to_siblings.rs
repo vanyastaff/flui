@@ -28,7 +28,8 @@ fn close_painted_scene(
         let presentation = ui_runtime.presentations.get(id).expect("resident producer");
         let dpr = presentation
             .pipeline()
-            .with(flui_rendering::PipelineOwner::device_pixel_ratio);
+            .with(flui_rendering::PipelineOwner::device_pixel_ratio)
+            .get();
         let constraints = BoxConstraints::tight(flui_foundation::geometry::Size::new(
             f64::from(width) / dpr,
             f64::from(height) / dpr,

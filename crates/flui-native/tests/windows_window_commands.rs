@@ -27,8 +27,8 @@ use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 
 use crate::Opened;
 use flui_platform::{
-    ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
-    WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
+    ApplyError, DispatchEventResult, MAX_SURFACE_EXTENT, PlatformFailure, PlatformWindow,
+    SizeConstraints, WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
@@ -1213,8 +1213,6 @@ fn geometry_win32_cannot_hold_is_refused() {
     let window = open(&platform, options());
     let before = window.state();
     for command in [
-        WindowCommand::SetSize(Size::new(1.0e10, 100.0)),
-        WindowCommand::SetSize(Size::new(100.0, 1.0e10)),
         WindowCommand::SetPosition(Point::new(1.0e12, 0.0)),
         WindowCommand::SetPosition(Point::new(0.0, -1.0e12)),
     ] {
@@ -1233,6 +1231,49 @@ fn geometry_win32_cannot_hold_is_refused() {
     let after = window.state();
     assert_eq!(after.content_size, before.content_size);
     assert_eq!(after.outer, before.outer);
+}
+
+/// A size past the largest surface a renderer draws is admitted and applied,
+/// where it used to be refused as past Win32's range: the window takes a size no
+/// larger than the largest surface. The clamp itself is proven by the pure
+/// conversion's table and the headless host's snapshot
+/// (`a_size_past_the_largest_surface_is_held_at_it`); Win32 holds a window
+/// within its own track size as well, so this run cannot tell the two apart.
+fn a_size_past_the_largest_surface_is_admitted() {
+    let platform = platform();
+    let window = open(&platform, options());
+    for (command, wide) in [
+        (WindowCommand::SetSize(Size::new(1.0e10, 100.0)), true),
+        (WindowCommand::SetSize(Size::new(100.0, 1.0e10)), false),
+    ] {
+        window
+            .admit_and_apply(command.clone())
+            .unwrap_or_else(|refusal| panic!("{command:?} refused: {refusal:?}"));
+        settle();
+        let state = window.state();
+        let physical = state.metrics.expect("a drawable window").physical();
+        let (long, short, device) = if wide {
+            (
+                state.content_size.width(),
+                state.content_size.height(),
+                physical.width,
+            )
+        } else {
+            (
+                state.content_size.height(),
+                state.content_size.width(),
+                physical.height,
+            )
+        };
+        // Win32 holds a window within its own track size as well, so the
+        // side is at most the largest surface, and the other side at most
+        // what Win32 lets a window be.
+        assert!(
+            u32::try_from(device).is_ok_and(|device| device <= MAX_SURFACE_EXTENT),
+            "{command:?}: {long} logical pixels, {device} device pixels"
+        );
+        assert!(long > short, "{command:?}: {long} grew past {short}");
+    }
 }
 
 fn press_f11(window: &Rc<dyn HostWindow>) {
@@ -1530,6 +1571,38 @@ fn a_run_of_zero_dpi_messages_is_reported_once() {
         send(&window, WM_DPICHANGED, 0, 0);
     });
     assert_eq!(after.load(Ordering::SeqCst), 1, "a new run is reported");
+}
+
+/// A `WM_DPICHANGED` whose DPI is no ratio a screen can have (1 and 4000,
+/// either side of `DevicePixelRatio`'s range), which any process can send, is
+/// refused by the hosts' one scale rule: the window keeps its scale, reports
+/// the run once, and takes the next DPI that is one.
+fn a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let scale = |window: &Rc<dyn HostWindow>| {
+        window
+            .state()
+            .metrics
+            .expect("a drawable window")
+            .scale()
+            .get()
+    };
+    let before = scale(&window);
+    let warnings = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(Warnings(Arc::clone(&warnings)), || {
+        for dpi in [1, 4000, 1, 4000] {
+            dpi_changed(&window, dpi, rect(&window));
+        }
+    });
+    assert_eq!(warnings.load(Ordering::SeqCst), 1, "one run, one warning");
+    assert_eq!(scale(&window), before, "the window keeps its scale");
+    window.request_redraw();
+    settle();
+    dpi_changed(&window, 144, rect(&window));
+    settle();
+    assert_eq!(scale(&window), 1.5, "and takes the next DPI that is one");
 }
 
 /// Activation is a fact of its own: a window whose keyboard focus went
@@ -2172,6 +2245,10 @@ fn native_window_commands() {
             geometry_win32_cannot_hold_is_refused,
         ),
         (
+            "a_size_past_the_largest_surface_is_admitted",
+            a_size_past_the_largest_surface_is_admitted,
+        ),
+        (
             "the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through",
             the_fullscreen_hotkey_waits_for_the_app_to_let_its_key_through,
         ),
@@ -2195,6 +2272,10 @@ fn native_window_commands() {
         (
             "a_dpi_change_announces_one_whole_snapshot",
             a_dpi_change_announces_one_whole_snapshot,
+        ),
+        (
+            "a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale",
+            a_dpi_no_screen_has_is_refused_and_the_window_keeps_its_scale,
         ),
         (
             "a_run_of_zero_dpi_messages_is_reported_once",

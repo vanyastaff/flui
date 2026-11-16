@@ -50,14 +50,16 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{DevicePixelRatio, Size};
+use flui_platform::MAX_SURFACE_EXTENT;
 use flui_platform::input_regions::ResizeEdge;
 
 use super::configure::{TiledEdges, ToplevelStates, WmCapabilities};
-use super::scale::{BufferScale, MAX_CONTENT_EXTENT};
+use super::scale::BufferScale;
 use crate::input::regions::ProjectedInputRegions;
 use crate::input::regions::presses::{ChromePress, ChromePresses, PressButton, device_point};
 use crate::owner::linux::wayland::user_input::MAX_SEATS;
+use crate::window::state::device_extent;
 
 /// The title bar's height, in logical pixels.
 pub(crate) const HEADER: f64 = 37.0;
@@ -77,14 +79,8 @@ const RADIUS: f64 = 8.0;
 /// The longest a second press on the title bar may follow the first and
 /// still count as a double press, in milliseconds: GTK's default.
 pub(crate) const DOUBLE_CLICK: u32 = 400;
-/// The widest or tallest a frame surface is drawn, in device pixels: the
-/// widest a window's content is ([`MAX_CONTENT_EXTENT`]), so every window
-/// that publishes metrics has its title bar. Past it a compositor's
-/// configure asks for more memory than any screen shows, and the frame is
-/// not drawn.
-pub(crate) const MAX_EXTENT: u32 = MAX_CONTENT_EXTENT.unsigned_abs();
 /// The most device pixels a frame surface is drawn with: a title bar
-/// [`MAX_EXTENT`] wide and [`HEADER`] tall at [`BufferScale::MAX`]. The two
+/// [`MAX_SURFACE_EXTENT`] wide and [`HEADER`] tall at [`BufferScale::MAX`]. The two
 /// sides' caps alone leave room for a square of a gibibyte, which a narrow
 /// window at a scale in the hundreds would be.
 #[expect(
@@ -92,7 +88,7 @@ pub(crate) const MAX_EXTENT: u32 = MAX_CONTENT_EXTENT.unsigned_abs();
     clippy::cast_sign_loss,
     reason = "the header's height at the largest scale is a whole number of pixels"
 )]
-pub(crate) const MAX_PIXELS: u32 = MAX_EXTENT * (HEADER * BufferScale::MAX) as u32;
+pub(crate) const MAX_PIXELS: u32 = MAX_SURFACE_EXTENT * (HEADER * BufferScale::MAX) as u32;
 /// The buffers a frame surface keeps: the one the compositor shows, the one
 /// its next commit carries, and one to draw into meanwhile. A compositor
 /// that releases none has the oldest destroyed for the next.
@@ -287,6 +283,11 @@ pub(crate) struct Frame {
     /// draws one of its own (`WindowFrame::AppTitleBar`), which keeps the
     /// margins alone.
     pub(crate) title_bar: bool,
+    /// Whether a viewport stretches the frame's surfaces: where none does,
+    /// a surface is drawn at scale one and no wider than
+    /// [`MAX_SURFACE_EXTENT`], so the title bar's controls are laid out
+    /// within that.
+    pub(crate) viewported: bool,
 }
 
 impl Frame {
@@ -396,7 +397,7 @@ impl Frame {
     pub(crate) fn button_rect(&self, button: Button) -> Option<Rect> {
         let index = self.buttons().position(|shown| shown == button)?;
         let steps = f64::from(u32::try_from(index).ok()?);
-        let x = self.content.width - (BUTTON_GAP + BUTTON) * (steps + 1.0);
+        let x = self.drawn_width() - (BUTTON_GAP + BUTTON) * (steps + 1.0);
         Some(Rect {
             x,
             y: (HEADER - BUTTON) / 2.0,
@@ -414,7 +415,20 @@ impl Frame {
 
     /// The widest the title is drawn, in logical pixels.
     pub(crate) fn title_room(&self) -> f64 {
-        (self.content.width - 2.0 * self.buttons_extent()).max(0.0)
+        (self.drawn_width() - 2.0 * self.buttons_extent()).max(0.0)
+    }
+
+    /// How much of the title bar's width is drawn, in logical pixels: all
+    /// of it where a viewport stretches it (its scale is fitted so that it
+    /// fits the largest surface), else, at scale one, no more than the
+    /// largest surface. The buttons and the title are laid out within it,
+    /// so a press is never routed to a control that is not drawn.
+    pub(crate) fn drawn_width(&self) -> f64 {
+        if self.viewported {
+            self.content.width
+        } else {
+            self.content.width.min(f64::from(MAX_SURFACE_EXTENT))
+        }
     }
 
     /// What lies at (`x`, `y`) on `piece`, in that piece's own logical
@@ -629,7 +643,7 @@ pub(crate) struct ContentChrome {
     pub(crate) projected: ProjectedInputRegions,
     /// The scale the regions were projected at, which a press is measured
     /// at too.
-    pub(crate) scale: f64,
+    pub(crate) scale: DevicePixelRatio,
 }
 
 /// One seat's pointer on the window's own surface, where the application
@@ -654,9 +668,9 @@ impl PointerOnContent {
         if self.held != Some(BTN_LEFT) {
             return None;
         }
-        let point = device_point(x * chrome.scale, y * chrome.scale)?;
+        let point = device_point(chrome.scale.to_device(x), chrome.scale.to_device(y))?;
         self.presses
-            .moved(point, chrome.scale)
+            .moved(point, chrome.scale.get())
             .then_some(Action::Move)
     }
 
@@ -693,7 +707,7 @@ impl PointerOnContent {
         let Some((x, y)) = self.at else {
             return ContentAnswer::App;
         };
-        let Some(point) = device_point(x * chrome.scale, y * chrome.scale) else {
+        let Some(point) = device_point(chrome.scale.to_device(x), chrome.scale.to_device(y)) else {
             return ContentAnswer::App;
         };
         let answer = self.presses.press(
@@ -702,7 +716,7 @@ impl PointerOnContent {
             button,
             None,
             at,
-            chrome.scale,
+            chrome.scale.get(),
         );
         let action = match answer {
             ChromePress::App => return ContentAnswer::App,
@@ -1143,10 +1157,10 @@ pub(crate) struct Pixels {
 
 impl Pixels {
     /// A transparent image of `width` by `height` device pixels; `None` for
-    /// an empty one, one with a side past [`MAX_EXTENT`], or one of more
+    /// an empty one, one with a side past [`MAX_SURFACE_EXTENT`], or one of more
     /// than [`MAX_PIXELS`].
     pub(crate) fn try_new(width: u32, height: u32) -> Option<Self> {
-        if width == 0 || height == 0 || width > MAX_EXTENT || height > MAX_EXTENT {
+        if width == 0 || height == 0 || width > MAX_SURFACE_EXTENT || height > MAX_SURFACE_EXTENT {
             return None;
         }
         if u64::from(width) * u64::from(height) > u64::from(MAX_PIXELS) {
@@ -1246,17 +1260,17 @@ impl Pixels {
 }
 
 /// A device coordinate as a pixel index: negative and non-finite values are
-/// zero, and the largest is [`MAX_EXTENT`].
+/// zero, and the largest is [`MAX_SURFACE_EXTENT`].
 fn channel_index(value: f64) -> u32 {
     if !value.is_finite() || value <= 0.0 {
         return 0;
     }
-    let value = value.min(f64::from(MAX_EXTENT));
-    // Clamped to 0..=MAX_EXTENT and whole: the cast is exact.
+    let value = value.min(f64::from(MAX_SURFACE_EXTENT));
+    // Clamped to 0..=MAX_SURFACE_EXTENT and whole: the cast is exact.
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "clamped to 0..=MAX_EXTENT and whole above"
+        reason = "clamped to 0..=MAX_SURFACE_EXTENT and whole above"
     )]
     let value = value as u32;
     value
@@ -1281,14 +1295,6 @@ fn segment_distance(px: f64, py: f64, a: (f64, f64), b: (f64, f64)) -> f64 {
     (px - cx).hypot(py - cy)
 }
 
-/// A device extent for `logical` at `scale`: rounded, at least one pixel;
-/// `None` for one that is no size or past [`MAX_EXTENT`].
-pub(crate) fn device_extent(logical: f64, scale: f64) -> Option<u32> {
-    let device = (logical * scale).round();
-    (device.is_finite() && device >= 1.0 && device <= f64::from(MAX_EXTENT))
-        .then(|| channel_index(device))
-}
-
 /// What a title bar is drawn from, beside its frame: the look, the button
 /// hovered and the one held, and the title.
 #[derive(Debug, Clone, Copy)]
@@ -1302,7 +1308,7 @@ pub(crate) struct HeaderLook<'a> {
 /// The title bar of `frame` at `scale`: its background (rounded at the top
 /// corners of a floating window), a line along its foot, its buttons with
 /// their icons, and the title centred between them. `None` where the bar is
-/// not shown or its extent is no size, past [`MAX_EXTENT`] on a side or past
+/// not shown, its extent is no size, or its pixels are past
 /// [`MAX_PIXELS`] in all.
 pub(crate) fn paint_header(
     frame: &Frame,
@@ -1310,10 +1316,10 @@ pub(crate) fn paint_header(
     look: HeaderLook<'_>,
 ) -> Option<Pixels> {
     let rect = frame.rect(Piece::Header)?;
-    let scale = scale.get();
+    let (ratio, scale) = (scale.ratio(), scale.get());
     let mut pixels = Pixels::try_new(
-        device_extent(rect.width, scale)?,
-        device_extent(rect.height, scale)?,
+        device_extent(rect.width, ratio)?,
+        device_extent(rect.height, ratio)?,
     )?;
     let colors = look.look;
     pixels.fill(colors.background());
@@ -1356,7 +1362,7 @@ pub(crate) fn paint_header(
         );
     }
     if let Some(title) = look.title {
-        let room = device_extent(frame.title_room(), scale).unwrap_or(0);
+        let room = device_extent(frame.title_room(), ratio).unwrap_or(0);
         let shown = title.width.min(room);
         if shown > 0 {
             let left = (pixels.width.saturating_sub(shown)) / 2;
@@ -1471,14 +1477,14 @@ fn square(centre: (f64, f64), half: f64) -> Vec<((f64, f64), (f64, f64))> {
 /// The size of the image a margin at `rect` is drawn with. With a viewport
 /// it is one transparent pixel the viewport stretches over the margin. With
 /// none the buffer is the surface's size at scale one, held within
-/// [`MAX_EXTENT`]: a margin along a side of a content at the largest extent
+/// [`MAX_SURFACE_EXTENT`]: a margin along a side of a content at the largest extent
 /// reaches past it by the other margins, and is drawn that much shorter
 /// rather than not at all. `None` for a margin that is no size.
 pub(crate) fn margin_size(rect: Rect, viewported: bool) -> Option<(u32, u32)> {
     if viewported {
         return Some((1, 1));
     }
-    let within = |logical: f64| device_extent(logical.min(f64::from(MAX_EXTENT)), 1.0);
+    let within = |logical: f64| device_extent(logical, DevicePixelRatio::ONE);
     Some((within(rect.width)?, within(rect.height)?))
 }
 
@@ -1499,7 +1505,7 @@ pub(crate) mod title {
     use flui_painting::typography::{FontWeight, TextAlign, TextDirection, TextStyle};
     use flui_painting::{GlyphContent, GlyphRasterizer};
 
-    use super::{BufferScale, MAX_EXTENT, TITLE_SIZE, TitleMask, device_extent};
+    use super::{BufferScale, MAX_SURFACE_EXTENT, TITLE_SIZE, TitleMask, device_extent};
 
     /// What a title is shaped and rasterized with, kept between titles.
     pub(crate) struct TitleText {
@@ -1540,7 +1546,7 @@ pub(crate) mod title {
             if text.is_empty() || !(room.is_finite() && room > 0.0) {
                 return None;
             }
-            let scale = scale.get();
+            let (ratio, scale) = (scale.ratio(), scale.get());
             let style = TextStyle::default()
                 .with_font_size(TITLE_SIZE)
                 .with_font_weight(FontWeight::W600);
@@ -1567,8 +1573,8 @@ pub(crate) mod title {
                 })
                 .ok()?;
             let metrics = layout.metrics();
-            let width = device_extent(metrics.max_line_width.min(room), scale)?;
-            let height = device_extent(metrics.height, scale)?;
+            let width = device_extent(metrics.max_line_width.min(room), ratio)?;
+            let height = device_extent(metrics.height, ratio)?;
             let bytes = usize::try_from(u64::from(width) * u64::from(height)).ok()?;
             let mut coverage = vec![0_u8; bytes];
             let shaped = layout.to_shaped(None);
@@ -1607,7 +1613,7 @@ pub(crate) mod title {
                             };
                             #[expect(
                                 clippy::cast_sign_loss,
-                                reason = "x and y are checked within 0..MAX_EXTENT above"
+                                reason = "x and y are checked within 0..MAX_SURFACE_EXTENT above"
                             )]
                             let at = (y as u64) * u64::from(width) + (x as u64);
                             if let Some(cell) =
@@ -1619,7 +1625,7 @@ pub(crate) mod title {
                     }
                 }
             }
-            debug_assert!(width <= MAX_EXTENT && height <= MAX_EXTENT);
+            debug_assert!(width <= MAX_SURFACE_EXTENT && height <= MAX_SURFACE_EXTENT);
             Some(TitleMask {
                 width,
                 height,
@@ -1655,6 +1661,7 @@ pub(crate) mod surfaces {
     use std::time::Instant;
 
     use cursor_icon::CursorIcon;
+    use flui_foundation::geometry::DevicePixelRatio;
     use flui_painting::text_layout::FontCollection;
     use flui_platform::input_regions::InputRegion;
     use wayland_client::protocol::wl_buffer::{self, WlBuffer};
@@ -1758,14 +1765,12 @@ pub(crate) mod surfaces {
         /// (window-logical) at `scale`, which its presses are answered from.
         /// Projected with nothing locked: a dropped region is reported
         /// through `tracing`, whose subscriber is the application's code.
-        pub(crate) fn set_regions(&self, regions: &[InputRegion], scale: f64) {
+        pub(crate) fn set_regions(&self, regions: &[InputRegion], scale: DevicePixelRatio) {
             let mut projected = std::mem::take(&mut self.0.borrow_mut().chrome.projected);
             let _changed = projected.update(regions, scale, None);
             let mut pointing = self.0.borrow_mut();
             pointing.chrome.projected = projected;
-            if scale.is_finite() && scale > 0.0 {
-                pointing.chrome.scale = scale;
-            }
+            pointing.chrome.scale = scale;
         }
 
         /// The action the pointer asked for since the last look.
@@ -2137,7 +2142,7 @@ pub(crate) mod surfaces {
         }
 
         /// Draw piece `index` as `shown` and commit it; `None` where it
-        /// could not be drawn (no size, past the largest extent or area, no
+        /// could not be drawn (no size, past the largest area, no
         /// shared memory).
         fn draw(&mut self, index: usize, shown: &Shown) -> Option<()> {
             let rect = shown.rect;

@@ -267,7 +267,7 @@ impl PendingWindowState {
         if let Some(metrics) = self.metrics {
             first.contain(|| {
                 resize_surface(metrics);
-                runtime.set_pipeline_device_pixel_ratio_for(id, metrics.scale().get());
+                runtime.set_pipeline_device_pixel_ratio_for(id, metrics.scale());
             });
             if first.is_held() {
                 // A merged batch still owns independent appearance/safe-area

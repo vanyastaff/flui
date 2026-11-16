@@ -91,9 +91,9 @@ pub(crate) mod configure {
     #![forbid(unsafe_code)]
 
     use flui_foundation::geometry::Size;
-    use flui_platform::{
-        CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability, WindowMode,
-    };
+    use flui_platform::{CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability};
+
+    use crate::window::state::ModeFlags;
 
     /// `xdg_toplevel.state` values.
     const MAXIMIZED: u32 = 1;
@@ -200,15 +200,14 @@ pub(crate) mod configure {
             self.tiled.any() && !self.maximized && !self.fullscreen
         }
 
-        /// The window's mode. A Wayland client never hears that its window
-        /// was minimized, so the mode is never `Minimized`.
-        pub(crate) const fn mode(self) -> WindowMode {
-            if self.fullscreen {
-                WindowMode::Fullscreen
-            } else if self.maximized {
-                WindowMode::Maximized
-            } else {
-                WindowMode::Normal
+        /// The facts the window's mode is decided from
+        /// ([`mode_of`](crate::window::state::mode_of)). A Wayland client
+        /// never hears that its window was minimized, so it never says so.
+        pub(crate) const fn mode_flags(self) -> ModeFlags {
+            ModeFlags {
+                minimized: false,
+                fullscreen: self.fullscreen,
+                maximized: self.maximized,
             }
         }
     }
@@ -467,9 +466,10 @@ pub(crate) mod configure {
 
     #[cfg(test)]
     mod tests {
-        use flui_platform::{WindowCommand, WindowFrame};
+        use flui_platform::{WindowCommand, WindowFrame, WindowMode};
 
         use super::*;
+        use crate::window::state::mode_of;
 
         /// Limits with these bounds.
         fn bounded(min: Option<Size<f64>>, max: Option<Size<f64>>) -> SizeConstraints {
@@ -491,12 +491,12 @@ pub(crate) mod configure {
             let states = ToplevelStates::decode(&array(&[ACTIVATED, MAXIMIZED, 77]));
             assert!(states.activated && states.maximized);
             assert!(!states.fullscreen && !states.tiled.any() && !states.suspended);
-            assert_eq!(states.mode(), WindowMode::Maximized);
+            assert_eq!(mode_of(states.mode_flags()), WindowMode::Maximized);
             let both = ToplevelStates::decode(&array(&[MAXIMIZED, FULLSCREEN]));
-            assert_eq!(both.mode(), WindowMode::Fullscreen);
+            assert_eq!(mode_of(both.mode_flags()), WindowMode::Fullscreen);
             let tiled = ToplevelStates::decode(&array(&[TILED_BOTTOM, SUSPENDED]));
             assert!(tiled.tiled.any() && tiled.suspended && tiled.sized_by_compositor());
-            assert_eq!(tiled.mode(), WindowMode::Normal);
+            assert_eq!(mode_of(tiled.mode_flags()), WindowMode::Normal);
             // Each edge is its own: the frame leaves the tiled ones alone.
             let edges = ToplevelStates::decode(&array(&[TILED_LEFT, TILED_RIGHT, TILED_TOP]));
             assert_eq!(
@@ -1149,7 +1149,7 @@ mod toplevel {
     use std::sync::{Arc, Weak};
 
     use cursor_icon::CursorIcon;
-    use flui_foundation::geometry::Size;
+    use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
         AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
@@ -1198,7 +1198,7 @@ mod toplevel {
     use super::foreign::PortalParent;
     use super::frame::{Pacing, Sight, first_live, waiting_on_callback};
     use super::presented;
-    use super::scale::{self, BufferScale, ScaleTold, buffer_scale};
+    use super::scale::{self, BufferScale, ScaleTold, ToldScale, buffer_scale};
     use crate::executor::NativeExecutor;
     use crate::host::{self, WindowFacets, WindowPositions};
     use crate::host_window::{CoreHostWindow, HostWindow, OwnerThreadToken};
@@ -1270,10 +1270,13 @@ mod toplevel {
         close_requested: bool,
         /// The outputs the surface is on, in the order entered.
         outputs: Vec<OutputName>,
-        /// The buffer scale the compositor prefers for the surface.
-        preferred_scale: Option<i32>,
-        /// The fractional scale the compositor prefers, as a numerator over 120.
-        fractional_scale: Option<u32>,
+        /// The buffer scale the compositor prefers for the surface: the last
+        /// one that was a ratio a screen can have (the hosts' one rule, at the
+        /// event; a refused one leaves it).
+        preferred_scale: ToldScale<i32>,
+        /// The fractional scale the compositor prefers, as a numerator over
+        /// 120, held the same way.
+        fractional_scale: ToldScale<u32>,
         /// Who draws the frame, as the compositor last said.
         frame: Option<FrameDrawer>,
         /// The compositor answered the window's last frame request since the
@@ -1432,7 +1435,12 @@ mod toplevel {
         /// The frame the window draws itself with `states` and its content
         /// now; `None` where it draws none. Around a title bar of the
         /// application's it is the margins alone.
-        fn own_frame(&self, decoration: Decoration, states: ToplevelStates) -> Option<Frame> {
+        fn own_frame(
+            &self,
+            decoration: Decoration,
+            states: ToplevelStates,
+            viewported: bool,
+        ) -> Option<Frame> {
             let app_margins = decoration.app_margins(self.app_title_bar.is_some());
             (app_margins || decoration.drawn() == Drawn::Client).then_some(Frame {
                 content: self.sizing.content(),
@@ -1440,6 +1448,7 @@ mod toplevel {
                 resizable: self.resizable,
                 offers: Offers::from(self.told.wm),
                 title_bar: !app_margins,
+                viewported,
             })
         }
 
@@ -1546,8 +1555,8 @@ mod toplevel {
             let scale = buffer_scale(
                 self.viewported,
                 ScaleTold {
-                    fractional: applied.told.fractional_scale,
-                    preferred: applied.told.preferred_scale,
+                    fractional: applied.told.fractional_scale.ratio(),
+                    preferred: applied.told.preferred_scale.ratio(),
                     output: output.map(|output| output.scale),
                 },
                 // The content is the one surface drawn at the scale: the
@@ -1570,7 +1579,7 @@ mod toplevel {
             // The outer size is the window's geometry: the content, and the
             // title bar of a frame it draws itself.
             let header = applied
-                .own_frame(decoration, states)
+                .own_frame(decoration, states, self.viewported)
                 .map_or(0.0, |frame| frame.header());
             let outer = Size::new(content.width, content.height + header);
             let geometry = WindowGeometry::try_new(None, outer).and_then(|outer| {
@@ -1582,7 +1591,7 @@ mod toplevel {
             });
             crate::window::state::Sample::read(geometry, |state| {
                 let state = state
-                    .with_mode(states.mode())
+                    .with_mode(crate::window::state::mode_of(states.mode_flags()))
                     // A toplevel has no hidden state of its own: it is shown
                     // until it closes.
                     .with_visible(!self.closed)
@@ -1754,6 +1763,7 @@ mod toplevel {
                             fullscreen: options.mode == WindowMode::Fullscreen,
                             ..ToplevelStates::default()
                         },
+                        protocol.viewporter.is_some(),
                     )
                     .map_or(0.0, |frame| frame.header()),
                 ..applied
@@ -1931,7 +1941,11 @@ mod toplevel {
             }
             let (frame, scale, title, resizable) = {
                 let applied = self.applied.borrow();
-                let frame = applied.own_frame(self.decoration(&applied), applied.sizing.states());
+                let frame = applied.own_frame(
+                    self.decoration(&applied),
+                    applied.sizing.states(),
+                    self.viewported,
+                );
                 (
                     frame,
                     self.buffer_scale(&applied),
@@ -2091,7 +2105,7 @@ mod toplevel {
                     // The configure sizes the window geometry: a title bar
                     // the window draws itself comes off the content's height.
                     let (width, height) = applied
-                        .own_frame(decoration, configure.states)
+                        .own_frame(decoration, configure.states, self.viewported)
                         .map_or((configure.width, configure.height), |frame| {
                             frame.content_of(configure.width, configure.height)
                         });
@@ -2710,11 +2724,10 @@ mod toplevel {
             if self.closed.get() {
                 return Err(Unsupported::new(UnsupportedReason::NoWindow));
             }
-            let scale = self
-                .state
-                .published()
-                .metrics
-                .map_or(1.0, |metrics| metrics.scale().get());
+            let scale = self.state.published().metrics.map_or(
+                DevicePixelRatio::ONE,
+                flui_foundation::geometry::WindowMetrics::scale,
+            );
             self.frame_record.set_regions(regions, scale);
             Ok(())
         }
@@ -2935,7 +2948,11 @@ mod toplevel {
         /// where it offers none, a window draws its own title bar above its
         /// content. Where it offers frames, its answer comes with the
         /// window, so the inset is the frame it is asked for: none.
-        fn frame_inset(owner: &WaylandLoop, _: &WaylandWindows, _: f64) -> Size<f64> {
+        fn frame_inset(
+            owner: &WaylandLoop,
+            _: &WaylandWindows,
+            _: flui_foundation::geometry::DevicePixelRatio,
+        ) -> Size<f64> {
             if !owner.offers_decorations() && owner.offers_frame_surfaces() {
                 Size::new(0.0, client_frame::HEADER)
             } else {
@@ -2965,6 +2982,7 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             let mut told = record.protocol.lock();
+            let mut refused = None;
             match event {
                 wl_surface::Event::Enter { output } => {
                     if let Some(name) = output.data::<OutputName>()
@@ -2979,9 +2997,20 @@ mod toplevel {
                     }
                 }
                 wl_surface::Event::PreferredBufferScale { factor } => {
-                    told.preferred_scale = Some(factor);
+                    // By the hosts' one rule, as the fractional scale is: a
+                    // refused one leaves the scale held.
+                    refused = told.preferred_scale.tell(
+                        factor,
+                        f64::from(factor),
+                        "wl_surface preferred_buffer_scale",
+                    );
                 }
                 _ => {}
+            }
+            // Reported with the lock let go: a subscriber is user code.
+            drop(told);
+            if let Some(refused) = refused {
+                refused.report();
             }
         }
     }
@@ -3175,7 +3204,17 @@ mod toplevel {
             _: &QueueHandle<Self>,
         ) {
             if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
-                record.protocol.lock().fractional_scale = Some(scale);
+                // By the hosts' one rule: a scale no screen has is refused and
+                // the window keeps the one it held, and a run of them is
+                // reported once, with the lock let go.
+                let refused = record.protocol.lock().fractional_scale.tell(
+                    scale,
+                    f64::from(scale) / 120.0,
+                    "wp_fractional_scale_v1",
+                );
+                if let Some(refused) = refused {
+                    refused.report();
+                }
             }
         }
     }
@@ -3271,8 +3310,8 @@ mod toplevel {
                 size: told.size,
                 raw_states: told.raw_states.clone(),
                 configures: told.configures,
-                preferred_scale: told.preferred_scale,
-                fractional_scale: told.fractional_scale,
+                preferred_scale: told.preferred_scale.raw(),
+                fractional_scale: told.fractional_scale.raw(),
                 frame_mode: told.raw_frame_mode,
                 outputs: told.outputs.clone(),
                 activation_tokens,

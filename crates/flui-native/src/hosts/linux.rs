@@ -68,7 +68,7 @@ mod wayland {
     use crate::clipboard::linux::wayland::SeatClipboard;
     use crate::display::linux::protocol::Environment;
     use crate::display::linux::wayland::WaylandDisplaySource;
-    use crate::drag::wayland::SeatDrag;
+    use crate::drag::linux::wayland::SeatDrag;
     use crate::input::linux::wayland::SeatInput;
     use crate::owner::linux::wayland::{
         LastInput, WaylandClipboard, WaylandDisplays, WaylandDrag, WaylandHost, WaylandInput,
@@ -202,7 +202,7 @@ mod x11 {
     };
     use crate::clipboard::linux::x11::X11Clipboard;
     use crate::display::linux::source::LinuxDisplays;
-    use crate::drag::x11::X11Drag;
+    use crate::drag::linux::x11::X11Drag;
     use crate::input::linux::x11::X11Input;
     use crate::owner::linux::x11::{
         Doorbell, HostDisplays, LoopClipboard, LoopDrag, LoopInput, LoopText, X11Connection,

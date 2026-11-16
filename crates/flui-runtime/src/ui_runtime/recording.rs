@@ -108,8 +108,7 @@ impl UiRuntime {
             .filter_map(|presentation| {
                 let scale_factor = presentation
                     .with_window(|window| window.state().metrics)??
-                    .scale()
-                    .get();
+                    .scale();
                 Some(RecordingWindow {
                     window: presentation.window_id(),
                     scale_factor,

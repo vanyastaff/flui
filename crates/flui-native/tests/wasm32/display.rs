@@ -650,7 +650,7 @@ fn near(actual: Option<Duration>, expected_ms: f64) -> bool {
 }
 
 fn scale_of_primary(snapshot: &DisplaySnapshot) -> Option<f64> {
-    snapshot.primary().map(|display| display.scale_factor)
+    snapshot.primary().map(|display| display.scale_factor.get())
 }
 
 fn has_period(snapshot: &DisplaySnapshot) -> Vec<bool> {
@@ -923,7 +923,7 @@ async fn web_lists_screens_only_with_granted_permission() {
         // The screen the window is on reports the window's own pixel ratio (1),
         // which includes page zoom, but its bounds are measured with the 2 its
         // ScreenDetailed reports, which does not.
-        assert_eq!(main.scale_factor, 1.0);
+        assert_eq!(main.scale_factor.get(), 1.0);
         assert_eq!(main.bounds.size.width, 3840);
         running.quit();
         settle().await;
@@ -1106,7 +1106,7 @@ async fn web_page_zoom_scales_the_current_screen_with_screen_access() {
     let zoomed = running.snapshot();
     assert_eq!(scale_of_primary(&zoomed), Some(3.0));
     assert_eq!(
-        zoomed.displays()[1].scale_factor,
+        zoomed.displays()[1].scale_factor.get(),
         1.5,
         "another screen keeps its own"
     );
@@ -1217,7 +1217,11 @@ async fn web_bounds_do_not_inflate_with_page_zoom_with_screen_access() {
     let running = Running::start();
     settle().await;
     let main = running.snapshot().displays()[0].clone();
-    assert_eq!(main.scale_factor, 1.25, "the scale includes page zoom");
+    assert_eq!(
+        main.scale_factor.get(),
+        1.25,
+        "the scale includes page zoom"
+    );
     assert_eq!(
         (main.bounds.size.width, main.bounds.size.height),
         (3440, 1440)
@@ -1232,7 +1236,7 @@ async fn web_bounds_do_not_inflate_with_page_zoom_with_screen_access() {
     set_pixel_ratio(1.5);
     settle().await;
     let main = running.snapshot().displays()[0].clone();
-    assert_eq!(main.scale_factor, 1.5);
+    assert_eq!(main.scale_factor.get(), 1.5);
     assert_eq!(
         (main.bounds.size.width, main.bounds.size.height),
         (3440, 1440)

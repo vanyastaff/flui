@@ -74,7 +74,11 @@ pub(crate) trait ViewInput {
 
     /// The window's input regions, in its logical coordinates, at its `scale`:
     /// what a press on a title bar the application draws is answered from.
-    fn set_input_regions(&self, regions: &[flui_platform::input_regions::InputRegion], scale: f64);
+    fn set_input_regions(
+        &self,
+        regions: &[flui_platform::input_regions::InputRegion],
+        scale: flui_foundation::geometry::DevicePixelRatio,
+    );
 }
 
 /// The text input's part of one content view: the document AppKit's input
@@ -249,7 +253,7 @@ impl ContentView<'_> {
 pub(crate) fn set_input_regions(
     view: &AnyObject,
     regions: &[flui_platform::input_regions::InputRegion],
-    scale: f64,
+    scale: flui_foundation::geometry::DevicePixelRatio,
 ) {
     // SAFETY: `view` is a live NSView the caller holds, on the main thread.
     let _taken = unsafe {

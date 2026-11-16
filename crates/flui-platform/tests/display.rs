@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{
     CapabilityAbsence, ColorGamut, DisplayColor, DisplayId, DisplayInfo, DisplayKey,
     DisplayRegistry, DisplaySnapshot, DynamicRange, Headroom, InvalidHeadroom, RefreshPeriod,
@@ -75,7 +75,7 @@ fn snapshot_derives_the_window_display_from_its_id() {
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
     let unheld = registry.mint(&DisplayKey::Injected(2)).expect("id");
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
-    let display = DisplayInfo::new(id, "Panel", bounds, 1.0)
+    let display = DisplayInfo::new(id, "Panel", bounds, DevicePixelRatio::ONE)
         .with_primary(true)
         .with_refresh_period(Duration::from_nanos(16_683_333));
     let snapshot = DisplaySnapshot::empty()
@@ -124,7 +124,12 @@ fn an_id_from_another_registry_does_not_resolve() {
 
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
     let snapshot = DisplaySnapshot::empty()
-        .successor(vec![DisplayInfo::new(our_id, "Panel", bounds, 1.0)])
+        .successor(vec![DisplayInfo::new(
+            our_id,
+            "Panel",
+            bounds,
+            DevicePixelRatio::ONE,
+        )])
         .expect("revision");
     assert!(snapshot.get(our_id).is_some());
     assert!(
@@ -195,7 +200,7 @@ fn blank_display() -> DisplayInfo {
     let id = DisplayRegistry::new()
         .mint(&DisplayKey::Injected(1))
         .expect("id");
-    DisplayInfo::new(id, "d", Bounds::default(), 1.0)
+    DisplayInfo::new(id, "d", Bounds::default(), DevicePixelRatio::ONE)
 }
 
 fn zero_rate_is_unknown() {
@@ -341,7 +346,7 @@ fn panel(id: DisplayId) -> DisplayInfo {
         id,
         "Panel",
         Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
-        1.0,
+        DevicePixelRatio::ONE,
     )
 }
 
