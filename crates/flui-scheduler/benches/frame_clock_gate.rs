@@ -66,7 +66,11 @@ fn segment_gate_dirty(c: &mut Criterion) {
     group.bench_function("clock_poll", |b| {
         b.iter(|| {
             clock.mark_demand(black_box(DemandKind::Dirty));
-            black_box(clock.poll(clock.now()).is_produce())
+            black_box(
+                clock
+                    .poll(clock.now(), flui_scheduler::FramesInFlight::NONE)
+                    .is_produce(),
+            )
         });
     });
 
@@ -90,7 +94,13 @@ fn segment_gate_idle(c: &mut Criterion) {
     group.bench_function("clock_poll", |b| {
         // Nothing marks demand this pump -- mirrors the ui_runtime's own guard
         // never firing when neither input is true.
-        b.iter(|| black_box(clock.poll(clock.now()).is_produce()));
+        b.iter(|| {
+            black_box(
+                clock
+                    .poll(clock.now(), flui_scheduler::FramesInFlight::NONE)
+                    .is_produce(),
+            )
+        });
     });
 
     group.finish();
@@ -112,7 +122,13 @@ fn poll_cost_attribution(c: &mut Criterion) {
     group.bench_function("poll_only_precomputed_now", |b| {
         let clock = FrameClock::new();
         let now = clock.now();
-        b.iter(|| black_box(clock.poll(black_box(now)).is_produce()));
+        b.iter(|| {
+            black_box(
+                clock
+                    .poll(black_box(now), flui_scheduler::FramesInFlight::NONE)
+                    .is_produce(),
+            )
+        });
     });
 
     group.finish();

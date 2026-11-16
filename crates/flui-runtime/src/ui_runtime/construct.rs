@@ -260,6 +260,7 @@ impl UiRuntime {
             anchor_owed: Cell::new(false),
             press_commit: Cell::new(None),
             frame_failure_detail: Cell::new(FrameFailureDetail::default()),
+            in_flight_limit: Cell::new(std::num::NonZeroUsize::MIN),
             _owner_affine: PhantomData,
         })
     }

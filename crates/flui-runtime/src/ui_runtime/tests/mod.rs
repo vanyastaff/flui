@@ -544,6 +544,7 @@ fn frame_failure_containment_matrix() {
             ("super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime", super::frame_commit_state_tests::every_presentation_takes_the_next_epoch_of_its_runtime as fn()),
             ("super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from", super::frame_commit_state_tests::a_settlement_commits_the_revision_its_frame_was_painted_from as fn()),
             ("super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded", super::frame_commit_state_tests::a_later_settlement_folds_the_frames_it_superseded as fn()),
+            ("super::frame_commit_state_tests::a_frame_in_flight_bounds_the_owners_sleep", super::frame_commit_state_tests::a_frame_in_flight_bounds_the_owners_sleep as fn()),
             ("super::frame_commit_state_tests::held_input_waits_for_the_settlement_that_commits_the_tree", super::frame_commit_state_tests::held_input_waits_for_the_settlement_that_commits_the_tree as fn()),
         ],
     );

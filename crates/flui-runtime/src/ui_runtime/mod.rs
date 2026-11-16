@@ -142,7 +142,7 @@ pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 pub(crate) use presentations::start_os_drags;
-pub(crate) use settlement::PendingFrame;
+pub(crate) use settlement::{IN_FLIGHT_FLOOR, PendingFrame};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -353,6 +353,10 @@ pub struct UiRuntime {
     /// Set once by the runner from `AppConfig`; a shared-UI runtime secondary
     /// presentation inherits this existing UI runtime policy.
     frame_failure_detail: Cell<FrameFailureDetail>,
+    /// How many frames the sink of the last frame may hold unsettled for one presentation
+    /// (`FrameSink::in_flight_limit`), read when a frame reaches its sink: the in-flight gate
+    /// (ADR-0305 §5) paces each presentation by it until the next frame reads it again.
+    in_flight_limit: Cell<std::num::NonZeroUsize>,
     /// `*const ()` is `!Send + !Sync`; `PhantomData` of it makes the runtime
     /// so at zero cost (thread-affinity marker).
     _owner_affine: PhantomData<*const ()>,

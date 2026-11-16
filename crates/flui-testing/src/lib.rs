@@ -1683,7 +1683,7 @@ impl HeadlessBinding {
         if was_running {
             entry.clock.mark_demand(DemandKind::Animation);
         }
-        let _ = entry.clock.poll(now);
+        let _ = entry.clock.poll(now, flui_scheduler::FramesInFlight::NONE);
     }
 
     /// [`pump_presentation`](Self::pump_presentation) for every currently

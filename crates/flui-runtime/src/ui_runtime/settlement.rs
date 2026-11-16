@@ -28,6 +28,10 @@ use crate::sink::{FrameSettlement, Settled, SubmitVerdict};
 /// replaced, folds so the ring stays bounded.
 pub(super) const MAX_PENDING_FRAMES: usize = 8;
 
+/// How long the owner sleeps at most while a presentation has frames pending, so a settlement
+/// whose wake was lost is drained within this interval instead of never (ADR-0305 §5).
+pub(crate) const IN_FLIGHT_FLOOR: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// What a frame commits once its sink's verdict is known, captured when the frame is handed to
 /// the sink, so a settlement that arrives later commits the frame it names and not the tree as it
 /// is by then.
@@ -299,6 +303,15 @@ impl UiRuntime {
                 if retry_needs_repaint {
                     self.mark_needs_full_repaint_for(producer);
                 }
+                self.wake_frame();
+            } else if !producer.clock().demand_mask().is_empty()
+                && !producer
+                    .frames_in_flight(self.in_flight_limit.get())
+                    .is_saturated()
+            {
+                // Demand the in-flight gate kept while the sink held as many frames as it may:
+                // this settlement freed a place, and nothing else wakes the loop for it
+                // (ADR-0305 §5).
                 self.wake_frame();
             }
         });

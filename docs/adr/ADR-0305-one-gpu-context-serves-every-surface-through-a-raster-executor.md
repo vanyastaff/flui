@@ -306,16 +306,21 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 
 §5. **Pacing, restated per slot.** ADR-0045 decision 3 and the rule of decision 5 stand, per slot:
 
-- `FrameClock`'s in-flight gate paces production, and the slot's record carries the count. The
-  depth is the placement's (§10): 1 inline, 2 threaded. wgpu's `desired_maximum_frame_latency`
-  stays the slot's `FrameLatency` (ADR-0257 decision 4), set at `Attach` and changed by
-  `Configure`, and stays decoupled from the depth; the GL backend ignores it as before.
+- `FrameClock`'s in-flight gate paces production: `FrameClock::poll` is handed the presentation's
+  `FramesInFlight`, the frames it has pending (queued and not settled) against the sink's
+  `FrameSink::in_flight_limit`. A presentation at its limit skips with `Backpressure`, keeps its
+  demand and reports no pending work, and the settlement that frees a place wakes the loop. The
+  limit is the placement's depth (§10): 1 inline, which never queues, 2 threaded. wgpu's
+  `desired_maximum_frame_latency` stays the slot's `FrameLatency` (ADR-0257 decision 4), set at
+  `Attach` and changed by `Configure`, and stays decoupled from the depth; the GL backend ignores
+  it as before.
 - The slot calls its `SurfaceTarget::pre_present_notify` directly, immediately before
   `queue.present` and only for a frame that will present; `flui-engine` already reaches
   `flui-platform` (`crates/flui-engine/Cargo.toml:50-52`), so no hook closure is installed.
 - `FallbackWake`'s deadline applies only when the slot's in-flight count is zero and its last
-  settlement did not present. While a frame is in flight the owner keeps a `WaitUntil` floor, so a
-  lost wake costs at most one floor interval.
+  settlement did not present. While a frame is in flight `UiRuntime::next_wake` keeps a floor of
+  50 ms, which the host turns into its `WaitUntil`, so a lost wake costs at most one floor
+  interval.
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's
@@ -592,7 +597,10 @@ the facade. Every production use of `with_backend` becomes:
   `a_frame_stamped_before_a_restore_is_refused_on_its_generation` (window surfaces from wgpu's
   no-op backend); compile-fail `surface_factory_is_owner_local` and
   `surface_factory_rejects_borrowed_window`; and in `flui-runtime`'s
-  `tests/main.rs`: `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored`.
+  `tests/main.rs`: `a_queued_frame_settles_by_its_stamp_and_a_stale_settlement_is_ignored` and
+  `a_sink_holding_its_depth_gets_no_frame_until_one_settles` (the in-flight gate of §5), with
+  the floor of §5 in its `frame_failure_containment_matrix` case
+  `a_frame_in_flight_bounds_the_owners_sleep`.
 - Conformance, to be added in `flui-native`: `a_surface_targets_display_equals_the_platforms_connection`,
   one row per host, in `flui-native`'s Linux suites: the Wayland row under a headless `weston`,
   the X11 row under `Xvfb`, the winit and headless rows without a display server.

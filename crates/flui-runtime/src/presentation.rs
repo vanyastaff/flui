@@ -7,6 +7,7 @@
 //! `flui_engine::RasterExecutor`.
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -1961,6 +1962,26 @@ impl PresentationState {
         self.device_recovery
             .get()
             .is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned)
+    }
+
+    /// The frames this presentation's sink holds unsettled, against the `limit` it may hold: the
+    /// in-flight gate its clock is polled with (ADR-0305 §5).
+    pub(crate) fn frames_in_flight(&self, limit: NonZeroUsize) -> flui_scheduler::FramesInFlight {
+        flui_scheduler::FramesInFlight::new(self.pending_frames.borrow().len(), limit)
+    }
+
+    /// While this presentation has frames pending, the latest the owner sleeps until: one
+    /// [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) from now, so a lost settlement wake
+    /// costs at most that interval (ADR-0305 §5).
+    pub(crate) fn in_flight_floor(&self) -> Option<Instant> {
+        if self.pending_frames.borrow().is_empty() {
+            return None;
+        }
+        let now = self.clock().now();
+        Some(
+            now.checked_add(crate::ui_runtime::IN_FLIGHT_FLOOR)
+                .unwrap_or(now),
+        )
     }
 
     /// The instant a dropped frame's wait ends, if one waits.

@@ -197,6 +197,30 @@ pub(crate) fn a_later_settlement_folds_the_frames_it_superseded() {
     assert_eq!(settle(&mut ui_runtime, first), Settled::Stale);
 }
 
+/// While a frame is in flight the owner sleeps no longer than the floor, so a settlement whose
+/// wake was lost is drained within it; once nothing is pending the floor goes.
+pub(crate) fn a_frame_in_flight_bounds_the_owners_sleep() {
+    let mut ui_runtime = mount_box();
+    let mut sink = ScriptedSink::new(|_, _| SubmitVerdict::Queued);
+    let primary = |ui_runtime: &UiRuntime| ui_runtime.presentations.primary().in_flight_floor();
+    let [_, (second, _)] = queue_two_frames(&ui_runtime, &mut sink);
+    // The wake is read first: the floor read after it lies no earlier on the same clock.
+    let wake = ui_runtime.next_wake();
+    let floor = primary(&ui_runtime).expect("a frame in flight keeps a floor");
+    let now = ui_runtime.presentations.primary().clock().now();
+    assert!(floor <= now + super::IN_FLIGHT_FLOOR);
+    assert!(
+        wake.is_some_and(|wake| wake <= floor),
+        "the owner sleeps no longer than the floor"
+    );
+    assert_eq!(settle(&mut ui_runtime, second), Settled::Applied);
+    assert_eq!(
+        primary(&ui_runtime),
+        None,
+        "with nothing in flight the floor goes"
+    );
+}
+
 fn held_pointer_count(ui_runtime: &UiRuntime) -> usize {
     ui_runtime
         .presentations

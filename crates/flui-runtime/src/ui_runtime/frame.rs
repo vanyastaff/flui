@@ -957,6 +957,7 @@ impl UiRuntime {
         }
 
         let (width, height) = sink.surface_size();
+        self.in_flight_limit.set(sink.in_flight_limit());
         let dpr = self
             .presentations
             .primary()

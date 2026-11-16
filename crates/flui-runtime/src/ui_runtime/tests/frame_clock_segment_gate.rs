@@ -386,7 +386,7 @@ fn mount_root_here() -> UiRuntime {
 
 /// END-STATE INVARIANT: at N=1 -- a clock that is
 /// never hidden and never backpressured -- the segment gate's
-/// decision (`clock.poll().should_run_segment()`, fed `Dirty`
+/// decision (`clock.poll(, flui_scheduler::FramesInFlight::NONE).should_run_segment()`, fed `Dirty`
 /// demand from `take_redraw_pending() || has_pending_work()`) is
 /// equivalent to that same union read directly, the predicate it
 /// replaces, over every reachable combination of the two inputs.
@@ -476,7 +476,11 @@ pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rea
     let clock = ui_runtime.presentations.primary().clock();
     // One produce opens a throttle window that outlasts the whole loop below.
     clock.mark_demand(flui_scheduler::DemandKind::Host);
-    assert!(clock.poll(clock.now()).should_run_segment());
+    assert!(
+        clock
+            .poll(clock.now(), flui_scheduler::FramesInFlight::NONE)
+            .should_run_segment()
+    );
     clock.set_min_produce_interval(Some(Duration::from_secs(3600)));
     wake_count.store(0, Ordering::Relaxed);
 

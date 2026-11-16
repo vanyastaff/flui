@@ -114,7 +114,11 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
     // part of the per-frame path this issue added.
     clock.mark_demand(DemandKind::Dirty);
     let now = clock.now();
-    assert_eq!(clock.poll(now), PollDecision::Produce, "warmup produce");
+    assert_eq!(
+        clock.poll(now, flui_scheduler::FramesInFlight::NONE),
+        PollDecision::Produce,
+        "warmup produce"
+    );
     let _ = clock.record_frame(
         clock.telemetry_cut(),
         address(),
@@ -136,7 +140,7 @@ fn frame_path_allocates_nothing_while_frames_since_pull_side_does() {
         let _epoch_id = clock.stamp_input_epoch(arrival);
         clock.mark_demand(DemandKind::Dirty);
         let now = clock.now();
-        let decision = clock.poll(now);
+        let decision = clock.poll(now, flui_scheduler::FramesInFlight::NONE);
         assert_eq!(decision, PollDecision::Produce, "every cycle must produce");
         let _snapshot = clock.record_frame(
             clock.telemetry_cut(),

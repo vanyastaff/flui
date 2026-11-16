@@ -521,6 +521,14 @@ impl UiRuntime {
                 // device rebuild was given up has none until a rebuild is asked
                 // for again.
                 let frame_work = match presentation.failure_retry_at() {
+                    // A presentation whose sink holds as many frames as it may produces none
+                    // until a settlement frees a place, and that settlement wakes the loop.
+                    _ if presentation
+                        .frames_in_flight(self.in_flight_limit.get())
+                        .is_saturated() =>
+                    {
+                        false
+                    }
                     _ if presentation.device_abandoned() => false,
                     Some(at) => presentation.clock().now() >= at,
                     None => {
@@ -611,6 +619,7 @@ impl UiRuntime {
                     presentation.haptics().next_wake(),
                     presentation.frame_rate_hold(),
                     presentation.failure_retry_at(),
+                    presentation.in_flight_floor(),
                 ]
             })
             .flatten()
