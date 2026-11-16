@@ -740,6 +740,69 @@ impl WebLoop {
             signal: Arc::downgrade(&self.signal),
         }
     }
+
+    /// Ask the handler for its turn deadline and schedule the owner turn it
+    /// asks for with a page timer (`setTimeout`): at that instant the owner
+    /// gets a turn whether or not the canvas asks for frames, and no frame is
+    /// asked for. Called after each owner turn and once the handler has
+    /// bootstrapped; an answer supersedes the timer an earlier one scheduled,
+    /// and an instant delivered once is not scheduled again.
+    fn arm_turn_deadline(&self) {
+        let answer = if self.signal.accepting() {
+            self.app.turn_deadline().or_resume(None)
+        } else {
+            None
+        };
+        let (armed, generation) = {
+            let mut slot = self.turn_deadline.borrow_mut();
+            let armed = slot.0.arm(answer, self.signal.turns());
+            slot.1 = slot
+                .1
+                .checked_add(1)
+                .expect("BUG: a turn-deadline generation per owner turn fits in u64");
+            (armed, slot.1)
+        };
+        let Some(at) = armed else {
+            return;
+        };
+        // Rounded up, so the timer never fires before the instant.
+        let millis = at
+            .saturating_duration_since(web_time::Instant::now())
+            .as_micros()
+            .div_ceil(1000);
+        let delay = i32::try_from(millis).unwrap_or(i32::MAX);
+        let state = Arc::downgrade(&self.state);
+        let fire = Closure::once_into_js(move || {
+            let Some(owner) = PageLoop::of(&state) else {
+                return;
+            };
+            let (current, due) = {
+                let mut slot = owner.turn_deadline.borrow_mut();
+                let current = slot.1 == generation;
+                (
+                    current,
+                    current
+                        && slot
+                            .0
+                            .take_due(web_time::Instant::now(), owner.signal.turns()),
+                )
+            };
+            if due {
+                let _ = owner.signal.wake();
+            } else if current {
+                // The page's clock ran the timer a little early: schedule
+                // the rest of the wait.
+                owner.arm_turn_deadline();
+            }
+        });
+        let scheduled = web_sys::window().map(|window| {
+            window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(fire.unchecked_ref(), delay)
+        });
+        if !matches!(scheduled, Some(Ok(_))) {
+            tracing::warn!("the page refused the turn deadline's timer");
+        }
+    }
 }
 
 /// Ask the browser for the next animation frame of the loop in `slot`.
@@ -847,69 +910,6 @@ impl host::Loop for WebLoop {
 
         tracing::info!("Web platform ready");
         Ok(())
-    }
-
-    /// Ask the handler for its turn deadline and schedule the owner turn it
-    /// asks for with a page timer (`setTimeout`): at that instant the owner
-    /// gets a turn whether or not the canvas asks for frames, and no frame is
-    /// asked for. Called after each owner turn and once the handler has
-    /// bootstrapped; an answer supersedes the timer an earlier one scheduled,
-    /// and an instant delivered once is not scheduled again.
-    fn arm_turn_deadline(&self) {
-        let answer = if self.signal.accepting() {
-            self.app.turn_deadline().or_resume(None)
-        } else {
-            None
-        };
-        let (armed, generation) = {
-            let mut slot = self.turn_deadline.borrow_mut();
-            let armed = slot.0.arm(answer, self.signal.turns());
-            slot.1 = slot
-                .1
-                .checked_add(1)
-                .expect("BUG: a turn-deadline generation per owner turn fits in u64");
-            (armed, slot.1)
-        };
-        let Some(at) = armed else {
-            return;
-        };
-        // Rounded up, so the timer never fires before the instant.
-        let millis = at
-            .saturating_duration_since(web_time::Instant::now())
-            .as_micros()
-            .div_ceil(1000);
-        let delay = i32::try_from(millis).unwrap_or(i32::MAX);
-        let state = Arc::downgrade(&self.state);
-        let fire = Closure::once_into_js(move || {
-            let Some(owner) = PageLoop::of(&state) else {
-                return;
-            };
-            let (current, due) = {
-                let mut slot = owner.turn_deadline.borrow_mut();
-                let current = slot.1 == generation;
-                (
-                    current,
-                    current
-                        && slot
-                            .0
-                            .take_due(web_time::Instant::now(), owner.signal.turns()),
-                )
-            };
-            if due {
-                let _ = owner.signal.wake();
-            } else if current {
-                // The page's clock ran the timer a little early: schedule
-                // the rest of the wait.
-                owner.arm_turn_deadline();
-            }
-        });
-        let scheduled = web_sys::window().map(|window| {
-            window
-                .set_timeout_with_callback_and_timeout_and_arguments_0(fire.unchecked_ref(), delay)
-        });
-        if !matches!(scheduled, Some(Ok(_))) {
-            tracing::warn!("the page refused the turn deadline's timer");
-        }
     }
 
     fn quit(&self) {
