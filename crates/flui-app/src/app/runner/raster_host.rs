@@ -833,36 +833,19 @@ impl RasterHost {
         let _turned = caught.contain(|| placed.executor.turn());
         // A raster thread attaches on its own turn: the owner waits for its
         // answer, so a window the thread refuses is refused here as it is
-        // inline. A thread still in a turn at the deadline (a device rebuild,
-        // a blocked acquire) is not a wedge: the window is accepted with its
-        // slot attaching; a refusal that comes later fails each of the
-        // window's frames, which the window is not yet quarantined for
-        // (docs/gaps.md). A dead thread refuses the window below.
+        // inline. A thread that does not answer within the deadline is
+        // wedged (ADR-0305 §9) and refuses this window and every later one.
         #[cfg(not(target_arch = "wasm32"))]
-        let attaching = match &placed.executor {
-            Executor::Threaded(handle) => {
-                match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
-                    Ok(answered) => !answered,
-                    Err(failure) => {
-                        tracing::error!(%failure, "raster host: the raster thread died before it answered a window's attach");
-                        false
-                    }
-                }
-            }
-            Executor::Inline(_) => false,
-        };
-        #[cfg(target_arch = "wasm32")]
-        let attaching = false;
-        if attaching {
-            tracing::warn!(
-                "raster host: the raster thread has not answered a window's attach yet; the window waits for it"
-            );
+        if let Executor::Threaded(handle) = &placed.executor
+            && let Err(failure) =
+                handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE)
+        {
+            tracing::error!(%failure, "raster host: the raster thread did not answer a window's attach");
         }
         let refusal = match placed.sender.record(slot).map(|record| record.phase) {
             // A panic of the turn alone (not of the slot's attach) leaves the
             // slot attached; the window reports it after its first frame.
             Some(flui_engine::SlotPhase::Attached) => None,
-            Some(flui_engine::SlotPhase::Attaching) if attaching => None,
             _ => match placed.sender.take_failure(slot) {
                 Some(SlotFailure::Refused(error)) => Some(error),
                 Some(SlotFailure::Panicked(payload)) => {
@@ -2247,8 +2230,8 @@ pub(crate) enum ThreadSettled {
     /// stands down.
     Presented,
     /// Frames settled and none presented (refused, retried, failed, not
-    /// shown): the first reveal counts each toward its fallback, as a frame
-    /// that presented nothing within its wake.
+    /// shown): the wake counts toward the first reveal's fallback as a wake
+    /// whose own frame presented nothing does.
     NotPresented,
 }
 
@@ -2342,7 +2325,9 @@ impl RasterSlot {
             let shown = settlement.verdict == SubmitVerdict::Presented;
             let answer = caught.contain(|| ui_runtime.settle_frame(settlement));
             // A settlement the runtime held no frame for is another life's.
-            // One whose settling panicked is still this window's frame.
+            // One whose settling panicked is still this window's frame, and
+            // a presented one is on the window's screen: it reveals the
+            // window while its panic resumes at the end of the wake.
             if matches!(answer, Some(flui_runtime::sink::Settled::Stale)) {
                 continue;
             }

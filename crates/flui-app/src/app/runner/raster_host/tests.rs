@@ -1403,8 +1403,9 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
 /// reveal's fallback counts as a frame of the wake that presented nothing,
 /// so a window whose first frames the thread refuses is still shown.
 ///
-/// Red-check: answer `Nothing` for a settlement that did not present and a
-/// window whose renders fail is never revealed.
+/// Red-check: answer `Nothing` for a settlement that did not present and
+/// the test fails; the desktop wake reveals on `NotPresented` in
+/// `DesktopFrameDriver::after_settled`.
 #[test]
 fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
     let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();

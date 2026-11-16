@@ -631,11 +631,14 @@ impl RasterSender {
 
     /// The failure `slot` holds since the last take: the first, or the first
     /// panic in place of a refusal held before it, since the owner reports a
-    /// panic and only logs a refusal.
+    /// panic and only logs a refusal. Taking it ends the slot's panic mark:
+    /// a panic the owner took is not the next settlement's.
     #[must_use]
     pub fn take_failure(&self, slot: SlotId) -> Option<SlotFailure> {
         let inbox = self.inbox(slot)?;
-        inbox.lock().failure.take()
+        let mut state = inbox.lock();
+        state.panicked = false;
+        state.failure.take()
     }
 
     /// The executor died: settle each frame still pending in an inbox

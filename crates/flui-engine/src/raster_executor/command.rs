@@ -356,13 +356,14 @@ pub struct SlotSettlement {
     pub epoch: FrameEpoch,
     /// What became of it.
     pub verdict: RasterVerdict,
-    /// Whether a call on the slot panicked since its previous settlement (a
-    /// resize, a texture upload or the render of this frame's turn, or a
-    /// configuration or surface command before it): the frame the panic came
-    /// with, which an owner that drains later than the turn cannot tell
-    /// otherwise. The payload is the slot's held failure
-    /// ([`RasterSender::take_failure`](super::RasterSender::take_failure)), unless an earlier panic the owner has
-    /// not taken yet holds its place.
+    /// Whether a call on the slot panicked since its previous settlement and
+    /// the owner has not taken the panic yet (a resize, a texture upload or
+    /// the render of this frame's turn, or a configuration or surface
+    /// command before it): the frame the panic came with, which an owner
+    /// that drains later than the turn cannot tell otherwise. The payload is
+    /// the slot's held failure
+    /// ([`RasterSender::take_failure`](super::RasterSender::take_failure)),
+    /// unless an earlier panic the owner has not taken yet holds its place.
     pub panicked: bool,
 }
 

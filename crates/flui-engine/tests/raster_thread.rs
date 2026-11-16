@@ -887,11 +887,10 @@ fn the_owner_waits_for_the_threads_answer_to_an_attach() {
             std::thread::sleep(Duration::from_millis(50));
             held.release();
         });
-        let answered = thread
+        thread
             .handle
             .await_attach(&thread.sender, slot, DETACH_DEADLINE)
-            .expect("the thread is alive");
-        assert!(answered, "the thread answers within the deadline");
+            .expect("the thread answers within the deadline");
         let phase = thread.sender.record(slot).expect("held").phase;
         assert_eq!(
             phase,
@@ -946,14 +945,15 @@ fn a_frame_that_panicked_settles_marked_so() {
     );
 }
 
-/// A turn slower than the owner's wait for an attach is not a wedge: the
-/// wait answers that the thread has not answered yet, and the executor keeps
-/// running and attaches the slot once the turn ends.
+/// A thread that does not answer an attach within its deadline is wedged,
+/// as one that does not answer a detach is: the wait marks the executor
+/// died, so the owner refuses the window instead of showing one whose
+/// frames would wait for an answer that may never come.
 ///
-/// Red-check: let the wait's deadline mark the executor died and every
-/// window loses its rendering for one slow turn.
+/// Red-check: answer the deadline without the death and the executor is
+/// still running when the wait returns.
 #[test]
-fn a_slow_turn_does_not_kill_the_executor_an_attach_waits_on() {
+fn a_raster_thread_that_does_not_answer_an_attach_dies_at_its_deadline() {
     let thread = spawn();
     let held = thread.backend.hold_next_render();
     let first = attach(&thread.sender);
@@ -978,17 +978,11 @@ fn a_slow_turn_does_not_kill_the_executor_an_attach_waits_on() {
             config: SlotConfig::new(),
         })
         .expect("the attach is accepted");
-    let answered = thread
-        .handle
-        .await_attach(&thread.sender, slot, Duration::from_millis(20))
-        .expect("the thread is alive");
-    assert!(!answered, "the turn is still running");
-    assert_eq!(thread.handle.health(), ExecutorHealth::Running);
+    let waited = Duration::from_millis(20);
+    assert_eq!(
+        thread.handle.await_attach(&thread.sender, slot, waited),
+        Err(ExecutorFailure::Wedged { waited })
+    );
+    assert_eq!(thread.handle.health(), ExecutorHealth::Died);
     held.release();
-    eventually("attached the second slot", || {
-        thread
-            .sender
-            .record(slot)
-            .is_some_and(|record| record.phase == SlotPhase::Attached)
-    });
 }

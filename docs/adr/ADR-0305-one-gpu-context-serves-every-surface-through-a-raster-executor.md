@@ -512,14 +512,15 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   placements.
 - Threaded, the owner's host waits for the thread's answer to a window's attach
   (`ExecutorHandle::await_attach`), so a window the thread refuses is refused at its attach as it
-  is inline; a thread still in a turn at the deadline is not a wedge, and the window is accepted
-  with its slot attaching. It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
+  is inline; a thread that does not answer within the detach deadline is wedged at the attach as
+  at a detach (§9). It answers a frame `Queued`, or `QueuedReplacing` with the epoch the
   slot's `SendReceipt::Replaced` names, keeps what each held frame's verdict needs (its version,
   surface and retry), and its sink's in-flight limit is the placement's depth. A settlement
-  carries whether a call of its frame's turn panicked (`SlotSettlement::panicked`), which is how
-  an owner that drains later than the turn tells the frame a slot's panic came with; a slot holds
-  a panic in place of a refusal held before it, since the owner reports the one and only logs the
-  other. The thread's wake asks every attached window for a frame through its
+  carries whether a call on its slot panicked since the previous settlement and the owner has
+  not taken the panic yet (`SlotSettlement::panicked`), which is how an owner that drains later
+  than the turn tells the frame a slot's panic came with; a slot holds a panic in place of a
+  refusal held before it, since the owner reports the one and only logs the other. The thread's
+  wake asks every attached window for a frame through its
   `RedrawRequester`, each one contained; each window's wake drains its own slot's settlements
   into `UiRuntime::settle_frame` first, before its frame gate and whatever the wake goes on to do,
   and holds a panic of the code they ran for the end of that window's wake. Neither the window's
@@ -650,7 +651,7 @@ the facade. Every production use of `with_backend` becomes:
   `a_frame_queued_behind_a_wedged_render_settles_after_it` and
   `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9),
   `the_owner_waits_for_the_threads_answer_to_an_attach`,
-  `a_slow_turn_does_not_kill_the_executor_an_attach_waits_on`,
+  `a_raster_thread_that_does_not_answer_an_attach_dies_at_its_deadline`,
   `a_frame_that_panicked_settles_marked_so`, with
   `crates/flui-engine/tests/raster_executor.rs`'s
   `a_texture_panic_after_a_failed_resize_is_the_failure_held` (§10); on the host's threaded

@@ -722,6 +722,104 @@ fn a_texture_panic_after_a_failed_resize_is_the_failure_held() {
         "the panic is the failure held"
     );
 }
+
+/// A panic takes the place of a refusal the slot held from an earlier turn
+/// the owner has not taken yet: the owner reports a panic and only logs a
+/// refusal.
+///
+/// Red-check: keep a held failure whatever comes after it and the record
+/// holds the earlier turn's refusal.
+#[test]
+fn a_panic_takes_the_place_of_a_refusal_held_from_an_earlier_turn() {
+    let mut rig = rig();
+    let at = attached(&mut rig, 1);
+    rig.backend
+        .script_resize(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
+    let SendReceipt::Configured(generation) = rig
+        .sender
+        .send(RasterCommand::Configure {
+            slot: at.slot,
+            change: SlotChange::Size(DeviceSize::new(16, 16)),
+        })
+        .expect("accepted")
+    else {
+        panic!("a positive size mints a generation");
+    };
+    let resized = Attached { generation, ..at };
+    let _ = rig.sender.send(frame(resized, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    let _ = drain(&rig.sender, at.slot);
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("an id is left");
+    texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+        1,
+        1,
+        vec![9, 9, 9, 255],
+    ));
+    rig.backend.script_textures(ScriptedAnswer::Panic);
+    let _ = rig
+        .sender
+        .send(RasterCommand::Frame {
+            slot: at.slot,
+            snapshot: snapshot(resized, 2, DamageRegion::Unchanged, scene())
+                .textures(registry.take_updates()),
+        })
+        .expect("accepted");
+    let _ = rig.executor.turn();
+    assert!(
+        matches!(
+            rig.sender.take_failure(at.slot),
+            Some(SlotFailure::Panicked(_))
+        ),
+        "the later turn's panic is the failure held"
+    );
+}
+
+/// A panic of a turn with no frame (a resize the owner configured) marks
+/// the slot's next settlement while the owner has not taken it, and not once
+/// it has: a panic the owner took and reported is not a later frame's.
+///
+/// Red-check: leave the mark set when the owner takes the panic and the
+/// frame after it settles marked.
+#[test]
+fn a_panic_marks_the_next_settlement_until_the_owner_takes_it() {
+    for taken in [false, true] {
+        let mut rig = rig();
+        let at = attached(&mut rig, 1);
+        rig.backend.script_resize(ScriptedAnswer::Panic);
+        let SendReceipt::Configured(generation) = rig
+            .sender
+            .send(RasterCommand::Configure {
+                slot: at.slot,
+                change: SlotChange::Size(DeviceSize::new(16, 16)),
+            })
+            .expect("accepted")
+        else {
+            panic!("a positive size mints a generation");
+        };
+        let _ = rig.executor.turn();
+        if taken {
+            assert!(
+                matches!(
+                    rig.sender.take_failure(at.slot),
+                    Some(SlotFailure::Panicked(_))
+                ),
+                "the resize's panic is held"
+            );
+        }
+        let resized = Attached { generation, ..at };
+        let _ = rig.sender.send(frame(resized, 1)).expect("accepted");
+        let _ = rig.executor.turn();
+        let settled = drain(&rig.sender, at.slot);
+        assert!(!settled.is_empty(), "the frame settles");
+        assert!(
+            settled
+                .iter()
+                .all(|settlement| settlement.panicked != taken),
+            "taken {taken}: {settled:?}"
+        );
+    }
+}
 /// A frame renders only against the generation the slot's configuration
 /// has: one stamped zero, or before a resize the executor applied, settles
 /// `SurfaceStale` without reaching the backend.

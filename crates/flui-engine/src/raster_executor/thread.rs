@@ -275,22 +275,23 @@ impl ExecutorHandle {
     }
     /// Wait until the thread answered `slot`'s attach, at most `timeout`, so
     /// the owner refuses a window the thread refused as an inline owner
-    /// does, before the window is shown: answers `true` once the slot's
-    /// record is [`SlotPhase::Attached`] or [`SlotPhase::Refused`], when
+    /// does, before the window is shown: returns once the slot's record is
+    /// [`SlotPhase::Attached`] or [`SlotPhase::Refused`], when
     /// [`RasterSender::take_failure`] says why it was refused, and at once
-    /// for a slot the sender does not hold. Answers `false` when the thread
-    /// is still in a turn at the deadline: a slow turn (a device rebuild, a
-    /// blocked acquire) is not a wedge, so the executor keeps running and
-    /// the slot stays attaching.
+    /// for a slot the sender does not hold. The deadline is a detach's
+    /// (§9): a thread that does not answer within it is wedged, whatever
+    /// its turn is doing, and refuses every window from then on.
     ///
     /// # Errors
-    /// The cause the executor died of, when it is dead.
+    /// [`ExecutorFailure::Wedged`] when the thread did not answer in time:
+    /// the executor is then [`ExecutorHealth::Died`]. The cause the executor
+    /// died of, when it was dead already.
     pub fn await_attach(
         &self,
         sender: &RasterSender,
         slot: SlotId,
         timeout: Duration,
-    ) -> Result<bool, ExecutorFailure> {
+    ) -> Result<(), ExecutorFailure> {
         let started = std::time::Instant::now();
         loop {
             // Read before the record, so a turn that ends between the check
@@ -300,14 +301,14 @@ impl ExecutorHandle {
                 .record(slot)
                 .is_none_or(|record| record.phase != SlotPhase::Attaching);
             if answered {
-                return Ok(true);
+                return Ok(());
             }
             if let Some(death) = self.shared.death() {
                 return Err(death);
             }
             let waited = started.elapsed();
             if waited >= timeout {
-                return Ok(false);
+                return Err(self.die(timeout));
             }
             self.shared
                 .wait_for_turn(seen, timeout.saturating_sub(waited));

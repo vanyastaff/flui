@@ -128,7 +128,8 @@ pub(crate) struct InboxState {
     pub(crate) settlements: VecDeque<SlotSettlement>,
     pub(crate) phase: SlotPhase,
     pub(crate) failure: Option<SlotFailure>,
-    /// Whether a panic of the slot was held since its last settlement.
+    /// Whether a panic of the slot was held since its last settlement and
+    /// the owner has not taken it.
     pub(crate) panicked: bool,
 }
 

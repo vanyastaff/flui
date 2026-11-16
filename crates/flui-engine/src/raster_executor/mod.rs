@@ -896,7 +896,8 @@ impl<B: RasterBackend> RasterExecutor<B> {
         // A frame's texture updates apply whether or not it is shown: a
         // retirement releases memory, and a hidden slot's next frame draws
         // the newest image. A panic joins this turn's failure: the first of
-        // the resize's, the textures' and the render's is the one held.
+        // the resize's, the textures' and the render's is the one held, or
+        // the first panic in place of a refusal before it (`join`).
         let mut frame = frame;
         let mut discarded = None;
         let textures_report = frame.as_mut().and_then(|frame| {

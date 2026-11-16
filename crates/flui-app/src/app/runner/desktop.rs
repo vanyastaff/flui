@@ -540,18 +540,27 @@ impl DesktopFrameDriver {
         // panic of the code the settlements ran is this window's: the rest
         // of the wake runs, then it resumes here.
         let (settled, mut caught) = self.raster.settle(ui_runtime);
-        let settled_at = web_time::Instant::now();
+        // The reveal runs platform code: contained with the rest of the wake,
+        // so a panic there does not drop the settlements' first one.
+        let _ran = caught.contain(|| {
+            self.after_settled(settled, web_time::Instant::now());
+            self.turn(ui_runtime, presentation);
+        });
+        caught.resume();
+    }
+
+    /// Pace the window on what its frames a raster thread finished became,
+    /// as on a frame of the wake itself.
+    fn after_settled(&self, settled: ThreadSettled, at: web_time::Instant) {
         match settled {
             ThreadSettled::Nothing => {}
-            ThreadSettled::Presented => self.after_presented(settled_at),
+            ThreadSettled::Presented => self.after_presented(at),
             ThreadSettled::NotPresented => {
-                if self.deadlines.first_reveal.after_frame(false, settled_at) {
+                if self.deadlines.first_reveal.after_frame(false, at) {
                     self.reveal();
                 }
             }
         }
-        let _ran = caught.contain(|| self.turn(ui_runtime, presentation));
-        caught.resume();
     }
 
     /// The wake past its settlements: the gate, then the frame and its
