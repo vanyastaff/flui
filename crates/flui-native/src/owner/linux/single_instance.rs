@@ -743,18 +743,55 @@ mod tests {
         assert_eq!(object_path("org.my-app.Notes_2"), "/org/my_app/Notes_2");
     }
 
+    /// A second launch reports what bounding its arguments dropped before it
+    /// forwards the rest, and the first instance, which drops nothing of what
+    /// arrives, reports nothing: the drop is reported once, where it happens.
+    #[test]
+    fn a_forwarded_launch_reports_its_drop_where_it_happens() {
+        use std::ffi::OsString;
+
+        use crate::owner::file_uri::PathConvention;
+        use crate::owner::launch_arguments::opened_by_arguments;
+        use crate::owner::opened::reports_in;
+
+        let arguments = (0..100).map(|n| OsString::from(format!("notes:///note/{n}")));
+        let mut launch = None;
+        let second = reports_in(|| {
+            launch = Some(opened_by_arguments(
+                arguments,
+                PathConvention::Unix,
+                |_| false,
+                |path| Some(path.to_owned()),
+            ));
+        });
+        let forwarded = Forwarded::of_launch(launch.expect("bounded"), None);
+        assert_eq!(forwarded.uris.len(), flui_platform::MAX_OPENED_ITEMS);
+        let mut opened = None;
+        let first = reports_in(|| opened = Some(forwarded.opened()));
+        assert_eq!(
+            opened.expect("opened").urls.len(),
+            flui_platform::MAX_OPENED_ITEMS
+        );
+        assert_eq!(
+            (second, first),
+            (1, 0),
+            "reported once, by the second launch"
+        );
+    }
+
     /// A second launch forwards its links as given and its files as absolute
     /// `file:` URIs, with its launcher's token; the first instance opens them
     /// as running, for the application as a whole, by the same split as any
     /// launch: links stay links, files come back as their paths.
     #[test]
     fn a_second_launch_forwards_what_it_opens() {
-        let launch = Opened::new(
+        let launch = Opened::bounded(
             ["notes:///note/3".to_owned()],
             [OpenedFile::new("/home/ana/Notes/a b.note")],
             OpenTarget::Application,
             Launch::Cold,
-        );
+        )
+        .0;
         let forwarded = Forwarded::of_launch(launch, Some("token-1".to_owned()));
         assert_eq!(
             forwarded.uris,
@@ -771,7 +808,7 @@ mod tests {
 
         // A launch with nothing to open still brings the window forward.
         let bare = Forwarded::of_launch(
-            Opened::new([], [], OpenTarget::Application, Launch::Cold),
+            Opened::bounded([], [], OpenTarget::Application, Launch::Cold).0,
             None,
         );
         assert!(bare.uris.is_empty() && bare.opened().is_empty());
@@ -780,12 +817,13 @@ mod tests {
         // carries a longer URI runs on its own instead of losing it.
         let long_path = format!("/{}", "ü/".repeat(1365));
         let long = Forwarded::of_launch(
-            Opened::new(
+            Opened::bounded(
                 [],
                 [OpenedFile::new(long_path)],
                 OpenTarget::Application,
                 Launch::Cold,
-            ),
+            )
+            .0,
             None,
         );
         assert!(long.uris[0].len() > flui_platform::MAX_OPENED_URL_LEN);

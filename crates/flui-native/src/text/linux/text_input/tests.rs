@@ -337,6 +337,21 @@ fn leaving_the_window_resets_the_preedit() {
     assert_eq!(store.text(), "a");
 }
 
+/// Focus leaving a field that refuses to commit its composition in place is
+/// reported once, and focus still moves.
+#[test]
+fn a_field_refusing_the_commit_on_blur_is_reported_once() {
+    let client = TextInputClient::new();
+    let wire = Rc::new(Wire::default());
+    let field: Rc<dyn TextStore> =
+        Rc::new(crate::text::refusal::read_only::ReadOnlyField::default());
+    client.focus_store(Some(field));
+    client.entered(Rc::clone(&wire) as Rc<dyn TextInputWire>);
+    let reports = crate::text::refusal::reports_in(|| client.focus_store(None));
+    assert_eq!(reports, 1, "the refusal is reported once");
+    assert!(client.focused().is_none(), "focus moved anyway");
+}
+
 #[test]
 fn focus_moved_mid_composition_commits_it_where_it_was() {
     let first = InMemoryTextStore::new("");
