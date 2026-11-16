@@ -1084,9 +1084,9 @@ trait depends on `flui-platform` instead.
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
   a capability change the snapshot published (the headless `simulate_capabilities`) answers
   `ApplyError::Superseded`. `WindowStateCell::open` publishes the window's
-  first capabilities (`WindowCapabilities::publish`, the contract's
-  publication, never reissued), so a token admitted for another window, or
-  against capabilities built by hand or edited, never opens on this one. The
+  first capabilities (`WindowCapabilities::publish`, ADR-0341: the contract's
+  publication, never reissued), so a token admitted for another window opens
+  nothing on this one, and capabilities built by hand or edited admit nothing. The
   conformance check `a_command_admitted_before_a_revision_is_superseded`
   holds a host to it where its fixture can revise capabilities. A command no
   host arm carries out, the Android and UIKit windows' included, answers

@@ -59,8 +59,8 @@ impl WindowCapability {
 }
 
 /// Which commands a window honours and which reports it makes, and how: the
-/// [`CapabilityParts`] a window published, read through `Deref`
-/// (`capabilities.material`), and which publication they are.
+/// [`CapabilityParts`] a window published, each read by its accessor
+/// (`capabilities.material()`), and which publication they are (ADR-0341).
 ///
 /// A backend reports exactly what it does today. A command is refused by
 /// [`WindowCommand::admit`] as
@@ -103,18 +103,20 @@ impl WindowCapability {
 /// identity this crate mints, when a host publishes a window's first snapshot
 /// ([`publish`](Self::publish)) and whenever
 /// [`WindowState::successor`](crate::WindowState::successor) publishes
-/// capabilities that differ from the ones before. No caller can name it,
-/// build it or move it onto other capabilities: the fields cannot be written
-/// through a `WindowCapabilities`, and every way to change one
-/// ([`unavailable`](Self::unavailable), [`into_parts`](Self::into_parts))
-/// yields capabilities of no publication. A copy of a window's published
-/// capabilities is the publication itself, so a value that carries one holds
-/// exactly what that window published.
+/// capabilities that differ from the ones before a published snapshot held.
+/// No caller can name it, build it or move it onto other capabilities: the
+/// fields are read by value and never written through a `WindowCapabilities`,
+/// and every way to change one ([`unavailable`](Self::unavailable),
+/// [`into_parts`](Self::into_parts)) yields capabilities of no publication,
+/// as the constants and [`CapabilityParts::into_capabilities`] are. A copy of
+/// a window's published capabilities is the publication itself, so a value
+/// that carries one holds exactly what that window published.
 ///
-/// An [`AdmittedCommand`](crate::AdmittedCommand) is bound to the publication
-/// it was admitted against, and opens only under it: a command checked against
-/// capabilities the window no longer has, another window's, or capabilities
-/// no window published is
+/// [`WindowCommand::admit`] refuses capabilities of no publication
+/// ([`AdmissionError::Unpublished`](crate::AdmissionError::Unpublished)), and
+/// an [`AdmittedCommand`](crate::AdmittedCommand) is bound to the publication
+/// it was admitted against and opens only under it: a command checked against
+/// capabilities the window no longer has, or another window's, is
 /// [`ApplyError::Superseded`](crate::ApplyError::Superseded), never applied.
 ///
 /// Equality and hashing compare what is honoured and why not, not the
@@ -154,15 +156,46 @@ impl Publication {
     }
 }
 
-impl std::ops::Deref for WindowCapabilities {
-    type Target = CapabilityParts;
+/// Declares one read-only accessor per capability, by value: none of them
+/// yields capabilities, so nothing read from a window's capabilities can
+/// stand in for them.
+macro_rules! capability_accessors {
+    ($($field:ident: $ty:ty),+ $(,)?) => {
+        impl WindowCapabilities {
+            $(
+                #[doc = concat!("[`CapabilityParts::", stringify!($field), "`] of these capabilities.")]
+                #[must_use]
+                pub const fn $field(&self) -> $ty {
+                    self.parts.$field
+                }
+            )+
+        }
+    };
+}
 
-    /// What the window honours and why not, to read. Nothing writes through
-    /// it: a field changes by taking the capabilities apart
-    /// ([`into_parts`](Self::into_parts)), which leaves the publication behind.
-    fn deref(&self) -> &CapabilityParts {
-        &self.parts
-    }
+capability_accessors! {
+    sets_title: WindowCapability,
+    sets_position: WindowCapability,
+    sets_size: WindowCapability,
+    sets_constraints: WindowCapability,
+    sets_resizable: WindowCapability,
+    sets_frame: WindowCapability,
+    app_title_bar: WindowCapability,
+    minimizes: WindowCapability,
+    maximizes: WindowCapability,
+    enters_fullscreen: WindowCapability,
+    hides: WindowCapability,
+    shows: WindowCapability,
+    activates: WindowCapability,
+    closes: WindowCapability,
+    material: WindowCapability,
+    reports_presentation: WindowCapability,
+    reports_keyboard_inset: WindowCapability,
+    reports_system_gestures: WindowCapability,
+    observes_position: Availability,
+    observes_minimized: Availability,
+    places_at_open: Availability,
+    frame_rate_hint: Availability,
 }
 
 impl PartialEq for WindowCapabilities {
@@ -322,13 +355,22 @@ impl WindowCapabilities {
         self
     }
 
-    /// These capabilities as the publication a window's snapshot at `revision`
-    /// makes of them, because they differ from the ones it published before.
+    /// These capabilities as the snapshot at `revision` holds them after they
+    /// changed from `previous`: a new publication where `previous` was one, and
+    /// still none where it was not, so a sample of hand-built capabilities
+    /// never becomes admissible by being succeeded.
     ///
     /// # Errors
     /// [`IdExhausted`] once the process issued every publication it can.
-    pub(crate) fn republished(mut self, revision: WindowRevision) -> Result<Self, IdExhausted> {
-        self.publication = Some(Publication::mint()?);
+    pub(crate) fn changed_from(
+        mut self,
+        previous: &Self,
+        revision: WindowRevision,
+    ) -> Result<Self, IdExhausted> {
+        self.publication = match previous.publication {
+            Some(_) => Some(Publication::mint()?),
+            None => None,
+        };
         self.revision = revision;
         Ok(self)
     }
@@ -366,7 +408,7 @@ impl WindowCapabilities {
     /// [`NotOnThisPlatform`](CapabilityAbsence::NOT_ON_THIS_PLATFORM) where no
     /// device of the platform has it. The mode every window has
     /// ([`WindowMode::Normal`]) cannot be taken away. The result is an edit, so
-    /// it is of no publication: a token admitted against it opens on no window.
+    /// it is of no publication: a host publishes it before admitting against it.
     ///
     /// ```
     /// use flui_platform::{
@@ -375,10 +417,12 @@ impl WindowCapabilities {
     /// };
     ///
     /// let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    /// let capabilities =
-    ///     WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    /// let capabilities = WindowCapabilities::ALL
+    ///     .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+    ///     .publish()
+    ///     .expect("the process has publications left");
     /// assert_eq!(
-    ///     capabilities.material,
+    ///     capabilities.material(),
     ///     WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     /// );
     /// let refused = material.admit(&capabilities).unwrap_err();
@@ -430,12 +474,12 @@ impl WindowCapabilities {
 }
 
 /// Every capability of a [`WindowCapabilities`], public: what a backend names
-/// its window's capabilities as, what a reader reads through
-/// [`WindowCapabilities`], and the boundary every serialization and mirror of
+/// its window's capabilities as, what [`WindowCapabilities::into_parts`] hands
+/// a reader, and the boundary every serialization and mirror of
 /// a window's capabilities goes through (a recording's schema), for the same
 /// reason as [`WindowStateParts`](crate::WindowStateParts).
 ///
-/// Deliberately not `#[non_exhaustive]`, unlike [`WindowCapabilities`]: a
+/// Deliberately not `#[non_exhaustive]`: a
 /// mirror builds and destructures this struct exhaustively, so a capability
 /// the contract gains breaks every mirror at compile time until it carries
 /// the capability. Which publication capabilities are, and at which revision,

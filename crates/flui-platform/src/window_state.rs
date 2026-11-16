@@ -67,12 +67,19 @@ impl WindowRevision {
     pub const LAST: Self = Self(u64::MAX);
 }
 
-/// A window state cannot advance: the last revision was reached, or its
-/// capabilities changed and the process has no publication left to issue them
-/// as ([`WindowState::successor`]).
+/// Why a window state cannot advance ([`WindowState::successor`]): nothing
+/// wraps, so the snapshot refuses the change and publishes nothing again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("window revisions exhausted")]
-pub struct WindowRevisionExhausted;
+#[non_exhaustive]
+pub enum WindowStateExhausted {
+    /// The window reached its last revision.
+    #[error("the window's revisions are exhausted")]
+    Revisions,
+    /// The window's capabilities changed and the process has issued every
+    /// publication it can, so they cannot be published (ADR-0341).
+    #[error("the process's capability publications are exhausted")]
+    Publications,
+}
 
 /// How a window occupies its display.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -413,17 +420,19 @@ impl WindowState {
     /// [`revision`](WindowCapabilities::revision) are this function's to
     /// issue, so a sample's are ignored too. While the window honours the same
     /// commands the same way, both stay this snapshot's; when that changes,
-    /// the capabilities become a new publication (a
-    /// [`publish`](WindowCapabilities::publish) of their own) at the new
-    /// snapshot's revision. A successor a caller computes from a window's
-    /// snapshot is therefore a publication of its own, which no token admitted
-    /// against the window's capabilities opens under, and the other way round.
+    /// the new snapshot's revision becomes theirs, capabilities this snapshot
+    /// held as a publication become a new one (ADR-0341), and capabilities of
+    /// no publication stay of none. A successor a caller computes from a
+    /// window's snapshot is therefore a publication of its own, which no token
+    /// admitted against the window's capabilities opens under, and the other
+    /// way round.
     ///
     /// # Errors
-    /// [`WindowRevisionExhausted`] when `sample` differs and this snapshot is
-    /// at the last revision, or when its capabilities differ and the process
-    /// issued every publication it can. Neither wraps.
-    pub fn successor(&self, mut sample: Self) -> Result<Self, WindowRevisionExhausted> {
+    /// [`WindowStateExhausted::Revisions`] when `sample` differs and this
+    /// snapshot is at the last revision, [`WindowStateExhausted::Publications`]
+    /// when its capabilities differ and the process issued every publication
+    /// it can. Neither wraps.
+    pub fn successor(&self, mut sample: Self) -> Result<Self, WindowStateExhausted> {
         sample.revision = self.revision;
         sample.capabilities = sample.capabilities.carried_from(&self.capabilities);
         if sample.metrics.is_none() {
@@ -433,13 +442,16 @@ impl WindowState {
         if sample == *self {
             return Ok(sample);
         }
-        let next = self.revision.next().ok_or(WindowRevisionExhausted)?;
+        let next = self
+            .revision
+            .next()
+            .ok_or(WindowStateExhausted::Revisions)?;
         sample.revision = next;
         if sample.capabilities != self.capabilities {
             sample.capabilities = sample
                 .capabilities
-                .republished(next)
-                .map_err(|flui_foundation::IdExhausted| WindowRevisionExhausted)?;
+                .changed_from(&self.capabilities, next)
+                .map_err(|flui_foundation::IdExhausted| WindowStateExhausted::Publications)?;
         }
         Ok(sample)
     }
@@ -527,12 +539,14 @@ impl WindowCommand {
     /// ([`WindowCapabilities`], "Publication").
     ///
     /// Pass the capabilities of the window's published snapshot
-    /// ([`WindowState::capabilities`]): capabilities built by hand or edited
-    /// belong to no window, and a window answers a token admitted against them
-    /// with [`ApplyError::Superseded`].
+    /// ([`WindowState::capabilities`]): capabilities built by hand, edited or
+    /// computed by a caller are no window's publication, and admission refuses
+    /// them (ADR-0341).
     ///
     /// # Errors
-    /// What [`validate`](Self::validate) refuses, or
+    /// What [`validate`](Self::validate) refuses;
+    /// [`AdmissionError::Unpublished`] when `capabilities` are no window's
+    /// publication, which admitting again never changes; or
     /// [`AdmissionError::Unsupported`] when the command's capability is
     /// [`Absent`](WindowCapability::Absent) in `capabilities`: the window
     /// does not take it, for the reason the capability carries.
@@ -541,12 +555,15 @@ impl WindowCommand {
         capabilities: &WindowCapabilities,
     ) -> Result<AdmittedCommand, AdmissionError> {
         self.validate()?;
+        let publication = capabilities
+            .publication()
+            .ok_or(AdmissionError::Unpublished)?;
         if let WindowCapability::Absent(absence) = capabilities.capability(&self) {
             return Err(Unsupported::from(absence).into());
         }
         Ok(AdmittedCommand {
             command: self,
-            publication: capabilities.publication(),
+            publication,
         })
     }
 
@@ -591,27 +608,26 @@ pub(crate) fn asked_size(size: Size<f64>) -> Result<WindowExtent, InvalidGeometr
 /// [`PlatformWindow::apply`](crate::PlatformWindow::apply) takes nothing else,
 /// so a window never receives an unchecked command.
 ///
-/// **What the token proves, and what it does not.** It proves the command's
-/// numbers describe a window and that one publication of a window's
+/// **What the token proves, and what it does not** (ADR-0341). It proves the
+/// command's numbers describe a window and that one publication of a window's
 /// capabilities ([`WindowCapabilities`], "Publication") honours it, and it
 /// carries that publication. No caller can make capabilities of a window's
 /// publication say anything but what the window published: their fields are
-/// read-only, an edit leaves the publication behind, and the publication is
-/// minted inside this crate and never reissued. A window opens the token with
+/// read by value, an edit leaves the publication behind, the publication is
+/// minted inside this crate and never reissued, and admission refuses
+/// capabilities of none. A window opens the token with
 /// [`against`](Self::against) its own published capabilities, which answers
 /// [`ApplyError::Superseded`] unless they are the very publication the token
 /// carries, so a window carries out only what its own published capabilities
-/// honour, and never a command checked against capabilities it no longer has,
-/// another window's, or capabilities no window published. The operating
-/// system still keeps the last word: it speaks through
-/// [`ApplyError::Platform`] and the next snapshot.
+/// honour, and never a command checked against capabilities it no longer has
+/// or another window's. The operating system still keeps the last word: it
+/// speaks through [`ApplyError::Platform`] and the next snapshot.
 #[derive(Debug, PartialEq)]
 #[must_use = "an admitted command does nothing until a window applies it"]
 pub struct AdmittedCommand {
     command: WindowCommand,
-    /// The publication the command was admitted against; `None` when it was
-    /// admitted against capabilities no window published.
-    publication: Option<Publication>,
+    /// The publication the command was admitted against.
+    publication: Publication,
 }
 
 impl AdmittedCommand {
@@ -626,22 +642,24 @@ impl AdmittedCommand {
     /// command out of the token.
     ///
     /// The contract is identity: the token opens only under the publication
-    /// it was admitted against. Within one window one publication is one set
-    /// of capabilities ([`WindowState::successor`] issues a new one with every
-    /// change), so the command it admitted is honoured without asking again.
+    /// it was admitted against. One publication is one set of capabilities,
+    /// which no reader can change and [`WindowState::successor`] replaces with
+    /// a new publication at every change, so the set `admit` checked the
+    /// command against is the set `capabilities` hold, and the command is
+    /// honoured without asking again.
     ///
     /// # Errors
     /// [`ApplyError::Superseded`], carrying the command back, when
-    /// `capabilities` are another publication than the token's: a later one
-    /// of the same window, another window's, or none at all; or when the token
-    /// was admitted against capabilities no window published. The caller
-    /// admits it again against the window's snapshot.
+    /// `capabilities` are another publication than the token's: a later one of
+    /// the same window, or another window's. The caller admits it again
+    /// against the window's snapshot.
     pub fn against(self, capabilities: &WindowCapabilities) -> Result<WindowCommand, ApplyError> {
-        match (self.publication, capabilities.publication()) {
-            (Some(admitted), Some(published)) if admitted == published => Ok(self.command),
-            _ => Err(ApplyError::Superseded {
+        if capabilities.publication() == Some(self.publication) {
+            Ok(self.command)
+        } else {
+            Err(ApplyError::Superseded {
                 command: self.command,
-            }),
+            })
         }
     }
 }
@@ -658,6 +676,12 @@ pub enum AdmissionError {
     /// The command's numbers cannot describe a window; the error names them.
     #[error("the command's geometry describes no window: {0}")]
     InvalidGeometry(InvalidGeometry),
+    /// The capabilities the command was admitted against are no window's
+    /// publication: built by hand, taken apart and edited, or computed by the
+    /// caller (ADR-0341). Admitting against them again is refused again; admit
+    /// against the window's snapshot.
+    #[error("the capabilities are no window's publication")]
+    Unpublished,
 }
 
 impl AdmissionError {
@@ -666,7 +690,7 @@ impl AdmissionError {
     pub const fn unsupported(&self) -> Option<Unsupported> {
         match self {
             Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::InvalidGeometry(_) => None,
+            Self::InvalidGeometry(_) | Self::Unpublished => None,
         }
     }
 }

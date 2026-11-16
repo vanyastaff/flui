@@ -531,7 +531,7 @@ async fn web_window_has_the_virtual_keyboard_overlay_its_page() {
         "the window asks for the keyboard's rectangle"
     );
     assert_eq!(
-        window.state().capabilities.reports_keyboard_inset,
+        window.state().capabilities.reports_keyboard_inset(),
         flui_platform::WindowCapability::Native
     );
     let keyboard = || window.state().insets.keyboard();

@@ -306,7 +306,7 @@ mod tests {
         let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
             (
                 "UIKit material",
-                scene_capabilities().material.absence(),
+                scene_capabilities().material().absence(),
                 Some(HOST),
             ),
             (
@@ -326,12 +326,12 @@ mod tests {
             ),
             (
                 "AppKit material",
-                appkit_window_capabilities(None).material.absence(),
+                appkit_window_capabilities(None).material().absence(),
                 None,
             ),
             (
                 "AppKit title bar of the application's",
-                appkit_window_capabilities(None).app_title_bar.absence(),
+                appkit_window_capabilities(None).app_title_bar().absence(),
                 None,
             ),
             (
@@ -351,70 +351,74 @@ mod tests {
             ),
             (
                 "Activity material, API 30",
-                activity_capabilities(activity(30, true)).material.absence(),
+                activity_capabilities(activity(30, true))
+                    .material()
+                    .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity material, API 31 with cross-window blur",
-                activity_capabilities(activity(31, true)).material.absence(),
+                activity_capabilities(activity(31, true))
+                    .material()
+                    .absence(),
                 Some(HOST),
             ),
             (
                 "UIKit keyboard inset",
-                scene_capabilities().reports_keyboard_inset.absence(),
+                scene_capabilities().reports_keyboard_inset().absence(),
                 None,
             ),
             (
                 "UIKit presentation report",
-                scene_capabilities().reports_presentation.absence(),
+                scene_capabilities().reports_presentation().absence(),
                 Some(HOST),
             ),
             (
                 "AppKit presentation report on a Mac",
                 appkit_window_capabilities(appkit_presentation(false))
-                    .reports_presentation
+                    .reports_presentation()
                     .absence(),
                 None,
             ),
             (
                 "AppKit presentation report on a hypervisor's guest",
                 appkit_window_capabilities(appkit_presentation(true))
-                    .reports_presentation
+                    .reports_presentation()
                     .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity keyboard inset, API 23",
                 activity_capabilities(activity(23, false))
-                    .reports_keyboard_inset
+                    .reports_keyboard_inset()
                     .absence(),
                 None,
             ),
             (
                 "Activity system gestures, API 28",
                 activity_capabilities(activity(28, false))
-                    .reports_system_gestures
+                    .reports_system_gestures()
                     .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity system gestures, API 29",
                 activity_capabilities(activity(29, false))
-                    .reports_system_gestures
+                    .reports_system_gestures()
                     .absence(),
                 None,
             ),
             (
                 "Activity presentation report",
                 activity_capabilities(activity(33, true))
-                    .reports_presentation
+                    .reports_presentation()
                     .absence(),
                 Some(HOST),
             ),
             (
                 "Activity material, API 31 with cross-window blur off",
                 activity_capabilities(activity(31, false))
-                    .material
+                    .material()
                     .absence(),
                 Some(DEVICE),
             ),
@@ -424,7 +428,7 @@ mod tests {
                     api: AndroidApi::UNKNOWN,
                     ..activity(31, true)
                 })
-                .material
+                .material()
                 .absence(),
                 Some(DEVICE),
             ),
@@ -460,7 +464,7 @@ mod tests {
                 frame_rate_hint: availability,
                 ..activity(31, true)
             });
-            assert_eq!(capabilities.frame_rate_hint, availability);
+            assert_eq!(capabilities.frame_rate_hint(), availability);
         }
     }
 

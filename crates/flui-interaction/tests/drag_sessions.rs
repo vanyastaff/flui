@@ -133,6 +133,9 @@ impl PlatformDragSource for FakeDragSource {
 struct DragWindow {
     size: Size<f64>,
     source: Option<Arc<dyn PlatformDragSource>>,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 impl PlatformWindow for DragWindow {
@@ -159,12 +162,13 @@ impl PlatformWindow for DragWindow {
             flui_platform::WindowGeometry::try_new(None, self.size).expect("a finite size"),
             flui_platform::WindowExtent::try_new(self.size).expect("a finite size"),
         )
+        .with_capabilities(self.capabilities)
     }
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
@@ -185,6 +189,9 @@ fn window(source: Option<OsDragStart>) -> Rc<dyn PlatformWindow> {
         size: Size::new(100.0, 100.0),
         source: source
             .map(|timing| Arc::new(FakeDragSource(timing)) as Arc<dyn PlatformDragSource>),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     })
 }
 

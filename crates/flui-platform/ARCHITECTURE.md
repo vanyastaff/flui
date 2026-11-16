@@ -124,34 +124,35 @@ this one path (ADR-0151 §9).
   disagree (X11 read a minimized window hidden, Win32 shown); a separate fact
   is what winit (`Occluded`), AppKit (`occlusionState` beside `isVisible`)
   and Chromium (`OcclusionState` visible/occluded/hidden) keep too.
-- **A window takes only an admitted command (ADR-0254 §2).**
+- **A window takes only an admitted command (ADR-0254 §2, ADR-0341).**
   `WindowCommand::admit(&WindowCapabilities)` is the one constructor of
   `AdmittedCommand`, and `PlatformWindow::apply` takes nothing else
   (`tests/compile_fail/{admitted_command_has_one_constructor,
   apply_takes_only_an_admitted_command}.rs`). Admission refuses with
-  `AdmissionError::Unsupported` exactly when the capability is `Absent`
-  and with `InvalidGeometry` before that. The token carries the
-  *publication* of the capabilities it was admitted against, an identity this
-  crate alone mints (one process-wide `AtomicIdMint`, never reissued):
+  `InvalidGeometry` first, then `AdmissionError::Unpublished` for
+  capabilities no window published, then `Unsupported` exactly when the
+  capability is `Absent`. The token carries the *publication* of the
+  capabilities it was admitted against, an identity this crate alone mints
+  (one process-wide `AtomicIdMint`, never reissued):
   `WindowCapabilities::publish` mints one for a window's first snapshot, and
   `WindowState::successor` keeps it while what the window honours stays the
-  same and mints a new one, at the new snapshot's revision, when it changes.
-  Capabilities of a publication cannot say anything but what the window
-  published: `WindowCapabilities` reads its `CapabilityParts` through `Deref`
-  and has no way to write one
+  same and mints a new one, at the new snapshot's revision, when it changes; a
+  successor of capabilities of no publication stays of none. Capabilities of
+  a publication cannot say anything but what the window published:
+  `WindowCapabilities` hands each capability out by value through an
+  accessor (`capabilities.material()`) and has no field to write
   (`tests/compile_fail/published_capabilities_cannot_be_edited.rs`), and
-  every edit (`into_parts`, `unavailable`) yields capabilities of no
-  publication, as `CapabilityParts::into_capabilities` and the constants are.
-  A window opens the token with `AdmittedCommand::against` its own published
+  `into_parts` is the one way out, to parts that turn back only into
+  capabilities of no publication, as `unavailable` and the constants are. A
+  window opens the token with `AdmittedCommand::against` its own published
   capabilities, which answers `ApplyError::Superseded`, giving the command
-  back to be admitted again, unless they are the token's very publication.
-  So a window carries out only what its own published capabilities honour,
-  and never a command admitted against an earlier publication, another
-  window's, an edited or hand-built copy, or a successor a caller computed
-  (`an_edit_of_published_capabilities_belongs_to_no_window`,
-  `a_successor_a_caller_computes_opens_nothing`). A token from capabilities
-  of no publication opens on no window, so a window double publishes its
-  capabilities once and opens against those. Equality of
+  back to be admitted again, unless they are the token's very publication;
+  one publication is one set of capabilities, so nothing is checked twice.
+  A window carries out only what its own published capabilities honour
+  (`an_edit_of_published_capabilities_is_refused_at_admission`,
+  `a_successor_a_caller_computes_opens_nothing`,
+  `a_successor_of_unpublished_capabilities_stays_unpublished`), and a window
+  double publishes its capabilities once and opens against those. Equality of
   `WindowCapabilities` compares what is honoured, not publication or
   revision. `ApplyError` is the world's (`Closed`,
   `Superseded { command }`, `Platform(PlatformFailure)`, where
@@ -159,7 +160,8 @@ this one path (ADR-0151 §9).
   `WindowControl::submit` answers `SubmitError` (`Admission`, `Closed`).
   `WindowCommand::admit_and_apply` is the one path that applies at once
   (admit against the snapshot, apply, admit once more on `Superseded`), and
-  answers `CommandRefusal` (`Admission` or `Apply`).
+  answers `CommandRefusal` (`Admission` or `Apply`). `successor` refuses
+  with `WindowStateExhausted` (`Revisions`, `Publications`).
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,
   `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no

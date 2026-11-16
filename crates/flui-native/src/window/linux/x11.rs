@@ -599,42 +599,42 @@ pub(crate) mod support {
                 let honoured =
                     capabilities(WindowManagerSupport::read(*manager, supported, &ATOMS));
                 assert_eq!(
-                    honoured.minimizes.availability(),
+                    honoured.minimizes().availability(),
                     *minimizes,
                     "{case}: minimizes"
                 );
                 assert_eq!(
-                    honoured.maximizes.availability(),
+                    honoured.maximizes().availability(),
                     *maximizes,
                     "{case}: maximizes"
                 );
                 assert_eq!(
-                    honoured.enters_fullscreen.availability(),
+                    honoured.enters_fullscreen().availability(),
                     *fullscreen,
                     "{case}: fullscreen"
                 );
-                assert_eq!(honoured.observes_minimized, *observes, "{case}: observes");
+                assert_eq!(honoured.observes_minimized(), *observes, "{case}: observes");
                 for always in [
-                    honoured.sets_title.availability(),
-                    honoured.sets_position.availability(),
-                    honoured.sets_size.availability(),
-                    honoured.sets_constraints.availability(),
-                    honoured.sets_resizable.availability(),
-                    honoured.sets_frame.availability(),
-                    honoured.hides.availability(),
-                    honoured.shows.availability(),
-                    honoured.activates.availability(),
-                    honoured.closes.availability(),
-                    honoured.observes_position,
-                    honoured.places_at_open,
+                    honoured.sets_title().availability(),
+                    honoured.sets_position().availability(),
+                    honoured.sets_size().availability(),
+                    honoured.sets_constraints().availability(),
+                    honoured.sets_resizable().availability(),
+                    honoured.sets_frame().availability(),
+                    honoured.hides().availability(),
+                    honoured.shows().availability(),
+                    honoured.activates().availability(),
+                    honoured.closes().availability(),
+                    honoured.observes_position(),
+                    honoured.places_at_open(),
                 ] {
                     assert_eq!(always, Native, "{case}: what the server does itself");
                 }
-                assert_eq!(honoured.frame_rate_hint, Unavailable, "{case}");
-                assert_eq!(honoured.material.availability(), Unavailable, "{case}");
+                assert_eq!(honoured.frame_rate_hint(), Unavailable, "{case}");
+                assert_eq!(honoured.material().availability(), Unavailable, "{case}");
                 let moves = *manager == Extended && supported.contains(&ATOMS.moveresize);
                 assert_eq!(
-                    honoured.app_title_bar.availability(),
+                    honoured.app_title_bar().availability(),
                     if moves { Native } else { Unavailable },
                     "{case}: a title bar of the application's"
                 );

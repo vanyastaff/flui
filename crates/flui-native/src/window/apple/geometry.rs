@@ -1024,11 +1024,11 @@ pub(crate) mod mode {
                 let honoured = capabilities_of(flags(expected.flags), None, every);
                 let actual = Row {
                     flags: expected.flags,
-                    maximizes: honoured.maximizes,
-                    enters_fullscreen: honoured.enters_fullscreen,
-                    sets_resizable: honoured.sets_resizable,
-                    sets_frame: honoured.sets_frame,
-                    hides: honoured.hides,
+                    maximizes: honoured.maximizes(),
+                    enters_fullscreen: honoured.enters_fullscreen(),
+                    sets_resizable: honoured.sets_resizable(),
+                    sets_frame: honoured.sets_frame(),
+                    hides: honoured.hides(),
                 };
                 assert_eq!(actual, expected);
             }
@@ -1048,8 +1048,9 @@ pub(crate) mod mode {
             let mut every = WindowCapabilities::NONE.into_parts();
             every.sets_resizable = Native;
             let every = every.into_capabilities();
-            let fixed =
-                |flags: WindowFlags, heading| capabilities_of(flags, heading, every).sets_resizable;
+            let fixed = |flags: WindowFlags, heading| {
+                capabilities_of(flags, heading, every).sets_resizable()
+            };
             let now = Instant::now();
 
             let mut sequence = ModeSequence::default();
@@ -1206,7 +1207,7 @@ pub(crate) mod mode {
             every.sets_resizable = flui_platform::WindowCapability::Native;
             let every = every.into_capabilities();
             let honoured = capabilities_of(flags("FR"), Some(Normal), every);
-            assert_eq!(honoured.sets_resizable, ABSENT);
+            assert_eq!(honoured.sets_resizable(), ABSENT);
         }
     }
 }

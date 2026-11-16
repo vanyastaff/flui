@@ -83,7 +83,7 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #       WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
 /// #   }
 /// #   fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-/// #       command.against(&WindowCapabilities::NONE)?;
+/// #       command.against(&self.state().capabilities)?;
 /// #       Ok(())
 /// #   }
 /// #   fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> { Ok(()) }

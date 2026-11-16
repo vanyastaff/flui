@@ -133,7 +133,7 @@ fn a_window_state_round_trips_through_its_parts() {
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
-        state.capabilities.reports_keyboard_inset,
+        state.capabilities.reports_keyboard_inset(),
         WindowCapability::NOT_ON_THIS_PLATFORM
     );
     assert_eq!(parts.capabilities.sets_title, WindowCapability::Native);
@@ -171,12 +171,10 @@ fn parts_leave_the_revision_and_publication_to_the_publishing_window() {
         Ok(WindowCommand::Hide),
         "a published snapshot taken apart and published again keeps its publication"
     );
-    let unpublished = WindowCommand::Hide
-        .admit(&sample_capabilities(&published))
-        .expect("the parts honour hiding");
-    assert!(
-        unpublished.against(&again.capabilities).is_err(),
-        "parts turned into capabilities are no window's"
+    assert_eq!(
+        WindowCommand::Hide.admit(&sample_capabilities(&published)),
+        Err(flui_platform::AdmissionError::Unpublished),
+        "parts turned into capabilities are no window's publication"
     );
 }
 

@@ -176,14 +176,12 @@ pub enum WindowAt {
 ///     .admit(&capabilities)
 ///     .expect("every window has the normal mode");
 /// assert_eq!(window.apply(normal), Ok(()));
-/// // Capabilities built by hand are no window's: the window gives the command back.
-/// let unpublished = WindowCommand::SetMode(WindowMode::Normal)
-///     .admit(&WindowCapabilities::ALL)
-///     .expect("every window has the normal mode");
-/// assert!(matches!(
-///     window.apply(unpublished),
-///     Err(ApplyError::Superseded { .. })
-/// ));
+/// // Capabilities built by hand are no window's publication: nothing admits
+/// // against them.
+/// assert_eq!(
+///     WindowCommand::SetMode(WindowMode::Normal).admit(&WindowCapabilities::ALL),
+///     Err(AdmissionError::Unpublished)
+/// );
 /// // A window with no native surface hands out none.
 /// let target = window.surface_target();
 /// assert!(raw_window_handle::HasWindowHandle::window_handle(&*target).is_err());
@@ -238,9 +236,9 @@ pub enum WindowAt {
 ///         WindowState::new(WindowGeometry::EMPTY, WindowExtent::ZERO)
 ///     }
 ///     fn apply(&self, command: AdmittedCommand) -> Result<(), ApplyError> {
-///         // Under the capabilities of its own snapshot, which honour
-///         // nothing but the normal mode every window has.
-///         command.against(&WindowCapabilities::NONE)?;
+///         // Under the capabilities of its own snapshot, the one place a
+///         // window reads what it honours.
+///         command.against(&self.state().capabilities)?;
 ///         Ok(())
 ///     }
 ///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {

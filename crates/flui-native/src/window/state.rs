@@ -207,8 +207,9 @@ pub(crate) enum StateDiagnostic {
     /// A read's geometry describes no window; the published geometry stands
     /// until a read describes one. Said once per run of such reads.
     Refused(InvalidGeometry),
-    /// The revision space is used up: the window publishes nothing again.
-    Frozen(flui_platform::WindowRevisionExhausted),
+    /// The window's revisions, or the process's capability publications, are
+    /// used up: the window publishes nothing again.
+    Frozen(flui_platform::WindowStateExhausted),
 }
 
 impl StateDiagnostic {
@@ -358,7 +359,7 @@ struct Slot {
     /// most one refusal (the first of the current run of refused reads) and
     /// the freeze, which happens once.
     unreported_refusal: Option<InvalidGeometry>,
-    unreported_freeze: Option<flui_platform::WindowRevisionExhausted>,
+    unreported_freeze: Option<flui_platform::WindowStateExhausted>,
     /// A note the first read carried, which no delivery has taken yet.
     unreported_note: Option<Note>,
 }

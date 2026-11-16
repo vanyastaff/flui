@@ -1810,6 +1810,9 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         query_time: Mutex::new(None),
         panic_next: AtomicBool::new(false),
         display: Mutex::default(),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     let runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -1964,6 +1967,9 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
             query_time: Mutex::new(None),
             panic_next: AtomicBool::new(false),
             display: Mutex::default(),
+            capabilities: flui_platform::WindowCapabilities::NONE
+                .publish()
+                .expect("the process has publications left"),
         });
         let fonts = flui_painting::FontCollection::new();
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
@@ -2126,6 +2132,9 @@ struct GeometryWindow {
     panic_next: std::sync::atomic::AtomicBool,
     /// The display the window reports being on.
     display: std::sync::Mutex<Option<flui_platform::DisplayId>>,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 /// Geometry belongs to the display a presentation is on: a move to a display
@@ -2169,6 +2178,9 @@ fn gesture_values_follow_the_presentation_display() {
         query_time: Mutex::new(None),
         panic_next: AtomicBool::new(false),
         display: Mutex::new(Some(display_id(1))),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     let runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -2323,13 +2335,14 @@ impl flui_platform::PlatformWindow for GeometryWindow {
         self.inner
             .state()
             .with_display(*self.display.lock().expect("display script"))
+            .with_capabilities(self.capabilities)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
 
@@ -2376,6 +2389,9 @@ struct RegionWindow {
     panic_next: std::sync::atomic::AtomicBool,
     /// The next display query panics, failing the gesture-geometry refresh.
     panic_display: std::sync::atomic::AtomicBool,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 impl flui_platform::PlatformWindow for RegionWindow {
@@ -2404,13 +2420,13 @@ impl flui_platform::PlatformWindow for RegionWindow {
         {
             panic!("scripted display query failure");
         }
-        self.inner.state()
+        self.inner.state().with_capabilities(self.capabilities)
     }
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
     fn text_input(&self) -> Option<std::sync::Arc<dyn flui_platform::PlatformTextInput>> {
@@ -2452,6 +2468,8 @@ struct MovingWindow {
         flui_foundation::geometry::Point<f64>,
         flui_platform::WindowRevision,
     )>,
+    /// What the window honours, published once when it was made.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 /// [`MovingWindow`] shared with the test that moves it.
@@ -2467,15 +2485,14 @@ impl flui_platform::WindowControl for SharedControl {
             flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         );
         state.revision = revision;
+        state.capabilities = self.0.capabilities;
         state
     }
     fn submit(
         &self,
         command: flui_platform::WindowCommand,
     ) -> Result<(), flui_platform::SubmitError> {
-        command
-            .admit(&flui_platform::WindowCapabilities::NONE)
-            .map(drop)?;
+        command.admit(&self.0.capabilities).map(drop)?;
         Ok(())
     }
     fn request_close(&self) {}
@@ -2496,6 +2513,9 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
         sent: Mutex::new(Vec::new()),
         panic_next: AtomicBool::new(false),
         panic_display: AtomicBool::new(false),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     let mut runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -2510,6 +2530,9 @@ fn a_failed_move_keeps_its_regions_subscribers_and_row() {
     .expect("runtime");
     let control = Arc::new(MovingWindow {
         position: Mutex::new((Point::new(0.0, 0.0), WindowRevision::ZERO)),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     let source = flui_view::__runtime::WindowSource::new(SharedControl(Arc::clone(&control)));
     let delivered = Rc::new(Cell::new(0));
@@ -2654,6 +2677,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         query_time: std::sync::Mutex::new(None),
         panic_next: AtomicBool::new(false),
         display: std::sync::Mutex::default(),
+        capabilities: flui_platform::WindowCapabilities::NONE
+            .publish()
+            .expect("the process has publications left"),
     });
     let runtime = UiRuntime::try_new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),

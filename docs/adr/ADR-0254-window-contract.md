@@ -4,6 +4,10 @@
 - **Date:** 2026-10-20
 - **Superseded-by:** [ADR-0277](ADR-0277-a-window-publishes-its-insets-and-the-keyboards-motion.md)
   in part: the snapshot field `safe_area` is `insets: WindowInsets`.
+- **Superseded-by:** [ADR-0341](ADR-0341-an-admitted-command-is-bound-to-a-publication-of-the-windows-capabilities.md)
+  for §2's binding of an `AdmittedCommand` only: the token carries the publication of the
+  capabilities it was admitted against, not their revision, and admission refuses capabilities no
+  window published.
 - **Amended:** 2026-10-27 — decision 4, approved by the owner: (1) a `WindowHandler` method takes
   no `&OwnerPlatform`, because `WindowHandler` is the contract's and `OwnerPlatform` is the host
   crate's, which the contract cannot name without the edge ADR-0083 and the layers forbid; a
@@ -272,12 +276,9 @@ Admission is a type:
   command's `InvalidGeometry` (`WindowOptions::geometry`). An application's configured window
   options are checked once more, the same way, before any runner starts: on every platform the
   start is refused with `LaunchError::InvalidWindowOption`, which names the option, whether or not
-  its host sizes the window from them. The token carries the publication
-  of the capabilities it was admitted against: an identity the contract crate mints for a window's
-  first snapshot and again whenever what the window honours changes (not with every state change),
-  carried with a capabilities revision that moves at the same points. A published capabilities
-  value is read-only, and any edit of one belongs to no window, so no caller can make the evidence
-  say what the window did not publish.
+  its host sizes the window from them. The token carries the capabilities
+  revision it was admitted against: the revision of the capabilities in the snapshot, which moves
+  when what the window honours changes and not with every state change.
 - `PlatformWindow::apply(AdmittedCommand) -> Result<(), ApplyError>`. A host can no longer
   receive an unvalidated command, and its `apply` has no admission arm to remember.
 - The errors are split by who can cause them. `AdmissionError` is `Unsupported(Unsupported)` or
@@ -295,8 +296,8 @@ Admission is a type:
   command.
 
 **The limit, stated in the docs of `AdmittedCommand`:** the token proves that the command was
-validated against one publication of the window's capabilities, and `apply` opens it only under the
-window's current publication, so a command is not applied under capabilities it was not checked
+validated against the capabilities read at admission, and `apply` compares the token's revision
+with the window's current one, so a command is not applied under capabilities it was not checked
 against. The OS still keeps the last word, and it speaks through `ApplyError::Platform` and the next
 snapshot. The remaining test obligation moves from "`apply` refuses exactly when a capability is
 false" to "a window's capabilities are honest".
@@ -588,12 +589,7 @@ on that platform.
   read.
 - `admitted_command_has_one_constructor` (compile-fail pair in the contract crate's
   `tests/compile_fail/`): building an `AdmittedCommand` outside `admit` does not compile, and
-  neither does passing a bare `WindowCommand` to `apply`; `published_capabilities_cannot_be_edited`
-  in the same directory: switching on a field of a window's published capabilities does not compile.
-- `an_edit_of_published_capabilities_belongs_to_no_window` and
-  `a_successor_a_caller_computes_opens_nothing` (the contract crate's `window_command_validate`):
-  a command admitted against capabilities taken apart and edited, published again, or computed
-  from a window's snapshot by a caller opens `Superseded` under the window's own capabilities.
+  neither does passing a bare `WindowCommand` to `apply`.
 - `a_command_admitted_before_a_capability_change_is_superseded`: a command admitted at one
   capabilities revision and applied after a capability change answers `ApplyError::Superseded`,
   not `Platform`, and admitting it again either applies it or is refused by `admit`.

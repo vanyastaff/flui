@@ -136,8 +136,10 @@ impl OpenPlan {
         inset: Size<f64>,
     ) -> Self {
         let mode = match options.mode {
-            WindowMode::Maximized if capabilities.maximizes.is_available() => WindowMode::Maximized,
-            WindowMode::Fullscreen if capabilities.enters_fullscreen.is_available() => {
+            WindowMode::Maximized if capabilities.maximizes().is_available() => {
+                WindowMode::Maximized
+            }
+            WindowMode::Fullscreen if capabilities.enters_fullscreen().is_available() => {
                 WindowMode::Fullscreen
             }
             _ => WindowMode::Normal,
@@ -165,7 +167,7 @@ impl OpenPlan {
         };
         let hidden_until_first_frame =
             options.visible && options.reveal == WindowReveal::AfterFirstFrame;
-        let position = if capabilities.places_at_open.is_available() {
+        let position = if capabilities.places_at_open().is_available() {
             at.and_then(|at| device_position(at, display))
         } else {
             None

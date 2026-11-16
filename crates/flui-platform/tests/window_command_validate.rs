@@ -8,7 +8,7 @@ use flui_platform::{
     SystemControls, Unsupported, UnsupportedReason, WindowAppearance, WindowCapabilities,
     WindowCapability, WindowCommand, WindowExecutionState, WindowExtent, WindowFrame,
     WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption, WindowOptions,
-    WindowRevision, WindowRevisionExhausted, WindowState,
+    WindowRevision, WindowState, WindowStateExhausted,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -280,12 +280,16 @@ fn commands_without_numbers_are_always_valid() {
 
 type Capability = fn(&mut CapabilityParts) -> &mut WindowCapability;
 
-/// What admitting `command` against `capabilities` answers, the token aside.
+/// What admitting `command` against `capabilities`, as a window publishes them,
+/// answers, the token aside.
 fn admits(
     command: &WindowCommand,
     capabilities: &WindowCapabilities,
 ) -> Result<(), AdmissionError> {
-    command.clone().admit(capabilities).map(|_admitted| ())
+    let published = (*capabilities)
+        .publish()
+        .expect("the process has publications left");
+    command.clone().admit(&published).map(|_admitted| ())
 }
 
 fn admit_refuses_exactly_when_the_capability_is_unavailable() {
@@ -546,11 +550,11 @@ fn the_last_revision_refuses_instead_of_wrapping() {
     at_last.revision = WindowRevision::LAST;
     assert_eq!(
         at_last.successor(base_state().with_visible(false)),
-        Err(WindowRevisionExhausted)
+        Err(WindowStateExhausted::Revisions)
     );
     assert_eq!(
         at_last.successor(base_state().with_visible(false)),
-        Err(WindowRevisionExhausted),
+        Err(WindowStateExhausted::Revisions),
         "exhaustion is permanent"
     );
     let unchanged = at_last
@@ -755,47 +759,88 @@ fn opens(admitted: AdmittedCommand, capabilities: &WindowCapabilities) -> Result
 }
 
 /// Capabilities taken apart, changed and put back together are no window's,
-/// whatever window's they were: a command a window lacks, admitted against
-/// its published capabilities with that capability switched on, opens not on
-/// the window but `Superseded`. So does one admitted against the capabilities
-/// marked absent once more, and publishing equal capabilities again is
-/// another publication.
-fn an_edit_of_published_capabilities_belongs_to_no_window() {
+/// whatever window's they were, and admission refuses them: a window's
+/// published capabilities with a capability it lacks switched on, the same
+/// capabilities marked absent once more, parts turned into capabilities and
+/// the constants are each `Unpublished`, which no retry changes. Publishing
+/// equal capabilities again is another publication, and a copy is the
+/// publication itself.
+fn an_edit_of_published_capabilities_is_refused_at_admission() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
     let published = as_published(WindowCapabilities::NONE);
     let mut switched_on = published.into_parts();
     switched_on.material = WindowCapability::Native;
-    let switched_on = switched_on.into_capabilities();
-    let admitted = material
-        .clone()
-        .admit(&switched_on)
-        .expect("the edited copy honours the material");
-    assert_eq!(
-        admitted.against(&published),
-        Err(ApplyError::Superseded {
-            command: material.clone()
-        }),
-        "the window's own capabilities do not take the material"
-    );
-
     let window = as_published(WindowCapabilities::ALL);
-    let narrowed = window.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
-    let hide = |capabilities: &WindowCapabilities| {
+    let hide = WindowCommand::Hide;
+    for (case, command, capabilities) in [
+        (
+            "a published copy with a capability switched on",
+            &material,
+            switched_on.into_capabilities(),
+        ),
+        (
+            "a published copy marked absent once more",
+            &hide,
+            window.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST),
+        ),
+        (
+            "published capabilities taken apart and put back",
+            &hide,
+            window.into_parts().into_capabilities(),
+        ),
+        (
+            "the constant every capability",
+            &hide,
+            WindowCapabilities::ALL,
+        ),
+    ] {
+        assert_eq!(
+            command.clone().admit(&capabilities),
+            Err(AdmissionError::Unpublished),
+            "{case}"
+        );
+    }
+    let admit = |capabilities: &WindowCapabilities| {
         WindowCommand::Hide
             .admit(capabilities)
-            .expect("every one honours hiding")
+            .expect("both honour hiding")
     };
-    assert_eq!(opens(hide(&narrowed), &window), Err(()), "an edit");
     assert_eq!(
-        opens(hide(&as_published(WindowCapabilities::ALL)), &window),
+        opens(admit(&as_published(WindowCapabilities::ALL)), &window),
         Err(()),
         "published again, equal capabilities are another publication"
     );
+    let copy = window;
     assert_eq!(
-        opens(hide(&window), &window),
+        opens(admit(&copy), &window),
         Ok(()),
         "a copy is the publication"
     );
+}
+
+/// A snapshot whose capabilities no window published passes none on: its
+/// successor's capabilities, changed or not, are still refused at admission,
+/// so succeeding a hand-built snapshot never makes its capabilities admissible.
+fn a_successor_of_unpublished_capabilities_stays_unpublished() {
+    let hand_built = base_state().with_capabilities(WindowCapabilities::ALL);
+    let changed = hand_built
+        .successor(base_state().with_capabilities(WindowCapabilities::NONE))
+        .expect("a capability changes");
+    let unchanged = hand_built
+        .successor(
+            base_state()
+                .with_capabilities(WindowCapabilities::ALL)
+                .with_focused(true),
+        )
+        .expect("another fact changes");
+    for (case, state) in [("changed", &changed), ("unchanged", &unchanged)] {
+        assert_eq!(
+            WindowCommand::SetMode(WindowMode::Normal).admit(&state.capabilities),
+            Err(AdmissionError::Unpublished),
+            "capabilities {case}"
+        );
+    }
+    assert_eq!(changed.capabilities.revision(), changed.revision);
 }
 
 /// The successor a caller computes from a window's snapshot is a publication
@@ -905,8 +950,9 @@ fn a_token_opens_only_under_the_capabilities_it_was_admitted_against() {
 }
 
 /// A token is bound to its window: at the same revision, another window's
-/// capabilities, or capabilities built by hand, do not open it, and a token
-/// admitted against hand-built capabilities opens on no window.
+/// capabilities, or capabilities built by hand, do not open it. Hand-built
+/// capabilities admit nothing at all
+/// (`an_edit_of_published_capabilities_is_refused_at_admission`).
 fn a_token_opens_only_on_the_window_it_was_admitted_for() {
     let first = as_published(WindowCapabilities::ALL);
     let second = as_published(WindowCapabilities::ALL);
@@ -918,11 +964,6 @@ fn a_token_opens_only_on_the_window_it_was_admitted_for() {
     };
     assert_eq!(opens(admit(&first), &first), Ok(()));
     assert_eq!(opens(admit(&first), &second), Err(()), "another window");
-    assert_eq!(
-        opens(admit(&WindowCapabilities::ALL), &first),
-        Err(()),
-        "capabilities built by hand belong to no window"
-    );
     assert_eq!(
         opens(admit(&first), &WindowCapabilities::ALL),
         Err(()),
@@ -1030,12 +1071,16 @@ fn window_command_validate() {
                 a_token_opens_only_on_the_window_it_was_admitted_for,
             ),
             (
-                "an_edit_of_published_capabilities_belongs_to_no_window",
-                an_edit_of_published_capabilities_belongs_to_no_window,
+                "an_edit_of_published_capabilities_is_refused_at_admission",
+                an_edit_of_published_capabilities_is_refused_at_admission,
             ),
             (
                 "a_successor_a_caller_computes_opens_nothing",
                 a_successor_a_caller_computes_opens_nothing,
+            ),
+            (
+                "a_successor_of_unpublished_capabilities_stays_unpublished",
+                a_successor_of_unpublished_capabilities_stays_unpublished,
             ),
             (
                 "a_capability_restored_is_the_one_never_taken_away",
@@ -1058,18 +1103,18 @@ fn window_command_validate() {
 /// it honours, and one left behind once it reports again is no difference.
 fn the_presentation_report_answers_why_it_is_missing() {
     assert_eq!(
-        WindowCapabilities::ALL.reports_presentation,
+        WindowCapabilities::ALL.reports_presentation(),
         WindowCapability::Native
     );
     assert_eq!(
-        WindowCapabilities::NONE.reports_presentation,
+        WindowCapabilities::NONE.reports_presentation(),
         WindowCapability::NOT_ON_THIS_PLATFORM,
         "a window that reports nothing: the platform's"
     );
     let mut host = WindowCapabilities::ALL.into_parts();
     host.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     let host = host.into_capabilities();
-    assert!(!host.reports_presentation.is_available());
+    assert!(!host.reports_presentation().is_available());
     let mut device = WindowCapabilities::ALL.into_parts();
     device.reports_presentation = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
     let device = device.into_capabilities();
@@ -1111,10 +1156,10 @@ fn a_refusal_answers_the_reason_the_capability_holds() {
     );
     assert_eq!(
         capabilities.capability(&material),
-        capabilities.material,
+        capabilities.material(),
         "a command reads the field it is admitted against"
     );
     let parts = capabilities.into_parts();
-    assert_eq!(parts.material, capabilities.material);
+    assert_eq!(parts.material, capabilities.material());
     assert_eq!(parts.into_capabilities(), capabilities);
 }

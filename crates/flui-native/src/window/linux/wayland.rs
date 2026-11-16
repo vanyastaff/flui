@@ -673,23 +673,23 @@ pub(crate) mod configure {
                 free,
                 Activation::Missing,
             );
-            assert!(unannounced.maximizes.is_available());
-            assert!(unannounced.minimizes.is_available());
-            assert!(unannounced.sets_size.is_available());
-            assert_eq!(unannounced.sets_resizable, WindowCapability::Emulated);
+            assert!(unannounced.maximizes().is_available());
+            assert!(unannounced.minimizes().is_available());
+            assert!(unannounced.sets_size().is_available());
+            assert_eq!(unannounced.sets_resizable(), WindowCapability::Emulated);
             assert_eq!(
-                capabilities(None, None, None, free, Activation::Missing).sets_frame,
+                capabilities(None, None, None, free, Activation::Missing).sets_frame(),
                 WindowCapability::Native,
                 "a compositor that draws frames takes the command"
             );
             assert_eq!(
-                capabilities(None, None, None, free, Activation::Offered).activates,
+                capabilities(None, None, None, free, Activation::Offered).activates(),
                 WindowCapability::Emulated,
                 "the compositor decides what an activation request does"
             );
             assert!(
                 capabilities(None, None, None, free, Activation::Missing)
-                    .app_title_bar
+                    .app_title_bar()
                     .is_available(),
                 "a window that draws its own margins takes the application's title bar"
             );
@@ -734,9 +734,9 @@ pub(crate) mod configure {
                 free,
                 Activation::Offered,
             );
-            assert!(!announced.maximizes.is_available());
-            assert!(!announced.minimizes.is_available());
-            assert!(announced.enters_fullscreen.is_available());
+            assert!(!announced.maximizes().is_available());
+            assert!(!announced.minimizes().is_available());
+            assert!(announced.enters_fullscreen().is_available());
             assert_eq!(
                 WindowCommand::SetMode(WindowMode::Maximized)
                     .admit(&announced)
@@ -763,13 +763,13 @@ pub(crate) mod configure {
             let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
             assert!(
                 capabilities(None, None, None, maximized, Activation::Missing)
-                    .sets_size
+                    .sets_size()
                     .is_available()
             );
             let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
             assert!(
                 capabilities(None, None, None, floating, Activation::Missing)
-                    .sets_size
+                    .sets_size()
                     .is_available()
             );
         }
@@ -1086,10 +1086,10 @@ pub(crate) mod presented {
         #[test]
         fn the_report_follows_the_compositor() {
             let offered = reported(WindowCapabilities::NONE, true);
-            assert_eq!(offered.reports_presentation, WindowCapability::Native);
+            assert_eq!(offered.reports_presentation(), WindowCapability::Native);
             let missing = reported(WindowCapabilities::NONE, false);
             assert_eq!(
-                missing.reports_presentation,
+                missing.reports_presentation(),
                 WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             );
         }

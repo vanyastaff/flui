@@ -345,7 +345,7 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
                 .then_some(())
                 .ok_or_else(|| format!("the title is {:?}, not {title:?}", state.title)),
             WindowCommand::SetPosition(at) => {
-                if capabilities.observes_position.is_available() {
+                if capabilities.observes_position().is_available() {
                     let there = state.outer.position();
                     there
                         .is_some_and(|there| near(there.x, at.x) && near(there.y, at.y))
@@ -378,7 +378,7 @@ fn accepted_commands_converge(fixture: &mut dyn WindowFixture) -> Result<(), Str
             WindowCommand::SetMode(WindowMode::Minimized) => {
                 if !state.visible {
                     Err("the window is no longer shown".to_owned())
-                } else if capabilities.observes_minimized.is_available() {
+                } else if capabilities.observes_minimized().is_available() {
                     (state.mode == WindowMode::Minimized)
                         .then_some(())
                         .ok_or_else(|| format!("the mode is {:?}, not Minimized", state.mode))
@@ -635,7 +635,7 @@ fn per_frame_verbs_report_unsupported_exactly_when_unavailable(
     for hint in [FrameRateHint::High, FrameRateHint::Default] {
         judge(
             format!("set_frame_rate_hint({hint:?})"),
-            capabilities.frame_rate_hint,
+            capabilities.frame_rate_hint(),
             window.set_frame_rate_hint(hint),
         );
     }
@@ -669,7 +669,7 @@ fn presentation_is_reported_exactly_when_claimed(
 ) -> Result<(), String> {
     // An absent capability names a lasting reason by its type
     // (`CapabilityAbsence`): there is no answer that asks to be tried again.
-    let claimed = fixture.window().state().capabilities.reports_presentation;
+    let claimed = fixture.window().state().capabilities.reports_presentation();
     let mut broken = Vec::new();
     let before = EventTime::now();
     let Some(request) = fixture.present_and_request_frame() else {
