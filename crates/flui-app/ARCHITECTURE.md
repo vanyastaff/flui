@@ -553,7 +553,7 @@ here is where the code keeps it.
   `lend_to_installing`) and the reopen ask it. A URL for the application goes to the main window
   alone (`host::main_window`: `Open`, `Opening`, `Closed` on every runner; the desktop reads its
   `Ingress`, the other runners their one window), never a focused or first-opened other window;
-  a window being built takes it only as the main window being opened (`WindowRole::Main`).
+  a window being built takes it only as the main window being opened (`is_main_window`, which each runner states).
 - Each owner turn calls `host::route_owed_opened_urls` (desktop and web in the owner-turn hook,
   iOS in `drive_owner`, Android in its wake) while anything waits. What a loan returned is routed
   once; the URL held for the application is bound to the main window's opening (`HeldUrl::bound`,

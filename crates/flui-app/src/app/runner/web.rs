@@ -99,7 +99,7 @@ where
         let (ui_runtime, opened) = match super::host::build_lending_ui_runtime(
             presentation_window,
             scale_factor,
-            super::opened::WindowRole::Main,
+            true, // the run's main window
         ) {
             Ok(built) => built,
             Err(error) => {

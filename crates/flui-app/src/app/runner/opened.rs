@@ -192,17 +192,6 @@ struct HeldUrl {
     bound: Option<u64>,
 }
 
-/// Which window of the run a UI runtime is built for: what decides whether
-/// the URL for the application is lent to it ([`destination`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WindowRole {
-    /// The run's main window: the desktop main-window controller's, or the
-    /// one window of iOS, Android and the web.
-    Main,
-    /// Any other window: a secondary or document window, a helper.
-    Other,
-}
-
 /// How a loan ended without its installation committing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoanEnd {
@@ -508,18 +497,20 @@ impl OpenRouting {
     /// `window`, in that runtime before its root mounts, so its first Router
     /// opens on them (`UrlOwnerSlot::open_at`'s cold start). Only what
     /// [`destination`] gives this window is lent: the URL for the application
-    /// to the main window while it is being opened (`role`), never to another
-    /// window that happens to be built first. They are on loan to the
+    /// to the main window while it is being opened (`is_main_window`, which
+    /// each runner states: true for the desktop main-window controller's
+    /// window and for the one window of iOS, Android and the web), never to
+    /// another window that happens to be built first. They are on loan to the
     /// installation, which owns the returned guard.
     pub(crate) fn open_held_in(
         self: &Rc<Self>,
         ui_runtime: &UiRuntime,
         window: &dyn PlatformWindow,
-        role: WindowRole,
+        is_main_window: bool,
     ) -> Option<OpenedLoan> {
         let presentation = ui_runtime.presentation_id();
         let builds_main =
-            role == WindowRole::Main && !matches!(super::host::main_window(), MainWindow::Open(_));
+            is_main_window && !matches!(super::host::main_window(), MainWindow::Open(_));
         if builds_main {
             self.main_installing.set(Some(PresentationAddress {
                 ui_runtime_id: ui_runtime.id(),

@@ -108,7 +108,8 @@ impl OpeningWindow {
 }
 
 /// Install `root` in `host`, the window `opening` opened, as the run's main
-/// window or another (`role`: which opened URLs its runtime takes).
+/// window or another (`is_main_window`: whether its runtime takes the opened URL for the
+/// application).
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -116,7 +117,7 @@ pub(super) fn install_desktop_window<V>(
     host: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
     opening: OpeningWindow,
-    role: super::opened::WindowRole,
+    is_main_window: bool,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
     V: View + Clone + 'static,
@@ -150,16 +151,19 @@ where
     let scale_factor = geometry.scale;
     // The opened URLs its runtime took are on loan until the installation
     // commits; a return before it is prepared gives them back.
-    let (ui_runtime, opened) =
-        match super::host::build_lending_ui_runtime(presentation_window, scale_factor, role) {
-            Ok(built) => built,
-            Err(e) => {
-                tracing::error!(error = %e, "UiRuntime construction failed");
-                return Err(crate::app::AppWindowError::Mount {
-                    source: Arc::new(e),
-                });
-            }
-        };
+    let (ui_runtime, opened) = match super::host::build_lending_ui_runtime(
+        presentation_window,
+        scale_factor,
+        is_main_window,
+    ) {
+        Ok(built) => built,
+        Err(e) => {
+            tracing::error!(error = %e, "UiRuntime construction failed");
+            return Err(crate::app::AppWindowError::Mount {
+                source: Arc::new(e),
+            });
+        }
+    };
 
     // Debug overlay: `Some` stats IS the enable flag, so this is the
     // single point that turns the frame path's overlay work on.

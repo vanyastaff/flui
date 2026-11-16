@@ -952,7 +952,7 @@ where
                             Rc::clone(&window),
                             host,
                             opening,
-                            super::opened::WindowRole::Other,
+                            false, // not the run's main window
                         )
                         .map(|rendered| rendered.installation)
                     })),
@@ -1098,7 +1098,7 @@ fn finish_open_secondary_window(
                     super::presentation_window(Rc::clone(&host))
                         .with_pointer_resampling(config.pointer_resampling),
                     scale_factor,
-                    super::opened::WindowRole::Other,
+                    false, // not the run's main window
                 )
                 .map_err(mount_error)?;
                 ui_runtime.set_frame_failure_detail(config.frame_failure_detail);

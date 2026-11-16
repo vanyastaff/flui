@@ -351,7 +351,7 @@ fn close_vetoes() -> Vec<flui_view::CloseReason> {
 pub(super) fn build_lending_ui_runtime(
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
-    role: super::opened::WindowRole,
+    is_main_window: bool,
 ) -> Result<
     (
         crate::app::ui_runtime::UiRuntime,
@@ -406,7 +406,7 @@ pub(super) fn build_lending_ui_runtime(
     // the caller hands the guard to (`WindowInstall::lend_opened`).
     let loan = current_open_routing().and_then(|routing| {
         routing.admit_in(&ui_runtime);
-        routing.open_held_in(&ui_runtime, native.as_ref(), role)
+        routing.open_held_in(&ui_runtime, native.as_ref(), is_main_window)
     });
     Ok((ui_runtime, loan))
 }
@@ -418,8 +418,7 @@ pub(super) fn build_ui_runtime(
     window: impl Into<crate::app::presentation::PresentationWindow>,
     scale_factor: f64,
 ) -> Result<crate::app::ui_runtime::UiRuntime, HostServicesError> {
-    build_lending_ui_runtime(window, scale_factor, super::opened::WindowRole::Other)
-        .map(|(ui_runtime, _)| ui_runtime)
+    build_lending_ui_runtime(window, scale_factor, false).map(|(ui_runtime, _)| ui_runtime)
 }
 
 /// Answer one phase of the user's session ending (ADR-0237, ADR-0260).
