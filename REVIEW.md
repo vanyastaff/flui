@@ -1,7 +1,8 @@
 # Review instructions
 
 What to look for lives in `AGENTS.md`, which `CLAUDE.md` imports: its "Review guidelines",
-"Recurring defects", "Design stance" and "Definition of Done" sections. Read them before the
+"Recurring defects", "Design stance", "Code for the next reader" and "Definition of Done"
+sections. Read them before the
 diff. This file sets severity, evidence and scope for Claude Code Review.
 
 ## Evidence
@@ -21,6 +22,8 @@ Important is a defect a user or a later change would hit:
 - `async`, or a lock on per-node state, on the build/layout/paint path;
 - a regression test that still passes with the fix reverted, or new behaviour with no test
   through the public API under `tests/`;
+- a stub standing in for the behaviour (an empty body, a default return, a test that returns
+  before its assertion);
 - a "Review guidelines" item that leads to wrong behaviour;
 - new code that uses a form from the "Not" column of `AGENTS.md`'s "Current forms", or a
   replacement or reversal whose old form still has users or records that teach it.
