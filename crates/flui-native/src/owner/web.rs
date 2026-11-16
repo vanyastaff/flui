@@ -478,7 +478,7 @@ pub struct WebLoop {
     launch: crate::owner::page_launch::PageLaunch,
     /// The application's turn deadline and the generation of the page timer
     /// scheduled for it ([`Self::arm_turn_deadline`]).
-    turn_deadline: RefCell<(crate::owner::wake_deadline::WakeDeadline, u64)>,
+    turn_deadline: RefCell<(crate::owner::wake_deadline::TurnDeadline, u64)>,
 }
 
 pub(crate) struct WebState {
@@ -632,7 +632,7 @@ impl WebLoop {
             frames: Arc::default(),
             raf: RefCell::new(None),
             launch,
-            turn_deadline: RefCell::new((crate::owner::wake_deadline::WakeDeadline::default(), 0)),
+            turn_deadline: RefCell::new((crate::owner::wake_deadline::TurnDeadline::default(), 0)),
         })
     }
 
@@ -745,22 +745,40 @@ impl WebLoop {
     /// asks for with a page timer (`setTimeout`): at that instant the owner
     /// gets a turn whether or not the canvas asks for frames, and no frame is
     /// asked for. Called after each owner turn and once the handler has
-    /// bootstrapped; an answer supersedes the timer an earlier one scheduled,
-    /// and an instant delivered once is not scheduled again.
+    /// bootstrapped. An answer that changes the instant armed supersedes the
+    /// timer an earlier one scheduled, the same instant keeps it, and an
+    /// instant a turn served is not scheduled again ([`TurnDeadline`]).
+    ///
+    /// [`TurnDeadline`]: crate::owner::wake_deadline::TurnDeadline
     fn arm_turn_deadline(&self) {
         let answer = if self.signal.accepting() {
             self.app.turn_deadline().or_resume(None)
         } else {
             None
         };
-        let (armed, generation) = {
+        let armed = {
             let mut slot = self.turn_deadline.borrow_mut();
-            let armed = slot.0.arm(answer, self.signal.turns());
+            let before = slot.0.armed();
+            let armed = slot.0.arm(answer);
+            if armed == before {
+                // The timer scheduled for this instant still stands.
+                return;
+            }
+            armed
+        };
+        self.schedule_turn_timer(armed);
+    }
+
+    /// Schedule the page timer for `armed`, superseding the one scheduled
+    /// before; `None` only supersedes it.
+    fn schedule_turn_timer(&self, armed: Option<web_time::Instant>) {
+        let generation = {
+            let mut slot = self.turn_deadline.borrow_mut();
             slot.1 = slot
                 .1
                 .checked_add(1)
                 .expect("BUG: a turn-deadline generation per owner turn fits in u64");
-            (armed, slot.1)
+            slot.1
         };
         let Some(at) = armed else {
             return;
@@ -781,10 +799,7 @@ impl WebLoop {
                 let current = slot.1 == generation;
                 (
                     current,
-                    current
-                        && slot
-                            .0
-                            .take_due(web_time::Instant::now(), owner.signal.turns()),
+                    current && slot.0.take_due(web_time::Instant::now()),
                 )
             };
             if due {
@@ -792,7 +807,7 @@ impl WebLoop {
             } else if current {
                 // The page's clock ran the timer a little early: schedule
                 // the rest of the wait.
-                owner.arm_turn_deadline();
+                owner.schedule_turn_timer(Some(at));
             }
         });
         let scheduled = web_sys::window().map(|window| {

@@ -2458,8 +2458,9 @@ fn window_state_to_wire(state: &RecordedWindowState) -> DtoResult<wire::WindowSt
         hovered,
         active,
         user_placing: match interaction {
-            WindowInteraction::UserPlacing => true,
-            WindowInteraction::None => false,
+            WindowInteraction::UserPlacing => Some(true),
+            WindowInteraction::None => Some(false),
+            WindowInteraction::Unknown => None,
             _ => return Err(DtoError::Unmirrored("WindowInteraction")),
         },
         capabilities: capabilities_to_wire(capabilities),
@@ -2620,10 +2621,10 @@ fn window_state_from_wire(wire: wire::WindowState) -> DtoResult<RecordedWindowSt
         },
         hovered,
         active,
-        interaction: if user_placing {
-            WindowInteraction::UserPlacing
-        } else {
-            WindowInteraction::None
+        interaction: match user_placing {
+            Some(true) => WindowInteraction::UserPlacing,
+            Some(false) => WindowInteraction::None,
+            None => WindowInteraction::Unknown,
         },
         capabilities: capabilities_from_wire(capabilities)?,
     };

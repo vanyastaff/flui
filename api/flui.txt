@@ -13686,8 +13686,9 @@ impl PartialEq for flui::platform::WindowInteraction
 impl core::fmt::Debug for flui::platform::WindowInteraction
 impl core::hash::Hash for flui::platform::WindowInteraction
 impl core::marker::StructuralPartialEq for flui::platform::WindowInteraction
-variant flui::platform::WindowInteraction::None // at 0
-variant flui::platform::WindowInteraction::UserPlacing // at 1
+variant flui::platform::WindowInteraction::None // at 1
+variant flui::platform::WindowInteraction::Unknown // at 0
+variant flui::platform::WindowInteraction::UserPlacing // at 2
 pub enum flui::platform::WindowMaterial
 impl Clone for flui::platform::WindowMaterial
 impl Copy for flui::platform::WindowMaterial
@@ -34230,7 +34231,7 @@ field flui_protocol::native_recording::WindowState::revision: u64 // at 0
 field flui_protocol::native_recording::WindowState::safe_area: [f64; 4] // at 15
 field flui_protocol::native_recording::WindowState::system_gestures: [f64; 4] // at 17
 field flui_protocol::native_recording::WindowState::title: Option<String> // at 8
-field flui_protocol::native_recording::WindowState::user_placing: bool // at 21
+field flui_protocol::native_recording::WindowState::user_placing: Option<bool> // at 21
 field flui_protocol::native_recording::WindowState::visible: bool // at 5
 impl Clone for flui_protocol::native_recording::WindowState
 impl PartialEq for flui_protocol::native_recording::WindowState

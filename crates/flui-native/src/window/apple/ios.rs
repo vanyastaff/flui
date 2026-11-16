@@ -1491,8 +1491,9 @@ impl IOSWindow {
                 // A scene has no activation apart from its focus.
                 active: focused,
                 capabilities: scene_capabilities(),
-                // A scene is placed by the system, never by the user.
-                interaction: flui_platform::WindowInteraction::None,
+                // The user can resize a scene in Stage Manager or split view,
+                // which this host does not read: it cannot tell.
+                interaction: flui_platform::WindowInteraction::Unknown,
             }
             .onto(state)
         });

@@ -869,23 +869,31 @@ trait depends on `flui-platform` instead.
   frame serves: at it a loop asks its windows for frames, and the instant is
   delivered again only after a frame ran. `turn_deadline` is work no frame
   serves (a bounded wait, a held write): at it the loop gives the owner one
-  turn through `OwnerSignal::wake`, with or without a window open, asks no
-  window for a frame, and delivers the instant again only after an owner turn
-  ran (`OwnerSignal::turns`), so the obligation stays until the handler moves
-  it at its turn. Every host asks it after every owner turn: the Win32 loop
+  turn through `OwnerSignal::wake`, with or without a window open, and asks no
+  window for a frame. Every loop arms and takes it with
+  `owner::wake_deadline::TurnDeadline`: a turn delivered for the deadline
+  serves every deadline not later than that turn's own time, and an answer not
+  later than the last time served is not armed again, so no answer spins a
+  loop; work ready now asks for a turn through the signal instead of answering
+  a past instant. Every host asks it after every owner turn: the Win32 loop
   and its modal loops and the X11, Wayland and Android loops before each wait;
   AppKit, UIKit and the web after each turn and once the handler bootstrapped,
   through a timer of the main queue or the page; the headless host when a test
   drives `HeadlessOwnerTurns::drive_at(now)`. A handler that moves the deadline
   outside an owner turn asks for one. `a_turn_deadline_gives_the_owner_a_turn_with_no_window`
   (the `app_handler` table on Win32, `x11_window`, `wayland_window`),
-  `a_turn_deadline_asks_no_window_for_a_frame` and
+  `a_turn_deadline_asks_no_window_for_a_frame`, `a_past_turn_deadline_gives_one_turn`,
+  `a_past_turn_deadline_does_not_spin_the_win32_loop` and
   `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` hold it.
 - **A window states when the user places it (ADR-0343 §2).** Each host fills
-  `ReportedFacts::interaction`: Win32 `UserPlacing` inside its size-move loop
-  and while the default procedure carries out `SC_MAXIMIZE`, `SC_MINIMIZE` or
-  `SC_RESTORE`; the headless host what `HeadlessHostWindow::simulate_interaction`
-  said; every other host `None` ([gaps](../../docs/gaps.md#x11-wayland-and-appkit-do-not-say-when-the-user-places-a-window)).
+  `ReportedFacts::interaction` on the report that carries a change: Win32
+  `UserPlacing` inside its size-move loop and while the default procedure
+  carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user worked,
+  and publishes `None` when either ends; a system command the window sends
+  itself for an application's command is marked by its sender
+  (`WindowContext::in_app_command`) and is not the user's. The headless host
+  states what `HeadlessHostWindow::simulate_interaction` said; every other
+  host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
 - **The application's handler is passed to `run` (ADR-0254 §4).**
   `AppHandler` (in `platform.rs`) has one method per obligation:
   `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,

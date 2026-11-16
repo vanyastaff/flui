@@ -239,7 +239,7 @@ pub(crate) struct HeadlessState {
     pub(crate) keyboard_layout: String,
     /// The application's turn deadline as [`HeadlessOwnerTurns::drive_at`]
     /// armed it.
-    turn_deadline: crate::owner::wake_deadline::WakeDeadline,
+    turn_deadline: crate::owner::wake_deadline::TurnDeadline,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
     /// [`HeadlessPlatform::enable_deferred_window_open`](crate::HeadlessPlatform::enable_deferred_window_open)): when `true`,
@@ -366,7 +366,7 @@ impl HeadlessLoop {
             is_running: false,
             windows,
             keyboard_layout: "en-US".to_string(),
-            turn_deadline: crate::owner::wake_deadline::WakeDeadline::default(),
+            turn_deadline: crate::owner::wake_deadline::TurnDeadline::default(),
             opened_urls: Vec::new(),
             deferred_window_open: false,
             pending_opens: Vec::new(),
@@ -817,10 +817,11 @@ impl HeadlessOwnerTurns {
 
     /// The turn a desktop loop's idle wait gives when it wakes at `now`: the
     /// application's turn deadline (`AppHandler::turn_deadline`) is asked
-    /// and, when it is due by `now`, gives the owner its turn, delivered again
-    /// only after a turn ran, as the native loops deliver it; then one owner
-    /// turn runs, as [`drive`](Self::drive) runs it. A test passes the time of
-    /// its manual clock, so a deadline is served with no real wait.
+    /// and, when it is due by `now`, gives the owner its turn, by the rule the
+    /// native loops deliver it by: that turn serves every deadline not later
+    /// than `now`, so an instant it served is not delivered again. Then one
+    /// owner turn runs, as [`drive`](Self::drive) runs it. A test passes the
+    /// time of its manual clock, so a deadline is served with no real wait.
     pub fn drive_at(&self, now: web_time::Instant) {
         let (Some(state), Some(signal)) = (self.state.upgrade(), self.signal.upgrade()) else {
             return;
@@ -832,11 +833,10 @@ impl HeadlessOwnerTurns {
         } else {
             None
         };
-        let turns = signal.turns();
         let due = {
             let mut state = state.borrow_mut();
-            let _: Option<web_time::Instant> = state.turn_deadline.arm(answer, turns);
-            state.turn_deadline.take_due(now, turns)
+            let _: Option<web_time::Instant> = state.turn_deadline.arm(answer);
+            state.turn_deadline.take_due(now)
         };
         if due {
             let _ = signal.wake();

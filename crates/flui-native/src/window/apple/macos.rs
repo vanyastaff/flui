@@ -1887,7 +1887,7 @@ impl MacOSWindow {
                     capabilities,
                     // AppKit's live resize and title-bar drag are not read
                     // yet (docs/gaps.md).
-                    interaction: flui_platform::WindowInteraction::None,
+                    interaction: flui_platform::WindowInteraction::Unknown,
                 }
                 .onto(state)
             })

@@ -524,9 +524,12 @@ run with nothing borrowed.
 
 - **The owner's turns come from the turn deadline (ADR-0343 §1).**
   `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
-  placements' next due instant and the main window's read bound; every host
-  gives the owner a turn at it, with or without a window open, asks no window
-  for a frame, and delivers it again after a turn that left it unserved.
+  placements' next due instant and the main window's read bound, instants in
+  the future that something waits for; every host gives the owner a turn at
+  it, with or without a window open, and asks no window for a frame. A turn
+  serves every instant not later than its own time, so work ready now is no
+  deadline: a storage answer wakes the owner itself, and a close carried over
+  asks for a turn (`PlacementShared::ask_turn`).
   Placement adds nothing to the frame deadline. A change made outside an owner
   turn (a window's report, a close, a display change, a window queued for its
   read) that moves the deadline asks for a turn
@@ -551,12 +554,13 @@ run with nothing borrowed.
 - **Only the user overwrites a placement the run could not read.** After a
   read that timed out, was refused or panicked, the recorder holds
   `StoredPlacement::Unknown`, which owes nothing until a change the host
-  states was the user's (`ChangeOrigin::User`): a report whose
-  `WindowState::interaction` is `UserPlacing`, or the report that ends one
-  (ADR-0343 §2). Nothing is inferred from what did not change: where the
-  window opened, a display or scale change, a window manager's adjustment and
-  an application's command never write, and on a host that cannot tell
-  nothing does until the read succeeds another run.
+  states was the user's (`ChangeOrigin::User`): the report that carries the
+  change says `WindowState::interaction` is `UserPlacing` (ADR-0343 §2).
+  Nothing is inferred from what did not change nor from the report before:
+  where the window opened, a display or scale change, a window manager's
+  adjustment, an application's command and a change after the user's
+  placement ended never write, and on a host that says `Unknown` nothing does
+  until the read succeeds another run.
 - **Writes are bounded.** At most one every `WRITE_INTERVAL` while the window
   changes. A refused write is tried again after twice the wait of the attempt
   before, `WRITE_ATTEMPTS` times in all, and then not until the window's

@@ -34,7 +34,7 @@ use crate::{
     owner::apple::terminate_gate::Termination,
     owner::panic_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry},
     owner::signal::OwnerTurnSlot,
-    owner::wake_deadline::WakeDeadline,
+    owner::wake_deadline::TurnDeadline,
 };
 
 /// Whether finishing a session end also answers a waiting
@@ -90,9 +90,9 @@ pub(crate) struct LoopControl {
     turn_deadline: OnceLock<NativeOwner<TurnTimer>>,
 }
 
-/// The turn deadline as AppKit arms it, keyed by the owner's turns, and the
-/// generation of the timer scheduled for it.
-type TurnTimer = Rc<RefCell<(WakeDeadline, u64)>>;
+/// The turn deadline as AppKit arms it, and the generation of the timer
+/// scheduled for it.
+type TurnTimer = Rc<RefCell<(TurnDeadline, u64)>>;
 
 impl LoopControl {
     /// The turn deadline's state, on the main thread.
@@ -244,8 +244,10 @@ impl LoopControl {
     /// the owner turn it asks for on the main queue: at that instant the
     /// owner gets a turn whether or not a window is open, and no window is
     /// asked for a frame. Called after each owner turn and once the run's
-    /// handler has bootstrapped; an answer supersedes the timer an earlier one
-    /// scheduled, and an instant delivered once is not scheduled again.
+    /// handler has bootstrapped. An answer that changes the instant armed
+    /// supersedes the timer an earlier one scheduled, the same instant keeps
+    /// it, and an instant a turn served is not scheduled again
+    /// ([`TurnDeadline`]).
     pub(crate) fn schedule_turn_deadline(self: &Arc<Self>) {
         let Some(main) = MainThreadMarker::new() else {
             return;
@@ -256,10 +258,14 @@ impl LoopControl {
             None
         };
         let timer = self.turn_timer(main);
-        let turns = self.owner_signal.turns();
         let (armed, generation) = {
             let mut slot = timer.borrow_mut();
-            let armed = slot.0.arm(answer, turns);
+            let before = slot.0.armed();
+            let armed = slot.0.arm(answer);
+            if armed == before {
+                // The timer scheduled for this instant still stands.
+                return;
+            }
             slot.1 = slot
                 .1
                 .checked_add(1)
@@ -275,12 +281,11 @@ impl LoopControl {
                 return;
             };
             let timer = control.turn_timer(main);
-            let turns = control.owner_signal.turns();
             // The main queue runs a timer at or after its delay, so a current
             // one finds its instant due.
             let due = {
                 let mut slot = timer.borrow_mut();
-                slot.1 == generation && slot.0.take_due(web_time::Instant::now(), turns)
+                slot.1 == generation && slot.0.take_due(web_time::Instant::now())
             };
             if due {
                 let _ = control.owner_signal.wake();

@@ -5734,13 +5734,17 @@ GPU-память простаивающего или невидимого окн
     новый срок `AppHandler::turn_deadline`: петля даёт владельцу ход в этот момент с окнами и без
     них и не просит кадров; срок обязателен в `AppHandler` и обслуживается каждым хостом (Win32 с
     модальными петлями, X11, Wayland, AppKit, UIKit, Android, веб, headless на ручных часах через
-    `drive_at`); доставленный срок снимает тот код, что дал ход (`WakeDeadline`, ключ —
-    счётчик ходов `OwnerSignal`) — ADR-0343 §1. Поздний ответ некуда применить: чтение
-    принадлежит окну. После таймаута, отказа или паники `StoredPlacement::Unknown` ничего не
-    пишет, пока хост не скажет, что окно размещает пользователь: `WindowState::interaction`
-    (`WindowInteraction::UserPlacing`, ADR-0343 §2) — Win32 из петли size-move и системных команд
-    размера, headless из `simulate_interaction`; остальные хосты говорят `None` (запись gaps «X11,
-    Wayland and AppKit do not say when the user places a window»). Отказ записи — `WRITE_ATTEMPTS` попыток с удвоением
+    `drive_at`). Все петли ведут срок одним типом `TurnDeadline`: ход, данный за срок, обслуживает
+    всякий срок не позже своего времени, и ответ не позже последнего обслуженного не взводится
+    снова, так что ответ обработчика не крутит петлю; готовая работа не срок — ответ хранилища
+    будит владельца сам, перенесённое закрытие просит ход через сигнал (ADR-0343 §1). Поздний
+    ответ некуда применить: чтение принадлежит окну. После таймаута, отказа или паники
+    `StoredPlacement::Unknown` ничего не пишет, пока отчёт, несущий изменение, не скажет, что
+    окно размещает пользователь: `WindowState::interaction` (`WindowInteraction::UserPlacing`,
+    ADR-0343 §2) — Win32 в петле size-move и в системных командах размера от пользователя,
+    публикуя `None` по их концу; команда, которую окно шлёт себе само, помечена отправителем;
+    headless — из `simulate_interaction`; остальные хосты говорят `Unknown` (запись gaps «Only
+    Win32 says when the user places a window, and not for every placement»). Отказ записи — `WRITE_ATTEMPTS` попыток с удвоением
     интервала, затем ни одного срока, пока размещение не изменится. Код хранилища (`publish`,
     `poll`, drop) идёт без заимствований записи; повторный вход видит `Write::Starting`/`Polling`.
     Закрытие не ждёт записи; закрытие при занятом состоянии — `Closing::Deferred`, выполняется в
@@ -5769,7 +5773,12 @@ GPU-память простаивающего или невидимого окн
     `host_capabilities_contract` (flui-runtime); `a_turn_deadline_gives_the_owner_a_turn_with_no_window`
     (Win32 в `app_handler`, X11 и Wayland в WSL), `a_turn_deadline_asks_no_window_for_a_frame`,
     `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop`,
-    `a_reopened_window_takes_over_the_write_in_flight`.
+    `a_reopened_window_takes_over_the_write_in_flight`, `a_served_turn_deadline_is_not_armed_again`,
+    `a_past_turn_deadline_gives_one_turn` (headless), `a_past_turn_deadline_does_not_spin_the_win32_loop`,
+    `the_size_move_loop_states_the_users_placement_and_ends_it`,
+    `a_system_command_states_the_users_placement_and_ends_it`,
+    `the_applications_own_restore_is_not_the_users`,
+    `a_window_that_could_not_read_its_placement_writes_only_what_the_user_places`.
     Откаты по каждому — в теле PR, раздел `## Evidence`. Строки без отката охраняют:
     `a_provider_that_fails_still_lets_the_first_window_open` — что запуск переживает панику и
     отказ провайдера; `a_recall_reads_what_storage_answers_and_checks_it` и

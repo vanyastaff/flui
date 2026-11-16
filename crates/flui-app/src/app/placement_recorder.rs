@@ -170,12 +170,13 @@ impl StoredPlacement {
 }
 
 /// Who changed a window between two of its reports. A change is the user's
-/// only when the host says so ([`WindowInteraction::UserPlacing`]); nothing is
-/// inferred from what did not change.
+/// only when the report that carries it says so
+/// ([`WindowInteraction::UserPlacing`]); nothing is inferred from what did not
+/// change, nor from the report before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeOrigin {
-    /// The host reported the user placing the window in this report or in the
-    /// one before it, whose placement this report ends.
+    /// The report that carries the change says the user is placing the
+    /// window.
     User,
     /// Anything else: where the window opened, a display or scale change, a
     /// window manager's or compositor's adjustment, an application's command,
@@ -184,11 +185,10 @@ pub(crate) enum ChangeOrigin {
 }
 
 impl ChangeOrigin {
-    /// Who changed a window whose last report said `before` and whose new one
-    /// says `now`, with `changed` whether its placement changed.
-    fn of(before: WindowInteraction, now: WindowInteraction, changed: bool) -> Self {
-        let user = |interaction| interaction == WindowInteraction::UserPlacing;
-        if changed && (user(now) || user(before)) {
+    /// Who changed a window whose new report says `now`, with `changed`
+    /// whether that report changed its placement.
+    fn of(now: WindowInteraction, changed: bool) -> Self {
+        if changed && now == WindowInteraction::UserPlacing {
             Self::User
         } else {
             Self::Other
@@ -558,11 +558,7 @@ impl WriteRecord {
             // The first report is where the window opened.
             return ChangeOrigin::Other;
         };
-        ChangeOrigin::of(
-            seen.state.interaction,
-            state.interaction,
-            seen.bytes.as_slice() != bytes,
-        )
+        ChangeOrigin::of(state.interaction, seen.bytes.as_slice() != bytes)
     }
 }
 
@@ -713,15 +709,15 @@ impl PlacementRecorder {
         record.capture(bytes, origin);
     }
 
-    /// When the owner should wake to [`tick`](Self::tick) this recorder, seen
-    /// from `now`: when a held change may be written, or now once storage has
-    /// answered a write in flight. A write still out has no deadline: storage's
-    /// answer wakes the owner itself. `None` when nothing is owed, or the
+    /// When the owner should wake to [`tick`](Self::tick) this recorder: when
+    /// a held change may be written. A write in flight has no deadline:
+    /// storage's answer wakes the owner itself ([`AnswerWake`]), and the turn
+    /// it brings takes the answer. `None` when nothing is owed, or the
     /// recorder gave up on the placement it owes.
-    pub(crate) fn next_due(&self, now: Instant) -> Option<Instant> {
+    pub(crate) fn next_due(&self) -> Option<Instant> {
         let record = self.record.borrow();
         if !record.write.is_idle() {
-            return self.answered.load(Ordering::Acquire).then_some(now);
+            return None;
         }
         if !record.owes_write() {
             return None;
@@ -943,12 +939,11 @@ pub(crate) enum FlushState {
 
 /// The earliest [`next_due`](PlacementRecorder::next_due) of `recorders`.
 pub(crate) fn earliest_due<'a>(
-    now: Instant,
     recorders: impl IntoIterator<Item = &'a Rc<PlacementRecorder>>,
 ) -> Option<Instant> {
     recorders
         .into_iter()
-        .filter_map(|recorder| recorder.next_due(now))
+        .filter_map(|recorder| recorder.next_due())
         .min()
 }
 

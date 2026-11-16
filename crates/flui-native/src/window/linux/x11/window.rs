@@ -685,7 +685,7 @@ impl X11Window {
                 capabilities,
                 // A move or resize the window manager runs for the user is
                 // not read yet (docs/gaps.md).
-                interaction: flui_platform::WindowInteraction::None,
+                interaction: flui_platform::WindowInteraction::Unknown,
             }
             .onto(state)
         })

@@ -28,7 +28,7 @@ use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use crate::Opened;
 use flui_platform::{
     ApplyError, DispatchEventResult, PlatformFailure, PlatformWindow, SizeConstraints,
-    WindowCommand, WindowMode, WindowOptions, WindowReveal, WindowState,
+    WindowCommand, WindowInteraction, WindowMode, WindowOptions, WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
@@ -1861,6 +1861,121 @@ fn a_live_resize_publishes_inside_its_modal_loop() {
     );
 }
 
+/// Each snapshot `window` publishes from here on: whether it moved or
+/// changed mode from the one before, and the interaction it states.
+fn record_interactions(window: &Opened) -> Arc<std::sync::Mutex<Vec<(bool, WindowInteraction)>>> {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&events);
+    on_changes(window, move |_, previous, next| {
+        let placed = previous.outer != next.outer || previous.mode != next.mode;
+        log.lock().expect("log").push((placed, next.interaction));
+    });
+    events
+}
+
+/// Post `keys` to `window` from another thread, one every 60 ms, while the
+/// window runs a modal loop on this one.
+fn post_keys(
+    window: &Rc<dyn HostWindow>,
+    keys: Vec<windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY>,
+) -> std::thread::JoinHandle<()> {
+    let address = hwnd_of(window).0 as isize;
+    std::thread::spawn(move || {
+        for key in keys {
+            std::thread::sleep(Duration::from_millis(60));
+            // SAFETY: a post to a window of this process; one that is gone
+            // fails the call.
+            let _ = unsafe {
+                PostMessageW(
+                    Some(HWND(address as *mut _)),
+                    WM_KEYDOWN,
+                    WPARAM(usize::from(key.0)),
+                    LPARAM(0x0001_0001),
+                )
+            };
+        }
+    })
+}
+
+/// A move in Win32's size-move loop (the system menu's move, by the
+/// keyboard) is reported as the user placing the window on the reports that
+/// move it, and the snapshot published as the loop ends says the user no
+/// longer is.
+fn the_size_move_loop_states_the_users_placement_and_ends_it() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let events = record_interactions(&window);
+    let mover = post_keys(&window, vec![VK_RIGHT, VK_RIGHT, VK_RIGHT, VK_RETURN]);
+    send(&window, WM_SYSCOMMAND, SC_MOVE as usize, 0);
+    mover.join().expect("the key thread");
+    let events = events.lock().expect("log").clone();
+    assert!(
+        events.iter().any(|(placed, _)| *placed),
+        "the loop moved the window: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|(placed, _)| *placed)
+            .all(|(_, interaction)| *interaction == WindowInteraction::UserPlacing),
+        "every report that moved it says the user: {events:?}"
+    );
+    assert_eq!(
+        window.state().interaction,
+        WindowInteraction::None,
+        "the end of the loop ends the user's placement: {events:?}"
+    );
+}
+
+/// A placement system command the user works (here `SC_MAXIMIZE`, as a
+/// caption button sends it) is reported as the user's on the report that
+/// carries it, and the snapshot after it says the user no longer is.
+fn a_system_command_states_the_users_placement_and_ends_it() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let events = record_interactions(&window);
+    send(
+        &window,
+        WM_SYSCOMMAND,
+        windows::Win32::UI::WindowsAndMessaging::SC_MAXIMIZE as usize,
+        0,
+    );
+    let events = events.lock().expect("log").clone();
+    assert_eq!(window.state().mode, WindowMode::Maximized);
+    assert!(
+        events
+            .iter()
+            .any(|(placed, interaction)| *placed && *interaction == WindowInteraction::UserPlacing),
+        "the report that maximized it says the user: {events:?}"
+    );
+    assert_eq!(
+        window.state().interaction,
+        WindowInteraction::None,
+        "the command's end ends the user's placement: {events:?}"
+    );
+}
+
+/// The restore the window sends itself before entering fullscreen from
+/// maximized is the application's command: no report of it says the user.
+fn the_applications_own_restore_is_not_the_users() {
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+    settle();
+    let events = record_interactions(&window);
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    let events = events.lock().expect("log").clone();
+    assert_eq!(window.state().mode, WindowMode::Fullscreen);
+    assert!(
+        events
+            .iter()
+            .all(|(_, interaction)| *interaction == WindowInteraction::None),
+        "no report of the application's command says the user: {events:?}"
+    );
+}
+
 fn a_locked_session_or_a_cloak_occludes_a_shown_window() {
     let platform = platform();
     let window = open(&platform, options());
@@ -2191,6 +2306,18 @@ fn native_window_commands() {
         (
             "a_live_resize_publishes_inside_its_modal_loop",
             a_live_resize_publishes_inside_its_modal_loop,
+        ),
+        (
+            "the_size_move_loop_states_the_users_placement_and_ends_it",
+            the_size_move_loop_states_the_users_placement_and_ends_it,
+        ),
+        (
+            "a_system_command_states_the_users_placement_and_ends_it",
+            a_system_command_states_the_users_placement_and_ends_it,
+        ),
+        (
+            "the_applications_own_restore_is_not_the_users",
+            the_applications_own_restore_is_not_the_users,
         ),
         (
             "a_dpi_change_announces_one_whole_snapshot",

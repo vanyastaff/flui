@@ -102,9 +102,6 @@ struct State {
     /// subscriber takes, so nothing is said where it asks. The work stays
     /// owed either way.
     unreported_window_post: Option<String>,
-    /// How many of the application's turns ran: what a turn deadline is
-    /// keyed by, as a wake deadline is by frames ([`OwnerSignal::turns`]).
-    turns: u64,
 }
 
 impl State {
@@ -161,7 +158,6 @@ impl OwnerSignal {
                 opens: VecDeque::new(),
                 reevaluate_exit: false,
                 opens_windows: false,
-                turns: 0,
                 unreported_window_post: None,
             }),
             notify,
@@ -322,13 +318,6 @@ impl OwnerSignal {
     }
     pub(crate) fn accepting(&self) -> bool {
         self.state.lock().accepting
-    }
-    /// How many of the application's turns ran. A turn deadline is keyed by
-    /// it (`owner::wake_deadline::WakeDeadline`): an instant delivered once is
-    /// delivered again only after a turn ran, so the obligation stays until
-    /// the handler, at its turn, moves it.
-    pub(crate) fn turns(&self) -> u64 {
-        self.state.lock().turns
     }
     pub(crate) fn bind_owner(&self) {
         let mut owner = self.owner.lock();
@@ -627,13 +616,7 @@ impl OwnerTurn<'_> {
         {
             failure.contain("the owner-turn callback");
         }
-        {
-            let mut state = signal.state.lock();
-            state.active = false;
-            // Counted whether the callback finished or panicked: the turn
-            // ran, and a deadline it left due is delivered again.
-            state.turns = state.turns.saturating_add(1);
-        }
+        signal.state.lock().active = false;
         signal.rearm();
         false
     }

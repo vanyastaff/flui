@@ -535,6 +535,7 @@ impl WindowsWindow {
                 cloak_watch: super::proc::CloakWatch::start(),
                 in_size_move: std::cell::Cell::new(false),
                 in_system_command: std::cell::Cell::new(false),
+                in_app_command: std::cell::Cell::new(false),
                 last_resize: std::cell::Cell::new(None),
                 modal_pacing: crate::owner::windows::modal_loop::ModalPacing::new(
                     crate::owner::windows::modal_loop::ModalFrames::new(

@@ -403,6 +403,62 @@ fn a_turn_deadline_asks_no_window_for_a_frame() {
     assert_eq!(frames, 0, "no frame was asked for the turn deadline");
 }
 
+/// A handler that keeps answering one turn deadline already past gets one
+/// owner turn for it, however often the loop looks: that turn served every
+/// deadline not later than its own time.
+fn a_past_turn_deadline_gives_one_turn() {
+    let log = AppLog::new();
+    let past = web_time::Instant::now();
+    log.answer_turn_deadline_with(move || Some(past));
+    let platform = HeadlessPlatform::new();
+    let driver = platform.owner_turns();
+    let owner = run_keeping_owner(Box::new(platform), &log);
+    let turns = Rc::new(Cell::new(0_usize));
+    let seen = Rc::clone(&turns);
+    owner
+        .on_wake(Box::new(move || seen.set(seen.get() + 1)))
+        .expect("the owner takes a wake callback");
+    for _ in 0..100 {
+        driver.drive_at(web_time::Instant::now());
+    }
+    assert_eq!(turns.get(), 1, "one turn for the past instant");
+    assert!(
+        log.count(AppCall::TurnDeadline) >= 100,
+        "the loop kept asking"
+    );
+}
+
+/// The same on Win32: a turn deadline answered as one past instant for
+/// half a second gives the owner a bounded number of turns, not a loop that
+/// turns as fast as it can.
+#[cfg(target_os = "windows")]
+fn a_past_turn_deadline_does_not_spin_the_win32_loop() {
+    let log = AppLog::new();
+    let past = web_time::Instant::now();
+    log.answer_turn_deadline_with(move || Some(past));
+    let turns = Rc::new(Cell::new(0_usize));
+    let seen = Rc::clone(&turns);
+    log.bootstrap(move |owner| {
+        let stop = owner.proxy();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = stop.request_quit();
+        });
+        owner
+            .on_wake(Box::new(move || seen.set(seen.get() + 1)))
+            .expect("the owner takes a wake callback");
+        Ok(())
+    });
+    Box::new(flui_native::WindowsPlatform::try_new().expect("native Windows platform"))
+        .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+        .expect("the loop ends on the quit");
+    assert!(
+        turns.get() <= 3,
+        "a served past instant gives no more turns: {} turns",
+        turns.get()
+    );
+}
+
 #[test]
 fn app_handler_obligation_table() {
     crate::run_table(
@@ -442,6 +498,15 @@ fn app_handler_obligation_table() {
             (
                 "a panicking method keeps the first panic",
                 a_panicking_method_keeps_the_first_panic,
+            ),
+            (
+                "a past turn deadline gives one turn",
+                a_past_turn_deadline_gives_one_turn,
+            ),
+            #[cfg(target_os = "windows")]
+            (
+                "a past turn deadline does not spin the Win32 loop",
+                a_past_turn_deadline_does_not_spin_the_win32_loop,
             ),
             #[cfg(target_os = "windows")]
             (

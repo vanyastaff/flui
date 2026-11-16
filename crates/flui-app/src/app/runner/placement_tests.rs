@@ -10,7 +10,8 @@ use flui_foundation::ManualClock;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::capability::ProviderContext;
 use flui_platform::{
-    PlatformWindow, Storage, StorageName, Unsupported, WindowMode, WindowPlacement,
+    PlatformWindow, Storage, StorageName, Unsupported, WindowInteraction, WindowMode,
+    WindowPlacement,
 };
 use flui_testing::storage::MemoryStorage;
 use flui_view::persist::{StorageCapability, StorageHandle};
@@ -168,6 +169,42 @@ fn a_window_opens_at_its_default_when_the_read_does_not_answer_in_time() {
     run.join().expect("the run ends");
 }
 
+/// A window that opened at its default because its read did not answer
+/// keeps what storage holds against a move the host does not report as the
+/// user's, and writes the one whose report says the user is placing it.
+#[test]
+fn a_window_that_could_not_read_its_placement_writes_only_what_the_user_places() {
+    let storage = MemoryStorage::new();
+    storage.put(&NAME, stored().to_bytes());
+    let held = storage.hold_reads();
+    let (run, clock) = start_on_manual_clock(remembering(&storage));
+    clock.advance(RECALL_BOUND);
+    turn_at(&run, &clock);
+    drop(held);
+    run.run_owner_turn();
+    let window = &run.open_windows()[0];
+    let flushed = || {
+        super::flush_all_by(std::time::Instant::now() + std::time::Duration::from_secs(1));
+        storage
+            .contents(&NAME)
+            .and_then(|bytes| WindowPlacement::from_bytes(&bytes).ok())
+    };
+
+    window.simulate_move(Point::new(222.0, 111.0));
+    assert_eq!(
+        flushed(),
+        Some(stored()),
+        "a move the host does not report as the user's leaves storage alone"
+    );
+
+    window.simulate_interaction(WindowInteraction::UserPlacing);
+    window.simulate_move(Point::new(333.0, 99.0));
+    window.simulate_interaction(WindowInteraction::None);
+    let written = flushed().expect("a placement is stored");
+    assert_ne!(written, stored(), "the user's move is written");
+    run.join().expect("the run ends");
+}
+
 /// A read answered inside the bound opens the window where it was, at the
 /// turn the answer wakes.
 #[test]
@@ -266,7 +303,7 @@ fn the_host_acquires_the_storage_once_per_window() {
 #[test]
 fn a_close_that_finds_the_state_busy_is_carried_over() {
     let storage = MemoryStorage::new();
-    let (run, clock) = start_on_manual_clock(remembering(&storage));
+    let (run, _clock) = start_on_manual_clock(remembering(&storage));
     let shared = APP_RUNTIME.with(|slot| slot.borrow().placement.shared());
     let address = shared.live.borrow()[0].address;
     let close = super::PlacementClose::of(Rc::clone(&shared), address);
@@ -276,11 +313,13 @@ fn a_close_that_finds_the_state_busy_is_carried_over() {
     drop(held);
     assert_eq!(closing, super::Closing::Deferred);
     assert_eq!(recording(), 1, "nothing is dropped meanwhile");
-    assert!(
-        run.turn_deadline().is_some(),
-        "the carried close asks the owner for a turn"
+    assert_eq!(
+        run.turn_deadline(),
+        None,
+        "a carried close is ready now, so it is no deadline"
     );
-    turn_at(&run, &clock);
+    // It asked the owner for a turn through the signal instead.
+    run.run_owner_turn();
     assert_eq!(recording(), 0, "the next turn carried the close out");
     assert!(
         shared.claims.0.borrow().is_empty(),

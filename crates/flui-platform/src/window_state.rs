@@ -157,19 +157,24 @@ impl SizeConstraints {
 ///
 /// Code that keeps a window's placement for the user (`AppConfig::restore_placement`)
 /// tells a change the user made from one the host or the application made by
-/// this alone: a host that cannot tell says [`Self::None`], and such a change
-/// counts as not the user's.
+/// this alone, read on the report that carries the change: only
+/// [`Self::UserPlacing`] there counts as the user's, and a host that cannot
+/// tell says [`Self::Unknown`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum WindowInteraction {
-    /// No placement by the user is under way, or the host cannot tell.
+    /// The host cannot tell whether the user is placing the window: the
+    /// value of a host that reads no signal for it. A consumer treats it as
+    /// not the user.
     #[default]
+    Unknown,
+    /// The host can tell, and no placement by the user is under way.
     None,
-    /// The user is moving or sizing the window by its frame or the keyboard,
-    /// or a system control the user worked (the caption's buttons, a double
-    /// click on the title bar, a snap gesture) is changing its placement: the
-    /// Win32 size-move loop and system commands, AppKit's live resize and
-    /// drag, a move or resize the window asked its window manager to start.
+    /// The user is placing the window through the window system. Win32
+    /// states it inside its size-move loop (a drag or resize by the frame, or
+    /// the system menu's move and size) and while the default procedure
+    /// carries out `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user
+    /// worked; the headless host states what its test simulates.
     UserPlacing,
 }
 
@@ -251,8 +256,8 @@ pub struct WindowState {
     /// is the focus.
     pub active: bool,
     /// Whether the user is placing the window through the window system
-    /// right now ([`WindowInteraction`]); [`WindowInteraction::None`] where the
-    /// host cannot tell.
+    /// right now ([`WindowInteraction`]); [`WindowInteraction::Unknown`] where
+    /// the host cannot tell.
     pub interaction: WindowInteraction,
     /// Which commands the window honours. A change in what it honours (a
     /// compositor revising what it allows) is a state change like any other.
@@ -262,8 +267,8 @@ pub struct WindowState {
 impl WindowState {
     /// A visible, unoccluded, unfocused, inactive, unhovered, running, resizable,
     /// system-framed window in normal mode at revision zero, with no title, limits, display,
-    /// metrics or insets, the light appearance, and capabilities that
-    /// honour nothing.
+    /// metrics or insets, the light appearance, an interaction the host cannot
+    /// tell, and capabilities that honour nothing.
     #[must_use]
     pub fn new(outer: WindowGeometry, content_size: WindowExtent) -> Self {
         Self {
@@ -286,7 +291,7 @@ impl WindowState {
             execution: WindowExecutionState::Running,
             hovered: false,
             active: false,
-            interaction: WindowInteraction::None,
+            interaction: WindowInteraction::Unknown,
             capabilities: WindowCapabilities::NONE,
         }
     }

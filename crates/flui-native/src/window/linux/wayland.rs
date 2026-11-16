@@ -1615,7 +1615,7 @@ mod toplevel {
                     active: states.activated,
                     // A move or resize the compositor runs for the user is not
                     // read yet (docs/gaps.md).
-                    interaction: flui_platform::WindowInteraction::None,
+                    interaction: flui_platform::WindowInteraction::Unknown,
                     capabilities: presented::reported(
                         capabilities(
                             applied.told.wm,

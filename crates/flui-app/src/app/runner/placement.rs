@@ -107,9 +107,10 @@ struct AwaitingOpen {
 
 impl PlacementHost {
     /// When the owner needs a turn for the placements: a held write whose
-    /// interval ends, a write storage answered, a close carried over, or a
-    /// window whose wait for its read ends. `None` while a list is busy:
-    /// the turn that holds it asks again.
+    /// interval ends, or a window whose wait for its read ends. Work ready
+    /// now (a write storage answered, a close carried over) is no deadline:
+    /// it asks for an owner turn itself. `None` while a list is busy: the
+    /// turn that holds it asks again.
     pub(in crate::app) fn next_due(&self) -> Option<Instant> {
         let due = self.shared.next_due();
         // What the loop is told now: a change made outside an owner turn and
@@ -135,22 +136,16 @@ impl PlacementShared {
     /// When the owner needs a turn for the placements; `None` while a list
     /// is busy: the turn that holds it asks again.
     fn next_due(&self) -> Option<Instant> {
-        let now = self.now();
-        let (Ok(live), Ok(closing), Ok(awaiting), Ok(deferred)) = (
+        // A close carried over is ready now, so it is no deadline: the turn
+        // it asked for ([`Self::ask_turn`]) carries it out.
+        let (Ok(live), Ok(closing), Ok(awaiting)) = (
             self.live.try_borrow(),
             self.closing.try_borrow(),
             self.awaiting.try_borrow(),
-            self.deferred_closes.try_borrow(),
         ) else {
             return None;
         };
-        if !deferred.is_empty() {
-            return Some(now);
-        }
-        let writes = earliest_due(
-            now,
-            live.iter().map(|window| &window.recorder).chain(&*closing),
-        );
+        let writes = earliest_due(live.iter().map(|window| &window.recorder).chain(&*closing));
         let reads = awaiting
             .iter()
             .filter_map(|awaiting| awaiting.opening.recall_deadline())
@@ -167,6 +162,13 @@ impl PlacementShared {
         if self.announced.replace(due) == due {
             return;
         }
+        self.ask_turn();
+    }
+
+    /// Ask for one owner turn, after which [`tick`] runs: for work that is
+    /// ready now, which is no turn deadline, and for a deadline that moved
+    /// outside a turn.
+    fn ask_turn(&self) {
         let wake = self.wake.borrow().clone();
         if let Some(wake) = wake {
             wake();
@@ -445,6 +447,7 @@ fn finish_in(shared: &PlacementShared, address: PresentationAddress) -> Closing 
     let window = {
         let Ok(mut live) = shared.live.try_borrow_mut() else {
             shared.deferred_closes.borrow_mut().push(address);
+            shared.ask_turn();
             return Closing::Deferred;
         };
         let Some(at) = live.iter().position(|window| window.address == address) else {

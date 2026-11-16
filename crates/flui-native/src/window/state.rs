@@ -43,7 +43,7 @@ pub(crate) struct ReportedFacts {
     /// What the window honours now.
     pub(crate) capabilities: WindowCapabilities,
     /// Whether the user is placing the window through the window system, as
-    /// the host knows it; [`WindowInteraction::None`] where it cannot tell
+    /// the host knows it; [`WindowInteraction::Unknown`] where it cannot tell
     /// (ADR-0343).
     pub(crate) interaction: WindowInteraction,
 }

@@ -10648,7 +10648,10 @@
           ]
         },
         "user_placing": {
-          "type": "boolean"
+          "type": [
+            "boolean",
+            "null"
+          ]
         },
         "visible": {
           "type": "boolean"

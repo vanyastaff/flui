@@ -363,13 +363,13 @@ fn user_placing(state: WindowState) -> WindowState {
 }
 
 /// A window whose stored placement could not be read keeps what storage may
-/// hold against everything the host does not state was the user: where it
-/// opened, a display change, a scale change, a window manager's adjustment
-/// after the window opened, an application's command in two reports. A move
-/// or a mode change the host reports as the user's is written, and so is the
-/// report that ends a placement by the user.
+/// hold against everything the report carrying the change does not state was
+/// the user: where it opened, a display change, a scale change, a window
+/// manager's adjustment after the window opened, an application's command in
+/// two reports, and a change in the report after one by the user. A move or a
+/// mode change whose own report says the user's is written.
 fn an_unread_placement_is_overwritten_only_by_the_user() {
-    let not_the_user: [ChangeSinceOpen; 4] = [
+    let not_the_user: [ChangeSinceOpen; 6] = [
         ("a display change", |recorder, now| {
             recorder.redisplay(&displays_with_left_edge(60), now);
         }),
@@ -394,8 +394,27 @@ fn an_unread_placement_is_overwritten_only_by_the_user() {
                 );
             },
         ),
+        (
+            "a scale change in the report after the user's",
+            |recorder, now| {
+                recorder.observe(
+                    &user_placing(scaled(at(100.0, 80.0), 1.0)).with_hovered(true),
+                    &displays(),
+                    now,
+                );
+                recorder.observe(&scaled(at(150.0, 80.0), 1.5), &displays(), now);
+            },
+        ),
+        ("a move in the report after the user's", |recorder, now| {
+            recorder.observe(
+                &user_placing(scaled(at(100.0, 80.0), 1.0)),
+                &displays(),
+                now,
+            );
+            recorder.observe(&scaled(at(400.0, 80.0), 1.0), &displays(), now);
+        }),
     ];
-    let the_user: [ChangeSinceOpen; 3] = [
+    let the_user: [ChangeSinceOpen; 2] = [
         ("a drag of the frame", |recorder, now| {
             recorder.observe(
                 &user_placing(scaled(at(400.0, 80.0), 1.0)),
@@ -409,14 +428,6 @@ fn an_unread_placement_is_overwritten_only_by_the_user() {
                 &displays(),
                 now,
             );
-        }),
-        ("the report that ends a drag", |recorder, now| {
-            recorder.observe(
-                &user_placing(scaled(at(100.0, 80.0), 1.0)),
-                &displays(),
-                now,
-            );
-            recorder.observe(&scaled(at(400.0, 80.0), 1.0), &displays(), now);
         }),
     ];
     let kept = b"what an earlier run kept".to_vec();
@@ -462,7 +473,7 @@ fn a_refusing_storage_is_tried_a_bounded_number_of_times() {
     fixture.observe(&at(100.0, 80.0), Duration::ZERO);
     let mut attempts = 1;
     let mut at_time = Duration::ZERO;
-    while let Some(due) = fixture.recorder.next_due(fixture.after(at_time)) {
+    while let Some(due) = fixture.recorder.next_due() {
         let wait = due.saturating_duration_since(fixture.after(at_time));
         assert_eq!(
             wait,
@@ -476,13 +487,7 @@ fn a_refusing_storage_is_tried_a_bounded_number_of_times() {
     }
     assert_eq!(attempts, WRITE_ATTEMPTS, "every attempt was made");
     assert_eq!(fixture.stored_offset(), None, "nothing stored");
-    assert_eq!(
-        fixture
-            .recorder
-            .next_due(fixture.after(at_time + WRITE_INTERVAL * 100)),
-        None,
-        "no deadline remains"
-    );
+    assert_eq!(fixture.recorder.next_due(), None, "no deadline remains");
 
     fixture.observe(&at(200.0, 80.0), at_time + WRITE_INTERVAL);
     assert_eq!(
@@ -686,7 +691,7 @@ fn storage_code_runs_with_nothing_borrowed() {
                 if let Some(recorder) = weak.upgrade() {
                     counted.set(counted.get() + 1);
                     recorder.tick(now);
-                    let _ = recorder.next_due(now);
+                    let _ = recorder.next_due();
                 }
             })));
         });
@@ -887,7 +892,7 @@ fn changes_inside_the_interval_are_held_and_written_when_it_is_over() {
         "at most one write every interval"
     );
     assert_eq!(
-        fixture.recorder.next_due(fixture.after(WRITE_INTERVAL / 2)),
+        fixture.recorder.next_due(),
         Some(fixture.after(WRITE_INTERVAL)),
         "the owner is asked to wake when the interval is over"
     );
@@ -908,7 +913,7 @@ fn changes_inside_the_interval_are_held_and_written_when_it_is_over() {
         "the held change is written with no further change to prompt it"
     );
     assert_eq!(
-        fixture.recorder.next_due(fixture.after(WRITE_INTERVAL)),
+        fixture.recorder.next_due(),
         None,
         "nothing is owed once it is stored"
     );
@@ -920,7 +925,7 @@ fn a_refused_write_is_owed_again_and_not_counted_as_stored() {
     fixture.observe(&at(100.0, 80.0), Duration::ZERO);
     assert_eq!(fixture.stored_offset(), None, "the disk refused it");
     assert_eq!(
-        fixture.recorder.next_due(fixture.after(Duration::ZERO)),
+        fixture.recorder.next_due(),
         Some(fixture.after(WRITE_INTERVAL * 2)),
         "still owed: tried again once twice the interval is over"
     );
@@ -946,7 +951,7 @@ fn a_write_in_flight_waits_for_storage_to_wake_the_owner() {
     let barrier = storage.hold_commits();
     recorder.observe(&at(100.0, 80.0), &displays(), now);
     assert_eq!(
-        recorder.next_due(now),
+        recorder.next_due(),
         None,
         "a write out has no deadline: the answer wakes the owner"
     );
@@ -959,17 +964,13 @@ fn a_write_in_flight_waits_for_storage_to_wake_the_owner() {
         "storage's answer wakes the owner"
     );
     assert_eq!(
-        recorder.next_due(now),
-        Some(now),
-        "the owner is asked to take the answer at once"
+        recorder.next_due(),
+        None,
+        "an answer is ready now, so it is no deadline: the wake brings the turn"
     );
 
     recorder.tick(now);
-    assert_eq!(
-        recorder.next_due(now),
-        None,
-        "nothing is owed once answered"
-    );
+    assert_eq!(recorder.next_due(), None, "nothing is owed once answered");
 }
 
 fn a_write_in_flight_is_not_doubled_and_counts_once_storage_answers() {
@@ -1150,7 +1151,7 @@ fn the_earliest_due_of_several_recorders_is_what_the_owner_wakes_for() {
     second.observe(&at(1.0, 1.0), &displays(), now + Duration::from_millis(500));
     second.observe(&at(2.0, 2.0), &displays(), now + Duration::from_millis(600));
     assert_eq!(
-        earliest_due(now, [&first, &second]),
+        earliest_due([&first, &second]),
         Some(now + WRITE_INTERVAL),
         "the first window's interval ends first"
     );

@@ -71,9 +71,8 @@ fn a_due_deadline_gets_one_modal_frame_per_generation() {
 }
 
 /// While a modal loop stands in for the main loop, a due turn deadline wakes
-/// the owner once and asks no window for a frame; the same instant is
-/// delivered again only after an owner turn ran, and a signal that no longer
-/// accepts work is not asked for.
+/// the owner once and asks no window for a frame; an instant that turn served
+/// is not delivered again, however often the handler answers it.
 #[test]
 fn a_due_turn_deadline_wakes_the_owner_from_a_modal_loop() {
     use crate::owner::app_delivery::testing::{AppLog, bound};
@@ -118,17 +117,21 @@ fn a_due_turn_deadline_wakes_the_owner_from_a_modal_loop() {
     assert_eq!(
         wakes.load(Ordering::SeqCst),
         1,
-        "the same instant, no turn since: not delivered again"
+        "the same instant, served: not delivered again"
     );
 
-    // The owner's turn runs and leaves the instant in place: it is owed still.
+    // The owner's turn runs and the handler leaves the instant in place: the
+    // turn served it, so neither this modal loop nor the next delivers it again.
     let _ = signal.drive_in(&slot);
-    assert_eq!(signal.turns(), 1, "the owner's turn ran");
     let before = wakes.load(Ordering::SeqCst);
+    for _ in 0..100 {
+        let _ = modal.deliver();
+    }
+    modal.start();
     let _ = modal.deliver();
     assert_eq!(
         wakes.load(Ordering::SeqCst),
-        before + 1,
-        "after a turn, the instant left unserved is delivered again"
+        before,
+        "an instant a turn served is not delivered again"
     );
 }

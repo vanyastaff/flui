@@ -52,7 +52,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
-use crate::owner::wake_deadline::{FrameCount, WakeDeadline};
+use crate::owner::wake_deadline::{FrameCount, TurnDeadline, WakeDeadline};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, define_class};
@@ -471,9 +471,9 @@ pub struct IOSLoop {
     wake: RefCell<WakeDeadline>,
     /// The timer of the armed turn deadline, named by its ticket.
     turn_timer: RefCell<Option<(Arc<()>, web_time::Instant)>>,
-    /// The turn deadline armed and the last one delivered, keyed by the
-    /// owner's turns ([`WakeDeadline`]).
-    turn_deadline: RefCell<WakeDeadline>,
+    /// The turn deadline armed and the time its last turn served
+    /// ([`TurnDeadline`]).
+    turn_deadline: RefCell<TurnDeadline>,
     /// The frames the scenes' windows' handlers produced.
     frames: FrameCount,
     /// A re-arm after a window's run is posted and has not run yet.
@@ -750,10 +750,7 @@ impl IOSLoop {
         } else {
             None
         };
-        let next = self
-            .turn_deadline
-            .borrow_mut()
-            .arm(answer, self.signal.turns());
+        let next = self.turn_deadline.borrow_mut().arm(answer);
         let ticket = {
             let mut current = self.turn_timer.borrow_mut();
             if current.as_ref().map(|(_, at)| *at) == next {
@@ -801,7 +798,7 @@ impl IOSLoop {
                             && platform
                                 .turn_deadline
                                 .borrow_mut()
-                                .take_due(web_time::Instant::now(), platform.signal.turns());
+                                .take_due(web_time::Instant::now());
                         if due {
                             let _ = platform.signal.wake();
                         }

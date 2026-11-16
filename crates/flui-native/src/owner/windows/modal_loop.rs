@@ -18,7 +18,7 @@ use std::sync::{Arc, Weak};
 use super::{ClassWindows, FrameCount, WindowsLoop};
 use crate::owner::app_delivery::AppDelivery;
 use crate::owner::signal::OwnerSignal;
-use crate::owner::wake_deadline::WakeDeadline;
+use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
 
 /// The timer that paces a window's modal loops. Distinct from the touchpad's.
 pub(crate) const MODAL_DEADLINE_TIMER: usize = 0x4D4C;
@@ -36,7 +36,7 @@ pub(crate) struct ModalFrames {
     /// message, which a modal loop dispatches like any other.
     signal: Weak<OwnerSignal>,
     deadline: RefCell<WakeDeadline>,
-    turn_deadline: RefCell<WakeDeadline>,
+    turn_deadline: RefCell<TurnDeadline>,
 }
 
 impl ModalFrames {
@@ -56,11 +56,11 @@ impl ModalFrames {
         }
     }
 
-    /// A modal loop starts: the deadlines an earlier one delivered do not
-    /// hold back its first.
+    /// A modal loop starts: the wake deadline an earlier one delivered does
+    /// not hold back its first. The turn deadline keeps the time its last turn
+    /// served, so an instant served before is not served again.
     pub(crate) fn start(&self) {
         *self.deadline.borrow_mut() = WakeDeadline::default();
-        *self.turn_deadline.borrow_mut() = WakeDeadline::default();
     }
 
     /// What the main loop would deliver, while the modal loop stands in for it
@@ -87,10 +87,9 @@ impl ModalFrames {
             windows.redraw_for_deadline();
         }
         // The turn deadline, as the main loop asks it: only while the owner
-        // accepts work, with no borrow held, then armed and taken against the
-        // owner's turns.
+        // accepts work, with no borrow held, then armed and taken by the one
+        // rule ([`TurnDeadline`]).
         let signal = self.signal.upgrade();
-        let turns = signal.as_ref().map_or(0, |signal| signal.turns());
         let turn_answer = if signal.as_ref().is_some_and(|signal| signal.accepting()) {
             WindowsLoop::ask_turn_deadline(&self.app)
         } else {
@@ -98,9 +97,9 @@ impl ModalFrames {
         };
         let (turn_armed, turn_due) = {
             let mut turn = self.turn_deadline.borrow_mut();
-            let armed = turn.arm(turn_answer, turns);
-            let due = turn.take_due(now, turns);
-            // A delivered instant is not waited for until a turn ran.
+            let armed = turn.arm(turn_answer);
+            let due = turn.take_due(now);
+            // A delivered instant is served: nothing is left to wait for.
             (armed.filter(|_| !due), due)
         };
         if turn_due && let Some(signal) = &signal {

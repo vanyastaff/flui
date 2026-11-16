@@ -27,10 +27,10 @@ Which contract additions make both facts the host's to state, on every host?
 
 ## Decision drivers
 
-- An obligation is cleared by the code that served it, never by its delivery (AGENTS.md, "Recurring
-  defects").
-- A loop that delivers the same unserved instant on every iteration spins; one that delivers it once
-  and forgets it drops accepted work.
+- A loop that delivers an instant already past on every iteration spins: the turn it gives does not
+  move the instant unless the handler does.
+- Work that is ready now is no deadline: the application does it in the turn it is in, or asks for
+  one owner turn through the signal.
 - One rule on every host, headless included, so an application test means what a desktop run does.
 - A fact the snapshot gains reaches every host and every recording through the compiler
   (`ReportedFacts`, `WindowStateParts`).
@@ -38,8 +38,9 @@ Which contract additions make both facts the host's to state, on every host?
 
 ## Considered options
 
-1. A required `AppHandler::turn_deadline`, keyed by owner turns as the wake deadline is by frames;
-   and `WindowState::interaction` (`WindowInteraction`), a snapshot fact each host states.
+1. A required `AppHandler::turn_deadline`, whose delivered turn serves every instant not later than
+   its own time; and `WindowState::interaction` (`WindowInteraction`), a snapshot fact each host
+   states on the report that carries the change.
 2. One deadline with a "no frame" flag in its answer.
 3. A per-window "the user did it" flag on `WindowHandler::state_changed`.
 4. Keep inferring the user from what did not change.
@@ -51,12 +52,13 @@ Chosen option: 1.
 1. **The turn deadline.** `flui_native::AppHandler::turn_deadline(&self, &OwnerPlatform) ->
    Option<web_time::Instant>` is required, like every handler method (ADR-0254 decision 4). At the
    instant the loop gives the owner one turn through `OwnerSignal::wake`, with or without a window
-   open, and asks no window for a frame. The loop arms and takes it with
-   `owner::wake_deadline::WakeDeadline`, the wake deadline's own type, keyed by
-   `OwnerSignal::turns()` (the application's turns that ran) where the wake deadline is keyed by
-   frames: an instant delivered once is delivered again only after a turn ran, so a handler that
-   leaves an unserved instant in place gets its turn again, and a handler that has served it moves
-   it.
+   open, and asks no window for a frame. Every loop, headless included, arms and takes it with one
+   type, `owner::wake_deadline::TurnDeadline`, by one rule: a turn delivered for the deadline
+   serves every deadline not later than that turn's own time, and an answer not later than the
+   last time served is not armed again. A handler that keeps answering an instant already past gets
+   one turn for it. Work that is ready now is no deadline: the application does it in the turn it
+   is in, or asks for one owner turn with `PlatformProxy::wake`, and answers only an instant in the
+   future that something waits for.
    - **When a loop asks.** After every owner turn. The Win32 loop and its modal loops and the X11,
      Wayland and Android loops ask before each wait, which follows every turn; AppKit, UIKit and the
      web ask after each turn and once the handler bootstrapped, and schedule the turn on the main
@@ -64,15 +66,21 @@ Chosen option: 1.
      `HeadlessOwnerTurns::drive_at(now)` with its manual clock. A handler that moves its turn
      deadline outside an owner turn asks for one with `PlatformProxy::wake`.
 2. **Who places the window.** `flui_platform::WindowState::interaction: WindowInteraction`
-   (`None`, the default, or `UserPlacing`), carried by `WindowStateParts`, `ReportedFacts` and the
-   native recording (`user_placing`). A host states `UserPlacing` while the user places the window
-   through the window system: Win32 inside its size-move loop and while the default procedure
-   carries out `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` (an application's command goes through
-   `ShowWindow`, which sends none). Every other host states `None` until it reads its own signal
-   (AppKit's live resize and drag, a move or resize X11 or Wayland starts for the user); UIKit,
-   Android and the web place their windows themselves. A consumer counts a change as the user's
-   only from this fact: `UserPlacing` in the report or in the one before it, whose placement it
-   ends.
+   (`Unknown`, the default, `None` or `UserPlacing`), carried by `WindowStateParts`,
+   `ReportedFacts` and the native recording (`user_placing`, absent for `Unknown`, which is how a
+   recording older than the fact reads). A host states `UserPlacing` on each report it makes
+   while the user places the window through the window system, and the snapshot it publishes
+   when that ends says `None`:
+   - Win32 inside its size-move loop (`WM_ENTERSIZEMOVE` to `WM_EXITSIZEMOVE`, which publishes),
+     and while the default procedure carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE`
+     the user worked (publishing after it). A system command the window sends itself for an
+     application's command (the restore before fullscreen) is marked by its sender and is not the
+     user's;
+   - the headless host states what its test simulates;
+   - X11, Wayland, AppKit, UIKit, Android and the web read no signal for it and state `Unknown`.
+
+   A consumer counts a change as the user's only from the report that carries it: `UserPlacing`
+   there. Nothing is inferred from the report before, and `Unknown` counts as not the user.
 
 ### Consequences
 
@@ -80,34 +88,45 @@ Chosen option: 1.
   and a sibling window gets no frame for it.
 - Good, because a placement the run could not read survives every change no host attributes to the
   user.
-- Bad, because a handler that keeps answering an instant it cannot serve gets a turn after every
-  turn until it moves it, as a wake deadline a frame never serves gets a frame after every frame.
-- Bad, because on X11, Wayland and AppKit a move the user makes after an unreadable placement is
-  not remembered until those hosts read their signal (`docs/gaps.md`).
+- Good, because no answer of the handler can spin a loop: an instant a turn served is never
+  delivered again.
+- Bad, because work left at an instant already served waits for the application to ask for a
+  turn itself; an answer repeated at the same past instant is not a request.
+- Bad, because on the hosts that state `Unknown`, and on Win32 for a snap by keyboard or a drag
+  that ends in a snap applied after `WM_EXITSIZEMOVE`, a placement the user makes after an
+  unreadable one is not remembered that run (`docs/gaps.md`); and on Win32 an application's
+  command applied in a turn the size-move loop gives counts as the user's.
 - Neutral, because every `AppHandler` implementor answers `turn_deadline`, `None` when it has
   none.
 
 ### Confirmation
 
-- `a_turn_deadline_gives_the_owner_a_turn_with_no_window` and
-  `a_turn_deadline_asks_no_window_for_a_frame` (the `app_handler` table, on Win32);
+- `a_served_turn_deadline_is_not_armed_again` (flui-native's `wake_deadline`); in the
+  `app_handler` table, `a_past_turn_deadline_gives_one_turn` (headless) and
+  `a_past_turn_deadline_does_not_spin_the_win32_loop`, with
+  `a_turn_deadline_gives_the_owner_a_turn_with_no_window` and
+  `a_turn_deadline_asks_no_window_for_a_frame` on Win32;
   `a_turn_deadline_gives_the_owner_a_turn_with_no_window` in `x11_window` (Xvfb) and
   `wayland_window` (Weston); `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` (Win32
   modal frames); `a_window_opens_at_its_default_when_the_read_does_not_answer_in_time`
   (headless, through `drive_at`).
+- `the_size_move_loop_states_the_users_placement_and_ends_it`,
+  `a_system_command_states_the_users_placement_and_ends_it` and
+  `the_applications_own_restore_is_not_the_users` (the Win32 window commands table).
 - `an_unread_placement_is_overwritten_only_by_the_user` (flui-app's `placement_recorder` table):
-  a display change, a scale change and the resize after it, a window manager's adjustment and an
-  application's command in two reports write nothing; a drag, a caption button and the report that
-  ends a drag write.
+  a display change, a scale change and the resize after it, a window manager's adjustment, an
+  application's command in two reports and a change in the report after the user's write nothing;
+  a drag and a caption button write. `a_window_that_could_not_read_its_placement_writes_only_what_the_user_places`
+  (flui-app's runner, headless).
 - The compiler: a host that builds `ReportedFacts` without `interaction`, and a mirror of
   `WindowStateParts` without it, do not compile.
 
 ## Pros and cons of the options
 
-### 1. A required turn deadline keyed by turns; a snapshot fact for the user
+### 1. A required turn deadline served by time; a snapshot fact for the user
 
 - Good, because each fact is the host's to state, with one rule everywhere.
-- Good, because the turn deadline reuses the wake deadline's delivery rule rather than a second one.
+- Good, because the rule needs no count of turns: the served time alone tells a stale answer.
 - Bad, because every host and every recording carry one more field.
 
 ### 2. One deadline with a "no frame" flag
@@ -129,8 +148,9 @@ Chosen option: 1.
 
 ## More information
 
-- The Win32 size-move loop: `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE`; the system commands reach the
-  window as `WM_SYSCOMMAND` only from the user's input, `ShowWindow` sends none.
+- The Win32 size-move loop: `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE`. `ShowWindow` sends no
+  `WM_SYSCOMMAND`; the window's own code sends one (the restore before fullscreen) and marks it.
+  Win+Arrow snaps move the window outside both, so Win32 states `None` on them.
 - The rule as flui-app keeps placements by it is in `crates/flui-app/ARCHITECTURE.md` ("The host
   keeps window placements in the application's storage"); the owner loops' rule is in
   `crates/flui-native/ARCHITECTURE.md`.

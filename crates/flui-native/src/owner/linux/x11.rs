@@ -109,7 +109,7 @@ use crate::owner::notices::{LifecycleHooks, NoticeChannel, StaleOnWake};
 use crate::owner::panic_boundary::contain_owner_callback;
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use crate::owner::slot::OwnerCell;
-use crate::owner::wake_deadline::WakeDeadline;
+use crate::owner::wake_deadline::{TurnDeadline, WakeDeadline};
 use crate::owner::watch::Watch;
 use crate::owner::window_delivery::WindowDelivery;
 use crate::owner::{DirectOwnerHooks, OwnerHooks, OwnerPlatform};
@@ -984,11 +984,7 @@ impl X11Loop {
         }
         // A due turn deadline is the owner's turn below, window or not, and
         // asks no window for a frame.
-        if turns
-            .turn_deadline
-            .take_due(web_time::Instant::now(), self.signal.turns())
-            && self.signal.accepting()
-        {
+        if turns.turn_deadline.take_due(web_time::Instant::now()) && self.signal.accepting() {
             let _ = self.signal.wake();
         }
         self.dispatch_events(turns)?;
@@ -1030,14 +1026,14 @@ impl X11Loop {
     }
 
     /// The instant the application asks for an owner turn at, armed by the
-    /// rule of [`WakeDeadline`], keyed by the owner's turns.
-    fn turn_deadline(&self, deadline: &mut WakeDeadline) -> Option<web_time::Instant> {
+    /// rule of [`TurnDeadline`].
+    fn turn_deadline(&self, deadline: &mut TurnDeadline) -> Option<web_time::Instant> {
         let answer = if self.signal.accepting() {
             self.app.turn_deadline().or_resume(None)
         } else {
             None
         };
-        deadline.arm(answer, self.signal.turns())
+        deadline.arm(answer)
     }
 
     /// Hand the turn's events to the features and the windows: those the
@@ -1251,7 +1247,7 @@ struct Turns {
     /// The application's wake deadline as the turns armed it.
     deadline: WakeDeadline,
     /// The application's turn deadline as the turns armed it.
-    turn_deadline: WakeDeadline,
+    turn_deadline: TurnDeadline,
 }
 
 /// How a turn of the loop ends.

@@ -663,7 +663,7 @@ impl host::Loop for AndroidLoop {
         // waits for a change to be reported.
         let mut next_preference_sample = Some(web_time::Instant::now());
         let mut due_deadline = DueDeadline::default();
-        let mut turn_deadline = crate::owner::wake_deadline::WakeDeadline::default();
+        let mut turn_deadline = crate::owner::wake_deadline::TurnDeadline::default();
         // The choreographer is the loop thread's own: register here, take down
         // at the loop's exit.
         let refresh_rate = self.displays.observe();
@@ -751,8 +751,8 @@ impl host::Loop for AndroidLoop {
             } else {
                 None
             };
-            let turn_armed = turn_deadline.arm(turn_answer, self.owner_signal.turns());
-            if turn_deadline.take_due(now, self.owner_signal.turns()) {
+            let turn_armed = turn_deadline.arm(turn_answer);
+            if turn_deadline.take_due(now) {
                 let _ = self.owner_signal.wake();
                 if self.owner_signal.drive_in(&self.turn) {
                     self.running.set(false);
