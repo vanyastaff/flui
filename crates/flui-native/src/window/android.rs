@@ -540,6 +540,9 @@ fn sample_state(
             // An Activity has no activation apart from its window's focus.
             active: focused,
             capabilities: activity_capabilities(activity_facts(api, displays)),
+            // The user can resize a freeform or split-screen window, which
+            // this host does not read: it cannot tell.
+            interaction: flui_platform::WindowInteraction::Unknown,
         }
         .onto(state)
     })

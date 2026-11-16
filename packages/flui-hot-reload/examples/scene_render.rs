@@ -370,4 +370,8 @@ impl flui_native::AppHandler for SceneApp {
     fn wake_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<std::time::Instant> {
         None
     }
+
+    fn turn_deadline(&self, _: &flui_native::OwnerPlatform) -> Option<std::time::Instant> {
+        None
+    }
 }

@@ -537,6 +537,12 @@ impl AppDelivery {
         self.question(<dyn AppHandler>::wake_deadline)
     }
 
+    /// Ask the handler for its turn deadline ([`AppHandler::turn_deadline`]);
+    /// vacant with no handler to ask. Every host asks it.
+    pub(crate) fn turn_deadline(&self) -> Asked<Option<web_time::Instant>> {
+        self.question(<dyn AppHandler>::turn_deadline)
+    }
+
     /// Whether the run's handler is bound, on this thread.
     #[cfg_attr(
         not(windows),

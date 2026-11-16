@@ -177,6 +177,9 @@ fn sample_state(
             // A page has no activation apart from the canvas's focus.
             active: focused,
             capabilities: page_capabilities(),
+            // The user can resize the browser window, which this host does
+            // not read as a placement: it cannot tell.
+            interaction: flui_platform::WindowInteraction::Unknown,
         }
         .onto(state)
     })
