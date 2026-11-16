@@ -166,7 +166,7 @@ force-stop the app.
 
 In a browser the project's `fn main` is compiled for `wasm32-unknown-unknown`
 as it is (`run_app` picks the web runner there), `wasm-bindgen --target web`
-produces `pkg/app.js` + `pkg/app_bg.wasm` next to `platforms/web/index.html`,
+produces `pkg/app.js` + `pkg/app_bg.wasm`, the build writes the page that loads them
 and a dev server on `127.0.0.1` serves that directory. Every rebuild reloads
 the open page; `r` rebuilds by hand, `q` stops the server.
 
@@ -441,6 +441,13 @@ min = "15.0"
 
 [platforms.android]
 min = 26
+
+# Optional: the web page. `base_href` is the path the build is served from;
+# `page` would name the project's own page template.
+[web]
+base_href = "/apps/demo/"
+description = "A FLUI application."
+theme_color = "#1a73e8"
 ```
 
 `[app].id` is the application's one identifier; `flui create` makes it from
@@ -459,6 +466,32 @@ for `windows` (a build number), `macos` and `ios` (a release in quotes) and
 `linux`, fails the build. `flui build` writes the higher of the two into the
 APK, the `Info.plist` and the deployment target rustc links with, and the app
 refuses to start below it. A plain `cargo build` uses FLUI's floor alone.
+
+`flui build web` writes the page (`index.html`), `flui.js` and `flui.css` on
+every build. The page has no inline script or style, so it runs under
+`script-src 'self'; style-src 'self'`; it names `[web] base_href` as its
+`<base href>` (the site's root when absent: an absolute path of plain
+segments, starting and ending with `/`), asks for `viewport-fit=cover` so the
+app reads the safe area, and states `[web] description` and
+`[web] theme_color`. The project's web manifest and icons (`manifest.json`
+and `icons` in its web platform directory) are copied as they are; a manifest
+from `flui.toml` is written when the project has none.
+
+A project that kept the page earlier versions scaffolded must choose: the
+build stops while that `index.html` exists, until it is deleted or named as
+the page template with `page` under `[web]`. A template holds
+`{{flui_module}}` where the app starts (outside a comment: the build checks
+only that it is there) and may hold `{{flui_base}}`, `{{flui_manifest}}`,
+`{{flui_stylesheet}}`, `{{flui_title}}`, `{{flui_description}}` and
+`{{flui_theme_color}}`, the last three escaped for HTML text and for
+attribute values in quotes only: put them nowhere else (not in a script, a
+style or an unquoted attribute). `theme_color` is a hex colour or a CSS
+colour name. Paths under `[web]` are relative to `flui.toml`.
+
+`flui run` serves its build under the same base path, and answers a browser
+navigating to a path that is no file (a deep link into the app's routes) with
+the page; a missing asset, a request that is not a navigation and any path
+outside the build directory get a 404.
 
 Unknown keys are ignored. There is no global configuration file
 and no telemetry setting, because the CLI stores nothing about you and sends

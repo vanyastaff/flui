@@ -1152,10 +1152,13 @@ trait depends on `flui-platform` instead.
   first capabilities (`WindowCapabilities::publish`, ADR-0341: the contract's
   publication, never reissued), so a token admitted for another window opens
   nothing on this one, and capabilities built by hand or edited admit nothing. A
-  cell that freezes at its last revision withdraws its capabilities, whether or
-  not they moved, and announces that once; a window opened with no publication
-  left opens with withdrawn capabilities (`WindowCapabilities::withdraw`), so a
-  window takes no command it may have lost (`a_frozen_window_withdraws_its_capabilities`). The
+  cell publishes the snapshot that takes the last revision with its capabilities
+  withdrawn and freezes there, so no revision names two snapshots; a window opened with no publication
+  left opens with withdrawn capabilities (`WindowCapabilities::withdraw`, from the cell's
+  `PublicationMint`), so a
+  window takes no command it may have lost
+  (`the_snapshot_that_takes_the_last_revision_withdraws_the_capabilities`,
+  `a_window_opened_with_no_publication_left_publishes_on_withdrawn`). The
   conformance check `a_command_admitted_before_a_revision_is_superseded`
   holds a host to it where its fixture can revise capabilities. A command no
   host arm carries out, the Android and UIKit windows' included, answers
@@ -1620,6 +1623,53 @@ retain the legacy US keycode fallback, including Shift and Caps Lock. A successf
 map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
 pins the projection, while actual layout and Shift mapping require live input.
 
+### The web window keeps its canvas and two hosts in one order, and takes them out
+
+`window::web::root::PageRoot` is what a web window puts in the page
+(ADR-0255 decision 16). A page with no canvas of its own gets a root,
+`flui-view`, appended to the body and fixed over the layout viewport
+(`position: fixed; inset: 0`, not `100vh`, which on a phone runs under the
+browser's toolbars), holding the canvas, the text-input host
+(`flui-text-input`) and the semantics slot (`flui-semantics`), in that
+order. A page that supplies `<canvas id="flui-canvas">` owns its layout: the
+two hosts are inserted after the canvas, and when the window retires the
+canvas gets back everything the window wrote on it: the attributes of one list
+(`owner::web::CANVAS_ATTRIBUTES`: `width`, `height`, `tabindex`, `inputmode`, which every writer goes through, `CanvasWrites`) and its inline
+style, restored through the CSSOM, which a Content Security Policy that
+refuses inline style attributes allows. For the window's life the canvas has
+two more siblings, which selectors such as `canvas:last-child` see; they
+change no layout, since they generate no box and all they hold is
+`position: fixed`. They stay beside the canvas so what the semantics slot
+holds is hidden by the canvas's ancestors and placed in the containing block
+a transformed ancestor gives it. A `#flui-canvas`
+inside another window's `flui-view` (another FLUI instance on the page) is
+not the page's: the window makes a root of its own, whose canvas takes the id
+only while no element has it. The hosts are `display: contents`, so they give
+no box, ancestor or containing block the canvas does not have; the text input
+and the accessibility put their elements only into them (`HostSlots`, on
+`CanvasRef`), so the semantics slot stays last whichever of the two adds its
+element first. Dropping the `PageRoot` takes out what it added, on a close and
+on an open that failed after the root was made.
+
+The safe area is the part of each band `env(safe-area-inset-*)` names
+unsafe that the canvas lies under. The text-input host's padding is those
+`env()` values, so its computed padding is the bands in CSS pixels;
+`window::safe_area::within` intersects them with the canvas's box in the
+layout viewport (the window's `innerWidth`×`innerHeight`, which quirks mode
+does not change) and scales them into the window's logical pixels, as the
+keyboard's occlusion is. The bands are zero unless the page covers the display
+(`viewport-fit=cover`, which the page `flui build` writes asks for). They are
+read once and kept (`HostSlots::unsafe_edges`), since reading them is a style
+recalculation every state sample would pay, and read again after a window
+resize, a turn of the screen (`screen.orientation`'s `change`, or `orientationchange`: half a turn changes no size yet swaps the side bands) or a visual-viewport or scroll change.
+
+`a_window_takes_the_part_of_each_band_over_it` pins the intersection on
+Linux; the Node suite's `web_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+and `web_window_reads_the_safe_area_from_the_viewport` drive the fake page,
+and the headless-Chrome `the_window_keeps_its_canvas_and_hosts_in_order_and_takes_them_out`
+checks the order, the teardown and the page canvas's attributes. No mobile
+browser has run the safe area.
+
 ### Web subscriptions belong to one actual canvas registration
 
 The canvas owns an exact DOM-object registration claim. Another live owner of
@@ -2032,7 +2082,7 @@ quiescent point is still inside that dispatch.
 `OwnerPlatform::text_store_host` as Win32's text services are. The focused
 field's store is mirrored into an `EditContext` on the canvas where the
 browser has one (Chromium; web-sys binds none, so the crate declares it) and
-into a hidden `<textarea>` beside the canvas where it does not. The browser
+into a hidden `<textarea>` in the window's text-input host where it does not. The browser
 edits its copy and reports each edit (`textupdate`, or the textarea's
 `input`, diffed against the text the host last gave it by
 `text::ime::diff`, the mirror's one edit); the host applies it to the store under an
@@ -2061,6 +2111,62 @@ change, its keys reach the window through the canvas's key route
 (`CanvasKeys`), focusing the canvas forwards focus to it, and detaching gives
 focus back to the canvas.
 
+A mobile browser shows its keyboard only for an element focused inside the
+handler of a tap, and iOS Safari zooms the page into a focused field whose
+text is below 16 CSS pixels. Every element the host focuses for editing (the
+textarea, a semantics field) has `font-size: 16px`
+(`owner::web::EDITOR_FONT_SIZE`), and every focus the text input makes
+passes `preventScroll`. The window has one hidden editor for its whole life,
+as Flutter's web engine keeps one editing element: a field change rewrites
+its content and hints and leaves its focus, so the keyboard stays up from one
+field to the next, and a store released with no field after it gives the
+focus back to the canvas. In the `pointerup` handler of a touch or pen tap (a
+contact that travelled at most `TAP_SLOP`), after the canvas's input
+dispatched it: a tap on the served field's box gives the focus back to an
+editor that lost it (iOS hides the keyboard by blurring). An editor that kept
+its focus is the normal state while typing and moves no focus, which would
+commit a live composition and reset the keyboard's shift and page; it gives
+its focus to the canvas and takes it back inside the handler only when the
+browser reports the keyboard hidden (Android's Back keeps the focus):
+`navigator.virtualKeyboard`'s empty rectangle while the window has it overlay
+the page (`window::keyboard::page::keyboard_state`). An inset inferred from the
+visual viewport is no report (Safari pans the viewport over a field near the
+bottom, a resizing or hardware keyboard leaves no inset), so where only that
+exists a tap moves no focus. `navigator.virtualKeyboard.show()` shows nothing without
+`virtualkeyboardpolicy="manual"`, a policy under which no focus opens the
+keyboard by itself, so it is not used; a tap elsewhere or a drag leaves the
+keyboard. The canvas hands the focus it takes (a click, the compatibility
+`mousedown` after a tap, the host's own round trip) on to the editor that
+serves a field or that a tap focused, through one listener for the window's
+life (`forward_canvas_focus`). The hidden editor's attributes follow its
+state and are written only by `set_hidden_state`: a served field's hints, or,
+idle, `aria-hidden`, `inputmode="none"`, `autocomplete="off"` and no value. A
+composition still live when a field gives the editor up is committed in place
+to it, once, and the idle state's value, replaced from script, ends it in the
+browser with no focus move (`the_hidden_editor_s_attributes_follow_its_state`,
+`a_composition_left_in_one_field_lands_in_no_other`,
+`a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
+`a_tap_s_compatibility_mousedown_leaves_the_focus_on_the_editor`).
+With nothing served (and no `EditContext`) the editor is focused with
+`inputmode="none"` and `aria-hidden`, which opens no keyboard and announces
+nothing; the field that attaches writes its hints, and two animation frames
+of that tap without one give the focus back. A field attached outside a tap
+focuses the editor only while the canvas has the page's focus.
+`navigator.userActivation.isActive` is not used: it stays true for seconds
+after a tap, outside its handler. The `EditContext` path writes the canvas's
+`inputmode` through `owner::web::CanvasWrites` and puts the page's value and
+the canvas's own `editContext` back when it lets the field go. The
+headless-Chrome tests (constructed events; the test driver has no trusted
+input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
+`a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
+`moving_from_one_field_to_the_next_keeps_the_editor_and_its_focus`,
+`a_tap_on_a_field_that_kept_its_focus_reopens_only_a_hidden_keyboard`,
+`a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone`,
+`a_page_canvas_gets_back_the_inputmode_and_the_style_it_had` and
+`the_hidden_editor_states_each_purpose_and_enter_action` pin the rule; whether
+Safari on iOS and Chrome on Android open the keyboard is a device run
+(`platform-parity.toml`, "Input purpose and hints").
+
 `the_purpose_picks_the_input_mode`,
 `a_key_of_the_input_method_is_marked_composing` and `mirror_text_table` pin
 the rules in Linux CI, and the conformance table's
@@ -2076,9 +2182,9 @@ input method, candidate window or soft keyboard has run.
 ### The web window's accessibility is a parallel ARIA DOM over the canvas
 
 AccessKit has no adapter for the browser, so `accessibility::web` writes the
-browser's accessibility tree itself (ADR-0255 decision 18): one `flui-node`
+browser's accessibility tree itself (ADR-0255 decision 18; the tree is the host's own, ADR-0336): one `flui-node`
 element per AccessKit node, nested as the tree is, inside a
-`flui-semantics-host` beside the canvas. The pure part runs on the Linux
+`flui-semantics-host` in the window's semantics slot. The pure part runs on the Linux
 host: `aria::describe` maps a node to its element (`role`, the name as
 `aria-label` or as the element's text for a role named by its content,
 states, ranges, `data-flui-id` from `author_id`, relations such as
@@ -2108,9 +2214,9 @@ and writes only what changed between two specs.
   transform is dropped, since CSS pixels are already logical. The host covers
   the canvas's client box, inside its border, the box the window's layout
   size reads.
-- **What stands beside the canvas is hidden with it.** As the canvas's
-  sibling, the placeholder and the host share every ancestor's `display` and
-  `visibility`; the canvas's own are copied on each placement and whenever a
+- **What stands in the semantics slot is hidden with the canvas.** In a
+  `display: contents` slot after the canvas, the placeholder and the host
+  share every ancestor's `display` and `visibility`; the canvas's own are copied on each placement and whenever a
   `MutationObserver` sees its `style`, `class` or `hidden` change.
 - **Work is queued.** A publish, an activation, a DOM event's action and a
   re-placement run in order from one queue. A listener that publishes from

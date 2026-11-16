@@ -1003,7 +1003,9 @@ fn an_xtest_drag_from_the_window_drops_on_another_client() {
     use flui_platform::data_transfer::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+    use flui_platform::drag::{
+        DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
+    };
 
     park_pointer();
     let handler = RecordingWindowHandler::new();
@@ -1019,21 +1021,24 @@ fn an_xtest_drag_from_the_window_drops_on_another_client() {
         .window
         .drag_source()
         .expect("the window has a drag source")
-        .start(OsDragRequest {
-            key: DragSessionKey::new(
-                ProcessNonce::from_raw(NonZeroU64::MIN),
-                UiRuntimeId::new(1),
-                IdMint::<DragSessionId>::new().next().expect("fresh mint"),
-            ),
-            pointer: None,
-            representations: vec![RepresentationDescriptor {
-                format: TransferFormat::Text,
-                declared_len: None,
-            }],
-            allowed: TransferActions::COPY,
-            provider: Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
-            on_end: Box::new(move |outcome| *end.borrow_mut() = Some(outcome)),
-        })
+        .start(OsDragRequest::new(
+            OsDragTerms::try_new(
+                DragSessionKey::new(
+                    ProcessNonce::from_raw(NonZeroU64::MIN),
+                    UiRuntimeId::new(1),
+                    IdMint::<DragSessionId>::new().next().expect("fresh mint"),
+                ),
+                vec![RepresentationDescriptor {
+                    format: TransferFormat::Text,
+                    declared_len: None,
+                }],
+                TransferActions::COPY,
+            )
+            .expect("one text representation under COPY"),
+            None,
+            Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
+            Box::new(move |outcome| *end.borrow_mut() = Some(outcome)),
+        ))
         .expect("the session starts");
 
     xtest.move_to_root(950, 750);
@@ -1109,7 +1114,9 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
     use flui_platform::data_transfer::{
         RepresentationDescriptor, TransferActions, TransferFormat, TransferPayload,
     };
-    use flui_platform::drag::{DragSessionKey, OsDragEnd, OsDragRequest, ProcessNonce};
+    use flui_platform::drag::{
+        DragSessionKey, OsDragEnd, OsDragRequest, OsDragTerms, ProcessNonce,
+    };
 
     park_pointer();
     let handler = RecordingWindowHandler::new();
@@ -1129,21 +1136,24 @@ fn an_xtest_escape_cancels_a_drag_after_the_focus_moved() {
         .window
         .drag_source()
         .expect("the window has a drag source")
-        .start(OsDragRequest {
-            key: DragSessionKey::new(
-                ProcessNonce::from_raw(NonZeroU64::MIN),
-                UiRuntimeId::new(1),
-                IdMint::<DragSessionId>::new().next().expect("fresh mint"),
-            ),
-            pointer: None,
-            representations: vec![RepresentationDescriptor {
-                format: TransferFormat::Text,
-                declared_len: None,
-            }],
-            allowed: TransferActions::COPY,
-            provider: Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
-            on_end: Box::new(move |outcome| *end.borrow_mut() = Some(outcome)),
-        })
+        .start(OsDragRequest::new(
+            OsDragTerms::try_new(
+                DragSessionKey::new(
+                    ProcessNonce::from_raw(NonZeroU64::MIN),
+                    UiRuntimeId::new(1),
+                    IdMint::<DragSessionId>::new().next().expect("fresh mint"),
+                ),
+                vec![RepresentationDescriptor {
+                    format: TransferFormat::Text,
+                    declared_len: None,
+                }],
+                TransferActions::COPY,
+            )
+            .expect("one text representation under COPY"),
+            None,
+            Box::new(|_| Ok(TransferPayload::Text("dragged".to_owned()))),
+            Box::new(move |outcome| *end.borrow_mut() = Some(outcome)),
+        ))
         .expect("the session starts");
 
     focus_elsewhere(&fixture);

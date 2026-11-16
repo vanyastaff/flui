@@ -129,7 +129,7 @@ impl WindowInputs for NoInputs {
     fn press_kind(
         &self,
         _window: WindowRef,
-        _pointer: flui_platform::PointerId,
+        _press: flui_platform::pointer::PressId,
     ) -> Option<flui_platform::pointer::PointerKind> {
         None
     }
