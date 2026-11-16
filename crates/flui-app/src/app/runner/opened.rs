@@ -14,7 +14,7 @@
 //! runtime as it is installed, ahead of its first frame, so its first
 //! `Router` opens on the link instead of its initial page; for the
 //! application as a whole the run opens its main window for them
-//! ([`OpenRouting::waits_for_a_window`]).
+//! ([`OpenRouting::route_held`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
