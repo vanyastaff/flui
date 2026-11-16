@@ -811,6 +811,51 @@ fn a_fullscreen_window_maximized_again_never_reads_normal() {
     );
 }
 
+/// A fullscreen window that was minimized leaves fullscreen straight from
+/// minimized: a subscriber sees it minimized, then in the mode asked, and
+/// never fullscreen or (on its way to maximized) normal between.
+fn a_minimized_fullscreen_window_leaves_in_one_step() {
+    for (target, between) in [
+        (
+            WindowMode::Maximized,
+            [WindowMode::Fullscreen, WindowMode::Normal],
+        ),
+        (
+            WindowMode::Normal,
+            [WindowMode::Fullscreen, WindowMode::Maximized],
+        ),
+    ] {
+        let platform = platform();
+        let window = open(&platform, options());
+        let normal = window.state().outer;
+        apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+        apply(&window, WindowCommand::SetMode(WindowMode::Minimized));
+        settle();
+        assert_eq!(window.state().mode, WindowMode::Minimized);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        on_changes(&window, move |_, _, next| {
+            log.lock().expect("log").push(next.mode);
+        });
+        apply(&window, WindowCommand::SetMode(target));
+        settle();
+        let seen = seen.lock().expect("log").clone();
+        assert!(
+            seen.iter().all(|mode| !between.contains(mode)),
+            "{target:?}: {seen:?}"
+        );
+        let state = window.state();
+        assert_eq!(state.mode, target);
+        assert!(shown(&window));
+        let returns = state.normal_geometry.unwrap_or(state.outer);
+        assert!(near(returns.size().width, normal.size().width), "{state:?}");
+        assert!(
+            near(returns.size().height, normal.size().height),
+            "{state:?}"
+        );
+    }
+}
+
 fn entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot() {
     let platform = platform();
     let window = open(&platform, options());
@@ -2336,6 +2381,10 @@ fn native_window_commands() {
         (
             "a_fullscreen_window_maximized_again_never_reads_normal",
             a_fullscreen_window_maximized_again_never_reads_normal,
+        ),
+        (
+            "a_minimized_fullscreen_window_leaves_in_one_step",
+            a_minimized_fullscreen_window_leaves_in_one_step,
         ),
         (
             "entering_fullscreen_and_changing_the_frame_each_publish_one_snapshot",

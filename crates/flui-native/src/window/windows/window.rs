@@ -1262,11 +1262,34 @@ impl WindowsWindow {
     }
 
     /// Take the window out of fullscreen into the mode `exit` names; a window
-    /// that is not fullscreen stays as it is. A fullscreen window that was
-    /// minimized is restored first, so it leaves fullscreen from there.
+    /// that holds no fullscreen stays as it is. A shown fullscreen window
+    /// that was minimized leaves straight from minimized; a hidden one is
+    /// restored first, which nobody sees. Either way the window publishes
+    /// once, in the mode it ends in.
     fn leave_fullscreen(&self, exit: FullscreenExit) {
-        self.restore_minimized_fullscreen();
-        Self::leave_fullscreen_for_hwnd(self.hwnd, exit);
+        let hwnd = self.hwnd;
+        let left = super::proc::with_window_context(hwnd, "leave_fullscreen", |ctx| {
+            let hold = ctx.hold_publishing();
+            // SAFETY: a plain query of this wrapper's window handle.
+            if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                self.restore_minimized_fullscreen();
+            }
+            Self::leave_fullscreen_for_hwnd(hwnd, exit);
+            drop(hold);
+            ctx.publish_window_state(hwnd);
+        });
+        if left.is_none() {
+            tracing::warn!(?hwnd, "cannot leave fullscreen: no usable window context");
+        }
+    }
+
+    /// Whether the window is fullscreen, or minimized out of fullscreen;
+    /// `false` once its context is gone.
+    fn holds_fullscreen(&self) -> bool {
+        super::proc::with_window_context(self.hwnd, "holds_fullscreen", |ctx| {
+            ctx.mode.get().holds_fullscreen()
+        })
+        .unwrap_or(false)
     }
 
     /// Restore a fullscreen window that is minimized: it comes back
@@ -2097,6 +2120,12 @@ impl WindowsWindow {
                 IsWindowVisible(self.hwnd()).as_bool(),
             )
         };
+        // A shown fullscreen window, minimized or not, leaves fullscreen in
+        // one step: a restore first would show it fullscreen on the way.
+        if shown && self.holds_fullscreen() {
+            self.leave_fullscreen(FullscreenExit::Normal);
+            return;
+        }
         if away && shown {
             self.show_native(SW_RESTORE);
         } else if away {

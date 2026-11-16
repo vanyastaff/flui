@@ -6878,7 +6878,7 @@ GPU-память простаивающего или невидимого окн
   текстом: без отбора — `Refused(DuplicateFormat)`); `a_request_from_a_press_the_window_does_not_hold_is_refused`
   в `headless_drag_contracts` (без проверки — сессия закончившегося нажатия принята).
 
-- [x] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
+- [ ] **LY124** — ветка `native/fullscreen-policy`. Обе находки подтверждены на `main` @
   `e166cabd3` запуском на Windows: F11, которое обработчик пропустил, переводило окно в
   полноэкранный режим; `SetMode(Maximized)` полноэкранного окна, развёрнутого до этого,
   публиковало `[Fullscreen, Normal, Normal, Maximized]`. Переключатель, терявший «развёрнуто»,
@@ -6900,12 +6900,20 @@ GPU-память простаивающего или невидимого окн
   `Fullscreen` и `Maximized`) — таблица `native_window_commands`;
   `leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless, таблица
   `window_state_contract`) держит то же правило у headless, где оно уже выполнялось.
-  X11, Wayland и AppKit исполняют выход несколькими ответами системы окон и публикуют режим
-  между (openbox на Xvfb в WSL: `Normal` трижды до `Maximized`, и при развороте до снятия
-  полноэкранного); это записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in
-  between on AppKit, X11 and Wayland») с тем, что нужно: хост держит режим снимка, пока
-  запрошенная им смена режима в пути, с ограничением по времени. Проверки и непрогнанное — в
-  теле PR.
+  Доведение после чтения: свёрнутое полноэкранное окно выходит прямо из свёрнутого одним
+  `SetWindowPlacement` под удержанием публикации (`a_minimized_fullscreen_window_leaves_in_one_step`;
+  с откатом — `[Minimized, Minimized, Fullscreen, Maximized]`); прямоугольник возврата, чей
+  монитор отключён, вписывается в рабочую область ближайшего (`mode::fit_within`, модельная
+  таблица `a_rectangle_comes_back_inside_a_monitor_that_is_there`: у хоста Windows нет двойника
+  дисплеев); документы говорят правило как есть — ни один хост не переключает полноэкранный
+  режим своим решением, смена системой (зелёная кнопка macOS, Escape браузера) сообщается и не
+  оспаривается; устаревшие фрагменты changelog о F11 переписаны.
+  Остаётся строимое, поэтому строка открыта: X11, Wayland и AppKit исполняют выход несколькими
+  ответами системы окон и публикуют режим между (openbox на Xvfb в WSL: `Normal` трижды до
+  `Maximized`, и при развороте до снятия полноэкранного). Нужно: хост держит режим снимка, пока
+  запрошенная им смена режима в пути, с ограничением по времени и ходом владельца по его
+  истечении; записано в `docs/gaps.md` («Leaving fullscreen publishes a mode in between on
+  AppKit, X11 and Wayland»). Проверки и непрогнанное — в теле PR #2680.
 
 ## Отступление от порядка, решённое владельцем
 

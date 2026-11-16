@@ -5714,17 +5714,27 @@ before the style is replaced, and the style saved to return to has no `WS_MAXIMI
 `WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back
 fullscreen.
 
-**Fullscreen is the application's.** No host has a key of its own that switches it: a window enters
-and leaves fullscreen only by `SetMode`, and a key for it is the application's or the framework's
-shortcut. A borderless Win32 window has no exit of its own, so every exit names where it goes
-(`proc::FullscreenExit`): `Normal` takes the style and the rectangle it had before fullscreen back,
-`Maximized` maximizes it with that rectangle as the one it is restored to, by one
-`SetWindowPlacement` that never shows the normal rectangle on the way. Each publishes one snapshot,
-in the mode it ends in, and sends no system command, so no report of the round trip says the user
+**No host switches fullscreen by its own decision.** No host has a key of its own for it: a key for
+fullscreen is the application's. A change the system makes (the macOS green button and its
+full-screen space, the browser ending fullscreen on Escape, a window manager or a compositor) is
+reported in the snapshot and not fought. A borderless Win32 window has no exit of its own, so every
+exit is a `SetMode` that names where it goes (`proc::FullscreenExit`), from fullscreen or from
+minimized out of fullscreen: `Normal` takes the style and the rectangle it had before fullscreen
+back, `Maximized` maximizes it with that rectangle as the one it is restored to. That rectangle is
+fitted first to the work area of the nearest monitor when the one it was on is gone
+(`mode::fit_within`). A fullscreen window leaving for `Normal` is moved there with one
+`SetWindowPos`; one leaving for `Maximized`, or out of minimized, is placed with one
+`SetWindowPlacement`, which never shows the normal rectangle on the way to maximized nor fullscreen
+on the way out of minimized. Each publishes one snapshot, in
+the mode it ends in, and sends no system command, so no report of the round trip says the user
 placed the window (ADR-0343 §2) and no placement is written as the user's. Tests:
 `a_key_the_application_lets_through_leaves_the_mode_alone`,
-`a_fullscreen_window_maximized_again_never_reads_normal` (Win32 window commands table),
-`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table).
+`a_fullscreen_window_maximized_again_never_reads_normal`,
+`a_minimized_fullscreen_window_leaves_in_one_step` (Win32 window commands table),
+`a_rectangle_comes_back_inside_a_monitor_that_is_there` (the fitting rule),
+`leaving_fullscreen_returns_to_the_state_it_left_in_one_step` (headless window state table). X11,
+Wayland and AppKit still publish a mode in between ([gaps](../../docs/gaps.md#leaving-fullscreen-publishes-a-mode-in-between-on-appkit-x11-and-wayland)).
+
 `WINDOWPLACEMENT` rectangles are workspace coordinates; a task bar on the top or left edge
 moves the work area, so they are converted with the monitor's work-area offset.
 
