@@ -892,7 +892,6 @@ pub(super) fn open_window_with_content_impl<V>(
 where
     V: View + Clone + 'static,
 {
-    use flui_native::WindowOpen;
     warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
@@ -909,9 +908,70 @@ where
     }
 
     let reservation = reserve_window()?;
+    let (reply, request) = crate::app::WindowRequest::new();
+    // The placement read starts before the window opens. A read that has not
+    // answered yet holds the open until it does or reaches its bound; the
+    // window's failures then reach the request instead of this return.
+    let mut opening = super::desktop::OpeningWindow::new(&config);
+    if opening.recall_settled() {
+        open_content_window(
+            opening,
+            config,
+            policy,
+            root,
+            loop_identity,
+            reservation,
+            reply,
+        )?;
+        return Ok(request);
+    }
+    super::placement::when_recalled(
+        opening,
+        Box::new(move |opening| {
+            let result = if secondary_install_admitted(&loop_identity) {
+                open_content_window(
+                    opening,
+                    config,
+                    policy,
+                    root,
+                    loop_identity,
+                    reservation,
+                    Arc::clone(&reply),
+                )
+            } else {
+                Err(AppWindowError::AdmissionClosed)
+            };
+            if let Err(error) = result {
+                let _ = reply.deliver(Err(error));
+            }
+        }),
+    );
+    Ok(request)
+}
+
+/// Open the content window `opening` describes, whose placement read
+/// settled, and queue its installation for the next owner turn, which answers
+/// `reply`.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn open_content_window<V>(
+    opening: super::desktop::OpeningWindow,
+    config: AppConfig,
+    policy: WindowPolicy,
+    root: V,
+    loop_identity: Arc<()>,
+    reservation: WindowReservation,
+    reply: Arc<crate::app::application_control::Reply>,
+) -> Result<(), AppWindowError>
+where
+    V: View + Clone + 'static,
+{
+    use flui_native::WindowOpen;
     // Deferred reveal: the content install below goes through
     // `install_desktop_window`, which performs the reveal.
-    let opening = super::desktop::OpeningWindow::new(&config);
     let open = with_owner_platform(|owner| opening.open(&config, owner))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;
@@ -919,7 +979,6 @@ where
     match open {
         WindowOpen::Ready(window) => {
             opening.adopt(window.id());
-            let (reply, request) = crate::app::WindowRequest::new();
             // Preparation consumes the captured root once. The completion then
             // retains the native window and liveness reservation until the
             // owner's publication receipt settles, including when this request
@@ -967,7 +1026,7 @@ where
             // `UiRuntime::request_redraw` already does from
             // `request_redraw_for`.
             with_owner_platform(|owner| owner.proxy().wake());
-            Ok(request)
+            Ok(())
         }
         WindowOpen::Pending(_) => Err(AppWindowError::UnsupportedPolicy {
             reason: "open_window with content does not yet support deferred window creation \

@@ -83,6 +83,8 @@ pub enum AppCall {
     ExitPolicy,
     /// [`AppHandler::wake_deadline`].
     WakeDeadline,
+    /// [`AppHandler::turn_deadline`].
+    TurnDeadline,
 }
 
 type Bootstrap = Box<dyn FnOnce(OwnerPlatform) -> Result<(), BootstrapError>>;
@@ -99,6 +101,7 @@ pub struct AppLog {
     session_end: RefCell<Rc<dyn Fn(SessionEndPhase) -> SessionEndAnswer>>,
     exit: RefCell<Rc<dyn Fn() -> ExitAnswer>>,
     deadline: RefCell<Rc<dyn Fn() -> Option<web_time::Instant>>>,
+    turn_deadline: RefCell<Rc<dyn Fn() -> Option<web_time::Instant>>>,
 }
 
 impl AppLog {
@@ -113,6 +116,7 @@ impl AppLog {
             session_end: RefCell::new(Rc::new(|_| SessionEndAnswer::Proceed)),
             exit: RefCell::new(Rc::new(|| ExitAnswer::KeepRunning)),
             deadline: RefCell::new(Rc::new(|| None)),
+            turn_deadline: RefCell::new(Rc::new(|| None)),
         })
     }
 
@@ -173,6 +177,14 @@ impl AppLog {
     /// Answer the wake deadline with what `answer` says when asked.
     pub fn answer_deadline_with(&self, answer: impl Fn() -> Option<web_time::Instant> + 'static) {
         self.deadline.replace(Rc::new(answer));
+    }
+
+    /// Answer the turn deadline with what `answer` says when asked.
+    pub fn answer_turn_deadline_with(
+        &self,
+        answer: impl Fn() -> Option<web_time::Instant> + 'static,
+    ) {
+        self.turn_deadline.replace(Rc::new(answer));
     }
 
     /// What it heard, in order.
@@ -271,6 +283,12 @@ impl AppHandler for AppLog {
     fn wake_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
         self.heard(AppCall::WakeDeadline, owner);
         let deadline = self.deadline.borrow().clone();
+        deadline()
+    }
+
+    fn turn_deadline(&self, owner: &OwnerPlatform) -> Option<web_time::Instant> {
+        self.heard(AppCall::TurnDeadline, owner);
+        let deadline = self.turn_deadline.borrow().clone();
         deadline()
     }
 }

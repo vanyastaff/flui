@@ -101,6 +101,10 @@ mod cases {
             a_wake_deadline_no_frame_serviced_is_delivered_once,
         ),
         (
+            "a_turn_deadline_gives_the_owner_a_turn_with_no_window",
+            a_turn_deadline_gives_the_owner_a_turn_with_no_window,
+        ),
+        (
             "a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one",
             a_parked_exit_policy_panic_comes_out_ahead_of_a_later_one,
         ),
@@ -1297,6 +1301,52 @@ mod cases {
         assert_eq!(calls.last(), Some(&AppCall::Quit), "{calls:?}");
     }
 
+    /// A turn deadline asked with no window open gives the owner a turn at
+    /// its instant, within a second of it, and is asked a few times, not
+    /// polled.
+    fn a_turn_deadline_gives_the_owner_a_turn_with_no_window() {
+        let platform = Box::new(X11Platform::try_new().expect("the X11 platform"));
+        let log = AppLog::new();
+        let due = Rc::new(std::cell::OnceCell::new());
+        let answer = Rc::clone(&due);
+        log.answer_turn_deadline_with(move || {
+            Some(*answer.get_or_init(|| web_time::Instant::now() + Duration::from_millis(80)))
+        });
+        let turns = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = Rc::clone(&turns);
+        let quit_at = Rc::clone(&due);
+        log.bootstrap(move |owner| {
+            // The run ends anyway after three seconds, so a loop that never
+            // gives the turn fails the assertion below instead of hanging.
+            quit_after(owner.proxy(), Duration::from_secs(3));
+            let quit = owner.proxy();
+            owner
+                .on_wake(Box::new(move || {
+                    let now = web_time::Instant::now();
+                    seen.borrow_mut().push(now);
+                    if quit_at.get().is_some_and(|due| now >= *due) {
+                        let _ = quit.request_quit();
+                    }
+                }))
+                .expect("the owner takes a wake callback");
+            Ok(())
+        });
+        platform
+            .run(Rc::clone(&log) as Rc<dyn AppHandler>)
+            .expect("the loop runs");
+        let due = *due.get().expect("the deadline was asked");
+        assert!(
+            turns
+                .borrow()
+                .iter()
+                .any(|turn| *turn >= due && *turn < due + Duration::from_secs(1)),
+            "the deadline gave the owner its turn: {:?}",
+            turns.borrow()
+        );
+        let questions = log.count(AppCall::TurnDeadline);
+        assert!(questions < 20, "asked {questions} times: polled");
+    }
+
     /// A wake deadline whose frame no handler ran is delivered once, not on
     /// every turn: the loop waits for the next event instead of spinning.
     fn a_wake_deadline_no_frame_serviced_is_delivered_once() {
@@ -1428,7 +1478,7 @@ mod cases {
         fixture.settle();
         let managed = fixture.window.state();
         assert_eq!(managed.mode, WindowMode::Minimized);
-        assert_eq!(managed.capabilities.minimizes, WindowCapability::Native);
+        assert_eq!(managed.capabilities.minimizes(), WindowCapability::Native);
 
         kill_window_manager();
         let started_again = StartedAgain;
@@ -1451,7 +1501,8 @@ mod cases {
         assert_eq!(state.mode, WindowMode::Normal, "nobody holds it iconic");
         assert!(state.visible, "the server mapped it again");
         assert_eq!(
-            state.capabilities.minimizes, UNAVAILABLE,
+            state.capabilities.minimizes(),
+            UNAVAILABLE,
             "nobody minimizes it now"
         );
         assert_eq!(
@@ -1477,7 +1528,7 @@ mod cases {
         drop(started_again);
         fixture.settle();
         assert_eq!(
-            fixture.window.state().capabilities.minimizes,
+            fixture.window.state().capabilities.minimizes(),
             WindowCapability::Native,
             "the window manager that started is followed"
         );
@@ -1500,7 +1551,7 @@ mod cases {
         let handler = RecordingWindowHandler::new();
         let mut fixture = X11Fixture::open_with("bereaved", Rc::clone(&handler));
         let managed = fixture.window.state().capabilities;
-        assert_eq!(managed.minimizes, WindowCapability::Native);
+        assert_eq!(managed.minimizes(), WindowCapability::Native);
         // Admitted while the window manager runs, applied in the turn that
         // hears it go, before anything reads the window.
         let maximize = WindowCommand::SetMode(WindowMode::Maximized)
@@ -1519,7 +1570,7 @@ mod cases {
                         *maximized.borrow_mut() = Some(window.apply(maximize));
                     }
                     let state = window.state();
-                    read.set(Some(state.capabilities.minimizes));
+                    read.set(Some(state.capabilities.minimizes()));
                     let activate = WindowCommand::Activate
                         .admit(&state.capabilities)
                         .expect("a window takes the focus");
@@ -1615,14 +1666,14 @@ mod cases {
             name(&fixture.server, root, named);
             fixture.settle();
             assert_eq!(
-                fixture.window.state().capabilities.enters_fullscreen,
+                fixture.window.state().capabilities.enters_fullscreen(),
                 UNAVAILABLE,
                 "{case}: no window manager that lists fullscreen is named"
             );
             name(&fixture.server, root, window_manager);
             fixture.settle();
             assert_eq!(
-                fixture.window.state().capabilities.enters_fullscreen,
+                fixture.window.state().capabilities.enters_fullscreen(),
                 WindowCapability::Native,
                 "{case}: the root's property changes are still heard"
             );
@@ -1665,7 +1716,7 @@ mod cases {
         });
         fixture.settle();
         assert_eq!(
-            fixture.window.state().capabilities.minimizes,
+            fixture.window.state().capabilities.minimizes(),
             UNAVAILABLE,
             "nobody iconifies the window"
         );
@@ -1708,7 +1759,7 @@ mod cases {
         stand_in.flush().expect("flush");
         fixture.settle();
         assert_eq!(
-            fixture.window.state().capabilities.minimizes,
+            fixture.window.state().capabilities.minimizes(),
             WindowCapability::Native,
             "the window manager that took the selection iconifies the window"
         );

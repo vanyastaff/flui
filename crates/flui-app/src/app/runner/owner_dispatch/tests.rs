@@ -55,6 +55,9 @@ struct ReentrantIdentityWindow {
     probe: flui_foundation::PresentationAddress,
     queried: Arc<std::sync::atomic::AtomicBool>,
     on_scale: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 
 impl PlatformWindow for ReentrantIdentityWindow {
@@ -101,14 +104,14 @@ impl PlatformWindow for ReentrantIdentityWindow {
         if let Some(on_scale) = &self.on_scale {
             on_scale();
         }
-        self.inner.state()
+        self.inner.state().with_capabilities(self.capabilities)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
 
@@ -155,6 +158,9 @@ fn native_identity_is_observed_before_registry_publication() {
             probe,
             queried: Arc::clone(&queried),
             on_scale: None,
+            capabilities: flui_platform::WindowCapabilities::NONE
+                .publish()
+                .expect("the process has publications left"),
         });
         let installed = match mode {
             Install::ReplaceRuntime => {
@@ -394,6 +400,9 @@ fn presentation_assembly_reentry_revalidates_its_authorizer() {
                     close_this_window(primary);
                 }
             })),
+            capabilities: flui_platform::WindowCapabilities::NONE
+                .publish()
+                .expect("the process has publications left"),
         });
         let result = install_presentation_alongside(primary, Rc::clone(&window));
         assert!(

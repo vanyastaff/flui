@@ -896,11 +896,42 @@ trait depends on `flui-platform` instead.
   instead of hanging) and
   `web_session_end_handler_reenters_the_platform`. Android and the Apple hosts
   run the same call point and are type-checked only.
+- **A turn deadline is a promise of an owner turn, window or not (ADR-0343
+  §1).** The application's handler answers two deadlines, each armed and
+  taken with `owner::wake_deadline::WakeDeadline`. `wake_deadline` is work a
+  frame serves: at it a loop asks its windows for frames, and the instant is
+  delivered again only after a frame ran. `turn_deadline` is work no frame
+  serves (a bounded wait, a held write): at it the loop gives the owner one
+  turn through `OwnerSignal::wake`, with or without a window open, and asks no
+  window for a frame. Every loop arms and takes it with
+  `owner::wake_deadline::TurnDeadline`: a turn delivered for the deadline
+  serves every deadline not later than that turn's own time, and an answer not
+  later than the last time served is not armed again, so no answer spins a
+  loop; work ready now asks for a turn through the signal instead of answering
+  a past instant. Every host asks it after every owner turn: the Win32 loop
+  and its modal loops and the X11, Wayland and Android loops before each wait;
+  AppKit, UIKit and the web after each turn and once the handler bootstrapped,
+  through a timer of the main queue or the page; the headless host when a test
+  drives `HeadlessOwnerTurns::drive_at(now)`. A handler that moves the deadline
+  outside an owner turn asks for one. `a_turn_deadline_gives_the_owner_a_turn_with_no_window`
+  (the `app_handler` table on Win32, `x11_window`, `wayland_window`),
+  `a_turn_deadline_asks_no_window_for_a_frame`, `a_past_turn_deadline_gives_one_turn`,
+  `a_past_turn_deadline_does_not_spin_the_win32_loop` and
+  `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop` hold it.
+- **A window states when the user places it (ADR-0343 §2).** Each host fills
+  `ReportedFacts::interaction` on the report that carries a change: Win32
+  `UserPlacing` inside its size-move loop and while the default procedure
+  carries out an `SC_MAXIMIZE`, `SC_MINIMIZE` or `SC_RESTORE` the user worked,
+  and publishes `None` when either ends; a system command the window sends
+  itself for an application's command is marked by its sender
+  (`WindowContext::in_app_command`) and is not the user's. The headless host
+  states what `HeadlessHostWindow::simulate_interaction` said; every other
+  host `Unknown` ([gaps](../../docs/gaps.md#only-win32-says-when-the-user-places-a-window-and-not-for-every-placement)).
 - **The application's handler is passed to `run` (ADR-0254 §4).**
-  `AppHandler` (in `platform.rs`) has one method per obligation and no
-  default: `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
-  `host_notice`, `exit_policy` and `wake_deadline`, each borrowing the owner
-  capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
+  `AppHandler` (in `platform.rs`) has one method per obligation:
+  `ready(OwnerPlatform)`, `quit_requested`, `reopen`, `session_end`,
+  `host_notice`, `exit_policy`, `wake_deadline` and `turn_deadline`, each
+  borrowing the owner capability. Every loop keeps one `owner::app_delivery::AppDelivery`, which
   its sources report to from construction on: `run` binds the handler on the
   owner thread in an owner slot, with the platform and the owner hooks held
   weakly (the platform owns the loop that owns the delivery), and each call
@@ -1117,14 +1148,18 @@ trait depends on `flui-platform` instead.
   opens the token against the capabilities of its last published snapshot
   (`WindowStateCell::published_capabilities`), never a constant of its own, so
   a capability change the snapshot published (the headless `simulate_capabilities`) answers
-  `ApplyError::Superseded`. `WindowStateCell::new` stamps the window's first
-  snapshot with a `CapabilitiesOwner` from one process-wide counter
-  (`window::state::NEXT_CAPABILITIES_OWNER`, checked, never reissued), so a
-  token admitted for another window, or against capabilities built by hand,
-  never opens on this one. The conformance check
-  `a_command_admitted_before_a_revision_is_superseded` holds a host to it
-  where its fixture can revise capabilities. A command no host arm carries
-  out answers `ApplyError::Platform` (`window::state::not_carried_out`), and
+  `ApplyError::Superseded`. `WindowStateCell::open` publishes the window's
+  first capabilities (`WindowCapabilities::publish`, ADR-0341: the contract's
+  publication, never reissued), so a token admitted for another window opens
+  nothing on this one, and capabilities built by hand or edited admit nothing. A
+  cell that freezes at its last revision withdraws its capabilities, whether or
+  not they moved, and announces that once; a window opened with no publication
+  left opens with withdrawn capabilities (`WindowCapabilities::withdraw`), so a
+  window takes no command it may have lost (`a_frozen_window_withdraws_its_capabilities`). The
+  conformance check `a_command_admitted_before_a_revision_is_superseded`
+  holds a host to it where its fixture can revise capabilities. A command no
+  host arm carries out, the Android and UIKit windows' included, answers
+  `ApplyError::Platform` (`window::state::not_carried_out`), never `Ok`, and
   a Win32 position beyond its device range is `PlatformFailure::OutOfRange`:
   admission held it finite, the range is the window system's. A size past the
   largest surface is not refused: the Win32, X11 and headless hosts clamp it by

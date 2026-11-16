@@ -28,6 +28,9 @@
   what carries over is restated in §1.
   [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1's last sentence ("A new capability is a
   method on `LifecycleContext`"), for platform capabilities only.
+- **Superseded-by:** [ADR-0338](ADR-0338-the-host-acquires-capabilities-from-the-launch-registry.md)
+  for §2 item 2 in part (that providers are acquired only per UI runtime: the composition root also
+  acquires for itself, from the launch registry, with no window).
 - **Related:** [ADR-0312](ADR-0312-drag-and-drop-owns-the-transfer-transport-and-the-clipboard-stays-plain-text.md)
   (the clipboard stays plain text, and the reserved shape of a richer read),
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md),

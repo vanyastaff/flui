@@ -133,8 +133,10 @@ impl OpenPlan {
         inset: Size<f64>,
     ) -> Self {
         let mode = match options.mode {
-            WindowMode::Maximized if capabilities.maximizes.is_available() => WindowMode::Maximized,
-            WindowMode::Fullscreen if capabilities.enters_fullscreen.is_available() => {
+            WindowMode::Maximized if capabilities.maximizes().is_available() => {
+                WindowMode::Maximized
+            }
+            WindowMode::Fullscreen if capabilities.enters_fullscreen().is_available() => {
                 WindowMode::Fullscreen
             }
             _ => WindowMode::Normal,
@@ -162,7 +164,7 @@ impl OpenPlan {
         };
         let hidden_until_first_frame =
             options.visible && options.reveal == WindowReveal::AfterFirstFrame;
-        let position = if capabilities.places_at_open.is_available() {
+        let position = if capabilities.places_at_open().is_available() {
             at.and_then(|at| device_position(at, display))
         } else {
             None
@@ -425,8 +427,9 @@ mod tests {
 
     #[test]
     fn open_plan_leaves_placement_to_a_window_that_cannot_be_placed() {
-        let mut capabilities = ALL;
+        let mut capabilities = ALL.into_parts();
         capabilities.places_at_open = flui_platform::Availability::Unavailable;
+        let capabilities = capabilities.into_capabilities();
         let planned = OpenPlan::new(
             &options(),
             &geometry_of(&options()),

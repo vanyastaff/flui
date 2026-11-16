@@ -1,22 +1,72 @@
-//! The owner's wake deadline as a loop arms and delivers it: the instant the
-//! application's handler asks the loop to wake at
-//! (`AppHandler::wake_deadline`), and the rule that keeps a deadline no frame
-//! could service from spinning the loop. The Win32 loop and its modal loops,
-//! and the X11, Wayland and UIKit loops, wait on it.
+//! The owner's two deadlines as a loop arms and delivers them.
+//!
+//! - The turn deadline (`AppHandler::turn_deadline`, ADR-0343 §1) is
+//!   delivered as one owner turn with no frame, through [`TurnDeadline`],
+//!   which every host uses, headless included. Its one rule: a turn delivered
+//!   for the deadline serves every deadline not later than that turn's own
+//!   time, and an answer not later than the last time served is not armed
+//!   again. A handler that keeps answering an instant already past gets one
+//!   turn for it, never a loop that spins: work that is ready now is no
+//!   deadline, and the application does it in the turn it is in or asks for
+//!   an owner turn through the signal.
+//! - The wake deadline (`AppHandler::wake_deadline`) is delivered as frame
+//!   requests, through [`WakeDeadline`], on the hosts that wait with a timeout
+//!   of their own and ask their windows for frames at it.
 
-/// The last deadline the loop delivered. The application's handler answers
-/// with an instant only, so the same instant is either work no frame has had
-/// a chance to service, which must not spin, or work a frame left or accepted
-/// at the instant it just serviced (a queue of obligations all due at one
-/// instant answers the same instant once per item), which must get its frame.
-/// The frame count is the delivery generation that tells them apart. A run
+/// The turn deadline of one loop: the instant armed, and the time of the
+/// last turn delivered for it.
+#[derive(Debug, Default)]
+pub(crate) struct TurnDeadline {
+    armed: Option<web_time::Instant>,
+    /// The time of the last turn delivered for the deadline: that turn served
+    /// every answer not later than it.
+    served: Option<web_time::Instant>,
+}
+
+impl TurnDeadline {
+    /// The application's handler answered `answer`: arm it unless a turn
+    /// delivered for the deadline already served it, that is unless it is not
+    /// later than that turn's time. The instant to wait until, if any.
+    pub(crate) fn arm(&mut self, answer: Option<web_time::Instant>) -> Option<web_time::Instant> {
+        self.armed = answer.filter(|at| self.served.is_none_or(|served| *at > served));
+        self.armed
+    }
+
+    /// The instant armed, if any. A host that schedules a timer for it reads
+    /// it before [`arm`](Self::arm) and keeps the timer it has when the
+    /// instant did not change: AppKit and the web, which time the deadline
+    /// with a timer per answer.
+    #[cfg(any(target_os = "macos", target_arch = "wasm32", test))]
+    pub(crate) fn armed(&self) -> Option<web_time::Instant> {
+        self.armed
+    }
+
+    /// Whether the armed instant is due at `now`. When it is, the caller
+    /// gives the owner one turn, which serves every deadline not later than
+    /// `now`.
+    pub(crate) fn take_due(&mut self, now: web_time::Instant) -> bool {
+        if self.armed.take_if(|at| *at <= now).is_none() {
+            return false;
+        }
+        self.served = Some(self.served.map_or(now, |served| served.max(now)));
+        true
+    }
+}
+
+/// The last wake deadline the loop delivered. The application's handler
+/// answers with an instant only, so the same instant is either work no frame
+/// has had a chance to service, which must not spin, or work a frame left due
+/// at the instant just serviced, which must be delivered again. The count of
+/// frames that ran is the delivery generation that tells them apart. A run
 /// has one handler, so the instant alone names the answer.
+#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 struct DeadlineDelivery {
     arm: DeadlineArm,
-    /// The platform's frame count when the delivery was made.
+    /// The count of frames that ran when the delivery was made.
     frames: u64,
 }
 
+#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 impl DeadlineDelivery {
     /// Whether `deadline` may be armed after this delivery: a different
     /// instant always, the same one whenever a frame callback ran since. An
@@ -51,6 +101,7 @@ impl FrameCount {
 }
 
 /// A deadline the loop waits for.
+#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 struct DeadlineArm {
     deadline: web_time::Instant,
 }
@@ -58,12 +109,14 @@ struct DeadlineArm {
 /// The wake deadline of a loop that waits with a timeout of its own: the
 /// deadline armed, and the last one delivered, by the rule of
 /// [`DeadlineDelivery`].
+#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 #[derive(Default)]
 pub(crate) struct WakeDeadline {
     armed: Option<DeadlineArm>,
     delivered: Option<DeadlineDelivery>,
 }
 
+#[cfg(any(windows, x11_host, wayland_host, target_os = "ios", test))]
 impl WakeDeadline {
     /// Whether the armed deadline is due at `now`. A due deadline is delivery
     /// debt: the caller asks every window for a frame, and the delivery is
@@ -109,7 +162,38 @@ mod tests {
 
     use web_time::Instant;
 
-    use super::WakeDeadline;
+    use super::{TurnDeadline, WakeDeadline};
+
+    /// A turn delivered for the deadline serves every answer not later than
+    /// its time: a past instant answered again is not armed again, a later
+    /// one is.
+    #[test]
+    fn a_served_turn_deadline_is_not_armed_again() {
+        let start = Instant::now();
+        let at = start + Duration::from_millis(5);
+        let served_at = start + Duration::from_millis(7);
+        let later = start + Duration::from_millis(9);
+        let mut deadline = TurnDeadline::default();
+
+        assert_eq!(deadline.arm(Some(at)), Some(at), "a new deadline is armed");
+        assert!(!deadline.take_due(start), "not due before its instant");
+        assert!(deadline.take_due(served_at), "due at its instant");
+        assert!(!deadline.take_due(served_at), "delivered once");
+
+        // (case, answer, instant armed)
+        let table: &[(&str, Option<Instant>, Option<Instant>)] = &[
+            ("the instant served", Some(at), None),
+            ("an instant before the turn's time", Some(start), None),
+            ("the turn's own time", Some(served_at), None),
+            ("no deadline", None, None),
+            ("still served after a quiet answer", Some(at), None),
+            ("an instant after the turn's time", Some(later), Some(later)),
+        ];
+        for (case, answer, armed) in table {
+            assert_eq!(deadline.arm(*answer), *armed, "{case}");
+            assert_eq!(deadline.armed(), *armed, "{case}: what a timer reads");
+        }
+    }
 
     /// A deadline is armed when asked for, delivered once when due, and armed
     /// again for the same instant only after a frame ran: a deadline no frame

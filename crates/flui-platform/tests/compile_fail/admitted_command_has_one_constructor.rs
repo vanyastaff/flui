@@ -1,8 +1,7 @@
-use flui_platform::{AdmittedCommand, WindowCommand, WindowRevision};
+use flui_platform::{AdmittedCommand, WindowCommand};
 
 fn main() {
     let _ = AdmittedCommand {
         command: WindowCommand::Show,
-        revision: WindowRevision::ZERO,
     };
 }

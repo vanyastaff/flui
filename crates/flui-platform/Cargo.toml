@@ -94,3 +94,7 @@ reach-forbid = [
     "tracing",
     "ui-events",
 ]
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "window_capabilities::PUBLICATIONS", grant = "ADR-0097", class = "counter", reason = "publications of window capabilities, one per window opened and per capability change, issued by an `AtomicIdMint` that refuses at exhaustion instead of reissuing one, so an admitted command never opens under capabilities it was not checked against" },
+]

@@ -52,13 +52,13 @@ use crate::version::gate::apple::MacOSVersion;
 /// insets, only edges an app may defer.
 #[cfg(any(target_os = "ios", test))]
 pub(crate) const fn scene_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.material = WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
     capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
     capabilities.reports_keyboard_inset = WindowCapability::Native;
     capabilities.closes = WindowCapability::Native;
     capabilities.frame_rate_hint = Availability::Native;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// `UIPointerInteraction` and `UIPointerStyle` (iOS 13.4): the pointer of a
@@ -101,7 +101,7 @@ pub(crate) const fn appkit_window_capabilities(
 ) -> WindowCapabilities {
     use WindowCapability::{Absent, Native};
     use flui_platform::Availability;
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.reports_presentation = match presentation {
         Some(absence) => Absent(absence),
         None => Native,
@@ -126,7 +126,7 @@ pub(crate) const fn appkit_window_capabilities(
     // transparent (`fullSizeContentView`), with the traffic lights over it.
     capabilities.app_title_bar = Native;
     capabilities.material = Native;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// Why an AppKit window reports no presentation on this machine; `None` where
@@ -207,7 +207,7 @@ pub(crate) struct ActivityFacts {
 /// and the system gesture regions from API 29.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.material =
         WindowCapability::Absent(material_absence(facts.api, facts.cross_window_blur));
     capabilities.reports_presentation = WindowCapability::Absent(PRESENTATION);
@@ -217,7 +217,7 @@ pub(crate) fn activity_capabilities(facts: ActivityFacts) -> WindowCapabilities 
         None => WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE),
     };
     capabilities.frame_rate_hint = facts.frame_rate_hint;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// Why an Activity's window draws no material. From Android 12 (API 31) the
@@ -306,7 +306,7 @@ mod tests {
         let rows: [(&str, Option<CapabilityAbsence>, Option<CapabilityAbsence>); 24] = [
             (
                 "UIKit material",
-                scene_capabilities().material.absence(),
+                scene_capabilities().material().absence(),
                 Some(HOST),
             ),
             (
@@ -326,12 +326,12 @@ mod tests {
             ),
             (
                 "AppKit material",
-                appkit_window_capabilities(None).material.absence(),
+                appkit_window_capabilities(None).material().absence(),
                 None,
             ),
             (
                 "AppKit title bar of the application's",
-                appkit_window_capabilities(None).app_title_bar.absence(),
+                appkit_window_capabilities(None).app_title_bar().absence(),
                 None,
             ),
             (
@@ -351,70 +351,74 @@ mod tests {
             ),
             (
                 "Activity material, API 30",
-                activity_capabilities(activity(30, true)).material.absence(),
+                activity_capabilities(activity(30, true))
+                    .material()
+                    .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity material, API 31 with cross-window blur",
-                activity_capabilities(activity(31, true)).material.absence(),
+                activity_capabilities(activity(31, true))
+                    .material()
+                    .absence(),
                 Some(HOST),
             ),
             (
                 "UIKit keyboard inset",
-                scene_capabilities().reports_keyboard_inset.absence(),
+                scene_capabilities().reports_keyboard_inset().absence(),
                 None,
             ),
             (
                 "UIKit presentation report",
-                scene_capabilities().reports_presentation.absence(),
+                scene_capabilities().reports_presentation().absence(),
                 Some(HOST),
             ),
             (
                 "AppKit presentation report on a Mac",
                 appkit_window_capabilities(appkit_presentation(false))
-                    .reports_presentation
+                    .reports_presentation()
                     .absence(),
                 None,
             ),
             (
                 "AppKit presentation report on a hypervisor's guest",
                 appkit_window_capabilities(appkit_presentation(true))
-                    .reports_presentation
+                    .reports_presentation()
                     .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity keyboard inset, API 23",
                 activity_capabilities(activity(23, false))
-                    .reports_keyboard_inset
+                    .reports_keyboard_inset()
                     .absence(),
                 None,
             ),
             (
                 "Activity system gestures, API 28",
                 activity_capabilities(activity(28, false))
-                    .reports_system_gestures
+                    .reports_system_gestures()
                     .absence(),
                 Some(DEVICE),
             ),
             (
                 "Activity system gestures, API 29",
                 activity_capabilities(activity(29, false))
-                    .reports_system_gestures
+                    .reports_system_gestures()
                     .absence(),
                 None,
             ),
             (
                 "Activity presentation report",
                 activity_capabilities(activity(33, true))
-                    .reports_presentation
+                    .reports_presentation()
                     .absence(),
                 Some(HOST),
             ),
             (
                 "Activity material, API 31 with cross-window blur off",
                 activity_capabilities(activity(31, false))
-                    .material
+                    .material()
                     .absence(),
                 Some(DEVICE),
             ),
@@ -424,7 +428,7 @@ mod tests {
                     api: AndroidApi::UNKNOWN,
                     ..activity(31, true)
                 })
-                .material
+                .material()
                 .absence(),
                 Some(DEVICE),
             ),
@@ -460,7 +464,7 @@ mod tests {
                 frame_rate_hint: availability,
                 ..activity(31, true)
             });
-            assert_eq!(capabilities.frame_rate_hint, availability);
+            assert_eq!(capabilities.frame_rate_hint(), availability);
         }
     }
 

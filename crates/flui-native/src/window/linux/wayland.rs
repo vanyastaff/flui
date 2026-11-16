@@ -295,7 +295,7 @@ pub(crate) mod configure {
         // window, no placement at open and no refresh-rate request. The
         // presentation report is the compositor's to offer
         // (`presentation::reported`).
-        let mut capabilities = WindowCapabilities::NONE;
+        let mut capabilities = WindowCapabilities::NONE.into_parts();
         capabilities.sets_title = Native;
         capabilities.sets_constraints = Native;
         capabilities.closes = Native;
@@ -314,7 +314,7 @@ pub(crate) mod configure {
         capabilities.minimizes = offered(|announced| announced.minimize);
         capabilities.maximizes = offered(|announced| announced.maximize);
         capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
-        capabilities
+        capabilities.into_capabilities()
     }
 
     /// `size` within `constraints`, the maximum before the minimum, and at
@@ -673,23 +673,23 @@ pub(crate) mod configure {
                 free,
                 Activation::Missing,
             );
-            assert!(unannounced.maximizes.is_available());
-            assert!(unannounced.minimizes.is_available());
-            assert!(unannounced.sets_size.is_available());
-            assert_eq!(unannounced.sets_resizable, WindowCapability::Emulated);
+            assert!(unannounced.maximizes().is_available());
+            assert!(unannounced.minimizes().is_available());
+            assert!(unannounced.sets_size().is_available());
+            assert_eq!(unannounced.sets_resizable(), WindowCapability::Emulated);
             assert_eq!(
-                capabilities(None, None, None, free, Activation::Missing).sets_frame,
+                capabilities(None, None, None, free, Activation::Missing).sets_frame(),
                 WindowCapability::Native,
                 "a compositor that draws frames takes the command"
             );
             assert_eq!(
-                capabilities(None, None, None, free, Activation::Offered).activates,
+                capabilities(None, None, None, free, Activation::Offered).activates(),
                 WindowCapability::Emulated,
                 "the compositor decides what an activation request does"
             );
             assert!(
                 capabilities(None, None, None, free, Activation::Missing)
-                    .app_title_bar
+                    .app_title_bar()
                     .is_available(),
                 "a window that draws its own margins takes the application's title bar"
             );
@@ -719,7 +719,11 @@ pub(crate) mod configure {
             ] {
                 let refused = command
                     .clone()
-                    .admit(&unannounced)
+                    .admit(
+                        &unannounced
+                            .publish()
+                            .expect("the process has publications left"),
+                    )
                     .expect_err("refused at admission");
                 assert_eq!(
                     refused.unsupported().map(|unsupported| unsupported.reason),
@@ -734,12 +738,16 @@ pub(crate) mod configure {
                 free,
                 Activation::Offered,
             );
-            assert!(!announced.maximizes.is_available());
-            assert!(!announced.minimizes.is_available());
-            assert!(announced.enters_fullscreen.is_available());
+            assert!(!announced.maximizes().is_available());
+            assert!(!announced.minimizes().is_available());
+            assert!(announced.enters_fullscreen().is_available());
             assert_eq!(
                 WindowCommand::SetMode(WindowMode::Maximized)
-                    .admit(&announced)
+                    .admit(
+                        &announced
+                            .publish()
+                            .expect("the process has publications left")
+                    )
                     .expect_err("the compositor offers no maximize")
                     .unsupported()
                     .map(|unsupported| unsupported.reason),
@@ -754,7 +762,11 @@ pub(crate) mod configure {
         fn a_tiled_window_takes_no_size() {
             let tiled = ToplevelStates::decode(&array(&[TILED_LEFT, ACTIVATED]));
             let refused = WindowCommand::SetSize(Size::new(640.0, 480.0))
-                .admit(&capabilities(None, None, None, tiled, Activation::Missing))
+                .admit(
+                    &capabilities(None, None, None, tiled, Activation::Missing)
+                        .publish()
+                        .expect("the process has publications left"),
+                )
                 .expect_err("the tiling holds the size");
             assert_eq!(
                 refused.unsupported().map(|unsupported| unsupported.reason),
@@ -763,13 +775,13 @@ pub(crate) mod configure {
             let maximized = ToplevelStates::decode(&array(&[TILED_LEFT, MAXIMIZED]));
             assert!(
                 capabilities(None, None, None, maximized, Activation::Missing)
-                    .sets_size
+                    .sets_size()
                     .is_available()
             );
             let floating = ToplevelStates::decode(&array(&[ACTIVATED]));
             assert!(
                 capabilities(None, None, None, floating, Activation::Missing)
-                    .sets_size
+                    .sets_size()
                     .is_available()
             );
         }
@@ -1049,15 +1061,16 @@ pub(crate) mod presented {
     /// where it offers no `wp_presentation`, a window learns nothing of when
     /// its frames are shown.
     pub(crate) const fn reported(
-        mut capabilities: WindowCapabilities,
+        capabilities: WindowCapabilities,
         offered: bool,
     ) -> WindowCapabilities {
+        let mut capabilities = capabilities.into_parts();
         capabilities.reports_presentation = if offered {
             WindowCapability::Native
         } else {
             WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
         };
-        capabilities
+        capabilities.into_capabilities()
     }
 
     #[cfg(test)]
@@ -1085,10 +1098,10 @@ pub(crate) mod presented {
         #[test]
         fn the_report_follows_the_compositor() {
             let offered = reported(WindowCapabilities::NONE, true);
-            assert_eq!(offered.reports_presentation, WindowCapability::Native);
+            assert_eq!(offered.reports_presentation(), WindowCapability::Native);
             let missing = reported(WindowCapabilities::NONE, false);
             assert_eq!(
-                missing.reports_presentation,
+                missing.reports_presentation(),
                 WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE)
             );
         }
@@ -1622,6 +1635,9 @@ mod toplevel {
                     .occluded(),
                     hovered: self.hovered,
                     active: states.activated,
+                    // A move or resize the compositor runs for the user is not
+                    // read yet (docs/gaps.md).
+                    interaction: flui_platform::WindowInteraction::Unknown,
                     capabilities: presented::reported(
                         capabilities(
                             applied.told.wm,

@@ -339,7 +339,7 @@ graph LR
 | **LY105** | **Хост X11: устаревшее состояние и ограниченная работа.** Окно без оконного менеджера читает режим `Normal` и перечитывает поддержку по `DestroyNotify` окна `_NET_SUPPORTING_WM_CHECK`; удалённое устройство XInput2 распознаётся по флагу, а не по `type_`; цикл разбирает за ход то, что поставил один read, читает каждое устаревшее окно один раз и сливает движения; `XkbMapNotify` помечает keymap, а не компилирует её; списки RandR ограничены, смена рабочего стола читает только рабочую область; чтение выделения без `INCR` проверяет тип и формат; `pump_for` и `run_loop` делят один `turn()`; запрос устройства сверх `MAX_DEVICES` не делается; `tracing::warn!` — после мьютекса наблюдений | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/x11*`, `preferences/linux.rs`, `ARCHITECTURE.md` (обработчики с ограниченной работой на событие) | `module-dag`, `file-length`, `globals` | X-сервер без менеджера: режим `Normal`, `SetMode` исполняется; таблица `removed_devices`/`added_devices` по инфо в форме провода через функцию обработчика; счёт запросов на ход; выделение с чужим типом отвергается; каждый падает при откате | L; Dev: Linux (X11) |
 | **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; случаи `wayland_window`, которым нужен протокол сверх xdg-shell или seat (`wayland_window::optional`), CI гоняет и под headless Weston, и под headless sway (`cargo xtask wayland-optional`, где недостающее — падение), остальной `wayland_window` — под Weston: sway 1.9 тайлит и предлагает `xdg_wm_base` 2, так что maximize не исполняет; пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; `wayland_window::optional` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
-| **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; **открыто:** оно читается и пишется через хранилище хоста, мимо `StorageCapability` приложения ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{window_routes.rs,desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
+| **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; размещение читается и пишется через хранилище, которое даёт реестр возможностей запуска (переопределение `StorageCapability` приложения), без блокировки потока владельца (исключение — последняя запись при выходе из цикла и в конце сеанса, в пределах их дедлайна) и с границей ожидания чтения; `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{runner/window_routes.rs,runner/desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
 | **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (перечисление `Standard(gamut)` / `High(gamut, headroom)`, у стандартного диапазона headroom нет); headroom или яркость поверхности, которым нельзя верить, читаются как SDR; срок простоя не бывает уже прошедшим; каждую фичу фасада поодиночке собирает `feature-matrix` (`cargo hack clippy --workspace --each-feature`), `facade-combos` не меняется | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна, поток отметок с опережением доходит до каждого запроса; самотест гейта с посаженным ivar; строка записи, противоречащая себе, — ошибка разбора; headroom NaN и ∞, белый уровень 0 и ниже; каждый падает при откате | L + T; Dev: macOS, iOS |
 | **LY110** | **Escape hatch делает то, что говорит, и имеет потребителя.** Команды `AppKitWindow` возвращают `Result<_, AppKitWindowError>`, проверяют закрытое окно (проверки главной дорожки нет: окно AppKit создаётся на главном потоке — `new_inner` берёт `MainThreadMarker` — и не `Send` и не `Sync`, так что его вид не попадает на другой поток); прозрачность приложения хранится в состоянии окна и переживает отложенный первый показ, её тип не держит NaN; главное окно достижимо из того, что держит виджет, и это показывает один пример; у каждого метода `Win32Window` есть тест, либо метод удалён; `NotOnTheOwnerThread` удалён; `MacOSWindowLevel` и `MacOSCollectionBehavior` не публикуют сырые значения ОС | — | `crates/flui-native/src/window/{apple/macos/ext.rs,windows/*}`, `crates/flui-app/src/*`, `src/*` (фасад), `examples/*`, `docs/{gaps,extending}.md` | `workspace`, `reach`, `facade-combos`, `doc-strict`, гейт API-замыкания | команда на закрытом окне отвечает типизированной ошибкой; прозрачность после первого показа; пример собирается; тесты методов `Win32Window`; каждый падает при откате | L + W + T; Dev: macOS |
 | **LY111** | **Манифесты объявляют только то, что линкует сборка.** `flui build` берёт фичи каждого узла из `cargo tree -e normal,no-proc-macro`: фича dev-зависимости ничего не объявляет (Android; iOS и остальные манифесты проверяются на то же); строка LY56 и R5.12 переписаны под объём ADR-0307, остаток открыт в `docs/gaps.md` | — | `crates/flui-cli/src/{declarations.rs,build/*}`, `docs/plans/specs/platform-layer/{tasks,requirements}.md`, `docs/gaps.md` | `workspace`, `checks` | строка «фича dev-зависимости ничего не объявляет» падает при откате; `the_manifest_declares_what_the_linked_crates_need` проходит без ребра dev-зависимости | L |
@@ -364,7 +364,7 @@ GPU-память простаивающего или невидимого окн
 
 | ID | Задача | Зависит от | Крейты и файлы | Гейты | Тесты | Где |
 |---|---|---|---|---|---|---|
-| **LY114** | **Команда допускается против возможностей самого окна.** Сейчас `AdmittedCommand::against` (`crates/flui-platform/src/window_state.rs`) сверяет только владельца и ревизию: копия опубликованных `WindowCapabilities` (тип `Copy`, поля `pub`) с правленым слотом даёт токен, который окно исполняет вопреки своему снимку (Android отвечает `Ok(())` на no-op); `CapabilitiesOwner::new(NonZeroU64)` публичен, а хосты берут владельцев из счётчика с 1, так что токен первого окна подделывается. После: окно, держа свои опубликованные возможности, проверяет и саму команду; владельца чеканит крейт (`IdMint`), публичного `new` нет | — | `crates/flui-platform/src/{window_state.rs,window_capabilities.rs}`, `crates/flui-native/src/window/state.rs` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck` | строка `window_command_validate`: допуск против правленой копии отвечает `Superseded`; `api/flui.txt` без `CapabilitiesOwner::new`; падает при откате | L + T |
+| **LY114** | **Команда допускается против возможностей самого окна.** Было: `AdmittedCommand::against` (`crates/flui-platform/src/window_state.rs`) сверял только владельца и ревизию: копия опубликованных `WindowCapabilities` (тип `Copy`, поля `pub`) с правленым слотом давала токен, который окно исполняло вопреки своему снимку (Android отвечал `Ok(())` на no-op); `CapabilitiesOwner::new(NonZeroU64)` был публичен, а хосты брали владельцев из счётчика с 1, так что токен первого окна подделывался. Построено (ADR-0341): токен связан с публикацией возможностей, которую чеканит только крейт контракта (`AtomicIdMint`); поля читаются аксессорами и не пишутся, правка и собранное руками — без публикации, и `admit` отказывает им `AdmissionError::Unpublished`; окно открывает токен только под той же публикацией, так что проверять команду второй раз незачем: одна публикация — один набор возможностей; `CapabilitiesOwner` удалён | — | `crates/flui-platform/src/{window_state.rs,window_capabilities.rs}`, `crates/flui-native/src/window/state.rs` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck` | строка `window_command_validate` `an_edit_of_published_capabilities_is_refused_at_admission`: допуск против правленой копии отвечает `Unpublished`, запись поля не компилируется (trybuild `published_capabilities_cannot_be_edited`); `api/flui.txt` без `CapabilitiesOwner`; падает при откате | L + T |
 | **LY115** | **Позиция окна называет свой дисплей; команды и опции несут проверенную геометрию.** Сейчас `outer`, `normal_geometry` и `SetPosition` — «глобальные логические пиксели», которых на столе со смешанным масштабом нет: Win32 переводит их текущим масштабом окна (`crates/flui-native/src/window/windows/window.rs`), так что одно значение `SetPosition` попадает на разные экраны, а сохранённый `outer` не восстанавливается; `WindowOptions::position` при этом уже относителен дисплею, и один `WindowGeometry` несёт два пространства. `DisplayInfo::bounds` — пиксели устройства, на Wayland логические пиксели композитора, а `usable_bounds` не обязан лежать внутри. `SetSize`, `SetPosition`, `WindowOptions::size` и `position` — сырые `Size<f64>`/`Point<f64>` со второй проверкой. После: `WindowPosition { display, at }` в логических пикселях дисплея от начала его рабочей области — в опциях, снимке и команде; границы дисплея логические, `try_new` держит рабочую область внутри; размер содержимого — проверенный newtype, `validate` сводится к отношению min/max | LY108, LY112 | `crates/flui-platform/src/{window_geometry.rs,window.rs,window_state.rs,display.rs,placement.rs}`, перевод позиции в каждом хосте `crates/flui-native/src/window/*`, кодек журнала и схема записи | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck`, `recording-vocabulary` | Win32, два дисплея разного масштаба: одно значение `SetPosition` из окна на каждом попадает в одну физическую точку, `outer` возвращается тем же; строка таблицы `display`, отказывающая рабочей области вне дисплея; каждый падает при откате | L + W + T; Dev: macOS, Linux (Wayland) |
 | **LY116** | **Отчёт о показе называет кадр, который описывает.** Сейчас `FrameRequest::presented` — «новейший более ранний кадр», о показе которого сообщила платформа (`crates/flui-platform/src/frame_request.rs`): при цепочке в два-три буфера или пропущенном кадре задержка ввод→фотон приписывается не тому кадру — ответ сопоставлен «текущему», а не своему билету; `FramePresented::refresh` — сырой `Duration`, хотя проверенный `RefreshPeriod` есть. После: `SurfaceTarget::pre_present_notify` чеканит `PresentId` на каждый present, `FramePresented { frame, at, refresh: Option<RefreshPeriod> }`; DXGI `PresentCount`, `wp_presentation_feedback` и обработчик drawable Metal отвечают своим id | — | `crates/flui-platform/src/{frame_request.rs,surface_target.rs}`, пути показа Win32, Wayland и Apple в `crates/flui-native/src/`, вызов презентера в `crates/flui-engine` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck` | строка headless-хоста с двумя present в полёте: отчёт называет первый; период вне диапазона `RefreshPeriod` не строится; каждый падает при откате | L + W + T; Dev: macOS, Linux (Wayland) |
 | **LY117** | **Ревизии указателя, состояние клавиши и мёртвые клавиши — один однозначный словарь.** Сейчас `PointerRevision` называет чтение парой `(PointerId, time)`, а `PointerId` переиспользуется после `Up` и одна грубая метка бывает у разных чтений; производителя нет ни у него, ни у `PointerEvent::PenSqueeze`, а `docs/gaps.md` («Input latency modes and high-rate sampling are partial») говорит, что варианта нет, и планирует другую форму. `KeyEvent` держит `state`, `repeat` и `release` тремя полями, и `with_repeat`/`with_release` на `Up` молча теряют значение. Прокрутка не говорит, инвертировал ли её пользователь (natural scrolling); `NamedKey::Dead` не несёт комбинирующего символа, и Android превращает `CombiningAccent` в голый `Dead` (`crates/flui-native/src/input/android.rs`): акцент не сочетается со следующей клавишей. После: ревизия ключуется билетом оценки, который хост выдал вместе с чтением (или оба варианта удаляются до производителя на iOS), запись gaps описывает настоящую форму; `KeyState::Down { repeat, release } \| Up`; флаг инверсии у прокрутки; мёртвая клавиша несёт свой символ, и Android сочетает его со следующей клавишей | — | `crates/flui-platform/src/{pointer/*,keyboard/*}`, переводчики ввода `crates/flui-native/src/input/*`, `crates/flui-runtime/src/recording_wire.rs`, `docs/gaps.md` | `key-vocabulary`, `recording-vocabulary`, гейт API-замыкания, `public-api`, `cross-typecheck` | ревизия после переиспользования `PointerId` находит своё чтение; событие `Up` с повтором не строится; чистая функция сочетания мёртвой клавиши Android по подставной раскладке; каждый падает при откате | L + T; Dev: Android |
@@ -2904,16 +2904,16 @@ GPU-память простаивающего или невидимого окн
   падают `a_command_superseded_in_the_queue_is_admitted_again`,
   `a_command_admitted_before_a_capability_change_is_superseded`,
   `a_token_opens_only_under_the_capabilities_it_was_admitted_against` и conformance headless.
-  (4) Токен привязан к окну: `CapabilitiesOwner` (`NonZeroU64`) в `WindowCapabilities`,
-  ставится `WindowStateCell::new` из одного счётчика процесса
-  (`window::state::NEXT_CAPABILITIES_OWNER`, `try_update` с `checked_add`, новая запись `globals`
-  по ADR-0097), `successor` его сохраняет; `against` сравнивает владельца и ревизию. Токен
-  другого окна и токен, допущенный против возможностей, собранных руками (`ALL`, `NONE`), —
-  `Superseded`. Тесты `a_token_opens_only_on_the_window_it_was_admitted_for` (`flui-platform`) и
-  `a_command_admitted_for_another_window_is_superseded` (`flui-native`): без сравнения владельца
-  падают оба. `AdmittedCommand::revision` удалён (его не читал ни один путь);
-  `WindowCapabilities::revision` читают тесты трёх крейтов и `against`. (5) Один путь
-  «допустить и применить»: `WindowCommand::admit_and_apply(self, &W) -> Result<(),
+  (4) Токен привязан к окну. Так это построено сейчас (LY114, ADR-0341): токен несёт публикацию
+  возможностей, которую чеканит только `flui-platform` (`window_capabilities::PUBLICATIONS`,
+  `AtomicIdMint`); `WindowStateCell::open` публикует первый снимок, `successor` сохраняет
+  публикацию, пока возможности те же, и выпускает новую при изменении; `against` сравнивает
+  публикацию, а `admit` отказывает собранному руками (`ALL`, `NONE`) `AdmissionError::Unpublished`.
+  Прежняя привязка этой задачи (владелец `CapabilitiesOwner` и ревизия) снята в LY114. Тест
+  `a_token_opens_only_on_the_window_it_was_admitted_for` (`flui-platform`) и
+  `a_command_admitted_for_another_window_is_superseded` (`flui-native`) держат правило.
+  `AdmittedCommand::revision` удалён; `WindowCapabilities::revision` остаётся опубликованным фактом.
+  (5) Один путь «допустить и применить»: `WindowCommand::admit_and_apply(self, &W) -> Result<(),
   CommandRefusal>` в `flui-platform` (при `Superseded` допускает ещё раз); `CommandRefusal` один,
   там же. Им пользуются `request_close`, показ главного окна, `discard_window`, очередь (на
   `Superseded`), закрытие при выходе AppKit, харнесс winit и `AdmitAndApply` `flui-testing`;
@@ -5681,10 +5681,10 @@ GPU-память простаивающего или невидимого окн
   clippy workspace `--all-targets -D warnings`, nextest шести крейтов 1262 из 1264 (две известные
   ошибки базы), `xtask checks`; WSL — clippy `-p flui-native -p flui-testing`, lib-тесты
   `window::` 115 из 115. Не собиралось: macOS, iOS, Android, wasm32.
-- [ ] **LY108** — ветка `app/handler-answers`, PR #2641, слит (`942184abe`). Открытая часть: размещение окна мимо
-  `StorageCapability` приложения
-  ([gaps](../../../gaps.md#window-placement-bypasses-an-applications-storage-provider)); как хост
-  получает capability для себя, решает владелец.
+- [x] **LY108** — ветка `app/handler-answers`, PR #2641 (влит, `942184abe`); открытая часть —
+  ветка `app/placement-through-storage` (последний пункт ниже). Решение владельца: хост берёт
+  провайдер хранилища из реестра запуска, первое окно открывается по умолчанию, если чтение не
+  ответило в пределах границы.
   - **Маршрут кадра.** `WindowRoutes::route_frame_requested` принимает
     `FnMut(FrameRequest) -> FrameOutcome`; у каждого runner это `dispatch_platform_frame`.
     Принятый кадр (выполнен в вызове или встал в идущий ход) — `Produced`; `StaleRuntime`,
@@ -5725,6 +5725,71 @@ GPU-память простаивающего или невидимого окн
   `xtask checks` зелёный; `xtask expectations`: изменение не трогает ни одного ожидания. Не
   запускалось: Linux, wasm32, Android и Apple; правки `window/android.rs` и `window/web.rs`
   впервые собирает CI.
+  - **Размещение через хранилище приложения** (ветка `app/placement-through-storage`). Хост
+    берёт `StorageCapability` из реестра запуска через `flui_runtime::capability::HostCapabilities`
+    (реестр, своя очередь заданий владельца, без окна; построение контекста общее с
+    `PresentationCapabilities`), по разу на открываемое окно — решение записано в ADR-0338.
+    Чтение — `PlacementRecall` с типизированным исходом `Recalled`; окно ждёт его не дольше
+    `RECALL_BOUND` по часам размещения (в тестах `ManualClock`). Ход владельца на границе даёт
+    новый срок `AppHandler::turn_deadline`: петля даёт владельцу ход в этот момент с окнами и без
+    них и не просит кадров; срок обязателен в `AppHandler` и обслуживается каждым хостом (Win32 с
+    модальными петлями, X11, Wayland, AppKit, UIKit, Android, веб, headless на ручных часах через
+    `drive_at`). Все петли ведут срок одним типом `TurnDeadline`: ход, данный за срок, обслуживает
+    всякий срок не позже своего времени, и ответ не позже последнего обслуженного не взводится
+    снова, так что ответ обработчика не крутит петлю; готовая работа не срок — ответ хранилища
+    будит владельца сам, перенесённое закрытие просит ход через сигнал (ADR-0343 §1). Поздний
+    ответ некуда применить: чтение принадлежит окну. После таймаута, отказа или паники
+    `StoredPlacement::Unknown` ничего не пишет, пока отчёт, несущий изменение, не скажет, что
+    окно размещает пользователь: `WindowState::interaction` (`WindowInteraction::UserPlacing`,
+    ADR-0343 §2) — Win32 в петле size-move и в системных командах размера от пользователя,
+    публикуя `None` по их концу; команда, которую окно шлёт себе само, помечена отправителем;
+    headless — из `simulate_interaction`; остальные хосты говорят `Unknown` (запись gaps «Only
+    Win32 says when the user places a window, and not for every placement»). Отказ записи — `WRITE_ATTEMPTS` попыток с удвоением
+    интервала, затем ни одного срока, пока размещение не изменится. Код хранилища (`publish`,
+    `poll`, drop) идёт без заимствований записи; повторный вход видит `Write::Starting`/`Polling`.
+    Закрытие не ждёт записи; закрытие при занятом состоянии — `Closing::Deferred`, выполняется в
+    следующем ходе. Последняя запись при выходе ждёт в пределах дедлайна сервисов и выполняет
+    задания провайдеров; в конце сеанса — после работы приложения и документов, не дольше
+    `SESSION_END_PLACEMENT_BOUND`. Окно, открытое из размещения закрытого окна, берёт и его долг
+    (`hand_over` → `HandOver::Taken`, запись в полёте переходит к новому окну; занятое состояние —
+    `HandOver::Busy`, новое окно не пишет, пока старое не отдаст), так что у имени один писатель.
+    Одно открытое окно держит имя. Поток ожидания границы удалён.
+
+    Тесты (откат и что он показывает): `an_application_storage_keeps_its_window_placement`,
+    `a_remembered_placement_is_read_once_before_the_window_opens`,
+    `the_host_acquires_the_storage_once_per_window` — с реестром только встроенных провайдеров
+    (`left: 800×600, right: 640×480`; `left: 0, right: 1`);
+    `a_window_opens_at_its_default_when_the_read_does_not_answer_in_time` и
+    `a_window_opens_where_it_was_when_the_read_answers_inside_its_bound` — без ожидания чтения окно
+    открывается сразу; `two_windows_never_share_one_placement` — без захвата имени; строки
+    `placement_recorder` `an_unread_placement_is_overwritten_only_by_the_user`,
+    `a_refusing_storage_is_tried_a_bounded_number_of_times`,
+    `a_handed_over_placement_carries_its_debt`, `storage_code_runs_with_nothing_borrowed`,
+    `a_closed_window_finishes_its_last_write_at_owner_turns`,
+    `the_end_of_the_loop_reports_a_placement_storage_did_not_take`;
+    `a_close_that_finds_the_state_busy_is_carried_over`,
+    `the_final_flush_takes_answers_posted_to_the_owner`,
+    `a_store_that_never_answers_leaves_the_session_end_its_budget`; таблица
+    `host_capabilities_contract` (flui-runtime); `a_turn_deadline_gives_the_owner_a_turn_with_no_window`
+    (Win32 в `app_handler`, X11 и Wayland в WSL), `a_turn_deadline_asks_no_window_for_a_frame`,
+    `a_due_turn_deadline_wakes_the_owner_from_a_modal_loop`,
+    `a_reopened_window_takes_over_the_write_in_flight`, `a_served_turn_deadline_is_not_armed_again`,
+    `a_past_turn_deadline_gives_one_turn` (headless), `a_past_turn_deadline_does_not_spin_the_win32_loop`,
+    `the_size_move_loop_states_the_users_placement_and_ends_it`,
+    `a_system_command_states_the_users_placement_and_ends_it`,
+    `the_applications_own_restore_is_not_the_users`,
+    `a_window_that_could_not_read_its_placement_writes_only_what_the_user_places`.
+    Откаты по каждому — в теле PR, раздел `## Evidence`. Строки без отката охраняют:
+    `a_provider_that_fails_still_lets_the_first_window_open` — что запуск переживает панику и
+    отказ провайдера; `a_recall_reads_what_storage_answers_and_checks_it` и
+    `a_storage_that_panics_costs_the_window_its_placement_only` — исходы модели чтения;
+    `a_display_change_alone_measures_the_window_again` — запись после смены рабочей области.
+
+    Долг на устройствах: путь изменился (асинхронное чтение, граница, отложенное первое открытие),
+    а прогон Windows в строке паритета «Save and restore window placement» был на прежнем
+    блокирующем чтении. Ни тест, ни пример не прогоняет цикл перезапуска нативного окна, поэтому
+    на этой машине он не запускался; прогоны Windows, macOS, X11 и Wayland записаны в примечании
+    той строки.
 - [x] **LY105** — ветка `platform/x11-peer-bounds`, PR #2645. Все девять находок подтверждены
   кодом и исправлены; неверных нет. (1) Оконный менеджер, который убит, не меняет свойств
   корневого окна: платформа слушает конец окна `_NET_SUPPORTING_WM_CHECK` (`StructureNotify`, как
@@ -6181,6 +6246,58 @@ GPU-память простаивающего или невидимого окн
   владельца — записано в `docs/gaps.md` и в строке паритета.
   Не запущено и не компилировалось здесь: macOS, iOS, Android, wasm32 (правки
   `clipboard/apple/{macos,ios}.rs`, `clipboard/android.rs`, `clipboard/web.rs` прочитаны).
+
+- [x] **LY114** — ветка `platform/admission-integrity`, решение — ADR-0341 (заменяет связку токена
+  из ADR-0254 §2). Подтверждено на `main` @ `ab45cd94c` тестом через публичный API: три подделки
+  открывались на окне — копия опубликованных возможностей с включённым `pub`-полем `material`;
+  владелец из `CapabilitiesOwner::new(7)`; `WindowState::successor`, вычисленный вызывающим от
+  снимка окна (владелец окна на ревизии, которую займёт следующее изменение возможностей самого
+  окна). Построено: токен несёт *публикацию* возможностей — идентичность, которую чеканит только
+  `flui-platform` (`AtomicIdMint`, запись `globals` `window_capabilities::PUBLICATIONS`);
+  `WindowCapabilities::publish` ставит её на первый снимок окна, `successor` сохраняет её, пока
+  возможности те же, и чеканит новую при изменении, а снимок без публикации наследник не
+  публикует. Поля `WindowCapabilities` закрыты и читаются аксессорами (`material()`), `Deref`
+  нет, так что ничто, прочитанное из опубликованного значения, не превращается в значение без
+  публикации; единственный выход — `into_parts`. `admit` отказывает значению без публикации
+  `AdmissionError::Unpublished` (повторный допуск его не лечит), поэтому `Superseded` значит
+  только «другая публикация того же или чужого окна». Проверка команды в `against` (`permits`)
+  не нужна: одна публикация — один набор возможностей, который читатель не меняет, а `successor`
+  при изменении выпускает новую, так что набор, против которого `admit` проверил команду, и есть
+  набор окна при совпадении публикации. Окно без публикации не публикует возможностей: снятые
+  (`WindowCapabilities::withdraw`) ничего не исполняют, снимок меняется и `state_changed` уходит
+  один раз. Счётчики отказывают порознь: без свободной публикации изменившиеся возможности
+  снимаются, а геометрия, метрики и фокус публикуются дальше (окно, открытое после этого,
+  открывается со снятыми возможностями, `open` не отказывает); на последней ревизии ячейка
+  замерзает и снимает возможности всегда, изменились они или нет (тест
+  `a_frozen_window_withdraws_its_capabilities`: без снятия команда, допущенная до потери
+  `maximizes`, проходит). Удалены `CapabilitiesOwner`, `owned_by` и счётчик
+  `window::state::NEXT_CAPABILITIES_OWNER`. Класс: окна Android, UIKit и оба headless отвечают
+  на неисполняемую команду `ApplyError::Platform`, а не `Ok`; публикуют возможности один раз
+  двойники `flui-testing`, `flui-app`, публичный `flui_runtime::testing::TestWindow` и двойники
+  тестов `flui-runtime`, `flui-interaction`, `flui-app` (фикстура trybuild
+  `platform_and_host_window_are_sealed` не компилируется по замыслу и не тронута).
+  Прочие «проверенные» значения контракта осмотрены и подделке не поддаются (закрытые поля,
+  проверяющие конструкторы): `RefreshPeriod`, `Locale`, `GestureGeometry`, `HapticPattern`,
+  `WindowExtent`, `WindowGeometry`, `DisplayId`, `WindowId`, `KeyText`, `PointerFrame`,
+  `ScrollDelta`; `OsDragRequest` — строка LY120.
+  Тесты (в скобках — какой откат их роняет): `an_edit_of_published_capabilities_is_refused_at_admission`
+  (`admit` принимает значение без публикации; `unavailable` сохраняет публикацию);
+  `a_successor_a_caller_computes_opens_nothing` и
+  `a_token_opens_only_under_the_capabilities_it_was_admitted_against` (`successor` не чеканит
+  новую публикацию при изменении); `a_successor_of_unpublished_capabilities_stays_unpublished`
+  (`successor` чеканит публикацию для неопубликованного предшественника; `admit` принимает
+  неопубликованное); `parts_leave_the_revision_and_publication_to_the_publishing_window` (`admit`
+  принимает неопубликованное); trybuild `published_capabilities_cannot_be_edited` (на `main`
+  компилируется); строки conformance `a_window_opens_only_its_own_publication` (токен своего снимка
+  открывается, токен своей `publish()` вызывающего — `Superseded`) и расширенная
+  `a_window_opened_after_a_close_has_an_id_of_its_own` (токен закрытого окна — `Superseded`) идут на
+  каждом хосте кита; `a_window_that_republishes_on_every_read_is_caught` показывает, что первая
+  ловит хост, публикующий заново на каждом чтении; `withdrawn_capabilities_honour_nothing_in_every_later_snapshot`.
+  Проверки: на Windows `check` и clippy рабочего пространства, nextest
+  затронутых крейтов, trybuild `flui-platform` и `flui-native`, `doc-strict`, `checks`,
+  `expectations`; в WSL clippy `flui-native --all-targets`. Только CI компилирует правки в
+  `window/android.rs`, `window/apple/ios.rs`, `window/web.rs`, `tests/appkit_window.rs`,
+  `tests/wasm32/web_page_lifecycle.rs`.
 
 - [ ] **LY112** — ветка `platform/one-rule-once`, PR #2651 (ждёт независимого чтения).
   **Частично:** масштаб каждой записи ввода (`NativeReading::scale`), зум преобразования

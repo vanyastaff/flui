@@ -561,6 +561,58 @@ fn a_due_deadline_no_frame_serves_leaves_the_loop_idle() {
     );
 }
 
+/// A turn deadline asked with no window open gives the owner a turn at its
+/// instant, within a second of it, and is asked a few times, not polled.
+#[test]
+fn a_turn_deadline_gives_the_owner_a_turn_with_no_window() {
+    let Some(platform) = platform("a_turn_deadline_gives_the_owner_a_turn_with_no_window") else {
+        return;
+    };
+    let log = app::AppLog::new();
+    let due = Rc::new(std::cell::OnceCell::new());
+    let answer = Rc::clone(&due);
+    log.answer_turn_deadline_with(move || {
+        Some(*answer.get_or_init(|| Instant::now() + Duration::from_millis(80)))
+    });
+    let turns = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&turns);
+    let quit_at = Rc::clone(&due);
+    log.bootstrap(move |owner| {
+        // The run ends anyway after three seconds, so a loop that never gives
+        // the turn fails the assertion below instead of hanging.
+        let stop = owner.proxy();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(3));
+            let _ = stop.request_quit();
+        });
+        let quit = owner.proxy();
+        owner
+            .on_wake(Box::new(move || {
+                let now = Instant::now();
+                seen.borrow_mut().push(now);
+                if quit_at.get().is_some_and(|due| now >= *due) {
+                    let _ = quit.request_quit();
+                }
+            }))
+            .expect("the owner takes a wake callback");
+        Ok(())
+    });
+    Box::new(platform)
+        .run(Rc::clone(&log) as _)
+        .expect("the run ends");
+    let due: Instant = *due.get().expect("the deadline was asked");
+    assert!(
+        turns
+            .borrow()
+            .iter()
+            .any(|turn: &Instant| *turn >= due && *turn < due + Duration::from_secs(1)),
+        "the deadline gave the owner its turn: {:?}",
+        turns.borrow()
+    );
+    let questions = log.count(AppCall::TurnDeadline);
+    assert!(questions < 20, "asked {questions} times: polled");
+}
+
 /// An exit policy that opens a window and then panics is the run's first
 /// failure: the loop goes on for the window, a later handler (the wake
 /// deadline) panics and leaves the loop, and the policy's panic is the one
@@ -972,7 +1024,7 @@ mod optional {
         };
         let mut fixture = WaylandFixture::open(platform, "activated on request");
         let capabilities = fixture.window.state().capabilities;
-        let activates = capabilities.activates;
+        let activates = capabilities.activates();
         if !offers_activation(&fixture.platform) {
             let refused = WindowCommand::Activate
                 .admit(&capabilities)
