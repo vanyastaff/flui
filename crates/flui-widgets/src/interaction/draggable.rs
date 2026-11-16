@@ -380,8 +380,6 @@ struct Capabilities {
     keep_alive: Option<KeepAliveHandle>,
 }
 
-/// One draggable as its drags, recognizers and actions share it. Owner-local;
-/// no borrow of it is held while user code runs.
 /// A contact pressed on the child: who pressed, and the press sequence its
 /// host named, which an OS drag from it starts from.
 #[derive(Clone, Copy)]
@@ -390,6 +388,8 @@ struct PressedContact {
     press: Option<PressId>,
 }
 
+/// One draggable as its drags, recognizers and actions share it. Owner-local;
+/// no borrow of it is held while user code runs.
 struct Source {
     config: RefCell<SourceConfig>,
     capabilities: RefCell<Capabilities>,

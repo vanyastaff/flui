@@ -2493,6 +2493,29 @@ fn an_os_session_names_its_press_and_offers_only_what_it_can() {
             "nothing to enter"
         );
         assert_eq!(session.stage(), Ok(DragStage::InWindow));
+        // A backend that starts its session as the drag starts (the web, iOS)
+        // decides the terms then: the drag does not start, as for any other
+        // refusal of an at-start session.
+        let claimed = TransferFormat::Custom {
+            mime: Mime::new(&format!(
+                "{};session=2",
+                flui_platform::drag::IDENTITY_ESSENCE
+            )),
+        };
+        let at_start = window(Some(OsDragStart::AtStart { eager_data: false }));
+        let start = DragStart::new(
+            f.presentation,
+            vec![
+                DragItem::new()
+                    .with_text("payload")
+                    .with_serialized(claimed, || Err(TransferError::Cancelled)),
+            ],
+            AllowedActions::new(COPY, COPY),
+        )
+        .window(Rc::downgrade(&at_start))
+        .hit_test(f.hit.clone());
+        assert_eq!(f.handle.start(start).err(), Some(refused));
+        assert!(f.owner.take_pending_os_drags().is_empty());
     });
 }
 

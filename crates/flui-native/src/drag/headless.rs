@@ -172,8 +172,8 @@ impl PlatformDragSource for HeadlessDragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        // The press is not checked: a headless window's input is synthesized,
-        // so no press it delivers carries an id a drag could name.
+        // The press is not checked: the simulated system holds no presses of
+        // its own, and the test plays the session's pointer itself.
         let OsDragParts {
             terms,
             provider,

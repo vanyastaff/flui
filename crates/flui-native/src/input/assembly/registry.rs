@@ -1080,16 +1080,21 @@ impl ContactRegistry {
                 let transition = contact.buttons.release_transition(button, reading.buttons);
                 let before = reading.buttons.unwrap_or(contact.buttons.held());
                 contact.buttons.release(button, reading.buttons);
+                let open = contact.press;
+                // The last button up ends the press whether or not the
+                // release could be placed: nothing starts from it after.
+                if transition == ButtonTransition::Up {
+                    contact.press = None;
+                }
                 if let Some(sample) = current
                     && transition != ButtonTransition::Ignored
                 {
                     let mut release =
                         PointerRelease::new(info, button, before, sample).with_modifiers(modifiers);
-                    if let Some(open) = contact.press {
+                    if let Some(open) = open {
                         release = release.with_press(open.id);
                     }
                     if transition == ButtonTransition::Up {
-                        contact.press = None;
                         contact.buttons.clear();
                         remove = !contact.hovers();
                         output.push(PlatformInput::Pointer(PointerEvent::Up(release)));

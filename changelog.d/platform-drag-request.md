@@ -16,9 +16,11 @@
   `into_parts()`; `OsDragTerms::indexed()` pairs each representation with the index its provider
   serves it under. The request names the press that began the drag (`PressId`) instead of a
   `PointerId`, which a contact reuses for its next press.
-- **`flui-interaction`**: a drag whose representations cannot be offered to the OS is refused as it
-  leaves its window (`MoveOutcome::Refused` with `DragError::Terms`) and stays in it, instead of
-  reaching the backend.
+- **`flui-interaction`**: a drag whose representations cannot be offered to the OS no longer reaches
+  the backend. On a desktop it is refused as it leaves its window (`MoveOutcome::Refused` with
+  `DragError::Terms`) and stays in it; on the web and iOS, which start the OS session as the drag
+  starts, `DragAndDrop::start` refuses it with that error, as it refuses any other at-start session
+  the OS cannot take.
 
 ### Fixed
 

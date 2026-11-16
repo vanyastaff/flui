@@ -202,12 +202,13 @@ minted_ids! {
 
     /// The identity of one press sequence of one contact, from the press that
     /// begins it to the release or cancellation that ends it, minted by the
-    /// platform host that decoded the press.
+    /// contact registry that decoded the press: unique among the presses of
+    /// that registry's windows, and only compared there.
     ///
     /// A pointer id names the contact and comes back for its next press; a
     /// press id never does. What starts from a press later (an OS drag
     /// session, whose start call needs the press's native event) names the
-    /// press by this id, and the host refuses an id whose sequence has ended
+    /// press by this id, and the window refuses an id whose sequence has ended
     /// instead of starting from whatever press holds the contact now.
     ///
     /// ```compile_fail
