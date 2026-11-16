@@ -2,15 +2,14 @@
 //! value apart and putting it back together gives the same value, every
 //! field of it.
 
-use std::num::NonZeroU64;
 use std::time::Duration;
 
 use flui_foundation::geometry::{
     Bounds, DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
 };
 use flui_platform::{
-    AppTitleBar, Availability, CapabilitiesOwner, CapabilityAbsence, ColorGamut, DisplayColor,
-    DisplayInfo, DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
+    AppTitleBar, Availability, CapabilityAbsence, ColorGamut, DisplayColor, DisplayInfo,
+    DisplayKey, DisplayRegistry, GesturePreferences, HourCycle, KeyboardInset, Locale,
     MeasurementSystem, MotionPreference, NumberingSystem, RegionOverride, RegionalFormats,
     SizeConstraints, SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
     WindowAppearance, WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState,
@@ -83,13 +82,15 @@ fn a_display_round_trips_through_its_parts() {
 
 fn a_window_state_round_trips_through_its_parts() {
     let material = WindowCommand::SetMaterial(WindowMaterial::System);
-    let mut capabilities =
-        WindowCapabilities::ALL.unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let mut capabilities = WindowCapabilities::ALL
+        .unavailable(&material, CapabilityAbsence::NOT_YET_ON_THIS_HOST)
+        .into_parts();
     capabilities.reports_presentation =
         WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
     capabilities.reports_keyboard_inset = WindowCapability::NOT_ON_THIS_PLATFORM;
     capabilities.reports_system_gestures =
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST);
+    let capabilities = capabilities.into_capabilities();
     let metrics = WindowMetrics::try_new(DeviceSize::new(1600, 1200), 2.0).expect("valid");
     let state = WindowState::new(
         WindowGeometry::try_new(Some(Point::new(10.0, 20.0)), Size::new(820.0, 640.0))
@@ -134,7 +135,7 @@ fn a_window_state_round_trips_through_its_parts() {
         WindowCapability::Absent(CapabilityAbsence::NOT_YET_ON_THIS_HOST)
     );
     assert_eq!(
-        state.capabilities.reports_keyboard_inset,
+        state.capabilities.reports_keyboard_inset(),
         WindowCapability::NOT_ON_THIS_PLATFORM
     );
     assert_eq!(parts.capabilities.sets_title, WindowCapability::Native);
@@ -147,10 +148,13 @@ fn extent(width: f64, height: f64) -> WindowExtent {
     WindowExtent::try_new(Size::new(width, height)).expect("a finite extent")
 }
 
-fn parts_leave_the_revision_and_owner_to_the_publishing_window() {
-    let owner = CapabilitiesOwner::new(NonZeroU64::MIN);
+fn parts_leave_the_revision_and_publication_to_the_publishing_window() {
     let first = WindowState::new(WindowGeometry::unplaced(extent(1.0, 1.0)), extent(1.0, 1.0))
-        .with_capabilities(WindowCapabilities::ALL.owned_by(owner));
+        .with_capabilities(
+            WindowCapabilities::ALL
+                .publish()
+                .expect("the process has publications left"),
+        );
     let published = first
         .successor(first.clone().with_focused(true))
         .expect("a revision is left");
@@ -161,6 +165,24 @@ fn parts_leave_the_revision_and_owner_to_the_publishing_window() {
         again.revision, published.revision,
         "the sample of a published snapshot is no change to it"
     );
+    let hide = WindowCommand::Hide
+        .admit(&first.capabilities)
+        .expect("the window honours hiding");
+    assert_eq!(
+        hide.against(&again.capabilities),
+        Ok(WindowCommand::Hide),
+        "a published snapshot taken apart and published again keeps its publication"
+    );
+    assert_eq!(
+        WindowCommand::Hide.admit(&sample_capabilities(&published)),
+        Err(flui_platform::AdmissionError::Unpublished),
+        "parts turned into capabilities are no window's publication"
+    );
+}
+
+/// The capabilities `state`'s parts describe, as a mirror rebuilds them.
+fn sample_capabilities(state: &WindowState) -> WindowCapabilities {
+    state.capabilities.into_parts().into_capabilities()
 }
 
 #[test]
@@ -185,8 +207,8 @@ fn parts_table() {
                 a_window_state_round_trips_through_its_parts as fn(),
             ),
             (
-                "parts_leave_the_revision_and_owner_to_the_publishing_window",
-                parts_leave_the_revision_and_owner_to_the_publishing_window as fn(),
+                "parts_leave_the_revision_and_publication_to_the_publishing_window",
+                parts_leave_the_revision_and_publication_to_the_publishing_window as fn(),
             ),
         ],
     );

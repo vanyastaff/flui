@@ -1683,9 +1683,9 @@ impl PlatformWindow for X11Window {
         if self.closed.get() {
             return Err(ApplyError::Closed);
         }
-        // Checked against what the window honours now: an event that marked
-        // it (the window manager's end) may have taken a mode away since the
-        // revision the command was admitted against.
+        // Opened under what the window honours now: an event that marked it
+        // (the window manager's end) may have published other capabilities
+        // since the publication the command was admitted against (ADR-0341).
         let command = command.against(&self.state_now().capabilities)?;
         match command {
             WindowCommand::SetTitle(title) => {

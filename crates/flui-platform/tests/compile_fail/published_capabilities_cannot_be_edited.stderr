@@ -1,0 +1,7 @@
+error[E0615]: attempted to take value of method `material` on type `WindowCapabilities`
+ --> tests/compile_fail/published_capabilities_cannot_be_edited.rs:7:18
+  |
+7 |     capabilities.material = WindowCapability::Native;
+  |                  ^^^^^^^^ method, not a field
+  |
+  = help: methods are immutable and cannot be assigned to
