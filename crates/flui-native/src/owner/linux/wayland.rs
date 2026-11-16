@@ -1139,7 +1139,7 @@ mod event_loop {
     }
 
     /// What the loop and its windows ask of drag and drop: the drag
-    /// feature's (`drag::wayland`), which the table registers, and the
+    /// feature's (`drag::linux::wayland`), which the table registers, and the
     /// platform's one [`DragTransport`].
     ///
     /// Its windows' drags reach it through the seats' data devices, which
@@ -1350,7 +1350,7 @@ mod event_loop {
         /// The display it is.
         pub(crate) display: DisplayId,
         /// Its device pixels per logical pixel.
-        pub(crate) scale: f64,
+        pub(crate) scale: flui_foundation::geometry::DevicePixelRatio,
     }
 
     /// What the loop asks of a window it holds: the window feature's

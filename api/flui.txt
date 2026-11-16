@@ -1567,7 +1567,7 @@ impl Clone for flui::app::RecordingStart
 impl core::fmt::Debug for flui::app::RecordingStart
 #[non_exhaustive] pub struct flui::app::RecordingWindow
 field flui::app::RecordingWindow::gesture_profiles: flui::interaction::GestureProfiles // at 2
-field flui::app::RecordingWindow::scale_factor: f64 // at 1
+field flui::app::RecordingWindow::scale_factor: flui::geometry::DevicePixelRatio // at 1
 field flui::app::RecordingWindow::window: flui::platform::WindowId // at 0
 impl Clone for flui::app::RecordingWindow
 impl core::fmt::Debug for flui::app::RecordingWindow
@@ -4299,11 +4299,13 @@ impl PartialEq for flui::geometry::DevicePixelRatio
 impl PartialOrd for flui::geometry::DevicePixelRatio
 impl core::fmt::Debug for flui::geometry::DevicePixelRatio
 impl core::marker::StructuralPartialEq for flui::geometry::DevicePixelRatio
+pub const flui::geometry::DevicePixelRatio::MAX: Self = _
+pub const flui::geometry::DevicePixelRatio::MIN: Self = _
 pub const flui::geometry::DevicePixelRatio::ONE: Self = _
 pub const fn flui::geometry::DevicePixelRatio::get(self) -> f64
 pub fn flui::geometry::DevicePixelRatio::to_device(self, logical: f64) -> f64
 pub fn flui::geometry::DevicePixelRatio::to_logical(self, device: f64) -> f64
-pub fn flui::geometry::DevicePixelRatio::try_new(ratio: f64) -> Option<Self>
+pub const fn flui::geometry::DevicePixelRatio::try_new(ratio: f64) -> Option<Self>
 pub type flui::geometry::DevicePoint = flui::geometry::Point<i32>
 pub type flui::geometry::DeviceRect = flui::geometry::Rect<i32>
 pub type flui::geometry::DeviceSize = flui::geometry::Size<i32>
@@ -4438,7 +4440,6 @@ impl core::fmt::Display for flui::geometry::InvalidMetrics
 impl core::marker::StructuralPartialEq for flui::geometry::InvalidMetrics
 variant flui::geometry::InvalidMetrics::EmptyExtent { width: i32, height: i32 } // at 0
 variant flui::geometry::InvalidMetrics::InvalidScale(f64) // at 2
-variant flui::geometry::InvalidMetrics::LogicalOverflow { width: i32, height: i32, scale: f64 } // at 4
 variant flui::geometry::InvalidMetrics::NonFiniteSize { width: f64, height: f64 } // at 1
 variant flui::geometry::InvalidMetrics::Overflow { width: f64, height: f64, scale: f64 } // at 3
 pub trait flui::geometry::IsZero
@@ -5207,6 +5208,7 @@ pub mod flui::geometry::corners
 reexport flui::geometry::corners::Corners => flui::geometry::Corners
 reexport flui::geometry::corners::corners => flui::geometry::corners
 pub fn flui::geometry::cover(rect: flui::geometry::Rect) -> flui::geometry::Rect
+pub fn flui::geometry::device_extent(logical: f64, ratio: flui::geometry::DevicePixelRatio) -> Option<u32>
 pub fn flui::geometry::device_rect_covering(rect: flui::geometry::Rect, ratio: flui::geometry::DevicePixelRatio) -> flui::geometry::DeviceRect
 pub fn flui::geometry::device_size(size: flui::geometry::Size, ratio: flui::geometry::DevicePixelRatio) -> flui::geometry::DeviceSize
 pub const fn flui::geometry::edges<T>(top: T, right: T, bottom: T, left: T) -> flui::geometry::Edges<T>
@@ -5276,6 +5278,7 @@ pub mod flui::geometry::snap
 pub fn flui::geometry::snap(x: f64) -> f64
 reexport flui::geometry::snap::DevicePixelRatio => flui::geometry::DevicePixelRatio
 reexport flui::geometry::snap::cover => flui::geometry::cover
+reexport flui::geometry::snap::device_extent => flui::geometry::device_extent
 reexport flui::geometry::snap::device_rect_covering => flui::geometry::device_rect_covering
 reexport flui::geometry::snap::device_size => flui::geometry::device_size
 reexport flui::geometry::snap::resolve_stroke_width => flui::geometry::resolve_stroke_width
@@ -12152,7 +12155,7 @@ field flui::platform::DisplayInfo::is_primary: bool // at 6
 field flui::platform::DisplayInfo::name: String // at 1
 field flui::platform::DisplayInfo::persistent_key: Option<String> // at 7
 field flui::platform::DisplayInfo::refresh_period: Option<flui::platform::RefreshPeriod> // at 5
-field flui::platform::DisplayInfo::scale_factor: f64 // at 4
+field flui::platform::DisplayInfo::scale_factor: flui::geometry::DevicePixelRatio // at 4
 field flui::platform::DisplayInfo::usable_bounds: flui::geometry::Bounds<i32> // at 3
 impl Clone for flui::platform::DisplayInfo
 impl PartialEq for flui::platform::DisplayInfo
@@ -12161,7 +12164,7 @@ impl core::marker::StructuralPartialEq for flui::platform::DisplayInfo
 pub fn flui::platform::DisplayInfo::color_space(&self) -> Result<flui::platform::SurfaceColorSpace, flui::platform::Unsupported>
 pub fn flui::platform::DisplayInfo::headroom(&self) -> Result<flui::platform::Headroom, flui::platform::Unsupported>
 pub fn flui::platform::DisplayInfo::into_parts(self) -> (flui::platform::DisplayId, flui::platform::DisplayParts)
-pub fn flui::platform::DisplayInfo::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: f64) -> Self
+pub fn flui::platform::DisplayInfo::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Self
 pub fn flui::platform::DisplayInfo::with_color(self, color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence>) -> Self
 pub fn flui::platform::DisplayInfo::with_persistent_key(self, key: impl Into<String>) -> Self
 pub fn flui::platform::DisplayInfo::with_primary(self, is_primary: bool) -> Self
@@ -12191,7 +12194,7 @@ field flui::platform::DisplayParts::is_primary: bool // at 5
 field flui::platform::DisplayParts::name: String // at 0
 field flui::platform::DisplayParts::persistent_key: Option<String> // at 6
 field flui::platform::DisplayParts::refresh_period: Option<flui::platform::RefreshPeriod> // at 4
-field flui::platform::DisplayParts::scale_factor: f64 // at 3
+field flui::platform::DisplayParts::scale_factor: flui::geometry::DevicePixelRatio // at 3
 field flui::platform::DisplayParts::usable_bounds: flui::geometry::Bounds<i32> // at 2
 impl Clone for flui::platform::DisplayParts
 impl PartialEq for flui::platform::DisplayParts
@@ -12702,6 +12705,7 @@ reexport flui::platform::Location => flui::interaction::Location
 pub const flui::platform::MAX_LAUNCH_KEY_LEN: usize = 128
 pub const flui::platform::MAX_OPENED_ITEMS: usize = 64
 pub const flui::platform::MAX_OPENED_URL_LEN: usize = 8192
+pub const flui::platform::MAX_SURFACE_EXTENT: u32
 #[non_exhaustive] pub enum flui::platform::MeasurementSystem
 impl Clone for flui::platform::MeasurementSystem
 impl Copy for flui::platform::MeasurementSystem
@@ -19894,7 +19898,7 @@ pub fn flui::rendering::PipelineOwner::debug_doing_paint(&self) -> bool // impl<
 pub fn flui::rendering::PipelineOwner::debug_doing_semantics(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::decode_semantics_action(&self, request: &accesskit::ActionRequest) -> Result<flui_semantics::action::SemanticsActionRequest, flui_semantics::action::ActionDecodeError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::rendering::PipelineOwner::detach_render_subtrees(&mut self, root_ids: &[flui::foundation::RenderId]) -> Result<flui_rendering::pipeline::owner::relocation::DetachedRenderSubtrees, flui_rendering::pipeline::owner::relocation::DetachRenderSubtreesError> // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
-pub fn flui::rendering::PipelineOwner::device_pixel_ratio(&self) -> f64 // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::device_pixel_ratio(&self) -> flui::geometry::DevicePixelRatio // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::dirty_node_count(&self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::drain_mid_layout_marks(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::drain_pending_dirty(&mut self) -> usize // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
@@ -19968,7 +19972,7 @@ pub fn flui::rendering::PipelineOwner::scene_staged(&self) -> bool // impl<Phase
 pub fn flui::rendering::PipelineOwner::seed_parent_data(&mut self, child_id: flui::foundation::RenderId, seed: flui_rendering::testing::parent_data::ParentDataSeed) // impl flui::rendering::PipelineOwner<flui_rendering::pipeline::phase::Idle>
 pub fn flui::rendering::PipelineOwner::semantics_enabled(&self) -> bool // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::semantics_owner(&self) -> Option<&flui_semantics::owner::SemanticsOwner> // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
-pub fn flui::rendering::PipelineOwner::set_device_pixel_ratio(&mut self, dpr: f64) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
+pub fn flui::rendering::PipelineOwner::set_device_pixel_ratio(&mut self, ratio: flui::geometry::DevicePixelRatio) // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::set_on_need_visual_update<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::set_on_semantics_owner_created<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
 pub fn flui::rendering::PipelineOwner::set_on_semantics_owner_disposed<F>(&mut self, callback: F) where F: Fn() + Send + Sync + 'static // impl<Phase: flui_rendering::pipeline::phase::PipelinePhase> flui::rendering::PipelineOwner<Phase>
@@ -23949,7 +23953,7 @@ pub fn flui::testing::harness::widgets::LaidOut::root(&self) -> flui::foundation
 pub fn flui::testing::harness::widgets::LaidOut::run_background(&mut self) -> usize
 pub fn flui::testing::harness::widgets::LaidOut::scheduler(&self) -> flui::view::UpdateScheduler
 pub fn flui::testing::harness::widgets::LaidOut::set_motion_override(&self, preference: flui::animation::MotionOverride)
-pub fn flui::testing::harness::widgets::LaidOut::set_scale_factor(&mut self, scale_factor: f64)
+pub fn flui::testing::harness::widgets::LaidOut::set_scale_factor(&mut self, scale_factor: flui::geometry::DevicePixelRatio)
 pub fn flui::testing::harness::widgets::LaidOut::set_system_preferences(&self, values: flui::platform::SystemPreferences)
 pub fn flui::testing::harness::widgets::LaidOut::set_window_focused(&self, focused: bool)
 pub fn flui::testing::harness::widgets::LaidOut::set_window_visible(&self, visible: bool)
@@ -23961,6 +23965,7 @@ pub fn flui::testing::harness::widgets::LaidOut::text_baseline(&self, id: flui::
 pub fn flui::testing::harness::widgets::LaidOut::tick(&mut self)
 pub fn flui::testing::harness::widgets::LaidOut::transform_layer_matrices(&self) -> Vec<flui::geometry::Matrix4>
 pub fn flui::testing::harness::widgets::LaidOut::try_find_by_render_type(&self, render_type_name: &str) -> Option<flui::foundation::RenderId>
+pub fn flui::testing::harness::widgets::LaidOut::try_set_scale_factor(&mut self, scale_factor: f64) -> Result<(), flui::geometry::InvalidMetrics>
 pub fn flui::testing::harness::widgets::LaidOut::try_size(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Size>
 pub fn flui::testing::harness::widgets::LaidOut::window(&self) -> &flui_testing::host::HeadlessWindow
 pub fn flui::testing::harness::widgets::LaidOut::with_build_owner_mut<R>(&mut self, f: impl FnOnce(&mut flui::prelude::BuildOwner) -> R) -> R
@@ -35884,7 +35889,6 @@ pub fn flui_runtime::ui_runtime::UiRuntime::request_redraw(&self)
 pub fn flui_runtime::ui_runtime::UiRuntime::retry_render_device(&self) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::scheduler(&self) -> &flui::view::UpdateScheduler
 pub fn flui_runtime::ui_runtime::UiRuntime::service_text_sizing_source_for(&self, id: flui::foundation::PresentationId, source: &flui_painting::text_painter::sizing::TextSizingSource) -> bool
-pub fn flui_runtime::ui_runtime::UiRuntime::set_device_pixel_ratio_for(&self, id: flui::foundation::PresentationId, device_pixel_ratio: f64) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::set_error_view_builder(&self, builder: Option<flui::view::ErrorViewBuilder>)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_detail(&self, detail: flui::app::FrameFailureDetail)
 pub fn flui_runtime::ui_runtime::UiRuntime::set_frame_failure_handler(&self, handler: Option<flui::app::FrameFailureHandler>)
@@ -35928,6 +35932,7 @@ impl core::fmt::Debug for flui_runtime::ui_runtime::UiRuntimeError
 impl core::fmt::Display for flui_runtime::ui_runtime::UiRuntimeError
 impl core::marker::StructuralPartialEq for flui_runtime::ui_runtime::UiRuntimeError
 variant flui_runtime::ui_runtime::UiRuntimeError::InteractionLane(flui_interaction::pointer::interaction_lane::InteractionDispatchError) // at 0
+variant flui_runtime::ui_runtime::UiRuntimeError::PixelRatio { bits: u64 } // at 1
 #[non_exhaustive] pub struct flui_runtime::ui_runtime::agent_record::NativeForms
 field flui_runtime::ui_runtime::agent_record::NativeForms::kept: bool // at 0
 field flui_runtime::ui_runtime::agent_record::NativeForms::redacted: bool // at 1

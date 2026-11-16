@@ -241,7 +241,8 @@ impl GestureGeometry {
     /// while drag tolerances remain half-extents.
     ///
     /// # Errors
-    /// Refuses nonfinite division results.
+    /// What [`Self::with_mouse_double_click_area`] refuses; a native size over a
+    /// ratio in range is always finite.
     pub fn from_native_mouse(native: &NativeMouseGeometry) -> Result<Self, InvalidPreference> {
         let ratio = native.pixel_ratio;
         Self::new(ratio)
@@ -258,7 +259,8 @@ impl GestureGeometry {
     /// Project a touch observation queried for this exact presentation context.
     ///
     /// # Errors
-    /// Refuses nonfinite division results or a degenerate projected fling range.
+    /// A degenerate projected fling range; a native distance over a ratio in
+    /// range is always finite.
     pub fn from_native_touch(native: &NativeTouchGeometry) -> Result<Self, InvalidPreference> {
         let ratio = native.pixel_ratio;
         Ok(Self::new(ratio)

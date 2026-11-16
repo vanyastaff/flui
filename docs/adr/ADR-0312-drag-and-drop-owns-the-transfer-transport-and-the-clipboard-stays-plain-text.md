@@ -276,7 +276,7 @@ Until then no type of §7 exists; `docs/gaps.md` lists the section.
   (`flui-native`, the headless host's transport), `drop_reaches_only_last_accepting_target` and
   `concurrent_sessions_are_independent` (`flui-interaction`), and
   `drag_and_drop_reaches_the_runtime` (`flui-runtime`, §5), with each host's drag tests
-  (`drag::x11::tests`, `wayland_drag`, `ole_drag_and_drop_on_real_windows`).
+  (`drag::linux::x11::tests`, `wayland_drag`, `ole_drag_and_drop_on_real_windows`).
 - The clipboard's tests (§6): `copy_and_paste_round_trip_through_the_headless_clipboard`,
   `reads_asked_while_one_is_in_flight_share_its_answer` and
   `a_concealed_write_reaches_the_host_marked`, in the `capability_seam` table of `flui-testing`.

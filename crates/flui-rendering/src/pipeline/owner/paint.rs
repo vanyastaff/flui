@@ -88,10 +88,6 @@ impl PipelineOwner<PaintPhase> {
 
         // A pass with nothing queued still repaints from the root when the
         // scene it would patch is not the one the records describe.
-        #[expect(
-            clippy::float_cmp,
-            reason = "an unchanged ratio is bit-identical, not approximately equal"
-        )]
         let owed = self.root_id.is_some()
             && (self.staged_scene.is_some()
                 || self.retained_pixel_ratio != self.device_pixel_ratio
@@ -151,10 +147,6 @@ impl PipelineOwner<PaintPhase> {
         // frame repaints from the root. Retained output recorded for another
         // pixel ratio is dropped too: text shaping and hairline snapping
         // depend on it.
-        #[expect(
-            clippy::float_cmp,
-            reason = "an unchanged ratio is bit-identical, not approximately equal"
-        )]
         let ratio_changed = self.retained_pixel_ratio != self.device_pixel_ratio;
         // A patch never reported applied holds the only copies of the contents
         // it recorded: the scene dropped its buffered operations when this
@@ -383,17 +375,18 @@ impl PipelineOwner<PaintPhase> {
         inputs: &PaintInputs<'_>,
     ) -> crate::error::RenderResult<()> {
         composer.begin_boundary(None);
-        let root_layer = if (self.device_pixel_ratio - 1.0).abs() < f64::EPSILON {
-            Layer::Offset(OffsetLayer::zero())
-        } else {
-            Layer::Transform(TransformLayer::new(
-                flui_foundation::geometry::Matrix4::scaling(
-                    self.device_pixel_ratio,
-                    self.device_pixel_ratio,
-                    1.0,
-                ),
-            ))
-        };
+        let root_layer =
+            if self.device_pixel_ratio == flui_foundation::geometry::DevicePixelRatio::ONE {
+                Layer::Offset(OffsetLayer::zero())
+            } else {
+                Layer::Transform(TransformLayer::new(
+                    flui_foundation::geometry::Matrix4::scaling(
+                        self.device_pixel_ratio.get(),
+                        self.device_pixel_ratio.get(),
+                        1.0,
+                    ),
+                ))
+            };
         // The device-pixel-ratio layer is the frame's own: no render object
         // pushed it, so it is filed under the root, after the root's effects
         // in ordinal space because they live in another content.
@@ -822,7 +815,7 @@ impl PipelineOwner<PaintPhase> {
         let recorder = &mut composer.work.recorder.0;
         recorder.begin(
             origin,
-            self.device_pixel_ratio,
+            self.device_pixel_ratio.get(),
             anchor.map(|frame| frame.at(origin)),
         );
         let own_effects = &mut composer.work.own_effects;

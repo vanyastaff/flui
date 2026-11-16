@@ -72,9 +72,17 @@ pub struct CounterAnchor {
 
 impl CounterAnchor {
     fn nanos(self, ticks: u64) -> u64 {
-        let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(self.frequency.get());
-        u64::try_from(nanos).unwrap_or(u64::MAX)
+        counter_nanos(ticks, self.frequency)
     }
+}
+
+/// `ticks` of a counter running at `frequency` per second, in nanoseconds:
+/// truncated, computed in `u128` so no intermediate overflows, and saturated
+/// at `u64::MAX` (some 584 years) for a span past it.
+#[must_use]
+pub(crate) fn counter_nanos(ticks: u64, frequency: NonZeroU64) -> u64 {
+    let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(frequency.get());
+    u64::try_from(nanos).unwrap_or(u64::MAX)
 }
 
 /// Which clock stamps a sequence: chosen per device when its sequence starts
@@ -199,5 +207,47 @@ impl NativeClock {
                 .as_nanos()
                 .saturating_sub(nanos(self.uptime.saturating_sub(sample)))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use super::counter_nanos;
+
+    /// Counter ticks become nanoseconds with no intermediate overflow, and a
+    /// span past `u64::MAX` nanoseconds saturates rather than wraps.
+    #[test]
+    fn counter_ticks_become_nanoseconds_at_the_extremes() {
+        let hz = |frequency: u64| NonZeroU64::new(frequency).expect("a nonzero frequency");
+        let cases = [
+            ("nothing elapsed", 0, hz(10_000_000), 0),
+            ("one tick at 10 MHz", 1, hz(10_000_000), 100),
+            (
+                "a second at 10 MHz",
+                10_000_000,
+                hz(10_000_000),
+                1_000_000_000,
+            ),
+            ("a tick shorter than a nanosecond", 1, hz(3_000_000_000), 0),
+            ("one tick of the fastest counter", 1, NonZeroU64::MAX, 0),
+            (
+                "the whole counter at the fastest frequency",
+                u64::MAX,
+                NonZeroU64::MAX,
+                1_000_000_000,
+            ),
+            (
+                "a product past u64 whose quotient fits",
+                u64::MAX,
+                hz(2_000_000_000),
+                u64::MAX / 2,
+            ),
+            ("past u64 nanoseconds at 1 Hz", u64::MAX, hz(1), u64::MAX),
+        ];
+        for (case, ticks, frequency, nanos) in cases {
+            assert_eq!(counter_nanos(ticks, frequency), nanos, "{case}");
+        }
     }
 }

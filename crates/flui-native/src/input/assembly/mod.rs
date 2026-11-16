@@ -54,6 +54,8 @@ use smallvec::SmallVec;
 
 pub use batch::MoveBatch;
 pub use buttons::{ButtonTransition, ClickCounter, ClickSettings, HeldButtons};
+#[cfg(any(windows, test))]
+pub(crate) use clock::counter_nanos;
 pub use clock::{ClockChoice, CounterAnchor, NativeClock, NativeTime, QpcTicks, ReadingTime};
 pub use pan_zoom::{GestureComponent, GestureDelta, GesturePhase, PanZoomAccumulator};
 pub(crate) use registry::decode_derived;

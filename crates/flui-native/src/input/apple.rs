@@ -1143,7 +1143,7 @@ pub(crate) mod macos {
     #[derive(Default)]
     struct ChromeRegions {
         projected: ProjectedInputRegions,
-        scale: f64,
+        scale: flui_foundation::geometry::DevicePixelRatio,
     }
 
     impl ViewInputs {
@@ -1159,7 +1159,7 @@ pub(crate) mod macos {
                 chrome.projected.sent(),
                 location.x,
                 view.height() - location.y,
-                chrome.scale,
+                chrome.scale.get(),
                 event.clickCount(),
             )
         }
@@ -1191,18 +1191,18 @@ pub(crate) mod macos {
             }
         }
 
-        fn set_input_regions(&self, regions: &[InputRegion], scale: f64) {
+        fn set_input_regions(
+            &self,
+            regions: &[InputRegion],
+            scale: flui_foundation::geometry::DevicePixelRatio,
+        ) {
             // Projected with nothing borrowed: a dropped region is reported
             // through `tracing`, whose subscriber is the application's code.
             let mut projected = std::mem::take(&mut self.chrome.borrow_mut().projected);
-            // A scale the projection refuses keeps the regions and the scale
-            // they were projected at.
             let _changed = projected.update(regions, scale, None);
             let mut chrome = self.chrome.borrow_mut();
             chrome.projected = projected;
-            if scale.is_finite() && scale > 0.0 {
-                chrome.scale = scale;
-            }
+            chrome.scale = scale;
         }
     }
 

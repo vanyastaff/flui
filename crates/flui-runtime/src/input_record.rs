@@ -383,7 +383,7 @@ pub struct RecordingWindow {
     /// The window.
     pub window: WindowId,
     /// Device pixels per logical pixel, possibly fractional.
-    pub scale_factor: f64,
+    pub scale_factor: flui_foundation::geometry::DevicePixelRatio,
     /// The per-kind gesture values the window's contacts are admitted with.
     pub gesture_profiles: flui_interaction::GestureProfiles,
 }

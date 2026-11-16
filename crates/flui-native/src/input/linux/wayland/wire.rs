@@ -25,7 +25,7 @@ use crate::input::assembly::{
     NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, RawSensors, ReadingAction,
     ReadingTime, ScrollPhases, ScrollReading, decode, framed,
 };
-use crate::input::scroll::{WheelAmount, wheel_step};
+use crate::input::scroll::{DetentSteps, WheelAmount, wheel_step};
 
 /// The cursor of a pointer device.
 pub const MOUSE: NativeContact = NativeContact(u64::MAX);
@@ -1368,23 +1368,26 @@ fn step(unit: ScrollUnit, values: [f64; 2]) -> ScrollDelta {
     .unwrap_or_else(|_| ScrollDelta::zero(unit))
 }
 
+/// The step of a wheel frame's `value120` (horizontal, vertical): detents,
+/// precise when they are not whole.
+pub(crate) fn value120_step(value120: [i32; 2]) -> (ScrollDelta, ScrollPrecision) {
+    let steps = value120.map(DetentSteps::new);
+    let precision = if steps.iter().all(|steps| steps.is_whole()) {
+        ScrollPrecision::Notched
+    } else {
+        ScrollPrecision::Precise
+    };
+    (
+        step(ScrollUnit::Detents, steps.map(DetentSteps::detents)),
+        precision,
+    )
+}
+
 /// A wheel frame's step: detents from `value120` (precise when they are not
 /// whole), else from the discrete notches, else the values in pixels.
 fn wheel(axes: &AxisFrame) -> (ScrollDelta, ScrollPrecision) {
     if axes.value120.iter().any(Option::is_some) {
-        let detents = axes
-            .value120
-            .map(|value| f64::from(value.unwrap_or(0)) / 120.0);
-        let whole = axes
-            .value120
-            .iter()
-            .all(|value| value.unwrap_or(0) % 120 == 0);
-        let precision = if whole {
-            ScrollPrecision::Notched
-        } else {
-            ScrollPrecision::Precise
-        };
-        return (step(ScrollUnit::Detents, detents), precision);
+        return value120_step(axes.value120.map(|value| value.unwrap_or(0)));
     }
     if axes.discrete.iter().any(Option::is_some) {
         let detents = axes.discrete.map(|value| f64::from(value.unwrap_or(0)));

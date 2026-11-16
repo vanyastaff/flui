@@ -11,7 +11,6 @@
 use std::panic::resume_unwind;
 use std::time::Duration;
 
-use flui_foundation::geometry::DevicePixelRatio;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     Condition, UnsettledCause, UnsettledReason, WaitOutcome, WaitParams, WindowId,
@@ -172,8 +171,7 @@ impl UiRuntime {
             events: wait.events,
         };
         let evaluation = state.pipeline().with(|pipeline| {
-            let ratio = DevicePixelRatio::try_new(pipeline.device_pixel_ratio())
-                .unwrap_or(DevicePixelRatio::ONE);
+            let ratio = pipeline.device_pixel_ratio();
             pipeline.semantics_owner().map(|owner| {
                 owner.evaluate_wait(&wait.condition, facts, Placement::new(ratio, window))
             })

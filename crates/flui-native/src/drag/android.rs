@@ -1650,7 +1650,7 @@ impl PlatformDragSource for AndroidDragSource {
             clippy::cast_possible_truncation,
             reason = "a shadow of a few hundred pixels fits an i32"
         )]
-        let shadow = (SHADOW * self.view.scale()).round() as i32;
+        let shadow = (SHADOW * self.view.scale().get()).round() as i32;
         // A drag the view could not start ends as one no target took.
         let refused = |view: &JavaView| view.push_event(ViewEvent::DragEnded { result: false });
         self.view.post_or(move |env, view| {

@@ -896,7 +896,13 @@ fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Capture
         .expect("the headless platform has a primary display");
     sources
         .displays
-        .simulate_display_change(primary, DisplayChange::ScaleFactor(2.0))
+        .simulate_display_change(
+            primary,
+            DisplayChange::ScaleFactor(
+                flui_foundation::geometry::DevicePixelRatio::try_new(2.0)
+                    .expect("a positive ratio"),
+            ),
+        )
         .expect("the primary display changes");
     reads.push(displays());
     sources
