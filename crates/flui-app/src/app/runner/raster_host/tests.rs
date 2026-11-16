@@ -1067,12 +1067,13 @@ fn threaded_host() -> (
     ScriptedSlots,
     Arc<std::sync::atomic::AtomicUsize>,
 ) {
-    threaded_host_at(address())
+    threaded_host_at(address(), None)
 }
 
-/// [`threaded_host`] with its window at `at`.
+/// [`threaded_host`] with its window at `at`, drawing `textures`.
 fn threaded_host_at(
     at: PresentationAddress,
+    textures: Option<flui_layer::TextureRegistry>,
 ) -> (
     SharedRasterHost,
     ScriptedSlots,
@@ -1095,7 +1096,7 @@ fn threaded_host_at(
                 Some(redraw),
                 at,
                 &crate::app::AppConfig::default(),
-                None,
+                textures,
                 None,
             )
         })
@@ -1433,6 +1434,64 @@ fn a_frame_held_when_its_slots_panic_was_taken_does_not_move_the_base() {
     }
 }
 
+/// A frame the raster thread draws after one whose texture upload panicked
+/// is drawn over an image that misses the upload: settled in the same drain
+/// as the panicked one, it does not move the base either.
+///
+/// Red-check: drop `torn` from `RasterHost::drain_settled` and the base
+/// shows the second frame.
+#[test]
+fn a_frame_drawn_after_a_panicked_upload_does_not_move_the_base() {
+    let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+    let texture = registry.register().expect("a texture id");
+    texture.submit_frame(flui_painting::paint::Image::from_rgba8(
+        1,
+        1,
+        vec![255, 0, 0, 255],
+    ));
+    let (shared, slots, _wakes) = threaded_host_at(address(), Some(registry));
+    slots.script_textures(ScriptedAnswer::Panic);
+    let render = slots.hold_next_render();
+    let mut scene = TestScene::new(AT);
+    let (_first, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    let (_second, verdict) = submit_threaded(&shared, &mut scene);
+    assert_eq!(verdict, SubmitVerdict::Queued);
+    render.release();
+    // Both settle before the window drains, so one drain holds both.
+    let undrained = || {
+        shared
+            .try_read(|host| {
+                let placed = host.placed.as_ref().expect("placed");
+                let slot = placed.slots.get(&address()).expect("attached").slot;
+                placed
+                    .sender
+                    .record(slot)
+                    .map_or(0, |record| record.undrained)
+            })
+            .expect("the host is idle")
+    };
+    let started = std::time::Instant::now();
+    while undrained() < 2 && started.elapsed() < THREAD_WAIT {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let mut settled = Vec::new();
+    shared
+        .try_with(|host| host.drain_settled(address(), &mut settled))
+        .expect("the host is idle");
+    assert_eq!(settled.len(), 2, "{settled:?}");
+    let shown = shared
+        .try_read(|host| {
+            host.placed
+                .as_ref()
+                .and_then(|placed| placed.slots.get(&address()))
+                .and_then(|slot| slot.base.shown_version())
+        })
+        .expect("the host is idle");
+    assert_eq!(shown, None, "the base is forgotten");
+}
+
 /// The placement switch takes `threaded` or `inline`, in any case, and keeps
 /// the executor inline for anything else.
 #[test]
@@ -1467,7 +1526,7 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
         ui_runtime_id: ui_runtime.id(),
         presentation_id: ui_runtime.active_presentation_for_test(),
     };
-    let (shared, slots, _wakes) = threaded_host_at(at);
+    let (shared, slots, _wakes) = threaded_host_at(at, None);
     // The first frame's render is held, so the second queues behind it
     // instead of taking the place of a frame the thread has not begun.
     let render = slots.hold_next_render();
@@ -1546,7 +1605,7 @@ fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
         ui_runtime_id: ui_runtime.id(),
         presentation_id: ui_runtime.active_presentation_for_test(),
     };
-    let (shared, slots, _wakes) = threaded_host_at(at);
+    let (shared, slots, _wakes) = threaded_host_at(at, None);
     slots.script_render(ScriptedAnswer::Fail(EngineError::GpuUnavailable));
     let mut slot = RasterSlot {
         host: shared,

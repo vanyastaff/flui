@@ -2016,17 +2016,20 @@ impl RasterHost {
         };
         let mut settlements = std::mem::take(&mut placed.settlements);
         settlements.clear();
-        placed.sender.drain_settlements(id, &mut settlements);
         // The slot's failure is taken for its payload, which the window
-        // reports; which frame it came with is each settlement's own mark,
-        // since the thread may settle more after this drain. Taking it ends
-        // the mark, so a frame held now may settle unmarked though the panic
-        // came with its turn: it is tainted, its settlement does not move the
-        // base, and settled stale it counts toward the surface's retry.
-        if Self::take_slot_failure(placed, address) == SlotTurn::Panicked
-            && let Some(slot) = placed.slots.get_mut(&address)
-        {
-            // A frame whose settlement is in this drain carries its own mark.
+        // reports, before its settlements are drained: a turn holds its panic
+        // and settles its frame under one lock, so a panic taken now came
+        // with a settlement this drain holds, marked, or with none at all.
+        // Which frame it came with is each settlement's own mark. Taking it
+        // ends the mark, so a frame held now and not settled in this drain may
+        // settle unmarked though the panic came with its turn: it is tainted,
+        // its settlement does not move the base, and settled stale it counts
+        // toward the surface's retry. The base is forgotten too, so a frame
+        // the window asks for next draws in full.
+        let panicked = Self::take_slot_failure(placed, address) == SlotTurn::Panicked;
+        placed.sender.drain_settlements(id, &mut settlements);
+        if panicked && let Some(slot) = placed.slots.get_mut(&address) {
+            slot.base.forget();
             for held in &mut slot.pending {
                 held.tainted |= !settlements
                     .iter()
@@ -2042,9 +2045,11 @@ impl RasterHost {
         };
         // A frame drawn after a panicked one of this drain was drawn over its
         // image, which may be torn or miss an upload: it does not move the
-        // base either.
+        // base either (after a panicked render, whose next frame the executor
+        // draws in full anyway, that costs one more full frame).
         let mut torn = false;
         for settlement in &settlements {
+            torn |= settlement.panicked;
             let Some(slot) = placed.slots.get_mut(&address) else {
                 break;
             };
@@ -2057,7 +2062,6 @@ impl RasterHost {
                 continue;
             };
             let frame = slot.pending.remove(at);
-            torn |= settlement.panicked;
             let forget = frame.tainted || torn;
             let verdict = Self::settle_one(
                 placed,
