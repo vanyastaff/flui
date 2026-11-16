@@ -1179,7 +1179,7 @@ impl crate::host_window::HostWindow for WebWindow {
 /// What every browser window honours, known before one exists
 /// (`Platform::window_capabilities`).
 pub(crate) const fn window_capabilities() -> WindowCapabilities {
-    let mut capabilities = WindowCapabilities::NONE;
+    let mut capabilities = WindowCapabilities::NONE.into_parts();
     capabilities.sets_title = flui_platform::WindowCapability::Native;
     capabilities.enters_fullscreen = flui_platform::WindowCapability::Native;
     // The page keeps its tab: the canvas is retired and its embedder told.
@@ -1191,20 +1191,20 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     // the keyboard from its visual viewport (`keyboard_over`), which is an
     // estimate; `page_capabilities` says where it names the keyboard itself.
     capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
-    capabilities
+    capabilities.into_capabilities()
 }
 
 /// What this page's window honours: [`window_capabilities`], with the
 /// keyboard reported natively where the browser has `navigator.virtualKeyboard`.
 fn page_capabilities() -> WindowCapabilities {
-    let mut capabilities = window_capabilities();
+    let mut capabilities = window_capabilities().into_parts();
     if web_sys::window()
         .and_then(|window| virtual_keyboard(&window))
         .is_some()
     {
         capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Native;
     }
-    capabilities
+    capabilities.into_capabilities()
 }
 
 impl std::fmt::Debug for WebWindow {

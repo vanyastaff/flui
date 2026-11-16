@@ -32,6 +32,9 @@ struct Window {
     inner: Rc<dyn PlatformWindow>,
     answer: Mutex<Result<Option<GestureGeometry>, PreferenceQueryError>>,
     panic_query: AtomicBool,
+    /// What the window honours, published once when it was made: what its commands are admitted
+    /// against and opened under.
+    capabilities: flui_platform::WindowCapabilities,
 }
 impl PlatformWindow for Window {
     fn id(&self) -> flui_platform::WindowId {
@@ -65,14 +68,14 @@ impl PlatformWindow for Window {
         self.inner.set_input_regions(regions)
     }
     fn state(&self) -> flui_platform::WindowState {
-        self.inner.state()
+        self.inner.state().with_capabilities(self.capabilities)
     }
 
     fn apply(
         &self,
         command: flui_platform::AdmittedCommand,
     ) -> Result<(), flui_platform::ApplyError> {
-        command.against(&flui_platform::WindowCapabilities::NONE)?;
+        command.against(&self.capabilities)?;
         Ok(())
     }
 
@@ -152,6 +155,9 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
                 .expect("window"),
             answer: Mutex::new(Ok(geometry(10.0))),
             panic_query: AtomicBool::new(false),
+            capabilities: flui_platform::WindowCapabilities::NONE
+                .publish()
+                .expect("the process has publications left"),
         });
         let clock = ManualClock::new();
         let mut runtime = Rc::new(

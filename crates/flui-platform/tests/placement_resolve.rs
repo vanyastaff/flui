@@ -208,8 +208,9 @@ fn a_mode_the_window_cannot_enter_becomes_normal() {
         1.0,
     );
     assert_eq!(resolved(&full).mode, WindowMode::Fullscreen);
-    let mut capabilities = WindowCapabilities::ALL;
+    let mut capabilities = WindowCapabilities::ALL.into_parts();
     capabilities.enters_fullscreen = WindowCapability::NOT_ON_THIS_PLATFORM;
+    let capabilities = capabilities.into_capabilities();
     let result = full
         .resolve(&DESK.displays, &capabilities, NO_FRAME)
         .expect("resolves");
@@ -217,8 +218,9 @@ fn a_mode_the_window_cannot_enter_becomes_normal() {
 }
 
 fn without_places_at_open_size_and_mode_stay_but_position_goes() {
-    let mut capabilities = WindowCapabilities::ALL;
+    let mut capabilities = WindowCapabilities::ALL.into_parts();
     capabilities.places_at_open = Availability::Unavailable;
+    let capabilities = capabilities.into_capabilities();
     let maximized = WindowPlacement::new(
         Some("key-left".into()),
         Some(Point::new(100.0, 100.0)),
