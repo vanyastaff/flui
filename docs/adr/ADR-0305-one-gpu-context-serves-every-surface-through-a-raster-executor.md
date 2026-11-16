@@ -448,8 +448,14 @@ executor and slot.
 
 - `ExecutorHealth { Running, ShutDown, Died }` rides the executor's record; the two non-running
   states log at `error`. Once it is not `Running`, every send answers `Gone` with its command, and
-  the owner settles every frame still pending in a slot's inbox `Failed`, since the executor no
-  longer can. The frame a wedged render holds settles only if that render returns.
+  the owner settles every frame still pending in the inbox of a slot it has not detached `Failed`,
+  since the executor no longer can; a detached slot's frame leaves with its presentation,
+  unsettled, as the executor's own detach drops it. A slot settles in order even then: the frame
+  a wedged render holds settles only if that render returns, and a frame queued behind it in that
+  slot settles `Failed` after it, so a late `Presented` never arrives for a frame whose record a
+  later settlement already folded. A dead executor makes no backend call once the call it died
+  during returns, except that its stop still takes each slot down in the backend:
+  that stop settles or drops what the inboxes hold.
 - `Detach` and `Release` complete before the native window is destroyed or its surface given
   back. Inline they complete within the call. Threaded, the owner waits for the slot's record with
   a deadline (`DETACH_DEADLINE`, two seconds, above wgpu's one-second acquire timeout), with no
@@ -615,7 +621,11 @@ the facade. Every production use of `with_backend` becomes:
   `a_stopped_executor_settles_every_pending_frame_failed`,
   `a_full_settlement_ring_holds_the_next_frame`,
   `a_full_lifecycle_queue_returns_the_command` and
-  `a_command_sent_during_the_stop_comes_back_gone`; ADR-0244's `gpu_backend_fallback_order`; and
+  `a_command_sent_during_the_stop_comes_back_gone`; on the raster thread, in
+  `crates/flui-engine/tests/raster_thread.rs`, `a_raster_thread_that_does_not_answer_a_detach_dies_at_its_deadline`
+  `a_frame_queued_behind_a_wedged_render_settles_after_it` and
+  `a_frame_whose_resize_the_executor_died_during_is_not_rendered` (§9); ADR-0244's
+  `gpu_backend_fallback_order`; and
   ADR-0267's `a_frame_dropped_on_a_lost_device_waits_out_the_backoff`,
   `a_failed_rebuild_is_reported_with_the_dropped_frame`,
   `a_given_up_rebuild_holds_frames_until_the_application_asks_again`,

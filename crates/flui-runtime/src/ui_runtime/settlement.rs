@@ -222,9 +222,9 @@ impl UiRuntime {
     /// address and epoch name commits what it captured when it was submitted, by the same rules
     /// an inline verdict follows. The raster side settles a slot's frames in order, so frames of
     /// the same presentation queued before it and still pending get no settlement of their own,
-    /// and their records fold into this one. The one exception is an executor that dies during a
-    /// render: its inbox frame settles `Failed` first, and the render's own settlement, should it
-    /// return, is stale (`docs/gaps.md`). A settlement no pending record matches (another
+    /// and their records fold into this one; an executor that dies settles a frame queued behind a
+    /// render it still holds only after that render, so even then a later settlement never folds
+    /// a frame the raster side may still show. A settlement no pending record matches (another
     /// runtime's, an earlier life's, one already settled or folded, or a queued verdict, which no
     /// settlement carries) is [`Settled::Stale`], traced and ignored.
     ///
