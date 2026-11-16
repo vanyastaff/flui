@@ -6,9 +6,32 @@ The project guide is shared by every agent runtime and lives in one place:
 
 @AGENTS.md
 
-## Models
+## Delegating
 
-Opus quota is the scarce resource. Subagent work names its model: `haiku` for locating code,
-`sonnet` for mechanical edits, check runs, PR bodies and fact-finding, `opus` for design, the
-review before a merge (AGENTS.md, "Before a merge") and any other review against "Recurring
-defects", and hard diagnosis.
+The session keeps what needs the whole picture: the decomposition, the design decisions and the
+last read of a diff before it is pushed. A subagent gets the cheapest model and effort that do
+its job, both named on the spawn. Without them a definition's `inherit` runs it on the session
+model, and the session's effort does not carry over to another model.
+
+| Work | `model` | `effort` |
+|------|---------|----------|
+| Locate code, list callers, pull one fact from a file or a page | `haiku` | `low` |
+| Run a named check and report it; an edit whose shape is settled (a rename, a move, a changelog fragment, a PR body) | `sonnet` | `low` |
+| Research across sources, tests for a settled contract, a contained change with a clear end state | `sonnet` | `medium` |
+| Implementation that changes behaviour inside an accepted design | `opus` | `high` |
+| Design and ADR options, the review before a merge (AGENTS.md, "Before a merge") and any other review against "Recurring defects", diagnosis of re-entrancy, unwinding, lifetimes or races | `fable` | `high` |
+
+Work that fails at its row is rerun one row up with what the failed run found, and the top row
+at `xhigh`. A row that keeps failing one kind of work is the row to change. A spawn spends tens
+of thousands of tokens before it reads a line, so a handful of tool calls stays in the session.
+
+`fable` is the highest alias a spawn can name. Mythos, where the account has it, is the same
+model: a session running on it hands it to a fork, or to a definition's `inherit`.
+
+- **A brief is the worker's whole context.** It states the end state and the check that proves
+  it (a test by name, a gate, a command and the output expected), the files the worker owns and
+  what is already ruled out. A worker told only what to do stops at the first thing that
+  compiles.
+- **A wrong result is a wrong brief.** Before a fan-out the brief runs on one unit and that
+  result is reviewed; then the brief is corrected and rerun, since a hand patch teaches the
+  remaining workers nothing.
