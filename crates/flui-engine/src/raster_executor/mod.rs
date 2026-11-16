@@ -1026,7 +1026,7 @@ fn render<B: RasterBackend>(
     }
     let damage = slot.full_redraw.map_or(frame.damage, DamageRegion::Full);
     let mut caught = FirstPanic::new();
-    let rendered = caught.contain(|| backend.render(slot.id, &frame.scene, damage));
+    let rendered = caught.contain(|| backend.render(slot.id, frame.stamp, &frame.scene, damage));
     let Some(rendered) = rendered else {
         slot.owe_full(RESET);
         let payload = caught

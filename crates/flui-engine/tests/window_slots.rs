@@ -420,6 +420,7 @@ impl flui_engine::RasterBackend for ReentersOwner {
     fn render(
         &mut self,
         slot: SlotId,
+        frame: flui_foundation::FrameStamp,
         scene: &Scene,
         damage: DamageRegion,
     ) -> flui_engine::EngineResult<flui_engine::PresentDisposition> {
@@ -429,7 +430,7 @@ impl flui_engine::RasterBackend for ReentersOwner {
                 .send(RasterCommand::Restore { slot, surface })
                 .expect("accepted");
         }
-        self.inner.render(slot, scene, damage)
+        self.inner.render(slot, frame, scene, damage)
     }
 
     fn render_lent(

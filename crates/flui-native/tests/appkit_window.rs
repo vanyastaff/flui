@@ -218,6 +218,8 @@ mod cases {
         window: Rc<dyn HostWindow>,
         ns_window: Retained<NSWindow>,
         handler: Rc<RecordingWindowHandler>,
+        /// How many drawables the fixture presented into the window.
+        presents: u64,
     }
 
     impl WindowFixture for AppKitFixture {
@@ -321,8 +323,16 @@ mod cases {
             layer.setDevice(Some(&device));
             layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
             let queue = device.newCommandQueue().expect("a Metal command queue");
+            let target = self.window.surface_target();
             for _ in 0..10 {
                 let drawable = layer.nextDrawable().expect("a drawable");
+                self.presents += 1;
+                target.pre_present_notify(
+                    Some(flui_testing::window_conformance::fixture_frame(
+                        self.presents,
+                    )),
+                    flui_platform::SwapChainStatistics::None,
+                );
                 let buffer = queue.commandBuffer().expect("a Metal command buffer");
                 buffer.presentDrawable(ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable));
                 buffer.commit();
@@ -400,6 +410,7 @@ mod cases {
             window,
             ns_window,
             handler,
+            presents: 0,
         };
         fixture.settle();
         fixture

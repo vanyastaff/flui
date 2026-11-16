@@ -464,9 +464,54 @@ pub struct HeadlessHostWindow {
     /// Carries a frame request made off the owner thread to the owner's next
     /// turn; `None` for a window opened with no owner signal.
     redraw: HeadlessRedraw,
-    /// How many frames were presented into the window's surface: each one
-    /// calls its target's `pre_present_notify` first.
-    presents: Arc<std::sync::atomic::AtomicU64>,
+    /// The presents made into the window's surface: each one calls its
+    /// target's `pre_present_notify` first.
+    presents: Arc<HeadlessPresents>,
+}
+
+/// How many presents a headless window keeps the frame of until the simulated
+/// window system shows or discards them: more than any swap chain holds.
+const PRESENTS_KEPT: usize = 16;
+
+/// The presents made into a headless window's surface: how many, and the
+/// frames of those the simulated window system has neither shown nor
+/// discarded yet, oldest first, as a compositor holds a window's commits.
+#[derive(Debug)]
+struct HeadlessPresents {
+    count: std::sync::atomic::AtomicU64,
+    in_flight: Mutex<std::collections::VecDeque<flui_foundation::FrameStamp>>,
+    /// The window's reports, told which presentation each present shows.
+    reports: crate::owner::frame_timing::PresentationReports,
+}
+
+impl HeadlessPresents {
+    /// A present of `frame` is about to be made: counted, and kept for the
+    /// simulated window system to show, unless it shows no frame. The oldest
+    /// kept present is forgotten past [`PRESENTS_KEPT`], and every kept one
+    /// when the frame is of another surface generation.
+    fn presenting(&self, frame: Option<flui_foundation::FrameStamp>) {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.reports.presenting(frame);
+        if let Some(frame) = frame {
+            let mut in_flight = self.in_flight.lock();
+            // A frame of another surface: the old surface's presents will never be shown.
+            if in_flight
+                .back()
+                .is_some_and(|kept| kept.surface_generation != frame.surface_generation)
+            {
+                in_flight.clear();
+            }
+            if in_flight.len() == PRESENTS_KEPT {
+                in_flight.pop_front();
+            }
+            in_flight.push_back(frame);
+        }
+    }
+
+    /// The oldest present not yet shown or discarded, which leaves.
+    fn oldest(&self) -> Option<flui_foundation::FrameStamp> {
+        self.in_flight.lock().pop_front()
+    }
 }
 
 /// How a [`HeadlessHostWindow`] asks its owner for a frame from another thread: the
@@ -509,9 +554,10 @@ impl flui_platform::RedrawRequester for HeadlessRedraw {
 }
 
 /// A headless window's surface target: there is no native window, so it
-/// answers `Unavailable` always; it counts the frames presented into it.
+/// answers `Unavailable` always; it counts the frames presented into it and
+/// keeps each one's frame for the simulated window system.
 struct HeadlessSurface {
-    presents: Arc<std::sync::atomic::AtomicU64>,
+    presents: Arc<HeadlessPresents>,
 }
 
 impl raw_window_handle::HasWindowHandle for HeadlessSurface {
@@ -531,9 +577,12 @@ impl raw_window_handle::HasDisplayHandle for HeadlessSurface {
 }
 
 impl flui_platform::SurfaceTarget for HeadlessSurface {
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {
-        self.presents
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    fn pre_present_notify(
+        &self,
+        frame: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+        self.presents.presenting(frame);
     }
 }
 
@@ -900,6 +949,7 @@ impl HeadlessHostWindow {
         delivery.publish_through_owner(&source, SnapshotSource::read);
         let redraw_delivery = Arc::downgrade(&delivery);
         let redraw_retirement = delivery.retirement();
+        let reports = delivery.presentation_reports();
         Self {
             id,
             state,
@@ -919,7 +969,11 @@ impl HeadlessHostWindow {
                 retirement: redraw_retirement,
                 owner: None,
             },
-            presents: Arc::default(),
+            presents: Arc::new(HeadlessPresents {
+                count: std::sync::atomic::AtomicU64::new(0),
+                in_flight: Mutex::default(),
+                reports,
+            }),
         }
     }
 
@@ -1002,29 +1056,60 @@ impl HeadlessHostWindow {
     /// presented frame, before the present, is the contract.
     #[must_use]
     pub fn pre_present_notifies(&self) -> u64 {
-        self.presents.load(std::sync::atomic::Ordering::SeqCst)
+        self.presents
+            .count
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Simulate the window system reporting that a frame of this window
-    /// reached the screen at `presented.at`, as a compositor's presentation
-    /// event does: the window's next frame request carries it
+    /// Simulate the window system showing the oldest present of this window it
+    /// has neither shown nor discarded, at `at`, on a display refreshing every
+    /// `refresh` where it names a period, as a compositor's presentation event
+    /// for a commit does: the report names the frame that present carried
+    /// ([`FramePresented::frame`](flui_platform::FramePresented::frame)), and
+    /// the window's next frame request carries it
     /// ([`FrameRequest::presented`](flui_platform::FrameRequest::presented)).
+    /// Returns the frame shown, `None` when no present waits.
+    ///
     /// A headless window has no screen, so this is the only report it makes,
-    /// and it is treated as a real host's: a report no later than one
-    /// already made is dropped; a time ahead of the event clock is carried
-    /// with its stamp while it lies within the host's report lead
-    /// (`REPORT_LEAD`); and a time further ahead is no time of a frame, and
-    /// the report is dropped. A closed window ignores it, as does one whose
-    /// capabilities say its window system reports no presentation
-    /// ([`WindowCapabilities::reports_presentation`](flui_platform::WindowCapabilities::reports_presentation)).
-    pub fn simulate_presented(&self, presented: flui_platform::FramePresented) {
-        {
+    /// and it is treated as a real host's: a report of a frame no newer than
+    /// one already reported, or shown before it, is dropped; a time ahead of
+    /// the event clock is carried with its stamp while it lies within the
+    /// host's report lead (`REPORT_LEAD`); and a time further ahead is no time
+    /// of a frame, and the report is dropped. A closed window shows nothing,
+    /// and one whose capabilities say its window system reports no
+    /// presentation
+    /// ([`WindowCapabilities::reports_presentation`](flui_platform::WindowCapabilities::reports_presentation))
+    /// shows the present without reporting it.
+    pub fn simulate_presented(
+        &self,
+        at: flui_platform::EventTime,
+        refresh: Option<flui_platform::RefreshPeriod>,
+    ) -> Option<flui_foundation::FrameStamp> {
+        let reports = {
             let state = self.state.borrow_mut();
-            if state.closed || !state.capabilities.reports_presentation().is_available() {
-                return;
+            if state.closed {
+                return None;
             }
+            state.capabilities.reports_presentation().is_available()
+        };
+        let frame = self.presents.oldest()?;
+        if reports {
+            let mut presented = flui_platform::FramePresented::new(frame, at);
+            if let Some(refresh) = refresh {
+                presented = presented.refresh(refresh);
+            }
+            self.presents.reports.report(presented);
         }
-        self.delivery.presentation_reports().report(presented);
+        Some(frame)
+    }
+
+    /// Simulate the window system discarding the oldest present of this
+    /// window it has neither shown nor discarded, as a compositor discards a
+    /// commit a later one replaced before it reached the screen
+    /// (`wp_presentation_feedback.discarded`): no report ever names it.
+    /// Returns the frame discarded, `None` when no present waits.
+    pub fn simulate_discarded(&self) -> Option<flui_foundation::FrameStamp> {
+        self.presents.oldest()
     }
 
     /// Every input-region set this window handed its simulated OS, in device pixels and

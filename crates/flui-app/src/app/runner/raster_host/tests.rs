@@ -645,7 +645,12 @@ impl raw_window_handle::HasDisplayHandle for CountingNoSurface {
 }
 
 impl flui_platform::SurfaceTarget for CountingNoSurface {
-    fn pre_present_notify(&self, _: flui_platform::SwapChainStatistics) {}
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
 }
 
 impl CountingNoSurface {

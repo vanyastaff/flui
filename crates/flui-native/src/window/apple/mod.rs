@@ -130,7 +130,7 @@ pub(crate) mod link_timing {
     /// The frame a tick read at `media_now_secs` stands for, as
     /// `(age, until_present)`: its vsync is the link's `timestamp_secs`, `age`
     /// before the reading, and it reaches the screen at the link's
-    /// `target_secs`, `until_present` after the reading (ADR-0257). A vsync the
+    /// `target_secs`, `until_present` after the reading (ADR-0347). A vsync the
     /// reading can't place (ahead of it, or no finite time) is the reading
     /// itself, and a target that isn't after both the vsync and the reading is
     /// unknown.
@@ -348,8 +348,9 @@ struct KeptView(objc2::rc::Retained<objc2::runtime::AnyObject>);
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 unsafe impl Send for KeptView {}
 
-// SAFETY: a shared `MainRetainedView` hands out its view's address on the main
-// thread only (`MainRetainedView::view` takes a `MainThreadMarker`), and
+// SAFETY: a shared `MainRetainedView` hands out its view, or the view's address,
+// on the main thread only (`MainRetainedView::view` and `object` take a
+// `MainThreadMarker`), and
 // releases the view on the main thread only (see `KeptView`): no thread but the
 // main thread reaches the view through it.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -380,6 +381,16 @@ impl MainRetainedView {
         self.0
             .as_ref()
             .map(|kept| std::ptr::NonNull::from(&*kept.0).cast())
+    }
+
+    /// The kept view to message, on the main thread: `None` when no view was
+    /// kept.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn object(
+        &self,
+        _main: objc2::MainThreadMarker,
+    ) -> Option<&objc2::runtime::AnyObject> {
+        self.0.as_ref().map(|kept| &*kept.0)
     }
 }
 

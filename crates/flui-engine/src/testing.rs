@@ -86,6 +86,8 @@ pub struct AppliedTextures {
 #[derive(Default)]
 struct Script {
     calls: Vec<SlotCall>,
+    /// The stamp of each frame rendered, in order.
+    rendered_frames: Vec<flui_foundation::FrameStamp>,
     attaches: VecDeque<ScriptedAnswer>,
     resizes: VecDeque<ScriptedAnswer>,
     restores: VecDeque<ScriptedAnswer>,
@@ -313,6 +315,13 @@ impl ScriptedSlots {
             .collect()
     }
 
+    /// The stamps the frames rendered so far carried to the backend, in
+    /// order: what a window slot hands its surface target with each present.
+    #[must_use]
+    pub fn rendered_frames(&self) -> Vec<flui_foundation::FrameStamp> {
+        self.script.lock().rendered_frames.clone()
+    }
+
     fn answer(&self, call: SlotCall) -> Option<ScriptedAnswer> {
         let mut script = self.script.lock();
         script.calls.push(call);
@@ -411,6 +420,7 @@ impl RasterBackend for ScriptedSlots {
     fn render(
         &mut self,
         slot: SlotId,
+        frame: flui_foundation::FrameStamp,
         _scene: &Scene,
         damage: DamageRegion,
     ) -> EngineResult<PresentDisposition> {
@@ -418,6 +428,7 @@ impl RasterBackend for ScriptedSlots {
         wait_out(hold);
         {
             let mut script = self.script.lock();
+            script.rendered_frames.push(frame);
             if std::mem::take(&mut script.lose_in_next_render) {
                 script.device_lost = true;
             }
@@ -615,7 +626,12 @@ impl raw_window_handle::HasDisplayHandle for FakeWindow {
 }
 
 impl flui_platform::SurfaceTarget for FakeWindow {
-    fn pre_present_notify(&self, _statistics: flui_platform::SwapChainStatistics) {}
+    fn pre_present_notify(
+        &self,
+        _frame: Option<flui_foundation::FrameStamp>,
+        _statistics: flui_platform::SwapChainStatistics,
+    ) {
+    }
 }
 
 /// What a test's window slot acquires instead of a surface texture.

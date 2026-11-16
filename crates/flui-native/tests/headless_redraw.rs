@@ -13,6 +13,7 @@ use flui_native::{
     Platform as _,
 };
 use flui_platform::{EventTime, FramePresented, WindowOptions};
+use flui_testing::window_conformance::fixture_frame as frame;
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 use parking_lot::Mutex;
 
@@ -85,27 +86,38 @@ fn a_redraw_requested_on_the_owner_dispatches_at_once() {
     assert_eq!(*frames.lock(), [thread::current().id()]);
 }
 
-/// A window system that stamps one presentation an hour ahead (a stamp left
-/// on its own clock's epoch) costs the window that report alone: the frame
-/// shown after it is still reported by the window's next request.
-fn a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it() {
-    let platform =
-        HeadlessPlatform::new().with_window_capabilities(flui_platform::WindowCapabilities::ALL);
-    let opened = crate::Opened::on(&platform, WindowOptions::default()).expect("open");
-    let window = opened
+/// A headless platform whose windows report presentation.
+fn reporting_platform() -> HeadlessPlatform {
+    HeadlessPlatform::new().with_window_capabilities(flui_platform::WindowCapabilities::ALL)
+}
+
+/// A window of `platform`.
+fn reporting_window(platform: &HeadlessPlatform) -> crate::Opened {
+    crate::Opened::on(platform, WindowOptions::default()).expect("open")
+}
+
+/// The headless window behind `opened`.
+fn headless(opened: &crate::Opened) -> &HeadlessHostWindow {
+    opened
         .window
         .as_any()
         .downcast_ref::<HeadlessHostWindow>()
-        .expect("the headless platform opens headless windows");
+        .expect("the headless platform opens headless windows")
+}
 
-    let hour = std::time::Duration::from_secs(3600);
-    window.simulate_presented(FramePresented::new(EventTime::now() + hour));
-    let shown = FramePresented::new(EventTime::now());
-    window.simulate_presented(shown);
+/// Present `epoch` into the window's surface, as the raster side does.
+fn present(opened: &crate::Opened, epoch: u64) {
+    opened
+        .window
+        .surface_target()
+        .pre_present_notify(Some(frame(epoch)), flui_platform::SwapChainStatistics::None);
+}
+
+/// What the window's next frame request carries.
+fn next_request_carries(opened: &crate::Opened) -> Vec<Option<FramePresented>> {
     opened.handler.take_calls();
     opened.window.request_redraw();
-
-    let carried: Vec<Option<FramePresented>> = opened
+    opened
         .handler
         .take_calls()
         .into_iter()
@@ -113,10 +125,57 @@ fn a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it() {
             HandlerCall::FrameRequested(request) => Some(request.presented),
             _ => None,
         })
-        .collect();
+        .collect()
+}
+
+/// A report names the present it describes, not the newest one made: with two
+/// presents in flight the window system shows the first, the request carries
+/// the first frame, and a present the window system discarded is never
+/// reported.
+fn a_presentation_report_names_the_present_it_describes() {
+    let platform = reporting_platform();
+    let opened = reporting_window(&platform);
+    let window = headless(&opened);
+    present(&opened, 1);
+    present(&opened, 2);
+    let at = EventTime::now();
+    assert_eq!(window.simulate_presented(at, None), Some(frame(1)));
     assert_eq!(
-        carried,
-        [Some(shown)],
+        next_request_carries(&opened),
+        [Some(FramePresented::new(frame(1), at))],
+        "two presents in flight: the first is shown"
+    );
+
+    present(&opened, 3);
+    assert_eq!(window.simulate_discarded(), Some(frame(2)));
+    let later = EventTime::now();
+    assert_eq!(window.simulate_presented(later, None), Some(frame(3)));
+    assert_eq!(
+        next_request_carries(&opened),
+        [Some(FramePresented::new(frame(3), later))],
+        "the discarded present is skipped"
+    );
+    assert_eq!(window.simulate_presented(EventTime::now(), None), None);
+    assert_eq!(next_request_carries(&opened), [None], "nothing waits");
+}
+
+/// A window system that stamps one presentation an hour ahead (a stamp left
+/// on its own clock's epoch) costs the window that report alone: the frame
+/// shown after it is still reported by the window's next request.
+fn a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it() {
+    let platform = reporting_platform();
+    let opened = reporting_window(&platform);
+    let window = headless(&opened);
+    present(&opened, 1);
+    present(&opened, 2);
+
+    let hour = std::time::Duration::from_secs(3600);
+    window.simulate_presented(EventTime::now() + hour, None);
+    let at = EventTime::now();
+    window.simulate_presented(at, None);
+    assert_eq!(
+        next_request_carries(&opened),
+        [Some(FramePresented::new(frame(2), at))],
         "the request carries the frame shown after the wrong stamp"
     );
 }
@@ -125,33 +184,20 @@ fn a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it() {
 /// (a compositor that adds its display's latency) still has each frame
 /// request carry a report, with the stamp the window system gave.
 fn a_window_whose_stamps_lead_the_clock_reports_on_every_request() {
-    let platform =
-        HeadlessPlatform::new().with_window_capabilities(flui_platform::WindowCapabilities::ALL);
-    let opened = crate::Opened::on(&platform, WindowOptions::default()).expect("open");
-    let window = opened
-        .window
-        .as_any()
-        .downcast_ref::<HeadlessHostWindow>()
-        .expect("the headless platform opens headless windows");
+    let platform = reporting_platform();
+    let opened = reporting_window(&platform);
+    let window = headless(&opened);
     let lead = std::time::Duration::from_millis(33);
 
-    for frame in 1..=4 {
+    for epoch in 1..=4 {
+        present(&opened, epoch);
         let stamp = EventTime::now() + lead;
-        window.simulate_presented(FramePresented::new(stamp));
-        opened.handler.take_calls();
-        opened.window.request_redraw();
-        let carried: Vec<Option<EventTime>> = opened
-            .handler
-            .take_calls()
-            .into_iter()
-            .filter_map(|call| match call {
-                HandlerCall::FrameRequested(request) => {
-                    Some(request.presented.map(|presented| presented.at))
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(carried, [Some(stamp)], "frame {frame}");
+        window.simulate_presented(stamp, None);
+        assert_eq!(
+            next_request_carries(&opened),
+            [Some(FramePresented::new(frame(epoch), stamp))],
+            "frame {epoch}"
+        );
     }
 }
 
@@ -206,6 +252,10 @@ fn headless_redraw_contracts() {
             (
                 "a_redraw_requested_on_the_owner_dispatches_at_once",
                 a_redraw_requested_on_the_owner_dispatches_at_once,
+            ),
+            (
+                "a_presentation_report_names_the_present_it_describes",
+                a_presentation_report_names_the_present_it_describes,
             ),
             (
                 "a_presentation_stamped_far_ahead_does_not_silence_the_reports_after_it",

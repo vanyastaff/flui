@@ -61,7 +61,7 @@ pub use hot_reload::DevReload;
 pub use flui_runtime::owner::{InputOutcome, WindowObservation};
 pub use flui_runtime::{
     DecisionRow, HostInput, InputRecord, InputRow, InputTap, InputTapFactory, PreferencesRow,
-    RecordingStart, RecordingWindow,
+    RecordingStart, RecordingWindow, ShownFrame,
 };
 pub use launch::{Application, LaunchError, UnsupportedSystem};
 #[cfg(not(target_arch = "wasm32"))]
