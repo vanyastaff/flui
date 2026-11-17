@@ -25,7 +25,6 @@ use crate::panic::PanicRecovery;
 use crate::sequence::IdMint;
 use crate::sequence::ListenerId;
 use smallvec::SmallVec;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A listener callback that borrows its argument for the duration of the call.
 pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
@@ -161,7 +160,7 @@ impl<Arg> Listeners<Arg> {
 struct ListenerStorage<Arg> {
     entries: RefCell<Listeners<Arg>>,
     delivery_depth: Cell<usize>,
-    failed: AtomicBool,
+    failed: Cell<bool>,
     /// What the delivery in progress retires when its outermost round ends.
     /// Made by the first removal or hand-over during a delivery and kept
     /// after it, so a channel nobody removes from mid-delivery holds one
@@ -320,7 +319,7 @@ impl<Arg> Notifier<Arg> {
             listeners: Rc::new(ListenerStorage {
                 entries: RefCell::new(Listeners::default()),
                 delivery_depth: Cell::new(0),
-                failed: AtomicBool::new(false),
+                failed: Cell::new(false),
                 retiring: RefCell::new(None),
                 next_id: IdMint::new(),
                 is_disposed: Cell::new(false),
@@ -570,8 +569,7 @@ impl<Arg> Notifier<Arg> {
     /// `recovery`, so a withdrawal made during that delivery retires its
     /// captures under containment and that failure stays the first.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
-        if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.load(Ordering::Relaxed)
-        {
+        if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.get() {
             recovery.inherit_failure();
         }
     }
@@ -637,7 +635,7 @@ impl<Arg> Notifier<Arg> {
     /// snapshot entries, and a disposed listener list yields an empty snapshot.
     pub(crate) fn notify_unchecked(&self, arg: &Arg) {
         let mut recovery = PanicRecovery::new();
-        if self.listeners.failed.load(Ordering::Relaxed) {
+        if self.listeners.failed.get() {
             recovery.inherit_failure();
         }
         self.notify_unchecked_with_recovery(arg, &mut recovery.scope());
@@ -757,7 +755,7 @@ impl<Arg> Notifier<Arg> {
                         recovery.retire_callout_capture(capture);
                     }
                 }
-                self.listeners.failed.store(false, Ordering::Relaxed);
+                self.listeners.failed.set(false);
             }
             self.listeners
                 .delivery_depth

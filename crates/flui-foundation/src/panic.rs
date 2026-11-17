@@ -14,7 +14,7 @@
 //! policy [`is_internal_invariant`] mechanizes.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
 
 mod commit;
 pub use commit::{Obligation, Outbox, commit, commit_into};
@@ -357,7 +357,7 @@ impl std::fmt::Debug for RecoveryScope<'_> {
 }
 
 struct FailureLatch<'scope> {
-    signal: &'scope AtomicBool,
+    signal: &'scope Cell<bool>,
     parent: Option<&'scope Self>,
 }
 
@@ -568,13 +568,13 @@ impl RecoveryScope<'_> {
     /// Only the failure signal is shared, never callback storage or an owner.
     pub(crate) fn with_failure_latch(
         &mut self,
-        signal: &AtomicBool,
+        signal: &Cell<bool>,
         action: impl FnOnce(&mut RecoveryScope<'_>),
     ) {
-        if signal.load(Ordering::Relaxed) {
+        if signal.get() {
             self.inherit_failure();
         }
-        signal.store(self.has_failure(), Ordering::Relaxed);
+        signal.set(self.has_failure());
         let latch = FailureLatch {
             signal,
             parent: self.channels,
@@ -600,7 +600,7 @@ impl RecoveryScope<'_> {
     fn mark_active_channels(&self) {
         let mut channel = self.channels;
         while let Some(latch) = channel {
-            latch.signal.store(true, Ordering::Relaxed);
+            latch.signal.set(true);
             channel = latch.parent;
         }
     }

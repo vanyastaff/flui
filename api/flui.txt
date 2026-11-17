@@ -2674,14 +2674,6 @@ impl PartialEq for flui::foundation::FrameStamp
 impl core::fmt::Debug for flui::foundation::FrameStamp
 impl core::marker::StructuralPartialEq for flui::foundation::FrameStamp
 pub fn flui::foundation::FrameStamp::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration) -> Self
-pub struct flui::foundation::GenerationGate(_)
-impl Clone for flui::foundation::GenerationGate
-impl Default for flui::foundation::GenerationGate
-impl core::fmt::Debug for flui::foundation::GenerationGate
-pub fn flui::foundation::GenerationGate::bump(&self) -> flui::foundation::ResourceGeneration
-pub fn flui::foundation::GenerationGate::current(&self) -> flui::foundation::ResourceGeneration
-pub fn flui::foundation::GenerationGate::is_current(&self, generation: flui::foundation::ResourceGeneration) -> bool
-pub fn flui::foundation::GenerationGate::new() -> Self
 #[repr(transparent)] pub struct flui::foundation::Id<T: flui::foundation::Marker>(_, _)
 impl From<flui::foundation::Id<flui::foundation::markers::Semantics>> for flui::foundation::inspect::InspectId
 impl<'de, T: flui::foundation::Marker> serde_core::de::Deserialize<'de> for flui::foundation::Id<T>
@@ -2765,38 +2757,6 @@ impl core::marker::StructuralPartialEq for flui::foundation::InputSequenceId
 impl flui::foundation::MintedId for flui::foundation::InputSequenceId
 impl flui_foundation::sequence::sealed::Sealed for flui::foundation::InputSequenceId
 pub const fn flui::foundation::InputSequenceId::get(self) -> u64
-#[repr(transparent)] pub struct flui::foundation::Key(_)
-impl Clone for flui::foundation::Key
-impl Copy for flui::foundation::Key
-impl Eq for flui::foundation::Key
-impl From<flui::foundation::Key> for flui::foundation::KeyRef
-impl PartialEq for flui::foundation::Key
-impl core::fmt::Debug for flui::foundation::Key
-impl core::fmt::Display for flui::foundation::Key
-impl core::hash::Hash for flui::foundation::Key
-impl core::marker::StructuralPartialEq for flui::foundation::Key
-impl flui::foundation::ViewKey for flui::foundation::Key
-impl serde_core::ser::Serialize for flui::foundation::Key
-impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::Key
-pub const fn flui::foundation::Key::as_u64(&self) -> u64
-pub const fn flui::foundation::Key::from_str(s: &str) -> Self
-pub const fn flui::foundation::Key::from_u64(n: u64) -> Option<Self>
-pub fn flui::foundation::Key::new() -> Self
-#[repr(transparent)] pub struct flui::foundation::KeyRef(_)
-impl Clone for flui::foundation::KeyRef
-impl Copy for flui::foundation::KeyRef
-impl Eq for flui::foundation::KeyRef
-impl From<flui::foundation::Key> for flui::foundation::KeyRef
-impl PartialEq for flui::foundation::KeyRef
-impl core::fmt::Debug for flui::foundation::KeyRef
-impl core::fmt::Display for flui::foundation::KeyRef
-impl core::hash::Hash for flui::foundation::KeyRef
-impl core::marker::StructuralPartialEq for flui::foundation::KeyRef
-impl serde_core::ser::Serialize for flui::foundation::KeyRef
-impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::KeyRef
-pub const fn flui::foundation::KeyRef::as_u64(&self) -> u64
-pub const fn flui::foundation::KeyRef::key(&self) -> flui::foundation::Key
-pub const fn flui::foundation::KeyRef::new(key: flui::foundation::Key) -> Self
 pub type flui::foundation::LayerId = flui::foundation::Id<flui::foundation::markers::Layer>
 pub struct flui::foundation::Leaf;
 impl Clone for flui::foundation::Leaf
@@ -3022,21 +2982,6 @@ pub fn flui::foundation::RebuildReasons::insert(&mut self, reason: flui::foundat
 pub fn flui::foundation::RebuildReasons::iter(self) -> impl Iterator<Item = flui::foundation::RebuildReason>
 pub fn flui::foundation::RebuildReasons::merge(&mut self, other: Self)
 pub type flui::foundation::RenderId = flui::foundation::id::GenId<flui::foundation::markers::Render>
-pub struct flui::foundation::ResourceGeneration(_)
-impl Clone for flui::foundation::ResourceGeneration
-impl Copy for flui::foundation::ResourceGeneration
-impl Default for flui::foundation::ResourceGeneration
-impl Eq for flui::foundation::ResourceGeneration
-impl Ord for flui::foundation::ResourceGeneration
-impl PartialEq for flui::foundation::ResourceGeneration
-impl PartialOrd for flui::foundation::ResourceGeneration
-impl core::fmt::Debug for flui::foundation::ResourceGeneration
-impl core::fmt::Display for flui::foundation::ResourceGeneration
-impl core::hash::Hash for flui::foundation::ResourceGeneration
-impl core::marker::StructuralPartialEq for flui::foundation::ResourceGeneration
-pub const flui::foundation::ResourceGeneration::ZERO: Self = _
-pub const fn flui::foundation::ResourceGeneration::get(self) -> u64
-pub const fn flui::foundation::ResourceGeneration::next(self) -> Self
 pub struct flui::foundation::SaltedKey { .. }
 impl Clone for flui::foundation::SaltedKey
 impl core::fmt::Debug for flui::foundation::SaltedKey
@@ -3353,8 +3298,6 @@ pub const flui::foundation::diagnostics::PRESENTATION_ID: &str = "presentation_i
 pub const flui::foundation::diagnostics::REDACTED_VALUE: &str = "<private>"
 pub mod flui::foundation::epoch
 reexport flui::foundation::epoch::FrameEpoch => flui::foundation::FrameEpoch
-reexport flui::foundation::epoch::GenerationGate => flui::foundation::GenerationGate
-reexport flui::foundation::epoch::ResourceGeneration => flui::foundation::ResourceGeneration
 reexport flui::foundation::epoch::SurfaceGeneration => flui::foundation::SurfaceGeneration
 pub fn flui::foundation::event_epoch() -> std::time::Instant
 pub fn flui::foundation::executable_class(stem: &str) -> String
@@ -3912,8 +3855,6 @@ impl flui::foundation::key::AsViewKey for dyn flui::foundation::ViewKey
 impl<K: flui::foundation::ViewKey> flui::foundation::key::AsViewKey for K
 impl<K: flui::foundation::key::AsViewKey + ?Sized> flui::foundation::key::AsViewKey for alloc::rcs::rc::Rc<K>
 impl<K: flui::foundation::key::AsViewKey> flui::foundation::key::AsViewKey for Option<K>
-reexport flui::foundation::key::Key => flui::foundation::Key
-reexport flui::foundation::key::KeyRef => flui::foundation::KeyRef
 reexport flui::foundation::key::SaltedKey => flui::foundation::SaltedKey
 reexport flui::foundation::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::foundation::key::ValueKey => flui::foundation::ValueKey
@@ -4050,8 +3991,6 @@ reexport flui::foundation::prelude::EPSILON => flui::foundation::EPSILON
 reexport flui::foundation::prelude::ElementId => flui::foundation::ElementId
 reexport flui::foundation::prelude::Id => flui::foundation::Id
 reexport flui::foundation::prelude::Identifier => flui::foundation::Identifier
-reexport flui::foundation::prelude::Key => flui::foundation::Key
-reexport flui::foundation::prelude::KeyRef => flui::foundation::KeyRef
 reexport flui::foundation::prelude::LayerId => flui::foundation::LayerId
 reexport flui::foundation::prelude::Listenable => flui::foundation::Listenable
 reexport flui::foundation::prelude::ListenerCallback => flui::foundation::ListenerCallback
@@ -25325,9 +25264,7 @@ macro flui::view::impl_render_view!
 macro flui::view::impl_stateful_render_view!
 pub mod flui::view::key
 reexport flui::view::key::GlobalKey => flui::prelude::GlobalKey
-reexport flui::view::key::Key => flui::foundation::Key
 reexport flui::view::key::KeyLookup => flui::view::KeyLookup
-reexport flui::view::key::KeyRef => flui::foundation::KeyRef
 reexport flui::view::key::ObjectKey => flui::prelude::ObjectKey
 reexport flui::view::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::view::key::ValueKey => flui::foundation::ValueKey
