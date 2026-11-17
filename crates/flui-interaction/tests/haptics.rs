@@ -21,7 +21,7 @@ use flui_platform::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
 use flui_platform::testing::FakeHaptics;
-use flui_platform::{HapticFeedback, PlatformHaptics};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics};
 
 /// The refresh period every fixture's window reports: the deadline is two of
 /// them.

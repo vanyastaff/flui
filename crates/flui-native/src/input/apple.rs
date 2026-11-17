@@ -1363,7 +1363,7 @@ pub(crate) mod macos {
         use flui_platform::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
         use flui_platform::pointer::{
             MotionAcceleration, MotionDelta, PanZoomEvent, PointerButton, PointerButtons,
-            PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, PointerRole,
+            PointerEvent, PointerId, PointerKind, PointerPosition, PointerRole, PointerSource,
             ScrollEvent, ScrollInversion, ScrollPhase, SmartZoomEvent,
         };
         use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventPhase, NSEventType};
@@ -1788,8 +1788,8 @@ pub(crate) mod macos {
             }
         }
 
-        fn mouse_info() -> PointerInfo {
-            PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+        fn mouse_info() -> PointerSource {
+            PointerSource::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
                 .with_role(PointerRole::Primary)
         }
 
@@ -2040,8 +2040,8 @@ pub(crate) mod ios {
 
     use flui_platform::EventTime;
     use flui_platform::pointer::{
-        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerPosition, PointerRole, ScrollEvent,
+        PenOrientation, PenTool, PointerButton, PointerEvent, PointerId, PointerKind,
+        PointerPosition, PointerRole, PointerSource, ScrollEvent,
     };
     use objc2::{msg_send, sel};
     use objc2_foundation::NSObjectProtocol;
@@ -2335,7 +2335,7 @@ pub(crate) mod ios {
                 .contacts
                 .pointer(NativeSurface::default(), None, CURSOR)
                 .unwrap_or_else(|| {
-                    PointerInfo::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
+                    PointerSource::new(PointerId::new(NonZeroU64::MIN), PointerKind::Mouse)
                         .with_role(PointerRole::Primary)
                 });
             let (delta, precision) = if precise {

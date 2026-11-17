@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-26)
 - **Amended:** 2026-10-28 — §2, §5 and §6, decided by the coordinator of the platform-layer
   feature, to whom the owner left the architecture, once the platform layer reports each
-  display's colour (`DisplayInfo::color`: a `SurfaceColorSpace` and a `Headroom`).
+  display's colour (`DisplayDescription::color`: a `SurfaceColorSpace` and a `Headroom`).
   (1) §2: the display's state is the platform's report where there is one, and wgpu's
   `DisplayHdrInfo` only without it, because the platform reads the display (DXGI, `NSScreen`,
   Android's `Display`, the Wayland image description) while the surface's report is what wgpu

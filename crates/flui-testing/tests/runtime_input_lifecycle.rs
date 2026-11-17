@@ -834,8 +834,8 @@ pub(crate) fn a_secondary_contact_move_is_delivered_by_the_next_frame() {
 pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
     use flui_platform::EventTime;
     use flui_platform::pointer::{
-        PointerButton, PointerButtons, PointerInfo, PointerMove, PointerPosition, PointerPress,
-        PointerRelease, PointerSample,
+        PointerButton, PointerButtons, PointerMove, PointerPosition, PointerPress, PointerRelease,
+        PointerSample, PointerSource,
     };
 
     fn sample(millis: u64, x: f64) -> PointerSample {
@@ -879,7 +879,7 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
             pump(&mut realm);
         }
 
-        let pointer = PointerInfo::new(
+        let pointer = PointerSource::new(
             PointerId::new(std::num::NonZeroU64::MIN),
             PointerKind::Touch,
         );

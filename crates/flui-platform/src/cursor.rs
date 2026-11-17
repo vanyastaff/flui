@@ -238,7 +238,7 @@ pub enum CursorGrab {
     /// before.
     Confined,
     /// The pointer stays where it is and is not shown, and its motion arrives
-    /// as [`PointerEvent::RawMotion`](crate::PointerEvent::RawMotion) instead of
+    /// as [`PointerEvent::RawMotion`](crate::pointer::PointerEvent::RawMotion) instead of
     /// moves: a 3D view that turns with the mouse, the web's pointer lock.
     Locked,
 }

@@ -88,7 +88,7 @@ fn describe(input: &PlatformInput) -> String {
 }
 
 fn pointer(event: &PointerEvent) -> String {
-    let head = |verb: &str, info: &flui_platform::pointer::PointerInfo| {
+    let head = |verb: &str, info: &flui_platform::pointer::PointerSource| {
         format!("{verb} p{} {:?}", info.id.get(), info.kind)
     };
     match event {
@@ -183,7 +183,9 @@ fn pointer(event: &PointerEvent) -> String {
             motion.delta.x(),
             motion.delta.y(),
             motion.acceleration,
-            motion.position.map(flui_platform::PointerPosition::get)
+            motion
+                .position
+                .map(flui_platform::pointer::PointerPosition::get)
         ),
         PointerEvent::DeviceAdded(change) => format!("added {:?}", change.kind),
         PointerEvent::DeviceRemoved(change) => format!("removed {:?}", change.kind),

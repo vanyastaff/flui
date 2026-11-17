@@ -7,7 +7,7 @@ use std::time::Duration;
 use flui_platform::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,
 };
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
 
 use super::rows::Outcome;
 use super::{BackendUnderTest, RowOutcome};

@@ -67,7 +67,7 @@ framework already has.
 
 ```rust
 pub enum TouchpadHoldPhase { Begin, End, Cancelled }
-pub struct TouchpadHoldEvent { pointer: PointerInfo, pub time: EventTime,
+pub struct TouchpadHoldEvent { pointer: PointerSource, pub time: EventTime,
     pub position: PointerPosition, pub phase: TouchpadHoldPhase, pub modifiers: Modifiers }
 PointerEvent::TouchpadHold(TouchpadHoldEvent)
 ```
@@ -88,7 +88,7 @@ cancel of a scroll that never began and cancelled by the scroll's `Began`; Wayla
 ```rust
 pub struct SwipeOffset(Offset<f64>);            // finite; travel since the start, logical pixels
 pub enum TouchpadSwipePhase { Start, Update(SwipeOffset), End, Cancelled }
-pub struct TouchpadSwipeEvent { pointer: PointerInfo, pub time: EventTime,
+pub struct TouchpadSwipeEvent { pointer: PointerSource, pub time: EventTime,
     pub position: PointerPosition, pub fingers: NonZeroU8, pub phase: TouchpadSwipePhase,
     pub modifiers: Modifiers }
 PointerEvent::TouchpadSwipe(TouchpadSwipeEvent)

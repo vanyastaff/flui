@@ -326,7 +326,7 @@ fn a_pointer_move_is_input_work_and_neither_tree_nor_due_work() {
         "a presented frame leaves nothing pending"
     );
     let at = flui_foundation::geometry::Offset::new(5.0, 5.0);
-    let touch = flui_platform::PointerKind::Touch;
+    let touch = flui_platform::pointer::PointerKind::Touch;
     for event in [
         flui_interaction::events::make_down_event(at, touch).expect("finite touch"),
         flui_interaction::events::make_move_event(

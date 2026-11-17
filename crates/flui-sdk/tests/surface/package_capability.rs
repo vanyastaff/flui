@@ -91,7 +91,7 @@ mod picker {
 
     use flui_sdk::platform::capability::{
         Activity, ActivityResult, Capability, CompletionSource, DataRefused, IntentFrame,
-        InvalidResultKey, JniFrame, ProviderContext, ResultCode, ResultData, ResultKey,
+        InvalidResultKey, JniFrame, ProviderContext, ResultCode, ResultIntent, ResultKey,
         ResultOutcome, ResultRefused, ResultRequest, ResultTicket, ResultToken,
     };
     use flui_sdk::platform::{Unsupported, UnsupportedReason};
@@ -160,7 +160,7 @@ mod picker {
                 picked.borrow_mut().push(match outcome {
                     Ok(answer) => {
                         let mut answer: ActivityResult = answer;
-                        let data: Option<ResultData> = answer.take_data();
+                        let data: Option<ResultIntent> = answer.take_data();
                         let read = data
                             .and_then(|data| {
                                 let taken: Result<bool, DataRefused> = activity

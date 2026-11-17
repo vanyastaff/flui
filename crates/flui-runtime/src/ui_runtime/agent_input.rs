@@ -22,8 +22,9 @@ use flui_interaction::InputSurface;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{
     ButtonChange, CancelReason, DeviceId, PenTool, PointerButton, PointerButtons, PointerCancel,
-    PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollUnit,
+    PointerEvent, PointerId, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRole, PointerSample, PointerSource, Pressure, ScrollDelta, ScrollEvent,
+    ScrollUnit,
 };
 use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::method::{self, Method};
@@ -442,8 +443,8 @@ struct Contact {
 }
 
 impl Contact {
-    fn info(&self) -> PointerInfo {
-        PointerInfo::new(self.id, self.kind)
+    fn info(&self) -> PointerSource {
+        PointerSource::new(self.id, self.kind)
             .with_device(DeviceId::AGENT)
             .with_role(self.role)
     }

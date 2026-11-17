@@ -1290,7 +1290,7 @@ impl PlatformWindow for WithDragSource {
     fn text_input(&self) -> Option<Arc<dyn flui_platform::PlatformTextInput>> {
         self.window.text_input()
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         self.window.haptics()
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

@@ -13,8 +13,8 @@ use flui_interaction::events::{Code, Key, KeyEvent, KeyPress, KeyState, Modifier
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::EventTime;
 use flui_platform::pointer::{
-    PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerSample,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+    PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
 };
 use flui_testing::replay::MouseScript;
 use flui_view::{BoxedView, ViewExt};
@@ -148,7 +148,7 @@ impl Scene {
 
     /// A primary click at `at` with Shift held.
     fn shift_click(&mut self, at: Offset<f64>) {
-        let mouse = PointerInfo::new(
+        let mouse = PointerSource::new(
             PointerId::try_from(77_u64).expect("a nonzero id"),
             PointerKind::Mouse,
         );
@@ -189,7 +189,7 @@ impl Scene {
     /// One step of a mouse contact by hand, `millis` into it, for a test
     /// that changes the tree while the button is held.
     fn contact(&mut self, step: Contact, millis: u64, at: Offset<f64>) {
-        let mouse = PointerInfo::new(
+        let mouse = PointerSource::new(
             PointerId::try_from(78_u64).expect("a nonzero id"),
             PointerKind::Mouse,
         );

@@ -8,7 +8,7 @@
 //! each display source hands the value its platform reports straight to the
 //! one for its unit, and one check there refuses what describes no cadence.
 
-use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot};
+use flui_platform::{DisplayDescription, DisplayId, DisplayKey, DisplayRegistry, DisplaySnapshot};
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
@@ -90,7 +90,7 @@ impl MeasuredPeriod {
 /// One platform instance's display identities and last published snapshot.
 ///
 /// A backend mints ids for the outputs it sampled, hands the resulting
-/// [`DisplayInfo`] list to [`publish`](Self::publish) and returns what that
+/// [`DisplayDescription`] list to [`publish`](Self::publish) and returns what that
 /// answers from `Platform::display_snapshot`. An unchanged sample answers the
 /// previous snapshot with its revision, so a consumer that compares revisions
 /// sees no change.
@@ -194,7 +194,7 @@ impl DisplaySource {
     /// snapshot stays published.
     pub(crate) fn publish(
         &self,
-        displays: Vec<DisplayInfo>,
+        displays: Vec<DisplayDescription>,
     ) -> Result<DisplaySnapshot, PlatformError> {
         let mut last = self.last.lock();
         let next = last
@@ -256,7 +256,7 @@ impl DisplaySource {
     ))]
     pub(crate) fn snapshot_with(
         &self,
-        sample: impl FnOnce() -> Result<Vec<DisplayInfo>, PlatformError>,
+        sample: impl FnOnce() -> Result<Vec<DisplayDescription>, PlatformError>,
     ) -> Result<DisplaySnapshot, PlatformError> {
         self.snapshot_with_aux(|| sample().map(|displays| (displays, ())), |()| {})
     }
@@ -281,7 +281,7 @@ impl DisplaySource {
     ))]
     pub(crate) fn snapshot_with_aux<T>(
         &self,
-        sample: impl FnOnce() -> Result<(Vec<DisplayInfo>, T), PlatformError>,
+        sample: impl FnOnce() -> Result<(Vec<DisplayDescription>, T), PlatformError>,
         commit: impl FnOnce(T),
     ) -> Result<DisplaySnapshot, PlatformError> {
         use std::sync::atomic::Ordering;
@@ -713,17 +713,22 @@ mod tests {
     use std::cell::Cell;
 
     use flui_foundation::geometry::{Bounds, DevicePixelRatio};
-    use flui_platform::{DisplayInfo, DisplayKey};
+    use flui_platform::{DisplayDescription, DisplayKey};
 
     use super::DisplaySource;
     use crate::error::PlatformError;
 
-    fn one_display(source: &DisplaySource, scale: f64) -> Vec<DisplayInfo> {
+    fn one_display(source: &DisplaySource, scale: f64) -> Vec<DisplayDescription> {
         let id = source
             .mint(&DisplayKey::Injected(1))
             .expect("ids are not exhausted");
         let scale = DevicePixelRatio::try_new(scale).expect("a positive ratio");
-        vec![DisplayInfo::new(id, "Test", Bounds::default(), scale)]
+        vec![DisplayDescription::new(
+            id,
+            "Test",
+            Bounds::default(),
+            scale,
+        )]
     }
 
     /// A source with a counted sample that reads one display.
@@ -784,7 +789,7 @@ mod tests {
         source.invalidate();
         let failed = source.snapshot_with_aux(
             || {
-                Err::<(Vec<DisplayInfo>, Vec<u32>), _>(PlatformError::Displays {
+                Err::<(Vec<DisplayDescription>, Vec<u32>), _>(PlatformError::Displays {
                     message: "the OS refused".into(),
                 })
             },

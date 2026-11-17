@@ -67,7 +67,7 @@ resume. No backend delivered a display change.
    JS screen object on the Web. An object compared only while it is retained, never by address or
    label, so a freed address or a duplicate name cannot alias another display.
    A persistent cross-restart identity is not added here: it belongs with window placement restore,
-   and `DisplayInfo` is `#[non_exhaustive]` so it can gain one without breaking the contract.
+   and `DisplayDescription` is `#[non_exhaustive]` so it can gain one without breaking the contract.
 4. **Delivery follows ADR-0172.** Each native source registers its observers before sampling the
    seed. A change commits a new snapshot (its revision never wraps) before anyone is notified;
    invalidations from foreign threads wake the owner and never run application code there; a
