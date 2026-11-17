@@ -190,8 +190,9 @@ pub enum SkipReason {
 /// it may hold: the in-flight gate [`FrameClock::poll`] paces production by (ADR-0305 §5).
 ///
 /// A sink that answers each frame inline never holds one, so its presentations are never gated.
-/// A sink that queues frames for a raster thread holds at most its depth (two: one rendering,
-/// one waiting); a frame produced past that would only replace the waiting one unrendered.
+/// A sink that queues frames for a raster thread holds at most its slot's limit (two: one rendering,
+/// one waiting; one for a compositor-paced surface); a frame produced past that would only replace
+/// the waiting one unrendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FramesInFlight {
     pending: usize,

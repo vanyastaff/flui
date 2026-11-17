@@ -1087,6 +1087,19 @@ fn threaded_host_at(
     ScriptedSlots,
     Arc<std::sync::atomic::AtomicUsize>,
 ) {
+    threaded_host_over(Arc::new(FakeWindow::new(1)), at, textures)
+}
+
+/// [`threaded_host_at`] with the window's surfaces made over `surface_target`.
+fn threaded_host_over(
+    surface_target: Arc<dyn flui_platform::SurfaceTarget>,
+    at: PresentationAddress,
+    textures: Option<flui_layer::TextureRegistry>,
+) -> (
+    SharedRasterHost,
+    ScriptedSlots,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     let slots = ScriptedSlots::new();
     let shared = SharedRasterHost::new(
         RasterFactory::Scripted(slots.clone()),
@@ -1100,7 +1113,7 @@ fn threaded_host_at(
     shared
         .try_with(|host| {
             host.attach_target(
-                Arc::new(FakeWindow::new(1)),
+                surface_target,
                 Some(redraw),
                 at,
                 &crate::app::AppConfig::default(),
@@ -1651,6 +1664,117 @@ fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert_eq!(settled, ThreadSettled::NotPresented);
+}
+
+/// A window whose compositor paces its surface, as a Wayland window's is:
+/// the host withholds its next frame only from the present that armed the
+/// frame callback.
+struct CompositorPaced(FakeWindow);
+
+impl raw_window_handle::HasWindowHandle for CompositorPaced {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        raw_window_handle::HasWindowHandle::window_handle(&self.0)
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for CompositorPaced {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        raw_window_handle::HasDisplayHandle::display_handle(&self.0)
+    }
+}
+
+impl flui_platform::SurfaceTarget for CompositorPaced {
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
+
+    fn frame_pacing(&self) -> flui_platform::FramePacing {
+        flui_platform::FramePacing::Compositor
+    }
+
+    fn keep_past_close(&self) {}
+}
+
+/// A raster thread holds one frame of a window its compositor paces, not
+/// the two of its placement: the frame callback that withholds the window's
+/// next frame is armed by the present, which the thread makes after the wake
+/// that queued the frame returned, so until that present nothing but the
+/// sink's limit holds the next frame back. The window's second frame stays
+/// with the runtime while the first renders, and goes out once the first
+/// settled.
+///
+/// Red-check: answer the placement's depth for every window in
+/// `in_flight_limit` and the second frame is queued behind the first, to be
+/// presented in the same refresh.
+#[test]
+fn a_compositor_paced_window_holds_one_frame_on_a_raster_thread() {
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.active_presentation_for_test(),
+    };
+    let (shared, slots, _wakes) =
+        threaded_host_over(Arc::new(CompositorPaced(FakeWindow::new(1))), at, None);
+    let render = slots.hold_next_render();
+    let mut slot = RasterSlot {
+        host: shared.clone(),
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+        renderer_dead: false,
+    };
+    let held = |shared: &SharedRasterHost| {
+        shared
+            .try_read(|host| {
+                host.placed
+                    .as_ref()
+                    .and_then(|placed| placed.slots.get(&at))
+                    .map_or(0, |slot| slot.pending.len())
+            })
+            .expect("the host is idle")
+    };
+    let frame = |slot: &mut RasterSlot, ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
+        ui_runtime.mark_primary_needs_full_repaint();
+        let presented = slot.pump(ui_runtime, web_time::Instant::now(), None);
+        assert!(!presented, "a queued frame has not presented yet");
+    };
+    frame(&mut slot, &mut ui_runtime);
+    assert!(
+        render.began_within(THREAD_WAIT),
+        "the thread renders the first frame"
+    );
+    frame(&mut slot, &mut ui_runtime);
+    assert_eq!(
+        held(&shared),
+        1,
+        "the runtime holds the second frame until the first presented"
+    );
+    render.release();
+    let started = std::time::Instant::now();
+    let mut presented = false;
+    while held(&shared) > 0 && started.elapsed() < THREAD_WAIT {
+        let (settled, caught) = slot.settle(&mut ui_runtime);
+        assert!(
+            caught.into_payload().is_none(),
+            "nothing the settlements ran panicked"
+        );
+        presented |= settled == ThreadSettled::Presented;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(presented, "the first frame presented");
+    assert_eq!(renders(&slots).len(), 1, "one frame was drawn, not two");
+    frame(&mut slot, &mut ui_runtime);
+    assert_eq!(held(&shared), 1, "the settled place takes the next frame");
 }
 
 /// A surface whose resize panics gets one retry, however its frames settle:
