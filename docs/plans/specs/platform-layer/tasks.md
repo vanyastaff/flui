@@ -7819,6 +7819,58 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `x11_window` (42 случая). Долг на устройствах — строка паритета `live-resize-without-jitter`:
   перетаскивание под mutter, KWin и xfwm4 с композитором. Не строится в этой строке: темп кадров по
   `_NET_WM_FRAME_DRAWN` и отчёты `_NET_WM_FRAME_TIMINGS` (записано в `docs/gaps.md`).
+- [x] **LY153** — ветка `native/touchpad-hold-and-swipe`, решение — ADR-0358. Находка подтверждена
+  на `main` @ `a0aa652ac`: Wayland не связывал `hold` и `swipe` (`input/linux/wayland.rs`), X11 не
+  выбирал `XI_GestureSwipe*`, Win32 ничего не публиковал, пока окно DirectManipulation идёт до
+  порога, а остановку инерции нёс один сигнал `ScrollInertiaCancel` без конца, только с macOS.
+  Теперь удержание — `PointerEvent::TouchpadHold` с фазами `Begin`, `End`, `Cancelled` (заменяет
+  `ScrollInertiaCancel` везде: словарь, binding, `Listener`, запись, протокол), и `Scrollable`
+  останавливает инерцию на `Begin`; свайп — `PointerEvent::TouchpadSwipe` с числом пальцев и
+  накопленным ходом (`SwipeOffset`, логические пиксели), не прокрутка: binding доставляет все фазы
+  по пути начала (`TouchpadSwipes`), закрывает арену по указателю свайпа после начала, подметает
+  после `End`, бросает после `Cancelled`, отменяет сам при потере фокуса, удалении устройства и
+  новом начале; `RecognizerSet` отдаёт начало `GestureRecognizer::add_touchpad_swipe`, и
+  `SwipeGestureRecognizer` ведёт ход как движение контакта. От строки отступлено с причиной (ADR-0358):
+  свайп — не `PanZoom` (у `PanZoomTransform` нет сдвига, ADR-0217 §4, и каждый потребитель щипка
+  встретил бы свайп); macOS свайпа не доставляет (`swipeWithEvent:` — только законченное
+  направление без хода), удержание macOS — из `MayBegin`; Router «назад/вперёд» не строится
+  (потребитель — распознаватель свайпа). Хосты: Wayland — `zwp_pointer_gestures_v1` версии 3
+  (`hold`, `swipe`), X11 — свайп XI 2.4, Win32 — удержание из окна DirectManipulation, macOS —
+  удержание; отсутствие типизировано `InputCapabilities::touchpad_hold`/`touchpad_swipe` для
+  каждого хоста. Формат записи — 5, протокол — 0.21 (разрыв, `scroll_inertia_cancel` в `removed`).
+  Тесты, каждый показан красным с убранной строкой проводки: `a_touchpad_swipe_is_a_gesture_and_no_scroll`
+  (flui-widgets, через binding; без ветки `add_touchpad_swipe` в `RecognizerSet` свайп не
+  доходит), `resting_fingers_catch_a_fling_and_leave_wheel_easing` (без `on_pointer_signal`
+  удержания инерция идёт), `a_manipulation_inside_the_slop_is_a_hold` и таблица
+  `direct_manipulation_contracts` (без ветки `Manipulation::Hold` в сборщике удержания нет),
+  `a_swipe_is_one_gesture_where_the_cursor_rests`, `a_hold_rests_until_it_lifts_or_a_gesture_starts`
+  (сборка сиденья Wayland; без веток `SeatEvent::Swipe`/`Hold` — пусто),
+  `a_touchpad_swipe_is_one_gesture_of_its_fingers` (декодер X11; без маршрута свайпа — пусто),
+  `resting_fingers_begin_a_hold_that_a_lift_ends_and_a_scroll_cancels` (грамматика macOS),
+  `a_swipe_sums_its_steps_into_its_travel`, `a_hold_and_a_swipe_end_with_their_device` (общая
+  сборка), `every_backend_says_whether_a_touchpad_hold_and_swipe_reach_it`; перезаписанная
+  запись `win32_direct_manipulation` проигрывается с удержаниями. Прогоны 2026-11-17: Windows —
+  `flui-widgets` (`pointer_and_gesture_recognition`, `scroll_physics_and_activity`), `flui-native`
+  (сборка, DirectManipulation, записи, parity), `flui-protocol`; WSL Ubuntu 24.04 — тесты
+  `wayland::wire` и `x11::decode`, clippy `flui-native` со всеми фичами. Код macOS и Android —
+  только проверка типов CI. После независимого чтения: свайп закрывает свой собственный конкурс
+  (поколение отсоединяется до пользовательского кода, `an_end_settles_its_own_contest_not_a_newer_one`),
+  каждый выход binding — строка `every_way_a_swipe_ends_ends_it_once` (потеря фокуса, удаление
+  устройства, вытеснение новым началом, отмена, закрытие binding; каждая красная без своего
+  цикла), паника слушателя посреди свайпа — `a_listener_that_fails_mid_swipe_leaves_the_swipe_open`;
+  сценарий даёт каждому удержанию и свайпу свой указатель, нечисловой ход — `ScriptError`; начало
+  поверх открытого удержания или свайпа сперва отменяет его (`a_start_over_an_open_gesture_cancels_it_first`),
+  свайп X11, кончившийся на чужом окне, отменяется на своём
+  (`a_swipe_ended_on_another_window_is_cancelled_on_its_own`); удержание останавливает и инерцию
+  `InteractiveViewer`; распознаватель `SwipeStart::FromEdge` свайпов тачпада не берёт; маска
+  событий XInput занимает второе слово для типа 32 (на CI падало переполнение сдвига,
+  `an_event_mask_takes_a_word_for_each_thirty_two_types`). Сценарный композитор (`wayland_scripted`)
+  отдаёт удержание и свайп по протоколу живому хосту, а на версии 2 глобала жестов хост не берёт
+  удержания (`a_touchpad_swipe_and_hold_reach_the_window_through_the_wire`,
+  `a_gestures_global_without_holds_gives_the_window_none`; красные без `Dispatch` свайпа и с
+  `HOLD_VERSION` 1). Долги — строки паритета `touchpad-hold-stops-a-fling` и
+  `touchpad-swipe-is-a-gesture`: тачпад на каждом хосте; строк `hold`/`swipe` в таблице
+  соответствия бэкендов нет (`docs/gaps.md`).
 
 ### Доведение до приёмки
 

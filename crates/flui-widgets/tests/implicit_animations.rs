@@ -1910,7 +1910,7 @@ fn layer_turns(laid: &mut LaidOut) -> f64 {
     let [matrix] = matrices.as_slice() else {
         panic!("one transform layer expected, got {matrices:?}");
     };
-    matrix.get(1, 0).atan2(matrix.get(0, 0)) / std::f64::consts::TAU
+    matrix[(1, 0)].atan2(matrix[(0, 0)]) / std::f64::consts::TAU
 }
 
 /// Rotate 0 → ¾ turn and read the child's rotation, in turns, half way through
@@ -2145,7 +2145,7 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         },
         |laid| {
             let matrices = laid.transform_layer_matrices();
-            matrices.first().map_or(0.0, |matrix| matrix.get(0, 3))
+            matrices.first().map_or(0.0, |matrix| matrix[(0, 3)])
         },
         100.0,
         "slide",
@@ -2532,7 +2532,7 @@ pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
             let [matrix] = matrices.as_slice() else {
                 panic!("one transform layer expected, got {matrices:?}");
             };
-            matrix.get(0, 3)
+            matrix[(0, 3)]
         },
         50.0,
         "slide",
@@ -2800,7 +2800,7 @@ pub(crate) fn new_implicit_widgets_keep_velocity_across_a_spring_retarget() {
         },
         |laid| {
             let matrices = laid.transform_layer_matrices();
-            matrices.first().map_or(0.0, |matrix| matrix.get(0, 3))
+            matrices.first().map_or(0.0, |matrix| matrix[(0, 3)])
         },
         [0.0, 1.0, 0.5],
         "slide",

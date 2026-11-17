@@ -173,6 +173,22 @@ vocabulary! {
 }
 
 vocabulary! {
+    /// Where fingers resting on a touchpad are.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+    #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum HoldPhase {
+        /// They came to rest.
+        Begin => "begin",
+        /// They lifted without moving.
+        End => "end",
+        /// They started a gesture, or the platform took the hold back.
+        Cancelled => "cancelled",
+    }
+}
+
+vocabulary! {
     /// A touchpad viewport's status (Win32 DirectManipulation).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -482,6 +498,25 @@ pub enum Action {
     Cancel(CancelReason),
     /// A trackpad gesture.
     Gesture(Gesture),
+    /// Fingers resting on a touchpad.
+    Hold(HoldPhase),
+    /// A touchpad swipe of several fingers.
+    Swipe(Swipe),
+}
+
+/// A touchpad swipe reading.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Swipe {
+    /// How many fingers swipe, at least one.
+    pub fingers: u8,
+    /// Where it is in its life.
+    pub phase: GesturePhase,
+    /// The horizontal step since the swipe's previous reading, in the reading's raw unit.
+    pub dx: f64,
+    /// The vertical step since the swipe's previous reading, in the reading's raw unit.
+    pub dy: f64,
 }
 
 /// A pen's angles, as its backend reports them.

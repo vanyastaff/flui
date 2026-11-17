@@ -19,6 +19,16 @@ use web_time::{Duration, Instant};
 pub trait GestureRecognizer: GestureArenaMember {
     /// Admit a Down, committing membership before invoking user callbacks.
     fn add_pointer(&self, down: PointerDispatch<'_>);
+    /// Admit the `Start` of a touchpad swipe
+    /// ([`TouchpadSwipe`](crate::events::PointerEvent::TouchpadSwipe)), whose
+    /// later phases then reach [`Self::handle_event`] and whose contest the
+    /// binding keys by the swipe's pointer as it does a contact's. A dispatcher
+    /// offers it only to a recognizer whose [`allowed_devices`](Self::allowed_devices)
+    /// admit a trackpad. The default admits nothing: a swipe is a gesture of
+    /// its own, which no contact recognizer reads as a drag.
+    fn add_touchpad_swipe(&self, start: PointerDispatch<'_>) {
+        let _ = start;
+    }
     /// Process a dispatch in local and root coordinates.
     fn handle_event(&self, dispatch: PointerDispatch<'_>);
     /// Cancel current work; repeated cancellation is idle.

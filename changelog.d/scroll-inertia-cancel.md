@@ -4,7 +4,7 @@
 
 ### Changed
 
-- `Listener::on_pointer_signal` also receives `PointerEvent::ScrollInertiaCancel`.
+- `Listener::on_pointer_signal` also receives `PointerEvent::TouchpadHold`.
 
 ### Fixed
 

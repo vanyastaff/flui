@@ -4323,7 +4323,8 @@ implemented by `input::linux::wayland::SeatInput`). The loop offers the hook
 every global it does not bind itself; the input binds `wl_seat` (to version
 9), `zwp_tablet_manager_v2`, `zwp_pointer_gestures_v1` and
 `wp_cursor_shape_manager_v1`, and makes each seat's pointer, keyboard,
-touchscreen, tablet seat, pinch and cursor-shape device as the capabilities
+touchscreen, tablet seat, gesture objects (a pinch and a swipe, and a hold
+from the gestures global's version 3) and cursor-shape device as the capabilities
 and managers arrive, in either order. A window joins the input as it opens,
 with its identity, its `wl_surface` and its delivery (`SeatWindow`), before
 the handler hears its capability snapshot, and leaves it as it retires; it
@@ -4362,7 +4363,13 @@ frame is one pointer frame (`the_touches_of_a_frame_are_one_pointer_frame`);
 a tablet frame becomes enter, press or move, buttons, lift and leave
 (`a_tablet_frame_is_one_reading_per_change`); a pinch's scale since its
 start becomes each update's own factor
-(`a_pinch_is_one_pan_zoom_about_the_cursor`). The compositor's millisecond
+(`a_pinch_is_one_pan_zoom_about_the_cursor`); a swipe's steps sum into its
+travel where the cursor rests (`a_swipe_is_one_gesture_where_the_cursor_rests`);
+a hold rests until it lifts or a gesture starts
+(`a_hold_rests_until_it_lifts_or_a_gesture_starts`); both come through the wire from
+the scripted compositor, which binds no hold below the gestures global's version 3
+(`wayland_scripted::a_touchpad_swipe_and_hold_reach_the_window_through_the_wire`,
+`wayland_scripted::a_gestures_global_without_holds_gives_the_window_none`). The compositor's millisecond
 stamp is read on `CLOCK_MONOTONIC` only within a second of the clock read
 on arrival, and the arrival stamps the event otherwise
 (`a_stamp_off_the_monotonic_clock_takes_the_arrival`): Weston's X11 backend
@@ -4576,7 +4583,9 @@ emulated (`XIPointerEmulated`: legacy wheel buttons, a touch's pointer)
 dropped, a scroll valuator's change in detents of its increment (fractional
 for a touchpad, unphased), the legacy wheel buttons of a device with no scroll
 valuator whole detents, a pinch one pan-zoom as on Wayland (each update's own
-factor and clockwise radians; swipes are the window manager's), and a grab's
+factor and clockwise radians), a swipe one gesture of the finger count the
+server names, its accelerated steps summed into its travel (XInput 2.4 has no
+hold), and a grab's
 leave mid-press a platform cancel. A device the hierarchy reports removed or
 disabled ends its contacts and is removed before the list is read again, so
 one plugged back in under its id is a new device. The change is read from its
@@ -5531,6 +5540,12 @@ not `Running`, `Inertia` or `Ready` (`Disabled`, `Suspended`) cancels what is
 open. Every reset re-anchors the decoder at the origin, so the next
 manipulation is measured from where the reset put the content even when the
 window discarded the reset's own content update (a paused window does).
+Until a slop is passed the fingers rest: `Running` begins a `TouchpadHold`
+on a trackpad contact of its own, the pan or pinch cancels it as it begins,
+and a stop with no slop passed ends it, so a framework fling stops when the
+fingers touch, as the viewport's own momentum does
+(`a_manipulation_inside_the_slop_is_a_hold`). Swipes of three fingers or more
+stay the shell's: no Win32 path reports them to a window.
 
 Pumping is the window's own: `WM_PAINT` pumps a running or coasting viewport
 before the frame callback, `WM_TIMER` (8 ms, clamped by the system) paces a

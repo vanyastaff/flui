@@ -11,7 +11,7 @@
 //! ```rust
 //! use std::{cell::Cell, rc::Rc};
 //!
-//! use flui_foundation::notifier::{ChangeNotifier, Listenable};
+//! use flui_foundation::{ChangeNotifier, Listenable};
 //!
 //! let notifier = ChangeNotifier::new();
 //! let count = Rc::new(Cell::new(0));
@@ -32,7 +32,11 @@
 use crate::panic::RecoveryScope;
 use std::{fmt, ops::Deref, rc::Rc};
 
-use crate::{notifier_generic::Notifier, sequence::ListenerId};
+use crate::sequence::ListenerId;
+
+mod channel;
+pub(crate) use channel::SubscribedChannel;
+pub use channel::{NotificationCallback, Notifier, NotifierCallback, RecoveryCallback};
 
 /// A listener callback function.
 // Stored callbacks own their captures for the subscription's lifetime.
@@ -59,7 +63,7 @@ pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 /// ```rust
 /// use std::{cell::Cell, rc::Rc};
 ///
-/// use flui_foundation::notifier::{ChangeNotifier, Listenable};
+/// use flui_foundation::{ChangeNotifier, Listenable};
 ///
 /// let notifier = ChangeNotifier::new();
 /// let count = Rc::new(Cell::new(0));
@@ -98,7 +102,7 @@ pub trait Listenable {
 /// # Example
 ///
 /// ```rust
-/// use flui_foundation::notifier::{Listenable, ValueListenable, ValueNotifier};
+/// use flui_foundation::{Listenable, ValueListenable, ValueNotifier};
 ///
 /// fn current<T: std::fmt::Debug>(
 ///     listenable: &impl ValueListenable<T>,
@@ -215,22 +219,19 @@ impl ChangeNotifier {
     /// [`inherit_failure`](Self::inherit_failure). `remove_listener` drops it
     /// instead, deferred to the end of an active delivery.
     #[must_use]
-    pub fn take_listener(
-        &self,
-        id: ListenerId,
-    ) -> Option<Rc<crate::notifier_generic::NotificationCallback<()>>> {
+    pub fn take_listener(&self, id: ListenerId) -> Option<Rc<NotificationCallback<()>>> {
         self.inner.take_callback(id)
     }
 
     /// Withdraw every subscription, with the custody of
     /// [`take_listener`](Self::take_listener).
     #[must_use]
-    pub fn take_listeners(&self) -> Vec<Rc<crate::notifier_generic::NotificationCallback<()>>> {
+    pub fn take_listeners(&self) -> Vec<Rc<NotificationCallback<()>>> {
         self.inner.take_all_callbacks()
     }
 
     /// Hand `capture` to this notifier's delivery in progress, with the
-    /// custody of [`Notifier::retire_after_delivery`](crate::notifier_generic::Notifier::retire_after_delivery).
+    /// custody of [`Notifier::retire_after_delivery`](Notifier::retire_after_delivery).
     /// Returns it when no delivery is in progress.
     pub fn retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> {
         self.inner.retire_after_delivery(capture)
@@ -239,9 +240,7 @@ impl ChangeNotifier {
     /// Dispose and withdraw subscriptions before their captures retire.
     #[doc(hidden)]
     #[must_use]
-    pub fn dispose_and_take_listeners(
-        &self,
-    ) -> Vec<Rc<crate::notifier_generic::NotificationCallback<()>>> {
+    pub fn dispose_and_take_listeners(&self) -> Vec<Rc<NotificationCallback<()>>> {
         self.inner.dispose_and_take_callbacks()
     }
 
@@ -274,7 +273,7 @@ impl ChangeNotifier {
             // fires — hence `cfg_attr`, not a bare `expect`.
             #[cfg_attr(debug_assertions, expect(unreachable_code))]
             {
-                tracing::warn!("ChangeNotifier used after dispose");
+                tracing::warn!(target: "flui.notifier", "ChangeNotifier used after dispose");
                 return true;
             }
         }
@@ -609,14 +608,6 @@ impl<T> ValueNotifier<T> {
         }
     }
 
-    /// Set a new value without checking for equality.
-    ///
-    /// Always notifies listeners, even if the value didn't change.
-    pub fn set_value_force(&mut self, new_value: T) {
-        *self.value_mut() = new_value;
-        self.notifier().notify_listeners();
-    }
-
     /// Update the value using a function.
     ///
     /// Notifies listeners after the update.
@@ -767,7 +758,7 @@ pub struct Subscription {
     /// The channel the listener registered on, weak so a subscription never
     /// pins a channel its outside has released. `None` for an inert
     /// subscription that never had one.
-    channel: Option<std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>>,
+    channel: Option<std::rc::Weak<dyn SubscribedChannel>>,
     /// Some while the listener is still registered; `None` once detached.
     id: Option<ListenerId>,
     /// A removal the source itself supplies instead of a channel: the owned
@@ -780,7 +771,7 @@ impl Subscription {
     /// A subscription bound to `channel`, cancelling on drop.
     #[doc(hidden)]
     pub(crate) fn for_channel(
-        channel: std::rc::Weak<dyn crate::notifier_generic::SubscribedChannel>,
+        channel: std::rc::Weak<dyn SubscribedChannel>,
         id: ListenerId,
     ) -> Self {
         Self {

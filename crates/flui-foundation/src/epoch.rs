@@ -47,27 +47,22 @@ macro_rules! epoch_counters {
 
             impl $name {
                 /// The initial value: a fresh runtime's first frame, a
-                /// freshly-configured surface, a freshly-minted resource.
+                /// freshly-configured surface.
                 pub const ZERO: Self = Self(0);
 
                 /// The next value in this monotonic sequence.
                 ///
-                /// Plain `self.0 + 1`, not `wrapping_add`: wrapping back to 0
-                /// would alias a live earlier value as current, which is the
-                /// exact staleness bug this type exists to prevent. No
-                /// existing counter in this codebase increments a bare `u64`
-                /// newtype this way to crib from (`Scene::frame_number` is a
-                /// passively-set field with no self-increment method; ids a
-                /// second thread mints go through `AtomicIdMint`'s
-                /// `compare_exchange`, a different mechanism for a different,
-                /// concurrently-shared counter). A per-runtime frame/surface/
-                /// resource counter increments at most once per frame, so
-                /// reaching `u64::MAX` is not a practical concern; debug
-                /// builds still panic on the (unreachable) overflow rather
-                /// than silently wrapping.
+                /// A value that wrapped back to an earlier one would alias a
+                /// live earlier value as current, the staleness this type
+                /// exists to prevent, so the step is checked in every build.
+                /// The counter steps at most once a frame, so a `u64` does not
+                /// reach its end.
                 #[must_use]
                 pub const fn next(self) -> Self {
-                    Self(self.0 + 1)
+                    match self.0.checked_add(1) {
+                        Some(next) => Self(next),
+                        None => panic!("BUG: a counter that steps once a frame does not exhaust a u64"),
+                    }
                 }
 
                 /// The raw counter value.
@@ -132,3 +127,20 @@ macro_rules! recorded_counters {
 }
 
 recorded_counters!(FrameEpoch, SurfaceGeneration);
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameEpoch, SurfaceGeneration};
+
+    #[test]
+    fn a_counter_steps_by_one_from_zero() {
+        assert_eq!(FrameEpoch::ZERO.next().next().get(), 2);
+        assert_eq!(SurfaceGeneration::ZERO.next().get(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: a counter that steps once a frame does not exhaust a u64")]
+    fn a_counter_at_its_end_refuses_to_wrap_in_every_build() {
+        let _ = FrameEpoch(u64::MAX).next();
+    }
+}

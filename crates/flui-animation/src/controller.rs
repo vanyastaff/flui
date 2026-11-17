@@ -32,7 +32,7 @@ use crate::origin::ControllerOrigin;
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpeedLimit, SpringDescription, Tolerance};
 use crate::status::AnimationStatus;
-use flui_foundation::notifier_generic::NotificationCallback;
+use flui_foundation::NotificationCallback;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 use flui_foundation::{ChangeNotifier, ListenerId, Notifier};
 use smallvec::SmallVec;
@@ -99,8 +99,7 @@ struct RetiredSources {
     /// through the controller's containment rather than the channel's.
     refused_status: SmallVec<[Opaque<StatusObserver>; 2]>,
     status_callbacks: SmallVec<[Rc<NotificationCallback<AnimationStatus>>; 4]>,
-    value_callbacks:
-        SmallVec<[Opaque<Rc<flui_foundation::notifier_generic::NotificationCallback<()>>>; 4]>,
+    value_callbacks: SmallVec<[Opaque<Rc<flui_foundation::NotificationCallback<()>>>; 4]>,
 }
 
 impl RetiredSources {

@@ -23,8 +23,8 @@ use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use cursor_icon::CursorIcon;
+use flui_foundation::IdMint;
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::sequence::IdMint;
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::keyboard::{KeyEvent, KeyPress, KeyState};
 use flui_platform::pointer::{PenTool, PointerEvent, PointerKind};
@@ -46,8 +46,14 @@ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::{
     self, WpCursorShapeManagerV1,
 };
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_hold_v1::{
+    self, ZwpPointerGestureHoldV1,
+};
 use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_pinch_v1::{
     self, ZwpPointerGesturePinchV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_swipe_v1::{
+    self, ZwpPointerGestureSwipeV1,
 };
 use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::{
     self, ZwpPointerGesturesV1,
@@ -75,8 +81,8 @@ use super::cursor::{self, SurfaceRequest};
 use super::keyboards::Keyboards;
 use super::repeat::RepeatSettings;
 use super::wire::{
-    Axis, AxisSource, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey, SeatWire,
-    ToolWire, TouchWire, WireTime,
+    Axis, AxisSource, HoldWire, PinchWire, PointerWire, Routed, SeatAssembly, SeatEvent, SeatKey,
+    SeatWire, SwipeWire, ToolWire, TouchWire, WireTime,
 };
 use crate::input::assembly::{NativeClock, NativeDevice, NativeSurface};
 use crate::input::availability::{self, WaylandInputGlobals};
@@ -99,8 +105,11 @@ use crate::owner::window_delivery::WindowDelivery;
 const SEAT_VERSION: u32 = 9;
 /// `zwp_tablet_manager_v2` version 1: no pad dials.
 const TABLET_VERSION: u32 = 1;
-/// `zwp_pointer_gestures_v1` version 1: pinches (and swipes, unasked).
-const GESTURES_VERSION: u32 = 1;
+/// `zwp_pointer_gestures_v1` version 3: pinches, swipes and holds.
+const GESTURES_VERSION: u32 = 3;
+/// The `zwp_pointer_gestures_v1` version from which fingers resting on a
+/// touchpad are a hold.
+const HOLD_VERSION: u32 = 3;
 /// `wp_cursor_shape_manager_v1` version 1.
 const CURSOR_SHAPE_VERSION: u32 = 1;
 /// The `wl_pointer` version from which events come in frames.
@@ -214,7 +223,7 @@ struct Attached {
 struct PointerObjects {
     pointer: WlPointer,
     device: NativeDevice,
-    pinch: Option<ZwpPointerGesturePinchV1>,
+    gestures: Option<GestureObjects>,
     shape: Option<WpCursorShapeDeviceV1>,
     /// The surface a theme cursor is drawn on, made at its first.
     cursor_surface: Option<ThemeSurface>,
@@ -516,6 +525,10 @@ impl Shared {
             .with(|objects| WaylandInputGlobals {
                 tablet: objects.tablet.is_some(),
                 pointer_gestures: objects.gestures.is_some(),
+                pointer_gesture_hold: objects
+                    .gestures
+                    .as_ref()
+                    .is_some_and(|(_, manager)| manager.version() >= HOLD_VERSION),
             })
             .unwrap_or_default()
     }
@@ -1087,8 +1100,8 @@ impl WaylandInput for SeatInput {
                     .iter_mut()
                     .filter_map(|seat| seat.pointer.as_mut())
                 {
-                    if pointer.pinch.is_none() {
-                        pointer.pinch = pinch(&manager, pointer, queue, &self.shared);
+                    if pointer.gestures.is_none() {
+                        pointer.gestures = gesture_objects(&manager, pointer, queue, &self.shared);
                     }
                 }
                 objects.gestures = Some((name, manager));
@@ -1769,23 +1782,45 @@ fn tablet_seat(
     )
 }
 
-/// The pinch of `pointer`; `None` past the last device label.
-fn pinch(
+/// A pointer's touchpad gesture objects, under one device label: its pinch,
+/// its swipe, and its hold where the gestures global is version 3.
+struct GestureObjects {
+    device: NativeDevice,
+    pinch: ZwpPointerGesturePinchV1,
+    swipe: ZwpPointerGestureSwipeV1,
+    hold: Option<ZwpPointerGestureHoldV1>,
+}
+
+impl GestureObjects {
+    fn destroy(self) {
+        self.pinch.destroy();
+        self.swipe.destroy();
+        if let Some(hold) = self.hold {
+            hold.destroy();
+        }
+    }
+}
+
+/// The gesture objects of `pointer`; `None` past the last device label.
+fn gesture_objects(
     manager: &ZwpPointerGesturesV1,
     pointer: &PointerObjects,
     queue: &QueueHandle<WaylandState>,
     shared: &Arc<Shared>,
-) -> Option<ZwpPointerGesturePinchV1> {
+) -> Option<GestureObjects> {
     let device = shared.label()?;
-    Some(manager.get_pinch_gesture(
-        &pointer.pointer,
-        queue,
-        PinchData {
-            shared: Arc::downgrade(shared),
-            device,
-            pointer: pointer.device,
-        },
-    ))
+    let data = || GestureData {
+        shared: Arc::downgrade(shared),
+        device,
+        pointer: pointer.device,
+    };
+    Some(GestureObjects {
+        device,
+        pinch: manager.get_pinch_gesture(&pointer.pointer, queue, data()),
+        swipe: manager.get_swipe_gesture(&pointer.pointer, queue, data()),
+        hold: (manager.version() >= HOLD_VERSION)
+            .then(|| manager.get_hold_gesture(&pointer.pointer, queue, data())),
+    })
 }
 
 /// Let go of a removed seat's objects. Every device of it, its tablet tools
@@ -1797,8 +1832,8 @@ fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
     shared.last_input.seat_gone(&seat.seat);
     shared.unfollow(&seat.seat);
     if let Some(pointer) = seat.pointer {
-        if let Some(pinch) = pointer.pinch {
-            pinch.destroy();
+        if let Some(gestures) = pointer.gestures {
+            gestures.destroy();
         }
         if let Some(surface) = pointer.cursor_surface {
             surface.destroy();
@@ -1838,16 +1873,14 @@ fn release_seat(seat: SeatObjects, shared: &Shared, time: WireTime) {
 fn release_pointer(pointer: PointerObjects, seat: &WlSeat, shared: &Shared, time: WireTime) {
     shared.last_input.pointer_gone(seat);
     shared.unfollow(seat);
-    if let Some(pinch) = pointer.pinch {
-        if let Some(data) = pinch.data::<PinchData>() {
-            shared.record_seat(
-                time,
-                SeatEvent::DeviceRemoved {
-                    device: data.device,
-                },
-            );
-        }
-        pinch.destroy();
+    if let Some(gestures) = pointer.gestures {
+        shared.record_seat(
+            time,
+            SeatEvent::DeviceRemoved {
+                device: gestures.device,
+            },
+        );
+        gestures.destroy();
     }
     if let Some(surface) = pointer.cursor_surface {
         surface.destroy();
@@ -1902,8 +1935,9 @@ pub(crate) struct TouchData {
     seat: SeatKey,
 }
 
-/// A pinch's user data.
-pub(crate) struct PinchData {
+/// A touchpad gesture object's user data: the device its gestures are, and
+/// the pointer they belong to.
+pub(crate) struct GestureData {
     shared: Weak<Shared>,
     device: NativeDevice,
     pointer: NativeDevice,
@@ -1991,15 +2025,15 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
                             .map(|manager| manager.get_pointer(&pointer, queue, ())),
                         pointer,
                         device,
-                        pinch: None,
+                        gestures: None,
                         cursor_surface: None,
                         focus: None,
                         focus_surface: None,
                         frame_focus: None,
                     };
-                    objects.pinch = gestures
+                    objects.gestures = gestures
                         .as_ref()
-                        .and_then(|manager| pinch(manager, &objects, queue, &shared));
+                        .and_then(|manager| gesture_objects(manager, &objects, queue, &shared));
                     held.pointer = Some(objects);
                     shared.record_seat(
                         time,
@@ -2465,12 +2499,12 @@ impl Dispatch<WlTouch, TouchData> for WaylandState {
     }
 }
 
-impl Dispatch<ZwpPointerGesturePinchV1, PinchData> for WaylandState {
+impl Dispatch<ZwpPointerGesturePinchV1, GestureData> for WaylandState {
     fn event(
         _: &mut Self,
         _: &ZwpPointerGesturePinchV1,
         event: zwp_pointer_gesture_pinch_v1::Event,
-        data: &PinchData,
+        data: &GestureData,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -2512,6 +2546,94 @@ impl Dispatch<ZwpPointerGesturePinchV1, PinchData> for WaylandState {
         shared.record_seat(
             time,
             SeatEvent::Pinch {
+                device: data.device,
+                pointer: data.pointer,
+                event: wire,
+            },
+        );
+    }
+}
+
+impl Dispatch<ZwpPointerGestureSwipeV1, GestureData> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &ZwpPointerGestureSwipeV1,
+        event: zwp_pointer_gesture_swipe_v1::Event,
+        data: &GestureData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(shared) = data.shared.upgrade() else {
+            return;
+        };
+        let (time, wire) = match event {
+            zwp_pointer_gesture_swipe_v1::Event::Begin {
+                time,
+                surface,
+                fingers,
+                ..
+            } => {
+                let Some(surface) = shared.surface_of(&surface) else {
+                    return;
+                };
+                (arrival(Some(time)), SwipeWire::Begin { surface, fingers })
+            }
+            zwp_pointer_gesture_swipe_v1::Event::Update { time, dx, dy } => {
+                (arrival(Some(time)), SwipeWire::Update { dx, dy })
+            }
+            zwp_pointer_gesture_swipe_v1::Event::End {
+                time, cancelled, ..
+            } => (
+                arrival(Some(time)),
+                SwipeWire::End {
+                    cancelled: cancelled != 0,
+                },
+            ),
+            _ => return,
+        };
+        shared.record_seat(
+            time,
+            SeatEvent::Swipe {
+                device: data.device,
+                pointer: data.pointer,
+                event: wire,
+            },
+        );
+    }
+}
+
+impl Dispatch<ZwpPointerGestureHoldV1, GestureData> for WaylandState {
+    fn event(
+        _: &mut Self,
+        _: &ZwpPointerGestureHoldV1,
+        event: zwp_pointer_gesture_hold_v1::Event,
+        data: &GestureData,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(shared) = data.shared.upgrade() else {
+            return;
+        };
+        let (time, wire) = match event {
+            zwp_pointer_gesture_hold_v1::Event::Begin { time, surface, .. } => {
+                let Some(surface) = shared.surface_of(&surface) else {
+                    return;
+                };
+                (arrival(Some(time)), HoldWire::Begin { surface })
+            }
+            zwp_pointer_gesture_hold_v1::Event::End {
+                time, cancelled, ..
+            } => (
+                arrival(Some(time)),
+                HoldWire::End {
+                    cancelled: cancelled != 0,
+                },
+            ),
+            _ => return,
+        };
+        shared.record_seat(
+            time,
+            SeatEvent::Hold {
                 device: data.device,
                 pointer: data.pointer,
                 event: wire,
@@ -2839,7 +2961,7 @@ mod tests {
     fn a_label_past_the_last_is_none() {
         use std::num::NonZeroU64;
 
-        use flui_foundation::sequence::IdMint;
+        use flui_foundation::IdMint;
 
         use crate::owner::slot::OwnerCell;
 

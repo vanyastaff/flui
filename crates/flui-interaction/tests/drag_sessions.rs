@@ -3149,7 +3149,7 @@ fn a_receiver_under_perspective_sees_its_own_plane() {
     in_lane(|f| {
         // Perspective with depth, over a tilt toward the viewer.
         let mut perspective = Matrix4::identity();
-        *perspective.get_mut(3, 2) = -0.002;
+        perspective[(3, 2)] = -0.002;
         let forward = perspective * Matrix4::rotation_x(0.6);
         let plane = Rc::new(TiltedPlane {
             seen: RefCell::new(Vec::new()),

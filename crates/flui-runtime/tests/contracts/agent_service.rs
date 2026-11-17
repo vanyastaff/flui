@@ -562,7 +562,11 @@ fn a_recording_streams_the_runtimes_rows_to_its_connection_until_it_stops() {
             &header["clock"],
             &header["keep_text"]
         ),
-        (&json!(4), &json!("virtual"), &json!(false)),
+        (
+            &json!(flui_protocol::input_recording::FORMAT_VERSION),
+            &json!("virtual"),
+            &json!(false)
+        ),
         "{header}"
     );
     assert_eq!(

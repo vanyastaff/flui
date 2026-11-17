@@ -10,6 +10,7 @@
 //! | `MoveCoalescer` | one frame-coalesced move per pointer and surface |
 //! | `ScrollSequences` | wheel and trackpad scroll latches per source and surface |
 //! | `PanZoomSequences` | native pan/zoom leases per source and surface |
+//! | `TouchpadSwipes` | the hit path each open touchpad swipe took at its start |
 //! | [`MouseTracker`] | hover, enter/exit and cursor state per source and surface |
 //! | `ArenaDriver` | the close-on-down / sweep-on-up arena lifecycle |
 //! | `CloseCoordinator` | the closed flag and when a close retires state |
@@ -123,6 +124,7 @@ mod pointer_frame;
 mod pointer_sequences;
 mod scroll_contact;
 mod scroll_sequences;
+mod touchpad_swipes;
 
 use std::{
     cell::{Cell, RefCell},
@@ -326,6 +328,7 @@ pub struct GestureBinding {
     moves: MoveCoalescer,
     scrolls: ScrollSequences,
     pan_zooms: PanZoomSequences,
+    touchpad_swipes: touchpad_swipes::TouchpadSwipes,
 
     /// Sampling mode captured by each pointer sequence at Down.
     ///
@@ -419,6 +422,7 @@ impl GestureBinding {
             moves: MoveCoalescer::default(),
             scrolls: ScrollSequences::default(),
             pan_zooms: PanZoomSequences::default(),
+            touchpad_swipes: touchpad_swipes::TouchpadSwipes::default(),
             resampling_enabled: Cell::new(false),
             sampling_clock: Cell::new(SamplingClock::default()),
             clock: std::sync::Arc::clone(&clock),
@@ -1293,6 +1297,7 @@ impl GestureBinding {
             route.capture.close();
         }
         let moves = self.moves.drain();
+        let swipes = self.touchpad_swipes.drain();
         let native_tickets: Vec<_> = native_sequences
             .into_iter()
             .flat_map(|sequence| sequence.take_staged())
@@ -1324,6 +1329,11 @@ impl GestureBinding {
         }
         for (_, event) in moves {
             failure.retire(event);
+        }
+        // The arena drained above rejected each swipe's contest; its path
+        // goes now.
+        for swipe in swipes {
+            failure.retire(swipe);
         }
         if failure.preserving() {
             failure.invoke(|| self.arena.drain(CloseMode::PreservingFailure));
@@ -1365,6 +1375,11 @@ impl GestureBinding {
             let mut first_panic = self.drain_capture_losses(None);
             let contacts = self.contacts.contacts(None);
             pan_zoom_sequences::retire_sequences(native_sequences, &mut first_panic);
+            // A swipe the platform will not end for an unfocused window ends
+            // here, as a contact does.
+            for swipe in self.touchpad_swipes.drain() {
+                self.cancel_touchpad_swipe(swipe, &mut first_panic);
+            }
             for contact in contacts {
                 // A handler run by an earlier iteration may have re-entered the
                 // binding and terminated or replaced this sequence. The numeric
@@ -1595,6 +1610,9 @@ impl GestureBinding {
                 self.cancel_orphaned_scroll_contacts(orphans, device.time, &mut first_panic);
                 let native = self.pan_zooms.withdraw_source(source);
                 pan_zoom_sequences::retire_sequences(native, &mut first_panic);
+                for swipe in self.touchpad_swipes.close_device(device.device) {
+                    self.cancel_touchpad_swipe(swipe, &mut first_panic);
+                }
                 for contact in self.contacts.contacts(Some(device.device)) {
                     if !self
                         .contacts
@@ -2060,7 +2078,10 @@ impl GestureBinding {
                     panic.resume();
                 }
             }
-            PointerEvent::ScrollInertiaCancel(_) => {
+            PointerEvent::TouchpadSwipe(swipe) => {
+                self.handle_touchpad_swipe(surface, event, swipe, hit_test_fn);
+            }
+            PointerEvent::TouchpadHold(_) => {
                 let panic = if self.contacts.contains(pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {
@@ -2796,6 +2817,7 @@ impl GestureBinding {
             cached.capture.end();
         }
         let pending_moves = self.moves.drain();
+        let swipes = self.touchpad_swipes.drain();
         pan_zoom_sequences::retire_sequences(native_sequences, &mut first_panic);
 
         // Every map above is empty before any arena callback or destructor
@@ -2829,6 +2851,14 @@ impl GestureBinding {
                 &mut first_panic,
                 pending_drop,
                 "interrupted pending-move cleanup",
+            );
+        }
+        for swipe in swipes {
+            let swipe_drop = RoutePanic::capture(|| drop(swipe));
+            RoutePanic::preserve_first(
+                &mut first_panic,
+                swipe_drop,
+                "interrupted touchpad swipe cleanup",
             );
         }
         first_panic

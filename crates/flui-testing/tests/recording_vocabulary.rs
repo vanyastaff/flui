@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{
-    DevicePixelRatio, DeviceSize, EdgeInsets, Point, Size, WindowMetrics,
+    DevicePixelRatio, DeviceSize, EdgeInsets, Offset, Point, Size, WindowMetrics,
 };
 use flui_interaction::GestureDisposition;
 use flui_platform::Availability;
@@ -26,7 +26,8 @@ use flui_platform::pointer::{
     PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
     PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
     Pressure, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
-    SmartZoomEvent, TangentialPressure, Twist,
+    SmartZoomEvent, SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase,
+    TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
@@ -162,6 +163,26 @@ fn pan_zoom(phase: PanZoomPhase) -> InputRecord {
     ))
 }
 
+fn hold(phase: TouchpadHoldPhase) -> InputRecord {
+    pointer_event(PointerEvent::TouchpadHold(
+        TouchpadHoldEvent::new(touch(), at(18), position(2.5, 4.0), phase)
+            .with_modifiers(Modifiers::SHIFT),
+    ))
+}
+
+fn swipe(phase: TouchpadSwipePhase) -> InputRecord {
+    pointer_event(PointerEvent::TouchpadSwipe(
+        TouchpadSwipeEvent::new(
+            touch(),
+            at(19),
+            position(6.0, 1.5),
+            NonZeroU8::new(3).expect("nonzero"),
+            phase,
+        )
+        .with_modifiers(Modifiers::CONTROL),
+    ))
+}
+
 fn key(state: KeyState, key: Key, location: Location) -> InputRecord {
     platform(PlatformInput::Keyboard(
         KeyEvent::new(state, key, Code::KeyA, at(17))
@@ -220,6 +241,8 @@ fn capabilities(availability: Availability) -> InputRecord {
             .pen(availability)
             .precise_scroll(Availability::Native)
             .trackpad_gestures(Availability::Emulated)
+            .touchpad_hold(Availability::Native)
+            .touchpad_swipe(Availability::Unavailable)
             .present(PointerKindSet::TOUCH | PointerKindSet::PEN)
             .build(),
     ))
@@ -502,10 +525,9 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("PointerEvent", "Scroll") => {
             one(scroll(ScrollUnit::Pixels, ScrollPrecision::Precise, None))
         }
-        ("PointerEvent", "ScrollInertiaCancel") => one(pointer_event(
-            PointerEvent::ScrollInertiaCancel(signal(touch())),
-        )),
+        ("PointerEvent", "TouchpadHold") => one(hold(TouchpadHoldPhase::Begin)),
         ("PointerEvent", "PanZoom") => one(pan_zoom(PanZoomPhase::Start)),
+        ("PointerEvent", "TouchpadSwipe") => one(swipe(TouchpadSwipePhase::Start)),
         ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
             SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
         ))),
@@ -607,6 +629,15 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ))),
         ("PanZoomPhase", "End") => one(pan_zoom(PanZoomPhase::End)),
         ("PanZoomPhase", "Cancelled") => one(pan_zoom(PanZoomPhase::Cancelled)),
+        ("TouchpadHoldPhase", "Begin") => one(hold(TouchpadHoldPhase::Begin)),
+        ("TouchpadHoldPhase", "End") => one(hold(TouchpadHoldPhase::End)),
+        ("TouchpadHoldPhase", "Cancelled") => one(hold(TouchpadHoldPhase::Cancelled)),
+        ("TouchpadSwipePhase", "Start") => one(swipe(TouchpadSwipePhase::Start)),
+        ("TouchpadSwipePhase", "Update") => one(swipe(TouchpadSwipePhase::Update(
+            SwipeOffset::try_new(Offset::new(-42.5, 3.25)).expect("finite"),
+        ))),
+        ("TouchpadSwipePhase", "End") => one(swipe(TouchpadSwipePhase::End)),
+        ("TouchpadSwipePhase", "Cancelled") => one(swipe(TouchpadSwipePhase::Cancelled)),
         ("Key", "Character") => one(key(
             KeyState::Down(KeyPress::AutoRepeat),
             Key::character("ß"),

@@ -6,8 +6,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+use flui_foundation::Listenable;
 use flui_foundation::geometry::Offset;
-use flui_foundation::notifier::Listenable;
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::{GestureEndReason, HapticsHandle};
 use flui_objects::RenderFollowerLayer;

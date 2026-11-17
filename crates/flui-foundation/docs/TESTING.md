@@ -12,7 +12,7 @@ substring-matching a printed dump.
 Inspect::inspect (render object, layer)  →  the object's own fields (color, padding, …)
 PipelineOwner / SceneVersion (InspectTree) →  + facts: committed offset / size / geometry
 snapshot(&tree, SnapshotQuery)           →  SnapshotNode tree
-node.get::<T>("field") / get_fact::<T>   →  typed CI assertions
+node.get::<T>("field") / fact_as::<T>   →  typed CI assertions
 ```
 
 Field names use **snake_case** (Rust idiom, not Dart camelCase).
@@ -23,7 +23,7 @@ Field names use **snake_case** (Rust idiom, not Dart camelCase).
 |--------|---------|
 | `kind` | Node type (e.g. `"RenderPadding"`), without type arguments (`kind_args`) |
 | `get::<T>("field")` | The object's own field read as `T`, or a `FieldError` |
-| `get_fact::<T>("size")` | A fact the tree adds (committed size, offset, dirty flags) |
+| `fact_as::<T>("size")` | A fact the tree adds (committed size, offset, dirty flags) |
 | `field("name")` / `fact("name")` | The untyped `OwnedField` |
 | `find_by_kind("RenderFlex")` | The nodes of a kind, in tree order; `.unique()` demands one |
 | `find_by_link(link)` | The counterpart of a node in another tree |
@@ -42,7 +42,7 @@ use flui_foundation::inspect::Rgba;
 let tree = run.render_snapshot();
 let leaf = tree.find_by_kind("RenderColoredBox").unique().expect("one leaf");
 assert_eq!(leaf.get::<Rgba>("color"), Ok(Rgba::new(1.0, 0.0, 0.0, 1.0)));
-assert_eq!(leaf.get_fact::<Size>("size"), Ok(Size::new(10.0, 10.0)));
+assert_eq!(leaf.fact_as::<Size>("size"), Ok(Size::new(10.0, 10.0)));
 ```
 
 Via [`flui_rendering::testing::Probe`](../../flui-rendering/docs/TESTING.md), whose

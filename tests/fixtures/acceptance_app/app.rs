@@ -27,7 +27,7 @@ use std::rc::{Rc, Weak};
 use std::str::FromStr;
 use std::task::Poll;
 
-use flui::foundation::{ChangeNotifier, ConnectionState, Listenable, Subscription, ValueKey};
+use flui::foundation::{ChangeNotifier, Listenable, Subscription, ValueKey};
 use flui::geometry::{EdgeInsets, Size};
 use flui::interaction::FocusNode;
 use flui::material::{ButtonStyle, InputDecoration, TextButton, TextFormField, Theme, ThemeData};
@@ -36,7 +36,7 @@ use flui::prelude::*;
 use flui::view::persist::{DecodeError, Document, PersistError, Persisted, Revision, SaveStatus};
 use flui::view::{AsyncDriver, CloseGuard, StaleClose, TaskToken};
 use flui::widgets::{
-    AnimatedBuilder, BoxedResultFuture, Form, FormHandle, FutureBuilder, SafeArea,
+    AnimatedBuilder, BoxedResultFuture, ConnectionState, Form, FormHandle, FutureBuilder, SafeArea,
     WidgetStateProperty,
 };
 use serde::{Deserialize, Serialize};

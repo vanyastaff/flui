@@ -256,12 +256,35 @@ pub enum TestError {
     /// The window's agent refused or failed a call.
     #[error("the window's agent answered {}: {}", .0.code, .0.message)]
     Agent(Box<ErrorObject>),
-    /// Frames kept changing the semantics tree between a locate and the
-    /// readings of what it found, every time it was read.
-    #[error("the semantics tree changed between a locate and its readings {reads} times")]
+    /// Frames kept changing the window between a locate and the readings of
+    /// what it found (its semantics tree, or the scene a drawing is read
+    /// from), every time it was read.
+    #[error("the window changed between a locate and its readings {reads} times")]
     KeptChanging {
         /// The locates made.
         reads: usize,
+    },
+    /// The element is an authored semantics region, which no render object
+    /// forms, so no drawing is its own.
+    #[error(
+        "{element} is an authored region no render object forms, so it painted nothing of its \
+         own; locate the widget that paints"
+    )]
+    NoRenderObject {
+        /// The element, as its outline line.
+        element: String,
+    },
+    /// A render object below the element has more children than one
+    /// inspection lists, so its drawing cannot be read whole.
+    #[error(
+        "a render object under {element} has more children than one inspection lists \
+         ({children} left out); locate a smaller part of it"
+    )]
+    TooManyChildren {
+        /// The element, as its outline line.
+        element: String,
+        /// How many children the inspection left out.
+        children: u32,
     },
 }
 
@@ -643,25 +666,155 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
-    /// Every draw command of the window's last submitted scene, in paint
-    /// order: what a paint test samples at a virtual time. Each command's
-    /// `transform` places it in the window, its canvas transform composed
-    /// with every offset and transform of the layers above it; a command
-    /// under a follower its leader does not place is left out, as it is not
-    /// painted. The frames due now run first, as for every read; a scene that
-    /// painted nothing new keeps the last one.
+    /// The draw commands the one element `locator` names painted in the
+    /// window's last submitted scene, in paint order: the render object that
+    /// forms the element and every render object below it, as `flutter_test`'s
+    /// `paints` matcher reads one render object's painting. A painter that
+    /// draws outside its own bounds is read whole, and a sibling's drawing is
+    /// left out, even where it overlaps.
     ///
-    /// This is the one read that does not go through the window's agent: the
-    /// agent's protocol carries no drawing, so the tester reads the scene the
-    /// headless host received. The commands are the whole scene's
-    /// ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
+    /// Each command's `transform` places it in the window, its canvas
+    /// transform composed with every offset and transform of the layers above
+    /// it; a command under a follower its leader does not place is left out,
+    /// as it is not painted. The frames due now run first, as for every read;
+    /// a scene that painted nothing new keeps the last one.
+    ///
+    /// The agent's protocol carries no drawing, so the tester reads the scene
+    /// the headless host received and selects its picture layers by the
+    /// render objects the window's agent lists under the element. A subtree
+    /// larger than one inspection lists is read in several: each node one
+    /// cut is inspected a level deep, and each child it did not list is read
+    /// from there, so the drawing is read whole. A frame that
+    /// submits a scene between those reads starts the read again, and two
+    /// such reads in a row that find the same render objects stand, as an
+    /// animation submits a scene every frame.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::try_read`]; [`TestError::NoRenderObject`] when the element
+    /// is an authored region no render object forms;
+    /// [`TestError::TooManyChildren`] when one render object below it has
+    /// more children than one inspection lists, rather than a partial
+    /// drawing; [`TestError::KeptChanging`] when every read saw a new scene.
+    pub fn try_draw_commands(
+        &mut self,
+        locator: &Locator,
+    ) -> Result<Vec<flui_painting::DrawCommandBuf>, TestError> {
+        // The subtree a read found when a frame ran during it: an animation
+        // submits a scene on every frame without changing which render
+        // objects the element has, so two reads that agree stand.
+        let mut changed: Option<rustc_hash::FxHashSet<flui_foundation::RenderId>> = None;
+        for _ in 0..VISIBLE_READS {
+            self.run_due_now();
+            let submits = self.host.sink().submits();
+            let found = self.resolve(locator)?;
+            // A render-formed node's id is its render object's packed id;
+            // an authored region's carries a domain bit no render id has.
+            let Some(render) = flui_foundation::RenderId::from_u64(found.element.element.get())
+            else {
+                return Err(TestError::NoRenderObject {
+                    element: line_of(&found.node),
+                });
+            };
+            let painters = self.render_subtree(render, &found.node);
+            // A frame between the locate and the inspections may have
+            // replaced what they read, its failure included: read again,
+            // unless this read and the last agree.
+            let painters = if self.host.sink().submits() == submits {
+                painters?
+            } else {
+                match painters {
+                    Ok(painters) if changed.as_ref() == Some(&painters) => painters,
+                    other => {
+                        changed = other.ok();
+                        continue;
+                    }
+                }
+            };
+            return Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
+                scene_commands(tree, |painter| painters.contains(&painter))
+            }));
+        }
+        Err(TestError::KeptChanging {
+            reads: VISIBLE_READS,
+        })
+    }
+
+    /// `render` and every render object below it, read with as many
+    /// inspections as the subtree takes.
+    ///
+    /// An inspection walks depth first on one node budget, so where it runs
+    /// out every ancestor still open counts its unvisited children as
+    /// omitted, and the protocol does not name them. Each node cut that way
+    /// is inspected one level deep to name its children, and each child the
+    /// first inspection did not list is the root of the next.
+    fn render_subtree(
+        &mut self,
+        render: flui_foundation::RenderId,
+        element: &Node,
+    ) -> Result<rustc_hash::FxHashSet<flui_foundation::RenderId>, TestError> {
+        let mut painters = rustc_hash::FxHashSet::default();
+        let mut roots = vec![render];
+        while let Some(root) = roots.pop() {
+            let mut cut = Vec::new();
+            let reading = self.inspect_render_from(root, None)?;
+            let mut pending = vec![&reading];
+            while let Some(node) = pending.pop() {
+                pending.extend(&node.children);
+                let id = render_of(node);
+                painters.insert(id);
+                if node.omitted_children > 0 {
+                    cut.push(id);
+                }
+            }
+            for parent in cut {
+                let level = self.inspect_render_from(parent, Some(1))?;
+                if level.omitted_children > 0 {
+                    // Its children alone are more than one inspection lists.
+                    return Err(TestError::TooManyChildren {
+                        element: line_of(element),
+                        children: level.omitted_children,
+                    });
+                }
+                roots.extend(
+                    level
+                        .children
+                        .iter()
+                        .map(render_of)
+                        .filter(|child| !painters.contains(child)),
+                );
+            }
+        }
+        Ok(painters)
+    }
+
+    /// One `inspect.render` reading from `root`, `max_depth` levels deep.
+    fn inspect_render_from(
+        &mut self,
+        root: flui_foundation::RenderId,
+        max_depth: Option<u32>,
+    ) -> Result<flui_protocol::InspectNode, TestError> {
+        let mut params = InspectParams::new(self.window.id());
+        params.root = Some(flui_foundation::inspect::Link::Render(root).to_string());
+        params.max_depth = max_depth;
+        let call = self.window.call::<InspectRender>(params)?;
+        let reading = self.answered(call)?;
+        let [node] = <[flui_protocol::InspectNode; 1]>::try_from(reading.roots)
+            .expect("BUG: an inspection from one root reads one root");
+        Ok(node)
+    }
+
+    /// The draw commands the one element `locator` names painted, as
+    /// [`Self::try_draw_commands`] reads them.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::try_draw_commands`] fails.
+    #[track_caller]
     #[must_use]
-    pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
-        self.run_due_now();
-        self.host
-            .sink()
-            .layer_tree()
-            .map_or_else(Vec::new, scene_commands)
+    pub fn draw_commands(&mut self, locator: &Locator) -> Vec<flui_painting::DrawCommandBuf> {
+        self.try_draw_commands(locator)
+            .unwrap_or_else(|error| panic!("{error}"))
     }
 
     // --- Acting -----------------------------------------------------------
@@ -1580,6 +1733,17 @@ fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
 }
 
 /// `node` as one outline line.
+/// The render object an `inspect.render` node names.
+fn render_of(node: &flui_protocol::InspectNode) -> flui_foundation::RenderId {
+    match node.id.parse::<flui_foundation::inspect::Link>() {
+        Ok(flui_foundation::inspect::Link::Render(id)) => id,
+        _ => panic!(
+            "BUG: inspect.render names its nodes by render handle, not {:?}",
+            node.id
+        ),
+    }
+}
+
 fn line_of(node: &Node) -> String {
     outline(std::slice::from_ref(node))
         .lines()
@@ -1625,15 +1789,19 @@ fn chord_keys(chord: &str) -> Vec<&str> {
     }
 }
 
-/// Every draw command of `tree`, in paint order, each placed in the tree's
-/// root coordinates; what [`Tester::draw_commands`] reads.
+/// The draw commands of `tree`'s picture layers whose painter `selects`, in
+/// paint order, each placed in the tree's root coordinates; what
+/// [`Tester::draw_commands`] reads.
 ///
 /// Pre-order is paint order: a parent keeps its children in the order they
 /// paint, a repaint boundary's content under its slot. An explicit stack,
 /// children pushed last first, so a deep chain of effects cannot overflow
 /// the test thread's stack. A follower its leader does not place is skipped
 /// with its subtree, as the engine skips it.
-fn scene_commands(tree: &flui_rendering::layer::LayerTree) -> Vec<flui_painting::DrawCommandBuf> {
+fn scene_commands(
+    tree: &flui_rendering::layer::LayerTree,
+    selects: impl Fn(flui_foundation::RenderId) -> bool,
+) -> Vec<flui_painting::DrawCommandBuf> {
     use flui_foundation::geometry::Matrix4;
     use flui_rendering::layer::{Layer, resolve_follower_transform};
 
@@ -1643,6 +1811,11 @@ fn scene_commands(tree: &flui_rendering::layer::LayerTree) -> Vec<flui_painting:
         let Some(node) = tree.get(id) else { continue };
         let local = match node.layer() {
             Layer::Picture(picture) => {
+                // A picture is one render object's run (ADR-0304 §2); one no
+                // render object painted is no element's drawing.
+                if !node.render_id().is_some_and(&selects) {
+                    continue;
+                }
                 commands.extend(picture.picture().iter().map(|command| {
                     let mut command = command.to_buf();
                     command.transform = above * command.transform;
@@ -1671,20 +1844,27 @@ mod tests {
     use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
     use flui_painting::{Canvas, DrawOp, Paint, styling::Color};
     use flui_rendering::layer::{
-        FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer, PictureLayer,
+        FollowerLayer, Layer, LayerLink, LayerNode, LayerTree, LeaderLayer, OffsetLayer,
+        PictureLayer,
     };
 
-    fn swatch(shade: u8) -> Layer {
+    /// A one-pixel swatch of `shade`, painted by a render object of that slot.
+    fn swatch(shade: u8) -> LayerNode {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
             Rect::from_origin_size(Point::ZERO, Size::new(1.0, 1.0)),
             &Paint::fill(Color::rgb(shade, 0, 0)),
         );
-        Layer::Picture(PictureLayer::new(canvas.finish()))
+        LayerNode::new(Layer::Picture(PictureLayer::new(canvas.finish()))).with_render(
+            flui_foundation::RenderId::new_gen(
+                u32::from(shade),
+                flui_foundation::generation::Generation::FIRST,
+            ),
+        )
     }
 
     fn placed(tree: &LayerTree) -> Vec<(u8, Matrix4)> {
-        super::scene_commands(tree)
+        super::scene_commands(tree, |_| true)
             .into_iter()
             .filter_map(|command| match command.op {
                 DrawOp::Rect { paint, .. } => {

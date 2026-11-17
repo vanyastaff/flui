@@ -103,7 +103,7 @@ use flui_interaction::focus::{FocusNode, FocusNodeRegistration, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{
     HoldEnd, HoldGestureRecognizer, PointerDispatch, PointerEvent, PointerKindSet,
-    WheelPreferencesProvider,
+    TouchpadHoldPhase, WheelPreferencesProvider,
 };
 use flui_platform::keyboard::{Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::{
@@ -972,7 +972,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.wheel_port.set(Some(Rc::clone(&wheel)));
         let listener = listener
             .on_scroll_claim(move |event| wheel(event))
-            .on_pointer_signal(self.inertia_cancel(&applied))
+            .on_pointer_signal(self.touchpad_hold(&applied))
             .child(if anchored {
                 // An anchored drag is no drop autoscroll target.
                 gestures
@@ -1232,11 +1232,11 @@ impl ScrollableState {
             .child(content)
     }
 
-    /// Fingers that come to rest on a trackpad catch the motion this
+    /// Fingers that come to rest on a touchpad catch the motion this
     /// scrollable drives, as a press does (ADR-0208 rule 4): the fling stops
     /// and the position settles through its physics from rest. A notched
     /// wheel's easing goes on, as it does under a click.
-    fn inertia_cancel(
+    fn touchpad_hold(
         &self,
         applied: &Applied,
     ) -> impl Fn(&mut EventContext<'_>, PointerDispatch<'_>) + use<> {
@@ -1244,13 +1244,15 @@ impl ScrollableState {
         let owner = Rc::clone(&applied.owner);
         let pipeline = self.pipeline.clone();
         move |_ctx, dispatch| {
-            let PointerEvent::ScrollInertiaCancel(signal) = dispatch.local else {
+            let PointerEvent::TouchpadHold(hold) = dispatch.local else {
                 return;
             };
-            if !(moving.is_animating() && owner.catchable()) {
+            if hold.phase != TouchpadHoldPhase::Begin
+                || !(moving.is_animating() && owner.catchable())
+            {
                 return;
             }
-            owner.hold(None, signal.pointer.kind);
+            owner.hold(None, hold.pointer().kind);
             if !owner.hold_ended(
                 HoldEnd::Lifted,
                 presentation_device_pixel_ratio(pipeline.as_ref()),

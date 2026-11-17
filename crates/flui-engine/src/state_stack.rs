@@ -132,6 +132,16 @@ impl GpuStateStack {
         parent
     }
 
+    /// Gives the group just begun its parent's hardware scissor back, for a
+    /// group whose children draw straight into the parent (a layer that
+    /// changes nothing where it composites): the scissor, a partial frame's
+    /// damage, cuts them as it would cut the group.
+    pub(super) fn keep_group_scissor(&mut self) {
+        if let Some(parent) = self.clip_groups.last() {
+            self.current_scissor = parent.scissor;
+        }
+    }
+
     pub(super) fn end_clip_group(&mut self) {
         if let Some(parent) = self.clip_groups.pop() {
             self.current_clip_chain = parent.clip_chain;

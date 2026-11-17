@@ -4,6 +4,7 @@
 //! `configure_bounds`, a scale change while the host runs, a fractional scale
 //! no screen has, a toplevel it never configures, a frame callback it never
 //! answers, an output that goes with no `leave`, a burst of configures, a
+//! touchpad's swipe and hold on a gestures global of the version a test picks, a
 //! connection it closes in the middle of a request.
 //!
 //! It runs on a thread of its own. A test connects the host to
@@ -44,6 +45,18 @@ use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_man
 };
 use wayland_protocols::wp::fractional_scale::v1::server::wp_fractional_scale_v1::{
     self, WpFractionalScaleV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::server::zwp_pointer_gesture_hold_v1::{
+    self, ZwpPointerGestureHoldV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::server::zwp_pointer_gesture_pinch_v1::{
+    self, ZwpPointerGesturePinchV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::server::zwp_pointer_gesture_swipe_v1::{
+    self, ZwpPointerGestureSwipeV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::server::zwp_pointer_gestures_v1::{
+    self, ZwpPointerGesturesV1,
 };
 use wayland_protocols::wp::viewporter::server::wp_viewport::{self, WpViewport};
 use wayland_protocols::wp::viewporter::server::wp_viewporter::{self, WpViewporter};
@@ -118,6 +131,7 @@ pub struct Offer {
     compositor: u32,
     shell: u32,
     seat: Option<u32>,
+    gestures: Option<u32>,
     viewporter: bool,
     fractional_scale: bool,
     outputs: Vec<OutputOffer>,
@@ -132,6 +146,7 @@ impl Default for Offer {
             compositor: 6,
             shell: 6,
             seat: None,
+            gestures: None,
             viewporter: true,
             fractional_scale: false,
             outputs: vec![OutputOffer::new(1920, 1080, 1)],
@@ -164,6 +179,15 @@ impl Offer {
     #[must_use]
     pub fn seat(mut self, version: u32) -> Self {
         self.seat = Some(version.clamp(1, 9));
+        self
+    }
+
+    /// Offer `zwp_pointer_gestures_v1` at `version` (1 to 3): every version
+    /// has the pinch and the swipe, version 3 the hold
+    /// ([`Step::SwipeBegin`], [`Step::HoldBegin`]).
+    #[must_use]
+    pub fn pointer_gestures(mut self, version: u32) -> Self {
+        self.gestures = Some(version.clamp(1, 3));
         self
     }
 
@@ -300,6 +324,35 @@ pub enum Step {
     WithholdFrameCallbacks(bool),
     /// Close the client's connection now, with no error.
     HangUp,
+    /// A swipe of `fingers` begins over the toplevel's surface, on every
+    /// swipe object the client made.
+    SwipeBegin {
+        /// How many fingers swipe.
+        fingers: u32,
+    },
+    /// The swiping fingers move by this much, in surface coordinates.
+    SwipeUpdate {
+        /// Horizontally.
+        dx: f64,
+        /// Vertically.
+        dy: f64,
+    },
+    /// The swipe ends, or the compositor takes it back.
+    SwipeEnd {
+        /// Taken back rather than ended.
+        cancelled: bool,
+    },
+    /// Fingers come to rest over the toplevel's surface, on every hold
+    /// object the client made (none below version 3).
+    HoldBegin {
+        /// How many fingers rest.
+        fingers: u32,
+    },
+    /// The resting fingers lift, or start another gesture.
+    HoldEnd {
+        /// Another gesture took them, rather than a lift.
+        cancelled: bool,
+    },
 }
 
 /// A protocol error the compositor posted to the client.
@@ -352,6 +405,12 @@ pub struct Heard {
     pub withheld: u32,
     /// Every buffer committed to a cursor surface, in order.
     pub cursor: Vec<CursorImage>,
+    /// The gestures global's version the client bound, if it bound it.
+    pub gestures: Option<u32>,
+    /// How many swipe objects the client made.
+    pub swipes: u32,
+    /// How many hold objects the client made.
+    pub holds: u32,
 }
 
 /// What the test thread and the compositor's thread share.
@@ -628,6 +687,8 @@ struct Compositor {
     outputs: Vec<OutputSlot>,
     pointers: Vec<WlPointer>,
     keyboards: Vec<WlKeyboard>,
+    swipes: Vec<ZwpPointerGestureSwipeV1>,
+    holds: Vec<ZwpPointerGestureHoldV1>,
     withheld: Vec<WlCallback>,
     /// Each surface's fractional-scale object.
     fractional: Vec<(WlSurface, WpFractionalScaleV1)>,
@@ -643,6 +704,9 @@ impl Compositor {
         }
         if offer.fractional_scale {
             display.create_global::<Self, WpFractionalScaleManagerV1, ()>(1, ());
+        }
+        if let Some(version) = offer.gestures {
+            display.create_global::<Self, ZwpPointerGesturesV1, ()>(version, ());
         }
         if let Some(version) = offer.seat {
             display.create_global::<Self, WlSeat, ()>(version, ());
@@ -670,6 +734,8 @@ impl Compositor {
             outputs,
             pointers: Vec::new(),
             keyboards: Vec::new(),
+            swipes: Vec::new(),
+            holds: Vec::new(),
             withheld: Vec::new(),
             fractional: Vec::new(),
         }
@@ -811,6 +877,46 @@ impl Compositor {
                 }
             }
             Step::HangUp => self.hang_up_now = true,
+            Step::SwipeBegin { fingers } => {
+                let serial = self.next_serial();
+                let time = self.time();
+                let Some(toplevel) = &self.toplevel else {
+                    return;
+                };
+                for swipe in &self.swipes {
+                    swipe.begin(serial, time, &toplevel.surface, fingers);
+                }
+            }
+            Step::SwipeUpdate { dx, dy } => {
+                let time = self.time();
+                for swipe in &self.swipes {
+                    swipe.update(time, dx, dy);
+                }
+            }
+            Step::SwipeEnd { cancelled } => {
+                let serial = self.next_serial();
+                let time = self.time();
+                for swipe in &self.swipes {
+                    swipe.end(serial, time, i32::from(cancelled));
+                }
+            }
+            Step::HoldBegin { fingers } => {
+                let serial = self.next_serial();
+                let time = self.time();
+                let Some(toplevel) = &self.toplevel else {
+                    return;
+                };
+                for hold in &self.holds {
+                    hold.begin(serial, time, &toplevel.surface, fingers);
+                }
+            }
+            Step::HoldEnd { cancelled } => {
+                let serial = self.next_serial();
+                let time = self.time();
+                for hold in &self.holds {
+                    hold.end(serial, time, i32::from(cancelled));
+                }
+            }
         }
     }
 
@@ -1555,5 +1661,98 @@ impl Dispatch<WlKeyboard, ()> for Compositor {
 
     fn destroyed(state: &mut Self, _: ClientId, keyboard: &WlKeyboard, (): &()) {
         state.keyboards.retain(|held| held.id() != keyboard.id());
+    }
+}
+
+impl GlobalDispatch<ZwpPointerGesturesV1, ()> for Compositor {
+    fn bind(
+        state: &mut Self,
+        _: &DisplayHandle,
+        _: &Client,
+        resource: New<ZwpPointerGesturesV1>,
+        (): &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        let manager = data_init.init(resource, ());
+        let version = manager.version();
+        state.shared.note(|heard| heard.gestures = Some(version));
+    }
+}
+
+impl Dispatch<ZwpPointerGesturesV1, ()> for Compositor {
+    fn request(
+        state: &mut Self,
+        _: &Client,
+        _: &ZwpPointerGesturesV1,
+        request: zwp_pointer_gestures_v1::Request,
+        (): &(),
+        _: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        match request {
+            zwp_pointer_gestures_v1::Request::GetSwipeGesture { id, .. } => {
+                state.swipes.push(data_init.init(id, ()));
+                state
+                    .shared
+                    .note(|heard| heard.swipes = heard.swipes.saturating_add(1));
+            }
+            zwp_pointer_gestures_v1::Request::GetPinchGesture { id, .. } => {
+                let _pinch = data_init.init(id, ());
+            }
+            zwp_pointer_gestures_v1::Request::GetHoldGesture { id, .. } => {
+                state.holds.push(data_init.init(id, ()));
+                state
+                    .shared
+                    .note(|heard| heard.holds = heard.holds.saturating_add(1));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpPointerGestureSwipeV1, ()> for Compositor {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &ZwpPointerGestureSwipeV1,
+        _: zwp_pointer_gesture_swipe_v1::Request,
+        (): &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
+
+    fn destroyed(state: &mut Self, _: ClientId, swipe: &ZwpPointerGestureSwipeV1, (): &()) {
+        state.swipes.retain(|held| held.id() != swipe.id());
+    }
+}
+
+impl Dispatch<ZwpPointerGesturePinchV1, ()> for Compositor {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &ZwpPointerGesturePinchV1,
+        _: zwp_pointer_gesture_pinch_v1::Request,
+        (): &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpPointerGestureHoldV1, ()> for Compositor {
+    fn request(
+        _: &mut Self,
+        _: &Client,
+        _: &ZwpPointerGestureHoldV1,
+        _: zwp_pointer_gesture_hold_v1::Request,
+        (): &(),
+        _: &DisplayHandle,
+        _: &mut DataInit<'_, Self>,
+    ) {
+    }
+
+    fn destroyed(state: &mut Self, _: ClientId, hold: &ZwpPointerGestureHoldV1, (): &()) {
+        state.holds.retain(|held| held.id() != hold.id());
     }
 }

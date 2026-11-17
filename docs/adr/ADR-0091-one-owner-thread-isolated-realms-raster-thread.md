@@ -85,7 +85,7 @@ success metric: with one window's UI runtime blocked, another window stays withi
 Adopting them needs its own ADR, and needs the platform callbacks to stop requiring `Send`
 ([ADR-0082](ADR-0082-platform-api-contract-crate.md)) and the UI traits to become `!Send` as
 ADR-0027 §9 already requires. That flip — `Listenable: Send + Sync` and `ListenerCallback`
-(`crates/flui-foundation/src/notifier.rs:78`, `:46`), `RenderView::RenderObject`, and
+(`crates/flui-foundation/src/notifier/mod.rs:78`, `:46`), `RenderView::RenderObject`, and
 `RenderObject::metadata()`'s `Arc<dyn Any + Send + Sync>`
 (`crates/flui-rendering/src/traits/render_object.rs:661`) — is conformance work ADR-0027 already
 demands, and this ADR schedules it: it lands **before the first crates.io publication** of any

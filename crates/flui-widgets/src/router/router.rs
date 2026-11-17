@@ -8,7 +8,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_foundation::BuildPhase;
-use flui_foundation::notifier::ChangeNotifier;
+use flui_foundation::ChangeNotifier;
 use flui_view::__runtime::{UrlOwnerRegistration, UrlOwnerSlot};
 use flui_view::element::ElementKind;
 use flui_view::navigation::{

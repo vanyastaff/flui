@@ -154,6 +154,15 @@ pub const BREAKING: &[Break] = &[
             "/$defs/SqueezePhase",
         ],
     },
+    Break {
+        version: ProtocolVersion::new(0, 21),
+        adr: "ADR-0358",
+        // Fingers resting on a touchpad are a phased `touchpad_hold`, which replaces the
+        // `scroll_inertia_cancel` signal; a touchpad swipe is a `touchpad_swipe`; recorded
+        // capabilities say whether either reaches the window.
+        renamed: &[],
+        removed: &["/$defs/PointerEvent/oneOf/scroll_inertia_cancel=scroll_inertia_cancel"],
+    },
 ];
 
 impl fmt::Display for ProtocolVersion {

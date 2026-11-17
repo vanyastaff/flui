@@ -18,7 +18,9 @@
 //!   precision and its gesture phase, and a two-finger trackpad pan is a phased scroll on
 //!   every backend; [`PanZoomEvent`] carries a trackpad's pinch and rotation as one cumulative
 //!   transform about a focal point between `Start` and `End`; [`SmartZoomEvent`] is the
-//!   trackpad's two-finger double-tap.
+//!   trackpad's two-finger double-tap; [`TouchpadHoldEvent`] is fingers resting on a touchpad,
+//!   which stops whatever coasts; [`TouchpadSwipeEvent`] is a swipe of three fingers or more,
+//!   a gesture of its own with a cumulative travel, never a scroll.
 //!
 //! Every number is a validated newtype ([`PointerPosition`], [`Pressure`], [`PenOrientation`],
 //! [`ScrollDelta`], [`PanZoomTransform`], …) whose fallible constructor states its NaN,
@@ -57,6 +59,7 @@ mod buttons;
 mod pan_zoom;
 mod sample;
 mod scroll;
+mod touchpad;
 mod value;
 
 use core::marker::PhantomData;
@@ -67,6 +70,9 @@ pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform, SmartZoomEvent}
 pub use sample::PointerSample;
 pub use scroll::{
     ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
+};
+pub use touchpad::{
+    SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 pub use value::{
     ContactSize, HoverDistance, InputValueError, PenOrientation, PointerPosition, Pressure,
@@ -730,7 +736,7 @@ impl PointerMove {
 }
 
 /// An event that only says a pointer did something at a moment: entering or leaving the
-/// window, or touching a trackpad to stop the platform's scroll momentum.
+/// window.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct PointerSignal {
@@ -859,12 +865,15 @@ pub enum PointerEvent {
     Leave(PointerSignal),
     /// A wheel or trackpad scroll.
     Scroll(ScrollEvent),
-    /// A finger touched the trackpad while the platform was scrolling with momentum: a
-    /// framework fling in progress stops too.
-    ScrollInertiaCancel(PointerSignal),
+    /// Fingers came to rest on a touchpad, lifted, or started a gesture. Its `Begin` stops a
+    /// framework fling in progress, as the platform's own momentum stops.
+    TouchpadHold(TouchpadHoldEvent),
     /// A trackpad pinch/rotate gesture event. A two-finger pan is a phased
     /// [`Scroll`](Self::Scroll), never this.
     PanZoom(PanZoomEvent),
+    /// A swipe of three fingers or more across a touchpad: a gesture, never a
+    /// [`Scroll`](Self::Scroll).
+    TouchpadSwipe(TouchpadSwipeEvent),
     /// The platform's smart zoom: a two-finger double-tap on a trackpad. One discrete
     /// event, offered to the innermost target that claims it.
     SmartZoom(SmartZoomEvent),

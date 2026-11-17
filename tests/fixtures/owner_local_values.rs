@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui::animation::{Curve, MotionSpec, Simulation};
-use flui::foundation::geometry::{Offset, Size};
+use flui::geometry::{Offset, Size};
 use flui::painting::Canvas;
 use flui::rendering::{BoxConstraints, RenderResult};
 use flui::view::BoxedView;

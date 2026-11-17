@@ -418,6 +418,7 @@ fn pointer_and_gesture_recognition() {
             ("touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag", crate::touchpad_pan::a_horizontal_pan_beside_a_vertical_list_goes_to_the_drag),
             ("touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag", crate::touchpad_pan::a_list_with_nowhere_to_go_leaves_the_pan_to_the_drag),
             ("touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before", crate::touchpad_pan::a_plain_list_scrolls_with_a_touchpad_pan_as_before),
+            ("touchpad_pan::a_touchpad_swipe_is_a_gesture_and_no_scroll", crate::touchpad_pan::a_touchpad_swipe_is_a_gesture_and_no_scroll),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::recognizers_follow_a_changed_arena_scope", crate::gesture_detector::recognizers_follow_a_changed_arena_scope),
