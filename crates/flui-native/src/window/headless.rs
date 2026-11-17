@@ -17,11 +17,11 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
-    AdmittedCommand, ApplyError, CursorError, DispatchEventResult, DisplayId, PlatformHaptics,
-    PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints, SurfaceChange, Unsupported,
-    UnsupportedReason, WindowAppearance, WindowCapabilities, WindowCommand, WindowFrame,
-    WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction, WindowMaterial,
-    WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, Brightness, CursorError, DispatchEventResult, DisplayId,
+    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints,
+    SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFocus,
+    WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction,
+    WindowMaterial, WindowMode, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -669,7 +669,7 @@ struct HeadlessHostWindowState {
     insets: flui_platform::WindowInsets,
     closed: bool,
 
-    appearance: WindowAppearance,
+    brightness: Brightness,
     cursor: CursorIcon,
     /// The display this window is on; `None` when the platform has no displays.
     display: Option<DisplayId>,
@@ -822,7 +822,6 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
         let state = state
             .with_mode(mode)
             .with_visible(model.visible && !model.closed)
-            .with_focused(model.focused)
             .with_title(Some(model.title.clone()))
             .with_constraints(model.constraints)
             .with_resizable(model.resizable)
@@ -839,12 +838,12 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
                 model.scale_factor.get(),
             )
             .ok(),
-            appearance: model.appearance,
+            brightness: model.brightness,
             insets: model.insets,
             execution,
             occluded: model.occluded,
             hovered,
-            active: model.focused,
+            focus: WindowFocus::reported(model.focused, model.focused),
             capabilities: *capabilities,
             interaction: model.interaction,
         }
@@ -920,7 +919,7 @@ impl HeadlessHostWindow {
             occluded: false,
             closed: false,
 
-            appearance: WindowAppearance::default(),
+            brightness: Brightness::default(),
             cursor: CursorIcon::default(),
             display,
             capabilities,
@@ -1278,13 +1277,13 @@ impl HeadlessHostWindow {
     /// Simulate the system light/dark appearance this window observes. Fires
     /// the handler's `state_changed` when the snapshot differs; closed windows ignore the
     /// report.
-    pub fn simulate_appearance(&self, appearance: WindowAppearance) {
+    pub fn simulate_brightness(&self, brightness: Brightness) {
         {
             let mut state = self.state.borrow_mut();
             if state.closed {
                 return;
             }
-            state.appearance = appearance;
+            state.brightness = brightness;
         }
         self.publish_state();
     }
@@ -1373,6 +1372,16 @@ impl PlatformWindow for HeadlessHostWindow {
     fn id(&self) -> WindowId {
         self.id
     }
+
+    /// No window system, so no gesture geometry: the consumer keeps its own.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    /// The window is revealed when it opens; there is nothing to defer.
+    fn reveal_after_first_frame(&self) {}
 
     fn request_redraw(&self) {
         flui_platform::RedrawRequester::request_redraw(&self.redraw);

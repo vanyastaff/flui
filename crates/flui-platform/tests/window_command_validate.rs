@@ -3,12 +3,12 @@
 
 use flui_foundation::geometry::{EdgeInsets, Point, Size, WindowMetrics};
 use flui_platform::{
-    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, CapabilityAbsence,
-    CapabilityParts, ControlsOffset, InvalidControlsOffset, InvalidGeometry, KeyboardInset,
-    SizeConstraints, SystemControls, Unsupported, UnsupportedReason, WindowAppearance,
+    AdmissionError, AdmittedCommand, AppTitleBar, ApplyError, Availability, Brightness,
+    CapabilityAbsence, CapabilityParts, ControlsOffset, InvalidControlsOffset, InvalidGeometry,
+    KeyboardInset, SizeConstraints, SystemControls, Unsupported, UnsupportedReason,
     WindowCapabilities, WindowCapability, WindowCommand, WindowExecutionState, WindowExtent,
-    WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode, WindowOption,
-    WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
+    WindowFocus, WindowFrame, WindowGeometry, WindowInsets, WindowMaterial, WindowMode,
+    WindowOption, WindowOptions, WindowRevision, WindowRevisionExhausted, WindowState,
 };
 
 fn size(width: f64, height: f64) -> Size<f64> {
@@ -573,16 +573,13 @@ fn each_window_fact_advances_the_revision() {
     honours_title.sets_title = WindowCapability::Native;
     let honours_title = honours_title.into_capabilities();
     let facts: [(&str, WindowState); 12] = [
-        ("focus", base_state().with_focused(true)),
+        ("focus", base_state().with_focus(WindowFocus::Focused)),
         ("visibility", base_state().with_visible(false)),
         ("occlusion", base_state().with_occluded(true)),
         ("hover", base_state().with_hovered(true)),
         ("frame", base_state().with_frame(WindowFrame::None)),
-        ("activation", base_state().with_active(true)),
-        (
-            "appearance",
-            base_state().with_appearance(WindowAppearance::Dark),
-        ),
+        ("activation", base_state().with_focus(WindowFocus::Active)),
+        ("theme", base_state().with_brightness(Brightness::Dark)),
         (
             "insets",
             base_state().with_insets(
@@ -695,6 +692,47 @@ fn shown_minimized_and_occluded_are_three_facts() {
     );
 }
 
+/// Focus implies activation, and a hidden window is neither: a window
+/// system's two reports read as one standing, and a hidden window's standing
+/// is published inactive whatever the sample says.
+fn focus_implies_activation_and_a_hidden_window_has_neither() {
+    use WindowFocus::{Active, Focused, Inactive};
+
+    // (focus reported, activation reported) → standing
+    for (focused, active, standing) in [
+        (false, false, Inactive),
+        (false, true, Active),
+        // Win32 deactivates before it takes the focus away; an X11 window
+        // manager names the active window after the focus moved.
+        (true, false, Focused),
+        (true, true, Focused),
+    ] {
+        assert_eq!(
+            WindowFocus::reported(focused, active),
+            standing,
+            "focus {focused}, activation {active}"
+        );
+        assert_eq!(standing.is_focused(), focused);
+        assert_eq!(standing.is_active(), focused || active);
+    }
+
+    // (shown, standing sampled) → standing published
+    for (visible, sampled, published) in [
+        (true, Focused, Focused),
+        (true, Active, Active),
+        (false, Focused, Inactive),
+        (false, Active, Inactive),
+    ] {
+        let state = base_state()
+            .successor(base_state().with_visible(visible).with_focus(sampled))
+            .expect("a revision");
+        assert_eq!(
+            state.focus, published,
+            "shown {visible}, sampled {sampled:?}"
+        );
+    }
+}
+
 /// The capabilities' revision is the snapshot revision at which what the
 /// window honours last changed: a change of another fact leaves it, a change
 /// of a capability moves it to the new snapshot's, and a sample's own is
@@ -711,7 +749,7 @@ fn the_capabilities_revision_moves_only_with_the_capabilities() {
         .successor(
             base_state()
                 .with_capabilities(WindowCapabilities::ALL)
-                .with_focused(true),
+                .with_focus(WindowFocus::Focused),
         )
         .expect("focus changes");
     assert_eq!(focused.revision.get(), first.revision.get() + 1);
@@ -724,7 +762,7 @@ fn the_capabilities_revision_moves_only_with_the_capabilities() {
         .successor(
             base_state()
                 .with_capabilities(honours_title)
-                .with_focused(true),
+                .with_focus(WindowFocus::Focused),
         )
         .expect("a capability changes");
     assert_eq!(revised.capabilities.revision(), revised.revision);
@@ -732,7 +770,7 @@ fn the_capabilities_revision_moves_only_with_the_capabilities() {
         .successor(
             base_state()
                 .with_capabilities(honours_title)
-                .with_focused(true),
+                .with_focus(WindowFocus::Focused),
         )
         .expect("an equal sample");
     assert_eq!(
@@ -857,10 +895,10 @@ fn withdrawn_capabilities_admit_nothing_in_every_later_snapshot() {
         .successor(
             base_state()
                 .with_capabilities(WindowCapabilities::ALL)
-                .with_focused(true),
+                .with_focus(WindowFocus::Focused),
         )
         .expect("a revision is left");
-    assert!(later.focused, "the other facts publish");
+    assert!(later.focus.is_focused(), "the other facts publish");
     assert_eq!(later.revision.get(), frozen.revision.get() + 1);
     assert!(later.capabilities.is_withdrawn());
     assert_eq!(later.capabilities.hides(), withdrawn_reason);
@@ -882,7 +920,7 @@ fn a_successor_of_unpublished_capabilities_stays_unpublished() {
         .successor(
             base_state()
                 .with_capabilities(WindowCapabilities::ALL)
-                .with_focused(true),
+                .with_focus(WindowFocus::Focused),
         )
         .expect("another fact changes");
     for (case, state) in [("changed", &changed), ("unchanged", &unchanged)] {
@@ -1109,6 +1147,10 @@ fn window_command_validate() {
             (
                 "shown_minimized_and_occluded_are_three_facts",
                 shown_minimized_and_occluded_are_three_facts,
+            ),
+            (
+                "focus_implies_activation_and_a_hidden_window_has_neither",
+                focus_implies_activation_and_a_hidden_window_has_neither,
             ),
             (
                 "the_capabilities_revision_moves_only_with_the_capabilities",

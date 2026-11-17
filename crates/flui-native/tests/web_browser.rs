@@ -1413,12 +1413,12 @@ impl HostedCanvas {
                 let active = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let seen = Arc::clone(&active);
                 let observed = std::rc::Rc::downgrade(&window);
-                let last = Cell::new(window.state().focused);
+                let last = Cell::new(window.state().focus.is_focused());
                 handler.react_to_state_change(move || {
                     let Some(window) = observed.upgrade() else {
                         return;
                     };
-                    let focused = window.state().focused;
+                    let focused = window.state().focus.is_focused();
                     if focused != last.replace(focused) {
                         seen.lock().expect("focus log").push(focused);
                     }
@@ -1595,7 +1595,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
             canvas.active.lock().expect("focus log")[reported..].is_empty(),
             "focus moved within the canvas's area: no window focus change"
         );
-        assert!(canvas.window.state().focused);
+        assert!(canvas.window.state().focus.is_focused());
 
         editor_composition("compositionstart");
         type_into_editor("abに", 3, true);
@@ -1642,7 +1642,7 @@ fn a_textarea_serves_the_field_without_edit_context() {
             "released: unfocused and empty"
         );
         assert!(
-            canvas.window.state().focused,
+            canvas.window.state().focus.is_focused(),
             "focus went back to the canvas"
         );
     }

@@ -2291,6 +2291,12 @@ fn gesture_values_follow_the_presentation_display() {
 }
 
 impl flui_platform::PlatformWindow for GeometryWindow {
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
@@ -2386,6 +2392,18 @@ struct RegionWindow {
 }
 
 impl flui_platform::PlatformWindow for RegionWindow {
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }

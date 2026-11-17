@@ -7,13 +7,15 @@
 //! capability-discovery pattern as [`PlatformWindow::haptics`](crate::PlatformWindow::haptics):
 //! a fallible accessor
 //! returning `Option<Arc<dyn _>>`, not a method bolted directly onto
-//! `PlatformWindow` with a panicking/no-op default. A backend that cannot
-//! support IME (a minimal future embedder; headless without its
-//! `FakeTextInput`) returns `None` from the accessor instead of every
+//! `PlatformWindow` with a panicking/no-op default. A window whose input
+//! method reads the field's store instead (the pull model, ADR-0135), or that
+//! has no input method, returns `None` from the accessor instead of every
 //! `PlatformWindow` implementor inheriting IME methods it cannot honor.
-//! [`PlatformHaptics`](crate::PlatformHaptics) follows the same
-//! template (`PlatformWindow::haptics`, ADR-0031); `PlatformSystemChrome`
-//! is deferred (ADR-0031) with no target date.
+//! [`PlatformHaptics`](crate::PlatformHaptics) and
+//! [`PlatformSystemChrome`](crate::PlatformSystemChrome) follow the same
+//! template ([`PlatformWindow::haptics`](crate::PlatformWindow::haptics),
+//! [`PlatformWindow::system_chrome`](crate::PlatformWindow::system_chrome),
+//! ADR-0031).
 
 use flui_foundation::geometry::Bounds;
 
