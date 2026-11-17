@@ -288,7 +288,9 @@ impl UiRuntime {
     /// [`FrameFailureKind::DeviceLost`](crate::frame_failure::FrameFailureKind::DeviceLost)
     /// with [`DeviceRecovery::Abandoned`](crate::frame_failure::DeviceRecovery::Abandoned)
     /// and holds the presentation's frames: it asks for none and waits out no
-    /// retry. Leaving a given-up state marks the whole tree for repaint and
+    /// retry. A renderer found dead reports one with
+    /// [`DeviceRecovery::Dead`](crate::frame_failure::DeviceRecovery::Dead), even over a
+    /// given-up rebuild, and holds the frames the same way for good. Leaving a given-up state marks the whole tree for repaint and
     /// asks for a frame, since nothing was shown meanwhile; a rebuild that
     /// succeeds is repainted by the renderer's owner, which knows whether the
     /// frame it runs next still needs one.
@@ -297,10 +299,14 @@ impl UiRuntime {
         recovery: Option<crate::frame_failure::DeviceRecovery>,
     ) {
         let presentation = self.presentations.primary();
-        let was_abandoned = presentation.device_abandoned();
-        presentation.replace_device_recovery(recovery);
-        let abandons = recovery.is_some_and(crate::frame_failure::DeviceRecovery::is_abandoned);
-        if abandons && !was_abandoned {
+        let previous = presentation.replace_device_recovery(recovery);
+        let was_held = previous.is_some_and(crate::frame_failure::DeviceRecovery::holds_frames);
+        let holds = recovery.is_some_and(crate::frame_failure::DeviceRecovery::holds_frames);
+        // A death is reported even over a given-up rebuild: it is the news
+        // that no later rebuild will help.
+        let newly_dead =
+            recovery == Some(crate::frame_failure::DeviceRecovery::Dead) && previous != recovery;
+        if (holds && !was_held) || newly_dead {
             presentation.disarm_failure_retry();
             self.report_frame_failure(
                 presentation,
@@ -308,7 +314,7 @@ impl UiRuntime {
                     recovery: recovery.unwrap_or_default(),
                 },
             );
-        } else if was_abandoned && !abandons {
+        } else if was_held && !holds {
             self.mark_needs_full_repaint_for(presentation);
             self.wake_frame();
         }
@@ -323,7 +329,7 @@ impl UiRuntime {
     pub fn retry_render_device(&self) -> bool {
         let mut asked = false;
         for presentation in self.presentations.iter() {
-            if presentation.device_abandoned() {
+            if presentation.device_rebuild_given_up() {
                 presentation
                     .replace_device_recovery(Some(crate::frame_failure::DeviceRecovery::Pending));
                 self.mark_needs_full_repaint_for(presentation);
@@ -526,7 +532,7 @@ impl UiRuntime {
                     // backoff still runs or the device was abandoned; the backoff's deadline
                     // (counted below once the sink frees a place) or a new rebuild wakes it then.
                     _ if presentation.frames_in_flight().is_saturated() => false,
-                    _ if presentation.device_abandoned() => false,
+                    _ if presentation.device_holds_frames() => false,
                     Some(at) => presentation.clock().now() >= at,
                     None => {
                         presentation.has_pending_work_snapshot()

@@ -1355,6 +1355,7 @@ impl core::hash::Hash for flui::app::DeviceRecovery
 impl core::marker::StructuralPartialEq for flui::app::DeviceRecovery
 pub fn flui::app::DeviceRecovery::is_abandoned(self) -> bool
 variant flui::app::DeviceRecovery::Abandoned { attempts: u32 } // at 2
+variant flui::app::DeviceRecovery::Dead // at 3
 variant flui::app::DeviceRecovery::Failed { attempts: u32 } // at 1
 variant flui::app::DeviceRecovery::Pending // at 0
 #[non_exhaustive] pub enum flui::app::DiagnosticsProfile

@@ -830,6 +830,7 @@ fn a_surface_deadline_is_only_its_own_windows() {
         address: at,
         size: SIZE,
         device: DeviceHealth::Healthy,
+        renderer_dead: false,
     };
     let (own, others) = (slot(address()), slot(other));
     let mut scene = TestScene::new(AT);
@@ -1312,7 +1313,8 @@ fn a_window_the_raster_thread_refuses_is_refused_at_attach() {
 /// A window whose attach the raster thread does not answer within the
 /// deadline is kept, not refused: the executor is dead, but the thread may
 /// still hold the window's surface, so the native window outlives it as a
-/// dead executor's windows do. Its frames draw nothing.
+/// dead executor's windows do. Its frames draw nothing and commit
+/// (`NoPresent`), so its UI runtime keeps taking input.
 ///
 /// Red-check: decide from the slot's record after the deadline and the
 /// window is refused (`did not attach the slot`) while its surface is in
@@ -1349,8 +1351,8 @@ fn a_window_whose_attach_the_raster_thread_does_not_answer_is_kept() {
         .try_with(|host| host.submit(other, SIZE, epoch, publication))
         .expect("the host is idle");
     assert!(
-        matches!(verdict, SubmitVerdict::Failed | SubmitVerdict::NotShown),
-        "a dead executor draws nothing: {verdict:?}"
+        verdict == SubmitVerdict::NoPresent,
+        "a dead executor draws nothing and the frame commits: {verdict:?}"
     );
     render.release();
 }
@@ -1540,6 +1542,7 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
         address: at,
         size: SIZE,
         device: DeviceHealth::Healthy,
+        renderer_dead: false,
     };
     let held = |shared: &SharedRasterHost| {
         shared
@@ -1617,6 +1620,7 @@ fn a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal() {
         address: at,
         size: SIZE,
         device: DeviceHealth::Healthy,
+        renderer_dead: false,
     };
     ui_runtime.mark_primary_needs_full_repaint();
     let presented = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
@@ -1708,4 +1712,150 @@ fn a_surface_whose_resize_panics_gets_one_retry() {
         settle(placed, 8, stale, false, super::SlotTurn::Panicked),
         Some(SubmitVerdict::Refused)
     );
+}
+
+/// A raster thread that stops answering quarantines its windows: a detach
+/// past the deadline marks the executor dead and asks every open window for
+/// a frame; that window's wake settles the frames the executor holds as
+/// finished, so the input held for their commit replays, and tells its UI
+/// runtime `DeviceRecovery::Dead` (ADR-0305 §9),
+/// which a rebuild the application asks for leaves as it is, and the window
+/// keeps taking pointer input and lifecycle changes while it draws nothing.
+/// The window whose detach went unanswered keeps its surface target alive.
+///
+/// Red-check: leave the dead executor's held frames in `drain_settled` and the
+/// held pointer down never replays; drop `settle_death` and the
+/// runtime reports no recovery.
+#[test]
+fn a_wedged_raster_thread_quarantines_its_open_window() {
+    use flui_runtime::frame_failure::DeviceRecovery;
+
+    let downs = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+    let counted = std::rc::Rc::clone(&downs);
+    let mut ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+    ui_runtime
+        .attach_root_widget(
+            &flui_widgets::Listener::new()
+                .child(flui_widgets::SizedBox::new(20.0, 20.0))
+                .behavior(flui_interaction::HitTestBehavior::Opaque)
+                .on_pointer_down(move |_, _| counted.set(counted.get() + 1)),
+        )
+        .expect("the root attaches");
+    let at = PresentationAddress {
+        ui_runtime_id: ui_runtime.id(),
+        presentation_id: ui_runtime.active_presentation_for_test(),
+    };
+    let (shared, slots, wakes) = threaded_host_at(at, None);
+    let closed = Arc::new(FakeWindow::new(2));
+    let other = PresentationAddress {
+        ui_runtime_id: UiRuntimeId::new(7),
+        presentation_id: PresentationId::new(7),
+    };
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::clone(&closed) as Arc<dyn flui_platform::SurfaceTarget>,
+                None,
+                other,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+    let mut slot = RasterSlot {
+        host: shared.clone(),
+        address: at,
+        size: SIZE,
+        device: DeviceHealth::Healthy,
+        renderer_dead: false,
+    };
+    // The first frame presents, so the window shows its tree.
+    ui_runtime.mark_primary_needs_full_repaint();
+    let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+    let started = std::time::Instant::now();
+    while slot.settle(&mut ui_runtime).0 != ThreadSettled::Presented {
+        assert!(started.elapsed() < THREAD_WAIT, "the first frame presents");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    // The thread wedges in the next render, and the other window's detach
+    // waits out the deadline. A pointer down that arrives meanwhile waits
+    // for the commit of the frame the thread holds.
+    let render = slots.hold_next_render();
+    ui_runtime.mark_primary_needs_full_repaint();
+    let _ = slot.pump(&mut ui_runtime, web_time::Instant::now(), None);
+    assert!(render.began_within(THREAD_WAIT), "the thread renders");
+    let id = at.presentation_id;
+    let down = |ui_runtime: &mut crate::app::ui_runtime::UiRuntime| {
+        ui_runtime.enter(|ui_runtime| {
+            ui_runtime.handle_input_addressed(
+                id,
+                flui_platform::PlatformInput::Pointer(
+                    flui_interaction::events::make_down_event(
+                        Offset::new(4.0, 6.0),
+                        flui_interaction::events::PointerKind::Touch,
+                    )
+                    .expect("finite test position"),
+                ),
+            );
+        });
+    };
+    down(&mut ui_runtime);
+    assert_eq!(downs.get(), 0, "the down waits for the held frame's commit");
+    let woken = wakes.load(std::sync::atomic::Ordering::SeqCst);
+    let held = Arc::strong_count(&closed);
+    shared.detach(other);
+    assert!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst) > woken,
+        "the death asks the open window for a frame"
+    );
+    assert_eq!(
+        Arc::strong_count(&closed),
+        held,
+        "the closed window's target outlives the detach the thread did not answer"
+    );
+    // The window's wake settles what the dead executor never will, and
+    // tells its runtime the renderer is dead.
+    let (_, caught) = slot.settle(&mut ui_runtime);
+    assert!(
+        caught.into_payload().is_none(),
+        "nothing the settle ran panicked"
+    );
+    assert_eq!(
+        downs.get(),
+        1,
+        "the held down replays once the frame commits"
+    );
+    assert_eq!(
+        ui_runtime.primary_device_recovery(),
+        Some(DeviceRecovery::Dead)
+    );
+    assert!(
+        !ui_runtime.retry_render_device(),
+        "a rebuild asked for changes nothing"
+    );
+    assert!(
+        !slot.settle_device(&ui_runtime),
+        "a dead renderer repaints nothing"
+    );
+    assert_eq!(
+        ui_runtime.primary_device_recovery(),
+        Some(DeviceRecovery::Dead)
+    );
+    // A frame still asked for commits without drawing; input and lifecycle
+    // reach the quarantined window.
+    ui_runtime.mark_primary_needs_full_repaint();
+    assert!(
+        !slot.pump(&mut ui_runtime, web_time::Instant::now(), None),
+        "a dead renderer presents nothing"
+    );
+    down(&mut ui_runtime);
+    assert_eq!(downs.get(), 2, "a later down reaches the window at once");
+    ui_runtime.update_window_visibility(id, false);
+    assert!(
+        ui_runtime.presentation_hidden_for_test(id) == Some(true),
+        "the lifecycle change reached the window"
+    );
+    render.release();
 }

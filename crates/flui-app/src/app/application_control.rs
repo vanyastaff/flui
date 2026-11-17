@@ -206,8 +206,11 @@ impl AppHandle {
     /// its [`FrameFailureHandler`](crate::FrameFailureHandler), attempts no
     /// more frames and stays as it was until this call, typically after the
     /// user installed a driver or reconnected a GPU. The rebuild then starts
-    /// over at once, with a fresh streak. A window whose device is healthy or
-    /// still being rebuilt ignores the request.
+    /// over at once, with a fresh streak. A window whose device is healthy,
+    /// still being rebuilt, or whose renderer is
+    /// [`DeviceRecovery::Dead`](crate::DeviceRecovery::Dead) ignores the
+    /// request: a dead raster thread still holds the device, so no rebuild
+    /// can replace it.
     ///
     /// Every rendering window of the application this handle controls follows
     /// the request.

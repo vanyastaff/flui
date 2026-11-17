@@ -166,7 +166,7 @@ impl UiRuntime {
                 .borrow()
                 .iter()
                 .any(|pending| pending.tree_revision >= current);
-            if !shown_by_later && !producer.device_abandoned() {
+            if !shown_by_later && !producer.device_holds_frames() {
                 tail.retry_needed = true;
                 tail.retry_needs_repaint = true;
             }
@@ -314,7 +314,7 @@ impl UiRuntime {
                 }
                 self.wake_frame();
             } else if !producer.failure_backoff_holds(producer.clock().now())
-                && !producer.device_abandoned()
+                && !producer.device_holds_frames()
                 && !producer.frames_in_flight().is_saturated()
                 && producer.has_frame_work()
             {
@@ -519,7 +519,7 @@ impl UiRuntime {
                         // painted segment advances the tree revision (ADR-0048), so the failed
                         // frame's guard for one has nothing to guard here.
                         let mut held = FirstPanic::new();
-                        if shows_current_tree && !producer.device_abandoned() {
+                        if shows_current_tree && !producer.device_holds_frames() {
                             producer.note_frame_failure();
                             Self::arm_failure_retry(producer);
                             // The mark's platform wake is user code and can unwind: the wait is
@@ -571,7 +571,7 @@ impl UiRuntime {
                     // is paced by, and the retry is armed before the failure
                     // handler or the telemetry's subscriber, code the runtime
                     // does not own, can panic.
-                    let report = (!producer.device_abandoned()).then(|| {
+                    let report = (!producer.device_holds_frames()).then(|| {
                         let recovery = producer.device_recovery().unwrap_or_default();
                         let report = self.frame_failure_report(
                             producer,
@@ -626,7 +626,7 @@ impl UiRuntime {
                     let mut held = FirstPanic::new();
                     if render_verdict == SubmitVerdict::Failed
                         && !shown_by_later
-                        && !producer.device_abandoned()
+                        && !producer.device_holds_frames()
                     {
                         producer.note_frame_failure();
                         Self::arm_failure_retry(producer);
