@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
-    AfterPump, FallbackWake, WakeAction, after_pump, frame_is_dirty, keeps_frame_gate_open,
-    wake_action,
+    AfterPump, FallbackWake, PendingWork, WakeAction, after_pump, frame_is_dirty,
+    keeps_frame_gate_open, wake_action,
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
@@ -469,7 +469,7 @@ impl DesktopWakeDeadlines {
         self.fallback.arm_after_no_present(
             now,
             ui_runtime.refresh_interval(presentation),
-            ui_runtime.has_pending_work(),
+            ui_runtime.has_pending_tree_work(),
         )
     }
 
@@ -621,7 +621,7 @@ impl DesktopFrameDriver {
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                ui_runtime.has_pending_work(),
+                PendingWork::of(ui_runtime),
                 merge_wake_deadlines(raster_deadline, first_reveal.next_deadline()),
                 fallback_gate,
             );

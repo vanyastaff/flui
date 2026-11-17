@@ -3,7 +3,8 @@ use flui_view::View;
 use flui_widgets::app_root;
 
 use super::frame_pacing::{
-    BackgroundPace, FallbackGate, WakeAction, frame_is_dirty, keeps_frame_gate_open, wake_action,
+    BackgroundPace, FallbackGate, PendingWork, WakeAction, frame_is_dirty, keeps_frame_gate_open,
+    wake_action,
 };
 use super::host::{APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 use super::owner_dispatch::{
@@ -520,7 +521,7 @@ impl AndroidFrameDriver {
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                ui_runtime.has_pending_work(),
+                PendingWork::of(ui_runtime),
                 raster_deadline,
                 // Android paces only its backgrounded pump
                 // (`BackgroundPace`): a rendering wake has no fallback
