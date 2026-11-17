@@ -69,13 +69,16 @@ impl WindowsHost for Windows {
     /// the default procedure. A created window activates TSF, is watched for
     /// cloaks, then gets its input with its touchpad viewport, then hears its
     /// session, then registers its drop target. The text services are the
-    /// class's text, which the window hands out.
+    /// class's text, which the window hands out; the window's own hook is the
+    /// class's chrome, which the input asks whose caption buttons a window's
+    /// are.
     fn window_class() -> WindowClass {
         let input = InputWindows::new();
         let text = Tsf::new();
+        let window = Rc::new(WindowProc);
         let hooks: WindowHooks = Rc::new([
             Rc::clone(&text) as Rc<dyn WindowMessages>,
-            Rc::new(WindowProc),
+            Rc::clone(&window) as Rc<dyn WindowMessages>,
             Rc::new(CloakWatch::default()),
             Rc::clone(&input) as Rc<dyn WindowMessages>,
             Rc::new(SessionWindows::default()),
@@ -85,6 +88,7 @@ impl WindowsHost for Windows {
             hooks,
             input,
             text,
+            chrome: window,
             modal_loops: Rc::default(),
         }
     }
