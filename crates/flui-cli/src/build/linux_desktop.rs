@@ -1,25 +1,33 @@
-//! What a Linux desktop registers about what the application opens
-//! (ADR-0307 §4): a desktop entry whose `MimeType` names each URL scheme as
-//! `x-scheme-handler/<scheme>` and each file type's MIME type, and a
+//! What a Linux desktop knows the application by (ADR-0307 §4, ADR-0351): a
+//! desktop entry named by the class the application's windows carry, which
+//! names it again as `StartupWMClass` and whose `MimeType` names each URL
+//! scheme as `x-scheme-handler/<scheme>` and each file type's MIME type, and a
 //! shared-mime-info package that gives each file type its extension.
+//!
+//! The class is the id `flui.toml` declares, which every `flui` command
+//! compiles the application with (`FLUI_APP_ID`); without a declared id, the
+//! executable's stem in ASCII ([`executable_class`]), which a window started
+//! without an id carries. The shell matches a window to this entry by it, so
+//! the dock shows the entry's name and groups the window under its launcher,
+//! and two applications of one directory (two examples) keep two entries.
 //!
 //! `flui build linux` writes them under the output directory at the paths a
 //! package installs them to below its `share` prefix
-//! (`share/applications/<id>.desktop`, `share/mime/packages/<id>.xml`);
+//! (`share/applications/<class>.desktop`, `share/mime/packages/<class>.xml`);
 //! installing them, and running `update-desktop-database` and
 //! `update-mime-database`, is the package's. The entry's `Exec` passes what
 //! is opened as URIs (`%U`), so files arrive as `file:` URIs.
 
 use std::path::{Path, PathBuf};
 
+use crate::app_id::executable_class;
 use crate::build::platform::AppBundle;
 use crate::build::util::xml::xml_escape;
 use crate::declarations::Declarations;
 
-/// The desktop entry and MIME package for `bundle`, whose executable is
-/// `executable`, written under `output_dir` when `declarations` gives the
-/// application something a Linux desktop registers: a URL scheme or a file
-/// type. The paths written, none when there is nothing to register.
+/// The desktop entry for `bundle`, whose executable's file name is
+/// `executable`, and the MIME package when `declarations` gives the
+/// application a file type, written under `output_dir`. The paths written.
 ///
 /// # Errors
 ///
@@ -30,32 +38,41 @@ pub(crate) fn stage(
     executable: &str,
     declarations: &Declarations,
 ) -> std::io::Result<Vec<PathBuf>> {
-    let Some(entry) = desktop_entry(bundle, executable, declarations) else {
-        return Ok(Vec::new());
-    };
+    let class = window_class(bundle, executable);
     let mut written = Vec::new();
     let applications = output_dir.join("share").join("applications");
     std::fs::create_dir_all(&applications)?;
-    let entry_path = applications.join(format!("{}.desktop", bundle.identifier));
-    std::fs::write(&entry_path, entry)?;
+    let entry_path = applications.join(format!("{class}.desktop"));
+    std::fs::write(
+        &entry_path,
+        desktop_entry(&bundle.name, &class, executable, declarations),
+    )?;
     written.push(entry_path);
     if let Some(package) = mime_package(declarations) {
         let packages = output_dir.join("share").join("mime").join("packages");
         std::fs::create_dir_all(&packages)?;
-        let package_path = packages.join(format!("{}.xml", bundle.identifier));
+        let package_path = packages.join(format!("{class}.xml"));
         std::fs::write(&package_path, package)?;
         written.push(package_path);
     }
     Ok(written)
 }
 
-/// The desktop entry, or `None` when the application opens no URL scheme
-/// and no file type.
-fn desktop_entry(
-    bundle: &AppBundle,
-    executable: &str,
-    declarations: &Declarations,
-) -> Option<String> {
+/// The class the windows of `bundle`'s executable `executable` carry: the
+/// declared id, else the executable's stem in ASCII.
+fn window_class(bundle: &AppBundle, executable: &str) -> String {
+    if bundle.declared {
+        return bundle.identifier.clone();
+    }
+    let stem = Path::new(executable)
+        .file_stem()
+        .map_or_default(|stem| stem.to_string_lossy());
+    executable_class(&stem)
+}
+
+/// The desktop entry: its `MimeType` line only when the application opens a
+/// URL scheme or a file type.
+fn desktop_entry(name: &str, class: &str, executable: &str, declarations: &Declarations) -> String {
     let mut mime_types: Vec<String> = declarations
         .url_schemes()
         .map(|(scheme, _)| format!("x-scheme-handler/{scheme}"))
@@ -65,17 +82,22 @@ fn desktop_entry(
             .file_types()
             .map(|(file_type, _)| file_type.mime().to_owned()),
     );
-    if mime_types.is_empty() {
-        return None;
-    }
-    let mut mime_type = mime_types.join(";");
-    mime_type.push(';');
-    Some(format!(
+    let mut entry = format!(
         "[Desktop Entry]\nType=Application\nName={name}\nExec={exec}\nTerminal=false\n\
-         MimeType={mime_type}\n",
-        name = string_value(&bundle.name),
+         StartupWMClass={class}\n",
+        name = string_value(name),
         exec = string_value(&format!("{} %U", exec_argument(executable))),
-    ))
+        class = string_value(class),
+    );
+    if !mime_types.is_empty() {
+        entry.push_str("MimeType=");
+        for mime_type in mime_types {
+            entry.push_str(&mime_type);
+            entry.push(';');
+        }
+        entry.push('\n');
+    }
+    entry
 }
 
 /// The shared-mime-info package giving each file type its extension, or
@@ -164,7 +186,7 @@ mod tests {
              [[file-types]]\nextension = \"note\"\nmime = \"application/x-notes-note\"\n\
              name = \"Note & Sketch\"\n",
         );
-        let bundle = AppBundle::new("Notes", "com.example.notes".to_owned());
+        let bundle = AppBundle::new("Notes", "com.example.notes".to_owned()).declared();
         let output = tempfile::tempdir().expect("a temporary directory");
         let written =
             stage(output.path(), &bundle, "notes", &declarations).expect("the files are written");
@@ -183,6 +205,7 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&written[0]).expect("the entry"),
             "[Desktop Entry]\nType=Application\nName=Notes\nExec=notes %U\nTerminal=false\n\
+             StartupWMClass=com.example.notes\n\
              MimeType=x-scheme-handler/notes;application/x-notes-note;\n"
         );
         let package = std::fs::read_to_string(&written[1]).expect("the package");
@@ -199,13 +222,81 @@ mod tests {
             "notes",
             "schema = 3\nassociated-domains = [\"a.example\"]\n",
         );
-        let nothing = tempfile::tempdir().expect("a temporary directory");
+        let entry_only = tempfile::tempdir().expect("a temporary directory");
+        let written =
+            stage(entry_only.path(), &bundle, "notes", &web_only).expect("the entry is written");
         assert_eq!(
-            stage(nothing.path(), &bundle, "notes", &web_only).expect("nothing fails"),
-            Vec::<std::path::PathBuf>::new(),
-            "an associated domain has no Linux registration"
+            written,
+            [entry_only
+                .path()
+                .join("share")
+                .join("applications")
+                .join("com.example.notes.desktop")],
+            "an associated domain has no Linux registration: the entry alone, for the identity"
         );
-        assert!(!nothing.path().join("share").exists());
+        assert_eq!(
+            std::fs::read_to_string(&written[0]).expect("the entry"),
+            "[Desktop Entry]\nType=Application\nName=Notes\nExec=notes %U\nTerminal=false\n\
+             StartupWMClass=com.example.notes\n",
+            "no MimeType for an application that opens nothing"
+        );
+        assert!(!entry_only.path().join("share").join("mime").exists());
+    }
+
+    /// The entry's file name and its `StartupWMClass`, read back from what
+    /// `stage` wrote under `output`.
+    fn staged_class(output: &Path, bundle: &AppBundle, executable: &str) -> (String, String) {
+        let written =
+            stage(output, bundle, executable, &Declarations::default()).expect("the entry");
+        let file = written[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a UTF-8 file name")
+            .to_owned();
+        let entry = std::fs::read_to_string(&written[0]).expect("the entry");
+        let class = entry
+            .lines()
+            .find_map(|line| line.strip_prefix("StartupWMClass="))
+            .expect("a StartupWMClass")
+            .to_owned();
+        (file, class)
+    }
+
+    /// The entry is named by what the window carries: the declared id, which
+    /// the application is compiled with, or without one the executable's
+    /// stem in ASCII, as the window then carries it. Two examples of one
+    /// directory, neither declaring an id, keep two entries, neither
+    /// overwriting the other, named by their executables, not by an id derived
+    /// from the directory.
+    #[test]
+    fn the_entry_is_named_by_what_the_window_carries() {
+        let declared = crate::app_id::AppId::try_new("com.example.notes").expect("an id");
+        let output = tempfile::tempdir().expect("a temporary directory");
+        let bundle = AppBundle::new("Notes", declared.desktop_entry_id()).declared();
+        assert_eq!(
+            staged_class(output.path(), &bundle, "notes"),
+            (
+                "com.example.notes.desktop".to_owned(),
+                "com.example.notes".to_owned()
+            )
+        );
+
+        let examples = tempfile::tempdir().expect("a temporary directory");
+        let undeclared = AppBundle::new(
+            "examples",
+            crate::app_id::AppId::unconfigured("examples").desktop_entry_id(),
+        );
+        for (executable, class) in [("counter", "counter"), ("todo", "todo"), ("nötes", "n_tes")] {
+            assert_eq!(
+                staged_class(examples.path(), &undeclared, executable),
+                (format!("{class}.desktop"), class.to_owned()),
+                "{executable}"
+            );
+        }
+        let entries = std::fs::read_dir(examples.path().join("share").join("applications"))
+            .expect("the entries")
+            .count();
+        assert_eq!(entries, 3, "one entry per executable");
     }
 
     /// A name and an executable are each one value of their key, whatever

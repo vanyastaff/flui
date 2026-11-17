@@ -35,7 +35,7 @@
 - Also `#[non_exhaustive]` (ADR-0329): `MainAxisAlignment`, `CrossAxisAlignment`, `StackFit`,
   `OverflowBoxFit`, `TableColumnWidth`, `WrapAlignment`, `WrapCrossAlignment`, `MinTarget`,
   `ViewFocusDirection`, `KeyLookup`, `GeometryError`, the inspect `Change`, `FieldError`,
-  `MatchError`, `Link` and `Role`, and the testing kit's `BuildCapabilities`, `PointerPhase`,
+  `MatchError`, `Link` and `Role`, and the testing kit's `PointerPhase`,
   `A11yQuery`, `A11yQueryError`, `InvokeActionError`, `RowOutcome`, `StoreHostCall` and
   `HandlerCall`.
 - Also `#[non_exhaustive]` (ADR-0329): the semantics `AccessibilityFocusBlockType`,
@@ -65,5 +65,5 @@
   control and the input tap. `WidgetsBinding`, `RenderingBinding`, the root render view,
   `embedder`, `native`, `testing`, `prelude` and the view re-exports are no longer under
   `flui::app`. The types public signatures name moved: `PipelineOwner` and `PipelineCell` to
-  `flui::rendering`, `UpdateScheduler` to `flui::view`, `GestureBinding` to
-  the deprecated `flui::testing::harness` (feature `testing`).
+  `flui::rendering`, `UpdateScheduler` to `flui::view`; `GestureBinding` has no
+  facade path and is named at its crate path, `flui_interaction::binding::GestureBinding`.

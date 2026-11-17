@@ -1269,3 +1269,161 @@ fn a_row_past_a_lists_viewport_is_found_and_a_tap_on_it_is_not_visible() {
     }
     assert!(t.find_all(&find::text("Item 39")).is_empty(), "never built");
 }
+
+/// Paints its whole size in one colour.
+#[derive(Debug)]
+struct SwatchPainter(flui_painting::styling::Color);
+
+impl flui_widgets::CustomPainter for SwatchPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            &flui_painting::Paint::fill(self.0),
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        true
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` reads the scene the window submitted last, after the
+/// frames due now: a change from outside the tree repaints the swatch, and
+/// the next read sees the new colour with no pump between.
+///
+/// Fails if the read samples the scene before the frames due now.
+#[test]
+fn draw_commands_read_the_last_submitted_scene() {
+    use flui_painting::styling::Color;
+
+    let changed = Rc::new(flui_foundation::ChangeNotifier::new());
+    let shade = Rc::new(Cell::new(0_u8));
+    let read = Rc::clone(&shade);
+    let mut t = Tester::mount(flui_widgets::AnimatedBuilder::new(
+        Rc::clone(&changed) as Rc<dyn flui_foundation::Listenable>,
+        move || {
+            Center::new().child(
+                flui_widgets::CustomPaint::new()
+                    .size(flui_foundation::geometry::Size::new(24.0, 16.0))
+                    .painter(SwatchPainter(Color::rgb(read.get(), 0, 0))),
+            )
+        },
+    ));
+    let rectangles = |t: &mut Tester| -> Vec<(flui_foundation::geometry::Rect, Color)> {
+        t.draw_commands()
+            .into_iter()
+            .filter_map(|command| match command.op {
+                flui_painting::DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
+                _ => None,
+            })
+            .collect()
+    };
+    let swatch = flui_foundation::geometry::Rect::from_origin_size(
+        flui_foundation::geometry::Point::ZERO,
+        flui_foundation::geometry::Size::new(24.0, 16.0),
+    );
+    assert_eq!(rectangles(&mut t), [(swatch, Color::rgb(0, 0, 0))]);
+    shade.set(100);
+    changed.notify_listeners();
+    assert_eq!(rectangles(&mut t), [(swatch, Color::rgb(100, 0, 0))]);
+}
+
+/// `draw_commands` lists the commands in paint order and places each in the
+/// window, across repaint boundaries: a row of a boundary, a plain painter
+/// and a boundary reads left to right, each swatch at its slot in the row.
+///
+/// Fails if the read walks the scene's layers in insertion order, where a
+/// boundary's content comes after its parent's and sibling boundaries come
+/// reversed, or leaves out the offsets of the layers above a command.
+#[test]
+fn draw_commands_follow_paint_order_across_repaint_boundaries() {
+    use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
+    use flui_painting::styling::Color;
+
+    let swatch = |shade: u8| {
+        flui_widgets::CustomPaint::new()
+            .size(Size::new(10.0, 10.0))
+            .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
+    };
+    let mut t = Tester::mount(Center::new().child(flui_widgets::Row::new(vec![
+        flui_widgets::RepaintBoundary::new().child(swatch(1)).into_view().boxed(),
+        swatch(2).into_view().boxed(),
+        flui_widgets::RepaintBoundary::new().child(swatch(3)).into_view().boxed(),
+    ])));
+    let painted: Vec<(Rect, Color, Matrix4)> = t
+        .draw_commands()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            flui_painting::DrawOp::Rect { rect, paint } => {
+                Some((rect, paint.color, command.transform))
+            }
+            _ => None,
+        })
+        .collect();
+    let local = Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0));
+    // The row fills the window's width and centres its 10 px height.
+    let top = (600.0 - 10.0) / 2.0;
+    assert_eq!(
+        painted,
+        [
+            (
+                local,
+                Color::rgb(1, 0, 0),
+                Matrix4::translation(0.0, top, 0.0)
+            ),
+            (
+                local,
+                Color::rgb(2, 0, 0),
+                Matrix4::translation(10.0, top, 0.0)
+            ),
+            (
+                local,
+                Color::rgb(3, 0, 0),
+                Matrix4::translation(20.0, top, 0.0)
+            ),
+        ]
+    );
+}
+
+/// `draw_commands` places a command under a transform layer with the whole
+/// matrix, composed in order with the canvas transform it was recorded
+/// under: a swatch padded by 5 inside a repaint boundary, under a twofold
+/// scale, lands scaled at the scaled padding.
+///
+/// Fails if the read applies only a transform layer's translation, or
+/// composes a layer's transform or a command's on the wrong side.
+#[test]
+fn draw_commands_place_a_command_through_a_transform_layer() {
+    use flui_foundation::geometry::{Matrix4, Size};
+
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::Transform::new(Matrix4::scaling(2.0, 2.0, 1.0)).child(
+                flui_widgets::RepaintBoundary::new().child(
+                    flui_widgets::Padding::all(5.0).child(
+                        flui_widgets::CustomPaint::new()
+                            .size(Size::new(10.0, 10.0))
+                            .painter(SwatchPainter(flui_painting::styling::Color::rgb(1, 0, 0))),
+                    ),
+                ),
+            ),
+        ),
+    );
+    let transforms: Vec<Matrix4> = t
+        .draw_commands()
+        .into_iter()
+        .filter(|command| matches!(command.op, flui_painting::DrawOp::Rect { .. }))
+        .map(|command| command.transform)
+        .collect();
+    // The 20 px box sits centred at (390, 290); the scale about its origin
+    // doubles the 5 px padding.
+    let placed = Matrix4::translation(390.0, 290.0, 0.0)
+        * Matrix4::scaling(2.0, 2.0, 1.0)
+        * Matrix4::translation(5.0, 5.0, 0.0);
+    assert_eq!(transforms, [placed]);
+}

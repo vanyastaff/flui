@@ -124,8 +124,10 @@ substrate driver over raw owners, which the raw-owner suites still use.
   holds a `HeadlessHost`, its window's `AgentWindow` and one `InputLease`, and
   nothing else: it finds with `semantics.locate`, checks with
   `element.actionability` and delivers input with `input.inject`, so it
-  hit-tests and walks no tree itself and proves what the driver would. Each
-  read first runs the frames due now at zero duration, so its answer comes
+  hit-tests and walks no tree itself and proves what the driver would. The
+  one exception is `Tester::draw_commands`, which reads the scene the
+  headless host received, because the agent's protocol carries no drawing.
+  Each read first runs the frames due now at zero duration, so its answer comes
   from the tree that work committed. An expectation pumps a frame only while
   `time_to_next_frame` is zero (a scheduled frame or pending work); with
   nothing due now the application is idle and the expectation fails at once,
