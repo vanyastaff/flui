@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 
 use flui_painting::styling::Color;
 use flui_platform::os_options::{Win32WindowOptions, WindowsCornerPreference, WindowsTheme};
-use flui_platform::{Brightness, Unsupported, UnsupportedReason, WindowAppearance, WindowMaterial};
+use flui_platform::{Brightness, Unsupported, UnsupportedReason, WindowMaterial};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
     DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE, DWMSBT_AUTO, DWMSBT_MAINWINDOW,
@@ -342,10 +342,10 @@ pub(super) fn apply_corners(
 /// The appearance `theme` draws the chrome in, `None` for the user's app
 /// theme, which the window then follows; `Err` for a theme newer than this
 /// host.
-fn chosen_appearance(theme: WindowsTheme) -> Result<Option<WindowAppearance>, Win32WindowError> {
+fn chosen_appearance(theme: WindowsTheme) -> Result<Option<Brightness>, Win32WindowError> {
     match theme {
-        WindowsTheme::Light => Ok(Some(WindowAppearance::Light)),
-        WindowsTheme::Dark => Ok(Some(WindowAppearance::Dark)),
+        WindowsTheme::Light => Ok(Some(Brightness::Light)),
+        WindowsTheme::Dark => Ok(Some(Brightness::Dark)),
         WindowsTheme::System => Ok(None),
         _ => Err(Win32WindowError::NOT_YET_ON_THIS_HOST),
     }
@@ -356,8 +356,8 @@ fn chosen_appearance(theme: WindowsTheme) -> Result<Option<WindowAppearance>, Wi
 /// from then on. A theme newer than this host opens as the user's.
 pub(super) fn opening_chrome(
     options: &Win32WindowOptions,
-    system: WindowAppearance,
-) -> (WindowAppearance, bool) {
+    system: Brightness,
+) -> (Brightness, bool) {
     match chosen_appearance(options.theme) {
         Ok(Some(appearance)) => (appearance, false),
         Ok(None) | Err(_) => (system, true),
@@ -370,7 +370,7 @@ pub(super) fn opening_chrome(
 /// window's own DWM dark-mode flag is chrome this backend sets, not an
 /// observation. A missing value (before Windows 10 1809, or a profile that
 /// never chose) means light.
-pub(super) fn system_appearance() -> WindowAppearance {
+pub(super) fn system_appearance() -> Brightness {
     let mut light: u32 = 1;
     let mut size = size_of::<u32>() as u32;
     // SAFETY: both strings are NUL-terminated literals from `w!`.
@@ -389,23 +389,16 @@ pub(super) fn system_appearance() -> WindowAppearance {
         )
     };
     if status.is_ok() && light == 0 {
-        WindowAppearance::Dark
+        Brightness::Dark
     } else {
-        WindowAppearance::Light
+        Brightness::Light
     }
 }
 
 /// Draw `hwnd`'s title bar and borders dark exactly when `appearance` is.
 /// A build before Windows 10 20H1 refuses the attribute.
-pub(super) fn apply_chrome(
-    hwnd: HWND,
-    appearance: WindowAppearance,
-) -> Result<(), Win32WindowError> {
-    set(
-        hwnd,
-        DARK_MODE,
-        i32::from(Brightness::from(appearance).is_dark()),
-    )
+pub(super) fn apply_chrome(hwnd: HWND, appearance: Brightness) -> Result<(), Win32WindowError> {
+    set(hwnd, DARK_MODE, i32::from(appearance.is_dark()))
 }
 
 // ============================================================================
@@ -516,7 +509,7 @@ impl Win32Window<'_> {
     /// As [`set_dark_mode`](Self::set_dark_mode).
     pub fn set_theme(self, theme: WindowsTheme) -> Result<(), Win32WindowError> {
         if let Some(appearance) = chosen_appearance(theme)? {
-            return self.set_dark_mode(Brightness::from(appearance).is_dark());
+            return self.set_dark_mode(appearance.is_dark());
         }
         let hwnd = self.live()?;
         apply_chrome(hwnd, system_appearance())?;

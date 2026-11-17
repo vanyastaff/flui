@@ -42,7 +42,7 @@ pub use crate::close_guard::{CloseGuardSource, SettledClose};
 use crate::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow};
 pub use crate::flush_registry::{
     FlushChanged, FlushHost, FlushPublisher, FlushRegistry, FlushReport, FlushState, FlushWrite,
-    FlushWriter, SESSION_END_BUDGET,
+    FlushWriter, SESSION_END_BUDGET, WritesInFlight,
 };
 pub use crate::lifecycle::{CloseDelivery, LifecycleCloseWindow, LifecycleSource};
 pub use crate::navigation::url_owner::{UrlOwnerRegistration, UrlOwnerSlot};

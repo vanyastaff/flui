@@ -152,7 +152,9 @@ mod cases {
             "the second client reads the first's text through the compositor, \
              concealed only under the hint (marked: {marked:?})"
         );
-        first.until("the keyboard to come back", || first.window.state().focused);
+        first.until("the keyboard to come back", || {
+            first.window.state().focus.is_focused()
+        });
         assert_eq!(
             read(&first).as_deref(),
             Some("written by the second"),

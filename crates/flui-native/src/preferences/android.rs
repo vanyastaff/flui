@@ -677,8 +677,10 @@ mod configuration {
         let duration = |value: i32| {
             u64::try_from(value)
                 .map(Duration::from_millis)
-                .map_err(|_| PreferenceQueryError::Native {
-                    message: "Android returned a negative gesture timeout".into(),
+                .map_err(|_| {
+                    PreferenceQueryError::failed(
+                        "Android returned a negative gesture timeout".into(),
+                    )
                 })
         };
         let gestures = GesturePreferences::default()

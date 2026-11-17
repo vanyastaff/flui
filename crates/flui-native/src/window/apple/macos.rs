@@ -1462,6 +1462,20 @@ impl PlatformWindow for MacOSWindow {
         self.id
     }
 
+    /// AppKit's gesture distances are not read yet; the consumer keeps its
+    /// own.
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    /// The stacking of this process's windows is not read yet, so the window
+    /// under a point is not known.
+    fn window_at(&self, _: Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
     fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
@@ -1661,7 +1675,7 @@ impl PlatformWindow for MacOSWindow {
                 _ => msg_send![class!(NSCursor), arrowCursor],
             };
             if ns_cursor == NIL {
-                return Err(CursorError::Backend(
+                return Err(CursorError::failed(
                     "AppKit returned a null NSCursor".to_string(),
                 ));
             }
@@ -1888,7 +1902,6 @@ impl MacOSWindow {
                 let state = state
                     .with_mode(mode)
                     .with_visible(flags.is_shown())
-                    .with_focused(focused)
                     .with_title(Some(title))
                     .with_resizable(flags.resizable)
                     .with_frame(reported_frame(
@@ -1906,7 +1919,7 @@ impl MacOSWindow {
                         scale,
                     )
                     .ok(),
-                    appearance,
+                    brightness: appearance,
                     // A desktop window has no safe area and AppKit never
                     // suspends one.
                     insets: flui_platform::WindowInsets::ZERO,
@@ -1916,7 +1929,7 @@ impl MacOSWindow {
                     hovered,
                     // The key window is the one this host reports active;
                     // the main window has no report of its own here.
-                    active: focused,
+                    focus: flui_platform::WindowFocus::reported(focused, focused),
                     capabilities,
                     // AppKit's live resize and title-bar drag are not read
                     // yet (docs/gaps.md).

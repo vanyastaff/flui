@@ -396,6 +396,7 @@ where
                     // What an opened URL's loan returned is routed here,
                     // outside the destructor that returned it.
                     super::host::route_owed_opened_urls();
+                    super::host::release_finished_background_writes();
                 }))
             })
             .expect("BUG: Android owner was just installed")?;

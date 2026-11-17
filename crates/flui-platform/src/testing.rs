@@ -1,4 +1,5 @@
-//! What test doubles of the platform contracts share (ADR-0243).
+//! What test doubles of the platform contracts share (ADR-0243), compiled
+//! only with the `testing` feature: production code has no use for any of it.
 //!
 //! [`window_takes_no_frame_verbs!`](crate::window_takes_no_frame_verbs) writes
 //! the per-frame verbs of a [`PlatformWindow`](crate::PlatformWindow) double
@@ -6,8 +7,7 @@
 //! regions, so each double does not repeat them; [`NoNativeSurface`] is the
 //! surface target of a double with no native surface.
 //!
-//! Behind the `testing` feature, the doubles of the contracts this crate
-//! owns (ADR-0243 D4): `FakeHaptics`, the recording
+//! The doubles of the contracts this crate owns (ADR-0243 D4): `FakeHaptics`, the recording
 //! [`PlatformHaptics`](crate::PlatformHaptics) a scenario asserts against,
 //! `ScriptedHttp`, the [`HttpClient`](crate::http::HttpClient) a headless host
 //! registers so no test reaches the network, and
@@ -27,22 +27,16 @@
 //! not a script, behind the `Send + Sync` storage contract, with nothing a
 //! request could be unexpected against.
 
-#[cfg(feature = "testing")]
 mod haptics;
 
-#[cfg(feature = "testing")]
 pub use haptics::{FakeHaptics, HapticCall, HapticPlay};
 
-#[cfg(feature = "testing")]
 mod http;
 
-#[cfg(feature = "testing")]
 pub use http::{ScriptedHttp, ScriptedResponse};
 
-#[cfg(feature = "testing")]
 mod launcher;
 
-#[cfg(feature = "testing")]
 pub use launcher::{LaunchRequest, ScriptedLauncher};
 
 use raw_window_handle::{
@@ -111,6 +105,13 @@ impl crate::SurfaceTarget for NoNativeSurface {
 /// #   fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> { None }
 /// #   fn system_chrome(&self) -> Option<Arc<dyn PlatformSystemChrome>> { None }
 /// #   fn drag_source(&self) -> Option<Arc<dyn drag::PlatformDragSource>> { None }
+/// #   fn gesture_geometry(&self) -> Result<Option<GestureGeometry>, PreferenceQueryError> {
+/// #       Ok(None)
+/// #   }
+/// #   fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> WindowAt {
+/// #       WindowAt::Unknown
+/// #   }
+/// #   fn reveal_after_first_frame(&self) {}
 /// }
 ///
 /// # let double = Double(

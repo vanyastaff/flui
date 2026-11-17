@@ -230,15 +230,14 @@ impl RuntimeEvent {
         if next.insets != previous.insets {
             events.push(Self::InsetsChanged(next.insets));
         }
-        let brightness = flui_platform::Brightness::from(next.appearance);
-        if brightness != flui_platform::Brightness::from(previous.appearance) {
-            events.push(Self::AppearanceChanged(brightness));
+        if next.brightness != previous.brightness {
+            events.push(Self::AppearanceChanged(next.brightness));
         }
         if next.execution != previous.execution {
             events.push(Self::WindowExecution(next.execution));
         }
-        if next.focused != previous.focused {
-            events.push(Self::WindowFocus(next.focused));
+        if next.focus.is_focused() != previous.focus.is_focused() {
+            events.push(Self::WindowFocus(next.focus.is_focused()));
         }
         if next.is_seen() != previous.is_seen() {
             events.push(Self::WindowVisibility(next.is_seen()));

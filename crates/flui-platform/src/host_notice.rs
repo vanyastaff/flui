@@ -34,8 +34,11 @@ pub enum SessionEndPhase {
     Ending,
 }
 
-/// The application's answer to a [`SessionEndPhase`]. Only an answer to
-/// [`SessionEndPhase::Query`] is read; the platform ignores the others.
+/// The application's answer to a [`SessionEndPhase`]. An answer to
+/// [`SessionEndPhase::Query`] is read, and an answer to
+/// [`SessionEndPhase::Ending`] on a platform that keeps a backgrounded process
+/// running for the application ([`SessionEndSupport::Background`]); the
+/// platform ignores the others.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SessionEndAnswer {
@@ -66,6 +69,20 @@ pub enum SessionEndSupport {
     },
     /// The platform tells the application, if at all, and does not wait.
     NotifyOnly,
+    /// A phone: once the application leaves the screen the platform may
+    /// suspend or end its process without notice (iOS, Android), so it
+    /// reports [`SessionEndPhase::Ending`] then, once per trip to the
+    /// background, and the application stays up for the user's return. An
+    /// [`SessionEndAnswer::Block`] to that phase keeps the process running,
+    /// for at most `window`, until the application releases it
+    /// (`Platform::release_session_end`): iOS holds a background task, which
+    /// the system may still end sooner; Android keeps a stopped process
+    /// running until it reclaims it, and holds nothing.
+    Background {
+        /// The longest the application's writes may run once the phase
+        /// returned.
+        window: std::time::Duration,
+    },
 }
 
 /// A system event other than a session end, as the platform reports it to the

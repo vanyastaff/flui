@@ -154,6 +154,18 @@ impl PlatformWindow for DragWindow {
     }
     flui_platform::window_takes_no_frame_verbs!();
 
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }

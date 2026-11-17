@@ -37,6 +37,12 @@ struct Window {
     capabilities: flui_platform::WindowCapabilities,
 }
 impl PlatformWindow for Window {
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }
@@ -325,6 +331,18 @@ struct HapticWindow {
     haptics: Arc<flui_platform::testing::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn id(&self) -> flui_platform::WindowId {
         self.inner.id()
     }

@@ -463,6 +463,18 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
     }
     flui_platform::window_takes_no_frame_verbs!();
 
+    fn gesture_geometry(
+        &self,
+    ) -> Result<Option<flui_platform::GestureGeometry>, flui_platform::PreferenceQueryError> {
+        Ok(None)
+    }
+
+    fn window_at(&self, _: flui_foundation::geometry::Point<f64>) -> flui_platform::WindowAt {
+        flui_platform::WindowAt::Unknown
+    }
+
+    fn reveal_after_first_frame(&self) {}
+
     fn set_cursor(&self, _: flui_platform::CursorIcon) -> Result<(), flui_platform::CursorError> {
         Ok(())
     }
@@ -472,7 +484,7 @@ impl flui_platform::PlatformWindow for CaptureWakeWindow {
             flui_platform::WindowGeometry::try_new(None, size).expect("a finite size"),
             flui_platform::WindowExtent::try_new(size).expect("a finite size"),
         )
-        .with_focused(true)
+        .with_focus(flui_platform::WindowFocus::Focused)
         .with_metrics(flui_foundation::geometry::WindowMetrics::from_logical(size, 1.0).ok())
         .with_capabilities(self.1)
     }

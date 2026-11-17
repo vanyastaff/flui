@@ -11974,7 +11974,6 @@ impl Clone for flui::platform::Brightness
 impl Copy for flui::platform::Brightness
 impl Default for flui::platform::Brightness
 impl Eq for flui::platform::Brightness
-impl From<flui::platform::WindowAppearance> for flui::platform::Brightness
 impl PartialEq for flui::platform::Brightness
 impl core::fmt::Debug for flui::platform::Brightness
 impl core::marker::StructuralPartialEq for flui::platform::Brightness
@@ -12133,6 +12132,7 @@ impl core::marker::StructuralPartialEq for flui::platform::CopiedAside
 #[non_exhaustive] pub enum flui::platform::CursorError
 impl Clone for flui::platform::CursorError
 impl Eq for flui::platform::CursorError
+impl From<flui::platform::PlatformFailure> for flui::platform::CursorError
 impl From<flui::platform::Unsupported> for flui::platform::CursorError
 impl PartialEq for flui::platform::CursorError
 impl core::error::Error for flui::platform::CursorError
@@ -12140,7 +12140,8 @@ impl core::fmt::Debug for flui::platform::CursorError
 impl core::fmt::Display for flui::platform::CursorError
 impl core::marker::StructuralPartialEq for flui::platform::CursorError
 pub const fn flui::platform::CursorError::unsupported(&self) -> Option<flui::platform::Unsupported>
-variant flui::platform::CursorError::Backend(String) // at 1
+pub fn flui::platform::CursorError::failed(message: String) -> Self
+variant flui::platform::CursorError::Platform(flui::platform::PlatformFailure) // at 1
 variant flui::platform::CursorError::Unsupported(flui::platform::Unsupported) // at 0
 reexport flui::platform::CursorIcon => cursor_icon::CursorIcon
 pub struct flui::platform::DataTransferOffer { .. }
@@ -12931,6 +12932,8 @@ variant flui::platform::PlacementError::UnsupportedVersion // at 1
 #[non_exhaustive] pub enum flui::platform::PlatformFailure
 impl Clone for flui::platform::PlatformFailure
 impl Eq for flui::platform::PlatformFailure
+impl From<flui::platform::PlatformFailure> for flui::platform::CursorError
+impl From<flui::platform::PlatformFailure> for flui::platform::PreferenceQueryError
 impl PartialEq for flui::platform::PlatformFailure
 impl core::error::Error for flui::platform::PlatformFailure
 impl core::fmt::Debug for flui::platform::PlatformFailure
@@ -12967,12 +12970,12 @@ fn flui::platform::PlatformTextInput::set_ime_cursor_area(&self, area: flui::geo
 pub trait flui::platform::PlatformWindow
 fn flui::platform::PlatformWindow::apply(&self, command: flui::platform::AdmittedCommand) -> Result<(), flui::platform::ApplyError>
 fn flui::platform::PlatformWindow::drag_source(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::drag::PlatformDragSource>>
-fn flui::platform::PlatformWindow::gesture_geometry(&self) -> Result<Option<flui::platform::GestureGeometry>, flui::platform::PreferenceQueryError> { .. }
+fn flui::platform::PlatformWindow::gesture_geometry(&self) -> Result<Option<flui::platform::GestureGeometry>, flui::platform::PreferenceQueryError>
 fn flui::platform::PlatformWindow::haptics(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformHaptics>>
 fn flui::platform::PlatformWindow::id(&self) -> flui::platform::WindowId
 fn flui::platform::PlatformWindow::redraw_requester(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::RedrawRequester>
 fn flui::platform::PlatformWindow::request_redraw(&self)
-fn flui::platform::PlatformWindow::reveal_after_first_frame(&self) { .. }
+fn flui::platform::PlatformWindow::reveal_after_first_frame(&self)
 fn flui::platform::PlatformWindow::set_cursor(&self, cursor: cursor_icon::CursorIcon) -> Result<(), flui::platform::CursorError>
 fn flui::platform::PlatformWindow::set_frame_rate_hint(&self, hint: flui::platform::FrameRateHint) -> Result<(), flui::platform::Unsupported>
 fn flui::platform::PlatformWindow::set_input_regions(&self, regions: &[flui::platform::input_regions::InputRegion]) -> Result<(), flui::platform::Unsupported>
@@ -12980,7 +12983,7 @@ fn flui::platform::PlatformWindow::state(&self) -> flui::platform::WindowState
 fn flui::platform::PlatformWindow::surface_target(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::SurfaceTarget>
 fn flui::platform::PlatformWindow::system_chrome(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformSystemChrome>>
 fn flui::platform::PlatformWindow::text_input(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformTextInput>>
-fn flui::platform::PlatformWindow::window_at(&self, position: flui::geometry::Point<f64>) -> flui::platform::WindowAt { .. }
+fn flui::platform::PlatformWindow::window_at(&self, position: flui::geometry::Point<f64>) -> flui::platform::WindowAt
 reexport flui::platform::PointerButton => flui::interaction::PointerButton
 reexport flui::platform::PointerButtons => flui::interaction::PointerButtons
 #[non_exhaustive] pub struct flui::platform::PointerCancel
@@ -13033,6 +13036,7 @@ pub fn flui::platform::PreferenceParts::try_into_preferences(self) -> Result<flu
 impl Clone for flui::platform::PreferenceQueryError
 impl Eq for flui::platform::PreferenceQueryError
 impl From<flui::platform::InvalidPreference> for flui::platform::PreferenceQueryError
+impl From<flui::platform::PlatformFailure> for flui::platform::PreferenceQueryError
 impl From<flui::platform::Unsupported> for flui::platform::PreferenceQueryError
 impl PartialEq for flui::platform::PreferenceQueryError
 impl core::error::Error for flui::platform::PreferenceQueryError
@@ -13040,8 +13044,9 @@ impl core::fmt::Debug for flui::platform::PreferenceQueryError
 impl core::fmt::Display for flui::platform::PreferenceQueryError
 impl core::marker::StructuralPartialEq for flui::platform::PreferenceQueryError
 pub const fn flui::platform::PreferenceQueryError::unsupported(&self) -> Option<flui::platform::Unsupported>
+pub fn flui::platform::PreferenceQueryError::failed(message: String) -> Self
 variant flui::platform::PreferenceQueryError::Invalid(flui::platform::InvalidPreference) // at 2
-variant flui::platform::PreferenceQueryError::Native { message: String } // at 3
+variant flui::platform::PreferenceQueryError::Platform(flui::platform::PlatformFailure) // at 3
 variant flui::platform::PreferenceQueryError::Unsupported(flui::platform::Unsupported) // at 0
 variant flui::platform::PreferenceQueryError::WrongThread // at 1
 pub struct flui::platform::PublicationMint(_)
@@ -13185,6 +13190,7 @@ impl PartialEq for flui::platform::SessionEndSupport
 impl core::fmt::Debug for flui::platform::SessionEndSupport
 impl core::hash::Hash for flui::platform::SessionEndSupport
 impl core::marker::StructuralPartialEq for flui::platform::SessionEndSupport
+variant flui::platform::SessionEndSupport::Background { window: core::time::Duration } // at 3
 variant flui::platform::SessionEndSupport::Delay { max: core::time::Duration } // at 1
 variant flui::platform::SessionEndSupport::Hold // at 0
 variant flui::platform::SessionEndSupport::NotifyOnly // at 2
@@ -13545,19 +13551,6 @@ impl core::fmt::Debug for flui::platform::WheelStep
 impl core::marker::StructuralPartialEq for flui::platform::WheelStep
 variant flui::platform::WheelStep::Lines(u32) // at 0
 variant flui::platform::WheelStep::Page // at 1
-#[non_exhaustive] pub enum flui::platform::WindowAppearance
-impl Clone for flui::platform::WindowAppearance
-impl Copy for flui::platform::WindowAppearance
-impl Default for flui::platform::WindowAppearance
-impl Eq for flui::platform::WindowAppearance
-impl From<flui::platform::WindowAppearance> for flui::platform::Brightness
-impl PartialEq for flui::platform::WindowAppearance
-impl core::fmt::Debug for flui::platform::WindowAppearance
-impl core::marker::StructuralPartialEq for flui::platform::WindowAppearance
-variant flui::platform::WindowAppearance::Dark // at 1
-variant flui::platform::WindowAppearance::Light // at 0
-variant flui::platform::WindowAppearance::VibrantDark // at 3
-variant flui::platform::WindowAppearance::VibrantLight // at 2
 #[non_exhaustive] pub enum flui::platform::WindowAt
 impl Clone for flui::platform::WindowAt
 impl Copy for flui::platform::WindowAt
@@ -13683,6 +13676,21 @@ pub const fn flui::platform::WindowExtent::get(self) -> flui::geometry::Size<f64
 pub const fn flui::platform::WindowExtent::height(self) -> f64
 pub const fn flui::platform::WindowExtent::width(self) -> f64
 pub fn flui::platform::WindowExtent::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
+pub enum flui::platform::WindowFocus
+impl Clone for flui::platform::WindowFocus
+impl Copy for flui::platform::WindowFocus
+impl Default for flui::platform::WindowFocus
+impl Eq for flui::platform::WindowFocus
+impl PartialEq for flui::platform::WindowFocus
+impl core::fmt::Debug for flui::platform::WindowFocus
+impl core::hash::Hash for flui::platform::WindowFocus
+impl core::marker::StructuralPartialEq for flui::platform::WindowFocus
+pub const fn flui::platform::WindowFocus::is_active(self) -> bool
+pub const fn flui::platform::WindowFocus::is_focused(self) -> bool
+pub const fn flui::platform::WindowFocus::reported(focused: bool, active: bool) -> Self
+variant flui::platform::WindowFocus::Active // at 1
+variant flui::platform::WindowFocus::Focused // at 2
+variant flui::platform::WindowFocus::Inactive // at 0
 #[non_exhaustive] pub enum flui::platform::WindowFrame
 impl Clone for flui::platform::WindowFrame
 impl Copy for flui::platform::WindowFrame
@@ -13882,18 +13890,17 @@ impl core::fmt::Debug for flui::platform::WindowRevisionExhausted
 impl core::fmt::Display for flui::platform::WindowRevisionExhausted
 impl core::marker::StructuralPartialEq for flui::platform::WindowRevisionExhausted
 #[non_exhaustive] pub struct flui::platform::WindowState
-field flui::platform::WindowState::active: bool // at 18
-field flui::platform::WindowState::appearance: flui::platform::WindowAppearance // at 14
-field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 20
+field flui::platform::WindowState::brightness: flui::platform::Brightness // at 14
+field flui::platform::WindowState::capabilities: flui::platform::WindowCapabilities // at 19
 field flui::platform::WindowState::constraints: flui::platform::SizeConstraints // at 9
 field flui::platform::WindowState::content_size: flui::platform::WindowExtent // at 2
 field flui::platform::WindowState::display: Option<flui::platform::DisplayId> // at 12
 field flui::platform::WindowState::execution: flui::platform::WindowExecutionState // at 16
-field flui::platform::WindowState::focused: bool // at 7
+field flui::platform::WindowState::focus: flui::platform::WindowFocus // at 7
 field flui::platform::WindowState::frame: flui::platform::WindowFrame // at 11
 field flui::platform::WindowState::hovered: bool // at 17
 field flui::platform::WindowState::insets: flui::platform::WindowInsets // at 15
-field flui::platform::WindowState::interaction: flui::platform::WindowInteraction // at 19
+field flui::platform::WindowState::interaction: flui::platform::WindowInteraction // at 18
 field flui::platform::WindowState::metrics: Option<flui::geometry::WindowMetrics> // at 13
 field flui::platform::WindowState::mode: flui::platform::WindowMode // at 3
 field flui::platform::WindowState::normal_geometry: Option<flui::platform::WindowGeometry> // at 4
@@ -13912,13 +13919,12 @@ pub fn flui::platform::WindowState::is_seen(&self) -> bool
 pub fn flui::platform::WindowState::new(outer: flui::platform::WindowGeometry, content_size: flui::platform::WindowExtent) -> Self
 pub fn flui::platform::WindowState::successor(&self, sample: Self) -> Result<Self, flui::platform::WindowRevisionExhausted>
 pub fn flui::platform::WindowState::successor_from(&self, sample: Self, mint: flui::platform::PublicationMint) -> Result<Self, flui::platform::WindowRevisionExhausted>
-pub fn flui::platform::WindowState::with_active(self, active: bool) -> Self
-pub fn flui::platform::WindowState::with_appearance(self, appearance: flui::platform::WindowAppearance) -> Self
+pub fn flui::platform::WindowState::with_brightness(self, brightness: flui::platform::Brightness) -> Self
 pub fn flui::platform::WindowState::with_capabilities(self, capabilities: flui::platform::WindowCapabilities) -> Self
 pub fn flui::platform::WindowState::with_constraints(self, constraints: flui::platform::SizeConstraints) -> Self
 pub fn flui::platform::WindowState::with_display(self, display: Option<flui::platform::DisplayId>) -> Self
 pub fn flui::platform::WindowState::with_execution(self, execution: flui::platform::WindowExecutionState) -> Self
-pub fn flui::platform::WindowState::with_focused(self, focused: bool) -> Self
+pub fn flui::platform::WindowState::with_focus(self, focus: flui::platform::WindowFocus) -> Self
 pub fn flui::platform::WindowState::with_frame(self, frame: flui::platform::WindowFrame) -> Self
 pub fn flui::platform::WindowState::with_hovered(self, hovered: bool) -> Self
 pub fn flui::platform::WindowState::with_insets(self, insets: flui::platform::WindowInsets) -> Self
@@ -13931,18 +13937,17 @@ pub fn flui::platform::WindowState::with_resizable(self, resizable: bool) -> Sel
 pub fn flui::platform::WindowState::with_title(self, title: Option<String>) -> Self
 pub fn flui::platform::WindowState::with_visible(self, visible: bool) -> Self
 pub struct flui::platform::WindowStateParts
-field flui::platform::WindowStateParts::active: bool // at 17
-field flui::platform::WindowStateParts::appearance: flui::platform::WindowAppearance // at 13
-field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 19
+field flui::platform::WindowStateParts::brightness: flui::platform::Brightness // at 13
+field flui::platform::WindowStateParts::capabilities: flui::platform::CapabilityParts // at 18
 field flui::platform::WindowStateParts::constraints: flui::platform::SizeConstraints // at 8
 field flui::platform::WindowStateParts::content_size: flui::platform::WindowExtent // at 1
 field flui::platform::WindowStateParts::display: Option<flui::platform::DisplayId> // at 11
 field flui::platform::WindowStateParts::execution: flui::platform::WindowExecutionState // at 15
-field flui::platform::WindowStateParts::focused: bool // at 6
+field flui::platform::WindowStateParts::focus: flui::platform::WindowFocus // at 6
 field flui::platform::WindowStateParts::frame: flui::platform::WindowFrame // at 10
 field flui::platform::WindowStateParts::hovered: bool // at 16
 field flui::platform::WindowStateParts::insets: flui::platform::WindowInsets // at 14
-field flui::platform::WindowStateParts::interaction: flui::platform::WindowInteraction // at 18
+field flui::platform::WindowStateParts::interaction: flui::platform::WindowInteraction // at 17
 field flui::platform::WindowStateParts::metrics: Option<flui::geometry::WindowMetrics> // at 12
 field flui::platform::WindowStateParts::mode: flui::platform::WindowMode // at 2
 field flui::platform::WindowStateParts::normal_geometry: Option<flui::platform::WindowGeometry> // at 3

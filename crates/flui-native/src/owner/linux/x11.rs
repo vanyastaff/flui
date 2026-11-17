@@ -85,8 +85,8 @@ use std::sync::{Arc, Weak};
 use flui_foundation::panic::FirstPanic;
 use flui_platform::data_transfer::DragTransport;
 use flui_platform::{
-    DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
-    SystemPreferences, WindowAppearance, WindowId,
+    Brightness, DisplayRevision, DisplaySnapshot, SessionEndAnswer, SessionEndPhase, SystemNotice,
+    SystemPreferences, WindowId,
 };
 use rustc_hash::FxHashMap;
 use rustix::event::{EventfdFlags, PollFd, PollFlags, Timespec, eventfd, poll};
@@ -763,7 +763,7 @@ pub(crate) trait LoopWindows: OpenWindows {
     fn refresh(&self);
 
     /// The colour scheme the system applies changed.
-    fn observe_appearance(&self, appearance: WindowAppearance);
+    fn observe_appearance(&self, appearance: Brightness);
 
     /// How many frames the windows' handlers produced.
     fn frames(&self) -> u64;
@@ -1754,7 +1754,7 @@ mod tests {
             .downcast_ref::<crate::window::linux::x11::X11Window>()
             .expect("the X11 platform opens X11 windows");
         assert!(
-            !window.state().focused,
+            !window.state().focus.is_focused(),
             "the window opens without the focus"
         );
 
@@ -1786,7 +1786,7 @@ mod tests {
         owner.windows.read_stale();
 
         assert!(activated.get(), "the handler ran during the announcement");
-        let focused = window.state().focused;
+        let focused = window.state().focus.is_focused();
         assert!(focused, "the command gave the window the focus");
         assert_eq!(
             x11.told_focus(),

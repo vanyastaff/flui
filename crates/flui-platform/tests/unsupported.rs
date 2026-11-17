@@ -101,7 +101,7 @@ fn window_commands() {
 
 fn cursors() {
     carries(CursorError::from, CursorError::unsupported);
-    assert_eq!(CursorError::Backend("refused".into()).unsupported(), None);
+    assert_eq!(CursorError::failed("refused".into()).unsupported(), None);
 }
 
 fn drags() {

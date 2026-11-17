@@ -210,14 +210,22 @@ impl LoopControl {
             .is_some_and(|gate| gate.session_ending())
     }
 
-    /// `applicationShouldTerminate:`. A quit nobody announced goes through the
-    /// run loop's orderly stop and is cancelled here; a session end is answered
-    /// at once, or after the application releases its holds.
+    /// `applicationShouldTerminate:`. A quit nobody announced is cancelled
+    /// here and asked of the application in a task of its own
+    /// ([`Self::quit_asked`]); a session end is answered at once, or after
+    /// the application releases its holds.
     fn terminate_requested(self: &Arc<Self>) -> NSApplicationTerminateReply {
         let termination = self.terminate_gate.lock().terminate_requested();
         match termination {
             Termination::Quit => {
-                self.request(true);
+                let weak = Arc::downgrade(self);
+                exec_async_on_owner(owner_queue(), move || {
+                    cleanup_step(|| {
+                        if let Some(control) = weak.upgrade() {
+                            control.quit_asked();
+                        }
+                    });
+                });
                 NSApplicationTerminateReply::TerminateCancel
             }
             Termination::Now => {
@@ -336,6 +344,27 @@ impl LoopControl {
                 },
             );
         });
+    }
+
+    /// Ask the application whether the quit AppKit heard (the Dock's Quit, a
+    /// quit Apple Event, `terminate:`) goes ahead, outside every lock and
+    /// outside the delegate's callback. On [`QuitAnswer::Quit`](crate::QuitAnswer::Quit) the loop stops
+    /// in order and closes every window; on
+    /// [`QuitAnswer::KeepRunning`](crate::QuitAnswer::KeepRunning) every window
+    /// stays as it was, its handler still installed, and the application
+    /// quits itself once its windows let it. A loop already stopping asks
+    /// nothing.
+    fn quit_asked(self: &Arc<Self>) {
+        if matches!(self.state.lock().phase, Phase::Stopping | Phase::Stopped) {
+            return;
+        }
+        let answer = self
+            .app
+            .quit_asked()
+            .or_contain(crate::QuitAnswer::Quit, "the application's quit question");
+        if answer == crate::QuitAnswer::Quit {
+            self.request(true);
+        }
     }
 
     /// The session is ending now: tell the application, then let AppKit go on if

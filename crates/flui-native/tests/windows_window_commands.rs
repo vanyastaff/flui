@@ -1703,16 +1703,22 @@ fn activation_is_a_fact_apart_from_focus() {
     let window = open(&platform, options());
     settle();
     send(&window, WM_ACTIVATE, WA_ACTIVE as usize, 0);
-    assert!(window.state().active, "WM_ACTIVATE made it active");
+    assert!(
+        window.state().focus.is_active(),
+        "WM_ACTIVATE made it active"
+    );
     // SAFETY: a plain call on this thread; no window keeps the focus.
     let _ = unsafe { SetFocus(None) };
     let state = window.state();
     assert!(
-        state.active && !state.focused,
+        state.focus == flui_platform::WindowFocus::Active,
         "active, not focused: {state:?}"
     );
     send(&window, WM_ACTIVATE, WA_INACTIVE as usize, 0);
-    assert!(!window.state().active, "WM_ACTIVATE took it back");
+    assert!(
+        !window.state().focus.is_active(),
+        "WM_ACTIVATE took it back"
+    );
 }
 
 /// A Win32 window for the conformance checks of `flui-testing`.

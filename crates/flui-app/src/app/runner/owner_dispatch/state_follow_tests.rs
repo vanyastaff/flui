@@ -8,7 +8,8 @@
 
 use flui_foundation::geometry::{DeviceSize, EdgeInsets, Size, WindowMetrics};
 use flui_platform::{
-    WindowAppearance, WindowExecutionState, WindowGeometry, WindowInsets, WindowMode, WindowState,
+    Brightness, WindowExecutionState, WindowFocus, WindowGeometry, WindowInsets, WindowMode,
+    WindowState,
 };
 
 use super::RuntimeEvent;
@@ -41,7 +42,7 @@ fn shown() -> WindowState {
         flui_platform::WindowExtent::try_new(size).expect("a finite size"),
     )
     .with_visible(true)
-    .with_focused(true)
+    .with_focus(WindowFocus::Focused)
     .with_metrics(Some(metrics(800, 1.0)))
 }
 
@@ -79,7 +80,7 @@ fn each_fact_brings_exactly_its_event() {
         ),
         (
             "appearance",
-            shown().with_appearance(WindowAppearance::Dark),
+            shown().with_brightness(Brightness::Dark),
             &["state", "brightness Dark"],
         ),
         (
@@ -89,7 +90,7 @@ fn each_fact_brings_exactly_its_event() {
         ),
         (
             "focus",
-            shown().with_focused(false),
+            shown().with_focus(WindowFocus::Inactive),
             &["state", "focus false"],
         ),
         (
@@ -107,7 +108,6 @@ fn each_fact_brings_exactly_its_event() {
             shown().with_hovered(true),
             &["state", "hover true"],
         ),
-        ("activation alone", shown().with_active(false), &["state"]),
     ];
     let mut failures = Vec::new();
     for (name, next, expected) in rows {
@@ -122,6 +122,16 @@ fn each_fact_brings_exactly_its_event() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+    // A window that loses its activation without holding the keyboard brings
+    // a new snapshot and no focus event.
+    assert_eq!(
+        followed(vec![
+            shown().with_focus(WindowFocus::Active),
+            shown().with_focus(WindowFocus::Inactive),
+        ]),
+        [Vec::<String>::new(), vec!["state".to_owned()]],
+        "activation alone"
+    );
 }
 
 /// A snapshot without drawable metrics keeps the last ones, so the same
@@ -153,10 +163,10 @@ fn a_minimize_and_restore_are_seen_and_unseen() {
 /// compared against the seed.
 fn a_change_before_the_seed_brings_nothing() {
     let mut seen = None;
-    let early = RuntimeEvent::follow(&mut seen, shown().with_focused(false));
+    let early = RuntimeEvent::follow(&mut seen, shown().with_focus(WindowFocus::Inactive));
     assert!(early.events.is_empty(), "a change before the seed");
     // The seed replaces whatever the early change left.
-    seen = Some(shown().with_focused(false));
+    seen = Some(shown().with_focus(WindowFocus::Inactive));
     let after = RuntimeEvent::follow(&mut seen, shown());
     assert_eq!(
         after.events.iter().map(named).collect::<Vec<_>>(),
@@ -186,7 +196,7 @@ fn a_panicking_delivery_keeps_the_later_facts() {
         &mut seen,
         shown()
             .with_metrics(Some(metrics(1000, 1.0)))
-            .with_focused(false)
+            .with_focus(WindowFocus::Inactive)
             .with_visible(false),
     )
     .events;

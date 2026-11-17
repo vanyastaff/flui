@@ -9,8 +9,8 @@
 //!
 //! A turn's panic outside a slot's command cannot be resumed on the owner's
 //! thread: the thread contains it, keeps serving, and hands its text to the
-//! owner as [`ExecutorFailure::TurnPanicked`]. A thread that does not answer a
-//! detach or a stop within [`DETACH_DEADLINE`] is marked
+//! owner as [`ExecutorFailure::TurnPanicked`]. A thread that does not answer an
+//! attach, a detach or a stop within [`DETACH_DEADLINE`] is marked
 //! [`ExecutorHealth::Died`] and left running: it holds the context, and the
 //! owner neither joins it nor builds a second context beside it.
 
@@ -264,6 +264,48 @@ impl ExecutorHandle {
                 {
                     return Ok(());
                 }
+            }
+            let waited = started.elapsed();
+            if waited >= timeout {
+                return Err(self.die(timeout));
+            }
+            self.shared
+                .wait_for_turn(seen, timeout.saturating_sub(waited));
+        }
+    }
+    /// Wait until the thread answered `slot`'s attach, at most `timeout`, so
+    /// the owner refuses a window the thread refused as an inline owner
+    /// does, before the window is shown: returns once the slot's record is
+    /// [`SlotPhase::Attached`] or [`SlotPhase::Refused`], when
+    /// [`RasterSender::take_failure`] says why it was refused, and at once
+    /// for a slot the sender does not hold. The deadline is a detach's
+    /// (§9): a thread that does not answer within it is wedged, whatever
+    /// its turn is doing, and every send answers `Gone` from then on.
+    ///
+    /// # Errors
+    /// [`ExecutorFailure::Wedged`] when the thread did not answer in time:
+    /// the executor is then [`ExecutorHealth::Died`], and the thread may still
+    /// hold the slot's target, so the owner keeps the window. The cause the executor
+    /// died of, when it was dead already.
+    pub fn await_attach(
+        &self,
+        sender: &RasterSender,
+        slot: SlotId,
+        timeout: Duration,
+    ) -> Result<(), ExecutorFailure> {
+        let started = std::time::Instant::now();
+        loop {
+            // Read before the record, so a turn that ends between the check
+            // and the wait is not missed.
+            let seen = self.shared.turns();
+            let answered = sender
+                .record(slot)
+                .is_none_or(|record| record.phase != SlotPhase::Attaching);
+            if answered {
+                return Ok(());
+            }
+            if let Some(death) = self.shared.death() {
+                return Err(death);
             }
             let waited = started.elapsed();
             if waited >= timeout {
