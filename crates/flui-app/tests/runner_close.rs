@@ -295,6 +295,8 @@ struct Started {
     handle: AppHandle,
     window: flui_native::HeadlessHostWindow,
     renderer: StandInRenderer,
+    /// What the platform reports, as the operating system does.
+    events: flui_native::HeadlessHostEvents,
 }
 
 fn start(observed: &Observed) -> Started {
@@ -305,7 +307,9 @@ fn start(observed: &Observed) -> Started {
 fn start_with(observed: &Observed, handler: Option<CloseRequestHandler>) -> Started {
     let ready = Rc::new(RefCell::new(None));
     let (application, root) = observed_app(observed.clone(), Rc::clone(&ready), handler);
-    let run = HeadlessRun::start(application, root);
+    let platform = flui_native::HeadlessPlatform::new();
+    let events = platform.host_events();
+    let run = HeadlessRun::start_on(application, root, platform);
     run.run_owner_turn();
     let handle = ready.take().expect("on_ready ran during start");
     let windows = run.open_windows();
@@ -322,6 +326,7 @@ fn start_with(observed: &Observed, handler: Option<CloseRequestHandler>) -> Star
         handle,
         window,
         renderer,
+        events,
     }
 }
 
@@ -622,11 +627,53 @@ pub(crate) fn a_vetoed_close_disposes_nothing() {
     }
 }
 
+/// Who asks the application to quit.
+#[derive(Clone, Copy, Debug)]
+enum QuitFrom {
+    /// Its own code, through `AppHandle::request_quit`.
+    Application,
+    /// The user, through the platform, as AppKit's Quit in the Dock does.
+    Platform,
+}
+
+/// Ask the run to quit from `from`. The platform's quit keeps the platform
+/// running: the application asks its presentations on its next turn.
+fn ask_quit(started: &Started, from: QuitFrom) {
+    match from {
+        QuitFrom::Application => started.handle.request_quit().expect("the quit is accepted"),
+        QuitFrom::Platform => assert_eq!(
+            started.events.quit(),
+            flui_native::QuitAnswer::KeepRunning,
+            "the application asks its windows before the platform quits"
+        ),
+    }
+}
+
+/// A quit nothing refuses ends the loop, whoever asked for it.
+pub(crate) fn a_quit_nothing_refuses_ends_the_loop() {
+    for from in [QuitFrom::Application, QuitFrom::Platform] {
+        let observed = Observed::default();
+        let started = start(&observed);
+        ask_quit(&started, from);
+        turn_until_stopped(&started.run, 4);
+        assert!(!started.run.is_running(), "{from:?}: the quit went ahead");
+        assert_eq!(observed.disposed.get(), 1, "{from:?}: disposed once");
+        join_ok(started.run);
+    }
+}
+
 /// A quit a hold or the handler refuses is deferred, disposes nothing and is
-/// recorded as the program's; once the record is carried out the quit goes
+/// recorded as the program's, whether the application or the user through
+/// the platform asked for it; once the record is carried out the quit goes
 /// ahead without asking again.
+///
+/// Red-check: let the platform's quit close the windows at once, past their
+/// handlers, as AppKit's loop did — the platform row disposes the tree.
 pub(crate) fn a_refused_quit_waits_for_the_record_then_exits() {
-    for veto in [Veto::Handler, Veto::Hold] {
+    let cases = [Veto::Handler, Veto::Hold]
+        .into_iter()
+        .flat_map(|veto| [QuitFrom::Application, QuitFrom::Platform].map(|from| (veto, from)));
+    for (veto, from) in cases {
         let observed = Observed::default();
         let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counted = Arc::clone(&asked);
@@ -643,12 +690,12 @@ pub(crate) fn a_refused_quit_waits_for_the_record_then_exits() {
         let started = start_with(&observed, handler);
         let hold = matches!(veto, Veto::Hold).then(|| observed.guard().hold());
 
-        started.handle.request_quit().expect("the quit is accepted");
+        ask_quit(&started, from);
         started.run.run_owner_turn();
         started.run.run_owner_turn();
-        assert_nothing_disposed(&observed, &started, &format!("{veto:?}"));
+        assert_nothing_disposed(&observed, &started, &format!("{veto:?} {from:?}"));
         let pending = observed.pending().expect("the refused quit is recorded");
-        assert_eq!(pending.reason(), CloseReason::Program, "{veto:?}");
+        assert_eq!(pending.reason(), CloseReason::Program, "{veto:?} {from:?}");
 
         match hold {
             Some(hold) => drop(hold),
@@ -674,9 +721,13 @@ pub(crate) fn a_refused_quit_waits_for_the_record_then_exits() {
 
 /// A quit is cancelled when the window stays open: by its recorded close
 /// resolved with `stay_open`, or by a handler that panicked and so recorded
-/// nothing. The application keeps running and accepts work.
+/// nothing. The application keeps running and accepts work, whoever asked
+/// for the quit.
 pub(crate) fn a_quit_the_window_stays_open_for_is_cancelled() {
-    for panics in [false, true] {
+    let cases = [false, true]
+        .into_iter()
+        .flat_map(|panics| [QuitFrom::Application, QuitFrom::Platform].map(|from| (panics, from)));
+    for (panics, from) in cases {
         let observed = Observed::default();
         let handler = CloseRequestHandler::new(move |request| {
             if request.reason() != CloseReason::Program {
@@ -687,7 +738,7 @@ pub(crate) fn a_quit_the_window_stays_open_for_is_cancelled() {
         });
         let started = start_with(&observed, Some(handler));
 
-        started.handle.request_quit().expect("the quit is accepted");
+        ask_quit(&started, from);
         started.run.run_owner_turn();
         if let Some(pending) = observed.pending() {
             assert!(!panics, "a panic recorded a close");
@@ -1450,6 +1501,10 @@ fn runner_close() {
             (
                 "a_vetoed_close_disposes_nothing",
                 a_vetoed_close_disposes_nothing,
+            ),
+            (
+                "a_quit_nothing_refuses_ends_the_loop",
+                a_quit_nothing_refuses_ends_the_loop,
             ),
             (
                 "a_refused_quit_waits_for_the_record_then_exits",

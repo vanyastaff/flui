@@ -1265,7 +1265,10 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
         installed.push((dispatcher, frame));
     }
     let slots = flui_engine::testing::ScriptedSlots::new();
-    let shared = SharedRasterHost::new(RasterFactory::Scripted(slots.clone()));
+    let shared = SharedRasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        flui_engine::RasterPlacement::Inline,
+    );
     /// Puts the loop's raster host back however the row ends.
     struct LoopRasterHost(Option<SharedRasterHost>);
     impl Drop for LoopRasterHost {

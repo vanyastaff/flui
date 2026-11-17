@@ -426,6 +426,9 @@ fn a_failed_bootstrap_keeps_the_reports() {
         fn quit_requested(&self, owner: &OwnerPlatform) {
             self.0.quit_requested(owner);
         }
+        fn quit_asked(&self, owner: &OwnerPlatform) -> QuitAnswer {
+            self.0.quit_asked(owner)
+        }
         fn opened(&self, owner: &OwnerPlatform, opened: Opened) {
             self.0.opened(owner, opened);
         }
@@ -628,6 +631,9 @@ fn a_released_handler_drops_outside_the_delivery_lock() {
             self.0.ready(owner)
         }
         fn quit_requested(&self, _: &OwnerPlatform) {}
+        fn quit_asked(&self, _: &OwnerPlatform) -> QuitAnswer {
+            QuitAnswer::Quit
+        }
         fn reopen(&self, _: &OwnerPlatform) {}
         fn opened(&self, _: &OwnerPlatform, _: Opened) {}
         fn session_end(&self, _: &OwnerPlatform, _: SessionEndPhase) -> SessionEndAnswer {

@@ -28,12 +28,14 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
             releases: self
                 .owner()
                 .with_state(|state| Arc::downgrade(&state.session_end_releases)),
+            signal: self.owner().with_state(|state| state.owner_signal.clone()),
         }
     }
 
     /// Stand in for a platform whose session end works as `support` says: a
-    /// test of a phone or a browser tab passes
-    /// [`NotifyOnly`](flui_platform::SessionEndSupport::NotifyOnly). The
+    /// test of a phone passes
+    /// [`Background`](flui_platform::SessionEndSupport::Background), one of a
+    /// browser tab [`NotifyOnly`](flui_platform::SessionEndSupport::NotifyOnly). The
     /// default is [`Hold`](flui_platform::SessionEndSupport::Hold), a
     /// desktop that waits for a block.
     #[must_use]
@@ -89,6 +91,8 @@ pub struct HeadlessHostEvents {
     app: Weak<AppDelivery>,
     notices: Weak<dyn NoticeChannel>,
     releases: Weak<AtomicUsize>,
+    /// The owner's signal, which a granted quit asks to stop the platform.
+    signal: Weak<crate::owner::signal::OwnerSignal>,
 }
 
 impl std::fmt::Debug for HeadlessHostEvents {
@@ -123,6 +127,37 @@ impl HeadlessHostEvents {
     pub fn notice(&self, notice: SystemNotice) {
         if let Some(notices) = self.notices.upgrade() {
             notices.dispatch(notice);
+        }
+    }
+
+    /// The user asked the application to quit, as AppKit reports the Dock's
+    /// Quit or a quit Apple Event: the application's handler is asked
+    /// ([`AppHandler::quit_asked`](crate::AppHandler::quit_asked)) and its
+    /// answer returned. On [`QuitAnswer::Quit`](crate::QuitAnswer::Quit) the
+    /// platform stops at its next owner turn, past every window's handler,
+    /// as AppKit's loop does; on
+    /// [`KeepRunning`](crate::QuitAnswer::KeepRunning) nothing else happens.
+    /// With no handler to ask, or once the platform is gone, the answer is
+    /// `Quit`.
+    pub fn quit(&self) -> crate::QuitAnswer {
+        let signal = self.signal.clone();
+        // The quit is carried out before a later report's panic resumes, so a
+        // granted quit is never lost to it.
+        let act = move |answer: &crate::QuitAnswer| {
+            if *answer == crate::QuitAnswer::Quit
+                && let Some(signal) = signal.upgrade()
+            {
+                // A platform that stopped already refuses the request: the
+                // quit it asks for has happened.
+                let _ = signal.request_quit();
+            }
+        };
+        if let Some(app) = self.app.upgrade() {
+            app.quit_asked()
+                .or_resume_after(crate::QuitAnswer::Quit, act)
+        } else {
+            act(&crate::QuitAnswer::Quit);
+            crate::QuitAnswer::Quit
         }
     }
 

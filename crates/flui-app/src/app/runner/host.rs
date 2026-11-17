@@ -510,8 +510,7 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
         }
         SessionEndPhase::Ending => {
             drop(take_session_end());
-            end_session_now();
-            SessionEndAnswer::Proceed
+            end_session_now()
         }
         // A phase this host does not know asks for nothing.
         _ => SessionEndAnswer::Proceed,
@@ -570,17 +569,29 @@ pub(super) fn release_session_end_refusal(address: flui_foundation::Presentation
 /// code runs only while at least [`SESSION_END_USER_CODE_THRESHOLD`] of it is
 /// left, and the loop is asked to quit where the application ends with the
 /// session.
+///
+/// On a phone ([`SessionEndSupport::Background`](flui_platform::SessionEndSupport::Background))
+/// the writes the inline flush left in flight hold the process in the
+/// background: the answer is `Block`, and the platform is released once they
+/// end or the platform's window passes, with what is still not stored
+/// reported by name ([`hold_for_background_writes`]).
 #[cfg(not(target_arch = "wasm32"))]
-fn end_session_now() {
-    use flui_platform::HostNotice;
+fn end_session_now() -> flui_platform::SessionEndAnswer {
+    use flui_platform::{HostNotice, SessionEndSupport};
 
     let deadline = std::time::Instant::now() + session_end_budget();
-    // A platform that only tells (Android's stop, iOS) reports that the
-    // process may be killed, not that the application is over: it may come
-    // back to the same UI. Only a platform that holds or delays the session
-    // ends the application here.
-    let ends_application = session_end_platform(flui_native::OwnerPlatform::session_end_support)
-        .is_some_and(|support| support != flui_platform::SessionEndSupport::NotifyOnly);
+    let support = session_end_platform(flui_native::OwnerPlatform::session_end_support);
+    // A platform that only tells, or a phone leaving the screen, reports that
+    // the process may be killed, not that the application is over: it may
+    // come back to the same UI. Only a platform that holds or delays the
+    // session ends the application here.
+    let ends_application = matches!(
+        support,
+        Some(SessionEndSupport::Hold | SessionEndSupport::Delay { .. })
+    );
+    // An earlier trip's writes no longer hold anything: this session end
+    // answers for what is in flight now.
+    drop(take_background_writes());
     // Application code runs while the budget can absorb it: a subscriber or a
     // Detached observer may still publish what the flush then writes. Each
     // runtime's code starts only while the margin is left, whatever the
@@ -594,7 +605,7 @@ fn end_session_now() {
     if ends_application {
         deliver_session_end_close(deadline);
     }
-    flush_for_session_end(deadline);
+    let unfinished = flush_for_session_end(deadline);
     // What the host keeps for itself, the window placements, comes after
     // the application's own work and the documents: it takes what the budget
     // has left, never more than its own small bound, and reports by name what
@@ -611,14 +622,108 @@ fn end_session_now() {
         super::owner_dispatch::end_session_teardown(tear_down);
         let _ = session_end_platform(flui_native::OwnerPlatform::quit);
     }
+    match (support, unfinished) {
+        (Some(SessionEndSupport::Background { window }), Some(writes)) => {
+            hold_for_background_writes(writes, std::time::Instant::now() + window)
+        }
+        _ => flui_platform::SessionEndAnswer::Proceed,
+    }
+}
+
+/// Hold a phone's process in the background for `writes`, the flush's writes
+/// still in flight: a thread waits for them until `until`, reports by name
+/// what is still not stored then, and asks the owner for the turn that
+/// releases the platform ([`release_finished_background_writes`]). `Block`
+/// while the hold is taken, `Proceed` when there is no owner to release it
+/// or the thread cannot start.
+#[cfg(not(target_arch = "wasm32"))]
+fn hold_for_background_writes(
+    writes: flui_view::__runtime::WritesInFlight,
+    until: std::time::Instant,
+) -> flui_platform::SessionEndAnswer {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let Some(proxy) = session_end_platform(flui_native::OwnerPlatform::proxy) else {
+        return flui_platform::SessionEndAnswer::Proceed;
+    };
+    let done = Arc::new(AtomicBool::new(false));
+    let finished = Arc::clone(&done);
+    let spawned = std::thread::Builder::new()
+        .name("flui-background-writes".into())
+        .spawn(move || {
+            let unstored = writes.wait_until(until);
+            if unstored.is_empty() {
+                tracing::debug!("the writes left in flight at the session end are stored");
+            } else {
+                tracing::warn!(
+                    ?unstored,
+                    "the background window ended before these values were stored"
+                );
+            }
+            finished.store(true, Ordering::Release);
+            // An owner that is gone has nothing left to release.
+            let _ = proxy.wake();
+        });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "no thread waits for the writes left in flight; the process is not held");
+        return flui_platform::SessionEndAnswer::Proceed;
+    }
+    let displaced = APP_RUNTIME.with(|slot| {
+        slot.try_borrow_mut()
+            .map(|mut state| state.background_writes.replace(done))
+    });
+    match displaced {
+        Ok(displaced) => {
+            drop(displaced);
+            flui_platform::SessionEndAnswer::Block
+        }
+        // The loop state is busy: nobody could release the hold.
+        Err(_) => flui_platform::SessionEndAnswer::Proceed,
+    }
+}
+
+/// Take the hold a phone's session end left for its writes, whatever its
+/// state.
+#[cfg(not(target_arch = "wasm32"))]
+fn take_background_writes() -> Option<Arc<std::sync::atomic::AtomicBool>> {
+    APP_RUNTIME.with(|slot| {
+        slot.try_borrow_mut()
+            .ok()
+            .and_then(|mut state| state.background_writes.take())
+    })
+}
+
+/// Release the platform from the background hold a phone's session end took
+/// once its writes ended or their window passed
+/// ([`hold_for_background_writes`]). Called on every owner turn; does
+/// nothing while no hold is taken or its writes still run.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn release_finished_background_writes() {
+    let finished = APP_RUNTIME.with(|slot| {
+        let Ok(mut state) = slot.try_borrow_mut() else {
+            return false;
+        };
+        let finished = state
+            .background_writes
+            .as_ref()
+            .is_some_and(|done| done.load(std::sync::atomic::Ordering::Acquire));
+        if finished {
+            state.background_writes = None;
+        }
+        finished
+    });
+    if finished {
+        let _ = session_end_platform(flui_native::OwnerPlatform::release_session_end);
+    }
 }
 
 /// The web's `pagehide`: the browser grants no synchronous budget and the
 /// page may come back from its cache, so the notice is delivered and the
 /// flush registry keeps writing on its own; nothing waits, closes or quits.
 #[cfg(target_arch = "wasm32")]
-fn end_session_now() {
+fn end_session_now() -> flui_platform::SessionEndAnswer {
     deliver_contained(&flui_platform::HostNotice::SessionEnded);
+    flui_platform::SessionEndAnswer::Proceed
 }
 
 /// Deliver the session's end to every UI runtime in its slot while the
@@ -749,17 +854,18 @@ fn session_end_budget() -> std::time::Duration {
 
 /// Write what the documents published, inline, by `deadline`: the process may
 /// be ended at any moment once the session-end handler returns. Runs no
-/// application code; a panic in the writer is contained and reported.
+/// application code; a panic in the writer is contained and reported. The
+/// writes still in flight at `deadline`, when there are any, are handed back
+/// for a phone's host to hold the process for.
 #[cfg(not(target_arch = "wasm32"))]
-fn flush_for_session_end(deadline: std::time::Instant) {
+fn flush_for_session_end(
+    deadline: std::time::Instant,
+) -> Option<flui_view::__runtime::WritesInFlight> {
     let flush = APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
             .and_then(|state| state.flush_host.clone())
-    });
-    let Some(flush) = flush else {
-        return;
-    };
+    })?;
     #[expect(
         clippy::disallowed_methods,
         reason = "ADR-0287: a flush hook's panic is warned about; the host keeps running"
@@ -767,18 +873,22 @@ fn flush_for_session_end(deadline: std::time::Instant) {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         flush.flush_within(deadline)
     })) {
-        Ok(report) if !report.is_complete() => tracing::warn!(
-            failed = report.failed.len(),
-            unfinished = report.unfinished.len(),
-            "the session ended before the flush registry was written"
-        ),
-        Ok(_) => {}
+        Ok(report) if !report.is_complete() => {
+            tracing::warn!(
+                failed = ?report.failed,
+                unfinished = ?report.unfinished,
+                "the session ended before the flush registry was written"
+            );
+            flush.writes_in_flight()
+        }
+        Ok(_) => None,
         Err(payload) => {
             tracing::error!(
                 panic = flui_foundation::panic::payload_text(&*payload),
                 "the session-end flush panicked"
             );
             flui_foundation::panic::discard_payload(payload);
+            None
         }
     }
 }
@@ -968,6 +1078,10 @@ pub(crate) fn install_owner_platform(
                     // outside the destructor that returned it.
                     if current() {
                         route_owed_opened_urls();
+                        // A phone's background hold is released once its
+                        // writes ended; the headless host stands in for one.
+                        #[cfg(not(target_arch = "wasm32"))]
+                        release_finished_background_writes();
                     }
                     commands.absorb(first);
                     commands.resume();
@@ -1084,6 +1198,8 @@ type Bootstrap =
 #[derive(Default)]
 pub(crate) struct AppRoutes {
     quit: Option<Rc<dyn Fn()>>,
+    /// Answers a quit the user or the system asked for.
+    quit_asked: Option<Rc<dyn Fn() -> flui_native::QuitAnswer>>,
     /// Answers whether the main window's controller took the reopen.
     reopen: Option<Rc<dyn Fn() -> bool>>,
     exit_policy: Option<Rc<dyn Fn() -> bool>>,
@@ -1132,6 +1248,22 @@ pub(super) fn current_open_routing() -> Option<Rc<super::opened::OpenRouting>> {
 /// Send the platform's quit to `route`.
 pub(crate) fn route_quit(route: impl Fn() + 'static) {
     set_route(|routes| &mut routes.quit, Rc::new(route) as Rc<dyn Fn()>);
+}
+
+/// Answer a quit the user or the system asked for (AppKit's Quit) with
+/// `route`.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "android", target_os = "ios"),
+    expect(
+        dead_code,
+        reason = "only the desktop main window asks its presentations"
+    )
+)]
+pub(super) fn route_quit_asked(route: impl Fn() -> flui_native::QuitAnswer + 'static) {
+    set_route(
+        |routes| &mut routes.quit_asked,
+        Rc::new(route) as Rc<dyn Fn() -> flui_native::QuitAnswer>,
+    );
 }
 
 /// Send the user's reopen (AppKit's Dock click) to `route`, which answers
@@ -1441,6 +1573,22 @@ impl flui_native::AppHandler for RunnerHandler {
                 quit();
             }
         });
+    }
+
+    /// The quit the user or the system asked for is the quit the application
+    /// asks for itself ([`AppHandle::request_quit`](crate::app::AppHandle::request_quit)):
+    /// every presentation is asked on the owner's next turn, and the
+    /// application quits once none refuses. A run with no main window to ask
+    /// through quits at once; a failure keeps it running.
+    fn quit_asked(&self, _: &flui_native::OwnerPlatform) -> flui_native::QuitAnswer {
+        contained(
+            flui_native::QuitAnswer::KeepRunning,
+            "application quit question",
+            || {
+                self.route(|routes| routes.quit_asked.clone())
+                    .map_or(flui_native::QuitAnswer::Quit, |asked| asked())
+            },
+        )
     }
 
     fn reopen(&self, _: &flui_native::OwnerPlatform) {

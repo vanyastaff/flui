@@ -176,6 +176,11 @@ impl flui_native::AppHandler for Page {
         drop(window);
     }
 
+    /// The web is never asked: a page cannot be told to quit.
+    fn quit_asked(&self, _: &flui_native::OwnerPlatform) -> flui_native::QuitAnswer {
+        flui_native::QuitAnswer::Quit
+    }
+
     fn reopen(&self, _: &flui_native::OwnerPlatform) {}
 
     // It registers no URL scheme and no file type, so nothing is opened with it.
