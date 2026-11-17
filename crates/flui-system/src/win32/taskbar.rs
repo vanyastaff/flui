@@ -153,7 +153,7 @@ pub(super) fn badge_pixels(size: u32, label: Option<&str>) -> Vec<u32> {
 
 /// The taskbar as the provider reaches it, on the owner thread. Each
 /// failure is the `HRESULT` or Win32 error reported.
-pub(super) trait TaskbarSystem: 'static {
+pub(crate) trait TaskbarSystem: 'static {
     /// Show `state` (and `value` of [`PROGRESS_TOTAL`]) on `owner`'s button.
     fn progress(&self, owner: Owner, state: TBPFLAG, value: Option<u64>) -> Result<(), i32>;
 
@@ -651,7 +651,7 @@ mod tests {
     use std::rc::Rc;
 
     use windows::Win32::UI::Shell::{
-        TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED, TBPFLAG,
+        TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED,
     };
 
     use super::{
@@ -659,7 +659,7 @@ mod tests {
         progress_call,
     };
     use crate::taskbar::{Fraction, TaskbarBackend, TaskbarBadge, TaskbarProgress};
-    use crate::win32::test_owner::win32_window;
+    use crate::testing::win32::{FakeTaskbar, TaskbarCall, win32_window};
 
     #[test]
     fn a_progress_becomes_the_taskbars_state_and_value() {
@@ -710,53 +710,9 @@ mod tests {
         assert_eq!(wide.len(), 1024, "an icon of a scaled display");
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    enum Call {
-        Progress(TBPFLAG, Option<u64>),
-        Badge(TaskbarBadge),
-        Watch,
-        Unwatch,
-    }
-
-    /// A taskbar that records each call and refuses a change while its
-    /// button is not made.
-    struct FakeTaskbar {
-        calls: Rc<RefCell<Vec<Call>>>,
-        made: Rc<Cell<bool>>,
-    }
-
-    impl TaskbarSystem for FakeTaskbar {
-        fn progress(&self, _: Owner, state: TBPFLAG, value: Option<u64>) -> Result<(), i32> {
-            self.calls.borrow_mut().push(Call::Progress(state, value));
-            if self.made.get() {
-                Ok(())
-            } else {
-                Err(-2_147_467_259)
-            }
-        }
-
-        fn badge(&self, _: Owner, badge: TaskbarBadge) -> Result<(), i32> {
-            self.calls.borrow_mut().push(Call::Badge(badge));
-            if self.made.get() {
-                Ok(())
-            } else {
-                Err(-2_147_467_259)
-            }
-        }
-
-        fn watch(&self, _: Owner, _: &Rc<TaskbarButtons>) -> Result<(), i32> {
-            self.calls.borrow_mut().push(Call::Watch);
-            Ok(())
-        }
-
-        fn unwatch(&self, _: Owner) {
-            self.calls.borrow_mut().push(Call::Unwatch);
-        }
-    }
-
     #[test]
     fn a_button_made_late_or_again_shows_what_its_window_last_asked() {
-        let calls: Rc<RefCell<Vec<Call>>> = Rc::default();
+        let calls: Rc<RefCell<Vec<TaskbarCall>>> = Rc::default();
         let made = Rc::new(Cell::new(false));
         let system = FakeTaskbar {
             calls: Rc::clone(&calls),
@@ -785,7 +741,10 @@ mod tests {
         buttons.button_created(owner);
         assert_eq!(
             *calls.borrow(),
-            [Call::Progress(TBPF_PAUSED, Some(5_000)), Call::Badge(three)],
+            [
+                TaskbarCall::Progress(TBPF_PAUSED, Some(5_000)),
+                TaskbarCall::Badge(three)
+            ],
             "the button shows the last progress and badge once it is made"
         );
 
@@ -793,7 +752,7 @@ mod tests {
         closer.close();
         assert_eq!(
             *calls.borrow(),
-            [Call::Unwatch],
+            [TaskbarCall::Unwatch],
             "a closed window is forgotten"
         );
         calls.borrow_mut().clear();

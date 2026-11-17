@@ -15,6 +15,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStringExt as _;
+use std::os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -51,19 +52,19 @@ use super::dialogs::shell_item;
 use super::{Owner, ShellThreads, os_code, wide};
 
 /// A file opened to be judged, and kept open while it is handed on.
-pub(super) struct HeldFile {
+pub(crate) struct HeldFile {
     /// The name the handle resolves to: every link the open followed,
     /// followed.
-    pub(super) final_path: PathBuf,
+    pub(crate) final_path: PathBuf,
     /// Whether it is a folder, which is shown, not run.
-    pub(super) directory: bool,
+    pub(crate) directory: bool,
     /// What keeps the file open; dropped once it was handed on.
-    pub(super) _handle: Box<dyn Send>,
+    pub(crate) _handle: Box<dyn Send>,
 }
 
 /// What a trash operation did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Trashed {
+pub(crate) enum Trashed {
     /// The item is in the recycle bin.
     Done,
     /// The user or the system called it off (the user declined to delete
@@ -73,7 +74,7 @@ pub(super) enum Trashed {
 
 /// The shell as the launcher reaches it, on a request's apartment thread.
 /// Each failure is the Win32 error or `HRESULT` the call reported.
-pub(super) trait ShellSystem: Send + Sync + 'static {
+pub(crate) trait ShellSystem: Send + Sync + 'static {
     /// Open `path` to judge it.
     fn hold(&self, path: &Path) -> Result<HeldFile, i32>;
 
@@ -244,20 +245,6 @@ impl LauncherBackend for WindowsLauncher {
 /// The real shell.
 struct Shell;
 
-/// Closes a file handle when dropped.
-struct FileHandle(HANDLE);
-
-// SAFETY: a file handle is a kernel object reference any thread may close;
-// this one is only closed, once, by its drop.
-unsafe impl Send for FileHandle {}
-
-impl Drop for FileHandle {
-    fn drop(&mut self) {
-        // SAFETY: the handle was opened by `Shell::hold` and is closed once.
-        let _ = unsafe { CloseHandle(self.0) };
-    }
-}
-
 /// `\\?\C:\…` as `C:\…`: the final name a handle reports carries the
 /// verbatim prefix, which the shell does not need for a drive path.
 fn without_verbatim(path: Vec<u16>) -> PathBuf {
@@ -288,14 +275,17 @@ impl ShellSystem for Shell {
             )
         }
         .map_err(|error| os_code(error.code()))?;
-        let handle = FileHandle(handle);
+        // SAFETY: `handle` was just opened and nothing else owns it: the
+        // owned handle closes it once, on whichever thread drops it.
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+        let raw = HANDLE(handle.as_raw_handle());
         let mut buffer = vec![0_u16; 512];
         let final_path = loop {
             // SAFETY: `buffer` is a live, writable buffer of the length the
             // call is given; the handle is open.
             let written = unsafe {
                 GetFinalPathNameByHandleW(
-                    handle.0,
+                    raw,
                     &mut buffer,
                     GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0),
                 )
@@ -320,7 +310,7 @@ impl ShellSystem for Shell {
         // handle is open with attribute access.
         unsafe {
             GetFileInformationByHandleEx(
-                handle.0,
+                raw,
                 FileBasicInfo,
                 std::ptr::from_mut(&mut info).cast(),
                 u32::try_from(std::mem::size_of::<FILE_BASIC_INFO>())
@@ -446,84 +436,13 @@ impl ShellSystem for Shell {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsStr;
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
 
     use flui_platform::SystemFailure;
     use flui_platform::launch::LaunchError;
 
-    use super::{
-        HeldFile, ShellSystem, Trashed, launch_error, open_document, open_uri, trash,
-        without_verbatim,
-    };
-    use crate::win32::Owner;
-
-    /// A shell whose file system holds one file under the name it resolves
-    /// to, and which records what it was asked to execute.
-    struct FakeShell {
-        final_path: PathBuf,
-        directory: bool,
-        dangerous: bool,
-        hold_error: Option<i32>,
-        executed: Mutex<Vec<(String, Option<String>)>>,
-        trashed: Result<Trashed, i32>,
-    }
-
-    impl FakeShell {
-        fn holding(final_path: &str) -> Self {
-            Self {
-                final_path: PathBuf::from(final_path),
-                directory: false,
-                dangerous: false,
-                hold_error: None,
-                executed: Mutex::new(Vec::new()),
-                trashed: Ok(Trashed::Done),
-            }
-        }
-
-        fn executed(&self) -> Vec<(String, Option<String>)> {
-            self.executed.lock().expect("BUG: the test's lock").clone()
-        }
-    }
-
-    impl ShellSystem for FakeShell {
-        fn hold(&self, _: &Path) -> Result<HeldFile, i32> {
-            if let Some(code) = self.hold_error {
-                return Err(code);
-            }
-            Ok(HeldFile {
-                final_path: self.final_path.clone(),
-                directory: self.directory,
-                _handle: Box::new(()),
-            })
-        }
-
-        fn is_dangerous(&self, _: &Path) -> bool {
-            self.dangerous
-        }
-
-        fn execute(
-            &self,
-            target: &OsStr,
-            class: Option<&str>,
-            _: Option<Owner>,
-        ) -> Result<(), i32> {
-            self.executed.lock().expect("BUG: the test's lock").push((
-                target.to_string_lossy().into_owned(),
-                class.map(str::to_owned),
-            ));
-            Ok(())
-        }
-
-        fn reveal(&self, _: &Path) -> Result<(), i32> {
-            Ok(())
-        }
-
-        fn trash(&self, _: &Path, _: Option<Owner>) -> Result<Trashed, i32> {
-            self.trashed
-        }
-    }
+    use super::{Trashed, launch_error, open_document, open_uri, trash, without_verbatim};
+    use crate::testing::win32::FakeShell;
 
     #[test]
     fn an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given() {

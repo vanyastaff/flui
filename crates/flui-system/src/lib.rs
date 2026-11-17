@@ -32,7 +32,7 @@ mod portal;
 pub mod share;
 pub mod shortcut;
 pub mod taskbar;
-#[cfg(feature = "testing")]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 #[cfg(windows)]
 mod win32;

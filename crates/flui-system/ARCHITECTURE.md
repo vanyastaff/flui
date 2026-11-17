@@ -108,6 +108,7 @@ UI runtime (`Portal`): the launcher (`OpenURI`, `OpenDirectory`, `Trash`) and th
   on a headless host over `testing::ScriptedSystem`, and the conformance table
   `every_provider_keeps_the_system_services_contract`, run against the doubles and against
   `SystemPlugin` on the host it runs on, asking nothing a user answers.
-- `win32::*::tests`: each Windows provider at its OS seam; `win32::modal::tests` and
+- `win32::*::tests`: each Windows provider at its OS seam, with the stand-ins and the test owner
+  of the crate's kit (`testing::win32`, test builds on Windows only); `win32::modal::tests` and
   `win32::dialogs::tests` run the dialog thread and its dismissal window with a stand-in dialog.
 - `tests/portal.rs` (Linux): the portal providers against a stand-in portal on a private bus.

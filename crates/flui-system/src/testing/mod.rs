@@ -10,6 +10,13 @@
 //! nobody wrote. The taskbar, whose calls answer at once, takes each change
 //! unless the test set a refusal, and records it.
 
+#[cfg(all(test, windows))]
+#[expect(
+    unsafe_code,
+    reason = "a raw window handle naming a window no test reaches, a message pump"
+)]
+pub(crate) mod win32;
+
 use std::{cell::RefCell, fmt, rc::Rc};
 
 use flui_platform::capability::scripted::{Answer, Scenario, Script};

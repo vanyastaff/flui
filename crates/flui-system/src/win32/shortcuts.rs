@@ -39,7 +39,7 @@ const MAX_HOTKEY_ID: i32 = 0xBFFF;
 
 /// Where a key's virtual key comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum KeySource {
+pub(crate) enum KeySource {
     /// A key whose character the layout decides, by its set-1 scan code.
     Scan(u32),
     /// A key whose virtual key is the same on every layout.
@@ -181,7 +181,7 @@ pub(super) fn hotkey_modifiers(modifiers: Modifiers) -> HOT_KEY_MODIFIERS {
 }
 
 /// The hot keys as the provider reaches them, on the owner thread.
-pub(super) trait HotkeySystem: 'static {
+pub(crate) trait HotkeySystem: 'static {
     /// Register hot key `id`; the failure is the Win32 error.
     fn register(&self, id: i32, modifiers: HOT_KEY_MODIFIERS, key: KeySource) -> Result<(), i32>;
 
@@ -475,7 +475,7 @@ mod tests {
     use flui_platform::capability::Abandoned;
     use flui_platform::keyboard::{Code, Modifiers};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        HOT_KEY_MODIFIERS, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
+        MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN,
     };
 
     use super::{
@@ -483,37 +483,7 @@ mod tests {
         key_source,
     };
     use crate::shortcut::{GlobalShortcuts, Shortcut, ShortcutError, ShortcutResult};
-    use crate::win32::test_owner::TestOwner;
-
-    /// A hot key system that records what it holds and refuses what it was
-    /// told to.
-    /// The hot keys a [`FakeHotkeys`] holds.
-    type Held = Rc<RefCell<Vec<(i32, HOT_KEY_MODIFIERS, KeySource)>>>;
-
-    #[derive(Default)]
-    struct FakeHotkeys {
-        held: Held,
-        refuse: Option<i32>,
-    }
-
-    impl HotkeySystem for FakeHotkeys {
-        fn register(
-            &self,
-            id: i32,
-            modifiers: HOT_KEY_MODIFIERS,
-            key: KeySource,
-        ) -> Result<(), i32> {
-            if let Some(code) = self.refuse {
-                return Err(code);
-            }
-            self.held.borrow_mut().push((id, modifiers, key));
-            Ok(())
-        }
-
-        fn unregister(&self, id: i32) {
-            self.held.borrow_mut().retain(|(held, _, _)| *held != id);
-        }
-    }
+    use crate::testing::win32::{FakeHotkeys, Held, TestOwner};
 
     fn window_over(fake: FakeHotkeys) -> (Rc<HotkeyWindow>, Held) {
         let held = Rc::clone(&fake.held);

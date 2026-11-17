@@ -491,9 +491,9 @@ mod tests {
         Dialog, DialogError, FileDialogs, FileFilter, OpenRequest, OpenResult, PickedFile, Picks,
         SaveLocation, SaveRequest,
     };
+    use crate::testing::win32::{self, TestOwner, pump};
     use crate::win32::Owner;
     use crate::win32::modal::Dismisser;
-    use crate::win32::test_owner::{self, TestOwner};
 
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(name)
@@ -670,21 +670,6 @@ mod tests {
         }
     }
 
-    /// Dispatch this thread's waiting messages.
-    #[expect(unsafe_code, reason = "a test's own message pump")]
-    fn pump() {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
-        };
-        let mut message = MSG::default();
-        // SAFETY: `message` is a live out-parameter; only this thread's own
-        // messages are dispatched.
-        while unsafe { PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
-            // SAFETY: as above.
-            unsafe { DispatchMessageW(&raw const message) };
-        }
-    }
-
     type Answers = mpsc::Sender<OsAnswer<Vec<OsPick>>>;
 
     fn modal() -> (Arc<ModalSystem>, Answers, mpsc::Receiver<Ended>) {
@@ -709,7 +694,7 @@ mod tests {
     #[test]
     fn a_dialog_answers_from_its_thread_at_an_owner_turn() {
         let owner = TestOwner::new();
-        let (window, _closer) = test_owner::window();
+        let (window, _closer) = win32::window();
         let (system, answer, ended) = modal();
         let dialogs = FileDialogs::try_new(WindowsDialogs::over(system), &owner.ctx(Some(window)))
             .expect("a window");
@@ -736,7 +721,7 @@ mod tests {
     #[test]
     fn a_dropped_dialog_is_closed_on_its_thread_and_frees_the_window() {
         let owner = TestOwner::new();
-        let (window, _closer) = test_owner::window();
+        let (window, _closer) = win32::window();
         let (system, _answer, ended) = modal();
         let dialogs = FileDialogs::try_new(WindowsDialogs::over(system), &owner.ctx(Some(window)))
             .expect("a window");
@@ -767,7 +752,7 @@ mod tests {
     #[test]
     fn a_dialog_ends_with_its_window_and_is_closed_on_its_thread() {
         let owner = TestOwner::new();
-        let (window, closer) = test_owner::window();
+        let (window, closer) = win32::window();
         let (system, _answer, ended) = modal();
         let dialogs = FileDialogs::try_new(WindowsDialogs::over(system), &owner.ctx(Some(window)))
             .expect("a window");

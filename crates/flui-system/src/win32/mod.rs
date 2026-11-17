@@ -27,7 +27,7 @@ mod dialogs;
 #[expect(unsafe_code, reason = "the jump list is a COM object")]
 mod jump_list;
 #[expect(unsafe_code, reason = "the shell's launch, reveal and trash calls")]
-mod launcher;
+pub(crate) mod launcher;
 #[expect(unsafe_code, reason = "the Run key is read and written through Win32")]
 mod login;
 #[expect(unsafe_code, reason = "MessageBoxW and the box's own end")]
@@ -39,18 +39,12 @@ mod os;
 #[expect(unsafe_code, reason = "the share sheet's interop call")]
 mod share;
 #[expect(unsafe_code, reason = "RegisterHotKey and its message-only window")]
-mod shortcuts;
+pub(crate) mod shortcuts;
 #[expect(
     unsafe_code,
     reason = "ITaskbarList3, the button's subclass and its icon"
 )]
-mod taskbar;
-#[cfg(test)]
-#[expect(
-    unsafe_code,
-    reason = "a raw window handle naming a window no test reaches"
-)]
-mod test_owner;
+pub(crate) mod taskbar;
 #[expect(unsafe_code, reason = "the apartment each shell thread enters")]
 mod threads;
 
