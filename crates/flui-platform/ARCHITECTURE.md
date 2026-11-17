@@ -405,7 +405,7 @@ named variant for a code it cannot read.
 ### A launch is decided at the seam, by what its caller allows
 
 `launch` holds the launch policy for every backend, the scripted double included, so no backend
-re-implements it (ADR-0359). A URI reaches a backend only as an `ExternalUri`, built from the
+re-implements it (ADR-0360). A URI reaches a backend only as an `ExternalUri`, built from the
 schemes its caller names (`&[Scheme::HTTPS]`): bounded before it is read, with no hidden
 character, no user before its host, and never a scheme of `REFUSED_SCHEMES`, which no `Scheme`
 can be. `Launcher`'s path verbs refuse a relative path and a Windows share or device path before

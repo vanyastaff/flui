@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// A named set of files an open or save dialog offers to filter by: "Images"
 /// with `png` and `jpg`.
 ///
-/// One meaning on every host (ADR-0359): a file matches when its name ends
+/// One meaning on every host (ADR-0360): a file matches when its name ends
 /// in `.` and one of the extensions, compared ignoring ASCII case
 /// (`PHOTO.PNG` matches `png`, `a.tar.gz` matches `tar.gz`), or when its type
 /// is one of the MIME types. A host whose dialog matches otherwise maps each

@@ -8,7 +8,7 @@
 //! through a [`LauncherBackend`] that a capability crate's provider builds.
 //!
 //! What may be launched is decided here, once, for every backend, the
-//! scripted one included (ADR-0359): a URI is an [`ExternalUri`], whose
+//! scripted one included (ADR-0360): a URI is an [`ExternalUri`], whose
 //! caller names the [`Scheme`]s it allows; a path is absolute and local, and
 //! [`Launcher::open_path`] opens documents only, never a program, a script or
 //! a shortcut.
@@ -148,7 +148,7 @@ impl Scheme {
 
 /// An absolute URI a launcher may hand to the system's handler.
 ///
-/// The policy is the seam's, so every backend has it (ADR-0359): the URI is
+/// The policy is the seam's, so every backend has it (ADR-0360): the URI is
 /// at most [`MAX_EXTERNAL_URI_LEN`] bytes, holds no character that hides how
 /// it reads, has a valid scheme that is not one of [`REFUSED_SCHEMES`] and is
 /// one the caller allowed, and names no user before its host. The URI is

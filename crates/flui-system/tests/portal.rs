@@ -687,7 +687,7 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     let images = ("Images".to_owned(), vec![(0, "*.[pP][nN][gG]".to_owned())]);
     assert_eq!(
         filters,
-        [images.clone()],
+        std::slice::from_ref(&images),
         "the glob matches `PHOTO.PNG` as Windows and macOS do"
     );
     assert_eq!(

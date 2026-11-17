@@ -8163,6 +8163,51 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
   здесь: Android, iOS, macOS (правка `android.rs` — только CI); wasm проверен типами в WSL.
 
+- [x] **LY144** — ветка `system/filters-and-launch-policy`, решение — ADR-0360. Находки
+  подтверждены на `main` @ `d139b8188` чтением кода: `literal_glob` выдавал `*.png` без сложения
+  регистра; `with_extension("tar.gz")` отказывал (точка была запрещена); `current_filter` не
+  уходил и не читался; `ExternalUri` пропускал всё, кроме шести схем; тело `OpenURI`, `OpenFile`
+  и `OpenDirectory` строилось с `String::new()` вместо родителя (находка «предположительно»
+  подтверждена). Построено: `ExternalUri::try_new(uri: &str, allowed: &[Scheme])` — длина до
+  копирования, без управляющих и двунаправленных символов, схема из `allowed` без учёта регистра
+  ASCII, никогда не из `REFUSED_SCHEMES` (`Scheme::try_new` их не строит), без пользователя перед
+  хостом; процент-коды не раскрываются. `Launcher`: путь абсолютный и локальный (сетевой ресурс и
+  устройство Windows — `NotLocal`, по пути как дан: подключённый пользователем диск открывается),
+  `open_path` не открывает программу, скрипт или ярлык (`RUNNABLE_EXTENSIONS`, по имени пути и по
+  имени цели ссылки, как Windows читает имя: без хвостовых точек и пробелов и без `:потока`) —
+  `NotADocument`; показ и корзина разрешены. `FileFilter`: расширение — части из букв, цифр ASCII,
+  `-`, `_`, `+`, через одиночную точку (`tar.gz`), хранится без ведущей точки в нижнем регистре и
+  один раз; MIME — два имени RFC 6838 или `тип/*`; оба не длиннее `FileFilter::MAX_PATTERN_LEN`;
+  два фильтра с одним именем отказаны. `DialogError::InvalidRequest(MalformedRequest)` называет
+  причину. Портал шлёт глобы со сложенным регистром (`*.[pP][nN][gG]`) и первый фильтр как
+  `current_filter`; сохранение отвечает `SaveLocation` с индексом выбранного фильтра (портал
+  сообщает фильтр значением — бэкенд находит его по имени; чужое имя — `None`); индекс вне
+  фильтров запроса — `MalformedAnswer` у handle для любого бэкенда. Launcher портала берёт окно
+  виджета и называет его `parent_window`, пока окно открыто. Схемы, объявленные приложением
+  (ADR-0307), в умолчание не вошли: это схемы, которые приложение принимает; запускающий свою
+  схему называет её сам. Тесты (в скобках — откат, который их роняет):
+  `external_uri_admits_only_the_schemes_its_caller_names` (без проверки `allowed` проходит `smb:`;
+  без проверки пользователя — `https://bank.example@evil.example/`; без двунаправленных — U+202E);
+  `a_scheme_is_named_once_whatever_its_case_and_never_a_refused_one`;
+  `opening_a_program_a_script_or_a_shortcut_is_refused_without_asking_the_system` (без проверки
+  имени `setup.exe` доходит до системы); `a_link_is_judged_by_what_it_links_to` (Unix; без
+  проверки цели `report.pdf` → `evil.desktop` открывается);
+  `a_network_share_or_a_device_is_refused_without_asking_the_system` (Windows; без проверки
+  `\\evil.example\share` доходит до системы); `a_filter_keeps_each_pattern_once_as_the_dialog_compares_it`
+  (без нижнего регистра и дедупликации — `["TAR.GZ", "tar.gz", "Zip", "zip"]`);
+  `a_malformed_request_is_refused_without_showing_a_dialog` (без проверки имён проходит
+  `DuplicateFilterName`); `a_save_reports_the_filter_selected_when_the_user_accepted` (без проверки
+  индекса доходит `Some(2)` при двух фильтрах); на Linux против подставного портала
+  `the_dialogs_reach_the_file_chooser_and_answer_its_picks` (без `current_filter` в запросе) и
+  `a_save_dialog_reports_the_filter_the_portal_says_was_selected` (без чтения `current_filter` —
+  `None` вместо `Some(1)`); модульные `a_filter_becomes_globs_then_mime_types` (без сложения —
+  `*.png`) и `a_launch_is_attached_to_its_widgets_window_while_it_is_open` (без родителя — `""`).
+  Прогнано: `flui-system` на Windows через `cargo heli nextest` (25), в WSL (4 модульных и 35
+  интеграционных, с подставным порталом). Должно на устройствах (в строках
+  `platform-parity.toml`): настоящие GTK и KDE file chooser и `OpenURI` на рабочем столе. macOS,
+  iOS, Android и Web в `flui-system` без провайдера; правило отображения фильтров и отказа в
+  бэкенде для них записано в ADR-0360 §2, §4 и `docs/gaps.md`.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная

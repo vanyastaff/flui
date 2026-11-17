@@ -1,4 +1,4 @@
-# ADR-0359: A dialog filter means one thing on every host, and a launch names the schemes it allows
+# ADR-0360: A dialog filter means one thing on every host, and a launch names the schemes it allows
 
 - **Status:** Accepted (2026-11-17)
 - **Date:** 2026-11-17

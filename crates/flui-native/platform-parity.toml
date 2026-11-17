@@ -927,13 +927,13 @@ decides_readiness = true
 id = "open-a-url"
 feature = 'Open a URL'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
-note = "Every host takes a URI only as an `ExternalUri` of the schemes its caller names, refused at the seam otherwise, headless included ([ADR-0359](adr/ADR-0359-a-dialog-filter-means-one-thing-on-every-host-and-a-launch-names-the-schemes-it-allows.md)). Linux: `flui-system`'s launcher through the `OpenURI` portal, its application chooser attached to an X11 window (not on Wayland, as for the dialogs), run against a stand-in portal on a private bus, not a desktop. Windows and Web: the core `open_url`, which nothing calls and no application reaches"
+note = "Every host takes a URI only as an `ExternalUri` of the schemes its caller names, refused at the seam otherwise, headless included ([ADR-0360](adr/ADR-0360-a-dialog-filter-means-one-thing-on-every-host-and-a-launch-names-the-schemes-it-allows.md)). Linux: `flui-system`'s launcher through the `OpenURI` portal, its application chooser attached to an X11 window (not on Wayland, as for the dialogs), run against a stand-in portal on a private bus, not a desktop. Windows and Web: the core `open_url`, which nothing calls and no application reaches"
 
 [[group.section.row]]
 id = "open-a-file-reveal-it-in-the-file-manager"
 feature = 'Open a file, reveal it in the file manager'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
-note = 'Every host refuses a relative path and a Windows share or device path, and opens no program, script or shortcut, at the seam (ADR-0359). Linux: `OpenFile` and `OpenDirectory` portals with a descriptor, attached to an X11 window, run against a stand-in portal; the file manager decides whether the file is selected'
+note = 'Every host refuses a relative path and a Windows share or device path, and opens no program, script or shortcut, at the seam (ADR-0360). Linux: `OpenFile` and `OpenDirectory` portals with a descriptor, attached to an X11 window, run against a stand-in portal; the file manager decides whether the file is selected'
 
 [[group.section.row]]
 id = "move-to-trash"
@@ -945,7 +945,7 @@ note = 'Linux: the `Trash` portal, run against a stand-in portal'
 id = "open-save-and-folder-dialogs"
 feature = 'Open, save and folder dialogs'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "missing", headless = "missing" }
-note = "A filter means one thing on every host: an extension (one or more parts, `tar.gz`) matched ignoring ASCII case, or a MIME type; a save reports the filter left selected where the system says (ADR-0359). Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters as case-folded globs with the first sent as `current_filter` and the selected one read back, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal, not a desktop's GTK or KDE chooser. Windows has no filters, title or owner window; every other host answers \"cancelled\""
+note = "A filter means one thing on every host: an extension (one or more parts, `tar.gz`) matched ignoring ASCII case, or a MIME type; a save reports the filter left selected where the system says (ADR-0360). Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters as case-folded globs with the first sent as `current_filter` and the selected one read back, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal, not a desktop's GTK or KDE chooser. Windows has no filters, title or owner window; every other host answers \"cancelled\""
 
 [[group.section.row]]
 id = "message-box"

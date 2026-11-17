@@ -37,8 +37,7 @@ impl PortalLauncher {
         self.window
             .as_ref()
             .filter(|window| !window.lifetime().is_closed())
-            .map(parent_window)
-            .unwrap_or_default()
+            .map_or_else(String::new, parent_window)
     }
 
     /// Open `path` for the portal, which takes a descriptor rather than a
