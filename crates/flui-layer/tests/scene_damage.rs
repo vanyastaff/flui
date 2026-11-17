@@ -1757,3 +1757,55 @@ pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
         "no case skipped a subtree, so a walk never climbed back past one"
     );
 }
+
+/// A node under a clip whose fractional edge covers a pixel in part is
+/// kept by a cull of that pixel and
+/// damaged in it, where its exact geometry misses the clip: the
+/// renderer shows the node's ink there at the product of both coverages.
+pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let node = writer.mint_node();
+    let boxed = |writer: &mut flui_layer::SceneWriter<'_>| {
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        content.chunk(chunk(2, version, Rect::from_ltrb(70.0, 4.0, 89.3, 28.0)));
+        content.finish()
+    };
+    let content = boxed(&mut writer);
+    writer.push(publish(node, content));
+    let mut top = BoundaryContent::builder();
+    top.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
+            Clip::AntiAlias,
+        )),
+        RenderId::new(1),
+        0,
+    );
+    top.slot(node);
+    top.pop_effect();
+    writer.push(publish(root, top.finish()));
+    writer.push(place(node, 0.0, 0.0));
+    owner.apply(SURFACE).expect("a box under a clip");
+
+    let mut writer = owner.writer();
+    let content = boxed(&mut writer);
+    writer.push(publish(node, content));
+    owner.apply(SURFACE).expect("the box repaints");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(89.0, 4.0, 90.0, 28.0)),
+        "the pixel the clip's edge shares with the box: {damage:?}"
+    );
+    // A cull of only that pixel keeps the node, which a clip in the root's
+    // content holds.
+    assert!(
+        owner
+            .current()
+            .subtree_cull(Rect::from_ltrb(89.0, 4.0, 90.0, 28.0))
+            .meets(node),
+        "the cull keeps the node for the shared pixel"
+    );
+}
