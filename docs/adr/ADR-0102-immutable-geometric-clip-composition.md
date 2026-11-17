@@ -66,7 +66,11 @@ removes source pixels the effect could have brought into the visible region.
    Its isolated input starts without that prefix, including its coarse scissor,
    and newly installed child clips form the input's suffix. Restore reinstates
    the parent prefix. This applies to opacity and filter groups, including empty
-   layers whose blend changes the destination under a transparent source.
+   layers whose blend changes the destination under a transparent source. A
+   group that changes nothing where it composites (opacity 1, no tint,
+   `SrcOver`, no filter, no clip of its own and an empty inherited prefix) is
+   no isolation: its children draw into the parent and keep the coarse scissor,
+   a partial frame's damage, which cuts them as it would cut the group.
 5. **Blend.** The group result is `mix(destination, blend(source, destination),
    coverage)`. Destination-sensitive modes under fractional coverage use a
    backdrop read on the baseline GPU path; multiplying only source alpha is

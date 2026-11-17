@@ -148,7 +148,7 @@ impl ViewState<MotionCard> for MotionCardState {
 #[test]
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     fn sample(t: &mut Tester) -> (Rect, Color) {
-        let rectangles: Vec<_> = t.draw_commands().into_iter().filter_map(|command| {
+        let rectangles: Vec<_> = t.draw_commands(&find::id("card")).into_iter().filter_map(|command| {
             match command.op {
                 DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
                 _ => None,
@@ -159,7 +159,9 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     }
 
     let card = MotionCard { owner: Rc::default(), builds: Rc::default() };
-    let mut t = Tester::mount(Center::new().child(card.clone()));
+    let mut t = Tester::mount(Center::new().child(
+        flui::widgets::Semantics::new().container(true).role(SemanticsRole::Group).identifier("card").child(card.clone()),
+    ));
     assert_eq!(sample(&mut t), (
         Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0)),
         Color::rgb(255, 0, 0),
