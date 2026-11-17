@@ -30732,6 +30732,7 @@ pub fn flui_layer::scene::version::SceneVersion::texture_users(&self, texture: f
 pub struct flui_layer::scene::version::SubtreeCull<'v> { .. }
 impl core::fmt::Debug for flui_layer::scene::version::SubtreeCull<'_>
 pub fn flui_layer::scene::version::SubtreeCull::meets(&mut self, node: flui_layer::scene::id::SceneNodeId) -> bool // impl<'v> flui_layer::scene::version::SubtreeCull<'v>
+pub fn flui_layer::scene::version::SubtreeCull::meets_chunk(&mut self, at: flui_layer::scene::version::EntryAddress) -> bool // impl<'v> flui_layer::scene::version::SubtreeCull<'v>
 pub struct flui_layer::scene_snapshot::DamageRect { .. }
 impl Clone for flui_layer::scene_snapshot::DamageRect
 impl Copy for flui_layer::scene_snapshot::DamageRect
