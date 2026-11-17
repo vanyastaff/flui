@@ -1422,13 +1422,19 @@ impl X11Window {
         {
             tracing::debug!(%error, "cannot unmap a closing X11 window");
         }
-        self.delivery.dispatch_close();
+        // `closed`, a delivery queued ahead of it and the facets' detach run
+        // user code. Every step runs whichever one before it panics: `closed`
+        // is already set, so nothing later releases what this close skips.
+        // The first panic resumes at the end.
+        let mut failure = FirstPanic::new();
+        failure.contain(|| self.delivery.dispatch_close());
         if let Some(windows) = self.windows.upgrade() {
             windows.forget(self.id, self.xid);
         }
-        self.facets.text.detach();
-        self.facets.accessibility.detach();
-        self.forget_features();
+        failure.contain(|| self.facets.text.detach());
+        failure.contain(|| self.facets.accessibility.detach());
+        failure.contain(|| self.forget_features());
+        failure.resume();
     }
 
     /// Tell the input, the drag and the text input the window is gone, then retire it. Each

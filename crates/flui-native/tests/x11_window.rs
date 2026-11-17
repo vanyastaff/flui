@@ -93,6 +93,10 @@ mod cases {
             a_keep_the_handler_release_makes_is_honoured,
         ),
         (
+            "a_close_whose_handler_panics_still_releases_the_window",
+            a_close_whose_handler_panics_still_releases_the_window,
+        ),
+        (
             "a_covered_window_reads_occluded_and_shown",
             a_covered_window_reads_occluded_and_shown,
         ),
@@ -1064,6 +1068,48 @@ mod cases {
     /// before the release, the server no longer has the kept window.
     fn a_keep_the_handler_release_makes_is_honoured() {
         close_a_kept_window(KeepAt::HandlerRelease);
+    }
+
+    /// A handler whose `closed` panics does not cut the close short: the panic
+    /// reaches the caller, and the handler is still let go of and the X
+    /// window destroyed. Red-check: with `X11Window::close` running its steps
+    /// uncontained, the handler stays held and the server keeps the window.
+    fn a_close_whose_handler_panics_still_releases_the_window() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let server = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("an X11 window opens");
+        let xid = xid_of(window.as_ref());
+        handler.react_to_close(|| panic!("a handler's `closed` panics"));
+        let released = Rc::downgrade(&handler);
+        drop(handler);
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        let closing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            window
+                .admit_and_apply(WindowCommand::Close)
+                .expect("the window closes");
+            run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        }));
+        assert!(closing.is_err(), "the handler's panic reaches the caller");
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+
+        assert!(
+            released.upgrade().is_none(),
+            "the close let go of the handler despite its panic"
+        );
+        assert!(
+            server
+                .get_window_attributes(xid)
+                .expect("request")
+                .reply()
+                .is_err(),
+            "the close destroyed the X window despite the handler's panic"
+        );
     }
 
     /// A window another client covers whole reads occluded and still shown,

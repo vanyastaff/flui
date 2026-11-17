@@ -1366,10 +1366,16 @@ mod toplevel {
             if let Some(table) = self.table.upgrade() {
                 table.forget(self.id);
             }
-            self.facets.accessibility.detach();
-            self.facets.text.detach();
-            self.delivery.dispatch_close();
-            self.retire();
+            // `closed`, a delivery queued ahead of it and the facets' detach
+            // run user code. Every step runs whichever one before it panics:
+            // `closed` is already set, so nothing later releases what this
+            // close skips. The first panic resumes at the end.
+            let mut failure = flui_foundation::panic::FirstPanic::new();
+            failure.contain(|| self.facets.accessibility.detach());
+            failure.contain(|| self.facets.text.detach());
+            failure.contain(|| self.delivery.dispatch_close());
+            failure.contain(|| self.retire());
+            failure.resume();
         }
 
         /// Leave the seats' input, take down the frame the window drew, let
