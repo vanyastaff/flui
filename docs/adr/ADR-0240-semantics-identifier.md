@@ -27,7 +27,10 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
 2. Translation exports it as AccessKit `author_id`, which the AccessKit adapters map to UIA
    `AutomationId`, macOS `AXIdentifier` and AT-SPI's accessible id. When Android, iOS and web
    adapters exist they map it to `viewIdResourceName`, `accessibilityIdentifier` and a
-   `data-flui-id` DOM attribute; that obligation is recorded in their gaps entries.
+   `data-flui-id` DOM attribute; that obligation is recorded in their gaps entries. A node that
+   carries an identifier and neither a role nor a name is published as a `Group`, not a
+   `GenericContainer`: every adapter's filter (`accesskit_consumer::common_filter`) drops a
+   generic container with its `author_id`, so an automation client could not select it.
 3. The wire `Node` gains `identifier` (schema `0.5`), and `Locator.identifier` matches it exactly.
    When the OS reports an `automation_id` equal to the identifier, the normalized projection
    (ADR-0095 §4) treats the two as one field.
@@ -58,6 +61,8 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
 
 - an identifier reaches the AccessKit node as `author_id`;
 - it is absent from the label and from a merged parent;
-- it does not create a boundary.
+- it does not create a boundary;
+- a container named only by it is found by `find::id`
+  (`tester::an_element_named_only_by_its_identifier_is_found`, flui-testing).
 
 On Windows the a11y scenario reads it back as `AutomationId` through UIA.

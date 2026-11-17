@@ -1427,3 +1427,23 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
         * Matrix4::translation(5.0, 5.0, 0.0);
     assert_eq!(transforms, [placed]);
 }
+
+/// An element named only by its identifier is found by it: a `Semantics`
+/// container with an identifier and nothing else forms a node the agent
+/// reports, as Flutter's `Semantics(identifier:)` does.
+///
+/// Fails if translation publishes such a node as a generic container,
+/// which every AccessKit filter drops with its identifier.
+#[test]
+fn an_element_named_only_by_its_identifier_is_found() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::Semantics::new()
+                .container(true)
+                .identifier("swatch")
+                .child(SizedBox::new(24.0, 16.0)),
+        ),
+    );
+    let rect = t.rect(&find::id("swatch"));
+    assert_eq!((rect.width, rect.height), (24.0, 16.0));
+}
