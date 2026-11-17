@@ -609,13 +609,14 @@ impl RasterSender {
         Some(inbox.record())
     }
 
-    /// How many settlements of `slot` wait for the owner's drain; `0` for an
-    /// id the owner does not hold. The executor writes a settlement before
-    /// its wake, so a settlement counted here has woken its owner.
+    /// How many settlements of `slot` wait for the owner's drain with the
+    /// executor's wake returned after them; `0` for an id the owner does not
+    /// hold. A settlement whose wake has not run yet, or panicked, is not
+    /// counted, so a count here means the window was asked for its frame.
     #[must_use]
-    pub fn settlements_waiting(&self, slot: SlotId) -> usize {
+    pub fn settlements_announced(&self, slot: SlotId) -> usize {
         self.inbox(slot)
-            .map_or(0, |inbox| inbox.lock().settlements.len())
+            .map_or(0, |inbox| inbox.lock().announced_waiting())
     }
 
     /// Move `slot`'s undrained settlements, oldest first, into `into`, and

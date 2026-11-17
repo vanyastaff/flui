@@ -2331,13 +2331,13 @@ impl RasterHost {
 
     /// Whether the in-flight floor of `address`'s presentation still guards
     /// a settlement (ADR-0305 §5): `false` only once a raster thread has
-    /// settled every frame it holds of the window. The thread writes a
-    /// settlement before its wake asks every window for a frame, so the
-    /// window has been asked for the frame whose wake drains them, which its
-    /// host delivers once the window can take one: woken at the floor's pace
-    /// before then, the loop would only ask the other windows for frames
-    /// they do not owe. Inline, with no slot, or with a frame still on the
-    /// thread, the floor stands.
+    /// settled every frame it holds of the window and its wake has returned
+    /// after them, so the window was asked for the frame that drains them,
+    /// which its host delivers once the window can take one: woken at the
+    /// floor's pace before then, the loop would only ask the other windows
+    /// for frames they do not owe. Inline, with no slot, with a frame still
+    /// on the thread, or with a settlement whose wake has not returned (it
+    /// has not run yet, or a requester panicked), the floor stands.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -2355,7 +2355,8 @@ impl RasterHost {
         let Some(slot) = placed.slots.get(&address) else {
             return true;
         };
-        slot.pending.is_empty() || placed.sender.settlements_waiting(slot.slot) < slot.pending.len()
+        slot.pending.is_empty()
+            || placed.sender.settlements_announced(slot.slot) < slot.pending.len()
     }
 
     /// Whether `address`'s window holds frames a raster thread has not

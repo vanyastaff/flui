@@ -177,6 +177,7 @@ impl OwnerHost {
     ///
     /// # Errors
     /// Returns `Busy` during runtime execution or a pure publication.
+    #[doc(hidden)]
     pub fn next_wake_owing_floors(
         &self,
         floor_owed: &dyn Fn(PresentationAddress) -> bool,
