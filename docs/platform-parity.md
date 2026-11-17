@@ -64,7 +64,7 @@ the ❌ cells of the new column.
 
 ᴺ after ✅: the row passed on that environment's hosted runner and runs there every night ([`nightly-platforms.yml`](../.github/workflows/nightly-platforms.yml)); its run evidence names the test.
 
-**Overall: ~38% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
+**Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
 This document is rendered from
 [`crates/flui-native/platform-parity.toml`](../crates/flui-native/platform-parity.toml), and a hand
