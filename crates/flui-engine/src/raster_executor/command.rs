@@ -356,6 +356,15 @@ pub struct SlotSettlement {
     pub epoch: FrameEpoch,
     /// What became of it.
     pub verdict: RasterVerdict,
+    /// Whether a call on the slot panicked since its previous settlement and
+    /// the owner has not taken the panic yet (a resize, a texture upload or
+    /// the render of this frame's turn, or a configuration or surface
+    /// command before it): the frame the panic came with, which an owner
+    /// that drains later than the turn cannot tell otherwise. The payload is
+    /// the slot's held failure
+    /// ([`RasterSender::take_failure`](super::RasterSender::take_failure)),
+    /// unless an earlier panic the owner has not taken yet holds its place.
+    pub panicked: bool,
 }
 
 /// Whether the executor still takes commands (ADR-0305 §9).
@@ -384,9 +393,9 @@ pub enum ExecutorHealth {
     Died,
 }
 
-/// How long an owner waits for a raster thread to answer a detach or a stop
-/// before it marks the executor [`ExecutorHealth::Died`]: above wgpu's
-/// one-second acquire timeout, so a slow acquire is not a wedge
+/// How long an owner waits for a raster thread to answer an attach, a detach
+/// or a stop before it marks the executor [`ExecutorHealth::Died`]: above
+/// wgpu's one-second acquire timeout, so one slow acquire is not a wedge
 /// (ADR-0305 §9).
 pub const DETACH_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
