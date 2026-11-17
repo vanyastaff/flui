@@ -88,6 +88,10 @@ pub struct WgpuPainter {
     compositor: LayerCompositor,
     /// Balanced saves rejected by the effect-depth admission limit.
     suppressed_layer_depth: usize,
+    /// The pass of a partial frame the painter records now, counted from 0
+    /// within the frame: a backdrop group captures once per pass, from the
+    /// pixels that pass drew (`begin_region_pass`).
+    region_pass: u32,
 
     // ===== Segmented Draw Order =====
     /// Current draw segment accumulating batched commands
@@ -123,6 +127,14 @@ impl WgpuPainter {
         self.reset_frame_state();
     }
 
+    /// Records what follows as pass `pass` of a partial frame. A grouped
+    /// backdrop filter shares its group's snapshot only within its pass:
+    /// each pass clears and redraws its own rect, so a snapshot an earlier
+    /// pass took holds the previous frame's pixels where this one draws.
+    pub(crate) fn begin_region_pass(&mut self, pass: u32) {
+        self.region_pass = pass;
+    }
+
     /// Finish an embedder-owned frame after submitting its final encoder.
     ///
     /// Call once, including when rendering failed and the encoder was discarded.
@@ -140,6 +152,7 @@ impl WgpuPainter {
         self.suppressed_layer_depth = 0;
         self.replay.update_viewport(self.size.0, self.size.1);
         self.frame_scope = None;
+        self.region_pass = 0;
     }
     /// Create a new GPU painter
     ///
@@ -269,6 +282,7 @@ impl WgpuPainter {
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
             suppressed_layer_depth: 0,
+            region_pass: 0,
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
         }
@@ -414,15 +428,21 @@ impl WgpuPainter {
     /// contained by it — i.e., part of the item falls outside the scissored
     /// region.  Items fully inside or fully outside do not straddle.
     ///
-    /// Called by `renderer.rs` after `render_layer_recursive` to decide whether
+    /// Only the items recorded from index `first_item` on are read: a partial
+    /// frame redrawn rect by rect asks once per pass, about the items that
+    /// pass recorded under its own rect ([`Self::recorded_items`] before it).
+    ///
+    /// Called by `renderer.rs` after each pass's walk to decide whether
     /// to schedule a full repaint on the next frame (self-healing).  Not test-gated
     /// because it is a production helper.
     pub(crate) fn has_advanced_shape_straddling(
         &self,
         damage: flui_foundation::geometry::Rect<f64>,
+        first_item: usize,
     ) -> bool {
         use crate::command_ir::DrawItem;
-        self.draw_order.iter().any(|item| match item {
+        let recorded = self.draw_order.get(first_item..).unwrap_or_default();
+        recorded.iter().any(|item| match item {
             DrawItem::AdvancedShape(op) => {
                 op.device_bounds.intersects(&damage) && !damage.contains_rect(&op.device_bounds)
             }
@@ -457,6 +477,13 @@ impl WgpuPainter {
             }
             _ => false,
         })
+    }
+
+    /// How many top-level draw items the frame has recorded so far: where
+    /// the next pass's items start, for
+    /// [`Self::has_advanced_shape_straddling`].
+    pub(crate) fn recorded_items(&self) -> usize {
+        self.draw_order.len()
     }
 
     /// Render all batched geometry to a texture view.
