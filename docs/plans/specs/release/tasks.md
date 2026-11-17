@@ -49,7 +49,7 @@
 | R24 один вход | окна сверх первого только под `unstable-windows` (#2466); входы `run_app`, `run_app_android`, `AppLaunch` (`src/lib.rs`) ещё живы, один `run_app` и `#[flui::main]` — открытый #2483 | слить #2483 | тред «Свести запуск к одному `run_app`» | в работе |
 | R25 навигация | пункт ADR-0093 в `docs/gaps.md`: Router, `push_for_result`, `WidgetsApp::router` есть; именованные маршруты и двери `NavigatorHandle` живы, роутера в `MaterialApp` и `CupertinoApp` нет | достроить ADR-0093 | тред «Оставить одну форму навигации» | в работе |
 | R26 закрытые enum | `#[non_exhaustive]` на части публичных `enum`; линта нет | правило и clippy-линт | тред снимка API | не начато |
-| R27 состояние виджета | запись [Widget states still fill their handles in `init_state`](../../../gaps.md#widget-states-still-fill-their-handles-in-init_state); `StateCell` рядом с `Signal` (решение 7 аудита) | перевести состояния каталогов на `create_state`; решить судьбу `StateCell` | тред инвентаря | в работе |
+| R27 состояние виджета | состояния каталогов рождаются со своими хэндлами в `create_state`; `StateCell` рядом с `Signal` (решение 7 аудита) | решить судьбу `StateCell` | тред инвентаря | в работе |
 
 ## Открытые issue critical и high
 

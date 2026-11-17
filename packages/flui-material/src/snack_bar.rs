@@ -215,27 +215,23 @@ impl std::fmt::Debug for SnackBarAction {
 #[derive(Debug, Default)]
 pub struct SnackBarActionState {
     triggered: Rc<Cell<bool>>,
-    /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018
-    /// (`build` receives a `BuildContext`, which has no `rebuild_handle()`,
-    /// so it cannot be taken there even for a press closure) — `None` only in
-    /// the window between `create_state` and the first `init_state`, never
-    /// observed by `build`.
+    /// Made in `create_state`. `None` only in a state built through the
+    /// public `Default` impl, which the framework never mounts.
     rebuild: Option<RebuildHandle>,
 }
 
 impl StatefulView for SnackBarAction {
     type State = SnackBarActionState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        SnackBarActionState::default()
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        SnackBarActionState {
+            triggered: Rc::new(Cell::new(false)),
+            rebuild: Some(ctx.rebuild_handle()),
+        }
     }
 }
 
 impl ViewState<SnackBarAction> for SnackBarActionState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
-    }
-
     fn build(&self, view: &SnackBarAction, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = Theme::of(ctx);
         let colors = theme.color_scheme;
@@ -259,7 +255,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
             let rebuild = self
                 .rebuild
                 .clone()
-                .expect("BUG: init_state runs before the first build");
+                .expect("BUG: a mounted SnackBarAction state comes from create_state");
             button = button.on_pressed(move |ctx| {
                 if triggered.replace(true) {
                     return;
