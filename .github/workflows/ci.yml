@@ -1041,7 +1041,7 @@ jobs:
 
 
       - name: cargo test --doc
-        # `flui/testing` compiles the book's testing chapter (src/book.rs).
+        # `flui/testing` compiles the book's chapters that run through Tester (src/book.rs).
         run: cargo test --workspace --locked --doc --features flui/testing
 
   # ─────────────────────────────────────────────────────────────────────────

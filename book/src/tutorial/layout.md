@@ -37,19 +37,21 @@ impl StatelessView for NotesScreen {
             NoteCard { title: "Groceries".to_owned(), words: 12 },
             NoteCard { title: "Talk outline".to_owned(), words: 240 },
         ))
-        .cross_axis_alignment(CrossAxisAlignment::Stretch)
     }
 }
 # let mut t = flui::testing::Tester::mount(NotesScreen);
-# t.expect(flui::testing::find::text("Talk outline")).to_exist();
-# t.expect(flui::testing::find::text("240 words")).to_exist();
+# // The window is 800 wide: both counts end 16 from its right edge, whatever
+# // the length of the title beside them.
+# let short = t.rect(&flui::testing::find::text("12 words"));
+# let long = t.rect(&flui::testing::find::text("240 words"));
+# assert_eq!(short.x + short.width, 784.0);
+# assert_eq!(long.x + long.width, 784.0);
 ```
 
-- `Column` and `Row` lay their children out along one axis, given as a tuple. A `Column` sizes
-  its children's width by its `cross_axis_alignment`: `Stretch` makes every card as wide as the
-  window.
-- `Expanded` gives its child the space its siblings leave on the main axis, so a long title
-  wraps before the word count moves.
+- `Column` and `Row` lay their children out along one axis, given as a tuple. A `Row` takes all
+  the width its parent allows, so each card spans the window.
+- `Expanded` gives its child the space its siblings leave on the main axis, so the word count
+  stays at the right edge however long the title is, and a long title wraps before it.
 - `Padding` and `SizedBox` make space: one around a child, the other between two.
 
 A view is a plain struct, so a card is reused by building it with other inputs. The list here is

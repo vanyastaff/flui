@@ -39,7 +39,8 @@ impl ViewState<Counter> for CounterState {
 }
 ```
 
-`build` reads signals but never writes them: a write from `build` is refused at run time
+`build` reads signals but never writes them: its `BuildContext` is not a context a write accepts,
+so a write there does not compile, and a `Writer` used while a build runs is refused at run time
 (`SignalError::WrittenDuringBuild`). A write rebuilds exactly the elements that read the signal. A
 widget that has to write from a callback with no `ctx` (one shaped `Fn()` or `Fn(&str)`) takes a
 `WriterSource` from `ctx.writer_source()` in `create_state`, keeps it in its state, and moves a

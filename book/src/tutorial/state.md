@@ -34,10 +34,10 @@ impl ViewState<NotesScreen> for NotesState {
             Text::new(format!("{} notes", titles.len())),
             Column::new(titles.into_iter().map(Text::new).collect::<Vec<Text>>()),
             RawButton::new(Text::new("Add note")).on_pressed(move |ctx| {
-                notes.update(ctx, |notes| {
-                    let title = format!("Note {}", notes.len() + 1);
-                    notes.push(title);
-                });
+                notes.update(ctx, |list| {
+                    let title = format!("Note {}", list.len() + 1);
+                    list.push(title);
+                })
             }),
         ))
     }
@@ -54,8 +54,9 @@ impl ViewState<NotesScreen> for NotesState {
   available in `build`.
 - `build` reads the signal with `get(ctx)`. The read subscribes this view, so a write rebuilds
   it and nothing else.
-- The button's callback receives a `ctx` and writes through it with `update`. `build` never
-  writes: a write there is refused at run time.
+- The button's callback receives a `ctx` and writes through it with `update`, returning the
+  write's `Result` so the button reports a refused write. `build` cannot write: its `ctx` is not
+  one a write accepts, so a write there does not compile.
 - A `Signal` is a `Copy` handle, so the callback captures its own copy with `move`.
 
 [State](../concepts/state.md) covers the other forms of state: data shared down the tree with an

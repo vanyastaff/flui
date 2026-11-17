@@ -15,7 +15,7 @@
 //!   headless leg runs it when it is in scope);
 //! - the facade's catalogs, none on by default, join the run
 //!   when `flui` is in scope (`--features flui/material,flui/cupertino`), and
-//!   the doctests add `flui/testing` for the book's testing chapter;
+//!   the doctests add `flui/testing` for the book's chapters that run through Tester;
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
@@ -43,7 +43,7 @@ use std::fmt::Write as _;
 const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 /// The facade's test support, which the doctests of `flui` name beside its
-/// catalogs so the book's testing chapter compiles.
+/// catalogs so the book's chapters that run through Tester compiles.
 const FACADE_TESTING: &str = "flui/testing";
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
@@ -311,7 +311,7 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
             }))
         };
         // `flui` has a library, so it is selected whenever `has("flui")`;
-        // `flui/testing` compiles the book's testing chapter (src/book.rs)
+        // `flui/testing` compiles the book's chapters that run through Tester (src/book.rs)
         if has("flui") {
             let _ = write!(
                 doctest_args,
