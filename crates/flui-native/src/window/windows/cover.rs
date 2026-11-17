@@ -46,8 +46,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MOVESIZEEND,
     EVENT_SYSTEM_MOVESIZESTART, EnumThreadWindows, EnumWindows, GWL_EXSTYLE, GetClientRect,
     GetLayeredWindowAttributes, GetWindowLongW, GetWindowRect, IsIconic, IsWindowVisible,
-    KillTimer, LWA_ALPHA, LWA_COLORKEY, OBJID_WINDOW, SendMessageW, SetTimer,
-    WINEVENT_OUTOFCONTEXT, WM_APP, WM_NCDESTROY, WM_TIMER, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    KillTimer, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, LWA_COLORKEY, OBJID_WINDOW,
+    SendMessageW, SetTimer, WINEVENT_OUTOFCONTEXT, WM_APP, WM_NCDESTROY, WM_TIMER, WS_EX_LAYERED,
+    WS_EX_TRANSPARENT,
 };
 use windows::core::BOOL;
 
@@ -106,9 +107,14 @@ impl CoverWatch {
             self.walk(now);
             return;
         }
-        if self.timer.get().is_some() {
-            return;
+        if self.timer.get().is_none() {
+            self.arm_timer(hwnd, wait);
         }
+    }
+
+    /// Arm the walk timer on `hwnd`, a window of the class, to fire after
+    /// `wait`.
+    fn arm_timer(&self, hwnd: HWND, wait: Duration) {
         // Whole milliseconds, rounded up, so the timer never fires inside the
         // interval and asks again.
         let millis = u32::try_from(wait.as_micros().div_ceil(1000)).unwrap_or(u32::MAX);
@@ -196,17 +202,18 @@ impl CoverWatch {
         }
     }
 
-    /// Forget `window`: a walk timer armed on it went with it, and once no
+    /// Forget `window`: a walk timer armed on it went with it, so the walk it
+    /// owed is armed again on a window left, a whole interval on; once no
     /// window left is covered the desktop hook is released.
     fn forget(&self, window: WindowRef) {
+        let left = self.windows.entries();
         if self.timer.get() == Some(window.hwnd()) {
             self.timer.set(None);
+            if let Some((other, _)) = left.first() {
+                self.arm_timer(other.hwnd(), WALK_INTERVAL);
+            }
         }
-        let any_covered = self
-            .windows
-            .entries()
-            .into_iter()
-            .any(|(_, covered)| covered);
+        let any_covered = left.into_iter().any(|(_, covered)| covered);
         if !any_covered {
             self.hear_the_desktop(false);
         }
@@ -456,7 +463,7 @@ fn is_see_through(window: HWND) -> bool {
         return false;
     }
     let mut alpha = 0_u8;
-    let mut flags = Default::default();
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS::default();
     // SAFETY: both out-parameters are live locals; a window drawn per pixel
     // (`UpdateLayeredWindow`) fails the call.
     let read = unsafe {
@@ -520,7 +527,7 @@ fn first_window_of_the_class() -> Option<HWND> {
                 // alive for the whole enumeration on this thread.
                 unsafe {
                     *std::ptr::with_exposed_provenance_mut::<Option<HWND>>(found.0 as usize) =
-                        Some(window)
+                        Some(window);
                 };
                 BOOL::from(false)
             },
