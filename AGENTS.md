@@ -154,8 +154,8 @@ conversation:
   `pub use`/`pub mod` or a listed item, `miri` runs when a changed file sits under a source
   it interprets whole, `perf-gates` compares the baseline when a changed file sits under a
   source that runs for every node of a frame (the element tree and its owners, render storage,
-  the pipeline owner's passes, the semantics model), and `test-without-agent` runs when the diff
-  reaches flui-app's agent module or its build script.
+  the pipeline owner's passes, the retained layer scene, the semantics model), and
+  `test-without-agent` runs when the diff reaches flui-app's agent module or its build script.
   A new main-only job that a pull request can break gets such a row.
 - No process markers (`Cycle N`, `PR #NNN review`, `Phase B`, slice labels) in code or docs.
   Archival roots are exempt (`docs/plans`). That root holds the live specs, and their task IDs
