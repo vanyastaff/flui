@@ -1367,8 +1367,21 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             orphans_read,
             ops: _,
         } = staged;
+        // Boundaries removed since the pass read the owner's list left their
+        // nodes after the entries it read: they wait for a later pass.
+        if let Some(late) = self.orphaned_nodes.get(orphans_read..) {
+            orphans.extend_from_slice(late);
+        }
         for (id, refreshed) in records.drain() {
             match refreshed {
+                // A boundary removed since the pass commits no record: the
+                // node the pass published for it waits with the orphans, as
+                // the removal left the node of the record it took.
+                Some(Refreshed::Repainted(record)) if self.render_tree.get(id).is_none() => {
+                    if !orphans.contains(&record.node) {
+                        orphans.push(record.node);
+                    }
+                }
                 Some(Refreshed::Repainted(record)) => {
                     if record.followers.is_empty() {
                         self.follower_boundaries.remove(&id);
@@ -1400,11 +1413,6 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             if let Some(record) = self.boundary_records.get_mut(&id) {
                 record.stale = true;
             }
-        }
-        // Boundaries removed since the pass read the owner's list left their
-        // nodes after the entries it read: they wait for a later pass.
-        if let Some(late) = self.orphaned_nodes.get(orphans_read..) {
-            orphans.extend_from_slice(late);
         }
         let previous_orphans = std::mem::replace(&mut self.orphaned_nodes, orphans);
         if let Some(scratch) = self.paint_scratch.as_mut() {
