@@ -258,6 +258,43 @@ impl LayerCompositor {
             .filter_map(|layer| layer.image_filter.as_ref())
     }
 
+    /// The whole device pixels, inside the current scope, that the clips the
+    /// enclosing layers apply to their composites can show.
+    ///
+    /// A layer's children draw into it unclipped and the clip cuts its
+    /// composite once, so what lies past that bound is never shown, and the
+    /// scene's cull skips a node there. An image filter between a clip and
+    /// the scope draws the clip's pixels from the input it requires, so the
+    /// bound grows by that input on the way in. Each layer's clip is rounded
+    /// out before the next meets it: two layers whose exact clips do not meet
+    /// can both show, in part, the pixel their edges share. `None` when no such clip
+    /// encloses the scope.
+    pub(super) fn composite_clip_bounds(&self) -> crate::EngineResult<Option<Rect<f64>>> {
+        let mut bounds: Option<Rect<f64>> = None;
+        for layer in &self.layer_stack {
+            if let Some(rect) = match &layer.composite_clip {
+                Some(clip) => clip
+                    .chain
+                    .root_bounds()?
+                    .map(flui_foundation::geometry::cover),
+                None => None,
+            } {
+                bounds = Some(match bounds {
+                    Some(outer) => outer.intersect(&rect).unwrap_or(Rect::ZERO),
+                    None => rect,
+                });
+            }
+            if let (Some(filter), Some(shown)) = (&layer.image_filter, bounds)
+                && !shown.is_empty()
+            {
+                bounds = Some(flui_foundation::geometry::cover(
+                    filter.required_input(shown)?,
+                ));
+            }
+        }
+        Ok(bounds)
+    }
+
     pub(super) fn force_current_layer_isolation(&mut self) {
         if let Some(layer) = self.layer_stack.last_mut() {
             layer.force_isolation = true;

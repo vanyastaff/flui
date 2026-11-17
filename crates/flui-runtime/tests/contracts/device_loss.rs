@@ -206,3 +206,149 @@ fn a_given_up_rebuild_holds_frames_until_the_application_asks_again() {
     assert!(lost.run_frame(), "the rebuilt device shows the whole tree");
     assert_eq!(lost.device.submits, submits + 1);
 }
+
+/// A dead renderer is reported once, even over a rebuild already given up,
+/// its frames go on without drawing, and a rebuild the application asks for leaves
+/// it as it is (ADR-0305 §9). The death asks for one frame, which commits
+/// the tree a frame dropped before it left uncommitted.
+///
+/// Red-check: report only a change into a given-up state (drop `dies` in
+/// `note_primary_device_recovery`) and the death over the given-up rebuild
+/// is never reported.
+#[test]
+fn a_dead_renderer_is_reported_once_and_its_frames_go_on() {
+    // The first frame was dropped on the lost device, so its tree is not
+    // committed when the renderer is found dead.
+    let mut lost = Lost::new();
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Abandoned { attempts: 10 }));
+    let before_death = lost.wakes.load(Ordering::SeqCst);
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Dead));
+    assert_eq!(
+        lost.reports().last(),
+        Some(&(DeviceRecovery::Dead, FailureDisposition::FrameDropped)),
+        "the death is reported over the given-up rebuild"
+    );
+    assert!(
+        lost.wakes.load(Ordering::SeqCst) > before_death,
+        "the death asks for the one frame that commits the dropped frame's tree"
+    );
+    // The dead renderer answers it without drawing, as the host's sink does.
+    lost.device.lost = false;
+    let submits = lost.device.submits;
+    let _shown = lost.run_frame();
+    assert_eq!(lost.device.submits, submits + 1, "that frame is run");
+    let reported = lost.reports().len();
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Dead));
+    assert_eq!(lost.reports().len(), reported, "the death is reported once");
+    let wakes = lost.wakes.load(Ordering::SeqCst);
+    assert!(
+        !lost.wants_a_frame(wakes),
+        "a dead renderer asks for no frame while nothing changes"
+    );
+    assert!(
+        !lost.runtime.retry_render_device(),
+        "a rebuild asked for changes nothing"
+    );
+    assert_eq!(
+        lost.runtime.primary_device_recovery(),
+        Some(DeviceRecovery::Dead)
+    );
+    // The frames go on, answered without drawing, so input and the semantics
+    // tree still follow the application.
+    lost.runtime.mark_primary_needs_full_repaint();
+    assert!(
+        lost.runtime.has_pending_work(),
+        "work asked for after the death runs a frame"
+    );
+    let submits = lost.device.submits;
+    let _shown = lost.run_frame();
+    assert_eq!(lost.device.submits, submits + 1, "that frame is run");
+    assert_eq!(lost.reports().len(), reported, "and reports nothing");
+}
+
+/// A dropped frame's paced retry is due work at its backoff deadline, never
+/// tree work a runner may pace behind a frame that showed nothing
+/// (ADR-0353 decision 4), and a repaint asked for is tree work.
+///
+/// Red-check: drop the backoff from `has_pending_tree_work` and the
+/// retry shows as tree work before its deadline.
+#[test]
+fn a_dropped_frames_retry_is_due_work_and_a_repaint_is_tree_work() {
+    let lost = Lost::new();
+    assert!(
+        !lost.runtime.has_pending_tree_work(),
+        "a backoff that runs leaves no tree work"
+    );
+    assert!(
+        !lost.runtime.has_pending_due_work(),
+        "nor due work before its deadline"
+    );
+    lost.wait_out_the_backoff();
+    assert!(
+        lost.runtime.has_pending_due_work(),
+        "the retry is due work once the backoff is over"
+    );
+    assert!(
+        !lost.runtime.has_pending_tree_work(),
+        "and not tree work a runner would hold behind its fallback"
+    );
+
+    let runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
+    runtime
+        .attach_root_widget_with_size(&flui_widgets::Text::new("tree"), 400.0, 400.0)
+        .expect("mount text");
+    runtime.mark_primary_needs_full_repaint();
+    assert!(
+        runtime.has_pending_tree_work(),
+        "a repaint asked for is tree work"
+    );
+    assert!(!runtime.has_pending_due_work(), "and nothing is due");
+}
+
+/// A pointer move is input work: the frame that delivers it is the one a
+/// runner paces behind any pending fallback, and it is neither tree work that
+/// would make a later fallback hold the tree nor due work with an instant of
+/// its own (ADR-0353 decision 4).
+///
+/// Red-check: count pending motion as tree work and the move shows as tree
+/// work.
+#[test]
+fn a_pointer_move_is_input_work_and_neither_tree_nor_due_work() {
+    let mut lost = Lost::new();
+    lost.device.lost = false;
+    lost.wait_out_the_backoff();
+    assert!(lost.run_frame(), "the retried frame presents");
+    assert!(
+        !lost.runtime.has_pending_work(),
+        "a presented frame leaves nothing pending"
+    );
+    let at = flui_foundation::geometry::Offset::new(5.0, 5.0);
+    let touch = flui_platform::PointerKind::Touch;
+    for event in [
+        flui_interaction::events::make_down_event(at, touch).expect("finite touch"),
+        flui_interaction::events::make_move_event(
+            flui_foundation::geometry::Offset::new(9.0, 9.0),
+            touch,
+        )
+        .expect("finite touch"),
+    ] {
+        lost.runtime.enter(|runtime| {
+            runtime.handle_input_addressed(
+                runtime.presentation_id(),
+                flui_platform::PlatformInput::Pointer(event),
+            );
+        });
+    }
+    assert!(
+        lost.runtime.has_pending_input_work(),
+        "the move waits for the frame that delivers it"
+    );
+    assert!(
+        !lost.runtime.has_pending_tree_work(),
+        "and is not tree work"
+    );
+    assert!(!lost.runtime.has_pending_due_work(), "nor due work");
+}

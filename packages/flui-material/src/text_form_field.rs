@@ -14,7 +14,7 @@
 use std::rc::Rc;
 
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::platform::TextInputPurpose;
+use flui_sdk::platform::TextInputOptions;
 use flui_sdk::view::element::ElementKind;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::{TextFormFieldConfig, TextFormFieldCore};
@@ -147,10 +147,11 @@ impl TextFormField {
         self
     }
 
-    /// What the field is for (default [`TextInputPurpose::Text`]).
+    /// What the field asks of the input method and the on-screen keyboard
+    /// (default [`TextInputOptions::TEXT`]).
     #[must_use]
-    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
-        self.config.input_purpose = purpose;
+    pub fn text_input(mut self, text_input: TextInputOptions) -> Self {
+        self.config.text_input = text_input;
         self
     }
 
@@ -226,7 +227,7 @@ impl ViewState<TextFormField> for TextFormFieldState {
                 .enabled(input.enabled)
                 .autofocus(input.autofocus)
                 .obscure_text(input.obscure_text)
-                .input_purpose(input.input_purpose)
+                .text_input(input.text_input)
                 .on_changed(input.on_changed());
             if let Some(node) = &input.focus_node {
                 field = field.focus_node(Rc::clone(node));

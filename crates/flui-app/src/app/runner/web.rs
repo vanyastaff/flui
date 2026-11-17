@@ -169,6 +169,7 @@ where
             address: installation.dispatcher().address,
             size: (size.width as u32, size.height as u32),
             device: flui_engine::DeviceHealth::Healthy,
+            renderer_dead: false,
         };
         installation.submit_web(super::frame_driver::FrameDriver::Web(WebFrameDriver {
             raster,
@@ -303,7 +304,7 @@ impl WebFrameDriver {
                 // No deferral on web: this callback is driven by the
                 // browser's own `requestAnimationFrame` loop, which
                 // already paces at the display's rate — the exact job
-                // ADR-0058's deadline does for the native backends.
+                // ADR-0353's deadline does for the native backends.
                 FallbackGate::default(),
             )
         });

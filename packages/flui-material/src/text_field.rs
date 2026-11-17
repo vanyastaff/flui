@@ -115,7 +115,7 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::platform::TextInputPurpose;
+use flui_sdk::platform::TextInputOptions;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{EditableText, Listener, SubmitCallback, TextEditingController};
@@ -140,8 +140,8 @@ pub struct TextField {
     autofocus: bool,
     /// Forwarded to [`EditableText::obscure_text`] â€” a password field.
     obscure_text: bool,
-    /// Forwarded to [`EditableText::input_purpose`].
-    input_purpose: TextInputPurpose,
+    /// Forwarded to [`EditableText::text_input`].
+    text_input: TextInputOptions,
     /// Forwarded to [`EditableText::required`] â€” see [`Self::required`].
     required: bool,
     /// Forwarded to [`EditableText::identifier`] â€” see [`Self::identifier`].
@@ -177,7 +177,7 @@ impl std::fmt::Debug for TextField {
             .field("enabled", &self.enabled)
             .field("autofocus", &self.autofocus)
             .field("obscure_text", &self.obscure_text)
-            .field("input_purpose", &self.input_purpose)
+            .field("text_input", &self.text_input)
             .field("required", &self.required)
             .field("identifier", &self.identifier)
             .field("on_submitted", &self.on_submitted.is_some())
@@ -206,12 +206,13 @@ impl TextField {
         self
     }
 
-    /// What the field is for (default [`TextInputPurpose::Text`]): an email,
-    /// URL, phone, number or search field asks the input method for the
-    /// layout that suits it. Forwards to [`EditableText::input_purpose`].
+    /// What the field asks of the input method and the on-screen keyboard
+    /// (default [`TextInputOptions::TEXT`]): the layout its purpose names, the
+    /// Enter key's label, capitalization, correction and autofill. Forwards
+    /// to [`EditableText::text_input`].
     #[must_use]
-    pub fn input_purpose(mut self, purpose: TextInputPurpose) -> Self {
-        self.input_purpose = purpose;
+    pub fn text_input(mut self, text_input: TextInputOptions) -> Self {
+        self.text_input = text_input;
         self
     }
 
@@ -246,7 +247,7 @@ impl TextField {
             enabled: None,
             autofocus: false,
             obscure_text: false,
-            input_purpose: TextInputPurpose::Text,
+            text_input: TextInputOptions::TEXT,
             required: false,
             identifier: None,
             on_submitted: None,
@@ -490,7 +491,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
             .autofocus(view.autofocus)
             .caret_color(caret_color)
             .obscure_text(view.obscure_text)
-            .input_purpose(view.input_purpose)
+            .text_input(view.text_input)
             .invalid(has_error)
             .required(view.required);
         if let Some(identifier) = &view.identifier {

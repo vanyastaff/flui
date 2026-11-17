@@ -778,6 +778,26 @@
         }
       ]
     },
+    "Autofill": {
+      "oneOf": [
+        {
+          "const": "username",
+          "type": "string"
+        },
+        {
+          "const": "current_password",
+          "type": "string"
+        },
+        {
+          "const": "new_password",
+          "type": "string"
+        },
+        {
+          "const": "one_time_code",
+          "type": "string"
+        }
+      ]
+    },
     "Availability": {
       "oneOf": [
         {
@@ -1028,6 +1048,26 @@
             "unavailable"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Capitalization": {
+      "oneOf": [
+        {
+          "const": "none",
+          "type": "string"
+        },
+        {
+          "const": "sentences",
+          "type": "string"
+        },
+        {
+          "const": "words",
+          "type": "string"
+        },
+        {
+          "const": "characters",
+          "type": "string"
         }
       ]
     },
@@ -1387,6 +1427,22 @@
             "any"
           ],
           "type": "object"
+        }
+      ]
+    },
+    "Correction": {
+      "oneOf": [
+        {
+          "const": "off",
+          "type": "string"
+        },
+        {
+          "const": "suggestions",
+          "type": "string"
+        },
+        {
+          "const": "autocorrect",
+          "type": "string"
         }
       ]
     },
@@ -2083,6 +2139,38 @@
     },
     "Empty": {
       "type": "object"
+    },
+    "EnterAction": {
+      "oneOf": [
+        {
+          "const": "default",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "type": "string"
+        },
+        {
+          "const": "go",
+          "type": "string"
+        },
+        {
+          "const": "next",
+          "type": "string"
+        },
+        {
+          "const": "previous",
+          "type": "string"
+        },
+        {
+          "const": "search",
+          "type": "string"
+        },
+        {
+          "const": "send_message",
+          "type": "string"
+        }
+      ]
     },
     "ErrorCode": {
       "oneOf": [
@@ -9393,11 +9481,50 @@
     },
     "StoreStatus": {
       "properties": {
+        "autofill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Autofill"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capitalization": {
+          "$ref": "#/$defs/Capitalization"
+        },
+        "correction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Correction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decimal": {
+          "type": "boolean"
+        },
+        "enter_action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnterAction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "protected": {
           "type": "boolean"
         },
         "purpose": {
           "$ref": "#/$defs/InputPurpose"
+        },
+        "signed": {
+          "type": "boolean"
         },
         "single_line": {
           "type": "boolean"
@@ -10432,26 +10559,6 @@
             "identifier",
             "parent",
             "elements"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "identifier": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "unpublished_identifier",
-              "type": "string"
-            },
-            "parent": {
-              "$ref": "#/$defs/ElementId"
-            }
-          },
-          "required": [
-            "kind",
-            "identifier",
-            "parent"
           ],
           "type": "object"
         },
@@ -12432,26 +12539,6 @@
               "identifier",
               "parent",
               "elements"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "identifier": {
-                "type": "string"
-              },
-              "kind": {
-                "const": "unpublished_identifier",
-                "type": "string"
-              },
-              "parent": {
-                "$ref": "#/$defs/ElementId"
-              }
-            },
-            "required": [
-              "kind",
-              "identifier",
-              "parent"
             ],
             "type": "object"
           },

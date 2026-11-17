@@ -133,6 +133,13 @@ pub trait TextStoreObserver {
     /// The document's geometry changed (`OnLayoutChange`).
     fn layout_changed(&self);
 
-    /// [`TextStore::status`] changed.
+    /// [`TextStore::status`] changed, in some part: a field tells of any
+    /// difference, including one a platform has no word for.
+    ///
+    /// A host compares what it passes on of the new status with what it last
+    /// told the platform and acts only on a difference; a difference that
+    /// would restart the input method waits until no composition is in
+    /// progress, and none shows a keyboard (the field's focus and its own tap
+    /// do).
     fn status_changed(&self);
 }

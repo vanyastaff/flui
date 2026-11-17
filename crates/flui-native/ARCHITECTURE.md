@@ -298,7 +298,12 @@ trait depends on `flui-platform` instead.
     size, position and their limits, DPI, focus, paint, the cursor, the
     title, the modal size-move and menu loops with their deadline timer, the
     setting changes, the frame, close and delivery requests posted to it and the
-    keyboard's system-menu command), the input
+    keyboard's system-menu command), the cloak watch
+    (`window::windows::CloakWatch`: the thread's one out-of-context WinEvent
+    subscription to cloak changes, held from the first window announced to the
+    last destroyed, whose callback finds the window by its handle; it answers
+    nothing. Test: `one_cloak_subscription_serves_every_window_of_the_thread`,
+    `each_window_hears_its_own_cloak`), the input
     (`input::windows::InputWindows`: mouse, pointer, wheel, keyboard,
     characters and the keyboard layout, and the precision touchpad's hit
     test and pacing timer, with the DirectManipulation viewport it gives each
@@ -365,20 +370,63 @@ trait depends on `flui-platform` instead.
     `the_displays_and_the_preferences_hear_every_change_in_either_order`,
     `display_broadcasts_mark_the_monitors_stale_and_wake_until_detached`.
   - The owner's message-only window answers its own messages (the wake, the
-    exit policy) and offers any other, in order, to the `OwnerMessages` hooks
+    exit policy, and `MODAL_FRAME`, the clock of the pacing of a modal loop
+    run from it) and offers any other, in order, to the `OwnerMessages` hooks
     of the objects the loop holds: today the drag transport the table makes
     (`WindowsHost::drag`). It answers `START_DRAG`, from which a session's
-    `DoDragDrop` runs on a fresh owner turn, and `MODAL_FRAME`, for which the
-    owner delivers the frames due while the modal loop runs
-    (`owner::windows::modal_loop::ModalFrames`, which the owner window holds
-    and hands a hook weakly), and it cancels a session that has not started
-    when the window is destroyed. Every hook hears that end, each in a
-    boundary of its own, so one that panics leaves the next told. A window's
-    `DefWindowProc` move and size loops deliver through a `ModalFrames` of
-    their own, at the owner's modal pace (`owner::modal_pace`). Tests:
+    `DoDragDrop` runs on a fresh owner turn under the owner window's pacing,
+    and it cancels a session that has not started when the window is
+    destroyed. Every hook hears that end, each in a boundary of its own, so one
+    that panics leaves the next told. Tests:
     `ole_drag_and_drop_on_real_windows`,
-    `a_due_deadline_gets_one_modal_frame_per_generation`,
     `every_owner_hook_hears_the_window_go_after_one_panics`.
+  - **A modal loop asks for frames by the main loop's rule, and polls for
+    nothing.** While a modal loop stands in for the main loop (OLE's drag
+    loop, `DefWindowProc`'s move, size and menu loops, the system menu
+    included), a `owner::windows::modal_loop::ModalPacing` of the window (or
+    of the owner window, for the drag loop) delivers what the main loop would
+    (`ModalFrames`: a due wake deadline once per frame generation, a due turn
+    deadline as one owner turn, the invalid windows painted) each time its
+    clock fires: a timer of the window, or for OLE's loop, which dispatches no
+    timer while the pointer rests, a thread that sends the owner window
+    `MODAL_FRAME`. The clock is set by the pure `owner::modal_pace::PaceTimer`:
+    for the earliest deadline the last delivery armed, and within
+    `ASK_AGAIN_MS` of the platform's code running on the thread, since that
+    code may have moved a deadline, as the main loop asks again each time its
+    queue runs dry. Every entry of the platform's code on the owner thread
+    tells the thread's `ModalLoops` (kept by FLUI's window class on the thread)
+    after it ran: the class's procedure after each window message but the
+    pacing timer's own, the owner window's after every message but
+    `MODAL_FRAME` (a guard, so a contained panic tells it too), the broadcast
+    receiver after its subscribers, the cloak hook, and the COM objects the OS
+    calls directly: every OLE vtable method (`com_method`, `com_hresult`: a
+    drop target's event, a drop source's question, a fetch running the
+    provider), every TSF text-store method that reads or edits the document
+    (`document_method`), and the UIA activation and action handlers on the
+    owner thread. The text store's methods that read no document, and the
+    input scope, run no application code and tell nothing. What another thread
+    hands the owner knocks at `ModalLoops::wake` once handed over: a window's
+    post through the owner queue, an invalidation of a shown window, the owner
+    signal's wake (posted or set on its fallback event). The system's loops
+    dispatch posted messages and paints themselves, which tell the loops as
+    they run; OLE's drag loop dispatches neither while the pointer rests, so
+    the knock sets its pacing thread to deliver at once, and that delivery
+    dispatches the posted messages of FLUI's range (at most
+    `POSTED_PER_DELIVERY`, then another delivery), drives the owner's turn and
+    paints. With no deadline and nothing run or handed over, no clock is set:
+    a menu left open asks the handler nothing. A window destroyed in its loop
+    ends its pacing. Tests: `a_delivery_sets_the_timer_for_what_is_due_and_nothing_else`,
+    `platform_code_asks_again_without_holding_the_timer_back`,
+    `a_due_deadline_gets_one_modal_frame_per_generation`,
+    `a_delivery_that_panics_leaves_the_pacing_asking_again`,
+    `an_idle_modal_loop_with_no_deadline_asks_nothing`,
+    `a_deadline_a_turn_sets_during_an_idle_modal_loop_is_delivered_in_it`,
+    `a_redraw_from_another_thread_is_painted_in_an_idle_modal_loop`,
+    `deadlines_are_delivered_while_the_window_is_moved`,
+    `a_second_window_repaints_while_the_modal_loop_rests`,
+    `work_from_another_thread_reaches_a_resting_drag_loop`,
+    `a_com_entry_asks_a_running_modal_loop_again`. Not run: the system menu by
+    the mouse, a drag held still over a window of another process.
 
   On Android the table implements `owner::android::AndroidHost`, which makes
   what the loop holds (the displays, the preference source, the notice
@@ -571,6 +619,21 @@ trait depends on `flui-platform` instead.
   (`accessibility::android`). The view reaches it through a `BridgeSlot`
   (`owner::android::bridge_slot`), which a closing window empties only of
   its own bridge.
+
+  Every adapter publishes through `BridgeShared::publish`, which retains a
+  whole tree for a late activation and decides what the adapter is handed.
+  AccessKit calls the activation handler while it holds its own state (the
+  subclass `RefCell` under UIA, the view's under NSAccessibility, the adapter
+  mutex under AT-SPI), and the handler tells the composition root there; a
+  publish the listener makes on that thread, from inside the activation, is
+  therefore retained and not handed on, and the activation answers it. A
+  publish another thread makes meanwhile reaches the adapter, which
+  serializes it. The bridge keeps each activating thread's own depth, so
+  activations of one bridge on two threads, ending in either order, never
+  clear or leave each other's marks. Tests: `a_tree_published_from_inside_the_activation_is_its_answer`,
+  `a_publish_on_another_thread_during_the_activation_reaches_the_adapter`,
+  `overlapping_activations_on_two_threads_keep_each_others_marks`,
+  `a_tree_published_inside_the_activation_answers_it` (UIA on a real window).
 
   The table's positions make the accessibility adapter and the actuator a
   window hands out (`host::Accessibility::for_window`,
@@ -1324,10 +1387,15 @@ trait depends on `flui-platform` instead.
   compositor's `wm_capabilities` where it sends them (version 5); one that
   sends none (sway 1.9) is taken to offer every mode. A window tiled and in
   no mode takes the tiling's size, so `SetSize` is `NotOnThisDevice` while it
-  is. Its buffer is drawn at the compositor's fractional scale
-  (`wp_fractional_scale_v1`), else the surface's preferred whole scale, else
-  its output's, and at scale 1 without a viewport: `scale::buffer_scale` is
-  the one place that decides. Its frame is the compositor's answer through
+  is. A configure that leaves the size to a window still at the size it
+  opened at holds that size within the compositor's `configure_bounds`
+  (version 4), each axis on its own; a size asked for or taken since is not
+  held to them (`configure::Bounds`,
+  `a_window_opens_within_the_compositors_bounds`). Its buffer is drawn at the
+  compositor's fractional scale (`wp_fractional_scale_v1`), else the
+  surface's preferred whole scale, else the largest of its outputs', and at
+  scale 1 without a viewport: `scale::buffer_scale` is the one place that
+  decides. Its frame is the compositor's answer through
   `xdg-decoration`, never the request; a configure after a request that names
   no mode answers it with the mode unchanged (wlroots sends no mode twice).
   Where the compositor offers none, or leaves the frame to the client, a
@@ -1346,9 +1414,22 @@ trait depends on `flui-platform` instead.
   OS extension; until that reader exists the handle is kept and read under
   `testing` only. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
-  the adapter (the X11 window already called it); the bridge reaches the
-  adapter through `AtSpiAdapter`, the two calls it makes of
-  `accesskit_unix::Adapter`. `Activate` is a request with an
+  the adapter (the X11 window already called it), and where its content is
+  (`WindowAccessibility::bounds_changed`): the compositor tells a client
+  nothing of its window's position, so the window is at the origin and its
+  content below the title bar it draws itself (`scale::unplaced_bounds`),
+  while the X11 window passes its frame's and its content's rectangles on the
+  root each time a read of the server finds them changed. That read follows
+  the events the server sends the window (`ConfigureNotify`, including the
+  synthetic one ICCCM 4.1.5 has a window manager send when it moves a frame,
+  `ReparentNotify`, `_NET_FRAME_EXTENTS`, the focus), so a manager that moves
+  a frame without telling the client leaves the old position until the next
+  such event ([gaps](../../docs/gaps.md)). The headless window passes its
+  simulated rectangle, which `HeadlessWindowSystem::accessibility_bounds`
+  reports. AT-SPI's screen
+  coordinates of a node are the content's origin plus the node's place; the
+  bridge reaches the adapter through `AtSpiAdapter`, the three calls it makes
+  of `accesskit_unix::Adapter`. `Activate` is a request with an
   `xdg-activation` token (`activation`): the window asks for one naming the
   last user input (its seat, serial and surface, `UserInput`, kept by the
   loop in `LastInput`, which the windows read; no input records into it until
@@ -2193,8 +2274,10 @@ of that tap without one give the focus back. A field attached outside a tap
 focuses the editor only while the canvas has the page's focus.
 `navigator.userActivation.isActive` is not used: it stays true for seconds
 after a tap, outside its handler. The `EditContext` path writes the canvas's
-`inputmode` through `owner::web::CanvasWrites` and puts the page's value and
-the canvas's own `editContext` back when it lets the field go. The
+`inputmode` and `enterkeyhint` through `owner::web::CanvasWrites` and puts the
+page's values and the canvas's own `editContext` back when it lets the field
+go; an `EditContext` has no capitalization, correction or autofill for the
+browser to read, so those reach only the editors. The
 headless-Chrome tests (constructed events; the test driver has no trusted
 input) `a_tap_focuses_an_editor_the_field_attached_after_it_takes_over`,
 `a_tap_no_field_follows_gives_the_focus_back_to_the_canvas`,
@@ -2315,8 +2398,9 @@ and writes only what changed between two specs.
   host writes no published value over a served field, and a field no store is
   served through shows its published value again after an edit and once the
   text input releases it (`FocusedField::on_release`). The field's
-  hints are the store's status (`inputmode`, an `autocomplete` of its
-  purpose, `enterkeyhint`). The focus leaving the field, the field's removal
+  hints are the store's status (`inputmode`, an `autocomplete` of its autofill
+  or purpose, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck`).
+  The focus leaving the field, the field's removal
   or the host's retirement moves the store back to the canvas, and the
   element keeps no listener of the text input's. A hidden editor that takes
   the store over takes the canvas's focus only, never another element's of the
@@ -2540,12 +2624,25 @@ waits at most 500ms before the bootstrap (`AppHandler::ready`); unavailable or s
 unknown and can recover later. No D-Bus call runs in the frame path. Successful
 unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
 other values to NoPreference. A missing key permits the GNOME
-`org.gnome.desktop.interface/enable-animations` fallback; transient errors
+`org.gnome.desktop.interface/enable-animations` fallback, and with neither key
+motion is unobserved, as every other key without a value is; failed reads
 preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
-reply. Healthy observations use notifications; failed reads retain a bounded
-retry that unrelated notifications cannot postpone. Service-owner changes
-refresh the same observation set. Shutdown fences owner admission before
-cancelling the task, whose state holds no strong owner/source cycle.
+reply. The watch never polls. A refresh is retried on `READ_RETRIES`' doubling
+schedule, which runs out and which unrelated notifications cannot postpone,
+after a read that fails in a way that passes by itself (the call timed out, no
+reply, the portal's `Failed`), and after a refresh in which the portal answered
+no setting at all: `xdg-desktop-portal` folds a backend that has not started
+or has gone into `NotFound` for every key, and the backend's return changes no
+owner on the bus and sends no signal. A key missing beside others that answer,
+a portal without the Settings interface and a portal not on the bus
+(`ServiceUnknown`) wait for the next `SettingChanged` or `NameOwnerChanged`,
+each of which refreshes the same observation set and starts the schedule over.
+A session bus that does not answer, or a connection that ends before the portal
+answered on it, is tried again on `CONNECT_RETRIES`' schedule, which only a
+connection the portal answered on starts over, and once it runs out the watch
+ends with the observation it has.
+Shutdown fences owner admission before cancelling the task, whose state holds
+no strong owner/source cycle.
 
 The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
 everything else (no preference, prefers light, a missing key) light. It is kept
@@ -2680,8 +2777,10 @@ Both paths drive the same owner-turn slot and quit policy. A strong `OwnedHandle
 owner spans every wait; closing admission prevents a retired proxy from posting.
 The event contains no callback or UI state and requires no polling thread.
 If both the post and kernel signal fail, the caller still receives an error and
-OwnerSignal retains its debt. A third-party modal loop does not wait on this
-private event; fallback delivery resumes when FLUI regains its loop.
+OwnerSignal retains its debt. The system's move, size and menu loops and a
+third-party modal loop do not wait on this private event; fallback delivery
+resumes when FLUI regains its loop. OLE's drag loop does not wait on it either,
+but the wake knocks at its pacing, whose delivery drives the owner's turn.
 
 Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
@@ -3360,7 +3459,7 @@ visible bit):
   from where it runs.
 - A diagnostic redraw tick in the backend (an `NSTimer`/thread poke behind a
   `FLUI_MACOS_REDRAW_POKE_MS`-style knob, which was implemented while diagnosing
-  this). Deleted, not deferred: it contradicts ADR-0058 — the platform paces
+  this). Deleted, not deferred: it contradicts ADR-0353 — the platform paces
   production, a sleep never does — and it pre-empts the `PlatformProxy` redraw
   verb ADR-0045 decision 5 scopes to #559 by shipping a second, private frame
   source. The primer that starts a measurement belongs to the measuring harness.
@@ -4187,7 +4286,11 @@ handler that opens or closes a window, sets a cursor or quits finds the
 input as it was; events a handler's roundtrip records meanwhile are
 delivered in the same turn. A held key repeats on the client, by
 `wl_keyboard.repeat_info`, and the loop's wait is bounded by the next repeat
-(`LoopTurn::input_due`).
+(`LoopTurn::input_due`). A keyboard of a seat bound below version 4 is never
+told its repeat and repeats at `repeat::UNTOLD`, 25 a second after 600 ms: its
+keymap, which a compositor sends first, carries the keyboard's version
+(`a_keyboard_never_told_its_repeat_still_repeats`,
+`a_keymap_of_an_old_keyboard_brings_its_repeat`).
 
 What the translation decides is in the module docs of
 `input::linux::wayland`; the parts with a test of their own: a pointer frame
@@ -4214,8 +4317,20 @@ replays to exactly what the window heard and is checked in as
 source in a headless compositor: their translation is held by the wire
 tests alone. A compositor without `cursor-shape` (Weston 13) gets the
 cursor theme's image (`wayland-cursor`, `XCURSOR_THEME` and `XCURSOR_SIZE`)
-on a surface of the pointer's own, drawn at the window's scale rounded up;
-`wayland_input` sees Weston 13 show the theme's pointer.
+on a surface of the pointer's own, drawn for the window's scale rounded up;
+`wayland_input` sees Weston 13 show the theme's pointer. A theme ships a few
+sizes, and the nearest to the asked one need not be a multiple of that scale
+(Adwaita's 64 at 3), while `wl_surface.attach` refuses a buffer whose size is
+not a multiple of the surface's buffer scale with a protocol error that ends
+the connection. So the image is put on the surface at the scale only where it
+divides both sides, else through a `wp_viewport` at the image's logical size
+with buffer scale 1, else, with no viewporter, at the largest smaller scale
+that divides it (`cursor::CursorBuffer::fit`,
+`a_theme_image_fits_its_cursor_surface`); the requests the surface is sent
+for each are `CursorBuffer::requests`, which the dispatch carries out one by
+one (`a_cursor_surface_is_sent_what_its_image_needs`). A window that publishes
+another scale tells the input (`WaylandInput::rescaled`), which draws a theme
+cursor over it again for that scale.
 
 Each seat's keyboard has its own keymap, window and repeat (`SeatKey` on
 every keyboard wire, `keyboards::Keyboards`); a key repeats only while its
@@ -4317,6 +4432,35 @@ window not mapped yet asks its mode in its own `_NET_WM_STATE`, which the window
 manager reads as it maps it, so a window opened in a mode is mapped only once
 the property holds it. Logical numbers become 16-bit X11 coordinates and
 extents only when they are finite and fit (`window::linux::x11::placement`).
+
+A window answers what its window manager asks beyond its close, a policy the
+Wayland host holds too (`xdg_wm_base.ping`): it lists `_NET_WM_PING` and sends
+each ping back to the root as the loop hears it, on the owner thread and
+flushed at once, so an owner that hangs answers nothing and its window
+manager can offer to end it, and a long turn holds no answer back
+(`a_window_answers_the_window_managers_ping`); it names `WM_CLIENT_MACHINE`
+from `uname`, and `_NET_WM_PID` only beside it and only from the initial PID
+namespace, where the window manager's id for the process is the same
+(`protocols::ClientProcess`: inside Flatpak's or a container's namespace the
+id names another process outside it, and `NSpid` cannot tell where the
+sandbox mounts its own `/proc`). Where the server has SYNC it
+lists `_NET_WM_SYNC_REQUEST` and names two XSync counters, the basic one and
+the extended one. `protocols::ResizeSync` decides when they are set: a request
+waits for the configure after it; at the window's read a configure that asked
+no frame is answered at once, and otherwise the answer follows the next frame
+the loop delivers (`X11Window::deliver_frame`), on every exit of its handler,
+a panic included; under a window manager that lists `_NET_WM_FRAME_DRAWN` the
+extended counter is odd while each frame draws, and never rests above
+`i64::MAX - 1`. Each write is flushed at once, since the GPU driver may present
+on a connection of its own. The answer follows the frame's hand-over to the
+GPU, not its presentation: the host hears no presentation (Present's
+completion goes to the driver's connection), a FIFO swap chain presents at a
+later refresh and a raster thread may still be drawing, so a window manager
+may draw the new size once around content of the old size
+([gaps](../../docs/gaps.md#live-resize-is-unaudited-and-unscheduled);
+`a_synchronised_resize_is_answered_after_its_frame`,
+`a_window_manager_that_paces_frames_sees_each_one_drawn`,
+`openbox_paces_an_interactive_resize_by_the_windows_counter`).
 
 A window's identity is the `WindowId` the platform issues from its `WindowIdMint`;
 the X id only routes an event to the window that holds it now and is
@@ -4439,7 +4583,21 @@ action (an `XdndActionAsk` reads the source's `XdndActionList`); each
 position is answered `XdndStatus` from the feedback the target cached while
 hearing it, asking for every movement; a drop resolves the action from that
 feedback, and a refusal answers `XdndFinished` at once while the window hears
-`Exited`. Types map to representations in the pure `drag::linux::x11::model`: text
+`Exited`. A source that crashes, or destroys its window without `XdndLeave`,
+says nothing else, so from its enter until its hover ends and its offers are
+concluded the drag hears its window's end (`PeerInterest::DropSource`). Every
+feature that hears another client's window for its end selects with a checked
+request (`select_checked`: a window already gone is told only by the refusal,
+and `hear_peer` then drops its entry), and a source whose `XdndSelection`
+nobody owns at its enter is taken as gone, which also covers a dead source's
+id reused by another client. The loop hands every `DestroyNotify` to
+`LoopDrag::window_destroyed` in its own containment; the hover ends as if the
+source left, and a dropped offer of it answers `SourceGone` until concluded
+(`the_loop_ends_a_drag_whose_source_goes`, `a_source_that_goes_ends_its_hover`,
+`a_dropped_offer_whose_source_goes_answers_gone_at_once`). The drag stops
+hearing a source nothing names at the end of the loop's turn, on the owner
+thread where the table of peer windows is. Types map to representations in the
+pure `drag::linux::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
 drag's last time into a window made for that fetch and destroyed as it ends,
@@ -4602,6 +4760,24 @@ so one leaving lets go of nothing another holds. Tests:
 `a_window_has_the_frame_its_compositor_leaves_it` (Weston and sway), and
 `tests/wayland_frame.rs` on Weston's desktop shell through XTest.
 
+### A Linux window carries the class its host decided once, from the application id
+
+A Linux host is started with the application's `flui_foundation::AppId`, or
+without one (`CurrentHost::start_with`, `start_single`), and decides at start
+the `window::linux::class::AppClass` every window carries: the id, or the
+executable's stem in ASCII (`flui_foundation::executable_class`). A Wayland
+window sets it with `xdg_toplevel.set_app_id` before its first commit; an X11
+window writes it as both halves of `WM_CLASS`, claims it as
+`_GTK_APPLICATION_ID` when it is an id, and writes `WM_HINTS` with `InputHint`
+set. The desktop entry `flui build linux` writes is named by the same class and
+names it as `StartupWMClass` (ADR-0351). The single-instance bus name, mutex
+and pipe are the id itself: its grammar is a D-Bus name's and its length fits
+the pipe's 256 characters (`APP_ID_MAX_LEN`), so the host checks nothing
+again. Tests:
+`a_window_is_classed_by_the_application_id_or_the_executable`, and
+`a_window_carries_the_application_id_it_was_started_with` on Xvfb with
+openbox and under sway (read through `zwlr_foreign_toplevel_manager_v1`).
+
 ### Linux displays come from the compositor on a connection of their own, and a window names its display by native number
 
 `display/linux/` reads the outputs of a Wayland compositor or an X
@@ -4671,7 +4847,16 @@ names a window's output by number; the X11 host does not.
 
 **What reaches the window.** A Wayland window is on the first output its surface
 entered that it has not left, so a window the compositor moves to another output
-names that output's display, whatever its scale. A change of the monitor list
+names that output's display, whatever its scale. Where the compositor prefers no
+scale for the surface (no `wp_fractional_scale_v1`, `wl_surface` before version
+6), the buffer is drawn at the largest scale of the outputs the surface is on,
+so a window across a scale-1 and a scale-2 output is sharp on the denser one
+whichever it entered first, while it still names the display of the first: a
+window's scale is its own fact, not its display's. Both are read from one
+snapshot (`WaylandDisplays::on_outputs`, `owner::linux::wayland::outputs::OnOutputs`);
+an output the surface entered first that the snapshot does not hold yet leaves
+the window on no display rather than on the next one
+(`a_window_is_on_its_first_output_and_drawn_for_the_densest`). A change of the monitor list
 needs no event of its own: the thread wakes the owner and the host derives every
 window's display from the new snapshot.
 
@@ -5392,13 +5577,15 @@ are released and cancels on Escape or on another button.
 `DoDragDrop`'s loop waits for input and for messages other threads send, and
 nothing else: while the pointer rests it dispatches no posted message, timer or
 paint, so the main loop's deadline delivery and a `WM_TIMER` would both stall.
-A pacing thread sends `MODAL_FRAME` to the owner window instead, which the
-loop's wait does dispatch; the transport's hook asks the owner
-(`OwnerWindow::deliver_modal_frames`), which delivers a due wake deadline as the
-main loop would (once per frame generation), sends `WM_PAINT` to every
-invalidated window with `UpdateWindow`, and answers how long to wait by the
-owner's modal pace (`owner::modal_pace`, which `DefWindowProc`'s move
-and size loops share). The session's
+The session runs under the owner window's modal pacing, whose clock is a
+thread that sends `MODAL_FRAME` to the owner window, which the loop's wait does
+dispatch: the owner delivers a due wake deadline as the main loop would (once
+per frame generation), sends `WM_PAINT` to every invalidated window with
+`UpdateWindow`, and sets the thread for the next delivery by the rule every
+modal loop shares (see "A modal loop asks for frames by the main loop's rule"):
+with nothing due the thread sleeps until the thread runs the platform's code (a
+drop target's event, a window message) or another thread hands the owner work, and
+a knocked delivery dispatches the posted work and the owner's turn too. The session's
 callbacks run with no `RefCell` borrow or lock held across a COM call or a
 dispatch: the provider is leased out of the data object while it runs, so a
 fetch from inside it is refused rather than reentered, and every COM method
@@ -5421,7 +5608,7 @@ window's frames while the loop rests, a drop into a FLUI window through the
 real loop, woken by posted mouse moves rather than the system pointer, and
 `window_at` across two placed real windows.
 `ole_drag_drop_contracts` pins the pure half everywhere, and
-`the_modal_loop_waits_for_the_next_deadline_within_a_frame` the pace. Not run: a drag to
+`a_delivery_sets_the_timer_for_what_is_due_and_nothing_else` the pace. Not run: a drag to
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.
 
@@ -5761,6 +5948,58 @@ popup has neither, so a window without a frame reports `resizable: false` and ge
 the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into outer limits in the
 window's current DPI with the frame measured for the style the window has
 (`window::windows::limits`); a fullscreen window keeps the system's rectangle.
+
+**A scale change keeps the content's logical size.** Left alone, the system scales the outer
+rectangle linearly across a DPI change, while the caption and border metrics are rounded at each
+DPI, so the content drifts by pixels at each change (an 800×600 content measured at 96, 120, 144
+and 168 DPI in `window::windows::rescale`'s test). A normal window answers `WM_GETDPISCALEDSIZE`
+with the outer size whose content is its logical size at the new DPI under the frame measured
+there (`rescale::rescaled_outer`), which the system then suggests in `WM_DPICHANGED` and positions
+against the pointer during a drag. The window keeps the logical size it rescaled from
+(`WindowContext::kept_logical`) for as long as its content still has that size's pixels, so
+several changes in a row come home at the size they left instead of walking a pixel at each
+rounding; a resize changes the pixels and the kept size gives way. A maximized, minimized or
+fullscreen window answers none; the rectangle a fullscreen window returns to is rescaled by the
+same rule under the style it returns to, with a kept size of its own. Tests:
+`a_rescaled_window_keeps_its_content_where_linear_scaling_drifts`,
+`a_kept_logical_size_comes_home_across_several_changes`,
+`a_scale_change_keeps_the_contents_logical_size`,
+`a_fullscreen_window_covers_its_monitor_through_a_dpi_change`. The rectangle a maximized window is
+restored to is the system's across a scale change
+([gaps](../../docs/gaps.md#a-maximized-win32-window-is-restored-to-the-rectangle-the-system-scaled)).
+
+**A maximized window without the system's title bar leaves the taskbar uncovered.** Its client is
+the work area: an application's title bar takes it in `WM_NCCALCSIZE`, a window without a frame,
+which the system would maximize over the whole monitor, in `WM_GETMINMAXINFO`
+(`chrome::maximized_area`). Either stands `chrome::AUTO_HIDE_BAR_REVEAL` back from each monitor
+edge that holds an auto-hide app bar, since a window covering the whole monitor reads to the shell
+as fullscreen and the bar would no longer slide in. The monitor is the one the proposed rectangle
+lies on (a window restored straight to maximized is still parked off every monitor). The shell's
+answer (`ABM_GETSTATE`, then `ABM_GETAUTOHIDEBAREX` per edge) is a cross-process call that runs
+the thread's sent messages meanwhile and blocks on a hung shell, so the window keeps it per monitor
+(`WindowContext::app_bars`, read with no borrow held) until `WM_SETTINGCHANGE` or
+`WM_DISPLAYCHANGE`, which also measure a maximized window again when its monitor's bars changed:
+moving an auto-hide bar to another edge leaves the work area the whole monitor, so the system
+sizes nothing. Tests: `the_client_reaches_the_top_and_a_maximized_one_leaves_an_auto_hide_bar_its_edge`,
+`a_frameless_window_is_maximized_to_the_work_area` (the rules),
+`a_maximized_window_leaves_each_auto_hide_bar_its_edge` and
+`a_settings_change_measures_the_bars_again` (the shell's answer supplied in the window's kept bars).
+
+**An application's caption buttons** (ADR-0286 §7) take the non-client pointer messages and,
+where `EnableMouseInPointer` was refused, the legacy non-client mouse messages over them as the
+client messages they stand for (`input::windows::caption`): a press captures the mouse as a press in
+the content does, a move tracks the non-client leave. The input keeps which pointer the buttons
+last saw (`InputWindow::caption_hover`); the first non-client move of it over the bar or a border,
+which the application hears nothing of, delivers one leave at the button, as does
+`WM_NCMOUSELEAVE` when the cursor left the window, and a message in the content clears it. The
+input takes those messages only after asking the window whose caption buttons they are
+(`owner::windows::WindowChrome`, the window's own hook as the class's chrome, so the hooks still
+answer disjoint messages): where the system draws the title bar, or the window is fullscreen, they
+stay the default procedure's, so a press on the system's own button is never the application's.
+Tests: `caption_buttons_take_the_legacy_mouse_messages_over_them`,
+`a_move_off_a_caption_button_ends_the_hover_it_saw`,
+`the_input_takes_only_the_applications_caption_buttons_and_ends_their_hover` (both routes; a
+pointer's packets need a real pointer, so the pointer route is checked by what the input keeps).
 
 **Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
 before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or

@@ -186,7 +186,8 @@ fn texture_registry() {
 
 /// A damage region holds at most eight disjoint rects, merges a ninth into
 /// the cheapest pair, and escalates a non-finite rect to `Full`, whose first
-/// reason survives a union (ADR-0304 §5).
+/// reason survives a union (ADR-0304 §5); a rect enclosing the pixels a caller
+/// marked takes them with no margin.
 #[test]
 fn region_contract() {
     use region as r;
@@ -208,6 +209,10 @@ fn region_contract() {
             (
                 "full_keeps_its_first_reason",
                 r::full_keeps_its_first_reason,
+            ),
+            (
+                "an_enclosing_rect_takes_its_whole_pixels_without_a_margin",
+                r::an_enclosing_rect_takes_its_whole_pixels_without_a_margin,
             ),
         ],
     );
@@ -355,6 +360,10 @@ fn scene_patch_damage() {
                 d::an_unattached_leader_never_shadows_the_attached_one,
             ),
             (
+                "damage_under_one_backdrop_group_member_takes_every_member",
+                d::damage_under_one_backdrop_group_member_takes_every_member,
+            ),
+            (
                 "a_magnifier_damages_its_sampling_fringe",
                 d::a_magnifier_damages_its_sampling_fringe,
             ),
@@ -401,6 +410,10 @@ fn scene_patch_damage() {
             (
                 "a_hidden_follower_hides_the_followers_of_the_leader_inside_it",
                 d::a_hidden_follower_hides_the_followers_of_the_leader_inside_it,
+            ),
+            (
+                "damage_under_a_fractional_clip_edge_takes_the_shared_pixel",
+                d::damage_under_a_fractional_clip_edge_takes_the_shared_pixel,
             ),
             (
                 "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",

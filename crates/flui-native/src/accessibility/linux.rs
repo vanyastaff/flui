@@ -36,9 +36,11 @@
 use std::sync::Arc;
 
 use accesskit::TreeUpdate;
+use flui_foundation::geometry::Bounds;
 use parking_lot::Mutex;
 
 use crate::accessibility::bridge::{Action, Activation, BridgeShared, Deactivation};
+use crate::host::ScreenBounds;
 use flui_semantics::{
     platform::AccessibilityActionListener, platform::AccessibilityActivationListener,
     platform::PlatformAccessibility,
@@ -52,14 +54,19 @@ use flui_semantics::{
 // written and unit-tested once there rather than re-derived per OS.
 
 /// What the bridge tells the AT-SPI adapter: `accesskit_unix::Adapter`'s
-/// two calls, behind a trait so the bridge's side of each is checked without
-/// a bus.
+/// three calls, behind a trait so the bridge's side of each is checked
+/// without a bus.
 trait AtSpiAdapter: Send {
     /// Hand `update` to the adapter if an assistive technology is attached.
     fn publish(&mut self, update: TreeUpdate);
 
     /// Whether the window is the active one.
     fn window_focused(&mut self, focused: bool);
+
+    /// Where the window and its content are on the screen, in device pixels:
+    /// AT-SPI's screen coordinates of every node are the content's origin
+    /// plus the node's place in the tree.
+    fn window_bounds(&mut self, outer: accesskit::Rect, content: accesskit::Rect);
 }
 
 impl AtSpiAdapter for accesskit_unix::Adapter {
@@ -71,6 +78,24 @@ impl AtSpiAdapter for accesskit_unix::Adapter {
     fn window_focused(&mut self, focused: bool) {
         self.update_window_focus_state(focused);
     }
+
+    fn window_bounds(&mut self, outer: accesskit::Rect, content: accesskit::Rect) {
+        // Kept while no assistive technology is attached, for the tree the
+        // first one asks for.
+        self.set_root_window_bounds(outer, content);
+    }
+}
+
+/// `bounds` as AccessKit's rectangle; the far edges are summed in `f64`, so
+/// no extent overflows.
+fn accesskit_rect(bounds: Bounds<i32>) -> accesskit::Rect {
+    let (left, top) = (f64::from(bounds.origin.x), f64::from(bounds.origin.y));
+    accesskit::Rect::new(
+        left,
+        top,
+        left + f64::from(bounds.size.width),
+        top + f64::from(bounds.size.height),
+    )
 }
 
 /// AT-SPI accessibility for one window.
@@ -128,6 +153,17 @@ impl crate::host::WindowAccessibility for UnixAccessibility {
     fn focus_changed(&self, focused: bool) {
         self.adapter.lock().window_focused(focused);
     }
+
+    /// Tell the bus where the window is: a screen reader's mouse review, a
+    /// magnifier that follows the focus and a tool that clicks a node all
+    /// place the nodes from it, and without it every window sits at the
+    /// screen's origin.
+    fn bounds_changed(&self, bounds: ScreenBounds) {
+        self.adapter.lock().window_bounds(
+            accesskit_rect(bounds.outer()),
+            accesskit_rect(bounds.content()),
+        );
+    }
 }
 
 /// Each window of a Linux host announces itself on the AT-SPI bus. The
@@ -154,13 +190,17 @@ impl PlatformAccessibility for UnixAccessibility {
         // from here shows the real interface immediately instead of an empty
         // window until something next changes. Incremental updates are not
         // retained — see `BridgeShared` for why a fragment must never answer
-        // an activation.
+        // an activation. One published from inside the activation, on the
+        // AT-SPI thread that holds the adapter's state, is that activation's
+        // answer and goes no further (`BridgeShared::publish`).
         //
         // Exactly one clone, and it buys that retention. `update_if_active`
         // takes a factory, so the owned value moves into the adapter only when
         // something is attached; with nobody listening the closure never runs
         // and the value is simply dropped.
-        self.shared.retain_if_self_contained(&update);
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         self.adapter.lock().publish(update);
     }
 
@@ -235,15 +275,67 @@ mod tests {
         assert!(accessibility.is_active());
     }
 
-    /// What the bridge told its adapter of the window's focus.
-    struct FocusTold(Arc<Mutex<Vec<bool>>>);
+    /// What the bridge told its adapter of the window's focus and bounds.
+    #[derive(Default)]
+    struct Told {
+        focus: Vec<bool>,
+        bounds: Vec<(accesskit::Rect, accesskit::Rect)>,
+    }
 
-    impl AtSpiAdapter for FocusTold {
+    /// An adapter that records what it is told.
+    struct ToldLog(Arc<Mutex<Told>>);
+
+    impl AtSpiAdapter for ToldLog {
         fn publish(&mut self, _: TreeUpdate) {}
 
         fn window_focused(&mut self, focused: bool) {
-            self.0.lock().push(focused);
+            self.0.lock().focus.push(focused);
         }
+
+        fn window_bounds(&mut self, outer: accesskit::Rect, content: accesskit::Rect) {
+            self.0.lock().bounds.push((outer, content));
+        }
+    }
+
+    /// The bridge hands the adapter the window's rectangles, the far edges
+    /// summed without overflow at the ends of the coordinate range.
+    #[test]
+    fn the_bridge_tells_the_adapter_where_the_window_is() {
+        use crate::host::WindowAccessibility as _;
+        use flui_foundation::geometry::{Point, Size};
+
+        let told = Arc::new(Mutex::new(Told::default()));
+        let log = Arc::clone(&told);
+        let bridge = UnixAccessibility::over(move |_| Box::new(ToldLog(log)));
+        let bounds = |x, y, width, height| Bounds::new(Point::new(x, y), Size::new(width, height));
+        let screen = |outer, content| {
+            ScreenBounds::try_new(outer, content).expect("the content lies within the window")
+        };
+        bridge.bounds_changed(screen(
+            bounds(195, 120, 410, 335),
+            bounds(200, 150, 400, 300),
+        ));
+        bridge.bounds_changed(screen(
+            bounds(i32::MAX, i32::MIN, i32::MAX, 1),
+            bounds(i32::MAX, i32::MIN, i32::MAX, 1),
+        ));
+        let far = f64::from(i32::MAX) * 2.0;
+        let edge = accesskit::Rect::new(
+            f64::from(i32::MAX),
+            f64::from(i32::MIN),
+            far,
+            -2_147_483_647.0,
+        );
+        assert_eq!(
+            told.lock().bounds,
+            [
+                (
+                    accesskit::Rect::new(195.0, 120.0, 605.0, 455.0),
+                    accesskit::Rect::new(200.0, 150.0, 600.0, 450.0),
+                ),
+                (edge, edge),
+            ]
+        );
     }
 
     /// The window's bridge passes each focus change its window reports to the
@@ -252,12 +344,12 @@ mod tests {
     fn the_bridge_tells_the_adapter_the_windows_focus() {
         use crate::host::WindowAccessibility as _;
 
-        let told = Arc::new(Mutex::new(Vec::new()));
+        let told = Arc::new(Mutex::new(Told::default()));
         let log = Arc::clone(&told);
-        let bridge = UnixAccessibility::over(move |_| Box::new(FocusTold(log)));
+        let bridge = UnixAccessibility::over(move |_| Box::new(ToldLog(log)));
         bridge.focus_changed(true);
         bridge.focus_changed(false);
-        assert_eq!(*told.lock(), [true, false]);
+        assert_eq!(told.lock().focus, [true, false]);
     }
 
     /// The listeners are the composition root's code, run inside AccessKit's

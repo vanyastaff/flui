@@ -508,9 +508,42 @@ as does the reference store, `flui_interaction::testing::InMemoryTextStore`
 call into code a store does not control goes through `OwnerCalls` (ADR-0142
 item 8; its module doc lists the points).
 
+A push preedit's cursor is the input method's target clause: the projection
+selects it inside the composition, as AppKit's `setMarkedText:selectedRange:`
+and `text-input-v3`'s cursor do, so a field marks the part being converted on
+every path.
+
+What a field asks of the input method and the on-screen keyboard is one value,
+`TextStoreStatus::text_input` (`TextInputOptions`): the purpose (a number with
+the sign and separator its `NumberFormat` allows), the Enter key's label
+(`EnterAction`), capitalization, correction (`Correction::{Off, Suggestions,
+Autocorrect}`, three states where two booleans would allow a fourth that no
+platform has) and autofill beyond the purpose (`Autofill`). `TextInputOptions::new`
+takes the purpose and picks the rest's defaults from it (a search's Enter says
+Search; prose is corrected, an address or a number is not), so the purpose has no
+builder whose order would matter. Each host passes on what its platform has a
+word for and states the rest in `platform-parity.toml`. A secret wins over every
+option: `TextStoreStatus::holds_secret` (protected, or asking for a password or a
+one-time code) is the one test before an input method may suggest, correct or
+learn and before the journal records content; `protected` alone decides what
+hides the text. A host acts on `status_changed` only where what it passes on
+differs from what it last told the platform, restarts an input method only
+outside a composition, and never shows a keyboard for it. The Enter key's label
+changes only the label: every host delivers the key as Enter (the Web always
+states an `enterkeyhint` so the browser picks none of its own), and the field
+acts on its own label (`EditableText` moves the focus on Next and Previous), so a
+hardware Enter and every platform's action key behave alike. The Send action is
+`EnterAction::SendMessage`: a variant named `Send` would make rustc print the
+marker trait in full (`std::marker::Send`) in every user's diagnostics.
+
 **Tests:** the `text_store` module's unit tests; the store tests that need a
 store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,
-`ime_events_project_onto_the_store_as_the_text_input_contract_says`).
+`ime_events_project_onto_the_store_as_the_text_input_contract_says`); each host's
+mapping of the options is pinned beside it (`keyboard_traits`,
+`editor_info`, `ContentType::of`, the Web's hints, `scope_for`), the field's in
+`flui-widgets`' `the_store_reports_the_text_input_the_field_was_built_with` and
+`enter_moves_the_focus_as_the_fields_enter_key_says`, and the recording's in
+`flui-native`'s `a_store_focus_keeps_every_field_of_its_status`.
 
 ### The input vocabulary keeps what the device reported
 

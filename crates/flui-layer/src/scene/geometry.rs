@@ -339,7 +339,7 @@ pub(crate) fn map_out_spread(links: &Links<'_>, reach: Reach, kernel: f64) -> Re
                     .pop()
                     .expect("BUG: every clip, filter and extent of the chain has its map");
                 match *link {
-                    Link::Clip(clip) => clipped(out, mapped(&ctm, clip)),
+                    Link::Clip(clip) => clipped(out, pixels_of(mapped(&ctm, clip))),
                     Link::Filter(filter) => filtered(filter, out, &ctm, Spread::Reach),
                     Link::Extent(rect) => out.union(mapped(&ctm, rect)),
                     _ => out,
@@ -348,6 +348,18 @@ pub(crate) fn map_out_spread(links: &Links<'_>, reach: Reach, kernel: f64) -> Re
         };
     }
     out
+}
+
+/// The whole device pixels a clip mapped to the surface touches, an
+/// over-report for a hard clip, which snaps. The
+/// renderer multiplies a pixel's coverage by an anti-aliased clip's, so content in a
+/// pixel the clip's edge covers in part shows there even where its exact
+/// geometry misses the clip.
+fn pixels_of(clip: Reach) -> Reach {
+    match clip {
+        Reach::Rect(rect) => Reach::rect(flui_foundation::geometry::cover(rect)),
+        other => other,
+    }
 }
 
 /// `out` cut by `clip`, both in one space.
@@ -499,27 +511,31 @@ impl<'v> Geometry<'v> {
         out: &mut Links<'v>,
         nesting: usize,
     ) -> Result<(), Unattached> {
-        let mut path: SmallVec<[NodeKey; 16]> = SmallVec::new();
+        // Each node on the way up with its record, read once.
+        let mut path: SmallVec<[(NodeKey, &'v NodeRecord); 16]> = SmallVec::new();
         let mut at = key;
-        path.push(at);
-        while let Some(parent) = self.version.record(at).and_then(NodeRecord::parent) {
-            path.push(parent);
+        let mut record = self.version.record(at).ok_or(Unattached)?;
+        loop {
+            path.push((at, record));
+            let Some(parent) = record.parent() else {
+                break;
+            };
             at = parent;
+            record = self.version.record(at).ok_or(Unattached)?;
         }
-        if at != self.version.root || self.version.record(at).is_none() {
+        if at != self.version.root {
             return Err(Unattached);
         }
         // The root's placement offsets the whole scene, as `flatten` draws it.
-        out.push(Link::Translate(self.record(at).placement().offset()));
+        out.push(Link::Translate(record.placement().offset()));
         for pair in path.windows(2).rev() {
-            let (child, parent) = (pair[0], pair[1]);
-            let slot = self
-                .record(parent)
+            let ((child, child_record), (parent, parent_record)) = (pair[0], pair[1]);
+            let slot = parent_record
                 .content()
                 .slot_entry(child)
                 .expect("BUG: a node's parent names it in a slot");
-            self.content_links(parent, slot, out, nesting);
-            out.push(Link::Translate(self.record(child).placement().offset()));
+            self.record_content_links(parent, parent_record, slot, out, nesting);
+            out.push(Link::Translate(child_record.placement().offset()));
         }
         Ok(())
     }
@@ -533,7 +549,19 @@ impl<'v> Geometry<'v> {
         out: &mut Links<'v>,
         nesting: usize,
     ) {
-        let content = self.record(key).content();
+        self.record_content_links(key, self.record(key), entry, out, nesting);
+    }
+
+    /// [`Self::content_links`] of `key`, whose record the caller holds.
+    fn record_content_links(
+        self,
+        key: NodeKey,
+        record: &'v NodeRecord,
+        entry: EntryIndex,
+        out: &mut Links<'v>,
+        nesting: usize,
+    ) {
+        let content = record.content();
         let mut above: SmallVec<[EntryIndex; 8]> = SmallVec::new();
         let mut at = content.entries()[entry.get()].parent();
         while let Some(effect) = at {
@@ -1246,7 +1274,7 @@ impl<'v> Folded<'v> {
                     continue;
                 }
                 Link::Clip(clip) => {
-                    let clip = mapped(&self.ctm, clip);
+                    let clip = pixels_of(mapped(&self.ctm, clip));
                     if let Some(Outer::Clip(outer)) = self.outer.last_mut() {
                         *outer = meet(*outer, clip);
                         continue;

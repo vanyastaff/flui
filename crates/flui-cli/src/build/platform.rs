@@ -40,19 +40,32 @@ pub(crate) struct AppBundle {
     pub(crate) identifier: String,
     /// Full application SemVer. Apple bundles store its numeric core separately.
     pub(crate) version: String,
+    /// Whether `identifier` derives from the id `flui.toml` declares, which
+    /// every command compiles the application with (`FLUI_APP_ID`); not for
+    /// one derived from the directory, which the application never carries.
+    pub(crate) declared: bool,
 }
 
 impl AppBundle {
     /// Bundle metadata for the application `name` (the `.app` stem and
     /// `CFBundleName`) under `identifier`, which callers derive with
-    /// [`AppId::apple_bundle_id`](crate::app_id::AppId::apple_bundle_id).
+    /// [`AppId::apple_bundle_id`](crate::app_id::AppId::apple_bundle_id); the
+    /// identifier is not a declared one until [`declared`](Self::declared).
     #[must_use]
     pub(crate) fn new(name: &str, identifier: String) -> Self {
         Self {
             name: name.to_string(),
             identifier,
             version: "0.1.0".into(),
+            declared: false,
         }
+    }
+
+    /// The same bundle, its identifier derived from the declared id.
+    #[must_use]
+    pub(crate) fn declared(mut self) -> Self {
+        self.declared = true;
+        self
     }
 }
 

@@ -139,11 +139,7 @@ fn scene(root: &ContentToken, boundaries: &[Boundary<'_>], backdrop: Option<Rect
 /// Hands `region` to the capture the way the raster executor hands it to a
 /// backend.
 fn apply(capture: &mut RetainedCapture, region: DamageRegion) {
-    match region {
-        DamageRegion::Region(region) => capture.mark_dirty(region.bounds().to_rect()),
-        DamageRegion::Unchanged => {}
-        DamageRegion::Full(_) => capture.mark_full_repaint(),
-    }
+    capture.apply_damage(region);
 }
 
 /// Renders `scene` after applying `region`, asserting the plan it ran.
@@ -3039,4 +3035,309 @@ fn a_static_shadow_outside_the_damage_is_not_repainted() {
         changed.is_empty(),
         "pixels outside the damage changed (x, y, now, before): {changed:?}"
     );
+}
+
+/// Renders `before` in full, warms the retained target, marks `rects` and
+/// renders `after` into a capture that plans rect by rect when `by_rect` is
+/// set. Answers the capture, after that frame.
+fn region_frame(
+    renderer: &crate::headless::HeadlessRenderer,
+    before: &Scene,
+    after: &Scene,
+    rects: &[Rect<f64>],
+    by_rect: bool,
+) -> RetainedCapture {
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    if by_rect {
+        capture.plan_rect_by_rect();
+    }
+    capture.mark_full_repaint();
+    capture
+        .render_scene(before)
+        .expect("the first frame renders");
+    warm(&mut capture, before);
+    for &rect in rects {
+        capture.mark_dirty(rect);
+    }
+    capture
+        .render_scene(after)
+        .expect("the region frame renders");
+    capture
+}
+
+/// The plan's rects, or `None` for a frame that was not partial.
+fn planned_rects(capture: &RetainedCapture) -> Option<Vec<flui_layer::DamageRect>> {
+    match capture.last_plan() {
+        Some(FramePlan::RetainedPartial(plan)) => Some(plan.rects().to_vec()),
+        _ => None,
+    }
+}
+
+/// A region planned as its bounding box redraws the gap between its rects,
+/// so a backdrop filter in that gap, which neither rect meets, is closed
+/// over with the box: its read footprint joins the frame, and the frame
+/// draws as a full one. Closing only the rects leaves the filter cut by the
+/// box's scissor, blurring pixels it already blurred.
+#[test]
+fn a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background) = (ContentToken::mint(), ContentToken::mint());
+    let build = |color: Color| {
+        backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
+            tree.push_child(
+                root_id,
+                rect_picture(Rect::from_xywh(0.0, 0.0, 30.0, 100.0), color),
+            );
+            tree.push_child(
+                root_id,
+                rect_picture(Rect::from_xywh(70.0, 0.0, 30.0, 100.0), color),
+            );
+            tree.push_child(
+                root_id,
+                Layer::from(BackdropFilterLayer::new(
+                    ImageFilter::blur(3.0),
+                    BlendMode::SrcOver,
+                    Rect::from_ltrb(45.0, 60.0, 55.0, 120.0),
+                )),
+            );
+        })
+    };
+    let (before, after) = (build(Color::RED), build(Color::WHITE));
+    let partial = region_frame(
+        &renderer,
+        &before,
+        &after,
+        &[
+            Rect::from_xywh(0.0, 0.0, 30.0, 100.0),
+            Rect::from_xywh(70.0, 0.0, 30.0, 100.0),
+        ],
+        false,
+    );
+    let rects = planned_rects(&partial).expect("a partial frame");
+    assert_eq!(rects.len(), 1, "one pass under the box: {rects:?}");
+    let pixels = partial.read_rgba().expect("readback");
+    let stale = mismatches(&pixels, &full_frame_pixels(&renderer, &after), 2);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+    assert!(
+        rects[0].bottom() > 120,
+        "the box joined the filter's read footprint below it: {rects:?}"
+    );
+}
+
+/// Grouped backdrop filters damaged in two corners of a rect-by-rect frame
+/// share one rect: the closure takes the rect over every member, so the one
+/// pass that redraws them captures at the first, as a full frame does.
+#[test]
+fn a_backdrop_group_takes_one_rect_of_a_region_frame() {
+    use flui_layer::BackdropGroupKey;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background) = (ContentToken::mint(), ContentToken::mint());
+    let group = BackdropGroupKey::new();
+    let build = |color: Color| {
+        backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
+            tree.push_child(
+                root_id,
+                rect_picture(Rect::from_xywh(4.0, 4.0, 24.0, 24.0), color),
+            );
+            tree.push_child(
+                root_id,
+                rect_picture(Rect::from_xywh(100.0, 100.0, 24.0, 24.0), color),
+            );
+            for bounds in [
+                Rect::from_ltrb(8.0, 8.0, 24.0, 24.0),
+                Rect::from_ltrb(104.0, 104.0, 120.0, 120.0),
+            ] {
+                tree.push_child(
+                    root_id,
+                    Layer::from(
+                        BackdropFilterLayer::new(
+                            ImageFilter::blur(3.0),
+                            BlendMode::SrcOver,
+                            bounds,
+                        )
+                        .with_group(Some(group.clone())),
+                    ),
+                );
+            }
+        })
+    };
+    let (before, after) = (build(Color::RED), build(Color::BLUE));
+    let partial = region_frame(
+        &renderer,
+        &before,
+        &after,
+        &[
+            Rect::from_xywh(4.0, 4.0, 24.0, 24.0),
+            Rect::from_xywh(100.0, 100.0, 24.0, 24.0),
+        ],
+        true,
+    );
+    assert_eq!(
+        planned_rects(&partial).map(|rects| rects.len()),
+        Some(1),
+        "both corners join the rect over the group"
+    );
+    assert_eq!(partial.region_passes(), 1);
+    let pixels = partial.read_rgba().expect("readback");
+    let full = full_frame_pixels(&renderer, &after);
+    let stale = mismatches(&pixels, &full, 2);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+    for (x, y) in [(16, 16), (112, 112)] {
+        assert!(
+            px(&full, x, y)[2] > 200,
+            "precondition: filter at ({x}, {y}) blurs the blue box"
+        );
+    }
+}
+
+/// On a hand-built tree, a backdrop group reads the backdrop as it stood at
+/// its first member, in a partial frame as in a full one. Damage that meets
+/// only the second member still makes the group capture at the first, so
+/// the second does not blur a box painted between the two. Each row puts
+/// the first member somewhere the damage does not reach; the last plans one
+/// pass per rect, with a second rect far from the group.
+#[test]
+fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
+    use flui_layer::BackdropGroupKey;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let box_under = Rect::from_xywh(100.0, 4.0, 24.0, 24.0);
+    // Over everything the second member reads and writes.
+    let box_over = Rect::from_xywh(90.0, 0.0, 38.0, 36.0);
+    let far = Rect::from_xywh(50.0, 100.0, 10.0, 10.0);
+    // (case, the damaged box, the first member in its own boundary, one pass
+    // per rect)
+    for (case, near, first_alone, by_rect) in [
+        ("first member under the root", box_under, false, false),
+        ("first member in its own boundary", box_under, true, false),
+        ("one pass per rect", box_under, true, true),
+        ("damage over the whole second member", box_over, true, false),
+    ] {
+        let (root, background, holder) = (
+            ContentToken::mint(),
+            ContentToken::mint(),
+            ContentToken::mint(),
+        );
+        let group = BackdropGroupKey::new();
+        let grouped = |bounds: Rect<f64>| {
+            Layer::from(
+                BackdropFilterLayer::new(ImageFilter::blur(3.0), BlendMode::SrcOver, bounds)
+                    .with_group(Some(group.clone())),
+            )
+        };
+        let build = |color: Color| {
+            backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
+                tree.push_child(root_id, rect_picture(near, color));
+                tree.push_child(root_id, rect_picture(far, color));
+                let first = grouped(Rect::from_ltrb(8.0, 8.0, 24.0, 24.0));
+                if first_alone {
+                    let alone = tree.push_child(
+                        root_id,
+                        LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                            .with_boundary(id(5), holder.clone()),
+                    );
+                    tree.push_child(alone, first);
+                } else {
+                    tree.push_child(root_id, first);
+                }
+                // Painted after the group's capture: the second member must
+                // not see it.
+                tree.push_child(
+                    root_id,
+                    rect_picture(Rect::from_xywh(106.0, 10.0, 12.0, 12.0), Color::WHITE),
+                );
+                tree.push_child(root_id, grouped(Rect::from_ltrb(104.0, 8.0, 120.0, 24.0)));
+            })
+        };
+        let (before, after) = (build(Color::RED), build(Color::BLUE));
+        let full = full_frame_pixels(&renderer, &after);
+        assert!(
+            px(&full, 112, 16)[0] < 200,
+            "{case}: precondition: the second member blurs the backdrop without the white box"
+        );
+        let partial = region_frame(&renderer, &before, &after, &[near, far], by_rect);
+        assert!(
+            matches!(partial.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            "{case}: the frame is partial: {:?}",
+            partial.last_plan()
+        );
+        if by_rect {
+            // The group's members share one rect, the far box has its own.
+            assert_eq!(partial.region_passes(), 2, "{case}: two passes");
+        }
+        let pixels = partial.read_rgba().expect("readback");
+        let stale = mismatches(&pixels, &full, 2);
+        assert!(stale.is_empty(), "{case}: stale pixels at {stale:?}");
+    }
+}
+
+/// On a hand-built tree, an advanced-blend shape that straddles the second
+/// rect of a rect-by-rect frame was drawn cut by that pass's scissor, so the
+/// next frame repaints in full; one that lies inside its rect leaves the
+/// next frame partial.
+#[test]
+fn a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background) = (ContentToken::mint(), ContentToken::mint());
+    let rects = [
+        Rect::from_xywh(4.0, 4.0, 20.0, 20.0),
+        Rect::from_xywh(100.0, 100.0, 20.0, 20.0),
+    ];
+    // (case, the Multiply shape, the next frame stays partial)
+    let cases = [
+        (
+            // Only the first pass sees it: the second must not clear its verdict.
+            "straddles the first rect",
+            Rect::from_xywh(14.0, 14.0, 20.0, 20.0),
+            false,
+        ),
+        (
+            "straddles the second rect",
+            Rect::from_xywh(90.0, 90.0, 20.0, 20.0),
+            false,
+        ),
+        (
+            "inside the second rect",
+            Rect::from_xywh(104.0, 104.0, 12.0, 12.0),
+            true,
+        ),
+    ];
+    for (case, shape, stays_partial) in cases {
+        let build = |color: Color| {
+            backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
+                for rect in rects {
+                    tree.push_child(root_id, rect_picture(rect, color));
+                }
+                let mut canvas = Canvas::new();
+                canvas.draw_rect(
+                    shape,
+                    &Paint::fill(Color::rgba(128, 128, 255, 255))
+                        .with_blend_mode(BlendMode::Multiply),
+                );
+                tree.push_child(root_id, Layer::from(PictureLayer::new(canvas.finish())));
+            })
+        };
+        let (before, after) = (build(Color::RED), build(Color::BLUE));
+        let mut capture = region_frame(&renderer, &before, &after, &rects, true);
+        assert_eq!(capture.region_passes(), 2, "{case}: one pass per rect");
+        capture.mark_dirty(Rect::from_xywh(4.0, 4.0, 1.0, 1.0));
+        capture
+            .render_scene(&after)
+            .expect("the next frame renders");
+        assert_eq!(
+            matches!(capture.last_plan(), Some(FramePlan::RetainedPartial(_))),
+            stays_partial,
+            "{case}: next plan {:?}",
+            capture.last_plan()
+        );
+    }
 }

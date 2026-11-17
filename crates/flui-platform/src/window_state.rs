@@ -299,7 +299,10 @@ pub struct WindowState {
     /// the window last reported a drawable one; `None` until it has. A report
     /// that is not a drawable area (a minimized window's zero size, a scale
     /// that is not finite and positive) is never published:
-    /// [`successor`](Self::successor) keeps the metrics before it.
+    /// [`successor`](Self::successor) keeps the metrics before it. The ratio
+    /// is the window's own, not its [`display`](Self::display)'s: a window
+    /// across displays of different scales may be drawn for the densest
+    /// while it names the display it is on.
     pub metrics: Option<WindowMetrics>,
     /// Whether the theme the system applies to the window is light or dark:
     /// the user's theme as applied to it, never one the backend chose for its

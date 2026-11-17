@@ -90,6 +90,7 @@ impl WgpuPainter {
                 });
             }
         };
+        let layer_clip_bounds = self.compositor.composite_clip_bounds()?;
         let mut clip = self.captured_group_clip();
         clip.chain = match clip.chain.append(
             shape,
@@ -128,9 +129,11 @@ impl WgpuPainter {
             clip,
             scissor: self.state.current_scissor(),
             output_bounds,
+            layer_clip_bounds,
             effect,
             blend,
             group: group.cloned(),
+            region_pass: self.region_pass,
         };
         self.finish_current_segment();
         self.draw_order.push(DrawItem::Backdrop(op));
@@ -234,6 +237,14 @@ impl GpuReplay {
             };
             output = cropped;
         }
+        // The enclosing layers' composite clips hide the rest, and a filter
+        // that wrote nothing there captures nothing (ADR-0230).
+        if let Some(bound) = op.layer_clip_bounds {
+            let Some(cropped) = output.intersect(&bound).filter(|rect| !rect.is_empty()) else {
+                return Ok(());
+            };
+            output = cropped;
+        }
         if let Some((x, y, width, height)) = op.scissor {
             let writes = Rect::from_xywh(x as f64, y as f64, f64::from(width), f64::from(height));
             let Some(cropped) = output.intersect(&writes).filter(|rect| !rect.is_empty()) else {
@@ -258,20 +269,31 @@ impl GpuReplay {
         // During resize the acquired image can still have the preceding extent.
         // Copy and output use attachment texels; never stretch their correspondence
         // through the painter's newer viewport uniform.
-        let readable = Rect::from_xywh(
+        let attachment = Rect::from_xywh(
             root_x,
             root_y,
             f64::from(viewport_size.0.min(attachment_size.0)),
             f64::from(viewport_size.1.min(attachment_size.1)),
         );
+        // A layer's children draw into it unclipped, and the scene's cull
+        // skips a node its composite clip hides: past that clip the filter
+        // reads transparency, as past the attachment.
+        let Some(readable) = (match op.layer_clip_bounds {
+            Some(bound) => attachment.intersect(&bound),
+            None => Some(attachment),
+        })
+        .filter(|rect| !rect.is_empty()) else {
+            return Ok(());
+        };
         // A grouped filter reads the backdrop its group captured on this
-        // surface; the first member captures the whole readable attachment.
-        // It captures before any crop below can skip it, so a member that
-        // shows nothing still fixes the group's backdrop before its children
-        // paint.
+        // surface; the first member that writes captures the whole readable
+        // attachment; one that writes nothing has returned above. A partial
+        // frame captures where a full one does because the damage closure
+        // keeps every member of a group it meets inside one rect (ADR-0230).
         let snapshot = match &op.group {
             Some(group) => Some(snapshots.capture(
                 group,
+                op.region_pass,
                 backing,
                 (
                     viewport_size.0.min(attachment_size.0),
@@ -590,26 +612,38 @@ impl GpuReplay {
 }
 
 /// Backdrops captured for grouped filters within one ordered item list, i.e.
-/// one attachment. Dropped with the list, so a group never reads another
-/// surface's pixels or a later reuse of the same pooled attachment.
+/// one attachment, and one pass of a partial frame. Dropped with the list, so
+/// a group never reads another surface's pixels or a later reuse of the same
+/// pooled attachment; keyed by pass, because a later pass clears and redraws
+/// its own rect after an earlier pass's capture.
 #[derive(Default)]
 pub(crate) struct BackdropSnapshots {
-    captured: Vec<(flui_layer::BackdropGroupKey, PooledTexture)>,
+    captured: Vec<((flui_layer::BackdropGroupKey, u32), PooledTexture)>,
 }
 
 impl BackdropSnapshots {
-    /// The group's snapshot of `backing`, capturing the readable attachment
-    /// (texels `0..extent`) on the group's first read.
+    /// The snapshot of `backing` for `group` in pass `pass`, capturing the
+    /// readable attachment (texels `0..extent`) on the group's first read in
+    /// that pass.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one capture's attachment, extent and format, and the frame resources it is charged to"
+    )]
     fn capture(
         &mut self,
         group: &flui_layer::BackdropGroupKey,
+        pass: u32,
         backing: &wgpu::Texture,
         extent: (u32, u32),
         format: wgpu::TextureFormat,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<&wgpu::Texture> {
-        if let Some(index) = self.captured.iter().position(|(key, _)| key == group) {
+        if let Some(index) = self
+            .captured
+            .iter()
+            .position(|((key, at), _)| key == group && *at == pass)
+        {
             return Ok(self.captured[index].1.texture());
         }
         let bytes = (extent.0 as usize)
@@ -645,7 +679,7 @@ impl BackdropSnapshots {
             },
         );
         let index = self.captured.len();
-        self.captured.push((group.clone(), snapshot));
+        self.captured.push(((group.clone(), pass), snapshot));
         Ok(self.captured[index].1.texture())
     }
 }

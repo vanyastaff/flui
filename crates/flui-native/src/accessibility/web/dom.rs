@@ -111,11 +111,17 @@ impl crate::host::WindowAccessibility for WebAccessibility {
     /// The canvas's focus area includes the semantics host, whose focus the
     /// window reads itself.
     fn focus_changed(&self, _: bool) {}
+
+    /// The semantics host is laid out in the page over the canvas, where the
+    /// browser places it.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 impl PlatformAccessibility for WebAccessibility {
     fn publish(&self, update: TreeUpdate) {
-        self.shared.retain_if_self_contained(&update);
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         if !self.shared.is_active() {
             return;
         }

@@ -827,6 +827,77 @@ fn damage_disjoint_from_a_backdrop_does_not_expand() {
     assert_eq!(partial(region), covering(10.0, 10.0, 30.0, 30.0));
 }
 
+/// Damage that meets one grouped backdrop filter takes the rect over every
+/// member of its group: the far member is where the group captures.
+#[test]
+fn damage_meeting_one_grouped_backdrop_takes_the_whole_group() {
+    let group = crate::BackdropGroupKey::new();
+    let build = |tokens: &[ContentToken; 2]| {
+        let mut frame = Frame::new(1.0, &tokens[0]);
+        let parent = frame.root();
+        for bounds in [
+            Rect::from_xywh(330.0, 200.0, 50.0, 50.0),
+            Rect::from_xywh(200.0, 200.0, 100.0, 100.0),
+        ] {
+            frame.push(
+                parent,
+                BackdropFilterLayer::new(ImageFilter::blur(2.0), BlendMode::SrcOver, bounds)
+                    .with_group(Some(group.clone())),
+            );
+        }
+        frame.boundary(
+            parent,
+            2,
+            &tokens[1],
+            Offset::new(190.0, 190.0),
+            Size::new(20.0, 20.0),
+        );
+        frame.scene()
+    };
+    let root = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&[root.clone(), ContentToken::mint()]), SURFACE);
+    let region = differ.diff(&build(&[root, ContentToken::mint()]), SURFACE);
+    assert_eq!(partial(region), covering(190.0, 190.0, 387.0, 307.0));
+}
+
+/// A member that leaves its group moves the group's capture to the member
+/// left: the damage of the frame it leaves in takes that member too, closed
+/// over the previous frame's groups as well as the current one's.
+#[test]
+fn a_member_leaving_its_group_damages_the_member_left() {
+    let group = crate::BackdropGroupKey::new();
+    let build = |tokens: &[ContentToken; 2], grouped: bool| {
+        let mut frame = Frame::new(1.0, &tokens[0]);
+        let parent = frame.root();
+        let boundary = frame.boundary(parent, 2, &tokens[1], Offset::ZERO, Size::new(60.0, 60.0));
+        frame.push(
+            boundary,
+            BackdropFilterLayer::new(
+                ImageFilter::blur(2.0),
+                BlendMode::SrcOver,
+                Rect::from_xywh(20.0, 20.0, 40.0, 40.0),
+            )
+            .with_group(grouped.then(|| group.clone())),
+        );
+        frame.push(
+            parent,
+            BackdropFilterLayer::new(
+                ImageFilter::blur(2.0),
+                BlendMode::SrcOver,
+                Rect::from_xywh(150.0, 20.0, 40.0, 40.0),
+            )
+            .with_group(Some(group.clone())),
+        );
+        frame.scene()
+    };
+    let root = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&[root.clone(), ContentToken::mint()], true), SURFACE);
+    let region = differ.diff(&build(&[root, ContentToken::mint()], false), SURFACE);
+    assert_eq!(partial(region), covering(0.0, 0.0, 197.0, 67.0));
+}
+
 #[test]
 fn damage_over_threshold_is_full() {
     let root = ContentToken::mint();

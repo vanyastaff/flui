@@ -15,7 +15,7 @@ use super::id::NodeKey;
 use super::owner::SlotMarks;
 use super::table::TableCost;
 use super::version::{Address, VersionInner};
-use crate::damage::closure::{Closure, close_over, read_closure};
+use crate::damage::closure::{Closure, Closures, close_over};
 use crate::layer::Layer;
 use crate::scene_snapshot::{DamageRect, DamageRegion, FullReason, Region};
 
@@ -75,7 +75,7 @@ pub(crate) struct DamageScratch {
     exact: Vec<(Reverse<u32>, NodeKey)>,
     pairs: FollowerPairs,
     content: ContentScratch,
-    closures: Vec<Closure>,
+    closures: Closures,
 }
 
 /// The vectors the general pairing of one republished content uses.
@@ -849,7 +849,7 @@ pub(crate) fn close_filtered(
     versions: &[(Geometry<'_>, &VersionInner)],
     surface: (u32, u32),
     cost: &mut FootprintCost,
-    closures: &mut Vec<Closure>,
+    closures: &mut Closures,
 ) -> DamageRegion {
     closures.clear();
     let mut waiting = Vec::new();
@@ -872,7 +872,7 @@ pub(crate) fn close_filtered(
             }
         }
     }
-    let mut region = close_over(region, closures.iter().copied(), surface);
+    let mut region = close_over(region, closures, surface);
     loop {
         let DamageRegion::Region(current) = &region else {
             return region;
@@ -890,7 +890,7 @@ pub(crate) fn close_filtered(
                     continue;
                 };
                 match input {
-                    Reach::Rect(content) => closures.push(read_closure(layer, &ctm, content)),
+                    Reach::Rect(content) => closures.push_effect(layer, &ctm, content),
                     Reach::Nothing => {}
                     Reach::Unbounded | Reach::NonFinite => closures.push(Closure::Unbounded),
                 }
@@ -900,7 +900,7 @@ pub(crate) fn close_filtered(
         if waiting.len() == before {
             return region;
         }
-        region = close_over(region, closures.iter().copied(), surface);
+        region = close_over(region, closures, surface);
     }
 }
 
@@ -915,7 +915,7 @@ fn direct_closures(
     geometry: Geometry<'_>,
     key: NodeKey,
     content: &BoundaryContent,
-    out: &mut Vec<Closure>,
+    out: &mut Closures,
     reads: &mut u64,
 ) -> bool {
     let mut foreground = false;
@@ -935,7 +935,7 @@ fn direct_closures(
             {
                 layer @ (Layer::BackdropFilter(_) | Layer::ColorFilter(_)) => {
                     if let Some(ctm) = geometry.effect_ctm(at) {
-                        out.push(read_closure(layer, &ctm, Rect::ZERO));
+                        out.push_effect(layer, &ctm, Rect::ZERO);
                     }
                 }
                 Layer::ImageFilter(filter) if filter.filter().modifies_transparent_black() => {

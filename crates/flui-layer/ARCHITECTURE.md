@@ -126,11 +126,11 @@ set.
 
 ### 7. Runtime state lives with its owner
 
-`DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) moved to
+`DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) lives in
 `flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, the footprint of a scene patch
-(decision 9), are defined here. Its
-tracker's three-rect merge was removed with the move (the seam's `Region` keeps up to eight disjoint rects, ADR-0304 §5): the one consumer reads `damage_rect()`, the bounding
-union, through which the merge was unobservable. The overlay's numbers (a frame-clock reading of the
+(decision 9), are defined here. The tracker keeps the seam's `Region` (up to eight disjoint rects,
+ADR-0304 §5), merged as `Region::insert` merges, and the engine redraws it by a `RegionPlan` (ADR-0304 §9, the engine's
+`ARCHITECTURE.md`). The overlay's numbers (a frame-clock reading of the
 presentation's frame history) are computed in `flui-runtime`, beside the presentation that knows when a frame was
 composited; `PerformanceOverlayLayer::record` composes the numbers it is handed through the
 caller's `TextContext` into the display list the layer carries, so the engine replays shaped
@@ -166,7 +166,8 @@ by the transform and the renderer's physical-pixel growth, `ceil(sqrt(3) x sigma
 writes its bounds; a foreground image filter reads and writes its children's extents moved or
 grown the same way, since the engine composites its whole output; a colour or image filter that
 paints transparent black has no bound and makes the frame `Full(Unbounded)`. Damage that meets a
-closure takes all of it, to a fixed point of at most 64 rounds. The engine's backdrop planning
+closure takes all of it, and damage that meets one member of a backdrop group takes the rect over every
+member's (a `Closures` set keys them by `BackdropGroupKey`), to a fixed point of at most 64 rounds. The engine's backdrop planning
 calls the same two functions. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
 twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one

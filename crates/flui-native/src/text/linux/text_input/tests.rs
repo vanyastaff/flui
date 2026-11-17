@@ -6,7 +6,8 @@ use std::rc::Rc;
 use flui_foundation::geometry::Bounds;
 use flui_platform::text_store::utf16::{Utf16Offset, Utf16Range};
 use flui_platform::text_store::{
-    CommitGate, Composition, CompositionEnd, Selection, TextInputPurpose, TextStore, TextStoreHost,
+    Capitalization, CommitGate, Composition, CompositionEnd, Correction, NumberFormat, Selection,
+    TextInputOptions, TextInputPurpose, TextStore, TextStoreHost, TextStoreStatus,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
 
@@ -125,7 +126,7 @@ fn a_field_with_a_seat_in_its_window_is_enabled_with_its_state() {
     let sent = wire.take();
     assert_eq!(sent.first(), Some(&Sent::Enable));
     assert!(sent.contains(&Sent::Content(ContentType {
-        hint: 0,
+        hint: ContentType::HINT_COMPLETION | ContentType::HINT_SPELLCHECK,
         purpose: ContentType::NORMAL,
     })));
     assert!(sent.contains(&Sent::Surrounding(around("ab", 2, 2))));
@@ -399,23 +400,89 @@ fn a_protected_field_shows_the_input_method_no_text() {
 
 #[test]
 fn each_purpose_names_its_content_type() {
-    for (purpose, expected) in [
-        (TextInputPurpose::Text, ContentType::NORMAL),
-        (TextInputPurpose::Search, ContentType::NORMAL),
-        (TextInputPurpose::Email, ContentType::EMAIL),
-        (TextInputPurpose::Url, ContentType::URL),
-        (TextInputPurpose::Phone, ContentType::PHONE),
-        (TextInputPurpose::Number, ContentType::NUMBER),
+    let number = |signed, decimal| TextInputPurpose::Number(NumberFormat { signed, decimal });
+    // Prose is completed and corrected; an address or a number is not.
+    let prose = ContentType::HINT_COMPLETION | ContentType::HINT_SPELLCHECK;
+    for (purpose, hint, expected) in [
+        (TextInputPurpose::Text, prose, ContentType::NORMAL),
+        (TextInputPurpose::Search, prose, ContentType::NORMAL),
+        (TextInputPurpose::Email, 0, ContentType::EMAIL),
+        (TextInputPurpose::Url, 0, ContentType::URL),
+        (TextInputPurpose::Phone, 0, ContentType::PHONE),
+        (number(false, false), 0, ContentType::DIGITS),
+        (number(true, false), 0, ContentType::NUMBER),
+        (number(false, true), 0, ContentType::NUMBER),
+        (number(true, true), 0, ContentType::NUMBER),
     ] {
+        let status =
+            TextStoreStatus::EDITABLE_SINGLE_LINE.with_text_input(TextInputOptions::new(purpose));
         assert_eq!(
-            ContentType::of(purpose, false, true),
+            ContentType::of(status),
             ContentType {
-                hint: 0,
+                hint,
                 purpose: expected,
             },
             "{purpose:?}"
         );
     }
+}
+
+#[test]
+fn the_capitalization_and_correction_a_field_asks_for_are_its_hints() {
+    let text = TextInputOptions::TEXT.correction(Correction::Off);
+    let hint = |options, protected| {
+        ContentType::of(
+            TextStoreStatus::EDITABLE_SINGLE_LINE
+                .with_protected(protected)
+                .with_text_input(options),
+        )
+        .hint
+    };
+    for (shift, expected) in [
+        (Capitalization::None, 0),
+        (
+            Capitalization::Sentences,
+            ContentType::HINT_AUTO_CAPITALIZATION,
+        ),
+        (Capitalization::Words, ContentType::HINT_TITLECASE),
+        (Capitalization::Characters, ContentType::HINT_UPPERCASE),
+    ] {
+        assert_eq!(
+            hint(text.capitalization(shift), false),
+            expected,
+            "{shift:?}"
+        );
+    }
+    for (correction, expected) in [
+        (Correction::Off, 0),
+        (Correction::Suggestions, ContentType::HINT_SPELLCHECK),
+        (
+            Correction::Autocorrect,
+            ContentType::HINT_COMPLETION | ContentType::HINT_SPELLCHECK,
+        ),
+    ] {
+        assert_eq!(
+            hint(text.correction(correction), false),
+            expected,
+            "{correction:?}"
+        );
+    }
+    // A password is neither shifted, completed nor corrected.
+    let asked = text
+        .capitalization(Capitalization::Words)
+        .correction(Correction::Autocorrect);
+    assert_eq!(
+        hint(asked, true),
+        ContentType::HINT_HIDDEN_TEXT | ContentType::HINT_SENSITIVE_DATA
+    );
+    // Nor is a one-time code shown in clear, which is sensitive data.
+    assert_eq!(
+        hint(
+            asked.autofill(flui_platform::text_store::Autofill::OneTimeCode),
+            false
+        ),
+        ContentType::HINT_SENSITIVE_DATA
+    );
 }
 
 #[test]
@@ -686,7 +753,7 @@ fn a_field_turned_protected_is_enabled_afresh_with_password_hints() {
     let _ = wire.take();
 
     // A status change that keeps the content type sends nothing.
-    store.set_purpose(TextInputPurpose::Search);
+    store.set_text_input(TextInputOptions::new(TextInputPurpose::Search));
     assert_eq!(wire.take(), []);
 
     store.set_protected(true);
@@ -779,7 +846,9 @@ fn a_focus_moved_by_a_status_query_is_the_one_served() {
         if on_change {
             let _ = wire.take();
             *plain.on_status.borrow_mut() = moves_focus.take();
-            plain.inner.set_purpose(TextInputPurpose::Email);
+            plain
+                .inner
+                .set_text_input(TextInputOptions::new(TextInputPurpose::Email));
         }
 
         let sent = wire.take();

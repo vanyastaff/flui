@@ -8,11 +8,11 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{LayerId, RenderId, SurfaceGeneration};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryContent, Chunk, ClipRectLayer, Closure, ContentToken,
-    ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer, ImageFilterLayer,
-    Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer, OffsetLayer,
-    OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp, SceneOwner,
-    SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over, read_closure,
+    BackdropFilterLayer, BackdropGroupKey, BoundaryContent, Chunk, ClipRectLayer, Closures,
+    ContentToken, ContentVersion, DamageMode, DamageRect, DamageRegion, Entry, FollowerLayer,
+    ImageFilterLayer, Layer, LayerDiffer, LayerLink, LayerNode, LayerTree, LeaderClip, LeaderLayer,
+    OffsetLayer, OpacityLayer, PictureLayer, Placement, Region, Scene, SceneNodeId, SceneOp,
+    SceneOwner, SceneVersion, SubtreeCull, SurfaceKey, TransformLayer, close_over,
     resolve_follower_transform,
 };
 use flui_painting::paint::{BlendMode, Clip, ImageFilter};
@@ -295,6 +295,73 @@ pub(crate) fn an_unattached_leader_never_shadows_the_attached_one() {
         covered(&damage, covering(300.0, 300.0, 320.0, 320.0)),
         "{damage:?}"
     );
+}
+
+/// Damage that meets one member of a backdrop group takes the rect over
+/// every member: the first member, far from the damage, is redrawn where the
+/// group captures. The same filters without a group leave the far one alone,
+/// and damage that reaches the near member only through an ungrouped filter
+/// it grew over still takes the group.
+pub(crate) fn damage_under_one_backdrop_group_member_takes_every_member() {
+    // (case, grouped, an ungrouped filter between the card and the member)
+    for (case, grouped, through) in [
+        ("grouped", true, false),
+        ("ungrouped", false, false),
+        ("grouped, reached through another filter", true, true),
+    ] {
+        let group = BackdropGroupKey::new();
+        let filter = |x: f64, grouped: bool| {
+            Layer::from(
+                BackdropFilterLayer::new(
+                    ImageFilter::blur(2.0),
+                    BlendMode::SrcOver,
+                    Rect::from_ltrb(x, 10.0, x + 40.0, 50.0),
+                )
+                .with_group(grouped.then(|| group.clone())),
+            )
+        };
+        let near = if through { 540.0 } else { 490.0 };
+        let mut owner = SceneOwner::new();
+        let mut writer = owner.writer();
+        let root = writer.current().root();
+        let (first, card) = (writer.mint_node(), writer.mint_node());
+        let mut alone = BoundaryContent::builder();
+        alone.push_effect(filter(10.0, grouped), RenderId::new(1), 0);
+        alone.pop_effect();
+        writer.push(publish(first, alone.finish()));
+        let version = writer.next_content_version().expect("a version");
+        let mut boxed = BoundaryContent::builder();
+        boxed.chunk(chunk(2, version, Rect::from_ltrb(500.0, 20.0, 520.0, 40.0)));
+        writer.push(publish(card, boxed.finish()));
+        let mut top = BoundaryContent::builder();
+        top.slot(card);
+        top.slot(first);
+        if through {
+            top.push_effect(filter(490.0, false), RenderId::new(4), 0);
+            top.pop_effect();
+        }
+        top.push_effect(filter(near, grouped), RenderId::new(3), 0);
+        top.pop_effect();
+        writer.push(publish(root, top.finish()));
+        owner.apply(SURFACE).expect("two members and a card");
+
+        let mut writer = owner.writer();
+        let version = writer.next_content_version().expect("a version");
+        let mut boxed = BoundaryContent::builder();
+        boxed.chunk(chunk(2, version, Rect::from_ltrb(500.0, 20.0, 520.0, 40.0)));
+        writer.push(publish(card, boxed.finish()));
+        owner.apply(SURFACE).expect("the card repaints");
+        let damage = rects(owner.patch_damage());
+        assert!(
+            covered(&damage, covering(near, 10.0, near + 40.0, 50.0)),
+            "{case}: the near member: {damage:?}"
+        );
+        assert_eq!(
+            covered(&damage, covering(10.0, 10.0, 50.0, 50.0)),
+            grouped,
+            "{case}: the far member: {damage:?}"
+        );
+    }
 }
 
 /// A magnifier's bilinear read reaches half a source pixel past its source
@@ -1448,12 +1515,12 @@ impl Oracle {
         *self.ids.entry(key).or_insert_with(|| RenderId::new(next))
     }
 
-    fn diff(&mut self, version: &SceneVersion) -> (DamageRegion, Vec<Closure>) {
+    fn diff(&mut self, version: &SceneVersion) -> (DamageRegion, Closures) {
         let stamped = self.stamped(version);
         let mut baked = LayerTree::new(copy(stamped.get(stamped.root()).expect("a root"), None));
         let root = baked.root();
         bake(&stamped, stamped.root(), &mut baked, root);
-        let mut closures = Vec::new();
+        let mut closures = Closures::new();
         backdrops(&baked, baked.root(), Matrix4::IDENTITY, &mut closures);
         (self.differ.diff(&Scene::new(baked), SURFACE.size), closures)
     }
@@ -1553,14 +1620,14 @@ fn bake(tree: &LayerTree, from: LayerId, baked: &mut LayerTree, to: LayerId) {
 /// Whether `patch` covers `diff`. The differ answers one rect, which closes
 /// over every backdrop its bounding box meets, so the patch's region is
 /// compared the same way: its bounds, closed over the same backdrops.
-fn covers(patch: DamageRegion, diff: DamageRegion, closures: &[Closure]) -> bool {
+fn covers(patch: DamageRegion, diff: DamageRegion, closures: &Closures) -> bool {
     match (patch, diff) {
         (_, DamageRegion::Unchanged) | (DamageRegion::Full(_), _) => true,
         (_, DamageRegion::Full(_)) | (DamageRegion::Unchanged, DamageRegion::Region(_)) => false,
         (DamageRegion::Region(patch), DamageRegion::Region(diff)) => {
             match close_over(
                 DamageRegion::Region(Region::new(patch.bounds())),
-                closures.iter().copied(),
+                closures,
                 SURFACE.size,
             ) {
                 DamageRegion::Region(closed) => covered(&[closed.bounds()], diff.bounds()),
@@ -1572,7 +1639,7 @@ fn covers(patch: DamageRegion, diff: DamageRegion, closures: &[Closure]) -> bool
 }
 
 /// What each backdrop of `tree` reads and writes.
-fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Vec<Closure>) {
+fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Closures) {
     let layer = tree.get_layer(id).expect("a node of the tree");
     let ctm = if let Layer::Transform(transform) = layer {
         parent * *transform.transform()
@@ -1581,7 +1648,7 @@ fn backdrops(tree: &LayerTree, id: LayerId, parent: Matrix4, out: &mut Vec<Closu
         parent * Matrix4::translation(offset.dx, offset.dy, 0.0)
     };
     if let Layer::BackdropFilter(_) = layer {
-        out.push(read_closure(layer, &ctm, Rect::ZERO));
+        out.push_effect(layer, &ctm, Rect::ZERO);
     }
     for &child in tree.children(id).expect("a node of the tree") {
         backdrops(tree, child, ctm, out);
@@ -1688,5 +1755,57 @@ pub(crate) fn a_cull_asked_in_walk_order_answers_as_one_asked_alone() {
     assert!(
         skipped > 0,
         "no case skipped a subtree, so a walk never climbed back past one"
+    );
+}
+
+/// A node under a clip whose fractional edge covers a pixel in part is
+/// kept by a cull of that pixel and
+/// damaged in it, where its exact geometry misses the clip: the
+/// renderer shows the node's ink there at the product of both coverages.
+pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let node = writer.mint_node();
+    let boxed = |writer: &mut flui_layer::SceneWriter<'_>| {
+        let version = writer.next_content_version().expect("a version");
+        let mut content = BoundaryContent::builder();
+        content.chunk(chunk(2, version, Rect::from_ltrb(70.0, 4.0, 89.3, 28.0)));
+        content.finish()
+    };
+    let content = boxed(&mut writer);
+    writer.push(publish(node, content));
+    let mut top = BoundaryContent::builder();
+    top.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
+            Clip::AntiAlias,
+        )),
+        RenderId::new(1),
+        0,
+    );
+    top.slot(node);
+    top.pop_effect();
+    writer.push(publish(root, top.finish()));
+    writer.push(place(node, 0.0, 0.0));
+    owner.apply(SURFACE).expect("a box under a clip");
+
+    let mut writer = owner.writer();
+    let content = boxed(&mut writer);
+    writer.push(publish(node, content));
+    owner.apply(SURFACE).expect("the box repaints");
+    let damage = rects(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(89.0, 4.0, 90.0, 28.0)),
+        "the pixel the clip's edge shares with the box: {damage:?}"
+    );
+    // A cull of only that pixel keeps the node, which a clip in the root's
+    // content holds.
+    assert!(
+        owner
+            .current()
+            .subtree_cull(Rect::from_ltrb(89.0, 4.0, 90.0, 28.0))
+            .meets(node),
+        "the cull keeps the node for the shared pixel"
     );
 }

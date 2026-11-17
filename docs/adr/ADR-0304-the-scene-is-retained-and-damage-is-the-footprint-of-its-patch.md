@@ -285,7 +285,12 @@ bounds it by the clip, its kernel spent. `Publish`
 recomputes both exactly from the children (O(children)); every other change grows the ancestors'
 bounds by union and their kernel by maximum
 up to the root (O(depth)) and never shrinks them, so a footprint can over-report and never
-under-report. The engine culls with the same bounds. A chain, placement or
+under-report. A clip on the chain from the surface to a node cuts the node's footprint by the whole
+pixels it touches once mapped to the surface, since
+an anti-aliased clip's edge can show content in a pixel it covers in part (for a hard clip,
+which snaps, that is an over-report). A clip inside a node's own content cuts the node's stored
+bound exactly, in the node's space. The engine culls with the
+same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and
 contributes only its old footprint.
 
@@ -338,7 +343,10 @@ pub enum Closure { None, Bounded { reads: Rect<f64>, writes: Rect<f64> }, Unboun
 `reads` is what the effect samples (for a blur, the kernel's reach as the renderer implements it,
 under the norm of the CTM) and `writes` what it changes; a chunk with `reads_destination` reads and
 writes its own bounds. Damage that meets an entry's `reads ∪ writes`, unless one rect of the
-region already contains it, joins `reads ∪ writes`. The joins and the region's merges repeat to a
+region already contains it, joins `reads ∪ writes`; damage that meets one member of a backdrop
+group joins the rect over every member's, so the group lies in one rect and captures where a full
+frame captures (ADR-0230).
+The entries of a frame are a `Closures` set, which `close_over` takes. The joins and the region's merges repeat to a
 fixed point, at most 64 rounds (the cap of `frame_protocol.rs:285-299`), past which the frame is
 `Full(Unbounded)`; damage that meets a `Closure::Unbounded` is `Full(Unbounded)`. A
 foreground image filter is read only once the region meets its node's subtree footprint, which holds
@@ -467,13 +475,15 @@ held version and culls nodes by their subtree footprint. For a `Region` it plans
 enum RegionPlan { Bounds(DamageRect), Rects(Region) }
 ```
 
-`Bounds` clears and redraws what meets the region's bounding box under one scissor; `Rects` clears
-and redraws each rect under its own scissor, culling against that rect, at most `Region::MAX`
-passes, counted as `region_passes`. `Bounds` is planned for one rect, or when the bounding box is at
-most twice the region's area (a hypothesis to measure). Both keep one invariant: no pixel outside
-the plan's rects is written, and every chunk that meets a written pixel is drawn there in paint
-order. One scissor around the region with culling per rect breaks it: the pixels between the rects
-are cleared and not redrawn, or drawn and blended twice.
+`Bounds` clears and redraws what meets the region's bounding box under one scissor. `Rects` records
+the frame once, culled against the union of the rects, and replays it once per rect under that
+rect's scissor and clear: at most `Region::MAX` passes, counted as `region_passes`. Damage is closed
+over the backdrop readers of what the plan redraws, so a `Bounds` plan closes over its box. The
+planner takes `Rects` only where a measurement on hardware of the record-once frame shows it
+cheaper, and `Bounds` otherwise ([docs/gaps.md](../gaps.md#accepted-adr-sections-not-built-yet) has
+what is built). Both keep one invariant: no pixel outside the plan's rects is written, and every chunk that meets a written pixel is drawn there
+in paint order. One scissor around the region with culling per rect breaks it: the pixels between
+the rects are cleared and not redrawn, or drawn and blended twice.
 
 A chunk's IR outlives the frame in a recording cache:
 

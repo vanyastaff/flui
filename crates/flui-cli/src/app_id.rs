@@ -5,9 +5,10 @@
 //! name is derived from it here and nowhere else: the Android package
 //! ([`AppId::android_package`]), the Apple bundle identifier
 //! ([`AppId::apple_bundle_id`]), and the `FLUI_APP_ID` the application is
-//! compiled with ([`AppId::as_str`]). The grammar is `flui_log::AppId`'s; the
-//! CLI ships without the framework, so it keeps its own parser and a test
-//! holds the two to the same answers.
+//! compiled with ([`AppId::as_str`]). The grammar is `flui_foundation::AppId`'s,
+//! and the name of an application without an id ([`executable_class`]) is
+//! `flui_foundation::executable_class`'s; the CLI ships without the framework,
+//! so it keeps its own copies and a test holds each to the same answers.
 
 use std::fmt::{self, Display, Formatter};
 
@@ -16,9 +17,33 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CliError, CliResult};
 use crate::types::{OrganizationId, ProjectName};
 
-/// The longest identifier, in bytes: the longest directory name, since the
-/// application's data directory is named after it.
-const MAX_LEN: usize = 255;
+/// The longest identifier, in bytes: the tightest name it is part of, the
+/// Windows single-instance pipe `\\.\pipe\flui-<id>-<session>` (256
+/// characters at most, a session of up to ten digits), which the D-Bus name,
+/// the data directory and the Linux desktop entry `<id>.desktop` also hold.
+const MAX_LEN: usize = 256 - r"\\.\pipe\flui-".len() - "-4294967295".len();
+
+/// The name an application without a declared id is known by on Linux, from
+/// its executable's file stem `stem`: each character outside ASCII letters,
+/// digits, `-`, `_` and `.` as `_`, cut to [`MAX_LEN`] bytes, `flui` when
+/// empty. Its windows carry it, and its desktop entry is named by it.
+pub(crate) fn executable_class(stem: &str) -> String {
+    let mut class: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    class.truncate(MAX_LEN);
+    if class.is_empty() {
+        class.push_str("flui");
+    }
+    class
+}
 
 /// Words Java reserves, which Android refuses as a package-name label.
 const JAVA_RESERVED: &[&str] = &[
@@ -80,7 +105,7 @@ const JAVA_RESERVED: &[&str] = &[
 /// A validated reverse-DNS application identifier, such as
 /// `com.example.my_app`: two or more `.`-separated labels, each starting with
 /// an ASCII letter and continuing with ASCII letters, digits and `_`, none a
-/// word Java reserves, at most 255 bytes.
+/// word Java reserves, at most 247 bytes (so `<id>.desktop` is a file name).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub(crate) struct AppId(String);
@@ -246,8 +271,8 @@ mod tests {
     /// `flui.toml` holds is what the application is compiled with.
     #[test]
     fn the_cli_and_the_framework_accept_the_same_identifiers() {
-        let long = format!("com.{}", "a".repeat(251));
-        let too_long = format!("com.{}", "a".repeat(252));
+        let long = format!("com.{}", "a".repeat(MAX_LEN - 4));
+        let too_long = format!("com.{}", "a".repeat(MAX_LEN - 3));
         let cases = [
             "com.example.notes",
             "com.example.my_app",
@@ -271,8 +296,29 @@ mod tests {
         for id in cases {
             assert_eq!(
                 AppId::try_new(id).is_ok(),
-                flui_log::AppId::try_new(id).is_ok(),
+                flui_foundation::AppId::try_new(id).is_ok(),
                 "{id}"
+            );
+        }
+    }
+
+    /// The CLI names an application without an id as its windows do, so the
+    /// desktop entry matches them.
+    #[test]
+    fn the_cli_and_the_framework_class_an_executable_alike() {
+        let long = "a".repeat(MAX_LEN + 10);
+        for stem in [
+            "notes",
+            "notes-app.bin_2",
+            "nötes",
+            "my notes",
+            "",
+            long.as_str(),
+        ] {
+            assert_eq!(
+                executable_class(stem),
+                flui_foundation::executable_class(stem),
+                "{stem:?}"
             );
         }
     }

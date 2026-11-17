@@ -100,6 +100,7 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
+pub(crate) use modal_loop::ModalLoops;
 pub(crate) use window_table::{WindowDpi, WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
@@ -144,6 +145,13 @@ pub(crate) struct WindowClass {
     pub(crate) input: Rc<dyn WindowInputs>,
     /// The text input those hooks keep, as the window hands it out.
     pub(crate) text: Rc<dyn WindowTexts>,
+    /// The window's own hook, as the input reads whose caption buttons a
+    /// window's are.
+    pub(crate) chrome: Rc<dyn WindowChrome>,
+    /// The modal loops running on the thread, which the class's procedure
+    /// tells after each message ([`ModalLoops::ran`]); the host's table starts
+    /// it empty.
+    pub(crate) modal_loops: Rc<ModalLoops>,
 }
 
 thread_local! {
@@ -180,9 +188,11 @@ pub(crate) fn window_class<H: WindowsHost>() -> Option<WindowClass> {
     Some(class)
 }
 
-/// FLUI's window class on this thread for the host the process registered
-/// the class for; `None` on a thread no owner of that host opened on.
-fn registered_class() -> Option<WindowClass> {
+/// What `part` reads of FLUI's window class on this thread for the host the
+/// process registered the class for, read inside the class list's borrow so
+/// only that part is cloned; `None` on a thread no owner of that host opened
+/// on.
+fn registered_class<T>(part: impl FnOnce(&WindowClass) -> T) -> Option<T> {
     let host = *WINDOW_CLASS.get()?.as_ref().ok()?;
     CLASS_ON_THREAD
         .try_with(|classes| {
@@ -190,24 +200,51 @@ fn registered_class() -> Option<WindowClass> {
                 .borrow()
                 .iter()
                 .find(|(made_for, _)| *made_for == host)
-                .map(|(_, class)| class.clone())
+                .map(|(_, class)| part(class))
         })
         .ok()
         .flatten()
+}
+
+/// The modal loops running on this thread, as FLUI's window class on it keeps
+/// them for the host the process registered the class for; `None` on a thread
+/// no owner of that host opened on.
+pub(crate) fn thread_modal_loops() -> Option<Rc<ModalLoops>> {
+    registered_class(|class| Rc::clone(&class.modal_loops))
 }
 
 /// What the input of FLUI's window class on this thread tells the other
 /// features of a window, for the host the process registered the class for;
 /// `None` on a thread no owner of that host opened on.
 pub(crate) fn window_inputs() -> Option<Rc<dyn WindowInputs>> {
-    registered_class().map(|class| class.input)
+    registered_class(|class| Rc::clone(&class.input))
 }
 
 /// What the text input of FLUI's window class on this thread holds of a
 /// window, for the host the process registered the class for; `None` on a
 /// thread no owner of that host opened on.
 pub(crate) fn window_texts() -> Option<Rc<dyn WindowTexts>> {
-    registered_class().map(|class| class.text)
+    registered_class(|class| Rc::clone(&class.text))
+}
+
+/// What the window's own hook of FLUI's window class on this thread tells the
+/// class's other hooks of a window's frame, for the host the process
+/// registered the class for; `None` on a thread no owner of that host opened
+/// on.
+pub(crate) fn window_chrome() -> Option<Rc<dyn WindowChrome>> {
+    registered_class(|class| Rc::clone(&class.chrome))
+}
+
+/// What the window tells the class's other hooks of its frame, read-only.
+/// Answers `None` for a window it does not hold: one already closed, or a
+/// reference whose handle now names another window.
+pub(crate) trait WindowChrome {
+    /// Whether the chrome regions the application hands `window` answer the
+    /// system's hit test (ADR-0286 §7): the system draws no title bar and the
+    /// window is not fullscreen. Its caption buttons are then the
+    /// application's; otherwise a caption button is the system's own, and so
+    /// are the messages over it.
+    fn regions_answer_the_hit_test(&self, window: WindowRef) -> Option<bool>;
 }
 
 /// What the text input of FLUI's window class holds of a window, as the
@@ -663,12 +700,12 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // A clone of the hooks: a hook's message may open or close windows, and
+    // A clone of the class: a hook's message may open or close windows, and
     // nothing of the thread's class stays borrowed while it runs.
-    let hooks = window_class::<H>().map(|class| class.hooks);
-    let answered = hooks
+    let class = window_class::<H>();
+    let answered = class
         .iter()
-        .flat_map(|hooks| hooks.iter())
+        .flat_map(|class| class.hooks.iter())
         .find_map(|hook| {
             // SAFETY: the arguments as Win32 delivered them, per this function's
             // `# Safety` contract.
@@ -680,7 +717,13 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
             answer
         });
     // SAFETY: forwards the message verbatim, as Win32 delivered it.
-    answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) })
+    let answer = answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) });
+    // The message may have run the platform's code, which a modal loop
+    // running on the thread asks the deadlines again after.
+    if let Some(class) = &class {
+        class.modal_loops.after_window_message(msg, wparam);
+    }
+    answer
 }
 
 /// Load a cursor by style

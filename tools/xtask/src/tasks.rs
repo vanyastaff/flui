@@ -224,7 +224,8 @@ const WAYLAND_OPTIONAL_TESTS: &str = "test(/^wayland_window::optional::/)";
 /// What a headless sway offers of those subjects and CI's headless Weston
 /// lacks, as `FLUI_REQUIRE_COMPOSITOR` lists it: a case that finds one of
 /// them missing fails instead of saying it skipped it.
-const SWAY_OFFERS: &str = "fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign";
+const SWAY_OFFERS: &str =
+    "foreign-toplevel,fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign";
 
 /// [`WAYLAND_OPTIONAL_TESTS`] against the compositor `WAYLAND_DISPLAY` names,
 /// which must offer [`SWAY_OFFERS`]: CI starts a headless sway for it. One
@@ -271,9 +272,9 @@ fn platform_compiler_tests() -> Cmd {
     .args(["--locked", "--no-fail-fast"])
 }
 
-/// flui-native's suite on `host`: under Xvfb on Linux, directly on Windows
-/// (native Windows needs neither), skipped elsewhere. Compiler checks run
-/// separately in the nested stage.
+/// flui-native's suite on `host`: under Xvfb on Linux, on Windows on the run's
+/// own desktop, which `.config/nextest.toml` starts every test on (ADR-0355),
+/// skipped elsewhere. Compiler checks run separately in the nested stage.
 fn platform_suite(host: Host) -> Vec<Step> {
     match host {
         Host::Linux => vec![
@@ -1438,7 +1439,7 @@ mod tests {
         assert_eq!(
             lines(&wayland_optional_plan()),
             [
-                "$ FLUI_REQUIRE_WAYLAND=1 FLUI_REQUIRE_COMPOSITOR=fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign cargo nextest run -p flui-native --locked --all-features --no-fail-fast --test-threads 1 --success-output final -E 'test(/^wayland_window::optional::/)'"
+                "$ FLUI_REQUIRE_WAYLAND=1 FLUI_REQUIRE_COMPOSITOR=foreign-toplevel,fractional-scale,seat,xdg-activation,xdg-decoration,xdg-foreign cargo nextest run -p flui-native --locked --all-features --no-fail-fast --test-threads 1 --success-output final -E 'test(/^wayland_window::optional::/)'"
             ]
         );
     }

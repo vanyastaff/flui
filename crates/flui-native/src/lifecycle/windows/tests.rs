@@ -13,6 +13,7 @@ use crate::owner::app_delivery::testing::{AppLog, Bound, bound};
 use crate::owner::signal::{OwnerSignal, OwnerTurnSlot};
 use crate::owner::windows::broadcast::{Receiver, Subscriber};
 use crate::owner::windows::control::{OwnerQueue, testing::FullQueue};
+use crate::owner::windows::modal_loop::ModalWake;
 
 /// A receiver wired to a host, with the notices it delivers heard by a
 /// recording application handler.
@@ -29,9 +30,10 @@ fn hosted_receiver_of(signal: &Arc<OwnerSignal>) -> (Receiver, Rc<HostEvents>, R
     let host = Rc::new(HostEvents::new(
         Arc::clone(&run.delivery),
         notices,
-        OwnerQueue::new(Arc::downgrade(signal)),
+        OwnerQueue::new(Arc::downgrade(signal), ModalWake::default()),
     ));
-    let receiver = Receiver::try_new([Rc::clone(&host) as Rc<dyn Subscriber>]).expect("receiver");
+    let receiver = Receiver::try_new([Rc::clone(&host) as Rc<dyn Subscriber>], Rc::default())
+        .expect("receiver");
     (receiver, host, app, run)
 }
 

@@ -455,18 +455,18 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         Ok(())
     }
 
-    /// Traverses the scene's layer tree and flushes all painter batches to
-    /// the GPU, reporting the damage-straddle check.
+    /// Traverses the scene's layer tree, once per pass of a partial frame,
+    /// and flushes all painter batches to the GPU, reporting the
+    /// damage-straddle check and the passes drawn.
     fn content(
         &mut self,
         render_view: &wgpu::TextureView,
         render_texture: &wgpu::Texture,
         _intermediate_active: bool,
-        partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
+        partial: Option<&crate::damage::RegionPlan>,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<bool> {
-        let straddled =
-            crate::Renderer::record_frame_content(self.painter, self.scene, partial_damage)?;
+    ) -> EngineResult<crate::frame_protocol::RecordedContent> {
+        let recorded = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
         let painter = &mut *self.painter;
 
         // Profiler scope wraps painter.render. The scope borrows
@@ -500,7 +500,7 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
         #[cfg(not(feature = "gpu-profiler"))]
         let render_result = painter.render(frame_target, encoder);
         render_result?;
-        Ok(straddled)
+        Ok(recorded)
     }
 
     fn blit(

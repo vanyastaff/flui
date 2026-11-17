@@ -8,18 +8,21 @@
 use std::rc::Rc;
 
 use super::{
-    Change, CharacterBounds, EditorReport, FLAG_HAS_VISIBLE_REGION, IME_ACTION_DONE,
-    IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH, IME_FLAG_NO_ENTER_ACTION, ImeEdit,
-    Install, Ledger, MAX_CHARACTER_BOUNDS, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER,
-    TYPE_CLASS_PHONE, TYPE_CLASS_TEXT, TYPE_TEXT_FLAG_MULTI_LINE,
-    TYPE_TEXT_VARIATION_EMAIL_ADDRESS, TYPE_TEXT_VARIATION_PASSWORD, TYPE_TEXT_VARIATION_URI,
-    character_bounds, cursor_anchor, editor_action_key, editor_info, starts_handwriting,
+    Change, CharacterBounds, EditorInfo, EditorReport, FLAG_HAS_VISIBLE_REGION, IME_ACTION_DONE,
+    IME_ACTION_GO, IME_ACTION_NEXT, IME_ACTION_PREVIOUS, IME_ACTION_SEARCH, IME_ACTION_SEND,
+    IME_FLAG_NO_ENTER_ACTION, IME_FLAG_NO_PERSONALIZED_LEARNING, ImeEdit, Install, Ledger,
+    MAX_CHARACTER_BOUNDS, Mirror, Replayed, Snapshot, TYPE_CLASS_NUMBER, TYPE_CLASS_PHONE,
+    TYPE_CLASS_TEXT, TYPE_NUMBER_FLAG_DECIMAL, TYPE_NUMBER_FLAG_SIGNED,
+    TYPE_NUMBER_VARIATION_PASSWORD, TYPE_TEXT_FLAG_AUTO_CORRECT, TYPE_TEXT_FLAG_CAP_CHARACTERS,
+    TYPE_TEXT_FLAG_CAP_SENTENCES, TYPE_TEXT_FLAG_CAP_WORDS, TYPE_TEXT_FLAG_MULTI_LINE,
+    TYPE_TEXT_FLAG_NO_SUGGESTIONS, TYPE_TEXT_VARIATION_EMAIL_ADDRESS, TYPE_TEXT_VARIATION_PASSWORD,
+    TYPE_TEXT_VARIATION_URI, character_bounds, cursor_anchor, editor_info, starts_handwriting,
 };
 use crate::text::ime::PROTECTED_UNIT;
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform::keyboard::NamedKey;
 use flui_platform::text_store::{
-    CommitGate, Composition, LockGrant, LockTiming, Selection, TextInputPurpose, TextStore,
+    Autofill, Capitalization, CommitGate, Composition, Correction, EnterAction, LockGrant,
+    LockTiming, NumberFormat, Selection, TextInputOptions, TextInputPurpose, TextStore,
     TextStoreStatus, Utf16Offset, Utf16Range,
 };
 use flui_testing::text_store_kit::InMemoryTextStore;
@@ -49,10 +52,11 @@ fn state(text: &str, selection: (i32, i32), composition: Option<(i32, i32)>) -> 
 fn publish(ledger: &Rc<Ledger>, store: &InMemoryTextStore, change: Change) -> Snapshot {
     let read = Rc::new(std::cell::RefCell::new(None));
     let (out, ledger) = (Rc::clone(&read), Rc::clone(ledger));
+    let editor = EditorInfo::of(store.status());
     let _granted = store
         .request_lock(
             LockGrant::read(move |session| {
-                *out.borrow_mut() = Some(ledger.publish(session, change));
+                *out.borrow_mut() = Some(ledger.publish(session, change, editor));
             }),
             LockTiming::Sync,
         )
@@ -198,6 +202,68 @@ fn a_selection_snapshot_that_saw_every_edit_is_taken() {
     store.app_select(Selection::collapsed(offset(0)));
     let moved = publish(&ledger, &store, Change::Selection);
     assert_eq!(mirror.install(&moved), Install::Replace { restart: false });
+}
+
+/// A status change restarts the input method only when what the input
+/// method is started with changes, never under a composition: a change of
+/// what Android does not read (autofill) restarts nothing, a chat field whose
+/// Enter becomes Send while the keyboard composes keeps the composition and
+/// restarts once it ends, and the restart takes the new `EditorInfo`.
+fn a_status_change_restarts_only_for_what_android_reads_and_never_mid_composition() {
+    let store = InMemoryTextStore::new("ab");
+    let (ledger, mut mirror) = focus(&store);
+
+    // Autofill alone: Android's `EditorInfo` is the same, nothing restarts.
+    store.set_text_input(TextInputOptions::TEXT.autofill(Autofill::Username));
+    let same = publish(&ledger, &store, Change::Status);
+    assert_eq!(mirror.decide(&same), Install::Keep);
+    mirror.take(&same, Install::Keep);
+    assert!(!mirror.status_owed(), "nothing waits");
+
+    // The keyboard composes, then the field's Enter becomes Send.
+    let composing = mirror
+        .report(&state("abか", (3, 3), Some((2, 3))))
+        .expect("current");
+    assert_eq!(
+        replay(&store, &ledger, composing).get(),
+        Some(Replayed::Applied)
+    );
+    store.set_text_input(TextInputOptions::TEXT.enter_action(EnterAction::SendMessage));
+    let send = publish(&ledger, &store, Change::Status);
+    assert_eq!(
+        mirror.decide(&send),
+        Install::Keep,
+        "no restart under the composition"
+    );
+    assert!(!mirror.reconfigures(&send, Install::Keep));
+    mirror.take(&send, Install::Keep);
+    assert!(!mirror.status_owed(), "the composition still holds it back");
+
+    // The composition ends: the owner is asked to publish the status again,
+    // once, and the view restarts on the new `EditorInfo`.
+    let committed = mirror
+        .report(&state("abか", (3, 3), None))
+        .expect("current");
+    assert_eq!(
+        replay(&store, &ledger, committed).get(),
+        Some(Replayed::Applied)
+    );
+    assert!(
+        mirror.status_owed(),
+        "the change waited for the composition"
+    );
+    assert!(!mirror.status_owed(), "and is asked for once");
+    let again = publish(&ledger, &store, Change::Status);
+    let install = mirror.decide(&again);
+    assert_eq!(install, Install::Replace { restart: true });
+    assert!(mirror.reconfigures(&again, install));
+    assert_eq!(again.editor.options & 0xff, IME_ACTION_SEND);
+    mirror.take(&again, install);
+    assert_eq!(
+        mirror.decide(&publish(&ledger, &store, Change::Status)),
+        Install::Keep,
+        "the input method runs with it now"
+    );
 }
 
 /// The application rewrote the text while the keyboard typed: its text
@@ -386,13 +452,14 @@ fn a_composition_the_owner_ends_restarts_the_input_method() {
         replay(&store, &ledger, composing).get(),
         Some(Replayed::Applied)
     );
+    let editor = EditorInfo::of(store.status());
     let ended = Rc::new(std::cell::RefCell::new(None));
     let (out, publisher) = (Rc::clone(&ended), Rc::clone(&ledger));
     let _granted = store
         .request_lock(
             LockGrant::read_write(move |session| {
                 session.set_composition(None).expect("a composition ends");
-                *out.borrow_mut() = Some(publisher.publish(&*session, Change::Text));
+                *out.borrow_mut() = Some(publisher.publish(&*session, Change::Text, editor));
             }),
             LockTiming::Sync,
         )
@@ -515,9 +582,17 @@ fn a_snapshot_hands_the_view_its_offsets() {
     );
 }
 
+/// A plain field is auto-corrected text whose Enter says Done; a protected
+/// one is a password that is neither corrected nor learnt from.
 fn the_editor_info_follows_the_store_status() {
     let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
-    assert_eq!(editor_info(single), (TYPE_CLASS_TEXT, IME_ACTION_DONE));
+    assert_eq!(
+        editor_info(single),
+        (
+            TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_AUTO_CORRECT,
+            IME_ACTION_DONE
+        )
+    );
     let (password, options) = editor_info(single.with_protected(true));
     assert_eq!(password, TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD);
     assert_eq!(options & 0xff, IME_ACTION_DONE);
@@ -533,34 +608,54 @@ fn the_editor_info_follows_the_store_status() {
 /// has no multi-line flag, which belongs to the text class.
 fn the_purpose_picks_the_keyboard() {
     let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
-    let with = |purpose| editor_info(single.with_purpose(purpose));
+    let with = |purpose| editor_info(single.with_text_input(TextInputOptions::new(purpose)));
+    let number = |signed, decimal| TextInputPurpose::Number(NumberFormat { signed, decimal });
+    // An address is not corrected: no suggestion strip.
     assert_eq!(
         with(TextInputPurpose::Email),
         (
-            TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_EMAIL_ADDRESS | TYPE_TEXT_FLAG_NO_SUGGESTIONS,
             IME_ACTION_DONE
         )
     );
     assert_eq!(
         with(TextInputPurpose::Url),
-        (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI, IME_ACTION_DONE)
+        (
+            TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI | TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            IME_ACTION_DONE
+        )
     );
-    assert_eq!(
-        with(TextInputPurpose::Number),
-        (TYPE_CLASS_NUMBER, IME_ACTION_DONE)
-    );
+    for (signed, decimal, flags) in [
+        (false, false, 0),
+        (true, false, TYPE_NUMBER_FLAG_SIGNED),
+        (false, true, TYPE_NUMBER_FLAG_DECIMAL),
+        (
+            true,
+            true,
+            TYPE_NUMBER_FLAG_SIGNED | TYPE_NUMBER_FLAG_DECIMAL,
+        ),
+    ] {
+        assert_eq!(
+            with(number(signed, decimal)),
+            (TYPE_CLASS_NUMBER | flags, IME_ACTION_DONE),
+            "signed {signed}, decimal {decimal}"
+        );
+    }
     assert_eq!(
         with(TextInputPurpose::Phone),
         (TYPE_CLASS_PHONE, IME_ACTION_DONE)
     );
     assert_eq!(
         with(TextInputPurpose::Search),
-        (TYPE_CLASS_TEXT, IME_ACTION_SEARCH)
+        (
+            TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_AUTO_CORRECT,
+            IME_ACTION_SEARCH
+        )
     );
     assert_eq!(with(TextInputPurpose::Text), editor_info(single));
     let (protected, _) = editor_info(
         single
-            .with_purpose(TextInputPurpose::Email)
+            .with_text_input(TextInputOptions::new(TextInputPurpose::Email))
             .with_protected(true),
     );
     assert_eq!(
@@ -568,8 +663,9 @@ fn the_purpose_picks_the_keyboard() {
         TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD,
         "protection wins over the purpose"
     );
-    let mut multi_line_number = single.with_purpose(TextInputPurpose::Number);
-    multi_line_number.single_line = false;
+    let multi_line_number = single
+        .with_text_input(TextInputOptions::new(number(false, false)))
+        .with_single_line(false);
     let (input_type, options) = editor_info(multi_line_number);
     assert_eq!(
         input_type, TYPE_CLASS_NUMBER,
@@ -578,14 +674,106 @@ fn the_purpose_picks_the_keyboard() {
     assert_eq!(options & IME_FLAG_NO_ENTER_ACTION, 0);
 }
 
-fn editor_actions_arrive_as_keys() {
-    assert_eq!(editor_action_key(IME_ACTION_DONE), (NamedKey::Enter, false));
-    assert_eq!(editor_action_key(IME_ACTION_NEXT), (NamedKey::Tab, false));
-    assert_eq!(
-        editor_action_key(IME_ACTION_PREVIOUS),
-        (NamedKey::Tab, true)
+/// The Enter key's action, the capitalization and the correction a field
+/// asks for reach `EditorInfo`; a multi-line field breaks lines on Enter
+/// unless it names an action, which it keeps.
+fn the_text_input_options_reach_the_editor_info() {
+    let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
+    let with = |options| editor_info(single.with_text_input(options));
+    let text = TextInputOptions::TEXT;
+    for (action, expected) in [
+        (EnterAction::Default, IME_ACTION_DONE),
+        (EnterAction::Done, IME_ACTION_DONE),
+        (EnterAction::Go, IME_ACTION_GO),
+        (EnterAction::Next, IME_ACTION_NEXT),
+        (EnterAction::Previous, IME_ACTION_PREVIOUS),
+        (EnterAction::Search, IME_ACTION_SEARCH),
+        (EnterAction::SendMessage, IME_ACTION_SEND),
+    ] {
+        assert_eq!(with(text.enter_action(action)).1, expected, "{action:?}");
+    }
+    let class_flags = |options| with(options).0 & !TYPE_TEXT_FLAG_AUTO_CORRECT;
+    for (shift, flag) in [
+        (Capitalization::None, 0),
+        (Capitalization::Sentences, TYPE_TEXT_FLAG_CAP_SENTENCES),
+        (Capitalization::Words, TYPE_TEXT_FLAG_CAP_WORDS),
+        (Capitalization::Characters, TYPE_TEXT_FLAG_CAP_CHARACTERS),
+    ] {
+        assert_eq!(
+            class_flags(text.capitalization(shift)),
+            TYPE_CLASS_TEXT | flag,
+            "{shift:?}"
+        );
+    }
+    for (correction, flag) in [
+        (Correction::Off, TYPE_TEXT_FLAG_NO_SUGGESTIONS),
+        (Correction::Suggestions, 0),
+        (Correction::Autocorrect, TYPE_TEXT_FLAG_AUTO_CORRECT),
+    ] {
+        assert_eq!(
+            with(text.correction(correction)).0,
+            TYPE_CLASS_TEXT | flag,
+            "{correction:?}"
+        );
+    }
+    let (input_type, options) = editor_info(
+        single
+            .with_protected(true)
+            .with_text_input(text.capitalization(Capitalization::Words)),
     );
-    assert_eq!(editor_action_key(3), (NamedKey::Enter, false), "search");
+    assert_eq!(
+        input_type,
+        TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD,
+        "a password is neither shifted nor corrected"
+    );
+    assert_eq!(options & 0xff, IME_ACTION_DONE);
+    assert_eq!(
+        options & IME_FLAG_NO_PERSONALIZED_LEARNING,
+        IME_FLAG_NO_PERSONALIZED_LEARNING
+    );
+    // A protected number keeps its pad, hidden, with its sign and separator.
+    let pin = TextInputOptions::new(TextInputPurpose::Number(NumberFormat {
+        signed: false,
+        decimal: true,
+    }));
+    assert_eq!(
+        editor_info(single.with_protected(true).with_text_input(pin)).0,
+        TYPE_CLASS_NUMBER | TYPE_NUMBER_FLAG_DECIMAL | TYPE_NUMBER_VARIATION_PASSWORD
+    );
+    // A one-time code shown in clear is neither suggested, corrected nor
+    // learnt from, whatever it asks.
+    let code = text
+        .correction(Correction::Autocorrect)
+        .capitalization(Capitalization::Words)
+        .autofill(Autofill::OneTimeCode);
+    let (input_type, options) = editor_info(single.with_text_input(code));
+    assert_eq!(input_type, TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+    assert_eq!(
+        options & IME_FLAG_NO_PERSONALIZED_LEARNING,
+        IME_FLAG_NO_PERSONALIZED_LEARNING
+    );
+
+    let many = single.with_single_line(false);
+    let (input_type, options) = editor_info(many);
+    assert_eq!(
+        input_type & TYPE_TEXT_FLAG_MULTI_LINE,
+        TYPE_TEXT_FLAG_MULTI_LINE
+    );
+    assert_eq!(
+        options & IME_FLAG_NO_ENTER_ACTION,
+        IME_FLAG_NO_ENTER_ACTION,
+        "Enter breaks the line"
+    );
+    let (input_type, options) =
+        editor_info(many.with_text_input(text.enter_action(EnterAction::SendMessage)));
+    assert_eq!(
+        input_type & TYPE_TEXT_FLAG_MULTI_LINE,
+        TYPE_TEXT_FLAG_MULTI_LINE
+    );
+    assert_eq!(
+        options, IME_ACTION_SEND,
+        "a chat field of many lines keeps its Send key"
+    );
 }
 
 fn field() -> Bounds<f64> {
@@ -708,6 +896,10 @@ fn android_ime_adapter() {
                 a_selection_snapshot_that_saw_every_edit_is_taken,
             ),
             (
+                "a_status_change_restarts_only_for_what_android_reads_and_never_mid_composition",
+                a_status_change_restarts_only_for_what_android_reads_and_never_mid_composition,
+            ),
+            (
                 "a_text_snapshot_that_raced_an_edit_wins_and_restarts",
                 a_text_snapshot_that_raced_an_edit_wins_and_restarts,
             ),
@@ -768,8 +960,8 @@ fn android_ime_adapter() {
                 the_editor_info_follows_the_store_status,
             ),
             (
-                "editor_actions_arrive_as_keys",
-                editor_actions_arrive_as_keys,
+                "the_text_input_options_reach_the_editor_info",
+                the_text_input_options_reach_the_editor_info,
             ),
             (
                 "handwriting_starts_for_a_pen_inside_the_focused_field",

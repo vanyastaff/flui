@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
-    AfterPump, FallbackWake, WakeAction, after_pump, frame_is_dirty, keeps_frame_gate_open,
-    wake_action,
+    AfterPump, FallbackWake, PendingWork, WakeAction, after_pump, frame_is_dirty,
+    keeps_frame_gate_open, wake_action,
 };
 use super::host::{APP_RUNTIME, desktop_secondary_wake_deadline, merge_wake_deadlines};
 use super::owner_dispatch::{
@@ -252,7 +252,7 @@ where
     // `open_secondary_window`'s window — see that function's own doc.
     installation.close_requests(config.close_request_handler.clone());
 
-    // 3c2. The frame-pacing fallback (ADR-0058): a non-blocking bound on
+    // 3c2. The frame-pacing fallback (ADR-0353): a non-blocking bound on
     // ticker-driven wakes that present nothing, anchored to this
     // window's own display period. Replaces the fixed 16 ms
     // `thread::sleep` on this very thread — which was the only pacer on
@@ -308,6 +308,7 @@ where
         address: owner_dispatch.address,
         size: (phys_size.width as u32, phys_size.height as u32),
         device: flui_engine::DeviceHealth::Healthy,
+        renderer_dead: false,
     };
 
     // 5. Register input callback -> entered ui_runtime input dispatch
@@ -465,8 +466,18 @@ impl DesktopWakeDeadlines {
         presentation: flui_foundation::PresentationId,
         now: web_time::Instant,
     ) -> web_time::Instant {
-        self.fallback
-            .arm_after_no_present(now, ui_runtime.refresh_interval(presentation))
+        self.fallback.arm_after_no_present(
+            now,
+            ui_runtime.refresh_interval(presentation),
+            ui_runtime.has_pending_tree_work(),
+        )
+    }
+
+    /// After a pump that presented nothing and left nothing pending: a
+    /// pending fallback no longer holds tree work
+    /// ([`FallbackWake::release_held_work`]).
+    pub(super) fn settle_after_no_present(&self) {
+        self.fallback.release_held_work();
     }
 
     /// The earliest armed deadline: the pacing fallback and the first
@@ -617,7 +628,7 @@ impl DesktopFrameDriver {
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                ui_runtime.has_pending_work(),
+                PendingWork::of(ui_runtime),
                 merge_wake_deadlines(raster_deadline, first_reveal.next_deadline()),
                 fallback_gate,
             );
@@ -667,7 +678,7 @@ impl DesktopFrameDriver {
         // a turn of the executor (`RasterSlot::pump`).
         let presented = self.raster.pump(ui_runtime, now, display_color);
 
-        // Frame-pacing fallback (ADR-0058). A frame that reached `present()`
+        // Frame-pacing fallback (ADR-0353). A frame that reached `present()`
         // needs no bound: the present blocked at vsync or the compositor is
         // pacing the redraws. A frame that did not present got neither, so
         // with a ticker still asking for frames nothing would pace the loop;
@@ -698,6 +709,8 @@ impl DesktopFrameDriver {
                         "frame presented nothing with the gate open; deferring the next \
                          ticker wake"
                     );
+                } else {
+                    self.deadlines.settle_after_no_present();
                 }
                 // The reveal runs platform code: after the deferral is
                 // armed, so a panic there leaves the wake paced.

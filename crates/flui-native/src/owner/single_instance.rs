@@ -1,7 +1,8 @@
 //! What a desktop host's first instance keeps of the launches later processes
-//! of its application hand it (ADR-0254 §4): the name an
-//! app id gives the instance, and the inbox the launches wait in until the
-//! owner takes them. The transport is the host's: the session bus on Linux
+//! of its application hand it (ADR-0254 §4): the inbox the launches wait in
+//! until the owner takes them. The instance is named by the application id
+//! itself (`flui_foundation::AppId`), which is a D-Bus well-known name and
+//! holds no character a Windows mutex or pipe name reserves. The transport is the host's: the session bus on Linux
 //! (`owner::linux::single_instance`), a named pipe on Windows
 //! (`owner::windows::single_instance`, whose frame the `frame` module writes and reads).
 //!
@@ -25,25 +26,6 @@ pub(crate) use inbox::{Posted, Refused};
 
 #[cfg(any(all(windows, feature = "single-instance"), test))]
 pub(crate) mod frame;
-
-/// The name the instance of an application of `app_id` is known by: the app
-/// id itself, when it is one (reverse DNS: two or more elements of ASCII
-/// letters, digits, `_` and `-`, none starting with a digit, 255 bytes at
-/// most); `None` otherwise. It is a D-Bus bus name as it is, and names the
-/// Windows mutex and pipe with no character either reserves.
-#[cfg(any(feature = "single-instance", test))]
-pub(crate) fn instance_name(app_id: &str) -> Option<&str> {
-    let well_formed = app_id.len() <= 255
-        && app_id.split('.').count() >= 2
-        && app_id.split('.').all(|element| {
-            let mut chars = element.chars();
-            chars
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, '_' | '-'))
-                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-        });
-    well_formed.then_some(app_id)
-}
 
 #[cfg(any(x11_host, wayland_host, all(windows, feature = "single-instance")))]
 mod inbox {
@@ -674,39 +656,5 @@ mod inbox {
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::instance_name;
-
-    /// An app id in reverse DNS names the instance as it is; any other names
-    /// none.
-    #[test]
-    fn an_app_id_in_reverse_dns_names_the_instance() {
-        assert_eq!(
-            instance_name("com.example.Notes"),
-            Some("com.example.Notes")
-        );
-        assert_eq!(
-            instance_name("org.flui_dev.my-app"),
-            Some("org.flui_dev.my-app")
-        );
-        for refused in [
-            "",
-            "notes",
-            "com..notes",
-            "com.1notes",
-            "com.example.notes/x",
-            "com.example.no tes",
-            "com.example.\\pipe",
-            "com.example.",
-            "com.example.Nötes",
-        ] {
-            assert_eq!(instance_name(refused), None, "{refused:?}");
-        }
-        let long = format!("com.{}", "a".repeat(252));
-        assert_eq!(instance_name(&long), None, "past 255 bytes");
     }
 }

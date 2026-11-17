@@ -691,7 +691,7 @@ impl RasterSender {
     /// frames are dropped with no borrow or lock held: a scene's destructor
     /// can be user code.
     fn settle_after_death(&self) {
-        let mut failed: Vec<flui_layer::SceneSnapshot> = Vec::new();
+        let mut failed: Vec<(Arc<SlotInbox>, flui_layer::SceneSnapshot)> = Vec::new();
         {
             let slots = self.slots.borrow();
             // A detaching slot's frame leaves with its presentation unsettled, as
@@ -711,15 +711,53 @@ impl RasterSender {
                 }
                 if let Some(frame) = state.frame.take() {
                     state.settle(&frame, super::RasterVerdict::Failed);
-                    failed.push(frame);
+                    failed.push((Arc::clone(&owned.inbox), frame));
                 }
             }
         }
-        let mut first = FirstPanic::new();
-        for frame in failed {
-            first.contain(move || drop(frame));
+        // A scene's destructor that panics is its own slot's failure, held
+        // with the settlement it came with as a command's panic is: whichever
+        // window's drain ran this, the payload reaches the window whose scene
+        // it was.
+        for (inbox, frame) in failed {
+            let epoch = frame.stamp.epoch;
+            let mut dropped = FirstPanic::new();
+            let _dropped = dropped.contain(move || drop(frame));
+            let Some(payload) = dropped.into_payload() else {
+                continue;
+            };
+            let spare = {
+                let mut state = inbox.lock();
+                let was_panicked = state.panicked;
+                let marked = state
+                    .settlements
+                    .iter_mut()
+                    .rev()
+                    .find(|settlement| settlement.epoch == epoch)
+                    .map(|settlement| settlement.panicked = true)
+                    .is_some();
+                let spare = state.hold_failure(SlotFailure::Panicked(payload));
+                if marked {
+                    // The mark went to the settlement the panic came with,
+                    // not to the slot's next one.
+                    state.panicked = was_panicked;
+                }
+                spare
+            };
+            match spare {
+                Some(SlotFailure::Panicked(payload)) => {
+                    flui_foundation::panic::discard_payload(payload);
+                }
+                Some(SlotFailure::Refused(error)) => {
+                    let mut caught = FirstPanic::new();
+                    let _dropped = caught.contain(move || drop(error));
+                    if let Some(payload) = caught.into_payload() {
+                        flui_foundation::panic::discard_payload(payload);
+                    }
+                }
+                None => {}
+            }
         }
-        first.resume();
     }
 
     /// Whether the owner sent `slot`'s detach.

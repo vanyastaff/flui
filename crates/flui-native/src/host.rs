@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Bounds, Size};
 use flui_platform::data_transfer::{DragTransport, NullDragTransport};
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
 use flui_platform::{
@@ -272,6 +272,81 @@ pub trait WindowAccessibility: PlatformAccessibility {
     /// thread. A bridge whose adapter follows focus itself (through the
     /// window procedure it subclasses) has nothing to do.
     fn focus_changed(&self, focused: bool);
+
+    /// The window's rectangles on the screen changed, on its owner thread:
+    /// an assistive technology places the window's nodes from them. A bridge
+    /// whose adapter asks the OS where the window is (through the window or
+    /// view it holds) has nothing to do.
+    fn bounds_changed(&self, bounds: ScreenBounds);
+}
+
+/// Where a window lies on the screen, in device pixels: its outer rectangle,
+/// with the frame the window manager or the window draws around it, and its
+/// content's, which the tree's root covers. A platform that does not tell a
+/// window where it is (Wayland) gives the outer rectangle at the origin, so
+/// the content's is relative to the window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScreenBounds {
+    outer: Bounds<i32>,
+    content: Bounds<i32>,
+}
+
+impl ScreenBounds {
+    /// The window with its frame at `outer` and its content at `content`.
+    ///
+    /// # Errors
+    /// [`InvalidScreenBounds::NegativeSize`] where either rectangle has a
+    /// negative width or height, and [`InvalidScreenBounds::ContentOutside`]
+    /// where the content does not lie within the outer rectangle.
+    pub fn try_new(outer: Bounds<i32>, content: Bounds<i32>) -> Result<Self, InvalidScreenBounds> {
+        let sized = |bounds: Bounds<i32>| bounds.size.width >= 0 && bounds.size.height >= 0;
+        if !(sized(outer) && sized(content)) {
+            return Err(InvalidScreenBounds::NegativeSize);
+        }
+        // The far edges in `i64`, where no sum of two `i32` overflows.
+        let far = |origin: i32, extent: i32| i64::from(origin) + i64::from(extent);
+        let within = |near: i32, extent: i32, outer_near: i32, outer_extent: i32| {
+            near >= outer_near && far(near, extent) <= far(outer_near, outer_extent)
+        };
+        if !(within(
+            content.origin.x,
+            content.size.width,
+            outer.origin.x,
+            outer.size.width,
+        ) && within(
+            content.origin.y,
+            content.size.height,
+            outer.origin.y,
+            outer.size.height,
+        )) {
+            return Err(InvalidScreenBounds::ContentOutside);
+        }
+        Ok(Self { outer, content })
+    }
+
+    /// The window with its frame.
+    #[must_use]
+    pub const fn outer(&self) -> Bounds<i32> {
+        self.outer
+    }
+
+    /// The window's content, which the tree's root covers.
+    #[must_use]
+    pub const fn content(&self) -> Bounds<i32> {
+        self.content
+    }
+}
+
+/// Why two rectangles are not where a window lies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InvalidScreenBounds {
+    /// A rectangle has a negative width or height.
+    #[error("a window rectangle has a negative size")]
+    NegativeSize,
+    /// The content does not lie within the window's outer rectangle.
+    #[error("the content lies outside the window's outer rectangle")]
+    ContentOutside,
 }
 
 /// The haptics position: the actuator one window, `W`, hands out.
@@ -598,6 +673,8 @@ impl WindowAccessibility for Absent<position::Accessibility> {
     fn detach(&self) {}
 
     fn focus_changed(&self, _: bool) {}
+
+    fn bounds_changed(&self, _: ScreenBounds) {}
 }
 
 /// Every window hands out a bridge that is never active.
@@ -716,5 +793,67 @@ impl<W: ?Sized> Chrome<W> for Absent<position::Chrome> {
 impl<O> Storage<O> for Absent<position::Storage> {
     fn data_store(_: &O, _: &AppDataDir) -> Option<DataStore> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::geometry::Point;
+
+    use super::*;
+
+    /// Rectangles that place no window are refused: a negative extent, and
+    /// content that leaves the outer rectangle on any side, the far edges
+    /// compared without overflow at the ends of the coordinate range.
+    #[test]
+    fn screen_bounds_hold_their_content_within_the_window() {
+        let bounds = |x, y, width, height| Bounds::new(Point::new(x, y), Size::new(width, height));
+        let outer = bounds(100, 50, 400, 300);
+        for (case, outer, content, expected) in [
+            ("framed", outer, bounds(105, 80, 390, 265), Ok(())),
+            ("frameless", outer, outer, Ok(())),
+            (
+                "at the end of the range",
+                bounds(i32::MAX, i32::MIN, i32::MAX, i32::MAX),
+                bounds(i32::MAX, i32::MIN, i32::MAX, i32::MAX),
+                Ok(()),
+            ),
+            (
+                "a negative width",
+                outer,
+                bounds(105, 80, -1, 265),
+                Err(InvalidScreenBounds::NegativeSize),
+            ),
+            (
+                "a negative outer height",
+                bounds(100, 50, 400, -300),
+                bounds(100, 50, 0, 0),
+                Err(InvalidScreenBounds::NegativeSize),
+            ),
+            (
+                "left of the window",
+                outer,
+                bounds(99, 80, 10, 10),
+                Err(InvalidScreenBounds::ContentOutside),
+            ),
+            (
+                "past the window's bottom",
+                outer,
+                bounds(105, 80, 390, 271),
+                Err(InvalidScreenBounds::ContentOutside),
+            ),
+            (
+                "past the end of the range",
+                bounds(0, 0, i32::MAX, 10),
+                bounds(1, 0, i32::MAX, 10),
+                Err(InvalidScreenBounds::ContentOutside),
+            ),
+        ] {
+            assert_eq!(
+                ScreenBounds::try_new(outer, content).map(|_| ()),
+                expected,
+                "{case}"
+            );
+        }
     }
 }

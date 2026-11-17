@@ -32,7 +32,7 @@ use flui_view::View;
 use flui_widgets::app_root;
 use std::rc::Rc;
 
-use super::frame_pacing::{FallbackGate, WakeAction, frame_is_dirty, wake_action};
+use super::frame_pacing::{FallbackGate, PendingWork, WakeAction, frame_is_dirty, wake_action};
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
     with_owner_platform,
@@ -404,6 +404,7 @@ where
         address: owner_dispatch.address,
         size: (phys_size.width as u32, phys_size.height as u32),
         device: flui_engine::DeviceHealth::Healthy,
+        renderer_dead: false,
     };
     let surface_host = raster.host.clone();
 
@@ -507,7 +508,7 @@ impl IosFrameDriver {
             let dirty = frame_is_dirty(
                 inbox_redraw,
                 ui_runtime.needs_redraw(),
-                ui_runtime.has_pending_work(),
+                PendingWork::of(ui_runtime),
                 raster_deadline,
                 FallbackGate::default(),
             );

@@ -80,8 +80,10 @@ pub enum ImeEvent {
     Preedit {
         /// The current composition text.
         text: String,
-        /// Byte offset range within `text` for the composition cursor or
-        /// selection. `None` hides the caret (see the type-level doc).
+        /// Byte offset range `(start, end)` within `text`: the input method's
+        /// target clause (the part being converted), or a caret when the two
+        /// are equal; the projection selects it inside the composition. `None`
+        /// hides the caret (see the type-level doc).
         cursor: Option<(usize, usize)>,
     },
     /// Composition finished; `String` is the final text to insert.

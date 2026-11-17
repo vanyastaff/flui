@@ -61,8 +61,8 @@ impl PipelineOwner<PaintPhase> {
     /// the node that asked rebuilt — see `layer_patches_for`. The caller
     /// applies the patch and reports the version with
     /// [`scene_applied`](PipelineOwner::scene_applied); a patch never
-    /// reported, a renewed lineage or a new pixel ratio makes the next pass
-    /// repaint from the root.
+    /// reported, a renewed lineage, a new pixel ratio or a pass with no root
+    /// to walk makes the next pass with a root repaint from it.
     ///
     /// # Errors
     ///
@@ -96,6 +96,15 @@ impl PipelineOwner<PaintPhase> {
                     .as_ref()
                     .is_none_or(|frame| frame.node.lineage() != writer.current().id().lineage()));
         if !self.scheduler.has_paint_work() && !owed {
+            // A patch still staged here was built for a root that is gone
+            // (`owed` holds whenever a root and a staged patch coexist). It
+            // describes nothing this frame publishes, so a later report must
+            // not commit it; the records it was built against are forgotten
+            // with it, and the next root repaints from scratch.
+            if let Some(staged) = self.staged_scene.take() {
+                self.discard_staged(staged, writer);
+                self.forget_scene();
+            }
             return Ok(());
         }
 
@@ -163,7 +172,14 @@ impl PipelineOwner<PaintPhase> {
             .scene_frame
             .as_ref()
             .is_some_and(|frame| frame.node.lineage() != lineage);
-        if ratio_changed || unapplied || renewed {
+        // A pass with no root to walk drops what is queued (the residue scan
+        // below), so the records stop describing the tree: forgotten, they
+        // make the next root's first pass repaint from scratch, with every
+        // change made while the root was gone.
+        let rootless = self
+            .root_id
+            .is_none_or(|root| self.render_tree.get(root).is_none());
+        if ratio_changed || unapplied || renewed || rootless {
             self.forget_scene();
             self.retained_pixel_ratio = self.device_pixel_ratio;
         }
@@ -1079,14 +1095,16 @@ impl PipelineOwner<PaintPhase> {
         let node = if composer.served(child_id) {
             composer.node_of(self, child_id)
         } else {
-            match self.refresh_boundary(composer, child_id, committed, region_anchor, inputs)? {
-                Some(fresh) => {
-                    let node = fresh.node;
-                    composer.stage_record(child_id, fresh);
-                    Some(node)
-                }
-                None => committed.map(|record| record.node),
+            let refreshed =
+                self.refresh_boundary(composer, child_id, committed, region_anchor, inputs)?;
+            let node = match &refreshed {
+                Some(Refreshed::Repainted(fresh)) => Some(fresh.node),
+                Some(Refreshed::Patched { .. }) | None => committed.map(|record| record.node),
+            };
+            if let Some(refreshed) = refreshed {
+                composer.stage_record(child_id, refreshed);
             }
+            node
         };
         let Some(node) = node else {
             debug_assert!(false, "BUG: a served boundary has a node");
@@ -1114,8 +1132,8 @@ impl PipelineOwner<PaintPhase> {
     }
 
     /// What `id`'s content becomes this frame: a fresh record when it is
-    /// repainted or its composited layers are patched, `None` when it stays
-    /// as `committed` holds it.
+    /// repainted, the patched content when its composited layers are
+    /// updated, `None` when it stays as `committed` holds it.
     ///
     /// A boundary without a record, queued for a repaint, or whose record was
     /// dropped as stale is painted afresh in a content of its own, at its own
@@ -1128,7 +1146,7 @@ impl PipelineOwner<PaintPhase> {
         committed: Option<&BoundaryRecord>,
         region_anchor: Option<AnchorFrame>,
         inputs: &PaintInputs<'_>,
-    ) -> crate::error::RenderResult<Option<BoundaryRecord>> {
+    ) -> crate::error::RenderResult<Option<Refreshed>> {
         composer.mark_served(id);
         if inputs.dirty_set.contains(&id) {
             composer.work.visited.insert(id);
@@ -1163,17 +1181,16 @@ impl PipelineOwner<PaintPhase> {
                 composer.counts.layers_produced += rebuilt;
                 composer.counts.layers_reused +=
                     (content.entries().len() as u64).saturating_sub(rebuilt);
-                let fresh = BoundaryRecord {
-                    content,
-                    ..record.clone()
-                };
                 // The patched content keeps every slot of the one it replaces.
                 composer
                     .work
                     .slotted
-                    .extend(fresh.children.iter().map(|&(_, node)| node));
-                composer.publish(fresh.node, Arc::clone(&fresh.content));
-                Some(fresh)
+                    .extend(record.children.iter().map(|&(_, node)| node));
+                composer.publish(record.node, Arc::clone(&content));
+                Some(Refreshed::Patched {
+                    content,
+                    placed: record.placed,
+                })
             });
             patches.clear();
             composer.work.layer_patches = patches;
@@ -1194,7 +1211,7 @@ impl PipelineOwner<PaintPhase> {
             committed.map_or(Placed::UNPLACED, |record| record.placed),
         );
         composer.publish(node, Arc::clone(&fresh.content));
-        Ok(Some(fresh))
+        Ok(Some(Refreshed::Repainted(fresh)))
     }
 }
 
@@ -1206,16 +1223,15 @@ impl PipelineOwner<PaintPhase> {
 /// its node, the content it published there, and the values a walk from the
 /// root would hand it at its slot, so a boundary painted alone paints as it
 /// would under its parent.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct BoundaryRecord {
     node: SceneNodeId,
     content: Arc<BoundaryContent>,
     placed: Placed,
     /// Each node whose own effect layers this content holds, the entries of
     /// those layers, and the origin they were built at: what a
-    /// composited-layer update rebuilds; shared by the record a
-    /// composited-layer update makes, and `None` when there are none.
-    effect_slots: Option<Arc<[(RenderId, EffectSlots)]>>,
+    /// composited-layer update rebuilds; `None` when there are none.
+    effect_slots: Option<Box<[(RenderId, EffectSlots)]>>,
     /// Each follower effect in the content, with the origin its subtree paints
     /// at, for hit-testing and input regions.
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
@@ -1236,6 +1252,40 @@ impl BoundaryRecord {
     /// entries and origin.
     fn effect_slots(&self) -> &[(RenderId, EffectSlots)] {
         self.effect_slots.as_deref().unwrap_or_default()
+    }
+}
+
+/// What a paint pass made of a boundary it served: a record that replaces
+/// the committed one, or the committed record's content patched by a
+/// composited-layer update at its placement, which keeps every other field
+/// of that record.
+#[derive(Debug)]
+pub(super) enum Refreshed {
+    /// Painted afresh: the record replaces the committed one.
+    Repainted(BoundaryRecord),
+    /// The committed record, republished with `content` at `placed`: its
+    /// node, effect slots, followers and children stay as they are.
+    Patched {
+        content: Arc<BoundaryContent>,
+        placed: Placed,
+    },
+}
+
+impl Refreshed {
+    /// The content the pass published.
+    fn into_content(self) -> Arc<BoundaryContent> {
+        match self {
+            Self::Repainted(record) => record.content,
+            Self::Patched { content, .. } => content,
+        }
+    }
+
+    /// Where the boundary's slot puts it.
+    fn placed_mut(&mut self) -> &mut Placed {
+        match self {
+            Self::Repainted(record) => &mut record.placed,
+            Self::Patched { placed, .. } => placed,
+        }
     }
 }
 
@@ -1287,8 +1337,9 @@ impl FrameRecord {
 /// A paint pass's patch, staged until the patch it buffered is applied.
 #[derive(Debug, Default)]
 pub(super) struct StagedScene {
-    /// Records replaced (`Some`) or dropped (`None`).
-    pub(super) records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    /// What the pass made of each boundary it republished (`Some`), and the
+    /// records it dropped (`None`).
+    pub(super) records: FxHashMap<RenderId, Option<Refreshed>>,
     /// New placements of records the pass kept.
     placed: FxHashMap<RenderId, Placed>,
     /// Records the residue scan found owing a paint.
@@ -1297,6 +1348,9 @@ pub(super) struct StagedScene {
     /// Nodes of removed boundaries still named by a parent the pass did not
     /// republish.
     orphans: Vec<SceneNodeId>,
+    /// How many entries of the owner's orphan list the pass read; a
+    /// removal after the pass adds its nodes after them.
+    orphans_read: usize,
     /// Operations the pass buffered.
     pub(super) ops: u64,
 }
@@ -1325,20 +1379,44 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             mut placed,
             mut stale,
             frame,
-            orphans,
+            mut orphans,
+            orphans_read,
             ops: _,
         } = staged;
-        for (id, record) in records.drain() {
-            if let Some(record) = record {
-                if record.followers.is_empty() {
-                    self.follower_boundaries.remove(&id);
-                } else {
-                    self.follower_boundaries.insert(id);
+        // Boundaries removed since the pass read the owner's list left their
+        // nodes after the entries it read: they wait for a later pass.
+        if let Some(late) = self.orphaned_nodes.get(orphans_read..) {
+            orphans.extend_from_slice(late);
+        }
+        for (id, refreshed) in records.drain() {
+            match refreshed {
+                // A boundary removed since the pass commits no record: the
+                // node the pass published for it waits with the orphans, as
+                // the removal left the node of the record it took. A node
+                // listed twice is retired once (`retired_set` in `finish`).
+                Some(Refreshed::Repainted(record)) if self.render_tree.get(id).is_none() => {
+                    orphans.push(record.node);
                 }
-                self.boundary_records.insert(id, record);
-            } else {
-                self.follower_boundaries.remove(&id);
-                self.boundary_records.remove(&id);
+                Some(Refreshed::Repainted(record)) => {
+                    if record.followers.is_empty() {
+                        self.follower_boundaries.remove(&id);
+                    } else {
+                        self.follower_boundaries.insert(id);
+                    }
+                    self.boundary_records.insert(id, record);
+                }
+                // A boundary removed since the pass took its record with it;
+                // its node is retired with the orphans.
+                Some(Refreshed::Patched { content, placed }) => {
+                    if let Some(record) = self.boundary_records.get_mut(&id) {
+                        record.content = content;
+                        record.placed = placed;
+                    }
+                }
+                None => {
+                    self.follower_boundaries.remove(&id);
+                    self.boundary_records.remove(&id);
+                }
             }
         }
         for (id, placed) in placed.drain() {
@@ -1414,8 +1492,8 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             orphans,
             ..
         } = staged;
-        for record in records.drain().filter_map(|(_, record)| record) {
-            writer.discard(record.content);
+        for refreshed in records.drain().filter_map(|(_, refreshed)| refreshed) {
+            writer.discard(refreshed.into_content());
         }
         if let Some(scratch) = self.paint_scratch.as_mut() {
             scratch.recycle_staged(records, placed, stale, orphans);
@@ -1594,7 +1672,8 @@ impl BoundaryBuild {
             node,
             content: Arc::new(self.builder.finish()),
             placed,
-            effect_slots: (!self.effect_slots.is_empty()).then(|| Arc::from(self.effect_slots)),
+            effect_slots: (!self.effect_slots.is_empty())
+                .then(|| self.effect_slots.into_boxed_slice()),
             followers: self.followers,
             children: self.children,
             stale: false,
@@ -1657,7 +1736,7 @@ impl PaintScratch {
     /// into.
     fn recycle_staged(
         &mut self,
-        mut records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+        mut records: FxHashMap<RenderId, Option<Refreshed>>,
         mut placed: FxHashMap<RenderId, Placed>,
         mut stale: Vec<RenderId>,
         mut orphans: Vec<SceneNodeId>,
@@ -1784,7 +1863,7 @@ struct ComposerScratch {
     retired_set: FxHashSet<SceneNodeId>,
     unslotted: Vec<RenderId>,
     /// A staged patch's maps, handed back by `scene_applied`.
-    records: FxHashMap<RenderId, Option<BoundaryRecord>>,
+    records: FxHashMap<RenderId, Option<Refreshed>>,
     placed: FxHashMap<RenderId, Placed>,
     stale: Vec<RenderId>,
     /// The orphan list the owner held before the last applied patch
@@ -1943,28 +2022,33 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     /// The node of a boundary served this pass.
     fn node_of(&self, owner: &PipelineOwner<PaintPhase>, id: RenderId) -> Option<SceneNodeId> {
         match self.staged.records.get(&id) {
-            Some(Some(record)) => Some(record.node),
+            Some(Some(Refreshed::Repainted(record))) => Some(record.node),
             Some(None) => None,
-            None => owner.boundary_records.get(&id).map(|record| record.node),
+            Some(Some(Refreshed::Patched { .. })) | None => {
+                owner.boundary_records.get(&id).map(|record| record.node)
+            }
         }
     }
 
-    fn stage_record(&mut self, id: RenderId, record: BoundaryRecord) {
+    /// Stages what the pass made of `id`; the placement it carries, the
+    /// committed one for a patched content, replaces any staged before.
+    fn stage_record(&mut self, id: RenderId, refreshed: Refreshed) {
         self.staged.placed.remove(&id);
-        self.staged.records.insert(id, Some(record));
+        self.staged.records.insert(id, Some(refreshed));
     }
 
     /// The placement a repaint staged for `id` this pass, if any.
     fn staged_placed(&self, id: RenderId) -> Option<Placed> {
         match self.staged.records.get(&id) {
-            Some(Some(record)) => Some(record.placed),
+            Some(Some(Refreshed::Repainted(record))) => Some(record.placed),
+            Some(Some(Refreshed::Patched { placed, .. })) => Some(*placed),
             _ => self.staged.placed.get(&id).copied(),
         }
     }
 
     fn stage_placed(&mut self, id: RenderId, placed: Placed) {
         match self.staged.records.get_mut(&id) {
-            Some(Some(record)) => record.placed = placed,
+            Some(Some(refreshed)) => *refreshed.placed_mut() = placed,
             _ => {
                 self.staged.placed.insert(id, placed);
             }
@@ -2187,9 +2271,9 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
         }
         while let Some(id) = unslotted.pop() {
             let below: SmallVec<[(RenderId, SceneNodeId); 4]> = match self.staged.records.get(&id) {
-                Some(Some(record)) => record.children.clone(),
+                Some(Some(Refreshed::Repainted(record))) => record.children.clone(),
                 Some(None) => SmallVec::new(),
-                None => owner
+                Some(Some(Refreshed::Patched { .. })) | None => owner
                     .boundary_records
                     .get(&id)
                     .map_or_default(|record| record.children.clone()),
@@ -2222,6 +2306,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             }
         }
         // Removed boundaries: retired once no unchanged parent names them.
+        self.staged.orphans_read = owner.orphaned_nodes.len();
         let mut orphans = std::mem::take(&mut self.staged.orphans);
         orphans.clear();
         orphans.extend(

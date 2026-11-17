@@ -83,6 +83,11 @@ impl<T> WindowTable<T> {
             .map(|kept| update(&mut kept.value))
     }
 
+    /// Whether the table keeps a value for no window.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.windows.borrow().is_empty()
+    }
+
     /// The window `hwnd` names, while the table keeps a value for it.
     pub(crate) fn window_of(&self, hwnd: HWND) -> Option<WindowRef> {
         self.windows
@@ -133,6 +138,11 @@ impl WindowDpi {
     pub(crate) fn get(self) -> u32 {
         self.dpi
     }
+
+    /// Its ratio to the 96 of 100%.
+    pub(crate) fn ratio(self) -> DevicePixelRatio {
+        self.ratio
+    }
 }
 
 /// A window's DPI: one value per window, which the window's procedure sets
@@ -176,7 +186,7 @@ impl WindowScale {
 
     /// Its scale as a device pixel ratio.
     pub(crate) fn ratio(&self) -> DevicePixelRatio {
-        self.0.get().ratio
+        self.0.get().ratio()
     }
 
     /// The window is now at `dpi`; answers the scale it was at.

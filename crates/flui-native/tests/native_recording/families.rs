@@ -106,7 +106,8 @@ impl ReplayTarget for WindowTarget {
         if let Some(focus) = focus {
             let store = InMemoryTextStore::new("");
             store.set_protected(focus.status.protected);
-            store.set_purpose(focus.status.purpose);
+            store.set_single_line(focus.status.single_line);
+            store.set_text_input(focus.status.text_input);
             self.stores.insert(focus.store, store);
         }
         Ok(())
@@ -1228,8 +1229,105 @@ fn a_header_out_of_its_stream_is_refused() {
     }
 }
 
+/// A store's focus keeps every field of its status: what the field asks of
+/// the input method is written in full and reads back as it was written; an
+/// older recording, with no Enter action or correction, reads as the hosts
+/// then behaved; a sign or a separator on a purpose that is not a number is
+/// refused.
+fn a_store_focus_keeps_every_field_of_its_status() {
+    use flui_platform::text_store::{
+        Autofill, Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions,
+        TextInputPurpose, TextStoreStatus,
+    };
+
+    let header =
+        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+    let focused = |status: &str| {
+        format!(r#"{{"row":"store_focus","focus":{{"store":1,"status":{status}}}}}"#)
+    };
+    let plain = TextStoreStatus::EDITABLE_SINGLE_LINE;
+    let signed_decimal = TextInputPurpose::Number(NumberFormat {
+        signed: true,
+        decimal: true,
+    });
+    // (the status read, what it means, the status written back)
+    for (status, expected, rewritten) in [
+        (
+            r#"{"single_line":true}"#,
+            plain,
+            r#"{"single_line":true,"enter_action":"default","correction":"autocorrect"}"#,
+        ),
+        (
+            r#"{"single_line":true,"purpose":"search"}"#,
+            plain.with_text_input(TextInputOptions::new(TextInputPurpose::Search)),
+            r#"{"single_line":true,"purpose":"search","enter_action":"search","correction":"autocorrect"}"#,
+        ),
+        (
+            r#"{"purpose":"email"}"#,
+            plain
+                .with_single_line(false)
+                .with_text_input(TextInputOptions::new(TextInputPurpose::Email)),
+            r#"{"purpose":"email","enter_action":"default","correction":"off"}"#,
+        ),
+        (
+            r#"{"protected":true,"purpose":"number","signed":true,"decimal":true,"enter_action":"next","capitalization":"words","correction":"suggestions","autofill":"one_time_code"}"#,
+            plain
+                .with_protected(true)
+                .with_single_line(false)
+                .with_text_input(
+                    TextInputOptions::new(signed_decimal)
+                        .enter_action(EnterAction::Next)
+                        .capitalization(Capitalization::Words)
+                        .correction(Correction::Suggestions)
+                        .autofill(Autofill::OneTimeCode),
+                ),
+            r#"{"protected":true,"purpose":"number","signed":true,"decimal":true,"enter_action":"next","capitalization":"words","correction":"suggestions","autofill":"one_time_code"}"#,
+        ),
+        (
+            r#"{"single_line":true,"purpose":"search","enter_action":"default","correction":"off","autofill":"new_password"}"#,
+            plain.with_text_input(
+                TextInputOptions::new(TextInputPurpose::Search)
+                    .enter_action(EnterAction::Default)
+                    .correction(Correction::Off)
+                    .autofill(Autofill::NewPassword),
+            ),
+            r#"{"single_line":true,"purpose":"search","enter_action":"default","correction":"off","autofill":"new_password"}"#,
+        ),
+    ] {
+        let text = format!("{header}\n{}\n", focused(status));
+        let recording = NativeRecording::read(text.as_bytes()).expect("a status it reads");
+        let Some(Row::StoreFocus(Some(focus))) = recording.rows.first() else {
+            panic!("one focus: {:?}", recording.rows);
+        };
+        assert_eq!(focus.status, expected, "{status}");
+        let mut written = Vec::new();
+        recording.write(&mut written).expect("written");
+        let written = String::from_utf8(written).expect("UTF-8");
+        assert_eq!(
+            written.lines().nth(1),
+            Some(focused(rewritten).as_str()),
+            "written back in full"
+        );
+    }
+    let signed_email = format!(
+        "{header}\n{}\n",
+        focused(r#"{"purpose":"email","signed":true}"#)
+    );
+    assert!(
+        matches!(
+            NativeRecording::read(signed_email.as_bytes()),
+            Err(CodecError::Invalid { line: 2, .. })
+        ),
+        "a sign on an address is refused"
+    );
+}
+
 /// The cases of the streams beside a registry's.
-pub(super) const CASES: [(&str, fn()); 13] = [
+pub(super) const CASES: [(&str, fn()); 14] = [
+    (
+        "a_store_focus_keeps_every_field_of_its_status",
+        a_store_focus_keeps_every_field_of_its_status,
+    ),
     (
         "close_rows_out_of_order_are_refused",
         close_rows_out_of_order_are_refused,
@@ -1550,6 +1648,15 @@ fn captured_streams_replay_to_what_the_session_delivered() {
         .map(|(index, _)| index)
         .collect();
     assert_eq!(lost, [1, 2], "the preedit and the commit lost their text");
+    assert!(
+        matches!(
+            &window.rows[1],
+            Row::Ime { event: ImeEvent::Preedit { text, cursor: Some((start, end)) }, .. }
+                if start == end && *end == text.len()
+        ),
+        "a redacted preedit selects no clause, its caret after the replacement: {:?}",
+        window.rows[1]
+    );
     let (mock, _) = headless_window(&owner);
     assert_eq!(
         window.replay_into(&mut WindowTarget::new(mock)),
@@ -1703,13 +1810,12 @@ enum StorePath {
 /// journaled store host, and whose input method on `path` composes "漢"
 /// after it ("か", "かん", then the conversion), with an application edit
 /// between the first two steps on the paths that keep no snapshot of their
-/// own: the field, and the window's recording. A `protected` field is a
-/// password field.
+/// own: the field, and the window's recording. The field has `status`.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn captured_store_session(
     path: StorePath,
     privacy: flui_native::journal::recorder::Privacy,
-    protected: bool,
+    status: flui_platform::text_store::TextStoreStatus,
 ) -> (Rc<InMemoryTextStore>, NativeRecording) {
     use flui_native::journal::codec::{Backend, Stream};
     use flui_native::journal::recorder::Recorder;
@@ -1728,7 +1834,8 @@ fn captured_store_session(
         .text_store_host(&window)
         .expect("the headless window is pull-model with a store host");
     let field = InMemoryTextStore::new("ab");
-    field.set_protected(protected);
+    field.set_protected(status.protected);
+    field.set_text_input(status.text_input);
     host.focus_store(Some(Rc::clone(&field) as Rc<dyn TextStore>));
     let served = SERVED
         .with(|served| served.borrow().clone())
@@ -1826,7 +1933,11 @@ fn captured_store_locks_replay_to_the_document_they_left() {
         (StorePath::WebEditContext, "Ab漢", vec!["ab", "Abか"]),
         (StorePath::AndroidMirror, "ab漢", vec!["ab"]),
     ] {
-        let (field, recording) = captured_store_session(path, Privacy::KeepText, false);
+        let (field, recording) = captured_store_session(
+            path,
+            Privacy::KeepText,
+            flui_platform::text_store::TextStoreStatus::EDITABLE_SINGLE_LINE,
+        );
         assert_eq!(field.text(), text, "{path:?}: the input method composed");
         assert!(
             matches!(recording.rows.first(), Some(Row::StoreFocus(Some(_)))),
@@ -1861,7 +1972,11 @@ fn captured_store_locks_replay_to_the_document_they_left() {
             "{path:?}: the replayed store holds what the field was left with"
         );
 
-        let (_, redacted) = captured_store_session(path, Privacy::Redact, false);
+        let (_, redacted) = captured_store_session(
+            path,
+            Privacy::Redact,
+            flui_platform::text_store::TextStoreStatus::EDITABLE_SINGLE_LINE,
+        );
         let mut written = Vec::new();
         redacted
             .write(&mut written)
@@ -2136,21 +2251,34 @@ fn asked_decision(answer: flui_native::journal::codec::CloseAnswer) -> Option<Cl
     }
 }
 
-/// A lock on a protected store, on each model, is journaled as a lock that
-/// happened on a protected store and nothing derived from the field's
-/// content, with text kept or not: no text, no range, no offset, no length;
-/// its replay is refused as withheld.
+/// A lock on a store that holds a secret (a protected field, or a one-time
+/// code shown in clear), on each model, is journaled as a lock that happened
+/// on a protected store and nothing derived from the field's content, with
+/// text kept or not: no text, no range, no offset, no length; its replay is
+/// refused as withheld.
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 fn a_protected_store_journals_nothing_of_its_content() {
     use flui_native::journal::recorder::Privacy;
+    use flui_platform::text_store::{
+        Autofill, NumberFormat, TextInputOptions, TextInputPurpose, TextStoreStatus,
+    };
 
+    let plain = TextStoreStatus::EDITABLE_SINGLE_LINE;
+    let one_time_code = plain.with_text_input(
+        TextInputOptions::new(TextInputPurpose::Number(NumberFormat::WHOLE))
+            .autofill(Autofill::OneTimeCode),
+    );
     for path in [
         StorePath::Tsf,
         StorePath::WebEditContext,
         StorePath::AndroidMirror,
     ] {
-        for privacy in [Privacy::KeepText, Privacy::Redact] {
-            let (field, recording) = captured_store_session(path, privacy, true);
+        for (privacy, status) in [
+            (Privacy::KeepText, plain.with_protected(true)),
+            (Privacy::Redact, plain.with_protected(true)),
+            (Privacy::KeepText, one_time_code),
+        ] {
+            let (field, recording) = captured_store_session(path, privacy, status);
             assert!(
                 field.text().contains('漢'),
                 "{path:?}: the field took the text"

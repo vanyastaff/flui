@@ -245,8 +245,10 @@ pub(crate) struct HostSlots {
 /// Every attribute the window writes on its canvas, beside its inline style:
 /// the backing store's size in device pixels (`width`, `height`), its
 /// focusability (`tabindex`) and the keyboard an `EditContext` asks for
-/// (`inputmode`). A page canvas gets each back as the page had it.
-pub(crate) const CANVAS_ATTRIBUTES: [&str; 4] = ["width", "height", "tabindex", "inputmode"];
+/// (`inputmode`, `enterkeyhint`). A page canvas gets each back as the page
+/// had it.
+pub(crate) const CANVAS_ATTRIBUTES: [&str; 5] =
+    ["width", "height", "tabindex", "inputmode", "enterkeyhint"];
 
 /// What a canvas held before the window wrote to it (nothing, for a canvas
 /// the window made), and the one way a feature writes and restores

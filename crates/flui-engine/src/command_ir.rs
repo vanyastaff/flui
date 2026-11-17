@@ -1334,10 +1334,17 @@ pub(crate) struct BackdropOp {
     pub(crate) clip: GroupClip,
     pub(crate) scissor: ScissorRect,
     pub(crate) output_bounds: Rect<f64>,
+    /// The whole pixels the clips of the enclosing layers' composites show of the
+    /// target (`LayerCompositor::composite_clip_bounds`): the filter neither
+    /// reads nor writes past it, as the scene's cull skips what lies there.
+    pub(crate) layer_clip_bounds: Option<Rect<f64>>,
     pub(crate) effect: BackdropEffect,
     pub(crate) blend: BlendMode,
-    /// Grouped filters read one backdrop snapshot per item list.
+    /// Grouped filters read one backdrop snapshot per item list and pass.
     pub(crate) group: Option<flui_layer::BackdropGroupKey>,
+    /// The pass of a partial frame the filter was recorded in
+    /// (`WgpuPainter::begin_region_pass`); `0` in a frame of one pass.
+    pub(crate) region_pass: u32,
 }
 
 impl Drop for BackdropOp {

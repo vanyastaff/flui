@@ -155,7 +155,8 @@ The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
 skips typos, taplo or lychee with a message when they are not installed; CI
 passes `--strict`, which makes a missing one a failure. The flui-native step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
-Windows, and is skipped with a message on macOS. Its `x11_window` harness, the
+Windows, on the run's own desktop ([The Windows test desktop](#the-windows-test-desktop)),
+and is skipped with a message on macOS. Its `x11_window` harness, the
 native X11 host's window conformance, starts an Xvfb and an openbox of its own
 and needs `openbox` too (`apt install openbox`). On Linux the native Wayland
 host's tests (`wayland_window::`) run in a step of their own against the
@@ -167,9 +168,9 @@ Xvfb and a Weston on its X11 backend of its own and drives them through XTest;
 it skips itself without `Xvfb` or `weston`, and fails then under
 `FLUI_REQUIRE_WAYLAND`. Which compositor runs which Wayland case is in
 [its own section](#which-compositor-runs-which-wayland-case). On Windows the Win32 window
-tests and the contract's share the desktop's foreground, and on macOS the
-AppKit window cases share it and its Spaces: each set runs one at a time
-(test group `desktop-foreground`).
+tests and the contract's share the run's desktop and which window is active on it, and on
+macOS the AppKit window cases share the desktop's foreground and its Spaces: each set runs one
+at a time (test group `desktop-foreground`).
 
 `flui_foundation::inspect::Untyped::new`, the untyped escape hatch that describes a field by its
 `Debug` text, is deprecated: each site outside a derive carries
@@ -209,18 +210,18 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 | Cases | In CI | Why there |
 |-------|-------|-----------|
 | `wayland_window::` outside `optional` | headless Weston 13, in `cargo xtask test` | The conformance kit and `a_window_maximized_before_fullscreen_returns_to_normal` maximize a window. Sway tiles and, at 1.9, offers `xdg_wm_base` 2 with no `wm_capabilities`, so it carries out no maximize and the window cannot know. |
-| `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, a seat. Weston 13 lacks all five. |
+| `wayland_window::optional::` | headless Weston 13, where each says what it skipped, then a headless sway, in `cargo xtask wayland-optional` | Their subjects are what a compositor may not offer: `xdg-decoration`, `wp_fractional_scale_v1`, `xdg-foreign`, `xdg-activation`, `zwlr_foreign_toplevel_manager_v1` (a window's app id read back), a seat. Weston 13 lacks all six. |
 | `a_window_moved_to_another_output_names_its_display` | none: a case of `optional`, it says under both runs that it skipped | It needs two outputs and a compositor that returns a window to the output it left: Weston on its X11 backend with `--output-count=2`. Sway leaves a window on the output it went fullscreen on. |
 
 A case of `optional` that meets a compositor without its subject says in its
 output what it skipped and what it checked instead, and both Wayland runs
 show each case's output at their end. `FLUI_REQUIRE_COMPOSITOR`, a variable
 of the test suite and not of a crate's consumer, is a comma-separated list of
-the subjects the compositor must offer (`fractional-scale`, `seat`,
+the subjects the compositor must offer (`foreign-toplevel`, `fractional-scale`, `seat`,
 `two-outputs`, `xdg-activation`, `xdg-decoration`, `xdg-foreign`, the names
 `Optional::ALL` in `tests/wayland_window.rs` holds): a case that finds a
 listed one missing fails, and a name of no subject fails every case of the
-module. `cargo xtask wayland-optional` lists the five a sway offers, and a
+module. `cargo xtask wayland-optional` lists the six a sway offers, and a
 Weston run with two outputs lists `two-outputs`. What no CI compositor runs
 is in [gaps](gaps.md#native-linux-host-wayland-and-x11).
 
@@ -234,6 +235,58 @@ its socket for the task. An output scaled past the largest scale a buffer is
 drawn at (`output * scale 20`) runs
 `a_window_draws_at_the_compositors_fractional_scale` on a hostile scale: the
 window draws at the largest.
+
+### The Windows test desktop
+
+On Windows, nextest starts every test on a desktop of its own (ADR-0355): `.config/nextest.toml`
+runs each test process through `test-desktop` (`tools/xtask/src/bin/test-desktop.rs`), which a
+setup script builds first, always into the workspace root's `target/`. The desktop is
+`flui-test-<run id>` in the user's window station, one per nextest run, shared by that run's tests
+and gone once nothing holds it: every test of the run has exited, crashed or not, and so has every
+process a test started. A process a test leaves behind keeps the desktop and runs on it unseen;
+Task Manager's Details tab lists it under the test binary's name, and ending it frees the desktop.
+A window there is never shown and no mouse or keyboard reaches it, while activation, focus,
+messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE drag and drop and the text
+services work as on the user's desktop. No window there is in the foreground: the system moves
+the activation among a process's shown windows when one of them enters a modal loop, so a case
+that counts what ran during an idle modal loop runs in a process with no other shown window
+(`windows_window_commands::native_idle_modal_loops`). This holds for `cargo heli nextest run`,
+`cargo nextest run` and every `cargo xtask` task that runs nextest (`test`, `platform-test`,
+`gpu-test`); plain `cargo test` starts its tests on the caller's desktop.
+`windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest
+starts is not there.
+
+`FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop instead, to watch them.
+
+The foreground, the cursor and injected input (`SendInput`, a synthetic pointer device) belong to
+the desktop that takes the user's input. A case that needs them checks
+(`input_desktop_for` in `crates/flui-native/tests/main.rs`), and elsewhere prints `CANNOT_VERIFY`
+and returns, which nextest reports as a pass; `FLUI_REQUIRE_INPUT_DESKTOP=1` makes it fail instead:
+
+| Case | Needs |
+|------|-------|
+| `windows_foreground::an_activation_takes_the_foreground_only_when_it_is_handed_over` | the foreground lock between two processes, the shell's flash notice, `SendInput` |
+| the contract rows in `NEED_THE_INPUT_DESKTOP` (`crates/flui-native/tests/contract.rs`) | a window brought to the foreground, then injected touch, pen, mouse or wheel input and the cursor |
+
+They run with `FLUI_TEST_VISIBLE_DESKTOP=1`, and every night on the Windows runner, which has no
+user, under `FLUI_REQUIRE_INPUT_DESKTOP=1` (`nightly-platforms.yml`). A test that reads the cursor only to have a position is handed one
+instead, as the touchpad tests are (`TestCursor`).
+
+The clipboard belongs to the window station, which the test desktop shares with the user: the
+clipboard tests (test group `system-clipboard`) write the user's clipboard, and a copy made while
+one runs can fail it. A window station of the run's own is not possible without administrator
+rights (ADR-0355 §3).
+
+Probes, which drive the real desktop on purpose, stay on the user's desktop and are run by hand:
+
+| Probe | What it does |
+|-------|--------------|
+| `text::windows::tsf::probe::text_services_probe` (flui-native, `#[ignore]`) | types into a real window through `SendInput` and a Japanese input method |
+| `tools/desktop-mcp`, the server | moves the pointer and types (enigo, `SendInput`), captures the screen (xcap) and reads UI Automation, on any application |
+| `tools/desktop-mcp/tests/native_windows.rs` and the `#[ignore]` tests of its `desktop` and `input::device` modules | drive the real pointer and keyboard against fixture windows |
+
+What a form of them that runs unattended would be is in
+[gaps](gaps.md#desktop-probes-drive-the-desktop-the-user-works-on).
 
 ### What `cargo xtask test` runs
 

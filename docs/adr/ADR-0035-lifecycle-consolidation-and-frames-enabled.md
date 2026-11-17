@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-07-17)
 - **Date:** 2026-07-18
-- **Related:** ADR-0027 (UI runtime ownership), ADR-0058 (pacing; the backgrounded pump)
+- **Related:** ADR-0027 (UI runtime ownership), ADR-0353 (pacing; the backgrounded pump)
 - **Superseded-by:**
   [ADR-0258](ADR-0258-owner-turn-panic-boundary-and-terminal-exit.md) §1–§2, for §5's sentence
   "the first panic resumes after restoration and notification" only: a quit observer's panic is
@@ -53,7 +53,7 @@ The per-wake gate is `wake_action(frames_enabled, dirty, frame_scheduled) -> Ren
 tickers, no pipeline, no present. The clear comes **first**, mirroring `handle_begin_frame`:
 without it a later independent `Waker::wake()` finds the latch already set and never wakes the
 loop; clearing *after* instead would erase a task's synchronous self-wake during the pump. How
-the backgrounded pump is paced is ADR-0058's decision.
+the backgrounded pump is paced is ADR-0353's decision.
 
 [ADR-0199](ADR-0199-presentation-sampling-recovery.md) adds due input-deadline
 service after the admitted background transaction. It preserves this demand
