@@ -135,6 +135,14 @@ pub(crate) trait FrameSteps {
         permits: Vec<Arc<crate::device_domain::PreparedPermit>>,
     ) -> EngineResult<()>;
 
+    /// How many kept recordings left the painter's cache since it was last
+    /// asked and the bytes it holds, read once the frame is submitted.
+    fn recording_cache_counts(&mut self) -> (u64, u64);
+
+    /// Drops the recordings the painter keeps for later frames, as a raster
+    /// panic does (ADR-0304 §10): called while the frame unwinds.
+    fn unwound(&mut self);
+
     /// Resets frame-local state on success, error and unwind.
     fn finish(&mut self);
 }
@@ -143,6 +151,10 @@ struct FrameCleanup<'a, S: FrameSteps>(&'a mut S);
 
 impl<S: FrameSteps> Drop for FrameCleanup<'_, S> {
     fn drop(&mut self) {
+        // Running while the frame unwinds, before anything catches it.
+        if std::thread::panicking() {
+            self.0.unwound();
+        }
         self.0.finish();
     }
 }
@@ -254,14 +266,13 @@ impl FrameProtocol {
     /// (`Full(DamageOff)`) also keeps the next frame that runs from replaying
     /// kept recordings.
     pub(crate) fn apply_damage(&mut self, damage: flui_layer::DamageRegion) {
-        use flui_layer::{DamageRegion, FullReason};
+        use flui_layer::DamageRegion;
+        self.damage_off |= crate::recording_cache::CacheReads::for_damage(&damage)
+            == crate::recording_cache::CacheReads::Off;
         match damage {
             DamageRegion::Region(region) => self.damage.mark_region(&region),
             DamageRegion::Unchanged => {}
-            DamageRegion::Full(reason) => {
-                self.damage_off |= reason == FullReason::DamageOff;
-                self.damage.mark_full_repaint();
-            }
+            DamageRegion::Full(_) => self.damage.mark_full_repaint(),
         }
     }
 
@@ -492,6 +503,9 @@ impl FrameProtocol {
         self.force_full_next_frame = recorded.straddled;
         self.damage_off = false;
         self.counters = recorded.counters;
+        let (evictions, bytes) = steps.0.recording_cache_counts();
+        self.counters.recording_cache_evictions = evictions;
+        self.counters.recording_cache_bytes = bytes;
         tracing::trace!(
             nodes_entered = self.counters.nodes_entered,
             cull_tests = self.counters.cull_tests,

@@ -341,9 +341,9 @@ impl WgpuPainter {
         }
         self.pipelines.select(&self.device, format);
         self.surface_format = format;
-        // No recording reads the format today; a recording made for one
-        // format is still not replayed into another.
-        self.recording_cache.advance_epoch();
+        // A kept recording names no pipeline and no format-dependent value
+        // (a chunk that draws a backdrop is a draw item and is not kept), so
+        // the recordings stay.
     }
 
     /// The painter's pipeline library, for a painter built after this one
@@ -929,10 +929,20 @@ impl WgpuPainter {
     }
 
     /// Evicts kept recordings over the cache's budget, least recently
-    /// rastered first, and answers how many left it since the last call and
-    /// the bytes it holds.
-    pub(crate) fn settle_recording_cache(&mut self) -> (u64, u64) {
-        self.recording_cache.settle()
+    /// rastered first.
+    pub(crate) fn settle_recording_cache(&mut self) {
+        self.recording_cache.settle();
+    }
+
+    /// Drops every kept recording, as a raster panic does (ADR-0304 §10).
+    pub(crate) fn drop_recordings(&mut self) {
+        self.recording_cache.advance_epoch();
+    }
+
+    /// How many kept recordings left the cache since the last call and the
+    /// bytes it holds, for the counters of a submitted frame.
+    pub(crate) fn take_recording_cache_counts(&mut self) -> (u64, u64) {
+        self.recording_cache.take_counts()
     }
 
     /// The IR recorded so far this frame, as bytes a test compares.

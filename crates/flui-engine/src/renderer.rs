@@ -2041,20 +2041,15 @@ impl Renderer {
     /// pins is the one the swapchain path runs. Submitting the painter's
     /// batches stays with the caller. `reads` says whether the walk may
     /// replay kept recordings; the cache settles under its budget once the
-    /// walk is done, and the counters carry what it evicted and holds.
+    /// walk is done.
     pub(crate) fn record_frame_content(
         painter: &mut crate::painter::WgpuPainter,
         scene: &flui_layer::Scene,
         partial: Option<&crate::damage::RegionPlan>,
         reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<crate::frame_protocol::RecordedContent> {
-        let mut recorded = Self::record_passes(painter, scene, partial, reads)?;
-        let (evictions, bytes) = painter.settle_recording_cache();
-        recorded.counters.recording_cache_evictions = recorded
-            .counters
-            .recording_cache_evictions
-            .saturating_add(evictions);
-        recorded.counters.recording_cache_bytes = bytes;
+        let recorded = Self::record_passes(painter, scene, partial, reads)?;
+        painter.settle_recording_cache();
         Ok(recorded)
     }
 

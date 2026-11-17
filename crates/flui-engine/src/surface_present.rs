@@ -534,6 +534,14 @@ impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
             .map(|_| ())
     }
 
+    fn recording_cache_counts(&mut self) -> (u64, u64) {
+        self.painter.take_recording_cache_counts()
+    }
+
+    fn unwound(&mut self) {
+        self.painter.drop_recordings();
+    }
+
     fn finish(&mut self) {
         self.painter.finish_frame();
     }

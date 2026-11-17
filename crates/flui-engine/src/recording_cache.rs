@@ -52,18 +52,33 @@ pub(crate) enum CacheReads {
     Off,
 }
 
+impl CacheReads {
+    /// The reads a frame of `damage` is drawn with: off for
+    /// `Full(DamageOff)`.
+    pub(crate) fn for_damage(damage: &flui_layer::DamageRegion) -> Self {
+        match damage {
+            flui_layer::DamageRegion::Full(reason)
+                if *reason == flui_layer::FullReason::DamageOff =>
+            {
+                Self::Off
+            }
+            _ => Self::On,
+        }
+    }
+}
+
 /// The painter's resources a recording's texels name: it advances whenever
 /// a glyph slot is freed, the image cache evicts or resets its atlas, the
-/// font source changes or the painter draws to another format, and a
-/// recording keyed by an older one never replays. Minted from an [`IdMint`],
-/// so it never repeats.
+/// font source changes or the painter reclaims its caches, and a recording
+/// keyed by an older one never replays. The target format is not among them:
+/// a kept recording names no pipeline. Minted from an [`IdMint`], so it never
+/// repeats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ResourceEpoch(NonZeroU64);
 
 /// The device transform a chunk is recorded under, as canonical bits
-/// (ADR-0098 §4): the linear part and the translation. The translation is
-/// whole here; a key that replays a chunk moved by whole pixels splits it
-/// into the fractional part it keys and the integer origin the replay adds.
+/// (ADR-0098 §4): the linear part and the whole translation, so a chunk
+/// moved by any amount records again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct RasterKey {
     linear: [u64; 4],
@@ -727,6 +742,7 @@ impl DrawSegment {
             glyph_keys,
             bytes: 0,
         };
+        shrink_to_fit(&mut recording);
         recording.bytes = recording_bytes(&recording);
         Some(recording)
     }
@@ -1004,7 +1020,7 @@ fn extend_clipped<T: ClippableInstance + Copy>(
 
 /// What a recording holds, in bytes, for the cache's budget.
 fn recording_bytes(recording: &ChunkRecording) -> usize {
-    use std::mem::size_of_val;
+    // By capacity, which `shrink_to_fit` brings to the length at capture.
     let ChunkRecording {
         rects,
         circles,
@@ -1036,31 +1052,95 @@ fn recording_bytes(recording: &ChunkRecording) -> usize {
         bytes: _,
     } = recording;
     std::mem::size_of::<ChunkRecording>()
-        + size_of_val(rects.as_slice())
-        + size_of_val(circles.as_slice())
-        + size_of_val(arcs.as_slice())
-        + size_of_val(shadows.as_slice())
-        + size_of_val(linear_gradients.as_slice())
-        + size_of_val(radial_gradients.as_slice())
-        + size_of_val(sweep_gradients.as_slice())
-        + size_of_val(glyphs.as_slice())
-        + size_of_val(stops.as_slice())
-        + size_of_val(mesh_vertices.as_slice())
-        + size_of_val(mesh_indices.as_slice())
-        + size_of_val(vertices.as_slice())
-        + size_of_val(indices.as_slice())
-        + size_of_val(tess_batches.as_slice())
-        + size_of_val(glyph_scissors.as_slice())
-        + size_of_val(rect_scissors.as_slice())
-        + size_of_val(circle_scissors.as_slice())
-        + size_of_val(arc_scissors.as_slice())
-        + size_of_val(shadow_scissors.as_slice())
-        + size_of_val(linear_gradient_runs.as_slice())
-        + size_of_val(radial_gradient_runs.as_slice())
-        + size_of_val(sweep_gradient_runs.as_slice())
-        + size_of_val(cached_images.as_slice())
-        + size_of_val(runs.as_slice())
-        + size_of_val(glyph_keys.as_slice())
+        + held(rects)
+        + held(circles)
+        + held(arcs)
+        + held(shadows)
+        + held(linear_gradients)
+        + held(radial_gradients)
+        + held(sweep_gradients)
+        + held(glyphs)
+        + held(stops)
+        + held(mesh_vertices)
+        + held(mesh_indices)
+        + held(vertices)
+        + held(indices)
+        + held(tess_batches)
+        + held(glyph_scissors)
+        + held(rect_scissors)
+        + held(circle_scissors)
+        + held(arc_scissors)
+        + held(shadow_scissors)
+        + held(linear_gradient_runs)
+        + held(radial_gradient_runs)
+        + held(sweep_gradient_runs)
+        + held(cached_images)
+        + held(runs)
+        + held(glyph_keys)
+}
+
+/// The bytes `values` holds on the heap.
+fn held<T>(values: &Vec<T>) -> usize {
+    values.capacity().saturating_mul(std::mem::size_of::<T>())
+}
+
+/// Drops the spare capacity of every arena of `recording`.
+fn shrink_to_fit(recording: &mut ChunkRecording) {
+    let ChunkRecording {
+        rects,
+        circles,
+        arcs,
+        shadows,
+        linear_gradients,
+        radial_gradients,
+        sweep_gradients,
+        glyphs,
+        stops,
+        mesh_vertices,
+        mesh_indices,
+        vertices,
+        indices,
+        tess_batches,
+        first_batch_grew: _,
+        glyph_scissors,
+        rect_scissors,
+        circle_scissors,
+        arc_scissors,
+        shadow_scissors,
+        linear_gradient_runs,
+        radial_gradient_runs,
+        sweep_gradient_runs,
+        cached_images,
+        runs,
+        clip: _,
+        glyph_keys,
+        bytes: _,
+    } = recording;
+    rects.shrink_to_fit();
+    circles.shrink_to_fit();
+    arcs.shrink_to_fit();
+    shadows.shrink_to_fit();
+    linear_gradients.shrink_to_fit();
+    radial_gradients.shrink_to_fit();
+    sweep_gradients.shrink_to_fit();
+    glyphs.shrink_to_fit();
+    stops.shrink_to_fit();
+    mesh_vertices.shrink_to_fit();
+    mesh_indices.shrink_to_fit();
+    vertices.shrink_to_fit();
+    indices.shrink_to_fit();
+    tess_batches.shrink_to_fit();
+    glyph_scissors.shrink_to_fit();
+    rect_scissors.shrink_to_fit();
+    circle_scissors.shrink_to_fit();
+    arc_scissors.shrink_to_fit();
+    shadow_scissors.shrink_to_fit();
+    linear_gradient_runs.shrink_to_fit();
+    radial_gradient_runs.shrink_to_fit();
+    sweep_gradient_runs.shrink_to_fit();
+    cached_images.shrink_to_fit();
+    runs.shrink_to_fit();
+    glyph_keys.shrink_to_fit();
 }
 
 /// One kept recording and the frame it was last rastered in.
@@ -1089,7 +1169,7 @@ pub(crate) struct RecordingCache {
     mint: IdMint<NonZeroU64>,
     /// `None` once the mint is spent: nothing is kept after that.
     epoch: Option<ResourceEpoch>,
-    /// Recordings dropped since [`Self::settle`] last reported.
+    /// Recordings dropped since [`Self::take_counts`] last reported.
     evictions: u64,
     /// Eviction's scratch, kept so a frame that evicts reuses its room.
     order: Vec<(u64, RecordingKey)>,
@@ -1192,16 +1272,20 @@ impl RecordingCache {
     }
 
     /// Evicts the least recently rastered recordings until the cache is
-    /// within its budget, and answers how many recordings left it since the
-    /// last call and the bytes it holds now.
-    pub(crate) fn settle(&mut self) -> (u64, u64) {
+    /// within its budget.
+    pub(crate) fn settle(&mut self) {
         self.evict_over_budget();
-        let evictions = std::mem::take(&mut self.evictions);
-        (evictions, self.bytes as u64)
     }
 
-    /// Evicts over the budget and starts the next frame; what left the cache
-    /// since the last [`Self::settle`] is reported by the next one.
+    /// How many recordings left the cache since this was last asked, which
+    /// starts the count again, and the bytes it holds now. Asked once a frame
+    /// is submitted, so a frame that fails leaves its evictions to the next.
+    pub(crate) fn take_counts(&mut self) -> (u64, u64) {
+        let evictions = std::mem::take(&mut self.evictions);
+        (evictions, u64::try_from(self.bytes).unwrap_or(u64::MAX))
+    }
+
+    /// Evicts over the budget and starts the next frame.
     pub(crate) fn end_frame(&mut self) {
         self.evict_over_budget();
         self.frame = self.frame.saturating_add(1);

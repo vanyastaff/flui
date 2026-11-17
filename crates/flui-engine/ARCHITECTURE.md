@@ -183,22 +183,26 @@ Neither quota is a whole-process memory or physical VRAM limit.
 
 `RecordingCache` (`recording_cache.rs`, ADR-0304 §9) keeps the recording of a
 chunk that stayed one fragment of the open segment: no external texture, no
-draw item, layer or clip of its own, recorded Ok under a finite affine
-transform whose translation is below 2^23. `RecordingKey` holds the chunk's
-`ContentVersion`, the transform's bits (`RasterKey`), the scissor relative to
-the whole-pixel translation or `Covers`, the inherited opacity (`AmbientKey`)
-and the painter's `ResourceEpoch`. A recording holds no clip chain, scissor or
-absolute offset: the splice gives it the entry's clip and scissor, rebases
-every arena offset onto the segment as it stands, runs the merge rules on its
-first element only, and charges the frame's `RecordingBudget`. Whatever moves
-texels a recording names (a glyph slot evicted or dropped, a glyph-atlas reset,
-a font-source switch, an image evicted, the image atlas reset, a reclaim, a
-retarget) advances the epoch, which drops every entry; a hit marks its glyphs
+draw item, layer or clip of its own, every glyph it asked for placed, recorded
+Ok under a finite affine transform whose translation is below 2^23.
+`RecordingKey` holds the chunk's `ContentVersion`, the transform's bits
+(`RasterKey`, the whole translation, so a moved chunk records again), what the
+IR bakes from outside the chunk (`AmbientKey`: the scissor relative to the
+whole-pixel translation or `Covers`, the inherited opacity, and the target's
+size, which a fill of the whole target records) and the painter's
+`ResourceEpoch`. A recording holds no clip chain, scissor or absolute offset:
+the splice gives it the entry's clip and scissor, rebases every arena offset
+onto the segment as it stands, runs the merge rules on its first element only,
+and charges the frame's `RecordingBudget`. Whatever moves texels a recording
+names (a glyph slot evicted or dropped, a glyph-atlas reset, a font-source
+switch, an image evicted, the image atlas reset, a reclaim) advances the epoch,
+which drops every entry, as a raster panic does (ADR-0304 §10). The target
+format is not among them: no recording names a pipeline. A hit marks its glyphs
 used for the frame (`GlyphAtlas::retain`), and a glyph gone since is a miss.
-A recording is kept only after it ended Ok, the entries over 64 MiB are evicted
-least recently rastered first at frame end, and a `Full(DamageOff)` frame does
-not read the cache. The key holds the whole translation, so a moved chunk
-records again.
+Entries over 64 MiB, or past two per chunk, are evicted least recently
+rastered first; a `Full(DamageOff)` frame, a window's or an offscreen slot's,
+does not read the cache; evictions are counted until a submitted frame reports
+them, and bytes by the capacity a recording holds.
 
 The Scene IR remains GPU-free and names logical `TextureId`s. At engine lowering,
 an external draw captures an immutable allocation lease: view, validated

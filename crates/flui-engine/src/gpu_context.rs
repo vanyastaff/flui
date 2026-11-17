@@ -316,6 +316,9 @@ pub struct GpuContext {
     /// When set, the next torn painter's drop panics.
     #[cfg(test)]
     panic_in_next_cleanup: bool,
+    /// What the last offscreen frame's walk and recording did.
+    #[cfg(test)]
+    slot_counters: crate::frame_protocol::RasterCounters,
     /// How many of the next device rebuilds fail.
     #[cfg(test)]
     rebuilds_failing: u32,
@@ -556,6 +559,8 @@ impl GpuContext {
             panics_ahead: 0,
             #[cfg(test)]
             panic_in_next_cleanup: false,
+            #[cfg(test)]
+            slot_counters: crate::frame_protocol::RasterCounters::default(),
             #[cfg(test)]
             panic_in_next_setup: false,
             #[cfg(test)]
@@ -877,7 +882,8 @@ impl GpuContext {
         }
     }
 
-    /// Clear offscreen `slot` to the frame background and draw `tree` over it.
+    /// Clear offscreen `slot` to the frame background and draw `tree` over it,
+    /// replaying kept recordings as `reads` allows.
     ///
     /// # Errors
     /// [`EngineError::InvalidRenderTarget`] for a slot that is not an
@@ -891,6 +897,7 @@ impl GpuContext {
         &mut self,
         slot: SlotId,
         scene: flui_layer::SceneContent<'_>,
+        reads: crate::recording_cache::CacheReads,
     ) -> EngineResult<()> {
         let (texture, format, size) = {
             let entry = self.offscreen_slot(slot)?;
@@ -910,15 +917,11 @@ impl GpuContext {
             let drawn = (|| {
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 crate::headless::clear_to_background(domain, &view)?;
-                {
+                let counters = {
                     let mut backend = LayerDispatcher::new(&mut painter);
-                    crate::layer_walk::record_scene(
-                        scene,
-                        None,
-                        crate::recording_cache::CacheReads::On,
-                        &mut backend,
-                    )?;
-                }
+                    crate::layer_walk::record_scene(scene, None, reads, &mut backend)?
+                };
+                painter.settle_recording_cache();
                 #[cfg(test)]
                 assert!(!panics, "injected panic in the middle of a slot's frame");
                 let mut encoder =
@@ -928,7 +931,7 @@ impl GpuContext {
                             label: Some("FLUI Slot Render Encoder"),
                         });
                 painter.render_to_texture(&texture, &mut encoder)?;
-                painter.submit_encoder(encoder).map(|_submitted| ())
+                painter.submit_encoder(encoder).map(|_submitted| counters)
             })();
             // Once a frame began, an error closes it as a completed frame
             // does, with its encoder discarded, as the window path's frame
@@ -951,7 +954,21 @@ impl GpuContext {
         if wrote && drawn.is_err() {
             self.flush_texture_writes();
         }
-        drawn
+        // A slot's frame reports no counters; a test reads them here.
+        let counters = drawn?;
+        #[cfg(test)]
+        {
+            self.slot_counters = counters;
+        }
+        #[cfg(not(test))]
+        let _ = counters;
+        Ok(())
+    }
+
+    /// What the last offscreen frame's walk and recording did.
+    #[cfg(test)]
+    pub(crate) fn slot_counters(&self) -> crate::frame_protocol::RasterCounters {
+        self.slot_counters
     }
 
     /// Render `scene` into window `slot` and present it, repainting at least
@@ -1362,7 +1379,11 @@ impl RasterBackend for GpuContext {
         match self.slots.get(slot) {
             Some(SurfaceSlot::Window(_)) => self.render_window(slot, frame, scene, damage),
             Some(SurfaceSlot::Offscreen(_)) | None => {
-                self.render_slot(slot, scene.content())?;
+                self.render_slot(
+                    slot,
+                    scene.content(),
+                    crate::recording_cache::CacheReads::for_damage(&damage),
+                )?;
                 Ok(PresentDisposition::Presented)
             }
         }
@@ -1535,6 +1556,127 @@ mod tests {
             FrameEpoch::ZERO.next(),
             SurfaceGeneration::ZERO.next(),
         )
+    }
+
+    /// A 32×32 version of one chunk, a red square.
+    #[cfg(feature = "testing")]
+    fn one_chunk_scene() -> Scene {
+        use std::sync::Arc;
+
+        use flui_foundation::RenderId;
+        use flui_layer::{BoundaryContent, Chunk, SceneOp, SceneOwner};
+
+        let mut owner = SceneOwner::new();
+        {
+            let mut writer = owner.writer();
+            let mut canvas = Canvas::new();
+            canvas.draw_rect(
+                Rect::from_xywh(4.0, 4.0, 8.0, 8.0),
+                &Paint::fill(Color::RED),
+            );
+            let mut content = BoundaryContent::builder();
+            content.chunk(Arc::new(Chunk::new(
+                RenderId::new(2),
+                0,
+                writer.next_content_version().expect("a content version"),
+                canvas.finish(),
+            )));
+            writer.push(SceneOp::Publish {
+                node: writer.current().root(),
+                content: Arc::new(content.finish()),
+            });
+        }
+        owner
+            .apply(flui_layer::SurfaceKey {
+                size: (32, 32),
+                generation: SurfaceGeneration::ZERO,
+            })
+            .expect("the scene applies");
+        Scene::of_version(owner.current().clone())
+    }
+
+    /// An offscreen slot reads the recording cache as a window does: a
+    /// frame of damage `Full(DamageOff)` records every chunk, and the next
+    /// one replays them again.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn an_offscreen_frame_with_damage_off_records_every_chunk() {
+        use flui_layer::FullReason;
+
+        use crate::raster_executor::{RasterBackend, SlotMint};
+
+        let Some(mut context) = context_or_skip() else {
+            return;
+        };
+        let slot = SlotMint::default().mint().expect("a slot id");
+        context
+            .attach_offscreen(slot, (32, 32), wgpu::TextureFormat::Rgba8Unorm)
+            .expect("the slot attaches");
+        let scene = one_chunk_scene();
+        let mut draw = |reason: FullReason| {
+            context
+                .render(slot, drawn_frame(), &scene, DamageRegion::Full(reason))
+                .expect("the slot draws");
+            let counters = context.slot_counters();
+            (counters.chunks_recorded, counters.recording_cache_hits)
+        };
+        assert_eq!(
+            draw(FullReason::FirstFrame),
+            (1, 0),
+            "the first frame records"
+        );
+        assert_eq!(draw(FullReason::FirstFrame), (0, 1), "the next replays");
+        assert_eq!(draw(FullReason::DamageOff), (1, 0), "damage off records");
+        assert_eq!(draw(FullReason::FirstFrame), (0, 1), "and the next replays");
+    }
+
+    /// No kept recording reads the target format, so a slot of another
+    /// format replays what one of the first format recorded, and draws what
+    /// a fresh context draws.
+    #[cfg(feature = "testing")]
+    #[test]
+    fn a_slot_of_another_format_replays_the_recordings_of_the_first() {
+        use crate::raster_executor::{RasterBackend, SlotMint};
+
+        let Some(mut context) = context_or_skip() else {
+            return;
+        };
+        let Some(mut fresh) = context_or_skip() else {
+            return;
+        };
+        let scene = one_chunk_scene();
+        let mut mint = SlotMint::default();
+        let rgba = mint.mint().expect("a slot id");
+        let bgra = mint.mint().expect("a slot id");
+        let full = || DamageRegion::Full(flui_layer::FullReason::FirstFrame);
+        let attach = |context: &mut GpuContext, slot, format| {
+            context
+                .attach_offscreen(slot, (32, 32), format)
+                .expect("the slot attaches");
+        };
+        attach(&mut context, rgba, wgpu::TextureFormat::Rgba8Unorm);
+        attach(&mut context, bgra, wgpu::TextureFormat::Bgra8Unorm);
+        attach(&mut fresh, bgra, wgpu::TextureFormat::Bgra8Unorm);
+        context
+            .render(rgba, drawn_frame(), &scene, full())
+            .expect("the first slot draws");
+        context
+            .render(bgra, drawn_frame(), &scene, full())
+            .expect("the second slot draws");
+        let counters = context.slot_counters();
+        assert_eq!(
+            (counters.chunks_recorded, counters.recording_cache_hits),
+            (0, 1),
+            "the second format replays the first one's recording"
+        );
+        fresh
+            .render(bgra, drawn_frame(), &scene, full())
+            .expect("the fresh slot draws");
+        assert_eq!(
+            context.read_slot(bgra).expect("readback"),
+            fresh.read_slot(bgra).expect("readback"),
+            "the replay draws what a fresh context draws"
+        );
     }
 
     /// A frame of `tree` for the slot at `address`, stamped with `generation`.
