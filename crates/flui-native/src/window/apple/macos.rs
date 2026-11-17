@@ -1782,8 +1782,9 @@ impl Drop for MacOSWindow {
 
         // The window's surface targets and the features beside it outlive
         // it; from here on they hand out nothing of a view the release below
-        // may free. A window that closed set this already, and let go of its
-        // handler there.
+        // may free. A window that closed set this already, and its close
+        // (`handle_close`) let go of its handler there, whatever step of it
+        // panicked.
         if !self.closed.swap(true, Ordering::SeqCst) {
             // A handler method queued ahead of the release may panic: the
             // drop still finishes.

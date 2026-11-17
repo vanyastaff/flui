@@ -1453,7 +1453,10 @@ mod toplevel {
         fn drop(&mut self) {
             // The handler may own the renderer whose swapchain draws to the
             // surface: it lets go first, while the role objects still exist.
-            self.delivery.clear();
+            // A delivery queued ahead of the release may panic: the drop
+            // still destroys what the window made (a panic out of a drop
+            // while unwinding aborts).
+            crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.clear());
             if let Some(client_frame) = self.client_frame.get_mut().take() {
                 client_frame.destroy();
             }

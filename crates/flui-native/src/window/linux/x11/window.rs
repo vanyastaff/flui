@@ -1577,9 +1577,11 @@ struct ServerRead {
 impl Drop for X11Window {
     fn drop(&mut self) {
         // The handler may own the window's renderer, whose surface names the
-        // window: it goes first, then the X window.
+        // window: it goes first, then the X window. A delivery queued ahead
+        // of the release may panic: the drop still finishes (a panic out of
+        // a drop while unwinding aborts).
         self.closed.set(true);
-        self.retire();
+        crate::owner::panic_boundary::contain_owner_callback(|| self.retire());
     }
 }
 
