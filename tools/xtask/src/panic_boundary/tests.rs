@@ -361,7 +361,7 @@ extern "system" fn native(mut env: EnvUnowned<'_>, _class: JClass<'_>) -> i64 {
 }
 "#;
 
-fn the_jni_adapter_is_the_boundarys_call() {
+fn the_jni_adapter_calls_the_boundary() {
     let guarded = r"
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
 pub(crate) fn jni_native<T>(method: &'static str, nothing: fn(()) -> T, body: impl FnOnce() -> T) -> T {
@@ -474,8 +474,8 @@ fn panic_boundary_contract() {
                 the_ivars_type_destroys_its_value_inside_the_boundary,
             ),
             (
-                "the_jni_adapter_is_the_boundarys_call",
-                the_jni_adapter_is_the_boundarys_call,
+                "the_jni_adapter_calls_the_boundary",
+                the_jni_adapter_calls_the_boundary,
             ),
         ],
     );

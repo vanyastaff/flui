@@ -8318,7 +8318,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   выходит наружу); самотест гейта: прямой `os_entry` и чужой адаптер у нативного метода, второй
   `jni_native` и его импорт, голый и макросный `add_fd_with_callback` (без правила JNI —
   `Direct`/`Adapted` `MISSED`; без списка лупера — оба `MISSED`), строка
-  `the_jni_adapter_is_the_boundarys_call` в `panic_boundary_contract`, счёт фикстуры 16/8 →
+  `the_jni_adapter_calls_the_boundary` в `panic_boundary_contract`, счёт фикстуры 16/8 →
   20/10. Код Android проверен типами в WSL (`cargo +nightly check --target
   aarch64-linux-android`), clippy под Android — только CI. Прогон на устройстве с намеренной
   паникой в нативном методе и в отправленном замыкании не сделан: у закреплённого 1.100.0 на
