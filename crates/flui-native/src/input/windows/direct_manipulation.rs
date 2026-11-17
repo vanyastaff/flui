@@ -1034,11 +1034,12 @@ pub mod manipulation {
             match self.state {
                 State::Idle => return,
                 State::Undecided => {
-                    out.push(Manipulation::Hold(if fingers == GesturePhase::Ended {
+                    let hold = if fingers == GesturePhase::Ended {
                         TouchpadHoldPhase::End
                     } else {
                         TouchpadHoldPhase::Cancelled
-                    }))
+                    };
+                    out.push(Manipulation::Hold(hold));
                 }
                 State::Settling => {}
                 State::Panning => out.push(scroll(Some(fingers), None, 0.0, 0.0)),

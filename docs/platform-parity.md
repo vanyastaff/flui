@@ -15,14 +15,15 @@ it). The native Wayland host (`WaylandPlatform`, the
 windows with their state and commands, displays, preferences, lifecycle and AT-SPI; the Wayland
 host ran the window conformance against a headless Weston, the X11 host under openbox on Xvfb.
 The Wayland host also has its seats' input (keyboard through XKB with its layout and repeat,
-pointer and wheel, touch, `tablet-v2` pens, `pointer-gestures` pinches, `cursor-shape` cursors):
-the cursor, a click, a wheel notch and a key ran from a real Weston seat (Weston 13 on its X11
-backend under Xvfb, driven through XTest, 2026-10-28), recorded and replayed; touch, pens and
-pinches are held by their translation tests only, with no device behind them; Weston 13 offers no
-`cursor-shape`, so the cursor ran from the cursor theme only. The X11 host has its input too:
-XInput 2's pointers, touches, pens, touchpad pinches and unphased smooth scrolling, XKB's keys,
+pointer and wheel, touch, `tablet-v2` pens, `pointer-gestures` pinches, swipes and holds,
+`cursor-shape` cursors): the cursor, a click, a wheel notch and a key ran from a real Weston seat
+(Weston 13 on its X11 backend under Xvfb, driven through XTest, 2026-10-28), recorded and
+replayed; touch, pens, pinches, swipes and holds are held by their translation tests only, with
+no device behind them; Weston 13 offers no `cursor-shape`, so the cursor ran from the cursor theme
+only. The X11 host has its input too: XInput 2's pointers, touches, pens, touchpad pinches and
+swipes and unphased smooth scrolling, XKB's keys,
 compose and layout, and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it
-on Xvfb under openbox and held against a native recording, while touch, pen, pinch and smooth
+on Xvfb under openbox and held against a native recording, while touch, pen, pinch, swipe and smooth
 scrolling are checked by their decoder only (no such device on Xvfb). The Wayland host reads and
 writes its seats' selection through `wl_data_device`: two clients of one Weston 13 (X11 backend
 under Xvfb, 2026-10-30) read each other's text through the compositor, and its primary selection
@@ -64,7 +65,7 @@ the ❌ cells of the new column.
 
 ᴺ after ✅: the row passed on that environment's hosted runner and runs there every night ([`nightly-platforms.yml`](../.github/workflows/nightly-platforms.yml)); its run evidence names the test.
 
-**Overall: ~38% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
+**Overall: ~37% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments).**
 
 This document is rendered from
 [`crates/flui-native/platform-parity.toml`](../crates/flui-native/platform-parity.toml), and a hand
@@ -89,14 +90,14 @@ columns and is listed after them.
 
 | Environment | Host | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready | Nightly runner | Nightly ✅ |
 |:--|:--|--:|--:|--:|--:|--:|--:|:-:|:--|--:|
-| Windows | Win32 (native) | 12 | 54 | 31 | 20 | 10 | 40% | no | windows-latest | 3 |
-| macOS | AppKit (native) | 9 | 44 | 43 | 21 | 10 | 32% | no | macos-latest | 2 |
-| Wayland | Wayland (native) | 11 | 54 | 28 | 29 | 5 | 41% | no | — | 0 |
-| X11 | X11 (native) | 12 | 50 | 30 | 30 | 5 | 40% | no | — | 0 |
-| iOS | UIKit (native) | 6 | 39 | 40 | 34 | 8 | 30% | no | macos-latest, iOS Simulator | 0 |
-| Android | android-activity (native) | 18 | 42 | 32 | 29 | 6 | 42% | no | ubuntu-24.04, Android emulator | 2 |
-| Web | wasm canvas (native) | 7 | 43 | 28 | 42 | 7 | 37% | no | — | 0 |
-| Headless | test double | 53 | 3 | 48 | 21 | 2 | 52% | — | — | 0 |
+| Windows | Win32 (native) | 12 | 55 | 32 | 20 | 10 | 40% | no | windows-latest | 3 |
+| macOS | AppKit (native) | 9 | 45 | 44 | 21 | 10 | 32% | no | macos-latest | 2 |
+| Wayland | Wayland (native) | 11 | 56 | 28 | 29 | 5 | 41% | no | — | 0 |
+| X11 | X11 (native) | 12 | 51 | 30 | 31 | 5 | 40% | no | — | 0 |
+| iOS | UIKit (native) | 6 | 39 | 41 | 35 | 8 | 30% | no | macos-latest, iOS Simulator | 0 |
+| Android | android-activity (native) | 18 | 42 | 34 | 29 | 6 | 41% | no | ubuntu-24.04, Android emulator | 2 |
+| Web | wasm canvas (native) | 7 | 43 | 28 | 44 | 7 | 37% | no | — | 0 |
+| Headless | test double | 55 | 3 | 48 | 21 | 2 | 53% | — | — | 0 |
 
 Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partly; 3 not met (power and thermal behaviour, assistive technology conformance, the first frame matching the OS splash); 2 not audited (timestamps across a counter wrap or a clock-base change, platform-edge diagnostics free of secrets).
 
@@ -225,6 +226,8 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 | Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Windows' precision-touchpad pan is implemented but no touchpad has run; Android's two-finger scroll ran only from a `uinput` touchpad. the iPad trackpad's scroll is type-checked only, never run on an iPad; the Web has no phases. |
 | Touchpad pan as a drag or a scroll | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ✅ | Runs on every host that sends phased precise scroll (see the row above); headless runs it with synthetic packets, no touchpad has. the iPad trackpad is type-checked only; the Web has no phases. |
 | Trackpad pinch and rotate | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only. |
+| Touchpad hold stops a fling | 🟡 | 🟡 | 🟡 | — | ❌ | ❌ | — | ✅ | Windows, macOS and Wayland deliver resting fingers as `TouchpadHold`, held by their decoders only; no touchpad has run. X11 has no hold in XInput 2.4 and the Web has no such event; UIKit and Android report none. |
+| Touchpad swipe is a gesture | ❌ | ❌ | 🟡 | 🟡 | — | ❌ | — | ✅ | Wayland and X11 deliver a swipe of three fingers or more as `TouchpadSwipe`, held by their decoders only. Windows keeps such swipes for the shell, AppKit reports only a finished direction, and Android's system navigation takes them. |
 | Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract |
 | Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard; Android ran hardware key events through a manual Android run, with no repeat, dead key or physical keyboard. Wayland repeats at 25 a second after 600 ms on a seat older than `repeat_info` (version 4), checked by its keyboard model alone: no compositor the tests start offers so old a seat. |
 | Keyboard layout and its changes | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US`; Wayland and X11 read the layout through XKB and report its changes, not run with a layout switched |
@@ -245,6 +248,8 @@ Quality bar: 2 of 16 met (no process-global state, one monotonic clock); 9 partl
 - **Precise scrolling with phases and momentum** — Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; no injector reaches the touchpad, and the native capture journals its viewport calls, so a `native-capture` run on one records the golden that certifies it). Wheel notches stay unphased; the iPad trackpad scrolls with phases through UIKit's continuous-scroll recognizer and a wheel's notches stay unphased, type-checked only; Web has no phases. AppKit's two-finger pan arrives as phased `Scroll`. Android (API 34+) turns a touchpad's two-finger scroll gesture into phased `Scroll` from its cursor; a manual Android run ran it on a Galaxy S21 from a `uinput` touchpad, not a hardware one; Android sends no touchpad momentum
 - **Touchpad pan as a drag or a scroll** — a precise, phased scroll that begins over a `GestureDetector` with a pan or drag slot opens a `Trackpad` contact in the gesture arena, and a `Scrollable` with somewhere to go on its axis contests it through the ownership table of ADR-0208; the winner gets the pan and a recognizer win drops the platform's momentum. Run in headless with synthetic phased packets (the `touchpad_pan` rows and `flui-interaction`'s `scroll_contact`); no precision touchpad has driven it on any host.
 - **Trackpad pinch and rotate** — Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); Android (API 34+) decodes a touchpad's pinch gesture as `PanZoom` scale about its cursor, ran by a manual Android run on a Galaxy S21 from a `uinput` touchpad, not a hardware one (Android has no touchpad rotation); the Web decodes the Control-held wheel events Chromium and Firefox send for a pinch (`Emulated`, classified by a sequence's first event, End at a deadline on the event timeline, refused in favour of the browser's zoom) and WebKit's `gesture*` events (scale and rotation): run in headless Chrome with constructed events through a manual Web run, never with a trackpad or in Safari; Wayland (`pointer-gestures`) and X11 (XInput 2.4) decode a pinch, held by their decoders only. `PanZoom` carries only scale and rotation about a focal point
+- **Touchpad hold stops a fling** — Fingers resting on a touchpad are `PointerEvent::TouchpadHold` (`Begin`, then `End` when they lift without moving or `Cancelled` when they start a gesture), and a `Scrollable` stops its fling at `Begin` (`resting_fingers_catch_a_fling_and_leave_wheel_easing`). Windows: a DirectManipulation viewport that runs before its manipulation passes a slop (`a_manipulation_inside_the_slop_is_a_hold`, and the replayed `win32_direct_manipulation` recording); macOS: a scroll in `NSEventPhaseMayBegin`, its cancel or its scroll's `Began` (`resting_fingers_begin_a_hold_that_a_lift_ends_and_a_scroll_cancels`); Wayland: `zwp_pointer_gesture_hold_v1`, bound at version 3 of the gestures global, held at the seat assembly (`a_hold_rests_until_it_lifts_or_a_gesture_starts`) and never through the protocol: no compositor the tests start sends holds, so a run under one that does (mutter, KWin, or the scripted compositor of the Wayland present work) is owed. `InputCapabilities::touchpad_hold` says where a hold reaches a window. Owed device runs: a precision touchpad on Windows, a MacBook trackpad, a libinput touchpad under GNOME or KDE.
+- **Touchpad swipe is a gesture** — A swipe is `PointerEvent::TouchpadSwipe` with its finger count and its travel since the start; the binding delivers it along the path its start took and keys its arena contest by the swipe's pointer, so `SwipeGestureRecognizer` takes it and no scrollable scrolls (`a_touchpad_swipe_is_a_gesture_and_no_scroll`). Wayland: `zwp_pointer_gesture_swipe_v1` (`a_swipe_is_one_gesture_where_the_cursor_rests`, at the seat assembly; no compositor the tests start sends swipes, so a protocol run is owed, as for the hold); X11: XInput 2.4's `XI_GestureSwipe*` (`a_touchpad_swipe_is_one_gesture_of_its_fingers`, at the decoder; Xvfb has no touchpad). A compositor keeps the swipes its own gestures bind (GNOME and KDE take three and four fingers). Windows: three- and four-finger swipes on a precision touchpad drive the shell's task view and desktops and reach no window; reading them would mean the touchpad's raw HID reports. macOS: `swipeWithEvent:` reports only a finished direction under the system's swipe-between-pages setting, with no travel. Android: the system's navigation takes multi-finger swipes, and `AXIS_GESTURE_X_OFFSET` is a fraction of the touchpad, not a distance. `InputCapabilities::touchpad_swipe` says where a swipe reaches a window.
 - **Keyboard: keys, modifiers, repeat, dead keys** — iOS handles no hardware keyboard. Windows run: Tab and Enter. Android run: a manual Android run sends hardware key events (`input keyevent`, `keycombination`): Tab and Shift+Tab, Enter, Space, Escape, F5, the arrows, Home, + and -, Ctrl+X and Ctrl+V (a character key looked up without Control, so the shortcut sees `x`), and the Menu key (named `ContextMenu`, which opens a row's menu); no repeat, dead key or physical keyboard
 - **Gamepad and D-pad: a controller's buttons and sticks, a remote's keys, moving focus by direction** — No gamepad vocabulary in the contract and no source on any host. Android: the `ui_events` key table turns `KEYCODE_DPAD_UP`, `DOWN`, `LEFT` and `RIGHT` into the arrow keys and `KEYCODE_DPAD_CENTER` into Enter, and `DefaultFocusTraversal` binds unmodified arrows to `DirectionalFocusIntent`, so a remote can move focus; never run on Android TV, Fire OS or with a controller. Headless drives the D-pad half through key events, not the gamepad half
 - **Browser gesture suppression** — The canvas sets `touch-action: none` inline, so a page's stylesheet cannot hand touch panning and zooming back to the browser; a manual Web run's trusted touch swipes, drags and pinches in headless Chrome kept their pointers. The page `flui build` writes sets `overscroll-behavior: none` on `html` and `body`, so a swipe past the content does not pull to refresh or bounce the page (`the_page_matches_its_golden`); the host sets it on neither the canvas nor its root, and a page that brings its own canvas sets its own; never run in Safari or on a phone

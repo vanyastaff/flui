@@ -1202,7 +1202,7 @@ pub enum DragDrop {
 }
 
 /// How a platform provides a capability.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(
@@ -1216,8 +1216,10 @@ pub enum Availability {
     /// The `emulated` availability.
     #[cfg_attr(feature = "serde", serde(rename = "emulated"))]
     Emulated,
-    /// The `unavailable` availability.
+    /// The `unavailable` availability: what a recording that does not name a
+    /// capability says of it.
     #[cfg_attr(feature = "serde", serde(rename = "unavailable"))]
+    #[default]
     Unavailable,
 }
 
@@ -1237,8 +1239,10 @@ pub struct Capabilities {
     /// Trackpad gestures.
     pub trackpad_gestures: Availability,
     /// Fingers resting on a touchpad.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub touchpad_hold: Availability,
     /// Touchpad swipes of three fingers or more.
+    #[cfg_attr(feature = "serde", serde(default))]
     pub touchpad_swipe: Availability,
     /// System gesture exclusion regions.
     pub system_gesture_exclusion: Availability,

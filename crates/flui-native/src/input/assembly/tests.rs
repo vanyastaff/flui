@@ -7,12 +7,13 @@ use crate::input::assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeFault, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, MAX_TOUCHES, MoveBatch, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime,
-    ScrollPhases, ScrollReading, decode,
+    ScrollPhases, ScrollReading, SwipeReading, decode,
 };
 use flui_platform::EventTime;
 use flui_platform::PlatformInput;
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomPhase, PointerButton, PointerEvent, PointerKind, PointerRole,
+    TouchpadHoldPhase, TouchpadSwipePhase,
 };
 
 fn at_ms(ms: u64) -> ReadingTime {
@@ -759,6 +760,138 @@ fn pan_zoom_phases(contacts: &mut ContactRegistry, action: ReadingAction) -> Vec
         .collect()
 }
 
+fn swipe(phase: GesturePhase, dx: f64, dy: f64) -> ReadingAction {
+    ReadingAction::Swipe(SwipeReading {
+        fingers: NonZeroU8::new(3).expect("three fingers"),
+        phase,
+        dx,
+        dy,
+    })
+}
+
+/// What a touchpad hold or swipe reading delivered, in a consumer's terms.
+fn touchpad(inputs: &[PlatformInput]) -> Vec<String> {
+    pointer_events(inputs)
+        .into_iter()
+        .map(|event| match event {
+            PointerEvent::TouchpadHold(hold) => format!("hold {:?}", hold.phase),
+            PointerEvent::TouchpadSwipe(swipe) => match swipe.phase {
+                TouchpadSwipePhase::Update(travel) => format!(
+                    "swipe {} travel ({}, {})",
+                    swipe.fingers,
+                    travel.get().dx,
+                    travel.get().dy
+                ),
+                phase => format!("swipe {} {phase:?}", swipe.fingers),
+            },
+            PointerEvent::DeviceAdded(_) => "device added".to_owned(),
+            PointerEvent::DeviceRemoved(_) => "device removed".to_owned(),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+/// A swipe's steps, in raw units at the reading's scale, sum into the travel
+/// since it began, in logical pixels; its contact goes when it ends, so the
+/// next swipe starts at no travel; a step of a swipe that never began is an
+/// orphan.
+fn a_swipe_sums_its_steps_into_its_travel() {
+    let mut contacts = registry();
+    let read = |action, ms| {
+        NativeReading::new(NativeContact(7), PointerKind::Trackpad, action, at_ms(ms))
+            .from_device(NativeDevice(3))
+            .at_device(100.0, 50.0, 2.0)
+    };
+    let mut lines = Vec::new();
+    for (action, ms) in [
+        (swipe(GesturePhase::Began, 0.0, 0.0), 1),
+        (swipe(GesturePhase::Changed, -20.0, 4.0), 2),
+        (swipe(GesturePhase::Changed, -30.0, 0.0), 3),
+        (swipe(GesturePhase::Ended, 0.0, 0.0), 4),
+        (swipe(GesturePhase::Began, 0.0, 0.0), 5),
+        (swipe(GesturePhase::Changed, 8.0, 0.0), 6),
+        (swipe(GesturePhase::Cancelled, 0.0, 0.0), 7),
+    ] {
+        lines.extend(touchpad(
+            &decode(&mut contacts, &read(action, ms)).expect("valid"),
+        ));
+    }
+    assert_eq!(
+        lines,
+        [
+            "device added",
+            "swipe 3 Start",
+            "swipe 3 travel (-10, 2)",
+            "swipe 3 travel (-25, 2)",
+            "swipe 3 End",
+            "swipe 3 Start",
+            "swipe 3 travel (4, 0)",
+            "swipe 3 Cancelled",
+        ]
+    );
+    let orphan = decode(
+        &mut contacts,
+        &read(swipe(GesturePhase::Changed, 1.0, 0.0), 8),
+    );
+    assert_eq!(
+        orphan.err().map(|error| error.fault()),
+        Some(DecodeFault::Orphan),
+        "a step of no swipe"
+    );
+}
+
+/// A hold begins once, ends or is cancelled once; a device removed with a
+/// hold or a swipe open ends it cancelled, before the device goes.
+fn a_hold_and_a_swipe_end_with_their_device() {
+    let mut contacts = registry();
+    let read = |contact, action, ms| {
+        NativeReading::new(
+            NativeContact(contact),
+            PointerKind::Trackpad,
+            action,
+            at_ms(ms),
+        )
+        .from_device(NativeDevice(3))
+        .at_logical(10.0, 10.0)
+    };
+    let mut lines = Vec::new();
+    for (contact, action, ms) in [
+        (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 1),
+        (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 2),
+        (1, ReadingAction::Hold(TouchpadHoldPhase::End), 3),
+        (1, ReadingAction::Hold(TouchpadHoldPhase::Begin), 4),
+        (2, swipe(GesturePhase::Began, 0.0, 0.0), 5),
+    ] {
+        lines.extend(touchpad(
+            &decode(&mut contacts, &read(contact, action, ms)).expect("valid"),
+        ));
+    }
+    let (ended, removed) =
+        contacts.remove_device(NativeDevice(3), EventTime::from_nanos(9_000_000));
+    lines.extend(touchpad(
+        &ended
+            .into_iter()
+            .map(|(_, input)| input)
+            .chain(
+                removed.map(|change| PlatformInput::Pointer(PointerEvent::DeviceRemoved(change))),
+            )
+            .collect::<Vec<_>>(),
+    ));
+    assert_eq!(
+        lines,
+        [
+            "device added",
+            "hold Begin",
+            "hold End",
+            "hold Begin",
+            "swipe 3 Start",
+            "hold Cancelled",
+            "swipe 3 Cancelled",
+            "device removed",
+        ]
+    );
+}
+
 fn pinch_and_rotation_accumulate_into_one_gesture() {
     use GestureComponent::{Rotation, Scale, Session};
     use GesturePhase::{Began, Cancelled, Changed, Ended};
@@ -1250,6 +1383,14 @@ fn pointer_assembly_contracts() {
             (
                 "a_released_label_starts_a_new_contact",
                 a_released_label_starts_a_new_contact,
+            ),
+            (
+                "a_swipe_sums_its_steps_into_its_travel",
+                a_swipe_sums_its_steps_into_its_travel,
+            ),
+            (
+                "a_hold_and_a_swipe_end_with_their_device",
+                a_hold_and_a_swipe_end_with_their_device,
             ),
             (
                 "pan_zoom_carries_only_scale_and_rotation",

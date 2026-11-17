@@ -862,6 +862,63 @@ fn a_touchpad_pinch_is_one_pan_zoom() {
     );
 }
 
+/// A touchpad swipe is one gesture of the finger count the server names:
+/// its accelerated steps, in device pixels, sum into its travel in logical
+/// pixels at the window's scale, where the cursor rests; an update or end
+/// of no swipe delivers nothing.
+#[test]
+fn a_touchpad_swipe_is_one_gesture_of_its_fingers() {
+    use flui_platform::pointer::TouchpadSwipePhase;
+    let mut pointers = pointers();
+    let at = (60.0, 40.0);
+    let swipe = |action| event(action, TOUCHPAD, at);
+    let begin = XiEvent {
+        detail: 3,
+        ..swipe(XiAction::SwipeBegin)
+    };
+    let events: Vec<PointerEvent> = [
+        swipe(XiAction::SwipeUpdate { dx: 4.0, dy: 0.0 }),
+        begin,
+        swipe(XiAction::SwipeUpdate { dx: -20.0, dy: 6.0 }),
+        swipe(XiAction::SwipeUpdate { dx: -10.0, dy: 0.0 }),
+        swipe(XiAction::SwipeEnd { cancelled: false }),
+        swipe(XiAction::SwipeEnd { cancelled: false }),
+    ]
+    .iter()
+    .flat_map(|event| pointer_events(pointers.event(SURFACE, 2.0, event).inputs))
+    .collect();
+    let swiped: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::TouchpadSwipe(swipe) => {
+                let at = swipe.position.get();
+                Some(match swipe.phase {
+                    TouchpadSwipePhase::Update(travel) => format!(
+                        "{} travel ({}, {}) at {},{}",
+                        swipe.fingers,
+                        travel.get().dx,
+                        travel.get().dy,
+                        at.x,
+                        at.y
+                    ),
+                    phase => format!("{} {phase:?} at {},{}", swipe.fingers, at.x, at.y),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        swiped,
+        [
+            "3 Start at 30,20",
+            "3 travel (-10, 3) at 30,20",
+            "3 travel (-15, 3) at 30,20",
+            "3 End at 30,20",
+        ],
+        "{events:?}"
+    );
+}
+
 /// The valuators a mask names: a bit past the 16 bits of a valuator's
 /// number skips its value without a panic, as does a value the event lacks.
 #[test]

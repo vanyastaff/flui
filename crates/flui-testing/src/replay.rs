@@ -780,7 +780,7 @@ impl fmt::Display for PointerScript {
                     )?,
                     TouchpadHoldPhase::End => writeln!(f, "trackpad fingers lift")?,
                     TouchpadHoldPhase::Cancelled => {
-                        writeln!(f, "trackpad fingers start a gesture")?
+                        writeln!(f, "trackpad fingers start a gesture")?;
                     }
                 },
                 ScriptStep::TouchpadSwipe(swipe) => match swipe.phase {
