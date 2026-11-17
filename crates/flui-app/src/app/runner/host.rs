@@ -82,7 +82,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
     // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(store));
     // The run's receivers replace the last run's, for the same reason.
-    let memory = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().host_memory));
+    let memory = APP_RUNTIME.with(|slot| Rc::clone(&slot.borrow().host_memory));
     memory.replace_receivers(config.memory_reclaimers.0.clone());
 }
 
@@ -662,6 +662,15 @@ fn end_session_now() -> flui_platform::SessionEndAnswer {
     }
 }
 
+/// The web's `pagehide`: the browser grants no synchronous budget and the
+/// page may come back from its cache, so the notice is delivered and the
+/// flush registry keeps writing on its own; nothing waits, closes or quits.
+#[cfg(target_arch = "wasm32")]
+fn end_session_now() -> flui_platform::SessionEndAnswer {
+    deliver_contained(&flui_platform::HostNotice::SessionEnded);
+    flui_platform::SessionEndAnswer::Proceed
+}
+
 /// Hold a phone's process in the background for `writes`, the flush's writes
 /// still in flight: a thread waits for them until `until`, reports by name
 /// what is still not stored then, and asks the owner for the turn that
@@ -747,15 +756,6 @@ pub(super) fn release_finished_background_writes() {
     if finished {
         let _ = session_end_platform(flui_native::OwnerPlatform::release_session_end);
     }
-}
-
-/// The web's `pagehide`: the browser grants no synchronous budget and the
-/// page may come back from its cache, so the notice is delivered and the
-/// flush registry keeps writing on its own; nothing waits, closes or quits.
-#[cfg(target_arch = "wasm32")]
-fn end_session_now() -> flui_platform::SessionEndAnswer {
-    deliver_contained(&flui_platform::HostNotice::SessionEnded);
-    flui_platform::SessionEndAnswer::Proceed
 }
 
 /// Deliver the session's end to every UI runtime in its slot while the

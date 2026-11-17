@@ -48,7 +48,7 @@ pub fn flui::AppConfig::frame_latency(self, latency: flui::app::FrameLatency) ->
 pub fn flui::AppConfig::input_latency(self, latency: flui::platform::InputLatency) -> Self
 pub fn flui::AppConfig::input_tap(self, factory: flui::app::InputTapFactory) -> Self
 pub fn flui::AppConfig::max_size(self, width: u32, height: u32) -> Self
-pub fn flui::AppConfig::memory_reclaim(self, receiver: impl flui::foundation::memory::ReclaimMemory + Send + Sync + 'static) -> Self
+pub fn flui::AppConfig::memory_reclaim(self, receiver: impl flui::foundation::memory::ReclaimMemory + 'static) -> Self
 pub fn flui::AppConfig::min_size(self, width: u32, height: u32) -> Self
 pub fn flui::AppConfig::mode(self, mode: flui::platform::WindowMode) -> Self
 pub fn flui::AppConfig::motion_override(self, preference: flui::animation::MotionOverride) -> Self
@@ -1309,16 +1309,15 @@ impl core::error::Error for flui::app::CloseRequestError
 impl core::fmt::Debug for flui::app::CloseRequestError
 impl core::fmt::Display for flui::app::CloseRequestError
 impl core::marker::StructuralPartialEq for flui::app::CloseRequestError
-variant flui::app::CloseRequestError::Failed { address: flui::foundation::PresentationAddress, error: flui::platform::ApplyError } // at 5
-variant flui::app::CloseRequestError::NoHostedRuntime // at 3
-variant flui::app::CloseRequestError::Refused { address: flui::foundation::PresentationAddress, error: flui::platform::AdmissionError } // at 4
+variant flui::app::CloseRequestError::Failed { address: flui::foundation::PresentationAddress, error: flui::platform::ApplyError } // at 4
+variant flui::app::CloseRequestError::NoHostedRuntime // at 2
+variant flui::app::CloseRequestError::Refused { address: flui::foundation::PresentationAddress, error: flui::platform::AdmissionError } // at 3
 variant flui::app::CloseRequestError::UnknownPresentation { address: flui::foundation::PresentationAddress } // at 0
 variant flui::app::CloseRequestError::WindowGone { address: flui::foundation::PresentationAddress } // at 1
-variant flui::app::CloseRequestError::WrongThread // at 2
 pub struct flui::app::CloseRequestHandler(_)
 impl Clone for flui::app::CloseRequestHandler
 impl core::fmt::Debug for flui::app::CloseRequestHandler
-pub fn flui::app::CloseRequestHandler::new(handler: impl Fn(&flui::app::CloseRequest) -> flui::app::CloseResponse + Send + Sync + 'static) -> Self
+pub fn flui::app::CloseRequestHandler::new(handler: impl Fn(&flui::app::CloseRequest) -> flui::app::CloseResponse + 'static) -> Self
 #[non_exhaustive] pub enum flui::app::CloseResponse
 impl Clone for flui::app::CloseResponse
 impl Copy for flui::app::CloseResponse
@@ -1788,7 +1787,7 @@ reexport flui::app::open_window => flui::open_window
 reexport flui::app::register_font => flui::register_font
 pub fn flui::app::request_presentation_close(address: flui::foundation::PresentationAddress) -> Result<(), flui::app::CloseRequestError>
 reexport flui::app::run_app => flui::run_app
-pub fn flui::app::run_direct(config: flui::AppConfig, render_fn: impl FnMut(&mut flui_layer::compositor::builder::SceneBuilder, f64, f64) + Send + 'static) -> anyhow::Result<()>
+pub fn flui::app::run_direct(config: flui::AppConfig, render_fn: impl FnMut(&mut flui_layer::compositor::builder::SceneBuilder, f64, f64) + 'static) -> anyhow::Result<()>
 pub fn flui::app::service_events<E: Send>(name: &'static str, capacity: usize) -> (flui::app::ServicePublisher<E>, flui::app::ServiceEvents<E>)
 pub fn flui::app::window_handle(address: flui::foundation::PresentationAddress) -> Option<flui::view::WindowHandle>
 pub mod flui::cupertino
@@ -23691,15 +23690,16 @@ impl core::error::Error for flui::testing::TestError
 impl core::fmt::Debug for flui::testing::TestError
 impl core::fmt::Display for flui::testing::TestError
 impl core::marker::StructuralPartialEq for flui::testing::TestError
-variant flui::testing::TestError::Agent(Box<flui_protocol::error::ErrorObject>) // at 7
-variant flui::testing::TestError::Ambiguous { locator: Box<flui::testing::Locator>, count: usize, candidates: String } // at 1
-variant flui::testing::TestError::Idle { expected: String, locator: Box<flui::testing::Locator>, found: String, next_deadline: Option<core::time::Duration>, shown: String } // at 3
-variant flui::testing::TestError::KeptChanging { reads: usize } // at 8
-variant flui::testing::TestError::NotActionable { element: String, check: flui_protocol::act::ActionabilityCheck, covered_by: Option<String> } // at 2
+variant flui::testing::TestError::Agent(Box<flui_protocol::error::ErrorObject>) // at 8
+variant flui::testing::TestError::Ambiguous { locator: Box<flui::testing::Locator>, count: usize, candidates: String } // at 2
+variant flui::testing::TestError::Idle { expected: String, locator: Box<flui::testing::Locator>, found: String, next_deadline: Option<core::time::Duration>, shown: String } // at 4
+variant flui::testing::TestError::KeptChanging { reads: usize } // at 9
+variant flui::testing::TestError::NotActionable { element: String, check: flui_protocol::act::ActionabilityCheck, covered_by: Option<String> } // at 3
 variant flui::testing::TestError::NotFound { locator: Box<flui::testing::Locator>, shown: String } // at 0
-variant flui::testing::TestError::NotSettled { frames: usize } // at 5
-variant flui::testing::TestError::Timeout { expected: String, locator: Box<flui::testing::Locator>, found: String, timeout: core::time::Duration, shown: String } // at 4
-variant flui::testing::TestError::Unanswered { frames: u32 } // at 6
+variant flui::testing::TestError::NotSettled { frames: usize } // at 6
+variant flui::testing::TestError::Timeout { expected: String, locator: Box<flui::testing::Locator>, found: String, timeout: core::time::Duration, shown: String } // at 5
+variant flui::testing::TestError::Unanswered { frames: u32 } // at 7
+variant flui::testing::TestError::UnpublishedIdentifier { locator: Box<flui::testing::Locator>, identifier: String, control: Option<String>, shown: String } // at 1
 pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
@@ -34493,7 +34493,8 @@ impl schemars::JsonSchema for flui_protocol::tree::TreeDiagnostic
 impl serde_core::ser::Serialize for flui_protocol::tree::TreeDiagnostic
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::tree::TreeDiagnostic
 variant flui_protocol::tree::TreeDiagnostic::DuplicateIdentifier { identifier: String, parent: flui_protocol::tree::ElementId, elements: Vec<flui_protocol::tree::ElementId> } // at 0
-variant flui_protocol::tree::TreeDiagnostic::Unknown // at 1
+variant flui_protocol::tree::TreeDiagnostic::Unknown // at 2
+variant flui_protocol::tree::TreeDiagnostic::UnpublishedIdentifier { identifier: String, parent: flui_protocol::tree::ElementId } // at 1
 pub struct flui_protocol::tree::TreeRevision(u64)
 impl Clone for flui_protocol::tree::TreeRevision
 impl Copy for flui_protocol::tree::TreeRevision

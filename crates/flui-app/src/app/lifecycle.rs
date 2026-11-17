@@ -13,7 +13,6 @@
 //! | **Task** ([`TaskHandle`]) | one-shot | whoever holds the handle | completing, explicit [`TaskHandle::cancel`], or the handle dropping (cancel-on-drop) |
 //! | **Worker** ([`WorkerHandle`]) | recurring, submission-driven | whoever holds the handle | the handle dropping (cancel-on-drop) |
 //! | **Service** ([`ServiceDefinition`]) | application-lifetime | the loop-scoped `AppRuntime` ([`ServiceRegistry`]) | staged registry shutdown at loop exit: cancel → bounded join → evidence |
-//! | **ProcessWorker** | process-external | — | **not implemented** — deliberately deferred until FLUI has process-spawning plumbing at all; nothing here pretends otherwise |
 //!
 //! **There is no fire-and-forget spawn.** Every unit of work has a named
 //! owner: a task or worker is owned by its `#[must_use]` handle (dropping
@@ -47,21 +46,17 @@
 //! makes a late service result after UI runtime teardown structurally inert
 //! ([`PublishError::OwnerGone`]).
 //!
-//! # Not in this slice (stated, not silently assumed)
+//! # Reach
 //!
-//! - **ProcessWorker** — see the table above.
-//! - **Journaled recoverable state** — not built here,
-//!   deliberately separate work. The close-request veto that used to be
-//!   named here alongside it has landed in
-//!   [`close_request`](super::close_request); note that it answers a
-//!   different question from [`ServiceLifetime::KeepsAppAlive`] and is
-//!   consulted strictly earlier — see
-//!   [`CloseRequestRouter::consult`](super::close_request::CloseRequestRouter::consult).
-//! - **A widget-tier capability** (a `BuildContext`-acquired spawner per
-//!   ADR-0018/0021's handle discipline) — today [`TaskSpawner`] reaches
-//!   application code through [`ServiceContext`] only.
-//! - **wasm32** — this module is native-only; the web runner's sequential
-//!   execution model needs its own lifecycle slice.
+//! - [`TaskSpawner`] reaches application code through [`ServiceContext`]
+//!   only: there is no ambient spawner and no build-context capability for
+//!   one.
+//! - [`ServiceLifetime::KeepsAppAlive`] defers the process exit after the
+//!   last window closes. Whether a window may close is a different
+//!   question, asked strictly earlier, by the close-request router
+//!   ([`CloseRequestRouter::consult`](super::close_request::CloseRequestRouter::consult)).
+//! - The module is native-only: `wasm32` does not build it, and an
+//!   application there starts no services.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -346,9 +341,8 @@ impl<T> fmt::Debug for JoinTimeout<T> {
 /// The capability to spawn tasks and workers onto the loop's execution
 /// services.
 ///
-/// Never ambient: there is no global spawner. This slice vends it to
-/// application code through [`ServiceContext`] only (a widget-tier
-/// capability handle is deferred work — see the module doc). Holds the
+/// Never ambient: there is no global spawner. Application code receives it
+/// through [`ServiceContext`] only. Holds the
 /// services weakly, so a spawner outliving its loop refuses with
 /// [`SpawnError::ShuttingDown`] instead of keeping dead pools alive or
 /// silently dropping work.

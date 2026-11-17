@@ -137,8 +137,8 @@ pub use app::{
 // Task/worker/service lifecycles over those lanes (ADR-0049):
 // owned, cancel-on-drop task and worker handles; application services with
 // declared lifetimes and a staged, deadline-bounded graceful shutdown; and
-// pull-only typed service events. Native-only — the web runner has no
-// lifecycle slice yet.
+// pull-only typed service events. Native-only: `wasm32` does not build the
+// lifecycle module.
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::{
     CancellationSignal, JoinTimeout, LifecycleWatch, PublishError, ServiceContext,

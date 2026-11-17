@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::MonotonicClock as _;
-use flui_testing::{TestError, TestWindow, Tester, find};
+use flui_testing::{Locator, TestError, TestWindow, Tester, find};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView};
 use flui_widgets::{Center, Column, RawButton, SizedBox, Text};
@@ -1584,4 +1584,126 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
         * Matrix4::scaling(2.0, 2.0, 1.0)
         * Matrix4::translation(5.0, 5.0, 0.0);
     assert_eq!(transforms, [placed]);
+}
+
+/// An element with no semantics of its own is found by the identifier on a
+/// group around it, the form `find`'s documentation and the failure below
+/// give.
+#[test]
+fn an_element_is_found_by_the_identifier_on_a_group_around_it() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::Semantics::new()
+                .container(true)
+                .role(flui_widgets::SemanticsRole::Group)
+                .identifier("swatch")
+                .child(SizedBox::new(24.0, 16.0)),
+        ),
+    );
+    let rect = t.rect(&find::id("swatch"));
+    assert_eq!((rect.width, rect.height), (24.0, 16.0));
+}
+
+/// An identifier on a node that publishes nothing else selects nothing, and
+/// the failure says so and gives the form that does: beside other content,
+/// and inside a button, which keeps the name its label gives it.
+///
+/// Fails if the failure is the plain `NotFound`, which tells the author to
+/// do what they already did.
+#[test]
+fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
+    let unpublished = |identifier: &str| {
+        flui_widgets::Semantics::new()
+            .container(true)
+            .identifier(identifier)
+    };
+    let mut t = Tester::mount(
+        Center::new().child(Column::new((
+            unpublished("swatch").child(SizedBox::new(24.0, 16.0)),
+            RawButton::new(
+                unpublished("save").child(
+                    flui_widgets::Semantics::new()
+                        .container(true)
+                        .label("Save")
+                        .child(SizedBox::new(40.0, 20.0)),
+                ),
+            )
+            .on_pressed(|_| {}),
+            // A published group and a lifted node share "legend".
+            flui_widgets::Semantics::new()
+                .container(true)
+                .role(flui_widgets::SemanticsRole::Group)
+                .identifier("legend")
+                .child(SizedBox::new(24.0, 16.0)),
+            unpublished("legend").child(SizedBox::new(24.0, 16.0)),
+            // "save" lifted outside the button too, which the read reports
+            // first: the fix still names the button, the control it is in.
+            unpublished("save").child(SizedBox::new(24.0, 16.0)),
+        ))),
+    );
+    let _ = t.rect(&find::button("Save"));
+    // The identifier blamed, and the message.
+    let failure = |t: &mut Tester, locator: Locator| {
+        let error = t
+            .try_rect(&locator)
+            .expect_err("an identifier on a lifted node selects nothing");
+        let message = error.to_string();
+        let TestError::UnpublishedIdentifier { identifier, .. } = error else {
+            panic!("{locator:?}: {message}");
+        };
+        (identifier, message)
+    };
+    let (_, swatch) = failure(&mut t, find::id("swatch"));
+    assert!(
+        swatch.contains("publishes nothing of its own")
+            && swatch.contains(".role(SemanticsRole::Group)"),
+        "{swatch}"
+    );
+    // Inside a control a group would cut the name its label gives it, so
+    // the fix names the control instead.
+    let (_, save) = failure(&mut t, find::id("save"));
+    assert!(
+        save.contains("Give the identifier to the control")
+            && !save.contains(".role(SemanticsRole::Group)"),
+        "{save}"
+    );
+    // A scope names the identifier as much as the target does.
+    let (scoped, _) = failure(&mut t, find::button("Save").within(find::id("swatch")));
+    assert_eq!(scoped, "swatch");
+    // An expectation that gives up says the same.
+    let expected = panic_text(|| t.expect(find::id("swatch")).to_exist());
+    assert!(
+        expected.contains("publishes nothing of its own"),
+        "{expected}"
+    );
+    // The reason only explains a failure: an expectation that holds by
+    // matching nothing passes.
+    t.expect(find::id("swatch")).to_be_gone();
+    // The target's own identifier is the likely reason even where a
+    // published node carries it too.
+    let (own, _) = failure(&mut t, find::id("legend").within(find::button("Save")));
+    assert_eq!(own, "legend");
+    // An identifier a published node carries selects it, and a failure
+    // there is the expectation's own, not the lifted node's.
+    let _ = t.rect(&find::id("legend"));
+    let present = panic_text(|| t.expect(find::id("legend")).to_be_gone());
+    assert!(
+        present.contains("0 matches") && !present.contains("publishes nothing of its own"),
+        "{present}"
+    );
+    // A scope a published node satisfies is not the reason a lookup misses.
+    assert!(
+        matches!(
+            t.try_rect(&find::button("Nope").within(find::id("legend"))),
+            Err(TestError::NotFound { .. })
+        ),
+        "the published legend scopes the lookup"
+    );
+    assert!(
+        matches!(
+            t.try_rect(&find::id("absent")),
+            Err(TestError::NotFound { .. })
+        ),
+        "an identifier nothing carries is not found"
+    );
 }

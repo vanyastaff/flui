@@ -267,10 +267,13 @@ pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Durati
 /// One-shot, like [`FallbackWake`]: the wake the deadline brings consumes it,
 /// so a deadline source that is never served cannot keep reporting a past
 /// instant.
+///
+/// Owner-thread state (ADR-0323 §1): the Android frame driver and the loop's
+/// wake-deadline query, both on the loop's thread, are all that reach it.
 #[cfg(any(target_os = "android", test))]
 #[derive(Debug, Default)]
 pub(super) struct BackgroundPace {
-    deadline: parking_lot::Mutex<Option<web_time::Instant>>,
+    deadline: std::cell::Cell<Option<web_time::Instant>>,
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -278,11 +281,10 @@ impl BackgroundPace {
     /// Whether a wake at `now` may pump: not while an armed deadline lies
     /// ahead. A deadline that has passed is consumed by the wake reading it.
     pub(super) fn admit(&self, now: web_time::Instant) -> bool {
-        let mut deadline = self.deadline.lock();
-        match *deadline {
+        match self.deadline.get() {
             Some(at) if now < at => false,
             Some(_) => {
-                *deadline = None;
+                self.deadline.set(None);
                 true
             }
             None => true,
@@ -292,19 +294,19 @@ impl BackgroundPace {
     /// A pump at `now` left work that asks for another wake: the next pump
     /// waits until one pace later.
     pub(super) fn defer(&self, now: web_time::Instant) {
-        *self.deadline.lock() = Some(now + BACKGROUNDED_PUMP_PACE);
+        self.deadline.set(Some(now + BACKGROUNDED_PUMP_PACE));
     }
 
     /// Frames are enabled again: no pump is deferred any more, and a deadline
     /// left armed would be reported as due on every wake with nothing to
     /// consume it.
     pub(super) fn clear(&self) {
-        *self.deadline.lock() = None;
+        self.deadline.set(None);
     }
 
     /// The armed deadline, for the wake-deadline hook.
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
-        *self.deadline.lock()
+        self.deadline.get()
     }
 }
 
@@ -368,6 +370,10 @@ pub(super) struct FallbackGate {
 /// A stack whose present blocks at vsync, or whose compositor paces
 /// redraws (Wayland after `pre_present_notify`), never reaches this: the
 /// pump presents every time and the deadline is never armed.
+///
+/// Owner-thread state (ADR-0323 §1): the window's frame driver and the loop's
+/// wake-deadline query, both on the thread that opened the window, are all
+/// that reach it.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -375,7 +381,7 @@ pub(super) struct FallbackGate {
 ))]
 #[derive(Debug)]
 pub(super) struct FallbackWake {
-    state: parking_lot::Mutex<FallbackState>,
+    state: std::cell::Cell<FallbackState>,
 }
 
 #[cfg(all(
@@ -383,7 +389,7 @@ pub(super) struct FallbackWake {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct FallbackState {
     last_present_at: Option<web_time::Instant>,
     deadline: Option<web_time::Instant>,
@@ -411,7 +417,7 @@ impl FallbackWake {
     /// after a resize.
     pub(super) fn new() -> Self {
         Self {
-            state: parking_lot::Mutex::new(FallbackState {
+            state: std::cell::Cell::new(FallbackState {
                 last_present_at: None,
                 deadline: None,
                 delivered_at: None,
@@ -420,12 +426,22 @@ impl FallbackWake {
         }
     }
 
+    /// Change the state with `change` and return what it answers. `change`
+    /// works on a copy and never reaches the cell, so no write is lost; what
+    /// it answers is acted on (a `tracing` event among it) after the state
+    /// is stored.
+    fn update<R>(&self, change: impl FnOnce(&mut FallbackState) -> R) -> R {
+        let mut state = self.state.get();
+        let answer = change(&mut state);
+        self.state.set(state);
+        answer
+    }
+
     /// What this wake sees. Reading a DUE deadline consumes it — this wake
     /// is the one the deadline asked for, and a deadline source that is not
     /// self-clearing re-fires forever.
     pub(super) fn gate(&self, now: web_time::Instant) -> FallbackGate {
-        let mut state = self.state.lock();
-        match state.deadline {
+        self.update(|state| match state.deadline {
             Some(deadline) if now < deadline => FallbackGate {
                 pending: true,
                 due: false,
@@ -442,17 +458,18 @@ impl FallbackWake {
                 }
             }
             None => FallbackGate::default(),
-        }
+        })
     }
 
     /// A frame presented at `now`: the anchor for the next deferral, and
     /// nothing is deferred any more.
     pub(super) fn record_present(&self, now: web_time::Instant) {
-        let mut state = self.state.lock();
-        state.last_present_at = Some(now);
-        state.deadline = None;
-        state.delivered_at = None;
-        state.holds_work = false;
+        self.update(|state| {
+            state.last_present_at = Some(now);
+            state.deadline = None;
+            state.delivered_at = None;
+            state.holds_work = false;
+        });
     }
 
     /// A pump ran and presented nothing while a requested frame keeps the gate open:
@@ -469,17 +486,18 @@ impl FallbackWake {
         period: std::time::Duration,
         left_work: bool,
     ) -> web_time::Instant {
-        let mut state = self.state.lock();
         let interval = period.mul_f64(FALLBACK_PERIOD_FRACTION);
-        let anchored = state
-            .last_present_at
-            .map(|at| at + interval)
-            .filter(|deadline| *deadline > now)
-            .unwrap_or(now + interval);
-        state.deadline = Some(anchored);
-        state.delivered_at = None;
-        state.holds_work = left_work;
-        anchored
+        self.update(|state| {
+            let anchored = state
+                .last_present_at
+                .map(|at| at + interval)
+                .filter(|deadline| *deadline > now)
+                .unwrap_or(now + interval);
+            state.deadline = Some(anchored);
+            state.delivered_at = None;
+            state.holds_work = left_work;
+            anchored
+        })
     }
 
     /// A pump ran, presented nothing and left nothing pending (the gate is
@@ -487,7 +505,7 @@ impl FallbackWake {
     /// holds tree work. The deadline stays, and tree work that arrives
     /// after this frame is new and runs at once.
     pub(super) fn release_held_work(&self) {
-        self.state.lock().holds_work = false;
+        self.update(|state| state.holds_work = false);
     }
 
     /// The instant the platform's wake-deadline hook should wake the loop
@@ -529,29 +547,46 @@ impl FallbackWake {
         now: web_time::Instant,
         period: std::time::Duration,
     ) -> Option<web_time::Instant> {
-        let mut state = self.state.lock();
-        let deadline = state.deadline?;
-        if deadline > now {
-            return Some(deadline);
+        /// What the query found.
+        enum Found {
+            Nothing,
+            WakeAt(web_time::Instant),
+            /// The deadline was abandoned after going unanswered this long.
+            Abandoned(std::time::Duration),
         }
-        let Some(delivered_at) = state.delivered_at else {
-            state.delivered_at = Some(now);
-            return Some(now);
+        let found = self.update(|state| {
+            let Some(deadline) = state.deadline else {
+                return Found::Nothing;
+            };
+            if deadline > now {
+                return Found::WakeAt(deadline);
+            }
+            let Some(delivered_at) = state.delivered_at else {
+                state.delivered_at = Some(now);
+                return Found::WakeAt(now);
+            };
+            // Reported already: the platform has a period to answer it, and
+            // the loop waits for that period, not for `now` over and over.
+            let expiry = delivered_at + period;
+            if expiry > now {
+                return Found::WakeAt(expiry);
+            }
+            // The wake this deadline asked for is not coming (a hidden
+            // surface withholds redraws). Abandon it rather than re-arming
+            // `WaitUntil` in the past every iteration — ADR-0044 §7's
+            // measured busy-spin. Clearing it also lifts the suppression of
+            // the ui_runtime's own redraw echo, so an ordinary wake produces.
+            state.deadline = None;
+            state.delivered_at = None;
+            Found::Abandoned(now.saturating_duration_since(delivered_at))
+        });
+        let unanswered = match found {
+            Found::Nothing => return None,
+            Found::WakeAt(wake) => return Some(wake),
+            Found::Abandoned(unanswered) => unanswered,
         };
-        // Reported already: the platform has a period to answer it, and the
-        // loop waits for that period, not for `now` over and over.
-        let expiry = delivered_at + period;
-        if expiry > now {
-            return Some(expiry);
-        }
-        // The wake this deadline asked for is not coming (a hidden surface
-        // withholds redraws). Abandon it rather than re-arming `WaitUntil`
-        // in the past every iteration — ADR-0044 §7's measured busy-spin.
-        // Clearing it also lifts the suppression of the ui_runtime's own
-        // redraw echo, so an ordinary wake produces.
-        let unanswered = now.saturating_duration_since(delivered_at);
-        state.deadline = None;
-        state.delivered_at = None;
+        // Stored before the event: a subscriber is code this type does not
+        // own, and what it reads of the deadline is already the abandonment.
         tracing::trace!(
             target: "flui.pace",
             event = "fallback_abandoned",
@@ -656,6 +691,84 @@ mod desktop_pacing_tests {
             fallback.next_wake(ten_ms_later, Duration::from_millis(8)),
             None,
             "10 ms unanswered on an 8 ms display is a wake that is not coming"
+        );
+    }
+
+    /// A `tracing` subscriber is code the fallback does not own. One that
+    /// reads the fallback's deadline from inside the event that reports its
+    /// abandonment finds it abandoned, and the read returns.
+    ///
+    /// Red-check: emit the event while the state is still borrowed or
+    /// locked — the read inside it waits on a lock its own thread holds, and
+    /// the row fails on its timeout.
+    fn a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        /// What the subscriber read inside the event.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum ReadInside {
+            /// The subscriber heard no pacing event.
+            NotRun,
+            /// The next wake the fallback answered inside the event.
+            Read(Option<Instant>),
+        }
+
+        thread_local! {
+            static FALLBACK: RefCell<Option<Rc<FallbackWake>>> = const { RefCell::new(None) };
+            static READ_INSIDE: Cell<ReadInside> = const { Cell::new(ReadInside::NotRun) };
+        }
+
+        /// Reads the fallback's next wake from inside every pacing event.
+        struct ReadsTheDeadline;
+        impl tracing::Subscriber for ReadsTheDeadline {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                if event.metadata().target() != "flui.pace" {
+                    return;
+                }
+                if let Some(fallback) = FALLBACK.with_borrow(Clone::clone) {
+                    let read = fallback.next_wake(Instant::now(), Duration::from_millis(16));
+                    READ_INSIDE.set(ReadInside::Read(read));
+                }
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let (finished, outcome) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            flui_testing::disarm_interest_cache();
+            let period = Duration::from_millis(16);
+            let fallback = Rc::new(FallbackWake::new());
+            let deadline = fallback.arm_after_no_present(Instant::now(), period, false);
+            assert_eq!(fallback.next_wake(deadline, period), Some(deadline));
+            FALLBACK.set(Some(Rc::clone(&fallback)));
+            let unanswered = deadline + period * 2;
+            let abandoned = tracing::subscriber::with_default(ReadsTheDeadline, || {
+                fallback.next_wake(unanswered, period)
+            });
+            FALLBACK.set(None);
+            let _ = finished.send((abandoned, READ_INSIDE.get()));
+        });
+        let (abandoned, read_inside) = outcome
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the subscriber's read returned: no state is held across the event");
+        assert_eq!(
+            abandoned, None,
+            "a deadline unanswered for two periods goes"
+        );
+        assert_eq!(
+            read_inside,
+            ReadInside::Read(None),
+            "the subscriber ran and read the deadline already abandoned"
         );
     }
 
@@ -861,6 +974,11 @@ mod desktop_pacing_tests {
                 (
                     "a_deadline_first_read_late_is_still_reported_due",
                     a_deadline_first_read_late_is_still_reported_due as fn(),
+                ),
+                (
+                    "a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone",
+                    a_subscriber_reading_the_deadline_inside_its_abandonment_event_finds_it_gone
+                        as fn(),
                 ),
                 (
                     "a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work",

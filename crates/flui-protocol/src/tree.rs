@@ -475,6 +475,19 @@ pub enum TreeDiagnostic {
         /// The siblings carrying it, in tree order.
         elements: Vec<ElementId>,
     },
+    /// An identifier is on a node the agent and the AccessKit adapters lift
+    /// into its parent (one with no role, label or text, or with the
+    /// `Generic` or `Presentation` role), so no agent or OS automation
+    /// locator selects it (ADR-0240 §3). Its author gives the node a role,
+    /// or the identifier to the node that publishes. A read lists one per
+    /// identifier and node it is lifted into, at most 4 nodes per identifier
+    /// and 256 in all.
+    UnpublishedIdentifier {
+        /// The identifier nothing can select.
+        identifier: String,
+        /// The node the read shows in its place: the one it is lifted into.
+        parent: ElementId,
+    },
     /// A diagnostic a newer schema added.
     #[cfg_attr(feature = "serde", serde(other))]
     Unknown,
@@ -776,7 +789,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.19",
+                "protocol": "0.20",
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false

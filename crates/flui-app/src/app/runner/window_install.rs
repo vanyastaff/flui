@@ -1,10 +1,7 @@
 //! Prepare native wiring and resources before admitting joint publication.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 
 use flui_platform::PlatformWindow;
 use flui_runtime::owner::{InstallInitialization, PreparedInstall, WindowObservation};
@@ -76,7 +73,7 @@ pub(super) struct WindowInstall {
 /// Owns native closure until the complete logical/native installation succeeds.
 pub(super) struct InstallationWindow {
     window: Option<Rc<dyn PlatformWindow>>,
-    closed: Arc<AtomicBool>,
+    closed: Rc<Cell<bool>>,
     published: bool,
     /// The window's agent, vended before the install, handed to the loop's
     /// hooks once it commits.
@@ -90,7 +87,7 @@ impl InstallationWindow {
     fn new(window: Rc<dyn PlatformWindow>) -> Self {
         Self {
             window: Some(window),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: Rc::new(Cell::new(false)),
             published: false,
             agent: None,
             opened: None,
@@ -117,11 +114,11 @@ impl InstallationWindow {
         self.window.as_ref()
     }
 
-    pub(super) fn cancellation(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.closed)
+    pub(super) fn cancellation(&self) -> Rc<Cell<bool>> {
+        Rc::clone(&self.closed)
     }
     pub(super) fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+        self.closed.get()
     }
     /// The installation committed: the window and the URLs opened into it
     /// are the presentation's.
@@ -144,7 +141,7 @@ impl Drop for InstallationWindow {
         // A loan ends first, as plain state: its URLs return for the owner's
         // next turn, refused when the window was closed before the commit.
         if let Some(loan) = self.opened.take() {
-            if self.closed.load(Ordering::Acquire) {
+            if self.closed.get() {
                 loan.window_closed();
             } else {
                 drop(loan);
@@ -155,7 +152,7 @@ impl Drop for InstallationWindow {
         };
         let mut first = flui_foundation::panic::FirstPanic::new();
         if !self.published {
-            self.closed.store(true, Ordering::Release);
+            self.closed.set(true);
             // An unpublished window's discard is contained; the first failure is kept.
             first.contain(|| {
                 super::discard_window(window.as_ref(), "an unpublished installation");
@@ -188,7 +185,7 @@ impl WindowInstall {
         // Terminal closure during native preparation must survive even though
         // the logical membership is not yet visible to dispatch.
         WindowRoutes::of(&**window.native()).route_closed(move || {
-            closing.store(true, Ordering::Release);
+            closing.set(true);
             let _ = dispatch_platform_ui_runtime(
                 dispatcher,
                 RuntimeTask::ClosePresentation(address.presentation_id),
@@ -286,7 +283,7 @@ impl WindowInstall {
     pub(super) fn on_close(&self, run: impl FnOnce() + 'static) {
         let closed = self.window.cancellation();
         WindowRoutes::of(&**self.window.native()).route_closed(move || {
-            closed.store(true, Ordering::Release);
+            closed.set(true);
             run();
         });
     }
@@ -319,11 +316,11 @@ impl WindowInstall {
         // Bound to this host's owner now, so a late change after a replacement
         // wakes the retired owner only (a cheap defence; nothing pins it).
         let proxy = super::host::with_owner_platform(flui_native::OwnerPlatform::proxy);
-        let seen = Arc::new(parking_lot::Mutex::new(None::<flui_platform::WindowState>));
+        let seen = Rc::new(RefCell::new(None::<flui_platform::WindowState>));
         // Weak: the route lives in the window's own handler, and a strong
         // capture would keep the window alive past close.
         let observed = Rc::downgrade(&window);
-        let last = Arc::clone(&seen);
+        let last = Rc::clone(&seen);
         WindowRoutes::of(&*window).route_state_changed(move || {
             let Some(window) = observed.upgrade() else {
                 return;
@@ -333,7 +330,7 @@ impl WindowInstall {
             // The baseline moves before delivery: a change a subscriber makes
             // re-enters here and is compared against this snapshot. Every
             // event is then delivered, a panicking one included.
-            let followed = RuntimeEvent::follow(&mut last.lock(), next);
+            let followed = RuntimeEvent::follow(&mut last.borrow_mut(), next);
             if followed.display_moved
                 && let Some(proxy) = &proxy
             {
@@ -346,7 +343,7 @@ impl WindowInstall {
             });
         });
         let seed = window.state();
-        *seen.lock() = Some(seed.clone());
+        *seen.borrow_mut() = Some(seed.clone());
         self.observe(WindowObservation::Snapshot {
             execution: seed.execution,
             focused: seed.focus.is_focused(),
@@ -409,7 +406,7 @@ impl WindowInstall {
         let closed = self.window.cancellation();
         let dispatcher = self.dispatcher();
         super::host::route_quit(move || {
-            if !closed.swap(true, Ordering::AcqRel) {
+            if !closed.replace(true) {
                 super::owner_dispatch::close_this_window(dispatcher);
             }
         });
