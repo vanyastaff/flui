@@ -9,8 +9,8 @@ the entry attribute is `flui::main`.
 
 | Macro | Writes | Import it from |
 |-------|--------|----------------|
-| `#[derive(StatelessView)]`, `#[derive(StatefulView)]` | `impl View` for a type that implements the authoring trait | `flui_view::prelude` |
-| `#[derive(InheritedData)]` | one `FIELD_<NAME>` mask per field and `impl InheritedData` | `flui_view::prelude` |
+| `#[derive(StatelessView)]`, `#[derive(StatefulView)]` | `impl View` for a type that implements the authoring trait, with its key and creation site from the fields marked `#[view(key)]` and `#[view(site)]` | `flui_view` |
+| `#[derive(InheritedData)]` | one `FIELD_<NAME>` mask per field and `impl InheritedData` | `flui_view` |
 | `#[derive(Inspect)]` | `impl Inspect` for a struct or an enum | `flui_foundation::inspect` |
 | `#[derive(TwoWayConverter)]` | `impl TwoWayConverter` and a fieldwise `impl Lerp` | `flui_animation` |
 | `#[derive(Routable)]` | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router` |

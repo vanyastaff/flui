@@ -355,9 +355,10 @@ pub(crate) fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_th
 
 /// A keyed item whose state records which data id it was created for and
 /// how many times `init_state` ran across the whole test.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct KeyedRow {
     id: u32,
+    #[view(key)]
     key: flui_foundation::ValueKey<u32>,
     inits: Arc<parking_lot::Mutex<Vec<u32>>>,
 }
@@ -387,15 +388,6 @@ impl ViewState<KeyedRow> for KeyedRowState {
         // The paragraph carries the STATE's id (what the element was born as),
         // so a remounted element reads differently from a preserved one.
         SizedBox::new(200.0, 48.0).child(Text::new(format!("row{}", self.born_as)))
-    }
-}
-
-impl flui_view::View for KeyedRow {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
     }
 }
 

@@ -28,7 +28,7 @@ error: `#[route]` gives a variant its path pattern; it does not go on a field
 15 |         #[route("/ignored")]
    |         ^^^^^^^^^^^^^^^^^^^^
 
-error: the list is empty; expected `rename = "key"`
+error: the list is empty; expected `rename = "key"`, or `#[query]` without the parentheses
   --> tests/routable_ui/fail/misplaced_attributes.rs:20:9
    |
 20 |         #[query()]

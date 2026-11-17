@@ -6,8 +6,8 @@
 //!
 //! | Macro | Writes | Re-exported as |
 //! |-------|--------|----------------|
-//! | [`macro@StatelessView`], [`macro@StatefulView`] | `impl View` for a type that implements the authoring trait | `flui_view::prelude` |
-//! | [`macro@InheritedData`] | one field mask per field and `impl InheritedData` | `flui_view::prelude` |
+//! | [`macro@StatelessView`], [`macro@StatefulView`] | `impl View` for a type that implements the authoring trait | `flui_view::StatelessView`, `flui_view::StatefulView` |
+//! | [`macro@InheritedData`] | one field mask per field and `impl InheritedData` | `flui_view::InheritedData` |
 //! | [`macro@Inspect`] | `impl Inspect` for a struct or an enum | `flui_foundation::inspect::Inspect` |
 //! | [`macro@TwoWayConverter`] | `impl TwoWayConverter` and a fieldwise `impl Lerp` | `flui_animation::TwoWayConverter` |
 //! | [`macro@Routable`] | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router::Routable` |
@@ -26,21 +26,17 @@
 // A macro that prints writes into the compiler's output of every crate that uses it.
 #![warn(clippy::print_stdout, clippy::print_stderr)]
 
-mod attribute;
-mod derive_inherited_data;
-mod derive_inspect;
-mod derive_routable;
-mod derive_two_way_converter;
-mod derive_view;
+mod derive;
+mod entry;
 mod generics;
-mod main_attr;
+mod hygiene;
 mod refusals;
 mod runtime_path;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
 
-use derive_view::ViewKind;
+use derive::view::ViewKind;
 
 /// Emit `impl View` for a type that implements `StatelessView`.
 ///
@@ -99,34 +95,38 @@ use derive_view::ViewKind;
 /// }
 /// ```
 ///
-/// # Refused attributes
+/// # Keys
 ///
-/// `#[view(...)]` is a compile error wherever the derive could not act on it:
-/// `inspect` on a field or given twice, `site` on the type, on two fields or
-/// twice on one, an empty list, and any `#[view(...)]` inside an enum or a
-/// union, whose values have no field of `self` to read.
-///
-/// # Keyed views
-///
-/// The derive leaves `View::key` at its default, `None`. A view that carries
-/// a key writes the `impl View` by hand in place of the derive, since a type
-/// has one `impl View`:
+/// A field marked `#[view(key)]` is the view's key (`View::key`), by which
+/// the parent matches it to the element it had before. The field is a
+/// `ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …), an `Option` of
+/// one for a view that is keyed only sometimes, or an `Rc<dyn ViewKey>` or
+/// `Box<dyn ViewKey>` for a key whose type the view does not name
+/// (`flui_foundation::key::AsViewKey` lists them). One field of a struct can
+/// carry the mark; without it the view has no key.
 ///
 /// ```rust,ignore
-/// impl View for Greeting {
-///     fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-///         flui_view::element::ElementKind::stateless(self)
-///     }
-///
-///     fn key(&self) -> Option<&dyn ViewKey> {
-///         Some(&self.key)
-///     }
+/// #[derive(Clone, StatelessView)]
+/// struct Row {
+///     #[view(key)]
+///     key: ValueKey<u64>,
+///     label: String,
 /// }
 /// ```
+///
+/// # Refused attributes
+///
+/// `#[view(...)]` is a compile error wherever the derive could not act on it,
+/// and one build reports every such place:
+/// `inspect` on a field or given twice, `key` or `site` on the type, on two
+/// fields or twice on one, an empty list, any `#[view(...)]` inside an
+/// enum or a union, whose values have no field of `self` to read, and one on
+/// a generic parameter or inside a field's type. A name spelled as a raw
+/// identifier (`#[r#view(r#key)]`) is read as the name.
 #[proc_macro_derive(StatelessView, attributes(view))]
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_view::expand(&input, ViewKind::Stateless)
+    derive::view::expand(&input, ViewKind::Stateless)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -159,12 +159,12 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// `#[view(inspect)]`, `#[view(site)]`, their refusals and keyed views work as
-/// they do for [`macro@StatelessView`].
+/// `#[view(inspect)]`, `#[view(key)]`, `#[view(site)]` and their refusals work
+/// as they do for [`macro@StatelessView`].
 #[proc_macro_derive(StatefulView, attributes(view))]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_view::expand(&input, ViewKind::Stateful)
+    derive::view::expand(&input, ViewKind::Stateful)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -196,7 +196,7 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(InheritedData)]
 pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_inherited_data::expand(&input)
+    derive::inherited_data::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -204,8 +204,10 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 /// Emit `impl Inspect` (`flui_foundation::inspect`) for a struct or an enum (ADR-0242 §4).
 ///
 /// Re-exported as `flui_foundation::inspect::Inspect`, beside the trait, which documents the
-/// field attributes. `#[inspect(...)]` describes a field: on the type or on a variant, with an
-/// empty list or with one attribute given twice, it is a compile error.
+/// field attributes. `#[inspect(...)]` describes a field: on the type, on a variant, on a generic
+/// parameter or inside a field's type, with an empty list or with one attribute given twice, it
+/// is a compile error, and one build reports every one. A name or an identifier value spelled as
+/// a raw identifier (`r#skip`, `level = r#debug`) is read as the name.
 ///
 /// A field whose type has no value mapping is a compile error naming the ways out (`skip`,
 /// `with`, `debug`, or a `ToValue` impl); a union is refused, because which of its fields is
@@ -213,7 +215,7 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Inspect, attributes(inspect))]
 pub fn derive_inspect(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_inspect::expand(&input)
+    derive::inspect::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -244,7 +246,7 @@ pub fn derive_inspect(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(TwoWayConverter)]
 pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_two_way_converter::expand(&input)
+    derive::two_way_converter::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -275,14 +277,18 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 /// `T: Default` is its default without it. `to_path` prints the query
 /// fields in declaration order and leaves out `None` and an empty `Vec`.
 ///
-/// Rejected at compile time: a struct, union or generic type; a tuple
-/// variant; `#[route]` on the type or on a field, and `#[query]` on the type
-/// or on a variant; a variant with no `#[route]`, two, or one with anything
+/// Rejected at compile time: a struct, union or generic type; a type without
+/// a variant; a tuple
+/// variant; `#[route]` on the type or on a field, `#[query]` on the type
+/// or on a variant, and either inside a field's type; a variant with no
+/// `#[route]`, two, or one with anything
 /// after the pattern; a malformed pattern; a parameter that names no field,
 /// or a field no parameter names, a parameter that names a `#[query]` field,
-/// a malformed or empty `#[query(...)]`; and two patterns of the same shape,
-/// since the second could never be parsed. What the type and each of its
-/// variants get wrong is reported in one build.
+/// a malformed, empty or doubled `#[query(...)]`, a key renamed twice, two
+/// fields of a variant that read one query key; and two patterns of the same
+/// shape,
+/// since the second could never be parsed. Everything the type, its variants
+/// and their fields get wrong is reported in one build.
 ///
 /// `from_path` tries the patterns from the most specific: a literal segment
 /// wins over a parameter in the same place whatever the declaration order,
@@ -293,7 +299,7 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Routable, attributes(route, query))]
 pub fn derive_routable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_routable::expand(&input)
+    derive::routable::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -330,11 +336,11 @@ pub fn derive_routable(input: TokenStream) -> TokenStream {
 ///
 /// The function takes nothing and returns `()` or `Result<(), E>` with a
 /// displayable `E`; an `async`, `unsafe`, generic or argument-taking
-/// function, or arguments on the attribute, are compile errors on every
-/// target.
+/// function is a compile error on every target, each such part of the
+/// signature reported in one build, and so are arguments on the attribute.
 #[proc_macro_attribute]
 pub fn main(args: TokenStream, item: TokenStream) -> TokenStream {
-    main_attr::expand(args.into(), item.into())
+    entry::expand(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

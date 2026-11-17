@@ -88,7 +88,8 @@ pub trait StatelessView: Clone + 'static {
     }
 }
 
-// `#[derive(StatelessView)]` (`crates/flui-macros/src/derive_view.rs`, re-exported by
+// `#[derive(StatelessView)]` (`crates/flui-macros/src/derive/view.rs`, exported beside the trait
+// and from
 // `flui_view::prelude`) writes the `impl View` of a stateless view. Its element is
 // `StatelessElement<V> = Element<V, Single, StatelessBehavior>`, exported from
 // `element/mod.rs`.

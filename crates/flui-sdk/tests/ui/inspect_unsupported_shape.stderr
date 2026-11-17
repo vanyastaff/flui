@@ -66,3 +66,9 @@ error: the list is empty; expected `skip`, `name`, `default`, `level`, `unit`, `
    |
 65 |     #[inspect()]
    |     ^^^^^^^^^^^^
+
+error: `#[inspect]` does nothing here: the derive reads the attributes of the type, of its variants and of their fields
+  --> tests/ui/inspect_unsupported_shape.rs:72:14
+   |
+72 |     call: fn(#[inspect(name = "x")] u32),
+   |              ^^^^^^^^^^^^^^^^^^^^^^

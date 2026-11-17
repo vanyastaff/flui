@@ -192,7 +192,8 @@ pub trait ViewState<V: StatefulView>: 'static {
     fn dispose(&mut self) {}
 }
 
-// `#[derive(StatefulView)]` (`crates/flui-macros/src/derive_view.rs`, re-exported by
+// `#[derive(StatefulView)]` (`crates/flui-macros/src/derive/view.rs`, exported beside the trait
+// and from
 // `flui_view::prelude`) writes the `impl View` of a stateful view. Its element is
 // `StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>`, exported from
 // `element/mod.rs`.

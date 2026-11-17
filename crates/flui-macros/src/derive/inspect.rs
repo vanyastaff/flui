@@ -6,15 +6,17 @@
 //! hint. A fieldless enum also gets `ToValue`, so it can be another type's field.
 
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::meta::ParseNestedMeta;
 use syn::{
     Attribute, Data, DeriveInput, Expr, Fields, GenericParam, Ident, LitStr, Member, Path, Type,
     ext::IdentExt, parse_quote, spanned::Spanned,
 };
 
-use crate::attribute::{helpers, is_named, parse_entries};
+use super::attribute::{is_named, named, parse_entries, refuse_unread};
 use crate::generics::mentions_param;
+use crate::hygiene::local;
+use crate::refusals::Refusals;
 
 /// A field's `default` attribute.
 enum DefaultAttr {
@@ -34,7 +36,7 @@ enum Level {
 
 impl Level {
     fn parse(ident: &Ident) -> syn::Result<Self> {
-        match ident.to_string().as_str() {
+        match ident.unraw().to_string().as_str() {
             "summary" => Ok(Self::Summary),
             "detail" => Ok(Self::Detail),
             "debug" => Ok(Self::Debug),
@@ -70,7 +72,7 @@ enum Unit {
 
 impl Unit {
     fn parse(ident: &Ident) -> syn::Result<Self> {
-        match ident.to_string().as_str() {
+        match ident.unraw().to_string().as_str() {
             "logical_px" => Ok(Self::LogicalPx),
             "device_px" => Ok(Self::DevicePx),
             "seconds" => Ok(Self::Seconds),
@@ -115,73 +117,79 @@ struct FieldAttrs {
 }
 
 impl FieldAttrs {
+    /// Read the field's `#[inspect(...)]` lists. An entry the field cannot take ends its own
+    /// list, since what follows it may be its value; the other lists, and the combinations of
+    /// what was read, are still checked.
     fn parse(field: &syn::Field) -> syn::Result<Self> {
-        let mut attrs = Self::default();
-        for attr in inspect_attributes(&field.attrs) {
-            parse_entries(attr, FIELD_ENTRIES, |meta| {
-                if is_named(&meta.path, "skip") {
-                    set_flag(&mut attrs.skip, &meta)
-                } else if is_named(&meta.path, "debug") {
-                    set_flag(&mut attrs.debug, &meta)
-                } else if is_named(&meta.path, "name") {
-                    let name: LitStr = meta.value()?.parse()?;
-                    set_once(&mut attrs.name, name, &meta)
-                } else if is_named(&meta.path, "default") {
-                    let default = if meta.input.peek(syn::Token![=]) {
-                        DefaultAttr::Expr(meta.value()?.parse()?)
+        Refusals::collect(|refusals| {
+            let mut attrs = Self::default();
+            for attr in inspect_attributes(&field.attrs) {
+                let read = parse_entries(attr, FIELD_ENTRIES, |meta| {
+                    if is_named(&meta.path, "skip") {
+                        set_flag(&mut attrs.skip, &meta)
+                    } else if is_named(&meta.path, "debug") {
+                        set_flag(&mut attrs.debug, &meta)
+                    } else if is_named(&meta.path, "name") {
+                        let name: LitStr = meta.value()?.parse()?;
+                        set_once(&mut attrs.name, name, &meta)
+                    } else if is_named(&meta.path, "default") {
+                        let default = if meta.input.peek(syn::Token![=]) {
+                            DefaultAttr::Expr(meta.value()?.parse()?)
+                        } else {
+                            DefaultAttr::Type
+                        };
+                        set_once(&mut attrs.default, default, &meta)
+                    } else if is_named(&meta.path, "level") {
+                        let level: Ident = meta.value()?.call(Ident::parse_any)?;
+                        let level = Level::parse(&level)?;
+                        set_once(&mut attrs.level, level, &meta)
+                    } else if is_named(&meta.path, "unit") {
+                        let unit: Ident = meta.value()?.call(Ident::parse_any)?;
+                        let unit = Unit::parse(&unit)?;
+                        set_once(&mut attrs.unit, unit, &meta)
+                    } else if is_named(&meta.path, "with") {
+                        let with: Path = meta.value()?.parse()?;
+                        set_once(&mut attrs.with, with, &meta)
                     } else {
-                        DefaultAttr::Type
-                    };
-                    set_once(&mut attrs.default, default, &meta)
-                } else if is_named(&meta.path, "level") {
-                    let level: Ident = meta.value()?.parse()?;
-                    let level = Level::parse(&level)?;
-                    set_once(&mut attrs.level, level, &meta)
-                } else if is_named(&meta.path, "unit") {
-                    let unit: Ident = meta.value()?.parse()?;
-                    let unit = Unit::parse(&unit)?;
-                    set_once(&mut attrs.unit, unit, &meta)
-                } else if is_named(&meta.path, "with") {
-                    let with: Path = meta.value()?.parse()?;
-                    set_once(&mut attrs.with, with, &meta)
-                } else {
-                    Err(meta.error(format!(
-                        "unsupported inspect attribute; expected {FIELD_ENTRIES}"
-                    )))
-                }
-            })?;
-        }
-        if attrs.skip
-            && (attrs.name.is_some()
-                || attrs.default.is_some()
-                || attrs.level.is_some()
-                || attrs.unit.is_some()
-                || attrs.with.is_some()
-                || attrs.debug)
-        {
-            return Err(syn::Error::new_spanned(
-                field,
-                "a skipped field takes no other inspect attribute",
-            ));
-        }
-        if attrs.debug && attrs.with.is_some() {
-            return Err(syn::Error::new_spanned(
-                field,
-                "`debug` and `with` both map the field; keep one",
-            ));
-        }
-        if attrs.debug && attrs.default.is_some() {
-            return Err(syn::Error::new_spanned(
-                field,
-                "a `debug` field has no typed value to compare a default with; map it with `with` instead",
-            ));
-        }
-        Ok(attrs)
+                        Err(meta.error(format!(
+                            "unsupported inspect attribute; expected {FIELD_ENTRIES}"
+                        )))
+                    }
+                });
+                refusals.value(read);
+            }
+            if attrs.skip
+                && (attrs.name.is_some()
+                    || attrs.default.is_some()
+                    || attrs.level.is_some()
+                    || attrs.unit.is_some()
+                    || attrs.with.is_some()
+                    || attrs.debug)
+            {
+                refusals.push(syn::Error::new_spanned(
+                    field,
+                    "a skipped field takes no other inspect attribute",
+                ));
+            }
+            if attrs.debug && attrs.with.is_some() {
+                refusals.push(syn::Error::new_spanned(
+                    field,
+                    "`debug` and `with` both map the field; keep one",
+                ));
+            }
+            if attrs.debug && attrs.default.is_some() {
+                refusals.push(syn::Error::new_spanned(
+                    field,
+                    "a `debug` field has no typed value to compare a default with; map it with `with` instead",
+                ));
+            }
+            Ok(attrs)
+        })
     }
 }
 
 fn inspect_attributes(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
-    helpers(attrs, "inspect")
+    named(attrs, "inspect")
 }
 
 /// Store an attribute's value; a second one for the same field is an error, since only one
@@ -206,13 +214,13 @@ fn given_twice(meta: &ParseNestedMeta<'_>) -> syn::Error {
 
 /// `#[inspect(...)]` describes a field: on the type or on a variant it would do nothing, so it
 /// is refused there.
-fn refuse_item_attributes(attrs: &[Attribute]) -> syn::Result<()> {
-    inspect_attributes(attrs).next().map_or(Ok(()), |attr| {
-        Err(syn::Error::new_spanned(
+fn refuse_item_attributes(attrs: &[Attribute], refusals: &mut Refusals) {
+    for attr in inspect_attributes(attrs) {
+        refusals.push(syn::Error::new_spanned(
             attr,
             "`#[inspect(...)]` describes a field; write it on the field it describes",
-        ))
-    })
+        ));
+    }
 }
 
 /// One field to describe.
@@ -235,33 +243,40 @@ enum Shape<'a> {
 
 impl<'a> Shape<'a> {
     /// Read the type's fields and their attributes. Every refusal the derive makes of its
-    /// input is made here, before any path of the runtime is looked up.
+    /// input is made here, before any path of the runtime is looked up, and all of them are
+    /// reported together.
     fn parse(input: &'a DeriveInput) -> syn::Result<Self> {
-        refuse_item_attributes(&input.attrs)?;
-        match &input.data {
-            Data::Struct(data) => Ok(Self::Struct(described(
-                &data.fields,
-                None,
-                |member, _| quote!(&self.#member),
-            )?)),
-            Data::Enum(data) => data
-                .variants
-                .iter()
-                .map(|variant| {
-                    refuse_item_attributes(&variant.attrs)?;
-                    let fields = described(&variant.fields, Some("variant"), |_, index| {
-                        let binding = variant_binding(index);
-                        quote!(#binding)
-                    })?;
-                    Ok((variant, fields))
-                })
-                .collect::<syn::Result<Vec<_>>>()
-                .map(Self::Enum),
-            Data::Union(_) => Err(syn::Error::new(
-                input.ident.span(),
-                "`#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand",
-            )),
-        }
+        Refusals::collect(|refusals| {
+            refuse_item_attributes(&input.attrs, refusals);
+            refuse_unread(input, &["inspect"], refusals);
+            match &input.data {
+                Data::Struct(data) => Ok(Self::Struct(described(
+                    &data.fields,
+                    None,
+                    |member, _| quote!(&self.#member),
+                    refusals,
+                ))),
+                Data::Enum(data) => Ok(Self::Enum(
+                    data.variants
+                        .iter()
+                        .map(|variant| {
+                            refuse_item_attributes(&variant.attrs, refusals);
+                            let fields = described(
+                                &variant.fields,
+                                Some("variant"),
+                                |_, index| variant_binding(index).into_token_stream(),
+                                refusals,
+                            );
+                            (variant, fields)
+                        })
+                        .collect(),
+                )),
+                Data::Union(_) => Err(syn::Error::new(
+                    input.ident.span(),
+                    "`#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand",
+                )),
+            }
+        })
     }
 
     /// The variants of an enum that has some and whose variants all carry no field: the shape
@@ -280,7 +295,7 @@ impl<'a> Shape<'a> {
 
 /// The name a `match` arm binds a variant's field at `index` to.
 fn variant_binding(index: usize) -> Ident {
-    format_ident!("__inspect_{}", index)
+    local(&format!("field_{index}"))
 }
 
 /// Expand `#[derive(Inspect)]`.
@@ -300,10 +315,12 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         })
         .collect();
     let mut bounds: Vec<TokenStream> = Vec::new();
+    // The `Fields` the generated `inspect` writes to.
+    let out = local("out");
 
     let body = match &shape {
         Shape::Struct(fields) => {
-            let calls = field_calls(fields, &runtime, &type_params, &mut bounds);
+            let calls = field_calls(fields, &runtime, &type_params, &out, &mut bounds);
             quote!(#(#calls)*)
         }
         Shape::Enum(variants) if variants.is_empty() => quote!(match *self {}),
@@ -323,11 +340,11 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
                     Fields::Unnamed(_) => quote!(Self::#variant_ident ( #(#bindings),* )),
                     Fields::Unit => quote!(Self::#variant_ident),
                 };
-                let calls = field_calls(fields, &runtime, &type_params, &mut bounds);
+                let calls = field_calls(fields, &runtime, &type_params, &out, &mut bounds);
                 quote! {
                     #[allow(unused_variables, reason = "a skipped field is bound and not read")]
                     #pattern => {
-                        out.value(
+                        #out.value(
                             "variant",
                             #runtime::Value::Variant { ty: #kind, name: #variant_name },
                         );
@@ -388,7 +405,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
             #kind_args
 
-            fn inspect(&self, out: &mut #runtime::Fields<'_>) {
+            fn inspect(&self, #out: &mut #runtime::Fields<'_>) {
                 #body
             }
         }
@@ -405,10 +422,13 @@ fn described<'a>(
     fields: &'a Fields,
     reserved: Option<&str>,
     access: impl Fn(&Member, usize) -> TokenStream,
-) -> syn::Result<Vec<Described<'a>>> {
+    refusals: &mut Refusals,
+) -> Vec<Described<'a>> {
     let mut out: Vec<Described<'a>> = Vec::with_capacity(fields.len());
     for (index, (field, member)) in fields.iter().zip(fields.members()).enumerate() {
-        let attrs = FieldAttrs::parse(field)?;
+        let Some(attrs) = refusals.value(FieldAttrs::parse(field)) else {
+            continue;
+        };
         if attrs.skip {
             continue;
         }
@@ -420,20 +440,22 @@ fn described<'a>(
             LitStr::value,
         );
         if reserved == Some(reported.as_str()) {
-            return Err(syn::Error::new_spanned(
+            refusals.push(syn::Error::new_spanned(
                 field,
                 format!(
                     "`{reported}` names the enum's variant in the snapshot; report this field under another name with `#[inspect(name = \"...\")]`"
                 ),
             ));
+            continue;
         }
         if out.iter().any(|other| other.reported == reported) {
-            return Err(syn::Error::new_spanned(
+            refusals.push(syn::Error::new_spanned(
                 field,
                 format!(
                     "another field already reports as `{reported}`; give one of them another name with `#[inspect(name = \"...\")]`"
                 ),
             ));
+            continue;
         }
         out.push(Described {
             access: access(&member, index),
@@ -443,13 +465,14 @@ fn described<'a>(
             span: field.ty.span(),
         });
     }
-    Ok(out)
+    out
 }
 
 fn field_calls(
     fields: &[Described<'_>],
     runtime: &Path,
     type_params: &[&Ident],
+    out: &Ident,
     bounds: &mut Vec<TokenStream>,
 ) -> Vec<TokenStream> {
     fields
@@ -461,17 +484,17 @@ fn field_calls(
             let name = &field.reported;
             let generic = mentions_param(ty, type_params);
             let start = if let Some(with) = &field.attrs.with {
-                quote_spanned!(field.span=> out.value(#name, #with(#access)))
+                quote_spanned!(field.span=> #out.value(#name, #with(#access)))
             } else if field.attrs.debug {
                 if generic {
                     bounds.push(quote!(#ty: ::core::fmt::Debug));
                 }
-                quote_spanned!(field.span=> out.value(#name, #runtime::Value::Debug(#runtime::Untyped::new(#access))))
+                quote_spanned!(field.span=> #out.value(#name, #runtime::Value::Debug(#runtime::Untyped::new(#access))))
             } else {
                 if generic {
                     bounds.push(quote!(#ty: #runtime::FieldValue));
                 }
-                quote_spanned!(field.span=> out.field(#name, #access))
+                quote_spanned!(field.span=> #out.field(#name, #access))
             };
             let level = field.attrs.level.map(|level| {
                 let variant = level.variant();
@@ -484,7 +507,7 @@ fn field_calls(
             let (default_let, default_call) = match &field.attrs.default {
                 None => (None, None),
                 Some(default) => {
-                    let binding = format_ident!("__inspect_default_{}", index);
+                    let binding = local(&format!("default_{index}"));
                     let value = match default {
                         DefaultAttr::Type => quote!(::core::default::Default::default()),
                         DefaultAttr::Expr(expr) => quote!(#expr),
@@ -517,6 +540,7 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+    use crate::refusals::assert_refused;
 
     // What an accepted derive writes is tested from a consuming crate: expansion resolves the
     // runtime path from the consuming manifest, which this crate lacks. A refusal is made
@@ -579,5 +603,67 @@ mod tests {
             };
             assert!(error.contains(expected), "{case}: {error}");
         }
+    }
+
+    #[test]
+    fn an_entry_and_its_value_read_the_same_spelled_raw() {
+        let input: DeriveInput = parse_quote! {
+            struct S {
+                #[inspect(r#skip)]
+                a: f64,
+                #[r#inspect(r#name = "w", r#level = r#debug, r#unit = r#seconds)]
+                b: f64,
+            }
+        };
+        let Data::Struct(data) = &input.data else {
+            panic!("BUG: the input is a struct");
+        };
+        let attrs: Vec<FieldAttrs> = data
+            .fields
+            .iter()
+            .map(|field| FieldAttrs::parse(field).expect("BUG: the field's attributes read"))
+            .collect();
+        assert!(attrs[0].skip);
+        assert_eq!(
+            attrs[1].name.as_ref().map(LitStr::value).as_deref(),
+            Some("w")
+        );
+        assert!(matches!(attrs[1].level, Some(Level::Debug)));
+        assert!(matches!(attrs[1].unit, Some(Unit::Seconds)));
+    }
+
+    #[test]
+    fn every_refusal_of_a_described_type_is_reported_in_one_build() {
+        let input: DeriveInput = parse_quote! {
+            #[inspect(skip)]
+            enum E<#[inspect(skip)] T> {
+                #[inspect(skip)]
+                A {
+                    #[inspect(nonsense)]
+                    a: f64,
+                    #[inspect(name = "x", name = "y")]
+                    #[inspect()]
+                    b: f64,
+                    variant: f64,
+                    #[inspect(skip, debug, with = describe, default)]
+                    c: T,
+                },
+            }
+        };
+        assert_refused(
+            expand(&input),
+            &[
+                "describes a field",
+                "`#[inspect]` does nothing here",
+                "describes a field",
+                "unsupported inspect attribute",
+                "given twice",
+                "the list is empty",
+                "`variant` names the enum's variant",
+                "a skipped field takes no other inspect attribute",
+                "`debug` and `with` both map the field",
+                "a `debug` field has no typed value",
+            ],
+        );
     }
 }

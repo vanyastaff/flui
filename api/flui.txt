@@ -3917,6 +3917,13 @@ pub fn flui::foundation::inspect::render(root: &flui::foundation::inspect::Snaps
 pub fn flui::foundation::inspect::snapshot<T: flui::foundation::inspect::InspectTree + ?Sized>(tree: &T, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
 pub fn flui::foundation::inspect::style_for(is_terminal: bool) -> &'static dyn flui::foundation::inspect::Style
 pub mod flui::foundation::key
+pub trait flui::foundation::key::AsViewKey
+fn flui::foundation::key::AsViewKey::as_view_key(&self) -> Option<&dyn flui::foundation::ViewKey>
+impl flui::foundation::key::AsViewKey for Box<dyn flui::foundation::ViewKey>
+impl flui::foundation::key::AsViewKey for dyn flui::foundation::ViewKey
+impl<K: flui::foundation::ViewKey> flui::foundation::key::AsViewKey for K
+impl<K: flui::foundation::key::AsViewKey + ?Sized> flui::foundation::key::AsViewKey for alloc::rcs::rc::Rc<K>
+impl<K: flui::foundation::key::AsViewKey> flui::foundation::key::AsViewKey for Option<K>
 reexport flui::foundation::key::Key => flui::foundation::Key
 reexport flui::foundation::key::KeyRef => flui::foundation::KeyRef
 reexport flui::foundation::key::Keyed => flui::foundation::Keyed
@@ -8496,7 +8503,7 @@ pub struct flui::material::DrawerController { .. }
 impl Clone for flui::material::DrawerController
 impl core::fmt::Debug for flui::material::DrawerController
 impl flui::prelude::StatefulView for flui::material::DrawerController { type State = flui::material::DrawerControllerState; }
-impl flui::prelude::View for flui::material::DrawerController
+impl flui::prelude::View for flui::material::DrawerController where Self: flui::prelude::StatefulView
 impl flui::prelude::ViewState<flui::material::DrawerController> for flui::material::DrawerControllerState
 pub fn flui::material::DrawerController::barrier_dismissible(self, dismissible: bool) -> Self
 pub fn flui::material::DrawerController::edge_drag_width(self, width: f64) -> Self
@@ -24244,6 +24251,7 @@ pub fn flui::view::HapticsMode::new(child: impl flui::prelude::IntoView) -> Self
 pub struct flui::view::HostNoticeSubscription { .. }
 impl core::fmt::Debug for flui::view::HostNoticeSubscription
 reexport flui::view::IndexedSlot => flui::foundation::IndexedSlot
+reexport flui::view::InheritedData => flui_macros::InheritedData
 reexport flui::view::InheritedData => flui::prelude::InheritedData
 pub type flui::view::InheritedElement<V> = flui::view::element::Element<V, flui::foundation::Single, flui::view::element::InheritedBehavior<V>>
 reexport flui::view::InheritedView => flui::prelude::InheritedView
@@ -24619,6 +24627,7 @@ fn flui::view::StatefulRenderView::did_unmount_render_object(&self, _ctx: &flui:
 type flui::view::StatefulRenderView::Protocol: flui::rendering::Protocol
 type flui::view::StatefulRenderView::RenderObject: flui::rendering::RenderObject<<Self as flui::view::StatefulRenderView>::Protocol> + 'static
 type flui::view::StatefulRenderView::State: flui::view::RenderViewState<Self>
+reexport flui::view::StatefulView => flui_macros::StatefulView
 reexport flui::view::StatefulView => flui::prelude::StatefulView
 pub struct flui::view::StatelessBehavior { .. }
 impl Default for flui::view::StatelessBehavior
@@ -24626,6 +24635,7 @@ impl core::fmt::Debug for flui::view::StatelessBehavior
 impl<V, A> flui::view::element::ElementBehavior<V, A> for flui::view::StatelessBehavior where V: flui::prelude::StatelessView, A: flui::view::element::ElementArity
 pub fn flui::view::StatelessBehavior::new() -> Self
 pub type flui::view::StatelessElement<V> = flui::view::element::Element<V, flui::foundation::Single, flui::view::StatelessBehavior>
+reexport flui::view::StatelessView => flui_macros::StatelessView
 reexport flui::view::StatelessView => flui::prelude::StatelessView
 pub struct flui::view::TaskToken { .. }
 impl Drop for flui::view::TaskToken
@@ -25651,6 +25661,7 @@ reexport flui::view::view::ErrorViewBuilder => flui::view::ErrorViewBuilder
 reexport flui::view::view::FieldMask => flui::view::FieldMask
 reexport flui::view::view::FieldSet => flui::view::FieldSet
 reexport flui::view::view::FrameworkError => flui::view::FrameworkError
+reexport flui::view::view::InheritedData => flui_macros::InheritedData
 reexport flui::view::view::InheritedData => flui::prelude::InheritedData
 reexport flui::view::view::InheritedElement => flui::view::InheritedElement
 reexport flui::view::view::InheritedView => flui::prelude::InheritedView
@@ -25671,8 +25682,10 @@ reexport flui::view::view::RootRenderElement => flui::view::RootRenderElement
 reexport flui::view::view::RootRenderView => flui::view::RootRenderView
 reexport flui::view::view::StatefulElement => flui::view::StatefulElement
 reexport flui::view::view::StatefulRenderView => flui::view::StatefulRenderView
+reexport flui::view::view::StatefulView => flui_macros::StatefulView
 reexport flui::view::view::StatefulView => flui::prelude::StatefulView
 reexport flui::view::view::StatelessElement => flui::view::StatelessElement
+reexport flui::view::view::StatelessView => flui_macros::StatelessView
 reexport flui::view::view::StatelessView => flui::prelude::StatelessView
 reexport flui::view::view::View => flui::prelude::View
 reexport flui::view::view::ViewExt => flui::prelude::ViewExt

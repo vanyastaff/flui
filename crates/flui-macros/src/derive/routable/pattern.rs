@@ -88,15 +88,6 @@ pub(crate) fn specificity(a: &[Segment], b: &[Segment]) -> Ordering {
     })
 }
 
-/// The first pair `(earlier, later)` of patterns with the same shape.
-pub(crate) fn first_conflict(patterns: &[&[Segment]]) -> Option<(usize, usize)> {
-    (0..patterns.len()).find_map(|later| {
-        (0..later)
-            .find(|&earlier| same_shape(patterns[earlier], patterns[later]))
-            .map(|earlier| (earlier, later))
-    })
-}
-
 /// Indices of `patterns` in the order they are tried.
 pub(crate) fn match_order(patterns: &[&[Segment]]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..patterns.len()).collect();
@@ -165,23 +156,24 @@ mod tests {
         assert!(rank(0) < rank(1), "{order:?}");
         assert!(rank(4) < rank(1), "{order:?}");
     }
-
-    fn first_conflict_names_the_later_duplicate() {
-        let patterns = [
-            parsed("/"),
-            parsed("/n/:a"),
-            parsed("/n/new"),
-            parsed("/n/:b"),
+    fn two_patterns_share_a_shape_when_they_match_the_same_locations() {
+        let cases: [(&str, &str, bool); 6] = [
+            ("/", "/", true),
+            ("/n/:a", "/n/:b", true),
+            ("/n/new", "/n/new", true),
+            ("/n/:a", "/n/new", false),
+            ("/n", "/n/:a", false),
+            ("/:a/n", "/n/:a", false),
         ];
-        let patterns: Vec<&[Segment]> = patterns.iter().map(Vec::as_slice).collect();
-        assert_eq!(first_conflict(&patterns), Some((1, 3)));
-        assert_eq!(first_conflict(&patterns[..3]), None);
+        for (a, b, expected) in cases {
+            assert_eq!(same_shape(&parsed(a), &parsed(b)), expected, "{a} {b}");
+        }
     }
 
     #[test]
     fn route_pattern_contract() {
         a_pattern_is_segments_or_the_reason_it_is_not();
         match_order_puts_literals_before_parameters();
-        first_conflict_names_the_later_duplicate();
+        two_patterns_share_a_shape_when_they_match_the_same_locations();
     }
 }

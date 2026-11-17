@@ -299,9 +299,10 @@ fn reduced_motion_keeps_visible_loading_without_continuation() {
     );
 }
 
-#[derive(Clone)]
+#[derive(Clone, flui_view::StatefulView)]
 struct KeyedIndicator {
     isolated: bool,
+    #[view(key)]
     key: flui_view::GlobalKey<KeyedIndicatorState>,
     registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
     inits: std::rc::Rc<std::cell::Cell<usize>>,
@@ -310,15 +311,6 @@ struct KeyedIndicator {
 struct KeyedIndicatorState {
     registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
     inits: std::rc::Rc<std::cell::Cell<usize>>,
-}
-
-impl flui_view::View for KeyedIndicator {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
-    }
 }
 
 impl flui_view::StatefulView for KeyedIndicator {

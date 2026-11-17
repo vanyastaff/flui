@@ -8,9 +8,11 @@
 
 use std::path::{Path, PathBuf};
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::quote;
 use toml_edit::{Document, TableLike};
+
+use crate::hygiene::local;
 
 /// One list the manifest declares: the crate's own entries, then each
 /// feature's, which count when the crate is compiled with that feature.
@@ -147,7 +149,7 @@ impl Opens {
             } = declared;
             quote! { #app::__entry::FileTypeDeclaration::new(#extension, #mime, #name) }
         });
-        let declared = syn::Ident::new("__flui_declared", Span::mixed_site());
+        let declared = local("declared");
         syn::parse2(quote! {
             let #declared = {
                 const URL_SCHEME_PARTS: &[&[&str]] = #schemes;

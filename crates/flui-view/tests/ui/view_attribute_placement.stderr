@@ -4,13 +4,13 @@ error: `#[view(...)]` marks a field of a struct; an enum's variants and a union'
 11 |         #[view(site)]
    |         ^^^^^^^^^^^^^
 
-error: expected `inspect`; `site` marks a field
+error: expected `inspect`; `key` and `site` mark a field
   --> tests/ui/view_attribute_placement.rs:17:8
    |
 17 | #[view(site)]
    |        ^^^^
 
-error: expected `site`; `inspect` goes on the type
+error: expected `key` or `site`; `inspect` goes on the type
   --> tests/ui/view_attribute_placement.rs:24:12
    |
 24 |     #[view(inspect)]
@@ -45,3 +45,15 @@ error: `#[view(...)]` marks a field of a struct; an enum's variants and a union'
    |
 53 |     #[r#view(inspect)]
    |     ^^^^^^^^^^^^^^^^^^
+
+error: only one field can be marked `#[view(key)]`
+  --> tests/ui/view_attribute_placement.rs:61:12
+   |
+61 |     #[view(key)]
+   |            ^^^
+
+error: `#[view]` does nothing here: the derive reads the attributes of the type, of its variants and of their fields
+  --> tests/ui/view_attribute_placement.rs:66:21
+   |
+66 | struct OnAParameter<#[view(site)] T> {
+   |                     ^^^^^^^^^^^^^

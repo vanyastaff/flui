@@ -6,6 +6,8 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::ItemFn;
 
+use crate::generics;
+use crate::refusals::Refusals;
 use crate::runtime_path::Runtime;
 
 mod declares;
@@ -71,38 +73,72 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     })
 }
 
-/// The entry function takes nothing and is a plain, synchronous `fn`.
+/// The entry function takes nothing and is a plain, synchronous `fn`. Each
+/// part of the signature that says otherwise is refused, all in one build.
 fn check_signature(function: &ItemFn) -> syn::Result<()> {
     let sig = &function.sig;
-    fn wrong(at: impl ToTokens, what: &str) -> syn::Result<()> {
-        Err(syn::Error::new_spanned(
+    let wrong = |at: &dyn ToTokens, what: &str| {
+        syn::Error::new_spanned(
             at,
             format!(
                 "`#[flui::main]` function {what}: write `pub fn run() -> Result<(), flui::LaunchError>`"
             ),
-        ))
-    }
-    if let Some(asyncness) = &sig.asyncness {
-        return wrong(asyncness, "cannot be `async`; the run drives its own loop");
-    }
-    if let syn::Safety::Unsafe(unsafety) = &sig.safety {
-        return wrong(unsafety, "cannot be `unsafe`");
-    }
-    if let Some(abi) = &sig.abi {
-        return wrong(abi, "cannot name an ABI");
-    }
-    if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
-        return if sig.generics.params.is_empty() {
-            wrong(&sig.generics.where_clause, "cannot be generic")
-        } else {
-            wrong(&sig.generics, "cannot be generic")
+        )
+    };
+    Refusals::collect(|refusals| {
+        if let Some(asyncness) = &sig.asyncness {
+            refusals.push(wrong(
+                asyncness,
+                "cannot be `async`; the run drives its own loop",
+            ));
+        }
+        if let syn::Safety::Unsafe(unsafety) = &sig.safety {
+            refusals.push(wrong(unsafety, "cannot be `unsafe`"));
+        }
+        if let Some(abi) = &sig.abi {
+            refusals.push(wrong(abi, "cannot name an ABI"));
+        }
+        if let Some(generic) = generics::declared(&sig.generics) {
+            refusals.push(wrong(generic, "cannot be generic"));
+        }
+        if !sig.inputs.is_empty() {
+            refusals.push(wrong(&sig.inputs, "takes no arguments"));
+        } else if let Some(variadic) = &sig.variadic {
+            refusals.push(wrong(variadic, "takes no arguments"));
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+    use crate::refusals::assert_refused;
+
+    #[test]
+    fn every_refusal_of_an_entrys_signature_is_reported_in_one_build() {
+        let plain: ItemFn = parse_quote! {
+            pub fn run() -> Result<(), flui::LaunchError> { Ok(()) }
         };
+        assert!(check_signature(&plain).is_ok());
+
+        let function: ItemFn = parse_quote! {
+            async unsafe extern "C" fn run<T>(argc: u8) where T: Copy {}
+        };
+        assert_refused(
+            check_signature(&function),
+            &[
+                "cannot be `async`",
+                "cannot be `unsafe`",
+                "cannot name an ABI",
+                "cannot be generic",
+                "takes no arguments",
+            ],
+        );
+        // A clause without a predicate still makes the function generic.
+        let function: ItemFn = parse_quote! { fn run() where {} };
+        assert_refused(check_signature(&function), &["cannot be generic"]);
     }
-    if !sig.inputs.is_empty() {
-        return wrong(&sig.inputs, "takes no arguments");
-    }
-    if let Some(variadic) = &sig.variadic {
-        return wrong(variadic, "takes no arguments");
-    }
-    Ok(())
 }

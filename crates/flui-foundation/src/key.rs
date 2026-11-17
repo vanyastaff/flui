@@ -427,6 +427,66 @@ impl Hash for dyn ViewKey {
     }
 }
 
+/// A field a view reads its key from: a [`ViewKey`], one that may be absent, or one that is
+/// shared or boxed as a trait object.
+///
+/// `#[view(key)]` on a field of a `#[derive(StatelessView)]` or `#[derive(StatefulView)]`
+/// type writes `View::key` through this trait, so the field keeps the type the view needs:
+///
+/// | Field type | The view's key |
+/// |------------|----------------|
+/// | `K: ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …) | always that key |
+/// | `Option<K>` of any row here | the key when there is one, keyless otherwise |
+/// | `Rc<dyn ViewKey>`, `Box<dyn ViewKey>` | the key inside |
+///
+/// The trait lives beside [`ViewKey`] because only the crate that owns `ViewKey` can state
+/// that `Option<K>` and `Rc<K>` are not keys themselves, which is what lets these
+/// implementations stand beside the one for every `K: ViewKey`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a field a view can read its key from",
+    label = "not a view key",
+    note = "a `#[view(key)]` field is a `ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …), an `Option` of one, or an `Rc<dyn ViewKey>` or `Box<dyn ViewKey>`"
+)]
+pub trait AsViewKey {
+    /// The key this field gives its view, or `None` when it holds none.
+    fn as_view_key(&self) -> Option<&dyn ViewKey>;
+}
+
+impl<K: ViewKey> AsViewKey for K {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        Some(self)
+    }
+}
+
+impl AsViewKey for dyn ViewKey {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        Some(self)
+    }
+}
+
+impl<K: AsViewKey> AsViewKey for Option<K> {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        self.as_ref().and_then(AsViewKey::as_view_key)
+    }
+}
+
+impl<K: AsViewKey + ?Sized> AsViewKey for std::rc::Rc<K> {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        (**self).as_view_key()
+    }
+}
+
+impl AsViewKey for Box<dyn ViewKey> {
+    #[inline]
+    fn as_view_key(&self) -> Option<&dyn ViewKey> {
+        Some(&**self)
+    }
+}
+
 // ============================================================================
 // VALUE KEY
 // ============================================================================

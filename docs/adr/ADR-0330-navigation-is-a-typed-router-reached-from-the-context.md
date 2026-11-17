@@ -126,7 +126,8 @@ variant's fields.
   a variant, where the derive could not act on them; a variant with no `#[route]`, with two, or
   with anything after the pattern; a malformed pattern; a parameter without a field, a field
   without a parameter that is not `#[query]`, a parameter that names a `#[query]` field, a
-  malformed or empty `#[query(...)]`; a
+  malformed, empty or doubled `#[query(...)]`, two fields of a variant that read one query key
+  (the second could not be told from the first in a location); a
   field type that is not `FromStr + Display` (plus `Default` for a query field that is neither
   `Option` nor `Vec`; reported on the field); and two patterns of the
   same shape (the same length, the same literals and parameters in the same places), because
@@ -411,7 +412,7 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted shapes
   (`routable_ui/pass/`) and every rejection against its diagnostic (`routable_ui/fail/`); the
   pattern parser, specificity order and conflict detection in
-  `crates/flui-macros/src/derive_routable/pattern.rs`.
+  `crates/flui-macros/src/derive/routable/pattern.rs`.
 - §2: in `crates/flui-widgets/tests/router.rs`, rows of the `router_and_widgets_app` table of
   `tests/contracts.rs`: `router_opens_at_a_location_with_its_back_stack`,
   `a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles`,

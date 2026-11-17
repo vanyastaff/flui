@@ -66,4 +66,10 @@ struct NamesNothing {
     width: f64,
 }
 
+#[derive(Inspect)]
+struct InAFieldsType {
+    #[inspect(skip)]
+    call: fn(#[inspect(name = "x")] u32),
+}
+
 fn main() {}

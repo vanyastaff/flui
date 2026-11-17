@@ -358,7 +358,7 @@ note: required because it appears within the type `X`
             "crates/flui-widgets/tests/routable_ui/pass/basic.rs",
             "crates/flui-widgets/tests/routable_ui/pass/a_new_case.rs",
             // the derive whose error text `routable_ui/fail/*.stderr` copies
-            "crates/flui-macros/src/derive_routable.rs",
+            "crates/flui-macros/src/derive/routable.rs",
             "tests/ui/thread_boundary/owner_values_stay_on_their_thread.stderr",
             "tests/ui/thread_boundary/owner_values_stay_on_their_thread.rs",
             "tests/ui/thread_boundary/a_new_case.rs",

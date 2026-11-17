@@ -28,6 +28,13 @@
 //! feedback kinds and input regions);
 //! `tests/surface.rs` pins the list.
 
+// Derive expansions use the same absolute owner path in library and integration targets.
+#[allow(
+    unused_extern_crates,
+    reason = "derive expansions resolve the owner by its absolute crate name"
+)]
+extern crate self as flui_sdk;
+
 pub use flui_animation as animation;
 pub use flui_foundation as foundation;
 pub use flui_foundation::geometry;

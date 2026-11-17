@@ -378,7 +378,7 @@ a key arrives with its first consumer.
   `android_manifest::tests::the_activity_filters_what_the_application_opens`;
   `apple_opening::tests::a_bundle_registers_what_the_application_opens` and
   `the_keys_render_as_xml_property_list_entries`; `ios_package::tests::publication_contract` ("the
-  info plist registers what the application opens"); `main_attr::declares::tests::the_entry_carries_what_the_manifest_declares_it_opens`
+  info plist registers what the application opens"); `entry::declares::tests::the_entry_carries_what_the_manifest_declares_it_opens`
   (flui-macros), `runner_open::the_entry_functions_manifest_declares_what_a_run_opens` (flui-app)
   and `cli_create::generated_basic_project_compiles` (an entry whose manifest and feature declare
   links compiles with the feature off and on).

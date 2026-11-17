@@ -1,8 +1,8 @@
-//! `#[view(...)]` where the derive could not act on it. `site` reads a field
-//! of `self`, which only a struct has, and `inspect` is about the whole type;
-//! anywhere else the attribute is refused instead of ignored, so a view never
-//! silently reports no creation site.
-use flui_foundation::CreationSite;
+//! `#[view(...)]` where the derive could not act on it. `key` and `site` read
+//! a field of `self`, which only a struct has, and `inspect` is about the
+//! whole type; anywhere else the attribute is refused instead of ignored, so
+//! a view never silently reports no key or no creation site.
+use flui_foundation::{CreationSite, UniqueKey};
 use flui_view::prelude::*;
 
 #[derive(Clone, StatelessView)]
@@ -52,6 +52,19 @@ struct NamesNothing;
 enum SpelledRaw {
     #[r#view(inspect)]
     Shown,
+}
+
+#[derive(Clone, StatelessView)]
+struct TwoKeys {
+    #[view(key)]
+    first: UniqueKey,
+    #[view(key)]
+    second: UniqueKey,
+}
+
+#[derive(Clone, StatelessView)]
+struct OnAParameter<#[view(site)] T> {
+    value: T,
 }
 
 fn main() {}
