@@ -1,7 +1,7 @@
 //! The decidable half of the Win32 OLE drag and drop backend: format mapping,
 //! the bytes each clipboard format carries, `DROPEFFECT` mapping and when the
 //! drop source ends the modal loop. The COM side around it runs only on
-//! Windows (the rest of `drag::windows`); how often that loop asks for frames
+//! Windows (the rest of `drag::windows`); when that loop asks for frames
 //! is the owner's (`owner::modal_pace`).
 
 use std::path::PathBuf;
