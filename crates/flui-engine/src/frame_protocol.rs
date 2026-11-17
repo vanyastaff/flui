@@ -132,7 +132,7 @@ pub(crate) struct FrameProtocol {
     /// in; `0` after a full frame or one that failed.
     region_passes: u32,
     /// How a partial frame's region is planned: [`RegionPlan::of`], or rect
-    /// by rect where a test asked for it ([`Self::plan_rect_by_rect`]).
+    /// by rect where a test asked for it (`plan_rect_by_rect`, test builds only).
     plan_region: RegionPlanner,
 }
 

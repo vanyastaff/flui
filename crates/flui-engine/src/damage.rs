@@ -9,11 +9,11 @@
 //! the raster executor's slot when the frame renders. A frame that is hidden or
 //! stale never reaches the tracker: its slot owes the next frame a full repaint instead.
 //!
-//! The accumulator keeps a [`Region`]: the rects of every publication owed,
-//! up to [`Region::MAX`] of them, a further one merging the cheapest pair as
+//! The accumulator keeps a [`Region`](flui_layer::Region): the rects of every publication owed,
+//! up to [`Region::MAX`](flui_layer::Region::MAX) of them, a further one merging the cheapest pair as
 //! the region itself does. [`crate::damage::plan_frame`] turns it into where a frame renders,
-//! and a partial frame into a [`RegionPlan`] (ADR-0304 §9). Production plans
-//! every region as its bounding box ([`RegionPlan::of`]); the rect-by-rect
+//! and a partial frame into a [`RegionPlan`](crate::damage::RegionPlan) (ADR-0304 §9). Production plans
+//! every region as its bounding box ([`RegionPlan::of`](crate::damage::RegionPlan::of)); the rect-by-rect
 //! plan is built and pinned by tests, and is switched on once a frame records
 //! its content once and replays it per rect, because recording it again for
 //! every rect costs more than the pixels it saves.
