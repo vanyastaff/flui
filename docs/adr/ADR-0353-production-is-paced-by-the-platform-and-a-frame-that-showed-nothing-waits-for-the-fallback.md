@@ -130,13 +130,17 @@ deadline that comes due between the two reads is counted at least once. An inbox
 raster attempt (`next_attempt_at`, a device rebuild or a surface restore) and the due fallback
 count at once. A frame's immediate retry (a panicking resize asking again) is tree work that frame
 left, so it waits for the fallback and cannot spin; a dropped frame's paced retry is due work at
-its backoff deadline. A frame the loop thread ran that presents nothing and leaves nothing
-pending (the gate closes, so it arms no deferral) releases a pending fallback's `holds_work`
-(`FallbackWake::release_held_work`); the deadline stays, and tree work after that frame runs at
-once. A frame a raster thread held does not release it, so the hold lasts until the deadline, one
-fallback at most. With no fallback armed, every pending work is dirty at once. A press, a release
-or a key is dispatched when it arrives (the platform input callback calls `handle_input_addressed`
-directly); the frame that shows its effect waits only while the fallback holds tree work.
+its backoff deadline. A frame the loop thread ran that presents nothing and leaves nothing the
+runtime counts as pending (the gate closes, so it arms no deferral) releases a pending fallback's
+`holds_work` (`FallbackWake::release_held_work`); the deadline stays, and tree work after that
+frame runs at once. Work a backoff or an abandoned device masks is not counted, and it returns as
+due work or through an explicit retry, bounded by those. A frame a raster thread held does not
+release the hold; it lasts until the deadline, a later loop-thread frame that closes the gate, or
+a present. With no fallback armed, every pending work is dirty at once. A press, a release or a
+key is dispatched when it arrives (the platform input callback calls `handle_input_addressed`
+directly). The frame that shows its effect waits for a pending fallback when that effect is a
+redraw request, a scheduled frame or input work, and when it is tree work only while the fallback
+holds tree work.
 Pointer motion is coalesced or resampled and delivered by the frame,
 so on a window whose last frame showed nothing, its handlers run with that frame, at most one
 fallback (0.95 display period) late. A deadline source must be in the dirty predicate and

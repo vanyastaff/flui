@@ -482,8 +482,8 @@ impl FallbackWake {
     }
 
     /// A pump ran, presented nothing and left nothing pending (the gate is
-    /// closed, so no deadline is armed for it): the tree work a pending
-    /// deadline held is done. The deadline stays, and tree work that arrives
+    /// closed, so no deadline is armed for it): a pending deadline no longer
+    /// holds tree work. The deadline stays, and tree work that arrives
     /// after this frame is new and runs at once.
     pub(super) fn release_held_work(&self) {
         self.state.lock().holds_work = false;
@@ -810,7 +810,7 @@ mod desktop_pacing_tests {
         let released = fallback.gate(now);
         assert!(
             released.pending && !released.holds_work,
-            "a frame that ran out the held work releases it; the deadline stays"
+            "a frame that left nothing pending releases the hold; the deadline stays"
         );
         assert!(
             frame_is_dirty(false, false, tree, None, released),
