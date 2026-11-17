@@ -1590,12 +1590,17 @@ fn captured_streams_replay_to_what_the_session_delivered() {
             state
                 .display
                 .into_iter()
-                .chain(state.outer.position().map(|at| at.display()))
+                .chain(
+                    state
+                        .outer
+                        .position()
+                        .map(flui_platform::WindowPosition::display),
+                )
                 .chain(
                     state
                         .normal_geometry
                         .and_then(flui_platform::WindowGeometry::position)
-                        .map(|at| at.display()),
+                        .map(flui_platform::WindowPosition::display),
                 )
         })
         .map(|id| (id.get(), id))

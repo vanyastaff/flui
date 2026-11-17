@@ -775,8 +775,7 @@ mod cases {
             session
                 .platform
                 .display_snapshot()
-                .map(|snapshot| snapshot.displays().to_vec())
-                .unwrap_or_default()
+                .map_or_else(|_| Vec::new(), |snapshot| snapshot.displays().to_vec())
         };
         session.turn_until("both outputs in the snapshot", |session| {
             displays(session).len() == 2
