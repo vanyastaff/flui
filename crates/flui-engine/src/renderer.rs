@@ -50,6 +50,7 @@ use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
 use crate::surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
+use crate::surface_pacing::SurfacePacing;
 use crate::surface_present::{
     SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery, SwapchainFrame,
     acquire_surface_texture_with, classify_frame, reconfigure_after_suboptimal_present,
@@ -604,6 +605,7 @@ impl Renderer {
     pub(crate) fn derive_surface_config(
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
+        pacing: SurfacePacing,
         width: u32,
         height: u32,
         latency: FrameLatency,
@@ -652,7 +654,7 @@ impl Renderer {
             color_space: surface_color.color_space(),
             width,
             height,
-            present_mode: Self::select_present_mode(&surface_caps),
+            present_mode: Self::select_present_mode(&surface_caps, pacing),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             // The caller's `FrameLatency` (ADR-0347), `Balanced` unless the window asked for
@@ -753,7 +755,15 @@ impl Renderer {
         let queue = Arc::new(queue);
 
         let (config, supports_copy_src, surface_color) =
-            Self::derive_surface_config(&surface, &adapter, width, height, latency, color)?;
+            Self::derive_surface_config(
+                &surface,
+                &adapter,
+                SurfacePacing::of(&**target),
+                width,
+                height,
+                latency,
+                color,
+            )?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
@@ -1190,38 +1200,40 @@ impl Renderer {
         limits.or_worse_values_from(adapter_limits)
     }
 
-    /// Select present mode based on capabilities.
+    /// The present mode of a surface offering `surface_caps` and paced by
+    /// `pacing` ([`SurfacePacing::present_mode`], ADR-0356).
     ///
-    /// Fifo is the default. On the Vulkan/Wayland path `render_scene`'s
-    /// blocking `get_current_texture()`/`present()` pair against Fifo is the
-    /// steady-state pacing mechanism: every PRESENTED frame blocks at display
-    /// cadence, which is what lets `flui-app`'s runner drop its fixed
-    /// frame-budget sleep in favor of a real vsync block (see the frame-pacing
-    /// ADR). That is a per-backend fact, not a property of Fifo: measured
+    /// A surface the display paces presents in `Fifo`, and on X11 and Win32
+    /// `render_scene`'s blocking `get_current_texture()`/`present()` pair is
+    /// the steady-state pacer: a presented frame blocks at the display's
+    /// cadence, so `flui-app`'s runner needs no frame-budget sleep (ADR-0353).
+    /// That is a per-backend fact, not a property of `Fifo`: measured
     /// 2026-09-17 on the native AppKit backend, `queue.present()` returns in
-    /// ~42 µs and the display cadence comes from AppKit's display-pass
-    /// scheduling instead — same vsync-locked period, different mechanism
+    /// ~42 µs and the cadence comes from AppKit's display pass instead
     /// (ADR-0353's per-backend facts; Windows' native backend is unmeasured).
-    /// Mailbox (triple
-    /// buffering, uncapped present, lower latency) is a documented future
-    /// opt-in for latency-sensitive apps that accept trading pacing for
-    /// responsiveness — it is not the default because pairing an uncapped
-    /// present mode with a wake-driven redraw loop reproduces the exact
-    /// busy-spin (~30 000 fps, observed) this pacing model exists to avoid.
+    /// An uncapped mode there would spin the wake-driven loop (~30 000 fps,
+    /// observed). A Wayland surface is paced by its compositor's frame
+    /// callback, which the host waits for before it asks for the next frame,
+    /// so it presents without waiting on the compositor itself: a `Fifo`
+    /// present there waits for a callback a compositor never sends a surface
+    /// it does not draw.
     ///
-    /// NB: Fifo does not cure live-resize wobble either — it blocks on
-    /// vsync and ghosts a stale frame during the modal resize loop, same as
-    /// Mailbox stretching the in-flight frame. The wobble is inherent
-    /// flip-model DWM compositing; the only real fix is DXGI_SCALING_NONE,
-    /// which wgpu 30 still does not expose.
-    fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
+    /// No mode cures Windows' live-resize wobble: `Fifo` blocks on vsync and
+    /// ghosts a stale frame during the modal resize loop, as `Mailbox`
+    /// stretches the in-flight one. The wobble is inherent to flip-model DWM
+    /// compositing; the only real fix is `DXGI_SCALING_NONE`, which wgpu 30
+    /// still does not expose.
+    fn select_present_mode(
+        surface_caps: &wgpu::SurfaceCapabilities,
+        pacing: SurfacePacing,
+    ) -> wgpu::PresentMode {
         debug_assert!(
             surface_caps
                 .present_modes
                 .contains(&wgpu::PresentMode::Fifo),
             "BUG: wgpu guarantees Fifo is always a supported present mode"
         );
-        wgpu::PresentMode::Fifo
+        pacing.present_mode(&surface_caps.present_modes)
     }
 
     /// Set how many frames this window's swapchain holds ahead of the display (ADR-0347).
@@ -1316,6 +1328,7 @@ impl Renderer {
         let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
             surface,
             &self.adapter,
+            self.lease.pacing(),
             width,
             height,
             self.frame_latency,
@@ -1706,6 +1719,7 @@ impl Renderer {
         let (fresh_config, supports_copy_src, fresh_color) = Self::derive_surface_config(
             &surface,
             &self.adapter,
+            SurfacePacing::of(&**released.target()),
             width,
             height,
             self.frame_latency,

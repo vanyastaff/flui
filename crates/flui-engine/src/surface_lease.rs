@@ -111,6 +111,12 @@ impl<S> SurfaceLease<S> {
         }
     }
 
+    /// Who paces the surfaces the retained target makes, which picks their
+    /// present mode.
+    pub(crate) fn pacing(&self) -> crate::surface_pacing::SurfacePacing {
+        crate::surface_pacing::SurfacePacing::of(&*self.target)
+    }
+
     /// The current surface, or `None` while [`SurfaceLease::release`] holds.
     pub(crate) fn surface(&self) -> Option<&S> {
         self.surface.as_ref()

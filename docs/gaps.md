@@ -410,7 +410,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** desktop, iOS, Android · **Who it hurts:** Games, drawing and latency-sensitive apps · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
 
-- The engine always presents with `Fifo` and a frame latency of 2; nothing lets the platform layer or the app choose a present mode, a queue depth, variable-refresh behaviour or tearing.
+- The engine chooses each surface's present mode from what paces it (`Fifo` where the display does, `Mailbox` or else `Immediate` on Wayland, whose compositor does: ADR-0356), and the queue depth is the application's `FrameLatency`; nothing lets the platform layer or the app choose a present mode, variable-refresh behaviour or tearing.
 - Every present hands the compositor the whole image: the engine's damage bounds what a frame redraws, into a retained target blitted whole to the swapchain (`crates/flui-engine/src/damage.rs`), not what it presents. No dirty rectangles reach DXGI `Present1`, Wayland's buffer damage or the EGL damage extension, since wgpu 30 exposes none, so a typed glyph recomposes the whole window.
 - Presentation feedback ([No presentation feedback](#no-presentation-feedback)) is read-only and "Refresh rate and frame pacing" covers rates only; control over how frames are presented is the other half.
 - Windows tearing needs `DXGI_FEATURE_PRESENT_ALLOW_TEARING` and `DXGI_PRESENT_ALLOW_TEARING`, which can only be used with sync interval 0 ([Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/variable-refresh-rate-displays)); Wayland has `wp_tearing_control_v1`, `fifo-v1` and `commit-timing-v1`.

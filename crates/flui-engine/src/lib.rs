@@ -377,6 +377,7 @@ mod glyph_atlas;
 mod surface_color;
 mod surface_factory;
 mod surface_lease;
+mod surface_pacing;
 mod surface_present;
 mod tessellator;
 pub(crate) mod texture_cache;

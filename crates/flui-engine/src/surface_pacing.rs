@@ -1,8 +1,8 @@
 //! Who decides when a surface's frames are shown, and the present mode that
-//! follows from it (ADR-0353).
+//! follows from it (ADR-0356).
 //!
 //! A surface the display paces presents in `Fifo`: its present blocks at the
-//! display's cadence, and that block is the pacer (ADR-0058). A Wayland
+//! display's cadence, and that block is the pacer (ADR-0353). A Wayland
 //! surface is paced by its compositor instead: the host arms a frame callback
 //! with every present (`SurfaceTarget::pre_present_notify`) and asks for the
 //! next frame only once the compositor answers it, or once its grace runs out

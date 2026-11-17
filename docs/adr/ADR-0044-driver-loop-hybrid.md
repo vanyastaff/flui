@@ -10,6 +10,9 @@
   [ADR-0254](ADR-0254-window-contract.md) decision 4, in part: §7's registered
   `Platform::set_wake_deadline_hook`, which is `AppHandler::wake_deadline`; the wall-clock wake
   the loop computes from the answer stays.
+- **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
+  §4 only, the pacer of its Wayland row: the compositor's frame callback alone paces a Wayland
+  surface, which presents without the blocking `Fifo` present.
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §1 (sanctioned leapfrog zone: runtime/scheduling topology is not Flutter-loyal by the Prime Directive's own carve-out); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the pacing mechanism this record's "real pacer" column defers to on every platform)
 - **Issue:** #556 — Runtime `UpdateScheduler`, presentation `FrameClock`, raster backpressure
 
