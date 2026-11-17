@@ -2326,10 +2326,11 @@ impl MacOSWindow {
     ) -> Option<WindowPosition> {
         let snapshot = self.displays.get()?.published();
         let screen = snapshot.get(display?)?;
-        let desktop = top_left_of_frame(
-            crate::owner::apple::macos::bounds_of(frame),
-            primary_screen_height()?,
-        )?;
+        // SAFETY: a window is used on its owner thread only, as it is
+        // neither `Send` nor `Sync`, which is the function's contract.
+        let primary_height = unsafe { primary_screen_height() }?;
+        let desktop =
+            top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), primary_height)?;
         position_on(desktop, screen)
     }
 
