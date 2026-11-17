@@ -515,7 +515,7 @@ fn answer_session_end(phase: flui_platform::SessionEndPhase) -> flui_platform::S
             // A subscriber that panics still gets the platform its answer, and
             // the book still closes: the panic is contained here, a native
             // callback boundary, and reported. A panicking subscriber holds
-            // no block (R25).
+            // no block.
             let delivery = deliver_contained(&HostNotice::SessionEnding(request.clone()));
             let held = request.answer();
             if let Some(delivery) = delivery
