@@ -1,6 +1,6 @@
 //! A window whose surface target is asked to keep the native window past the
 //! close (`SurfaceTarget::keep_past_close`, ADR-0305 §9), as `flui-app`'s
-//! raster host asks of every window once a raster thread is dead or wedged:
+//! raster host asks of every window once a raster thread is wedged:
 //! a keep recorded any time before the close settles the window's fate,
 //! usually while the window is still open, changes nothing until the close;
 //! the window is closed to the application all the same, and the headless

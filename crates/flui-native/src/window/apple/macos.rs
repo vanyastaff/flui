@@ -1785,7 +1785,9 @@ impl Drop for MacOSWindow {
         // may free. A window that closed set this already, and let go of its
         // handler there.
         if !self.closed.swap(true, Ordering::SeqCst) {
-            self.clear_then_keep_if_kept();
+            // A handler method queued ahead of the release may panic: the
+            // drop still finishes.
+            crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
         }
 
         // The close delegate pins its native receiver in the outer autorelease

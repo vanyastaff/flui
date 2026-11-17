@@ -418,17 +418,16 @@ pub(crate) fn clear_then_keep_if_kept(
         if retirement.settle() != NativeFate::Keep {
             return;
         }
+        // Never released, from before `hide` runs, so a panic of `hide` cannot
+        // release it: a raster thread that did not answer may still present
+        // to this view (ADR-0305 §9).
+        let view = std::mem::ManuallyDrop::new(view);
         // The release completes on the owner thread, the main thread.
         if let Some(main) = objc2::MainThreadMarker::new()
             && let Some(object) = view.object(main)
         {
             hide(object);
         }
-        #[expect(
-            clippy::mem_forget,
-            reason = "ADR-0305 §9: a raster thread that did not answer may still present to this view"
-        )]
-        std::mem::forget(view);
     });
 }
 

@@ -89,6 +89,10 @@ mod cases {
             a_window_kept_past_its_close_is_unmapped_not_destroyed,
         ),
         (
+            "a_keep_the_handler_release_makes_is_honoured",
+            a_keep_the_handler_release_makes_is_honoured,
+        ),
+        (
             "a_covered_window_reads_occluded_and_shown",
             a_covered_window_reads_occluded_and_shown,
         ),
@@ -976,13 +980,30 @@ mod cases {
         );
     }
 
-    /// A window whose target was asked to keep it past the close while it was
-    /// open, as `flui-app`'s raster host asks once a raster thread is dead or
-    /// wedged, stays on the server, unmapped, once it closes, while the
-    /// application sees it closed: its handler let go of, its target handing
-    /// out nothing. Red-check: with `X11Window::retire` destroying the window
-    /// whatever was recorded, the server no longer has the kept window.
-    fn a_window_kept_past_its_close_is_unmapped_not_destroyed() {
+    /// Asks its target to keep the native window when dropped: a renderer a
+    /// window's handler owns, asking as the close lets go of the handler.
+    struct KeepOnDrop(Arc<dyn flui_platform::SurfaceTarget>);
+
+    impl Drop for KeepOnDrop {
+        fn drop(&mut self) {
+            self.0.keep_past_close();
+        }
+    }
+
+    /// When a window's keep past the close is recorded.
+    #[derive(Clone, Copy)]
+    enum KeepAt {
+        /// While the window is open, as `flui-app`'s raster host asks once a
+        /// raster thread is wedged.
+        Open,
+        /// By the handler's own release, the latest a keep can come.
+        HandlerRelease,
+    }
+
+    /// Close a window whose keep is recorded `at`, and check that it stays on
+    /// the server, unmapped, while the application sees it closed: its
+    /// handler let go of, its target handing out nothing.
+    fn close_a_kept_window(at: KeepAt) {
         let platform = X11Platform::try_new().expect("the X11 platform");
         let server = RustConnection::connect(None)
             .expect("the X server answers")
@@ -993,10 +1014,18 @@ mod cases {
             .expect("an X11 window opens");
         let xid = xid_of(window.as_ref());
         let target = window.surface_target();
+        if let KeepAt::HandlerRelease = at {
+            let keep = KeepOnDrop(window.surface_target());
+            handler.react_to_close(move || {
+                let _released_with_the_handler = &keep;
+            });
+        }
         let released = Rc::downgrade(&handler);
         drop(handler);
         run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
-        target.keep_past_close();
+        if let KeepAt::Open = at {
+            target.keep_past_close();
+        }
 
         window
             .admit_and_apply(WindowCommand::Close)
@@ -1021,6 +1050,20 @@ mod cases {
             MapState::UNMAPPED,
             "a kept window is unmapped"
         );
+    }
+
+    /// A window kept while it was open is unmapped, not destroyed, once it
+    /// closes. Red-check: with `X11Window::retire` destroying the window
+    /// whatever was recorded, the server no longer has the kept window.
+    fn a_window_kept_past_its_close_is_unmapped_not_destroyed() {
+        close_a_kept_window(KeepAt::Open);
+    }
+
+    /// A keep the handler's release makes is honoured: the fate settles after
+    /// the release. Red-check: with `X11Window::retire` settling the fate
+    /// before the release, the server no longer has the kept window.
+    fn a_keep_the_handler_release_makes_is_honoured() {
+        close_a_kept_window(KeepAt::HandlerRelease);
     }
 
     /// A window another client covers whole reads occluded and still shown,

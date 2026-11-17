@@ -1979,7 +1979,9 @@ impl Drop for IOSWindow {
     /// settles once the handler let go.
     fn drop(&mut self) {
         if !self.closed.swap(true, Ordering::SeqCst) {
-            self.clear_then_keep_if_kept();
+            // A handler method queued ahead of the release may panic: the
+            // drop still finishes.
+            crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
         }
     }
 }
