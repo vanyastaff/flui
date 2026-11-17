@@ -3,9 +3,8 @@
 //! opens.
 
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{ToTokens, quote};
 use syn::ItemFn;
-use syn::spanned::Spanned;
 
 use crate::runtime_path::Runtime;
 
@@ -14,8 +13,8 @@ mod declares;
 /// Expand `#[main]` on `item`, with `args` the attribute's own tokens.
 pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     if !args.is_empty() {
-        return Err(syn::Error::new(
-            args.span(),
+        return Err(syn::Error::new_spanned(
+            &args,
             "`#[flui::main]` takes no arguments; configure the run with `Application`",
         ));
     }
@@ -75,34 +74,35 @@ pub(crate) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
 /// The entry function takes nothing and is a plain, synchronous `fn`.
 fn check_signature(function: &ItemFn) -> syn::Result<()> {
     let sig = &function.sig;
-    let wrong = |span: proc_macro2::Span, what: &str| {
-        Err(syn::Error::new(
-            span,
+    fn wrong(at: impl ToTokens, what: &str) -> syn::Result<()> {
+        Err(syn::Error::new_spanned(
+            at,
             format!(
                 "`#[flui::main]` function {what}: write `pub fn run() -> Result<(), flui::LaunchError>`"
             ),
         ))
-    };
+    }
     if let Some(asyncness) = &sig.asyncness {
-        return wrong(
-            asyncness.span(),
-            "cannot be `async`; the run drives its own loop",
-        );
+        return wrong(asyncness, "cannot be `async`; the run drives its own loop");
     }
     if let syn::Safety::Unsafe(unsafety) = &sig.safety {
-        return wrong(unsafety.span(), "cannot be `unsafe`");
+        return wrong(unsafety, "cannot be `unsafe`");
     }
     if let Some(abi) = &sig.abi {
-        return wrong(abi.span(), "cannot name an ABI");
+        return wrong(abi, "cannot name an ABI");
     }
     if !sig.generics.params.is_empty() || sig.generics.where_clause.is_some() {
-        return wrong(sig.generics.span(), "cannot be generic");
+        return if sig.generics.params.is_empty() {
+            wrong(&sig.generics.where_clause, "cannot be generic")
+        } else {
+            wrong(&sig.generics, "cannot be generic")
+        };
     }
     if !sig.inputs.is_empty() {
-        return wrong(sig.inputs.span(), "takes no arguments");
+        return wrong(&sig.inputs, "takes no arguments");
     }
     if let Some(variadic) = &sig.variadic {
-        return wrong(variadic.span(), "takes no arguments");
+        return wrong(variadic, "takes no arguments");
     }
     Ok(())
 }

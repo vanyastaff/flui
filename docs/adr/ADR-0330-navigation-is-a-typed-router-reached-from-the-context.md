@@ -122,9 +122,11 @@ variant's fields.
   The query is part of the location only: `back_stack` opens the pages below without it. There
   is no `#` fragment.
 - **Compile-time rejections.** A struct, union or generic type; a tuple variant (nesting is a
-  `#[nest]` variant, below); a variant with no `#[route]`, with two, or with anything after the
-  pattern; a malformed pattern; a parameter without a field, a field without a parameter that is
-  not `#[query]`, a parameter that names a `#[query]` field, a malformed `#[query]`; a
+  `#[nest]` variant, below); `#[route]` on the type or on a field and `#[query]` on the type or on
+  a variant, where the derive could not act on them; a variant with no `#[route]`, with two, or
+  with anything after the pattern; a malformed pattern; a parameter without a field, a field
+  without a parameter that is not `#[query]`, a parameter that names a `#[query]` field, a
+  malformed or empty `#[query(...)]`; a
   field type that is not `FromStr + Display` (plus `Default` for a query field that is neither
   `Option` nor `Vec`; reported on the field); and two patterns of the
   same shape (the same length, the same literals and parameters in the same places), because

@@ -29,6 +29,9 @@ use syn::parse::Parser;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DeriveInput, Fields, Ident, LitStr, Path, Type, Variant};
 
+use crate::attribute::{helpers, is_named, parse_entries};
+use crate::refusals::Refusals;
+
 use pattern::Segment;
 
 /// One variant and its route.
@@ -78,11 +81,14 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             "derive(Routable) supports enums: one variant per location",
         ));
     };
-    if !input.generics.params.is_empty() || input.generics.where_clause.is_some() {
-        return Err(syn::Error::new(
-            input.generics.span(),
-            "derive(Routable) takes no generics: a route type is concrete",
-        ));
+    let generics = &input.generics;
+    if !generics.params.is_empty() || generics.where_clause.is_some() {
+        let message = "derive(Routable) takes no generics: a route type is concrete";
+        return Err(if generics.params.is_empty() {
+            syn::Error::new_spanned(&generics.where_clause, message)
+        } else {
+            syn::Error::new_spanned(generics, message)
+        });
     }
     if data.variants.is_empty() {
         return Err(syn::Error::new(
@@ -91,23 +97,42 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         ));
     }
 
-    refuse_misplaced_attributes(input, data)?;
-
-    let mut errors: Option<syn::Error> = None;
-    let mut push = |error: syn::Error| match &mut errors {
-        Some(all) => all.combine(error),
-        None => errors = Some(error),
-    };
+    // Every refusal of the type and of its variants is found before any is
+    // reported, so one build shows them all.
+    let mut refusals = Refusals::default();
+    refuse_misplaced(
+        &input.attrs,
+        "route",
+        "`#[route]` gives a variant its path pattern; the type takes none",
+        &mut refusals,
+    );
+    refuse_misplaced(
+        &input.attrs,
+        "query",
+        "`#[query]` marks a field of a variant; the type takes none",
+        &mut refusals,
+    );
     let mut routes = Vec::with_capacity(data.variants.len());
     for variant in &data.variants {
-        match route(variant) {
-            Ok(route) => routes.push(route),
-            Err(error) => push(error),
+        refuse_misplaced(
+            &variant.attrs,
+            "query",
+            "`#[query]` marks a field; the variant takes `#[route(\"/path\")]`",
+            &mut refusals,
+        );
+        for field in &variant.fields {
+            refuse_misplaced(
+                &field.attrs,
+                "route",
+                "`#[route]` gives a variant its path pattern; it does not go on a field",
+                &mut refusals,
+            );
+        }
+        if let Some(route) = refusals.value(route(variant)) {
+            routes.push(route);
         }
     }
-    if let Some(errors) = errors {
-        return Err(errors);
-    }
+    refusals.into_result()?;
 
     let patterns: Vec<&[Segment]> = routes.iter().map(|r| r.segments.as_slice()).collect();
     if let Some((earlier, later)) = pattern::first_conflict(&patterns) {
@@ -281,49 +306,17 @@ fn route(variant: &Variant) -> syn::Result<Route<'_>> {
 
 /// `route` gives a variant its pattern and `query` marks a variant's field.
 /// The derive registers both for the whole item, so anywhere else rustc
-/// accepts them and the derive would not read them: they are refused.
-fn refuse_misplaced_attributes(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<()> {
-    fn refuse(attrs: &[Attribute], name: &str, message: &str) -> syn::Result<()> {
-        attrs
-            .iter()
-            .find(|attribute| attribute.path().is_ident(name))
-            .map_or(Ok(()), |attribute| {
-                Err(syn::Error::new(attribute.span(), message))
-            })
+/// accepts them and the derive would not read them: each one found in
+/// `attrs`, a place that takes no `name`, is refused.
+fn refuse_misplaced(attrs: &[Attribute], name: &str, message: &str, refusals: &mut Refusals) {
+    for attribute in helpers(attrs, name) {
+        refusals.push(syn::Error::new_spanned(attribute, message));
     }
-    refuse(
-        &input.attrs,
-        "route",
-        "`#[route]` gives a variant its path pattern; the type takes none",
-    )?;
-    refuse(
-        &input.attrs,
-        "query",
-        "`#[query]` marks a field of a variant; the type takes none",
-    )?;
-    for variant in &data.variants {
-        refuse(
-            &variant.attrs,
-            "query",
-            "`#[query]` marks a field; the variant takes `#[route(\"/path\")]`",
-        )?;
-        for field in &variant.fields {
-            refuse(
-                &field.attrs,
-                "route",
-                "`#[route]` gives a variant its path pattern; a field takes `#[query]`",
-            )?;
-        }
-    }
-    Ok(())
 }
 
 /// The one `#[route("…")]` of `variant`.
 fn route_attribute(variant: &Variant) -> syn::Result<LitStr> {
-    let mut attributes = variant
-        .attrs
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("route"));
+    let mut attributes = helpers(&variant.attrs, "route");
     let Some(attribute) = attributes.next() else {
         return Err(syn::Error::new(
             variant.ident.span(),
@@ -334,14 +327,14 @@ fn route_attribute(variant: &Variant) -> syn::Result<LitStr> {
         ));
     };
     if let Some(second) = attributes.next() {
-        return Err(syn::Error::new(
-            second.span(),
+        return Err(syn::Error::new_spanned(
+            second,
             "a variant takes one `#[route]` attribute",
         ));
     }
     let usage = || {
-        syn::Error::new(
-            attribute.span(),
+        syn::Error::new_spanned(
+            attribute,
             "`#[route]` takes one string literal, the path pattern: `#[route(\"/note/:id\")]`",
         )
     };
@@ -367,23 +360,20 @@ fn route_attribute(variant: &Variant) -> syn::Result<LitStr> {
 /// The field's `#[query]` or `#[query(rename = "key")]`, read with the kind
 /// its type spells; `None` for a path parameter.
 fn query_attribute<'a>(field: &'a syn::Field, name: &str) -> syn::Result<Option<QueryField<'a>>> {
-    let mut attributes = field
-        .attrs
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("query"));
+    let mut attributes = helpers(&field.attrs, "query");
     let Some(attribute) = attributes.next() else {
         return Ok(None);
     };
     if let Some(second) = attributes.next() {
-        return Err(syn::Error::new(
-            second.span(),
+        return Err(syn::Error::new_spanned(
+            second,
             "a field takes one `#[query]` attribute",
         ));
     }
     let mut key = name.to_owned();
     if !matches!(attribute.meta, syn::Meta::Path(_)) {
-        attribute.parse_nested_meta(|meta| {
-            if meta.path.is_ident("rename") {
+        parse_entries(attribute, "`rename = \"key\"`", |meta| {
+            if is_named(&meta.path, "rename") {
                 let renamed: LitStr = meta.value()?.parse()?;
                 if renamed.value().is_empty() {
                     return Err(syn::Error::new(renamed.span(), "a query key is not empty"));
@@ -564,7 +554,7 @@ mod tests {
 
     #[test]
     fn a_route_or_query_attribute_out_of_place_is_refused() {
-        let cases: [(&str, DeriveInput, &str); 4] = [
+        let cases: [(&str, DeriveInput, &str); 6] = [
             (
                 "route on the type",
                 parse_quote! { #[route("/")] enum R { #[route("/")] Home } },
@@ -585,7 +575,17 @@ mod tests {
                 parse_quote! {
                     enum R { #[route("/note/:id")] Note { #[route("/ignored")] id: u32 } }
                 },
-                "`#[route]` gives a variant its path pattern; a field takes `#[query]`",
+                "`#[route]` gives a variant its path pattern; it does not go on a field",
+            ),
+            (
+                "spelled with a raw identifier on the type",
+                parse_quote! { #[r#route("/")] enum R { #[route("/")] Home } },
+                "`#[route]` gives a variant its path pattern; the type takes none",
+            ),
+            (
+                "an empty query list",
+                parse_quote! { enum R { #[route("/search")] Search { #[query()] q: String } } },
+                "the list is empty; expected `rename = \"key\"`",
             ),
         ];
         for (case, input, expected) in cases {
@@ -594,6 +594,38 @@ mod tests {
                 Err(error) => error.to_string(),
             };
             assert!(error.contains(expected), "{case}: {error}");
+        }
+    }
+
+    #[test]
+    fn every_refusal_of_a_route_type_is_reported_in_one_build() {
+        let input: DeriveInput = parse_quote! {
+            #[query]
+            enum R {
+                #[route("/n/:id")]
+                Note(#[route("/x")] u32),
+                #[route("nope")]
+                #[query]
+                Bad,
+            }
+        };
+        let Err(refusals) = expand(&input) else {
+            panic!("BUG: the type expands");
+        };
+        let refusals: Vec<String> = refusals
+            .into_iter()
+            .map(|refusal| refusal.to_string())
+            .collect();
+        let expected = [
+            "`#[query]` marks a field of a variant; the type takes none",
+            "`#[route]` gives a variant its path pattern; it does not go on a field",
+            "name the fields of `Note`",
+            "`#[query]` marks a field; the variant takes",
+            "a route pattern starts with `/`",
+        ];
+        assert_eq!(refusals.len(), expected.len(), "{refusals:?}");
+        for (refusal, expected) in refusals.iter().zip(expected) {
+            assert!(refusal.contains(expected), "{refusal}");
         }
     }
 }

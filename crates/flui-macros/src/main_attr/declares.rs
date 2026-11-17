@@ -390,4 +390,24 @@ mod tests {
             }
         }
     }
+
+    // A manifest reaches the attribute only from the crate being compiled, and a trybuild
+    // case's manifest declares nothing, so what a feature's part expands to is read here.
+    #[test]
+    fn a_features_part_tests_its_feature_through_core() {
+        let declared = Declared {
+            always: Vec::new(),
+            by_feature: vec![("links".to_owned(), vec!["notes".to_owned()])],
+        };
+        let part = declared
+            .parts(
+                &quote::quote!(&'static str),
+                |scheme| quote::quote!(#scheme),
+            )
+            .to_string();
+        assert!(
+            part.contains(":: core :: cfg ! (feature = \"links\")"),
+            "{part}"
+        );
+    }
 }

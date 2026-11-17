@@ -33,4 +33,25 @@ struct Twice {
     second: CreationSite,
 }
 
+#[derive(Clone, StatelessView)]
+struct OneFieldTwice {
+    #[view(site, site)]
+    site: CreationSite,
+}
+
+#[derive(Clone, StatelessView)]
+#[view(inspect)]
+#[view(inspect)]
+struct InspectTwice;
+
+#[derive(Clone, StatelessView)]
+#[view()]
+struct NamesNothing;
+
+#[derive(Clone, StatelessView)]
+enum SpelledRaw {
+    #[r#view(inspect)]
+    Shown,
+}
+
 fn main() {}

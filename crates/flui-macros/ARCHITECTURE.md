@@ -21,10 +21,12 @@ need not preserve distances. The nested spring case in
 completion timing rather than adopting the scalar field's threshold.
 
 Empty structs are refused because they have no motion components. A field that
-references a type or const parameter is refused at its type span: stable Rust
-cannot sum generic-dependent associated widths into an array length. Unused const
-parameters with concrete fields remain supported. A manual implementation can
-choose a concrete vector representation when a generic author needs one.
+references a type or const parameter is refused at its type: stable Rust
+cannot sum generic-dependent associated widths into an array length. A type with
+a lifetime parameter is refused at the parameter, since an array length names no
+lifetime. Unused const parameters with concrete fields remain supported. A manual
+implementation can choose a concrete vector representation when a generic author
+needs one.
 
 `two_way_converter_derive_contract` in `flui-animation` tests named, tuple and
 nested fields, color behavior and actual registered retargeting.
@@ -77,19 +79,30 @@ dev-dependency are **Unasserted:** no test pins this.
 A derive registers its helper attribute (`view`, `inspect`, `route`, `query`)
 for the whole item, so rustc accepts it anywhere inside: on the type, a
 variant or a field. Each derive reads its input into a typed description
-before it looks up a runtime path, and that reading refuses every place and
-every repetition it could not act on: `#[view(site)]` on an enum's field or
-twice on one field, `#[inspect(...)]` on a type or a variant, one `inspect`
-key twice on a field, `#[route]` on the type or a field, `#[query]` on the
-type or a variant. Accepting them would leave the author with a view that
-reports no creation site, a field that reports under a name they did not
-expect, or a route whose query never parses, and no diagnostic. Because the
-refusals precede the manifest lookup they are unit tests of `expand` in this
-crate (`a_misplaced_view_attribute_is_refused_with_its_place`,
+before it looks up a runtime path, and that reading refuses every place, every
+repetition and every empty list it could not act on: `#[view(site)]` on an
+enum's field or twice on one field, `#[view(inspect)]` twice, `#[view()]`,
+`#[inspect(...)]` on a type or a variant, one `inspect` key twice on a field,
+`#[route]` on the type or a field, `#[query]` on the type or a variant.
+Accepting them would leave the author with a view that reports no creation
+site, a field that reports under a name they did not expect, or a route whose
+query never parses, and no diagnostic.
+
+rustc resolves a helper written as a raw identifier (`#[r#view(site)]`) to the
+same helper, so the derives compare names through `attribute::is_named`, which
+drops the `r#`; a comparison of the identifier as written would pass that
+spelling by every refusal above. `Routable` collects what it refuses in
+`Refusals` and reports the type's and every variant's together, so an author
+does not fix one, build again and meet the next.
+
+Because the refusals precede the manifest lookup they are unit tests of `expand`
+in this crate (`a_misplaced_view_attribute_is_refused_with_its_place`,
 `an_inspect_attribute_that_would_do_nothing_is_refused`,
-`a_route_or_query_attribute_out_of_place_is_refused`); the trybuild cases
-`view_attribute_placement` in `flui-view` and `inspect_unsupported_shape` in
-`flui-sdk` pin what the author sees.
+`a_route_or_query_attribute_out_of_place_is_refused`,
+`every_refusal_of_a_route_type_is_reported_in_one_build`); the trybuild cases
+`view_attribute_placement` in `flui-view`, `inspect_unsupported_shape` in
+`flui-sdk` and `misplaced_attributes` in `flui-widgets` pin what the author sees:
+the message and the whole attribute underlined.
 
 ### Inspect derive: the field type is the mapping
 

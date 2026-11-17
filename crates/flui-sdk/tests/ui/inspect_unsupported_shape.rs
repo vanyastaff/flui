@@ -54,4 +54,16 @@ struct NamedTwice {
     width: f64,
 }
 
+#[derive(Inspect)]
+#[r#inspect(skip)]
+struct SpelledRaw {
+    width: f64,
+}
+
+#[derive(Inspect)]
+struct NamesNothing {
+    #[inspect()]
+    width: f64,
+}
+
 fn main() {}

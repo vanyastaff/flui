@@ -45,7 +45,9 @@ cargo heli clippy -p flui-macros --all-targets -- -D warnings
 cargo heli nextest run -p flui-macros
 ```
 
-Each macro's refusals of its input are unit tests of its `expand` here. What an accepted derive
-expands to is tested where the runtime is: `flui-view`, `flui-foundation`,
-`flui-animation` and `flui-widgets` for behaviour, and the trybuild suites of
-`flui-sdk`, `flui-view` and `flui-widgets` for diagnostics.
+A refusal a derive makes before it needs a runtime path (an attribute out of place, repeated
+or empty, a shape it does not support) is a unit test of its `expand` here. What an accepted
+derive expands to is tested where the runtime is: `flui-view`, `flui-foundation`,
+`flui-animation` and `flui-widgets` for behaviour, and the trybuild suites of `flui-sdk`,
+`flui-view`, `flui-widgets` and the facade (`tests/ui/entry` for `#[flui::main]`) for what an
+author sees, a refusal included.

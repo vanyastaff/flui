@@ -2,4 +2,4 @@ error: `#[flui::main]` function cannot be generic: write `pub fn run() -> Result
  --> tests/ui/entry/fail/main_attribute_refuses_generics.rs:3:11
   |
 3 | pub fn run<T: Default>() -> Result<(), flui::LaunchError> {
-  |           ^
+  |           ^^^^^^^^^^^^

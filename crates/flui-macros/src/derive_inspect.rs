@@ -13,6 +13,7 @@ use syn::{
     ext::IdentExt, parse_quote, spanned::Spanned,
 };
 
+use crate::attribute::{helpers, is_named, parse_entries};
 use crate::generics::mentions_param;
 
 /// A field's `default` attribute.
@@ -98,6 +99,9 @@ impl Unit {
     }
 }
 
+/// The entries a field's `#[inspect(...)]` list takes, as a refusal names them.
+const FIELD_ENTRIES: &str = "`skip`, `name`, `default`, `level`, `unit`, `with` or `debug`";
+
 /// What `#[inspect(...)]` says about one field.
 #[derive(Default)]
 struct FieldAttrs {
@@ -114,40 +118,39 @@ impl FieldAttrs {
     fn parse(field: &syn::Field) -> syn::Result<Self> {
         let mut attrs = Self::default();
         for attr in inspect_attributes(&field.attrs) {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("skip") {
+            parse_entries(attr, FIELD_ENTRIES, |meta| {
+                if is_named(&meta.path, "skip") {
                     set_flag(&mut attrs.skip, &meta)
-                } else if meta.path.is_ident("debug") {
+                } else if is_named(&meta.path, "debug") {
                     set_flag(&mut attrs.debug, &meta)
-                } else if meta.path.is_ident("name") {
+                } else if is_named(&meta.path, "name") {
                     let name: LitStr = meta.value()?.parse()?;
                     set_once(&mut attrs.name, name, &meta)
-                } else if meta.path.is_ident("default") {
+                } else if is_named(&meta.path, "default") {
                     let default = if meta.input.peek(syn::Token![=]) {
                         DefaultAttr::Expr(meta.value()?.parse()?)
                     } else {
                         DefaultAttr::Type
                     };
                     set_once(&mut attrs.default, default, &meta)
-                } else if meta.path.is_ident("level") {
+                } else if is_named(&meta.path, "level") {
                     let level: Ident = meta.value()?.parse()?;
                     let level = Level::parse(&level)?;
                     set_once(&mut attrs.level, level, &meta)
-                } else if meta.path.is_ident("unit") {
+                } else if is_named(&meta.path, "unit") {
                     let unit: Ident = meta.value()?.parse()?;
                     let unit = Unit::parse(&unit)?;
                     set_once(&mut attrs.unit, unit, &meta)
-                } else if meta.path.is_ident("with") {
+                } else if is_named(&meta.path, "with") {
                     let with: Path = meta.value()?.parse()?;
                     set_once(&mut attrs.with, with, &meta)
                 } else {
-                    Err(meta.error(
-                        "unsupported inspect attribute; expected `skip`, `name`, `default`, `level`, `unit`, `with` or `debug`",
-                    ))
+                    Err(meta.error(format!(
+                        "unsupported inspect attribute; expected {FIELD_ENTRIES}"
+                    )))
                 }
             })?;
         }
-        let span = field.span();
         if attrs.skip
             && (attrs.name.is_some()
                 || attrs.default.is_some()
@@ -156,20 +159,20 @@ impl FieldAttrs {
                 || attrs.with.is_some()
                 || attrs.debug)
         {
-            return Err(syn::Error::new(
-                span,
+            return Err(syn::Error::new_spanned(
+                field,
                 "a skipped field takes no other inspect attribute",
             ));
         }
         if attrs.debug && attrs.with.is_some() {
-            return Err(syn::Error::new(
-                span,
+            return Err(syn::Error::new_spanned(
+                field,
                 "`debug` and `with` both map the field; keep one",
             ));
         }
         if attrs.debug && attrs.default.is_some() {
-            return Err(syn::Error::new(
-                span,
+            return Err(syn::Error::new_spanned(
+                field,
                 "a `debug` field has no typed value to compare a default with; map it with `with` instead",
             ));
         }
@@ -178,7 +181,7 @@ impl FieldAttrs {
 }
 
 fn inspect_attributes(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
-    attrs.iter().filter(|attr| attr.path().is_ident("inspect"))
+    helpers(attrs, "inspect")
 }
 
 /// Store an attribute's value; a second one for the same field is an error, since only one
@@ -255,7 +258,7 @@ impl<'a> Shape<'a> {
                 .collect::<syn::Result<Vec<_>>>()
                 .map(Self::Enum),
             Data::Union(_) => Err(syn::Error::new(
-                input.span(),
+                input.ident.span(),
                 "`#[derive(Inspect)]` does not support unions: which field is live is unknown; implement `Inspect` by hand",
             )),
         }
@@ -417,16 +420,16 @@ fn described<'a>(
             LitStr::value,
         );
         if reserved == Some(reported.as_str()) {
-            return Err(syn::Error::new(
-                field.span(),
+            return Err(syn::Error::new_spanned(
+                field,
                 format!(
                     "`{reported}` names the enum's variant in the snapshot; report this field under another name with `#[inspect(name = \"...\")]`"
                 ),
             ));
         }
         if out.iter().any(|other| other.reported == reported) {
-            return Err(syn::Error::new(
-                field.span(),
+            return Err(syn::Error::new_spanned(
+                field,
                 format!(
                     "another field already reports as `{reported}`; give one of them another name with `#[inspect(name = \"...\")]`"
                 ),
@@ -520,7 +523,7 @@ mod tests {
     // before that lookup, so `expand` answers with it here.
     #[test]
     fn an_inspect_attribute_that_would_do_nothing_is_refused() {
-        let cases: [(&str, DeriveInput, &str); 6] = [
+        let cases: [(&str, DeriveInput, &str); 9] = [
             (
                 "on the type",
                 parse_quote! { #[inspect(skip)] struct S { width: f64 } },
@@ -552,6 +555,21 @@ mod tests {
                 "a default given both ways",
                 parse_quote! { struct S { #[inspect(default, default = 1.0)] width: f64 } },
                 "given twice",
+            ),
+            (
+                "spelled with a raw identifier on the type",
+                parse_quote! { #[r#inspect(skip)] struct S { width: f64 } },
+                "describes a field",
+            ),
+            (
+                "an unknown entry behind a raw identifier",
+                parse_quote! { struct S { #[r#inspect(nonsense)] width: f64 } },
+                "unsupported inspect attribute",
+            ),
+            (
+                "an empty list",
+                parse_quote! { struct S { #[inspect()] width: f64 } },
+                "the list is empty; expected `skip`",
             ),
         ];
         for (case, input, expected) in cases {

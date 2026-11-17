@@ -26,6 +26,7 @@
 // A macro that prints writes into the compiler's output of every crate that uses it.
 #![warn(clippy::print_stdout, clippy::print_stderr)]
 
+mod attribute;
 mod derive_inherited_data;
 mod derive_inspect;
 mod derive_routable;
@@ -33,6 +34,7 @@ mod derive_two_way_converter;
 mod derive_view;
 mod generics;
 mod main_attr;
+mod refusals;
 mod runtime_path;
 
 use proc_macro::TokenStream;
@@ -97,6 +99,13 @@ use derive_view::ViewKind;
 /// }
 /// ```
 ///
+/// # Refused attributes
+///
+/// `#[view(...)]` is a compile error wherever the derive could not act on it:
+/// `inspect` on a field or given twice, `site` on the type, on two fields or
+/// twice on one, an empty list, and any `#[view(...)]` inside an enum or a
+/// union, whose values have no field of `self` to read.
+///
 /// # Keyed views
 ///
 /// The derive leaves `View::key` at its default, `None`. A view that carries
@@ -150,8 +159,8 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// `#[view(inspect)]`, `#[view(site)]` and keyed views work as they do for
-/// [`macro@StatelessView`].
+/// `#[view(inspect)]`, `#[view(site)]`, their refusals and keyed views work as
+/// they do for [`macro@StatelessView`].
 #[proc_macro_derive(StatefulView, attributes(view))]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -195,8 +204,8 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 /// Emit `impl Inspect` (`flui_foundation::inspect`) for a struct or an enum (ADR-0242 §4).
 ///
 /// Re-exported as `flui_foundation::inspect::Inspect`, beside the trait, which documents the
-/// field attributes. `#[inspect(...)]` describes a field: on the type or on a variant, or with
-/// one attribute given twice, it is a compile error.
+/// field attributes. `#[inspect(...)]` describes a field: on the type or on a variant, with an
+/// empty list or with one attribute given twice, it is a compile error.
 ///
 /// A field whose type has no value mapping is a compile error naming the ways out (`skip`,
 /// `with`, `debug`, or a `ToValue` impl); a union is refused, because which of its fields is
@@ -267,11 +276,13 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 /// fields in declaration order and leaves out `None` and an empty `Vec`.
 ///
 /// Rejected at compile time: a struct, union or generic type; a tuple
-/// variant; a variant with no `#[route]`, two, or one with anything after the
-/// pattern; a malformed pattern; a parameter that names no field, or a field
-/// no parameter names, a parameter that names a `#[query]` field, a malformed
-/// `#[query]`; and two patterns of the same shape, since the second
-/// could never be parsed.
+/// variant; `#[route]` on the type or on a field, and `#[query]` on the type
+/// or on a variant; a variant with no `#[route]`, two, or one with anything
+/// after the pattern; a malformed pattern; a parameter that names no field,
+/// or a field no parameter names, a parameter that names a `#[query]` field,
+/// a malformed or empty `#[query(...)]`; and two patterns of the same shape,
+/// since the second could never be parsed. What the type and each of its
+/// variants get wrong is reported in one build.
 ///
 /// `from_path` tries the patterns from the most specific: a literal segment
 /// wins over a parameter in the same place whatever the declaration order,

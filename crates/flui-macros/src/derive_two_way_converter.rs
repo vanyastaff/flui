@@ -4,7 +4,9 @@
 //! flattened in declaration order; interpolation delegates to each field,
 //! preserving contracts such as premultiplied colour interpolation.
 //! Field types must have concrete vector widths: stable Rust cannot sum
-//! generic-dependent associated constants in an array length.
+//! generic-dependent associated constants in an array length, so a field that
+//! mentions a type or const parameter is refused, and it accepts no lifetime
+//! parameter in one, so a type that has a lifetime parameter is.
 
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
@@ -47,8 +49,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         .iter()
         .find(|field| mentions_param(&field.ty, &parameters))
     {
-        return Err(syn::Error::new(
-            field.ty.span(),
+        return Err(syn::Error::new_spanned(
+            &field.ty,
             "#[derive(TwoWayConverter)] requires concrete field types; stable Rust cannot sum generic-dependent vector widths",
         ));
     }

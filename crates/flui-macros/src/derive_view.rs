@@ -23,6 +23,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Attribute, Data, DeriveInput, Member, parse_quote};
 
+use crate::attribute::{helpers, is_named, parse_entries};
 use crate::runtime_path::Runtime;
 
 /// The authoring trait a view type implements, and so the element it mounts.
@@ -65,8 +66,8 @@ impl ViewAttrs {
             site: None,
         };
         for attr in view_attributes(&input.attrs) {
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("inspect") {
+            parse_entries(attr, "`inspect`", |meta| {
+                if is_named(&meta.path, "inspect") {
                     if attrs.inspect {
                         return Err(meta.error("`inspect` is given twice"));
                     }
@@ -81,8 +82,8 @@ impl ViewAttrs {
             Data::Struct(data) => {
                 for (field, member) in data.fields.iter().zip(data.fields.members()) {
                     for attr in view_attributes(&field.attrs) {
-                        attr.parse_nested_meta(|meta| {
-                            if !meta.path.is_ident("site") {
+                        parse_entries(attr, "`site`", |meta| {
+                            if !is_named(&meta.path, "site") {
                                 return Err(
                                     meta.error("expected `site`; `inspect` goes on the type")
                                 );
@@ -125,7 +126,7 @@ impl ViewAttrs {
 }
 
 fn view_attributes(attrs: &[Attribute]) -> impl Iterator<Item = &Attribute> {
-    attrs.iter().filter(|attr| attr.path().is_ident("view"))
+    helpers(attrs, "view")
 }
 
 fn field_attributes(fields: &syn::Fields) -> impl Iterator<Item = &Attribute> {
@@ -207,7 +208,7 @@ mod tests {
 
     #[test]
     fn a_misplaced_view_attribute_is_refused_with_its_place() {
-        let cases: [(&str, DeriveInput, &str); 8] = [
+        let cases: [(&str, DeriveInput, &str); 11] = [
             (
                 "site on the type",
                 parse_quote! { #[view(site)] struct V { site: CreationSite } },
@@ -247,6 +248,21 @@ mod tests {
                 "a union's field",
                 parse_quote! { union V { #[view(site)] site: CreationSite } },
                 "marks a field of a struct",
+            ),
+            (
+                "spelled with a raw identifier on a variant",
+                parse_quote! { enum V { #[r#view(inspect)] A } },
+                "marks a field of a struct",
+            ),
+            (
+                "an empty list on the type",
+                parse_quote! { #[view()] struct V; },
+                "the list is empty; expected `inspect`",
+            ),
+            (
+                "an empty list on a field",
+                parse_quote! { struct V { #[view()] site: CreationSite } },
+                "the list is empty; expected `site`",
             ),
         ];
         for (case, input, expected) in cases {
