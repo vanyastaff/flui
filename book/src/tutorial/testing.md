@@ -11,7 +11,8 @@ feature, which an application turns on for its tests:
 flui = { version = "…", features = ["testing"] }
 ```
 
-Here is a test of the notes screen from [Handling input](input.md); the screen's code is hidden:
+Here is a test of the notes screen from [Handling input](input.md); a copy of the screen's code is
+hidden above it:
 
 ```rust
 # use flui::prelude::*;

@@ -42,12 +42,16 @@ impl StatelessView for SaveHint {
 # let on = |platform| TestWindow::new(800, 600).platform(platform);
 # Tester::mount_in(SaveHint, on(TargetPlatform::MacOS)).expect(find::text("⌘S saves")).to_exist();
 # Tester::mount_in(SaveHint, on(TargetPlatform::Windows)).expect(find::text("Ctrl+S saves")).to_exist();
+# // A subtree that names a platform follows it, whatever the window's.
+# let mac = PlatformConvention::new(TargetPlatform::MacOS, SaveHint);
+# Tester::mount_in(mac, on(TargetPlatform::Windows)).expect(find::text("⌘S saves")).to_exist();
 ```
 
 The convention is the platform the application runs on, unless a test or a subtree names
 another: a test passes `TestWindow::platform`, and a `PlatformConvention::new(platform, child)`
-above a subtree changes it for that subtree. A widget that asks the build machine instead
-(`TargetPlatform::current()`) would follow the machine that compiled it, not the one it runs on.
+above a subtree changes it for that subtree. `TargetPlatform::current()` is not a substitute: it is
+the target the code was compiled for, so it is `Unknown` in a browser whatever the visitor's
+system, and in a test it is the test machine's rather than the platform the test names.
 
 That completes the notes application: a window, a laid-out screen, state, input, a list, pages,
 a theme, its tests and its platforms.
