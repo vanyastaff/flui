@@ -403,7 +403,7 @@ pub(super) struct TouchpadHost {
 }
 
 /// The cursor a test hands a frame in place of `GetCursorPos`.
-#[cfg(test)]
+#[cfg(all(windows, test))]
 #[derive(Clone, Copy, Debug)]
 enum TestCursor {
     /// The OS's reading.
