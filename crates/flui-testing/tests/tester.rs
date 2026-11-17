@@ -1657,32 +1657,30 @@ fn draw_commands_read_one_element_and_none_of_its_sibling() {
 }
 
 /// `draw_commands` reads a subtree larger than one inspection lists whole,
-/// in several inspections: a swatch after five thousand render objects is
-/// still the element's drawing.
+/// in several inspections: six columns of a thousand render objects, each
+/// ending in a swatch, give all six swatches in paint order.
 ///
-/// Fails if the read stops at the first inspection's 4096 nodes.
+/// Fails if the read stops at the first inspection's 4096 nodes, or if it
+/// pages only from the node an inspection cut, which never reaches the
+/// columns after the one the budget ran out in.
 #[test]
 fn draw_commands_read_a_subtree_past_one_inspection_whole() {
     use flui_painting::styling::Color;
 
-    let column = |last: Option<u8>| {
+    let column = |shade: u8| {
         let mut children: Vec<_> = (0..1000)
             .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
             .collect();
-        if let Some(shade) = last {
-            children.push(
-                flui_widgets::CustomPaint::new()
-                    .size(flui_foundation::geometry::Size::new(1.0, 1.0))
-                    .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
-                    .into_view()
-                    .boxed(),
-            );
-        }
+        children.push(
+            flui_widgets::CustomPaint::new()
+                .size(flui_foundation::geometry::Size::new(1.0, 1.0))
+                .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
+                .into_view()
+                .boxed(),
+        );
         flui_widgets::Column::new(children).into_view().boxed()
     };
-    let columns: Vec<_> = (0..5)
-        .map(|index| column((index == 4).then_some(7)))
-        .collect();
+    let columns: Vec<_> = (1..=6).map(column).collect();
     let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Row::new(columns))));
     let colours: Vec<Color> = t
         .draw_commands(&find::id("many"))
@@ -1692,7 +1690,8 @@ fn draw_commands_read_a_subtree_past_one_inspection_whole() {
             _ => None,
         })
         .collect();
-    assert_eq!(colours, [Color::rgb(7, 0, 0)]);
+    let expected: Vec<Color> = (1..=6).map(|shade| Color::rgb(shade, 0, 0)).collect();
+    assert_eq!(colours, expected);
 }
 
 /// `draw_commands` refuses an element under which one render object has

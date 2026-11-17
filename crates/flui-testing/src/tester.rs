@@ -682,8 +682,9 @@ impl Tester {
     /// The agent's protocol carries no drawing, so the tester reads the scene
     /// the headless host received and selects its picture layers by the
     /// render objects the window's agent lists under the element. A subtree
-    /// larger than one inspection lists is read in several, each from a
-    /// node the last one cut, so the drawing is read whole. A frame that
+    /// larger than one inspection lists is read in several: each node one
+    /// cut is inspected a level deep, and each child it did not list is read
+    /// from there, so the drawing is read whole. A frame that
     /// submits a scene between those reads starts the read again.
     ///
     /// # Errors
@@ -709,10 +710,13 @@ impl Tester {
                     element: line_of(&found.node),
                 });
             };
-            let painters = self.render_subtree(render, &found.node)?;
+            let painters = self.render_subtree(render, &found.node);
+            // A frame between the locate and the inspections may have
+            // replaced what they read, its failure included: read again.
             if self.host.sink().submits() != submits {
                 continue;
             }
+            let painters = painters?;
             return Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
                 scene_commands(tree, |painter| painters.contains(&painter))
             }));
@@ -723,46 +727,67 @@ impl Tester {
     }
 
     /// `render` and every render object below it, read with as many
-    /// inspections as the subtree takes: each node an inspection cut is the
-    /// root of the next.
+    /// inspections as the subtree takes.
+    ///
+    /// An inspection walks depth first on one node budget, so where it runs
+    /// out every ancestor still open counts its unvisited children as
+    /// omitted, and the protocol does not name them. Each node cut that way
+    /// is inspected one level deep to name its children, and each child the
+    /// first inspection did not list is the root of the next.
     fn render_subtree(
         &mut self,
         render: flui_foundation::RenderId,
         element: &Node,
     ) -> Result<rustc_hash::FxHashSet<flui_foundation::RenderId>, TestError> {
-        use flui_foundation::inspect::Link;
-
         let mut painters = rustc_hash::FxHashSet::default();
         let mut roots = vec![render];
         while let Some(root) = roots.pop() {
-            let mut params = InspectParams::new(self.window.id());
-            params.root = Some(Link::Render(root).to_string());
-            let call = self.window.call::<InspectRender>(params)?;
-            let reading = self.answered(call)?;
-            let mut pending: Vec<&flui_protocol::InspectNode> = reading.roots.iter().collect();
+            let mut cut = Vec::new();
+            let reading = self.inspect_render_from(root, None)?;
+            let mut pending = vec![&reading];
             while let Some(node) = pending.pop() {
-                let Ok(Link::Render(id)) = node.id.parse::<Link>() else {
-                    panic!(
-                        "BUG: inspect.render names its nodes by render handle, not {:?}",
-                        node.id
-                    );
-                };
+                pending.extend(&node.children);
+                let id = render_of(node);
                 painters.insert(id);
                 if node.omitted_children > 0 {
-                    // The root itself cut: its children alone are more than
-                    // one inspection lists, so reading it again lists the same.
-                    if id == root {
-                        return Err(TestError::TooManyChildren {
-                            element: line_of(element),
-                            children: node.omitted_children,
-                        });
-                    }
-                    roots.push(id);
+                    cut.push(id);
                 }
-                pending.extend(&node.children);
+            }
+            for parent in cut {
+                let level = self.inspect_render_from(parent, Some(1))?;
+                if level.omitted_children > 0 {
+                    // Its children alone are more than one inspection lists.
+                    return Err(TestError::TooManyChildren {
+                        element: line_of(element),
+                        children: level.omitted_children,
+                    });
+                }
+                roots.extend(
+                    level
+                        .children
+                        .iter()
+                        .map(render_of)
+                        .filter(|child| !painters.contains(child)),
+                );
             }
         }
         Ok(painters)
+    }
+
+    /// One `inspect.render` reading from `root`, `max_depth` levels deep.
+    fn inspect_render_from(
+        &mut self,
+        root: flui_foundation::RenderId,
+        max_depth: Option<u32>,
+    ) -> Result<flui_protocol::InspectNode, TestError> {
+        let mut params = InspectParams::new(self.window.id());
+        params.root = Some(flui_foundation::inspect::Link::Render(root).to_string());
+        params.max_depth = max_depth;
+        let call = self.window.call::<InspectRender>(params)?;
+        let reading = self.answered(call)?;
+        let [node] = <[flui_protocol::InspectNode; 1]>::try_from(reading.roots)
+            .expect("BUG: an inspection from one root reads one root");
+        Ok(node)
     }
 
     /// The draw commands the one element `locator` names painted, as
@@ -1694,6 +1719,17 @@ fn find_node(roots: &[Node], id: ElementId) -> Option<&Node> {
 }
 
 /// `node` as one outline line.
+/// The render object an `inspect.render` node names.
+fn render_of(node: &flui_protocol::InspectNode) -> flui_foundation::RenderId {
+    match node.id.parse::<flui_foundation::inspect::Link>() {
+        Ok(flui_foundation::inspect::Link::Render(id)) => id,
+        _ => panic!(
+            "BUG: inspect.render names its nodes by render handle, not {:?}",
+            node.id
+        ),
+    }
+}
+
 fn line_of(node: &Node) -> String {
     outline(std::slice::from_ref(node))
         .lines()
