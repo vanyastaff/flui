@@ -171,6 +171,10 @@ mod cases {
             "a_window_manager_that_paces_frames_sees_each_one_drawn",
             a_window_manager_that_paces_frames_sees_each_one_drawn,
         ),
+        (
+            "a_frame_handlers_panic_leaves_the_other_windows_their_frames",
+            a_frame_handlers_panic_leaves_the_other_windows_their_frames,
+        ),
     ];
 
     /// The harness's window manager, which a case that kills it starts again
@@ -1517,11 +1521,20 @@ mod cases {
                 Some(&[1, 1][..]),
                 "{class}: InputHint set, input True"
             );
+            // The id, only from the initial PID namespace (a CI runner's),
+            // where a window manager's id for the process is the same; a
+            // WSL distribution or a container has a namespace of its own.
+            let initial = std::fs::read_link("/proc/self/ns/pid")
+                .is_ok_and(|link| link.as_os_str() == "pid:[4026531836]");
             let pid: Vec<u32> = read("_NET_WM_PID")
                 .value32()
-                .expect("a 32-bit pid")
-                .collect();
-            assert_eq!(pid, [std::process::id()], "{class}");
+                .map_or_default(Iterator::collect);
+            let expected = if initial {
+                vec![std::process::id()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(pid, expected, "{class}: the process id");
             // EWMH: the machine the process runs on, beside its id.
             let machine = read("WM_CLIENT_MACHINE");
             let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
@@ -2299,9 +2312,12 @@ mod cases {
     /// answers it as its loop turns on the owner thread: the message goes back
     /// to the root with nothing changed but its window, where a window manager
     /// hears it, and nothing answers while the owner does not turn, so a
-    /// window manager sees an owner that hangs.
+    /// window manager sees an owner that hangs. The answer is on the wire
+    /// before the turn runs any application code: a frame's handler in the
+    /// same turn finds it already arrived.
     fn a_window_answers_the_window_managers_ping() {
-        let fixture = X11Fixture::open("ping");
+        let handler = RecordingWindowHandler::new();
+        let fixture = X11Fixture::open_with("ping", Rc::clone(&handler));
         let root = fixture.root();
         assert_eq!(
             atom_names(&fixture.server, fixture.xid, "WM_PROTOCOLS"),
@@ -2309,9 +2325,11 @@ mod cases {
             "the protocols a window takes"
         );
         // A stand-in window manager, hearing the root's substructure.
-        let manager = RustConnection::connect(None)
-            .expect("the X server answers")
-            .0;
+        let manager = Rc::new(
+            RustConnection::connect(None)
+                .expect("the X server answers")
+                .0,
+        );
         manager
             .change_window_attributes(
                 root,
@@ -2321,42 +2339,48 @@ mod cases {
             .check()
             .expect("the root's substructure is heard");
         let protocols = atom(&manager, "WM_PROTOCOLS");
-        let ping = [
-            atom(&manager, "_NET_WM_PING"),
-            0x0BAD_CAFE,
-            fixture.xid,
-            0,
-            0,
-        ];
-        manager
-            .send_event(
-                false,
-                fixture.xid,
-                EventMask::NO_EVENT,
-                ClientMessageEvent::new(32, fixture.xid, protocols, ping),
-            )
-            .expect("request");
-        manager.flush().expect("flush");
-        let answers = || {
-            // A round trip: what the server sent before it has arrived.
+        let ping_atom = atom(&manager, "_NET_WM_PING");
+        let ping = |time: u32| [ping_atom, time, fixture.xid, 0, 0];
+        let send_ping = |time: u32| {
+            manager
+                .send_event(
+                    false,
+                    fixture.xid,
+                    EventMask::NO_EVENT,
+                    ClientMessageEvent::new(32, fixture.xid, protocols, ping(time)),
+                )
+                .expect("request");
+            // A round trip: the server has queued the ping for the window.
             manager
                 .get_input_focus()
                 .expect("request")
                 .reply()
                 .expect("the focus");
-            let mut answers = Vec::new();
-            while let Some(event) = manager.poll_for_event().expect("the connection") {
-                if let Event::ClientMessage(message) = event
-                    && message.window == root
-                    && message.type_ == protocols
-                    && message.format == 32
-                {
-                    answers.push(message.data.as_data32());
+        };
+        let answers = {
+            let manager = Rc::clone(&manager);
+            move || {
+                // A round trip: what the server sent before it has arrived.
+                manager
+                    .get_input_focus()
+                    .expect("request")
+                    .reply()
+                    .expect("the focus");
+                let mut answers = Vec::new();
+                while let Some(event) = manager.poll_for_event().expect("the connection") {
+                    if let Event::ClientMessage(message) = event
+                        && message.window == root
+                        && message.type_ == protocols
+                        && message.format == 32
+                    {
+                        answers.push(message.data.as_data32());
+                    }
                 }
+                answers
             }
-            answers
         };
 
+        send_ping(0x0BAD_CAFE);
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(
             answers(),
@@ -2368,7 +2392,33 @@ mod cases {
             heard.extend(answers());
             !heard.is_empty()
         });
-        assert_eq!(heard, [ping], "the ping goes back as it came");
+        assert_eq!(heard, [ping(0x0BAD_CAFE)], "the ping goes back as it came");
+
+        // A ping, then the window manager's close, heard in one turn: the
+        // handler the close asks, which holds the owner thread, waits a
+        // bounded time for the answer to the ping heard just before.
+        let asked = Rc::new(RefCell::new(None));
+        handler.react_to_close_request({
+            let asked = Rc::clone(&asked);
+            move || {
+                let deadline = Instant::now() + Duration::from_millis(500);
+                let mut heard = answers();
+                while heard.is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                    heard = answers();
+                }
+                *asked.borrow_mut() = Some(heard);
+                CloseDecision::KeepOpen
+            }
+        });
+        send_ping(0x0000_F00D);
+        send_close(&manager, fixture.xid);
+        turn_until(&fixture, "the close request", || asked.borrow().is_some());
+        assert_eq!(
+            asked.borrow().clone(),
+            Some(vec![ping(0x0000_F00D)]),
+            "the answer was sent before the turn's next handler ran"
+        );
     }
 
     /// A window manager that waits for a window's counter before it draws a
@@ -2590,5 +2640,53 @@ mod cases {
         assert!(drawn(before), "the panicking frame ended even");
         drop(listed);
         run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+    }
+
+    /// Two windows of one platform whose frame handlers both panic in one
+    /// turn: each still gets its frame, and the panic that goes on is the one
+    /// raised first.
+    fn a_frame_handlers_panic_leaves_the_other_windows_their_frames() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let ran = Rc::new(RefCell::new(Vec::new()));
+        let windows: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|name| {
+                let handler = RecordingWindowHandler::new();
+                let window = platform
+                    .open_window(
+                        WindowOptions::default().title(name),
+                        Rc::clone(&handler) as _,
+                    )
+                    .expect("an X11 window opens");
+                (name, handler, window)
+            })
+            .collect();
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        for (name, handler, _) in &windows {
+            let ran = Rc::clone(&ran);
+            let name = *name;
+            handler.react_to_frame(move |_| {
+                ran.borrow_mut().push(name);
+                panic!("{name} panics");
+            });
+        }
+        for (_, _, window) in &windows {
+            window.request_redraw();
+        }
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        }))
+        .expect_err("a handler's panic goes on");
+        let ran = ran.borrow().clone();
+        assert_eq!(ran.len(), 2, "each window got its frame: {ran:?}");
+        assert_eq!(
+            flui_foundation::panic::payload_text(unwound.as_ref()),
+            Some(format!("{} panics", ran[0]).as_str()),
+            "the first panic goes on"
+        );
+        for (_, _, window) in windows {
+            window.close_for_cleanup();
+        }
+        run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
     }
 }

@@ -8,8 +8,9 @@
 //! (`_NET_WM_PING`) offers to end the process `_NET_WM_PID` names, which it
 //! may do only on the machine `WM_CLIENT_MACHINE` names: EWMH requires the
 //! machine wherever the process is written. [`ClientMachine`] is that name as
-//! the property carries it, and a window whose machine has no such name
-//! writes neither.
+//! the property carries it; [`ClientProcess`] keeps the id only beside a
+//! machine and only where the window manager's id for the process is the same
+//! one, outside every PID namespace a sandbox or container made.
 //!
 //! # A synchronised resize
 //!
@@ -34,7 +35,13 @@
 //! window draws a frame, so the compositor never shows one half drawn, even
 //! once it is drawn. A request the window manager marks extended is answered
 //! on it, at an even value no lower than the request's, as GDK does
-//! (`gdk_x11_surface_begin_frame`).
+//! (`gdk_x11_surface_begin_frame`); the counter never rests above the largest
+//! even value, `i64::MAX - 1`.
+//!
+//! A frame is answered once its handler has returned, which is when it has
+//! been handed to the GPU, not when it is shown: the X11 host hears no
+//! presentation (the Present extension tells the GPU driver's connection), and
+//! with a FIFO swap chain the driver presents at a later refresh.
 
 #![forbid(unsafe_code)]
 
@@ -60,16 +67,34 @@ impl CounterValue {
         (high, low)
     }
 
-    /// The value after this one. The largest value is held: a window manager
-    /// that asks for a value no larger one follows is answered with it.
-    const fn next(self) -> Self {
+    /// The largest even value: an odd one says "drawing" to a window manager
+    /// that synchronises frames, so the extended counter never rests above it.
+    const LARGEST_EVEN: Self = Self(i64::MAX - 1);
+
+    /// The odd value a frame begins at, after this even one, which is at most
+    /// [`LARGEST_EVEN`](Self::LARGEST_EVEN), so the sum cannot overflow.
+    const fn odd_after(self) -> Self {
         Self(self.0.saturating_add(1))
     }
 
-    /// The smallest even value no lower than this one, or the largest value
-    /// where none is.
+    /// The even value a frame ends at, after this odd one: the largest even
+    /// value where no larger one is.
+    const fn even_after(self) -> Self {
+        Self(self.0.saturating_add(1)).even_at_least()
+    }
+
+    /// The smallest even value no lower than this one, or the largest even
+    /// value where none is: a window manager that asks for `i64::MAX` is
+    /// answered with the value below it.
     const fn even_at_least(self) -> Self {
-        if self.0 % 2 == 0 { self } else { self.next() }
+        if self.0 % 2 == 0 {
+            self
+        } else {
+            match self.0.checked_add(1) {
+                Some(even) => Self(even),
+                None => Self::LARGEST_EVEN,
+            }
+        }
     }
 
     /// Whether the value is odd: an extended counter that is says the window
@@ -201,7 +226,7 @@ impl ResizeSync {
             if let Some(request) = extended {
                 self.extended = self.extended.max(request.value().even_at_least());
             }
-            self.extended = self.extended.next();
+            self.extended = self.extended.odd_after();
             writes.extended = Some(self.extended);
         }
         (FrameSync { answers, bracketed }, writes)
@@ -213,7 +238,7 @@ impl ResizeSync {
     pub(crate) fn frame_ends(&mut self, frame: FrameSync) -> CounterWrites {
         let mut writes = CounterWrites::default();
         if frame.bracketed {
-            self.extended = self.extended.next();
+            self.extended = self.extended.even_after();
             writes.extended = Some(self.extended);
         }
         if let Some(request) = frame.answers.filter(|request| !request.extended) {
@@ -261,7 +286,7 @@ impl ClientMachine {
     /// The machine named `name`, the node name `uname` reports. `None` for an
     /// empty name, or one with a control character, a space or bytes that are
     /// not UTF-8: no window manager could match it against a machine, and a
-    /// window then writes no `_NET_WM_PID` either.
+    /// window then writes no `_NET_WM_PID` either ([`ClientProcess`]).
     pub(crate) fn from_node_name(name: &[u8]) -> Option<Self> {
         let encoding = if name.iter().all(u8::is_ascii_graphic) {
             NameEncoding::Latin1
@@ -290,6 +315,62 @@ impl ClientMachine {
     pub(crate) const fn encoding(&self) -> NameEncoding {
         self.encoding
     }
+}
+
+/// The inode of the initial PID namespace (`PROC_PID_INIT_INO`, Linux 3.8),
+/// which `/proc/self/ns/pid` names for a process outside every PID namespace
+/// a sandbox or container made.
+const INITIAL_PID_NAMESPACE: u64 = 0xEFFF_FFFC;
+
+/// What a window says of its process: the machine it runs on, and its id,
+/// where a window manager on that machine can signal it by that id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClientProcess {
+    machine: Option<ClientMachine>,
+    id: Option<std::num::NonZeroU32>,
+}
+
+impl ClientProcess {
+    /// The process `id`, on the machine `node_name` names (what `uname`
+    /// reports), in the PID namespace `/proc/self/ns/pid` names (its link,
+    /// `pid:[<inode>]`; `None` where it cannot be read).
+    ///
+    /// The id is kept only beside a machine (EWMH) and only in the initial PID
+    /// namespace: a window manager kills a window that stopped answering its
+    /// pings by this id, and inside a sandbox's or container's namespace
+    /// (Flatpak, a container, a WSL distribution) the id names another
+    /// process outside it. The `NSpid` line of `/proc/self/status` cannot
+    /// tell: a sandbox that mounts its own `/proc`, as Flatpak's does, lists
+    /// one id there. A namespace that cannot be read keeps no id either, and
+    /// a window manager inside the same namespace loses only its offer to end
+    /// the process.
+    pub(crate) fn read(node_name: &[u8], namespace: Option<&str>, id: u32) -> Self {
+        let machine = ClientMachine::from_node_name(node_name);
+        let initial = namespace.and_then(namespace_inode) == Some(INITIAL_PID_NAMESPACE);
+        let id = machine
+            .as_ref()
+            .filter(|_| initial)
+            .and_then(|_| std::num::NonZeroU32::new(id));
+        Self { machine, id }
+    }
+
+    /// The machine a window names in `WM_CLIENT_MACHINE`.
+    pub(crate) const fn machine(&self) -> Option<&ClientMachine> {
+        self.machine.as_ref()
+    }
+
+    /// The id a window names in `_NET_WM_PID`, only beside its machine.
+    pub(crate) const fn id(&self) -> Option<std::num::NonZeroU32> {
+        self.id
+    }
+}
+
+/// The inode a namespace link (`pid:[4026531836]`) names.
+fn namespace_inode(link: &str) -> Option<u64> {
+    link.strip_prefix("pid:[")?
+        .strip_suffix(']')?
+        .parse::<u64>()
+        .ok()
 }
 
 #[cfg(test)]
@@ -490,7 +571,22 @@ mod tests {
             ("below the counter", 1, true, Some(3), 4),
             ("an even request at the read", 10, false, None, 10),
             ("an odd request at the read", 11, false, None, 12),
-            ("the largest", i64::MAX, false, None, i64::MAX),
+            // No even value is above `i64::MAX - 1`, and an odd one says
+            // "drawing": the counter rests there.
+            (
+                "the largest, repainted",
+                i64::MAX,
+                true,
+                Some(i64::MAX),
+                i64::MAX - 1,
+            ),
+            (
+                "the largest at the read",
+                i64::MAX,
+                false,
+                None,
+                i64::MAX - 1,
+            ),
         ];
         for (case, raw, frame_asked, during, after) in table {
             let mut sync = ResizeSync::default();
@@ -547,6 +643,59 @@ mod tests {
             if let Some(machine) = machine {
                 assert_eq!(machine.name(), *name, "{case}: the bytes");
             }
+        }
+    }
+
+    /// A process id is written only beside a machine and only from the
+    /// initial PID namespace, where a window manager's id for the process is
+    /// the same one; anywhere else, or where the namespace cannot be read, the
+    /// machine alone is.
+    #[test]
+    fn a_process_id_is_written_only_where_a_window_manager_can_use_it() {
+        const INITIAL: &str = "pid:[4026531836]";
+        // (case, node name, the namespace link, the machine written, the id
+        //  written)
+        type Case = (
+            &'static str,
+            &'static [u8],
+            Option<&'static str>,
+            bool,
+            Option<u32>,
+        );
+        let table: &[Case] = &[
+            (
+                "the initial namespace",
+                b"host",
+                Some(INITIAL),
+                true,
+                Some(4242),
+            ),
+            (
+                "a sandbox's namespace",
+                b"host",
+                Some("pid:[4026532223]"),
+                true,
+                None,
+            ),
+            ("an unreadable namespace", b"host", None, true, None),
+            (
+                "a link of another kind",
+                b"host",
+                Some("net:[4026531836]"),
+                true,
+                None,
+            ),
+            ("a malformed link", b"host", Some("pid:[x]"), true, None),
+            ("no machine", b"", Some(INITIAL), false, None),
+        ];
+        for (case, name, namespace, machine, id) in table {
+            let process = ClientProcess::read(name, *namespace, 4242);
+            assert_eq!(process.machine().is_some(), *machine, "{case}: the machine");
+            assert_eq!(
+                process.id().map(std::num::NonZeroU32::get),
+                *id,
+                "{case}: the id"
+            );
         }
     }
 }

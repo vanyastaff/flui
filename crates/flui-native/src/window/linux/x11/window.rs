@@ -59,15 +59,18 @@
 //!
 //! Beside its close, a window lists `_NET_WM_PING` and, where the server has
 //! the SYNC extension, `_NET_WM_SYNC_REQUEST` in `WM_PROTOCOLS`, and names its
-//! machine and process (`WM_CLIENT_MACHINE`, `_NET_WM_PID`). A ping goes back
-//! to the root as the event loop hears it, on the owner thread: a window whose
-//! owner hangs answers nothing, and its window manager can offer to end it, as
-//! a Wayland compositor can by `xdg_wm_base.ping`. A synchronised resize is
-//! answered on the window's XSync counters (`protocols::ResizeSync`): at the
-//! turn's read when the configure asks no frame, otherwise once the frame the
-//! loop delivers after it returns. Under the inline raster that frame has been
-//! presented by then; a raster thread may still be drawing it, so the window
-//! manager may draw its frame once around content of the old size.
+//! machine and process (`WM_CLIENT_MACHINE`, and `_NET_WM_PID` where a window
+//! manager's id for the process is the same, `protocols::ClientProcess`). A
+//! ping goes back to the root, and is sent, as the event loop hears it on the
+//! owner thread: a window whose owner hangs answers nothing, and its window
+//! manager can offer to end it, as a Wayland compositor can by
+//! `xdg_wm_base.ping`. A synchronised resize is answered on the window's XSync
+//! counters (`protocols::ResizeSync`): at the turn's read when the configure
+//! asks no frame, otherwise once the handler of the frame the loop delivers
+//! after it returns. That is when the frame has been handed to the GPU, not
+//! when it is shown: the host hears no presentation, and a FIFO swap chain
+//! presents at a later refresh (a raster thread may still be drawing), so a
+//! window manager may draw its frame once around content of the old size.
 //!
 //! # Close
 //!
@@ -127,7 +130,7 @@ use super::placement::{
     FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
     window_scale,
 };
-use super::protocols::{ClientMachine, CounterWrites, NameEncoding, ResizeSync, SyncRequest};
+use super::protocols::{ClientProcess, CounterWrites, NameEncoding, ResizeSync, SyncRequest};
 use super::support::{SupportAtoms, WindowManager, WindowManagerSupport, capabilities};
 use crate::host::{self, ScreenBounds, WindowFacets, WindowPositions};
 use crate::host_window::HostWindow;
@@ -380,18 +383,21 @@ struct SyncCounters {
 
 impl SyncCounters {
     /// Two counters made on `xcb` at 0, or `None` when the connection has no
-    /// ids left or failed.
+    /// ids left or failed. Both ids are taken before either counter is made,
+    /// and the first is destroyed again when the second cannot be: none is
+    /// left on the server for nobody.
     fn create(xcb: &x11rb::xcb_ffi::XCBConnection) -> Option<Self> {
         let zero = xsync::Int64 { hi: 0, lo: 0 };
-        let make = || -> Option<xsync::Counter> {
-            let counter = xcb.generate_id().ok()?;
-            xcb.sync_create_counter(counter, zero).ok()?;
-            Some(counter)
-        };
-        Some(Self {
-            basic: make()?,
-            extended: make()?,
-        })
+        let basic = xcb.generate_id().ok()?;
+        let extended = xcb.generate_id().ok()?;
+        xcb.sync_create_counter(basic, zero).ok()?;
+        if xcb.sync_create_counter(extended, zero).is_err() {
+            let _: Result<(), _> = xcb
+                .sync_destroy_counter(basic)
+                .map(x11rb::cookie::VoidCookie::ignore_error);
+            return None;
+        }
+        Some(Self { basic, extended })
     }
 }
 
@@ -712,8 +718,9 @@ impl X11Window {
 
     /// Set the window's counters to `writes`, where it has counters, and send
     /// them at once: the GPU driver may present on a connection of its own,
-    /// and a compositor that reads the extended counter must see a frame
-    /// begin before its present and end as soon as it has.
+    /// so a compositor that reads the extended counter sees a frame begin
+    /// before the frame is handed to the GPU, and end as soon as its handler
+    /// returns.
     fn write_counters(&self, writes: CounterWrites) {
         let Some(counters) = self.counters else {
             return;
@@ -780,13 +787,17 @@ impl X11Window {
             // EWMH: the message goes back to the root with nothing changed
             // but its window. Answered here on the owner thread, so a window
             // whose owner hangs answers nothing and its window manager can
-            // offer to end it.
+            // offer to end it; and sent now, not behind the turn's
+            // application work and frames.
             self.send_to_root(ClientMessageEvent::new(
                 32,
                 self.connection.root(),
                 message.type_,
                 data,
             ));
+            if let Err(error) = self.xcb().flush() {
+                tracing::debug!(%error, "cannot send an X11 window's answer to a ping");
+            }
         } else if protocol == self.atoms.net_wm_sync_request
             && self.counters.is_some()
             && let Some(request) = SyncRequest::from_message(data)
@@ -2087,9 +2098,8 @@ pub struct X11Windows {
     atoms: WindowAtoms,
     /// The class every window carries in `WM_CLASS`.
     class: AppClass,
-    /// The machine every window names in `WM_CLIENT_MACHINE`, beside its
-    /// process; neither is written without it.
-    machine: Option<ClientMachine>,
+    /// The machine and process every window names, read once.
+    process: ClientProcess,
     /// The server has the SYNC extension, initialised on the connection: each
     /// window makes the counters a synchronised resize waits on.
     synchronises: bool,
@@ -2129,8 +2139,8 @@ impl std::fmt::Debug for X11Windows {
 
 impl X11Windows {
     /// The windows of `connection`, each handing out what `positions` make,
-    /// with the atoms interned on it, and each carrying `class` and the
-    /// machine `uname` names. Hears the root window's property changes from
+    /// with the atoms interned on it, and each carrying `class`, the machine
+    /// `uname` names and the process (`ClientProcess`). Hears the root window's property changes from
     /// here on (the window manager's support and the active window) and the
     /// messages sent to its structure (a window manager announcing itself,
     /// ICCCM §2.8), initialises the SYNC extension where the server has it,
@@ -2159,7 +2169,14 @@ impl X11Windows {
             positions,
             atoms,
             class,
-            machine: ClientMachine::from_node_name(rustix::system::uname().nodename().to_bytes()),
+            process: ClientProcess::read(
+                rustix::system::uname().nodename().to_bytes(),
+                std::fs::read_link("/proc/self/ns/pid")
+                    .ok()
+                    .as_deref()
+                    .and_then(std::path::Path::to_str),
+                std::process::id(),
+            ),
             synchronises: initialize_sync(connection.xcb()),
             table: RefCell::default(),
             closed: Cell::new(false),
@@ -2514,7 +2531,7 @@ impl X11Windows {
             .delivery
             .publish_through_owner(&window, X11Window::publish_at_the_turns_read);
 
-        window.write_properties(position, &self.class, self.machine.as_ref());
+        window.write_properties(position, &self.class, &self.process);
         if opens_in != WindowMode::Normal {
             window.seed_mode(opens_in);
         }
@@ -2618,15 +2635,14 @@ impl X11Window {
     /// Write what the window manager reads as it maps the window: the
     /// protocols the window takes (its close, the ping, and a synchronised
     /// resize where it has counters, which it names), its title, `class` and
-    /// the application id it claims, that it takes the input focus, its
-    /// `machine` and process, type, size hints and decorations. Without a
-    /// machine the process is not written either: a window manager may end
-    /// a process by its id only on the machine named beside it (EWMH).
+    /// the application id it claims, that it takes the input focus, the
+    /// machine and the id of its `process` where it has them
+    /// (`ClientProcess` decides), type, size hints and decorations.
     fn write_properties(
         &self,
         position: Option<(i16, i16)>,
         class: &AppClass,
-        machine: Option<&ClientMachine>,
+        process: &ClientProcess,
     ) {
         let xcb = self.xcb();
         let atoms = &self.atoms;
@@ -2661,27 +2677,27 @@ impl X11Window {
                 &[counters.basic, counters.extended],
             )
         });
-        let process = machine.map(|machine| {
+        let machine = process.machine().map(|machine| {
             let encoding = match machine.encoding() {
                 NameEncoding::Latin1 => u32::from(AtomEnum::STRING),
                 NameEncoding::Utf8 => atoms.utf8_string,
             };
-            [
-                xcb.change_property8(
-                    PropMode::REPLACE,
-                    self.xid,
-                    AtomEnum::WM_CLIENT_MACHINE,
-                    encoding,
-                    machine.name(),
-                ),
-                xcb.change_property32(
-                    PropMode::REPLACE,
-                    self.xid,
-                    atoms.net_wm_pid,
-                    AtomEnum::CARDINAL,
-                    &[std::process::id()],
-                ),
-            ]
+            xcb.change_property8(
+                PropMode::REPLACE,
+                self.xid,
+                AtomEnum::WM_CLIENT_MACHINE,
+                encoding,
+                machine.name(),
+            )
+        });
+        let id = process.id().map(|id| {
+            xcb.change_property32(
+                PropMode::REPLACE,
+                self.xid,
+                atoms.net_wm_pid,
+                AtomEnum::CARDINAL,
+                &[id.get()],
+            )
         });
         let written = [
             xcb.change_property32(
@@ -2717,7 +2733,8 @@ impl X11Window {
             .into_iter()
             .chain(claimed)
             .chain(counters)
-            .chain(process.into_iter().flatten())
+            .chain(machine)
+            .chain(id)
             .find_map(Result::err);
         if let Some(error) = failed {
             tracing::debug!(%error, "cannot set an X11 window's properties");
@@ -2779,7 +2796,9 @@ impl LoopWindows for X11Windows {
     /// One handler's panic leaves the other windows their frames, and the
     /// first goes on after the last.
     fn deliver_frames(&self) {
-        let paced = self.support().paces_frames;
+        // As `read_stale` read it earlier in the turn: no request and no
+        // `tracing` here, outside every window's containment.
+        let paced = self.support.get().paces_frames;
         let mut failure = FirstPanic::new();
         for window in self.open_windows() {
             // The handle goes inside the containment: it may be the last one
