@@ -13,7 +13,8 @@ use flui_platform::{PlatformWindow, SystemFailure};
 use flui_sdk::view::CloseReason;
 use flui_system::dialog::{
     Dialog, DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs,
-    FileFilter, OpenRequest, OpenResult, PickedFile, Picks, SaveRequest, SaveResult,
+    FileFilter, MalformedRequest, OpenRequest, OpenResult, PickedFile, Picks, SaveLocation,
+    SaveRequest, SaveResult,
 };
 use flui_system::testing::{DialogRequest, ScriptedFileDialogs, ScriptedLauncher, ScriptedSystem};
 use flui_testing::{HeadlessHost, HeadlessWindow};
@@ -42,6 +43,11 @@ fn file(name: &str) -> PickedFile {
 
 fn picks(names: &[&str]) -> Picks {
     Picks::try_new(names.iter().copied().map(file).collect()).expect("the test names a pick")
+}
+
+/// A save to the file `name`, with no filter reported.
+fn saved(name: &str) -> SaveLocation {
+    SaveLocation::new(file(name), None)
 }
 
 #[test]
@@ -96,6 +102,43 @@ fn a_cancelled_save_dialog_answers_none() {
 
     assert_eq!(dialogs.requests().len(), 1);
     assert_eq!(*answered.borrow(), Some(Ok(Ok(None))));
+}
+
+#[test]
+fn a_save_reports_the_filter_selected_when_the_user_accepted() {
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let request = || {
+        SaveRequest::new()
+            .filter(FileFilter::new("PNG").with_extension("png"))
+            .filter(FileFilter::new("JPEG").with_extension("jpg"))
+    };
+
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(file("picture"), Some(1)))));
+    let chosen = land(handle.save(request()));
+    turn(&mut host);
+    turn(&mut host);
+    let answered = chosen.borrow_mut().take();
+    let location = match answered {
+        Some(Ok(Ok(Some(location)))) => location,
+        other => panic!("a save location: {other:?}"),
+    };
+    assert_eq!(location.filter(), Some(1), "the JPEG filter was selected");
+    assert_eq!(location.into_file(), file("picture"));
+
+    // A filter the request did not offer is not one the system can report.
+    let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(file("picture"), Some(2)))));
+    let beyond = land(handle.save(request()));
+    turn(&mut host);
+    turn(&mut host);
+    assert_eq!(*beyond.borrow(), Some(Ok(Err(malformed))));
+    dialogs.answer_next_save(Ok(Some(SaveLocation::new(file("picture"), Some(0)))));
+    let unoffered = land(handle.save(SaveRequest::new()));
+    turn(&mut host);
+    turn(&mut host);
+    assert_eq!(*unoffered.borrow(), Some(Ok(Err(malformed))));
 }
 
 #[test]
@@ -189,12 +232,12 @@ fn a_window_shows_one_dialog_at_a_time() {
     assert_eq!(
         dialogs
             .save_script()
-            .release_held(|_| Ok(Some(file("out.txt")))),
+            .release_held(|_| Ok(Some(saved("out.txt")))),
         2
     );
     turn(&mut host);
-    assert_eq!(*third.borrow(), Some(Ok(Ok(Some(file("out.txt"))))));
-    assert_eq!(*other.borrow(), Some(Ok(Ok(Some(file("out.txt"))))));
+    assert_eq!(*third.borrow(), Some(Ok(Ok(Some(saved("out.txt"))))));
+    assert_eq!(*other.borrow(), Some(Ok(Ok(Some(saved("out.txt"))))));
 }
 
 #[test]
@@ -289,39 +332,227 @@ fn a_dropped_dialog_is_dismissed_and_frees_its_window() {
 }
 
 #[test]
+fn a_filter_keeps_each_pattern_once_as_the_dialog_compares_it() {
+    let filter = FileFilter::new("Archives")
+        .with_extension(".TAR.GZ")
+        .with_extension("tar.gz")
+        .with_extension("Zip")
+        .with_extension(".zip")
+        .with_mime_type("Application/ZIP")
+        .with_mime_type("application/zip")
+        .with_mime_type("image/*");
+    assert_eq!(
+        filter.extensions(),
+        ["tar.gz", "zip"],
+        "lower case, no leading dot, each once"
+    );
+    assert_eq!(filter.mime_types(), ["application/zip", "image/*"]);
+    assert_eq!(
+        FileFilter::new("Images").with_extension("PNG"),
+        FileFilter::new("Images").with_extension("png"),
+        "two spellings of one extension are one filter"
+    );
+}
+
+#[test]
 fn a_malformed_request_is_refused_without_showing_a_dialog() {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
     let images = || FileFilter::new("Images").with_extension("png");
+    let longest = "a".repeat(FileFilter::MAX_PATTERN_LEN);
+    let too_long = "a".repeat(FileFilter::MAX_PATTERN_LEN + 1);
 
     let opens = [
-        OpenRequest::files().filter(FileFilter::new("").with_extension("png")),
-        OpenRequest::files().filter(FileFilter::new("Nothing")),
-        OpenRequest::files().filter(FileFilter::new("Glob").with_extension("*.png")),
-        OpenRequest::files().filter(FileFilter::new("Path").with_extension("a/b")),
-        OpenRequest::files().filter(FileFilter::new("Mime").with_mime_type("image")),
-        OpenRequest::folders().filter(images()),
-        OpenRequest::files().directory("relative/dir"),
+        (
+            OpenRequest::files().filter(FileFilter::new("").with_extension("png")),
+            MalformedRequest::FilterName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Bell\u{7}").with_extension("png")),
+            MalformedRequest::FilterName,
+        ),
+        (
+            OpenRequest::files().filter(
+                FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN + 1)).with_extension("png"),
+            ),
+            MalformedRequest::FilterName,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Nothing")),
+            MalformedRequest::EmptyFilter,
+        ),
+        (
+            OpenRequest::files().filter(
+                (0..=FileFilter::MAX_PATTERNS).fold(FileFilter::new("Many"), |filter, index| {
+                    filter.with_extension(format!("e{index}"))
+                }),
+            ),
+            MalformedRequest::TooManyPatterns,
+        ),
+        (
+            (0..=FileFilter::MAX_PER_REQUEST).fold(OpenRequest::files(), |request, index| {
+                request.filter(FileFilter::new(format!("F{index}")).with_extension("png"))
+            }),
+            MalformedRequest::TooManyFilters,
+        ),
+        // A wildcard, a separator or an empty part reads differently on
+        // each system, so no extension holds one.
+        (
+            OpenRequest::files().filter(FileFilter::new("Glob").with_extension("*.png")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("One").with_extension("pn?")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Set").with_extension("[pP]ng")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("List").with_extension("png;exe")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Path").with_extension("a/b")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Gap").with_extension("tar..gz")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Dot").with_extension(".")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Space").with_extension("p ng")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Accent").with_extension("pñg")),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Long").with_extension(too_long.as_str())),
+            MalformedRequest::Extension,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Mime").with_mime_type("image")),
+            MalformedRequest::MimeType,
+        ),
+        (
+            OpenRequest::files().filter(FileFilter::new("Any").with_mime_type("*/*")),
+            MalformedRequest::MimeType,
+        ),
+        (
+            OpenRequest::files()
+                .filter(FileFilter::new("Charset").with_mime_type("text/plain;charset=utf-8")),
+            MalformedRequest::MimeType,
+        ),
+        (
+            OpenRequest::files()
+                .filter(images())
+                .filter(FileFilter::new(" Images ").with_extension("jpg")),
+            MalformedRequest::DuplicateFilterName,
+        ),
+        (
+            OpenRequest::folders().filter(images()),
+            MalformedRequest::FiltersOnFolders,
+        ),
+        (
+            OpenRequest::files().directory("relative/dir"),
+            MalformedRequest::RelativeDirectory,
+        ),
     ];
     let saves = [
-        SaveRequest::new().suggested_name("dir/name.txt"),
-        SaveRequest::new().suggested_name(".."),
-        SaveRequest::new().suggested_name("  "),
-        SaveRequest::new().filter(FileFilter::new("Images")),
-        SaveRequest::new().directory("relative"),
+        (
+            SaveRequest::new().suggested_name("dir/name.txt"),
+            MalformedRequest::SuggestedName,
+        ),
+        (
+            SaveRequest::new().suggested_name(".."),
+            MalformedRequest::SuggestedName,
+        ),
+        (
+            SaveRequest::new().suggested_name("  "),
+            MalformedRequest::SuggestedName,
+        ),
+        (
+            SaveRequest::new().filter(FileFilter::new("Images")),
+            MalformedRequest::EmptyFilter,
+        ),
+        (
+            SaveRequest::new().filter(images()).filter(images()),
+            MalformedRequest::DuplicateFilterName,
+        ),
+        (
+            SaveRequest::new().directory("relative"),
+            MalformedRequest::RelativeDirectory,
+        ),
     ];
-    let open_answers = opens.map(|request| land(handle.open(request)));
-    let save_answers = saves.map(|request| land(handle.save(request)));
+    let open_answers = opens.map(|(request, malformed)| (land(handle.open(request)), malformed));
+    let save_answers = saves.map(|(request, malformed)| (land(handle.save(request)), malformed));
     turn(&mut host);
 
+    // Every row is checked, and every row that answers otherwise is named.
+    let wrong_opens = open_answers.iter().filter_map(|(answer, malformed)| {
+        let answered = answer.borrow();
+        let as_wanted = matches!(
+            &*answered,
+            Some(Ok(Err(DialogError::InvalidRequest(reason)))) if reason == malformed
+        );
+        (!as_wanted).then(|| format!("{malformed:?}: {answered:?}"))
+    });
+    let wrong_saves = save_answers.iter().filter_map(|(answer, malformed)| {
+        let answered = answer.borrow();
+        let as_wanted = matches!(
+            &*answered,
+            Some(Ok(Err(DialogError::InvalidRequest(reason)))) if reason == malformed
+        );
+        (!as_wanted).then(|| format!("{malformed:?}: {answered:?}"))
+    });
+    let wrong = wrong_opens.chain(wrong_saves).collect::<Vec<String>>();
+    assert!(wrong.is_empty(), "{wrong:#?}");
     assert!(dialogs.requests().is_empty(), "no dialog was shown");
-    for answer in open_answers {
-        assert_eq!(*answer.borrow(), Some(Ok(Err(DialogError::InvalidRequest))));
-    }
-    for answer in save_answers {
-        assert_eq!(*answer.borrow(), Some(Ok(Err(DialogError::InvalidRequest))));
-    }
+
+    // Several parts, digits and `-_+` are an extension; the longest one is
+    // taken, and a MIME type may name every subtype.
+    dialogs.answer_next_open(Ok(None));
+    let wide = land(
+        handle.open(
+            OpenRequest::files().filter(
+                FileFilter::new("Many")
+                    .with_extension("tar.gz")
+                    .with_extension("c++")
+                    .with_extension("my_ext-2")
+                    .with_extension(longest.as_str())
+                    .with_mime_type("image/*")
+                    .with_mime_type("application/vnd.ms-excel"),
+            ),
+        ),
+    );
+    turn(&mut host);
+    assert_eq!(*wide.borrow(), Some(Ok(Ok(None))));
+
+    // Each bound is taken at its limit.
+    let at_limits = (1..FileFilter::MAX_PER_REQUEST).fold(
+        OpenRequest::files().filter((1..FileFilter::MAX_PATTERNS).fold(
+            FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN)).with_extension("e0"),
+            |filter, index| filter.with_extension(format!("e{index}")),
+        )),
+        |request, index| request.filter(FileFilter::new(format!("F{index}")).with_extension("png")),
+    );
+    assert_eq!(at_limits.filters.len(), FileFilter::MAX_PER_REQUEST);
+    assert_eq!(
+        at_limits.filters[0].extensions().len(),
+        FileFilter::MAX_PATTERNS
+    );
+    dialogs.answer_next_open(Ok(None));
+    let limits = land(handle.open(at_limits));
+    turn(&mut host);
+    assert_eq!(*limits.borrow(), Some(Ok(Ok(None))));
 
     // A refused request leaves the window free for the next one.
     dialogs.answer_next_open(Ok(None));
