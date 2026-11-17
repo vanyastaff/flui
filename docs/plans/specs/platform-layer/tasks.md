@@ -7127,6 +7127,52 @@ GPU-память простаивающего или невидимого окн
   `overlapping_activations_on_two_threads_keep_each_others_marks` (один общий слот — публикация
   второй активации доходит до адаптера).
 
+- [x] **LY130** — ветка `native/xdnd-source-watch`. Находка подтверждена на `main` @ `cd0c88cd0`
+  прогоном в WSL под Xvfb: источник, чьё соединение закрыто посреди наведения, оставлял окно в
+  `Entered` с живым предложением до следующего drag, а запрос принятого drop от ушедшего
+  источника ждал `TRANSFER_TIMEOUT` и отвечал `TimedOut`. Построено: `PeerInterest::DropSource`;
+  `enter` слушает `StructureNotify` окна источника проверенным запросом (окно, ушедшее до выбора,
+  узнаётся только по отказу `BadWindow`, и наведение кончается сразу); цикл отдаёт каждый
+  `DestroyNotify` в `LoopDrag::window_destroyed` в своей изоляции паники, так что паника
+  обработчика окна не отнимает событие у окон; наведение кончается как `Exited`, а принятый drop
+  остаётся окну до `conclude_drop`, и его запросы сразу отвечают `SourceGone` (события
+  «отменён» после `Dropped` в словаре нет, а повторный `Exited` после `Dropped` нарушил бы
+  порядок событий; `XdndFinished` мёртвому окну не шлётся). Источник забывается в конце хода
+  цикла на потоке владельца (`State::released`), когда его не называет ни наведение, ни живое
+  предложение; `conclude_drop` с другого потока будит цикл. Старый слух `DestroyNotify` в
+  `session_event` источника перенесён туда же (`requestor_gone` из `window_destroyed`). Класс:
+  писатель `INCR` буфера X11 слушает и уничтожение запрашивающего и отпускает его передачи сразу,
+  а не по сроку. Тесты, в скобках результат с откатом: `a_source_that_goes_ends_its_hover`
+  (строка «пока наводит» — окно наводит 10 с, тест падает; строка «до чтения enter» без
+  проверки выбора — `Entered` без `Exited`); `a_dropped_offer_whose_source_goes_answers_gone_at_once`
+  (`TimedOut` через 5 с вместо `SourceGone`); `a_drag_that_leaves_retires_its_offer` (маска на
+  окне источника — 0 вместо `STRUCTURE_NOTIFY`); `a_requestor_that_goes_lets_go_of_its_transfers`
+  (следующему отказано, `NONE`). Проверено и найдено верным: источник drag FLUI при ушедшей цели
+  ограничен `FINISH_TIMEOUT` после отпускания и сменой цели при движении; чтение буфера X11 при
+  ушедшем владельце — общим сроком чтения `TRANSFER_TIMEOUT` (ICCCM не даёт читателю окна
+  владельца); на Wayland композитор шлёт `leave`, когда источник ушёл, а чтение принятого drop
+  получает конец канала — протокол не отличает ушедший источник от пустого ответа. Источник,
+  который кончает drag без `XdndLeave`, но окно оставляет, по-прежнему держит наведение до
+  следующего `XdndEnter`: такого источника показать не удалось, все известные (GTK, Qt) шлют
+  `XdndLeave` при отмене. Прогонов на устройствах не нужно.
+  Доведение после чтения (PR #2692): каждое слушание чужого окна ради его конца — одна форма,
+  `select_checked` (`owner::linux::x11`), на соединении платформы и на своём соединении буфера;
+  `X11Connection::hear_peer` проверяет выбор сам и отвечает `PeerHeard`, а окно, которого уже
+  нет (`Gone`), уносит свою запись из таблицы, другой отказ возвращает прежнюю маску интереса;
+  перешли менеджер окон, запрашивающий `INCR` источника drag и источник XDND. Источник, чьим
+  `XdndSelection` при входе никто не владеет, считается ушедшим: так узнаётся и мёртвый
+  источник, чей id занял новый клиент (равенство владельца окну из сообщений не требуется:
+  источник FLUI называет окно визита, а выделением владеет окно сессии). Паника второго шага
+  `enter` складывается за первой (`FirstPanic`); `window_destroyed` для окна, которое никто не
+  называет, не шлёт ничего. Писатель буфера отказывает запрашивающему, ушедшему до ответа.
+  Тесты, в скобках результат с откатом: `the_loop_ends_a_drag_whose_source_goes` (цикл без вызова
+  `window_destroyed` — окно наводит 10 с); строка «выделение без владельца» в
+  `a_source_that_goes_ends_its_hover` (без проверки — `Entered` без `Exited`);
+  `features_that_hear_one_peer_window_keep_each_others_events` (без отката записи — интерес на
+  ушедшем окне остаётся); строка «до ответа» в `a_requestor_that_goes_lets_go_of_its_transfers`
+  (следующему отказано). Windows (источник OLE, упавший при наведении) не прогонялся: запись в
+  `docs/gaps.md` («No native drag and drop») и заметка строки `drop-into-the-app`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
@@ -7338,6 +7384,43 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `presentation-feedback-when-each-frame-reached-the-screen`. Только CI компилирует правки в
   `owner/apple/metal_layer.rs`, `owner/apple/macos/content_view.rs`, `window/apple/{macos,ios,mod}.rs`,
   `window/android.rs`, `window/web.rs`, `tests/appkit_window.rs`.
+
+- [x] **LY128** — ветка `native/linux-app-identity`, решение — ADR-0351 (заменяет условие desktop
+  entry в ADR-0307 §4, оговорку ADR-0254 §4 о неверном id и сигнатуру `start_with` в ADR-0327 §3).
+  Подтверждено на `main` @ `ac3b1ee58`: `set_app_id` в `flui-native` нет, X11 писал `WM_CLASS` из
+  основы имени исполняемого файла и не писал `WM_HINTS`, desktop entry писалась только при схеме
+  или типе файла и без `StartupWMClass`; хост брал id строкой и проверял своей грамматикой
+  (`instance_name`), предупреждая и продолжая при отказе. Одно тождество: `AppId` и `AppIdError`
+  переехали в `flui-foundation` (`flui::app` экспортирует оба, реэкспорта из `flui-log` нет,
+  `IdentityError` оставил отказы имени показа); длина — не больше `APP_ID_MAX_LEN` = 231, по самому
+  тесному имени, где стоит id: канал Windows `\.\pipe\flui-<id>-<сессия>` (256 знаков), а более
+  длинный id — `AppIdError::TooLong` в `AppId::try_new` (CLI держит ту же границу, тест
+  `the_cli_and_the_framework_accept_the_same_identifiers`). `CurrentHost::start_with(executor,
+  Option<&AppId>)` и `start_single(executor, &AppId)`; `instance_name` и путь предупреждения
+  удалены. Хост Linux решает `window::linux::class::AppClass` один раз при старте (id или основа
+  имени в ASCII, `flui_foundation::executable_class`); Wayland зовёт `set_app_id` до первого
+  commit, X11 пишет `WM_CLASS` (экземпляр и класс), `_GTK_APPLICATION_ID` при id и `WM_HINTS`
+  (`InputHint`, input `True`). Тождество компилируется только объявленное: `FLUI_APP_ID` приходит
+  лишь из конфигурации cargo, которую каждая команда пишет из `[app] id` в `flui.toml`; выведенный
+  из каталога `dev.flui.<каталог>` не компилируется никогда. `flui build linux` пишет
+  `<класс>.desktop` для каждой сборки со `StartupWMClass=<класс>` (`MimeType` — только когда есть
+  что открывать), где класс — объявленный id или основа имени исполняемого файла, как её несёт окно.
+  Тесты: `a_window_carries_the_application_id_it_was_started_with` в `x11_window` (Xvfb + openbox:
+  при откате `WM_CLASS` к основе имени — падает на «the instance and the class», при откате
+  `WM_HINTS` — на «32-bit hints») и в `wayland_window::optional` (headless sway 1.9, другой клиент
+  читает app id через `zwlr_foreign_toplevel_manager_v1`, новый предмет `foreign-toplevel` в
+  `SWAY_OFFERS`; без `set_app_id` — `None` вместо id; Weston пропускает),
+  `a_window_is_classed_by_the_application_id_or_the_executable`,
+  `the_entry_is_named_by_what_the_window_carries` (два примера одного каталога без id — две записи,
+  `counter.desktop` и `todo.desktop`), `a_build_compiles_no_application_id_in_by_itself` (окружение
+  cargo ни одной цели не несёт `FLUI_APP_ID`), `the_cli_and_the_framework_class_an_executable_alike`,
+  `an_executable_is_classed_in_ascii`, `a_linux_desktop_registers_what_the_application_opens`,
+  `an_app_id_is_a_reverse_dns_name_every_platform_accepts` (перенесён в `flui-foundation`).
+  Прогоны 2026-11-16 (WSL Ubuntu 24.04): весь `x11_window` (38 случаев), весь
+  `wayland_window::optional` под sway с `FLUI_REQUIRE_COMPOSITOR` из `SWAY_OFFERS`, clippy Linux
+  с `--all-features`. Не запущено и записано в строке паритета
+  `app-identity-aumid-bundle-id-desktop-file`: сопоставление окна с установленной записью в сессиях
+  GNOME и KDE; AppUserModelID на Windows не ставится (`docs/gaps.md`).
 
 ### Доведение до приёмки
 

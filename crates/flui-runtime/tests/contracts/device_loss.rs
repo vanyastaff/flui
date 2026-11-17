@@ -206,3 +206,65 @@ fn a_given_up_rebuild_holds_frames_until_the_application_asks_again() {
     assert!(lost.run_frame(), "the rebuilt device shows the whole tree");
     assert_eq!(lost.device.submits, submits + 1);
 }
+
+/// A dead renderer is reported once, even over a rebuild already given up,
+/// its frames go on without drawing, and a rebuild the application asks for leaves
+/// it as it is (ADR-0305 §9). The death asks for one frame, which commits
+/// the tree a frame dropped before it left uncommitted.
+///
+/// Red-check: report only a change into a given-up state (drop `dies` in
+/// `note_primary_device_recovery`) and the death over the given-up rebuild
+/// is never reported.
+#[test]
+fn a_dead_renderer_is_reported_once_and_its_frames_go_on() {
+    // The first frame was dropped on the lost device, so its tree is not
+    // committed when the renderer is found dead.
+    let mut lost = Lost::new();
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Abandoned { attempts: 10 }));
+    let before_death = lost.wakes.load(Ordering::SeqCst);
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Dead));
+    assert_eq!(
+        lost.reports().last(),
+        Some(&(DeviceRecovery::Dead, FailureDisposition::FrameDropped)),
+        "the death is reported over the given-up rebuild"
+    );
+    assert!(
+        lost.wakes.load(Ordering::SeqCst) > before_death,
+        "the death asks for the one frame that commits the dropped frame's tree"
+    );
+    // The dead renderer answers it without drawing, as the host's sink does.
+    lost.device.lost = false;
+    let submits = lost.device.submits;
+    let _shown = lost.run_frame();
+    assert_eq!(lost.device.submits, submits + 1, "that frame is run");
+    let reported = lost.reports().len();
+    lost.runtime
+        .note_primary_device_recovery(Some(DeviceRecovery::Dead));
+    assert_eq!(lost.reports().len(), reported, "the death is reported once");
+    let wakes = lost.wakes.load(Ordering::SeqCst);
+    assert!(
+        !lost.wants_a_frame(wakes),
+        "a dead renderer asks for no frame while nothing changes"
+    );
+    assert!(
+        !lost.runtime.retry_render_device(),
+        "a rebuild asked for changes nothing"
+    );
+    assert_eq!(
+        lost.runtime.primary_device_recovery(),
+        Some(DeviceRecovery::Dead)
+    );
+    // The frames go on, answered without drawing, so input and the semantics
+    // tree still follow the application.
+    lost.runtime.mark_primary_needs_full_repaint();
+    assert!(
+        lost.runtime.has_pending_work(),
+        "work asked for after the death runs a frame"
+    );
+    let submits = lost.device.submits;
+    let _shown = lost.run_frame();
+    assert_eq!(lost.device.submits, submits + 1, "that frame is run");
+    assert_eq!(lost.reports().len(), reported, "and reports nothing");
+}

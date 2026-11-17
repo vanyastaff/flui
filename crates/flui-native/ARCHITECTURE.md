@@ -4504,7 +4504,21 @@ action (an `XdndActionAsk` reads the source's `XdndActionList`); each
 position is answered `XdndStatus` from the feedback the target cached while
 hearing it, asking for every movement; a drop resolves the action from that
 feedback, and a refusal answers `XdndFinished` at once while the window hears
-`Exited`. Types map to representations in the pure `drag::linux::x11::model`: text
+`Exited`. A source that crashes, or destroys its window without `XdndLeave`,
+says nothing else, so from its enter until its hover ends and its offers are
+concluded the drag hears its window's end (`PeerInterest::DropSource`). Every
+feature that hears another client's window for its end selects with a checked
+request (`select_checked`: a window already gone is told only by the refusal,
+and `hear_peer` then drops its entry), and a source whose `XdndSelection`
+nobody owns at its enter is taken as gone, which also covers a dead source's
+id reused by another client. The loop hands every `DestroyNotify` to
+`LoopDrag::window_destroyed` in its own containment; the hover ends as if the
+source left, and a dropped offer of it answers `SourceGone` until concluded
+(`the_loop_ends_a_drag_whose_source_goes`, `a_source_that_goes_ends_its_hover`,
+`a_dropped_offer_whose_source_goes_answers_gone_at_once`). The drag stops
+hearing a source nothing names at the end of the loop's turn, on the owner
+thread where the table of peer windows is. Types map to representations in the
+pure `drag::linux::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
 drag's last time into a window made for that fetch and destroyed as it ends,
@@ -4666,6 +4680,24 @@ so one leaving lets go of nothing another holds. Tests:
 `the_pointer_on_a_frame_asks_for_what_it_pressed`,
 `a_window_has_the_frame_its_compositor_leaves_it` (Weston and sway), and
 `tests/wayland_frame.rs` on Weston's desktop shell through XTest.
+
+### A Linux window carries the class its host decided once, from the application id
+
+A Linux host is started with the application's `flui_foundation::AppId`, or
+without one (`CurrentHost::start_with`, `start_single`), and decides at start
+the `window::linux::class::AppClass` every window carries: the id, or the
+executable's stem in ASCII (`flui_foundation::executable_class`). A Wayland
+window sets it with `xdg_toplevel.set_app_id` before its first commit; an X11
+window writes it as both halves of `WM_CLASS`, claims it as
+`_GTK_APPLICATION_ID` when it is an id, and writes `WM_HINTS` with `InputHint`
+set. The desktop entry `flui build linux` writes is named by the same class and
+names it as `StartupWMClass` (ADR-0351). The single-instance bus name, mutex
+and pipe are the id itself: its grammar is a D-Bus name's and its length fits
+the pipe's 256 characters (`APP_ID_MAX_LEN`), so the host checks nothing
+again. Tests:
+`a_window_is_classed_by_the_application_id_or_the_executable`, and
+`a_window_carries_the_application_id_it_was_started_with` on Xvfb with
+openbox and under sway (read through `zwlr_foreign_toplevel_manager_v1`).
 
 ### Linux displays come from the compositor on a connection of their own, and a window names its display by native number
 

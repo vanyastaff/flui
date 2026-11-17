@@ -34,7 +34,7 @@ generics, empty structs, missing field traits and generic-dependent widths.
 painter in external projects with both ordinary and renamed facade dependencies.
 Its `nested_custom_motion_repaints_and_retargets_through_the_facade` case reads
 the submitted rectangle's geometry and color, preserves its velocity at a
-retarget seam, and asserts zero element builds on moving frames.
+retarget seam, and asserts that the card does not rebuild on moving frames.
 
 ### Resolve runtime paths through Cargo dependencies
 
