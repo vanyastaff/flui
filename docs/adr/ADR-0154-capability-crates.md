@@ -10,7 +10,7 @@
   gain `capability`) and §2 in part (the reach table gains its row);
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) in part (official packages keep their
   rules; capability crates are a second kind of package with rules of their own).
-- **Superseded-by:** [ADR-0364](ADR-0364-a-window-names-itself-to-a-portal-for-each-request.md)
+- **Superseded-by:** [ADR-0365](ADR-0365-a-window-names-itself-to-a-portal-for-each-request.md)
   for §9 items 1 and 5 in part (a portal takes the window's portal parent, which the host fills
   per request, not one a provider builds from the raw handle; the host bridge names the
   application id)

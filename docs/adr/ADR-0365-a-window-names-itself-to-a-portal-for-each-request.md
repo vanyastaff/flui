@@ -1,4 +1,4 @@
-# ADR-0364: A window names itself to a desktop portal for each request
+# ADR-0365: A window names itself to a desktop portal for each request
 
 - **Status:** Accepted (2026-11-17)
 - **Date:** 2026-11-17
@@ -101,7 +101,10 @@ the notion in the seam.
 ### Confirmation
 
 The compiler: `WindowRef::new` takes the window; `PortalParent` keeps its export private. Tests:
-`a_portal_names_each_kind_of_window_and_a_wayland_name_lasts_with_its_export` (flui-platform),
+`a_portal_names_each_kind_of_window_and_a_wayland_name_lasts_with_its_export` and
+`a_closed_window_is_named_to_no_portal_whatever_its_host_answers` (flui-platform),
+`a_closed_window_takes_its_exports_with_it_and_names_no_parent` and
+`a_binding_retried_after_its_first_attempt_failed_still_names_its_window` (flui-system),
 `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends` and
 `a_compositor_without_an_exporter_names_no_portal_parent` (flui-native, against the scripted
 compositor), `a_portal_parent_names_the_window_while_its_request_holds_the_export` (flui-native,

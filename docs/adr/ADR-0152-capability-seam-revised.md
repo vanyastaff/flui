@@ -24,7 +24,7 @@
   mark from one where only some clipboard managers read it and one with no way to mark it.
 - **Superseded-by:** [ADR-0337](ADR-0337-a-clipboard-write-answers-and-win32-serves-the-clipboard-off-the-owner-thread.md)
   for §6 in part (a write answers through a resolver; `NativeClipboard` has no `write_text`)
-- **Superseded-by:** [ADR-0364](ADR-0364-a-window-names-itself-to-a-portal-for-each-request.md)
+- **Superseded-by:** [ADR-0365](ADR-0365-a-window-names-itself-to-a-portal-for-each-request.md)
   for §2 item 6 in part (`WindowRef` also answers the window's portal parent, for one request at a
   time; `ProviderContext` also names the application id)
 - **Supersedes:** [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) (Proposed) as a whole;

@@ -5480,7 +5480,7 @@ GPU-память простаивающего или невидимого окн
   `Trigger` в записи спецификации XDG shortcuts), `taskbar` (`TaskbarEntry`, `Progress`,
   `Honoured`), `user_dirs` (`UserDirs`, `UserDir`); вне Linux — `NotYetOnThisHost`; двойники
   `ScriptedAutostart`, `ScriptedShortcuts`, `ScriptedTaskbar`, `ScriptedUserDirs` в
-  `ScriptedSystem`. Родитель портала — межплатформенное понятие ADR-0364 (поправка ADR-0152 §2.6 и
+  `ScriptedSystem`. Родитель портала — межплатформенное понятие ADR-0365 (поправка ADR-0152 §2.6 и
   ADR-0154 §9): `PortalParent` (`none`, `x11`, `wayland` с экспортом, отпускаемым при drop),
   `PlatformWindow::portal_parent`, `WindowRef::portal_parent`; окно Wayland экспортирует себя на
   каждый запрос (`zxdg_exporter_v2`), а не на всю жизнь, запрос держит экспорт до конца.
@@ -5501,7 +5501,12 @@ GPU-память простаивающего или невидимого окн
   `a_refused_binding_ends_denied_and_closes_its_session`,
   `the_launcher_entry_broadcasts_its_whole_state_under_the_applications_entry`,
   `the_home_folder_is_the_one_the_process_names`,
-  `a_runtime_that_ends_closes_the_sessions_its_portal_still_holds`; ручки на двойниках
+  `a_runtime_that_ends_closes_the_sessions_its_portal_still_holds`,
+  `a_closed_window_takes_its_exports_with_it_and_names_no_parent` (закрытие окна отпускает
+  экспорт любого запроса, закрытое окно не называется),
+  `a_binding_retried_after_its_first_attempt_failed_still_names_its_window`,
+  `a_burst_of_entry_changes_ends_on_the_last_state`; правило закрытого окна в `WindowRef` —
+  `a_closed_window_is_named_to_no_portal_whatever_its_host_answers`; ручки на двойниках
   (`tests/services.rs`, на всех ОС); экспорт против `ScriptedCompositor` (глобал
   `zxdg_exporter_v2` добавлен): `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends`,
   `a_compositor_without_an_exporter_names_no_portal_parent`; под sway —

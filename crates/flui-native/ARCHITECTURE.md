@@ -1466,10 +1466,11 @@ trait depends on `flui-platform` instead.
   callback or a later one, and an older one gives it the first grace
   (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window
   exports itself for each portal request that names it
-  (`PlatformWindow::portal_parent`, ADR-0364) and answers `wayland:<handle>` when the
+  (`PlatformWindow::portal_parent`, ADR-0365) and answers `wayland:<handle>` when the
   compositor's `handle` event comes; the answer holds the `zxdg_exported_v2`, whose drop
   destroys it and flushes the connection on whichever thread the request ended, so no handle
-  names the window between requests. A compositor with no exporter and a closed window answer no
+  names the window between requests. The window's close destroys every export a request still
+  holds (`Exports::close`, before the role objects go), so none outlives its toplevel. A compositor with no exporter and a closed window answer no
   window; an X11 window answers `x11:<XID>` at once. The window tells its AT-SPI bridge each change of the
   compositor's activation, which `UnixAccessibility::focus_changed` passes to
   the adapter (the X11 window already called it), and where its content is

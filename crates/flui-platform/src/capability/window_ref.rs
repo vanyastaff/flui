@@ -14,7 +14,7 @@ use crate::{PlatformWindow, SurfaceTarget, WindowId};
 /// its raw window and display handles, its [`WindowLifetime`], and the
 /// [`PortalParent`] a desktop portal names it by. No other method of the
 /// window is reachable, so no window method becomes surface that capability
-/// crates depend on (ADR-0152 §2, item 6; ADR-0364).
+/// crates depend on (ADR-0152 §2, item 6; ADR-0365).
 ///
 /// The raw handles are what owner-attached dialogs need; they are reached
 /// through [`HasWindowHandle`] and [`HasDisplayHandle`], the upstream traits
