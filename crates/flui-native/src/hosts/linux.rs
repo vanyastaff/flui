@@ -190,7 +190,7 @@ mod wayland {
         /// [`try_new`](Self::try_new) on the compositor at `socket`, which
         /// the windows and the display source both connect to, whatever the
         /// environment names: a test's own compositor
-        /// (`testing::wayland::compositor`).
+        /// (`testing::wayland_compositor`).
         ///
         /// # Errors
         /// As [`try_new`](Self::try_new).

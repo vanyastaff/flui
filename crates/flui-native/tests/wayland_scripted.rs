@@ -1,5 +1,5 @@
 //! The native Wayland host against a compositor the test scripts
-//! (`flui_native::testing::wayland::compositor`): the wire protocol over a
+//! (`flui_native::testing::wayland_compositor`): the wire protocol over a
 //! socket of the case's own, to the unmodified host, for what no installed
 //! compositor does on demand: bounds on a window's size, a scale change while
 //! the host runs, a seat too old to tell its repeat, a strict buffer-scale
@@ -22,14 +22,16 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod cases {
     use std::rc::Rc;
+    use std::sync::mpsc::{RecvTimeoutError, Sender};
     use std::time::{Duration, Instant};
 
     use flui_foundation::geometry::Size;
-    use flui_native::testing::wayland::compositor::{
-        Configure, HangUp, KEY_A, Offer, OutputOffer, ScriptedCompositor, Step, ToplevelState,
-    };
     use flui_native::testing::wayland::{
         MAX_BUFFER_SCALE, compositor_report, cursor_report, present, run_for,
+    };
+    use flui_native::testing::wayland_compositor::{
+        Configure, HangUp, Heard, KEY_A, Offer, OutputOffer, ScriptedCompositor, Step,
+        ToplevelState,
     };
     use flui_native::{HostWindow, Platform as _, WaylandPlatform};
     use flui_platform::keyboard::{KeyPress, KeyState};
@@ -91,6 +93,10 @@ mod cases {
             (
                 "a_compositor_that_hangs_up_on_a_frame_ends_the_loop_with_an_error",
                 a_compositor_that_hangs_up_on_a_frame_ends_the_loop_with_an_error,
+            ),
+            (
+                "the_compositor_refuses_each_request_a_strict_compositor_refuses",
+                the_compositor_refuses_each_request_a_strict_compositor_refuses,
             ),
         ]
         .into_iter()
@@ -180,6 +186,24 @@ mod cases {
         file
     }
 
+    /// Ends the process with a message naming a step that did not return
+    /// within [`PATIENCE`]: a call that blocks the owner thread cannot be
+    /// bounded from that thread.
+    struct Watchdog(#[expect(dead_code, reason = "dropping it disarms the watchdog")] Sender<()>);
+
+    impl Watchdog {
+        fn arm(step: &'static str) -> Self {
+            let (disarm, armed) = std::sync::mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                if armed.recv_timeout(PATIENCE) == Err(RecvTimeoutError::Timeout) {
+                    eprintln!("{step} did not return within {PATIENCE:?}");
+                    std::process::exit(101);
+                }
+            });
+            Self(disarm)
+        }
+    }
+
     /// A compositor, the host on it, and one window.
     struct Session {
         window: Rc<dyn HostWindow>,
@@ -193,17 +217,43 @@ mod cases {
         /// `options` on that.
         fn open(offer: Offer, options: WindowOptions) -> Self {
             let compositor = ScriptedCompositor::start(offer).expect("the compositor starts");
-            let platform = WaylandPlatform::try_new_at(compositor.socket())
-                .expect("the host connects to the compositor");
+            let platform = {
+                let _bound = Watchdog::arm("the host connecting to the compositor");
+                WaylandPlatform::try_new_at(compositor.socket())
+                    .expect("the host connects to the compositor")
+            };
             let handler = RecordingWindowHandler::new();
-            let window = platform
-                .open_window(options, Rc::clone(&handler) as _)
-                .expect("a window opens");
+            let window = {
+                let _bound = Watchdog::arm("the window opening");
+                platform
+                    .open_window(options, Rc::clone(&handler) as _)
+                    .expect("a window opens")
+            };
             Self {
                 window,
                 handler,
                 platform,
                 compositor,
+            }
+        }
+
+        /// Turn the loop until what the compositor heard satisfies `done`,
+        /// bounded at [`PATIENCE`]: the compositor records a request when its
+        /// thread reads it, which may be after the host's turn returns.
+        fn heard_until(&self, what: &str, done: impl Fn(&Heard) -> bool) -> Heard {
+            let deadline = Instant::now() + PATIENCE;
+            loop {
+                let heard = self.compositor.heard();
+                if done(&heard) {
+                    return heard;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for the compositor to hear {what}; it heard {heard:?}"
+                );
+                // The loop may have ended (a hang-up); the compositor's thread
+                // still records.
+                let _ = run_for(&self.platform, Duration::from_millis(5));
             }
         }
 
@@ -310,7 +360,11 @@ mod cases {
         session.turn_until("a cursor at scale 3", |session| {
             session.cursor_scale() == Some(3)
         });
-        let cursor = session.compositor.heard().cursor;
+        let cursor = session
+            .heard_until("a cursor buffer at scale 3", |heard| {
+                heard.cursor.iter().any(|image| image.scale == 3)
+            })
+            .cursor;
         let last = cursor.last().expect("a cursor buffer was committed");
         assert_eq!(
             (last.size, last.scale, last.destination),
@@ -340,7 +394,9 @@ mod cases {
         session.turn_until("a cursor at scale 2", |session| {
             session.cursor_scale() == Some(2)
         });
-        let heard = session.compositor.heard();
+        let heard = session.heard_until("the cursor buffer for scale 2", |heard| {
+            heard.cursor.iter().any(|image| image.destination.is_some())
+        });
         assert_eq!(heard.errors, [], "the compositor posted no protocol error");
         let last = heard.cursor.last().expect("a cursor buffer was committed");
         assert_eq!(
@@ -434,8 +490,7 @@ mod cases {
                 session.draw();
             }
         }
-        let heard = session.compositor.heard();
-        assert!(heard.withheld > 0, "the compositor held back the callbacks");
+        session.heard_until("callbacks held back", |heard| heard.withheld > 0);
         assert!(
             longest < Duration::from_millis(500),
             "a turn of 10 ms took {longest:?}"
@@ -571,39 +626,54 @@ mod cases {
         );
     }
 
-    /// A burst of configures, each of another size, settles on the last: the
-    /// window acknowledges its serial and takes its size, and acknowledges
-    /// no serial out of order.
+    /// A burst of configures, each of another size, sent before the loop
+    /// turns, settles on the last: the window acknowledges only the newest
+    /// configure it has read each time it carries them out, so the 200 cost
+    /// a few acknowledgements (one per read of the socket, at most four
+    /// here), in order, the last of them the burst's last, whose size the
+    /// window takes.
     fn a_configure_storm_settles_on_the_last_configure() {
-        const STORM: i32 = 200;
+        const STORM: usize = 200;
         let session = Session::open(Offer::default(), WindowOptions::default().title("a storm"));
         session.turn_until("the window's first frame", |session| {
             session.compositor.heard().frames > 0
         });
-        for step in 1..=STORM {
+        let before = session.compositor.heard();
+        let storm = i32::try_from(STORM).expect("a small storm");
+        for step in 1..=storm {
             session.compositor.play(Step::Configure(
                 Configure::default()
                     .size(400 + step, 300 + step)
                     .state(ToplevelState::Activated),
             ));
         }
-        let last = Size::new(f64::from(400 + STORM), f64::from(300 + STORM));
+        // The whole burst is on its way before the loop turns again.
+        let deadline = Instant::now() + PATIENCE;
+        while session.compositor.heard().configures.len() < before.configures.len() + STORM {
+            assert!(
+                Instant::now() < deadline,
+                "the compositor never sent the storm"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let last = Size::new(f64::from(400 + storm), f64::from(300 + storm));
         session.turn_until("the last configure's size", |session| {
             session.window.state().content_size.get() == last
-                && session.compositor.heard().configures.len()
-                    > usize::try_from(STORM).expect("a small storm")
         });
-        let heard = session.compositor.heard();
-        let sent = heard.configures.last().copied();
-        assert_eq!(
-            heard.acknowledged.last().copied(),
-            sent,
-            "the last configure is acknowledged"
+        let sent = session.compositor.heard().configures;
+        let last_serial = *sent.last().expect("configures were sent");
+        let heard = session.heard_until("the last configure acknowledged", |heard| {
+            heard.acknowledged.last() == Some(&last_serial)
+        });
+        let storm_acks = &heard.acknowledged[before.acknowledged.len()..];
+        assert!(
+            storm_acks.is_sorted() && storm_acks.iter().all(|serial| sent.contains(serial)),
+            "serials acknowledged in order, each one sent: {storm_acks:?}"
         );
         assert!(
-            heard.acknowledged.is_sorted(),
-            "serials acknowledged in order: {:?}",
-            heard.acknowledged
+            storm_acks.len() <= 4,
+            "{} acknowledgements of a burst of {STORM}: {storm_acks:?}",
+            storm_acks.len()
         );
     }
 
@@ -646,10 +716,267 @@ mod cases {
             }
             assert!(Instant::now() < deadline, "the loop never saw the hang-up");
         }
-        assert_eq!(
-            session.compositor.heard().clients,
-            0,
-            "every connection closed"
-        );
+        session.heard_until("every connection closed", |heard| heard.clients == 0);
+    }
+
+    /// Each rule the compositor enforces ends the connection of a client that
+    /// breaks it with that rule's protocol error: what makes a host that
+    /// passes the cases above one that keeps the rules.
+    fn the_compositor_refuses_each_request_a_strict_compositor_refuses() {
+        use wayland_protocols::xdg::shell::client::xdg_surface;
+        use wrong_client::Wrong;
+
+        let xdg_surface = |error: xdg_surface::Error| ("xdg_surface", error as u32);
+        for (wrong, expected) in [
+            (
+                Wrong::BufferBeforeAcknowledgement,
+                xdg_surface(xdg_surface::Error::UnconfiguredBuffer),
+            ),
+            (
+                Wrong::SerialNeverSent,
+                xdg_surface(xdg_surface::Error::InvalidSerial),
+            ),
+            (
+                Wrong::SerialOlderThanAcknowledged,
+                xdg_surface(xdg_surface::Error::InvalidSerial),
+            ),
+            (
+                Wrong::BufferScaleBelowOne,
+                (
+                    "wl_surface",
+                    wayland_client::protocol::wl_surface::Error::InvalidScale as u32,
+                ),
+            ),
+            (
+                Wrong::CursorOnToplevel,
+                (
+                    "wl_pointer",
+                    wayland_client::protocol::wl_pointer::Error::Role as u32,
+                ),
+            ),
+            (
+                Wrong::BufferItsScaleDoesNotDivide,
+                (
+                    "wl_surface",
+                    wayland_client::protocol::wl_surface::Error::InvalidSize as u32,
+                ),
+            ),
+        ] {
+            let compositor =
+                ScriptedCompositor::start(Offer::default().seat(7)).expect("the compositor starts");
+            let refused = wrong_client::play(&compositor, wrong);
+            assert!(
+                refused,
+                "{wrong:?}: the client's connection outlived its request"
+            );
+            let deadline = Instant::now() + PATIENCE;
+            loop {
+                let errors = compositor.heard().errors;
+                if errors
+                    .iter()
+                    .any(|error| (error.interface, error.code) == expected)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{wrong:?}: no {expected:?} was posted; posted {errors:?}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    /// A Wayland client written to break one rule of the protocol, on
+    /// `wayland-client` alone.
+    mod wrong_client {
+        use std::os::fd::AsFd as _;
+        use std::os::unix::net::UnixStream;
+        use std::time::Instant;
+
+        use flui_native::testing::wayland_compositor::{ScriptedCompositor, Step};
+        use wayland_client::protocol::wl_buffer::WlBuffer;
+        use wayland_client::protocol::wl_compositor::WlCompositor;
+        use wayland_client::protocol::wl_pointer::WlPointer;
+        use wayland_client::protocol::wl_registry::{self, WlRegistry};
+        use wayland_client::protocol::wl_seat::WlSeat;
+        use wayland_client::protocol::wl_shm::{self, WlShm};
+        use wayland_client::protocol::wl_shm_pool::WlShmPool;
+        use wayland_client::protocol::wl_surface::WlSurface;
+        use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
+        use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
+        use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
+        use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+
+        use super::{Configure, PATIENCE};
+
+        /// The rule a client breaks.
+        #[derive(Debug, Clone, Copy)]
+        pub(super) enum Wrong {
+            /// Commits its toplevel's buffer before it acknowledges a configure.
+            BufferBeforeAcknowledgement,
+            /// Acknowledges a serial the compositor never sent.
+            SerialNeverSent,
+            /// Acknowledges a serial older than one it acknowledged.
+            SerialOlderThanAcknowledged,
+            /// Sets a buffer scale of zero.
+            BufferScaleBelowOne,
+            /// Sets its toplevel's surface as its cursor.
+            CursorOnToplevel,
+            /// Commits a 63-pixel buffer at buffer scale 2.
+            BufferItsScaleDoesNotDivide,
+        }
+
+        /// The globals the client bound as they were announced, and the
+        /// serials it was configured with.
+        #[derive(Default)]
+        struct Heard {
+            compositor: Option<WlCompositor>,
+            base: Option<XdgWmBase>,
+            shm: Option<WlShm>,
+            seat: Option<WlSeat>,
+            serials: Vec<u32>,
+        }
+
+        impl Dispatch<WlRegistry, ()> for Heard {
+            fn event(
+                heard: &mut Self,
+                registry: &WlRegistry,
+                event: wl_registry::Event,
+                (): &(),
+                _: &Connection,
+                queue: &QueueHandle<Self>,
+            ) {
+                let wl_registry::Event::Global {
+                    name,
+                    interface,
+                    version,
+                } = event
+                else {
+                    return;
+                };
+                match interface.as_str() {
+                    "wl_compositor" => {
+                        heard.compositor = Some(registry.bind(name, version.min(6), queue, ()));
+                    }
+                    "xdg_wm_base" => {
+                        heard.base = Some(registry.bind(name, version.min(6), queue, ()));
+                    }
+                    "wl_shm" => heard.shm = Some(registry.bind(name, 1, queue, ())),
+                    "wl_seat" => heard.seat = Some(registry.bind(name, version.min(7), queue, ())),
+                    _ => {}
+                }
+            }
+        }
+
+        impl Dispatch<XdgSurface, ()> for Heard {
+            fn event(
+                heard: &mut Self,
+                _: &XdgSurface,
+                event: xdg_surface::Event,
+                (): &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+                if let xdg_surface::Event::Configure { serial } = event {
+                    heard.serials.push(serial);
+                }
+            }
+        }
+
+        impl Dispatch<XdgWmBase, ()> for Heard {
+            fn event(
+                _: &mut Self,
+                base: &XdgWmBase,
+                event: xdg_wm_base::Event,
+                (): &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+                if let xdg_wm_base::Event::Ping { serial } = event {
+                    base.pong(serial);
+                }
+            }
+        }
+
+        delegate_noop!(Heard: ignore WlCompositor);
+        delegate_noop!(Heard: ignore WlSurface);
+        delegate_noop!(Heard: ignore WlShm);
+        delegate_noop!(Heard: ignore WlShmPool);
+        delegate_noop!(Heard: ignore WlBuffer);
+        delegate_noop!(Heard: ignore WlSeat);
+        delegate_noop!(Heard: ignore WlPointer);
+        delegate_noop!(Heard: ignore XdgToplevel);
+
+        /// Open a toplevel on `compositor`, break `wrong`'s rule, and say
+        /// whether the compositor ended the connection for it.
+        pub(super) fn play(compositor: &ScriptedCompositor, wrong: Wrong) -> bool {
+            let stream = UnixStream::connect(compositor.socket()).expect("the socket answers");
+            let connection = Connection::from_socket(stream).expect("a connection");
+            let mut queue = connection.new_event_queue::<Heard>();
+            let handle = queue.handle();
+            let mut heard = Heard::default();
+            let _registry = connection.display().get_registry(&handle, ());
+            queue.roundtrip(&mut heard).expect("the registry answers");
+            let wl_compositor = heard.compositor.clone().expect("wl_compositor is offered");
+            let base = heard.base.clone().expect("xdg_wm_base is offered");
+            let shm = heard.shm.clone().expect("wl_shm is offered");
+            let seat = heard.seat.clone().expect("a seat is offered");
+            let surface = wl_compositor.create_surface(&handle, ());
+            let xdg = base.get_xdg_surface(&surface, &handle, ());
+            let _toplevel = xdg.get_toplevel(&handle, ());
+            surface.commit();
+            queue.roundtrip(&mut heard).expect("the first configure");
+            let first = *heard
+                .serials
+                .first()
+                .expect("the compositor configured the toplevel");
+            let buffer = |side: i32| {
+                let file = tempfile::tempfile().expect("a buffer's memory");
+                let bytes = side * side * 4;
+                file.set_len(u64::try_from(bytes).expect("a small buffer"))
+                    .expect("the memory is sized");
+                let pool = shm.create_pool(file.as_fd(), bytes, &handle, ());
+                pool.create_buffer(
+                    0,
+                    side,
+                    side,
+                    side * 4,
+                    wl_shm::Format::Argb8888,
+                    &handle,
+                    (),
+                )
+            };
+            match wrong {
+                Wrong::BufferBeforeAcknowledgement => {
+                    surface.attach(Some(&buffer(64)), 0, 0);
+                    surface.commit();
+                }
+                Wrong::SerialNeverSent => xdg.ack_configure(first + 1_000),
+                Wrong::SerialOlderThanAcknowledged => {
+                    compositor.play(Step::Configure(Configure::default()));
+                    let deadline = Instant::now() + PATIENCE;
+                    while heard.serials.len() < 2 {
+                        assert!(Instant::now() < deadline, "no second configure came");
+                        queue.roundtrip(&mut heard).expect("the second configure");
+                    }
+                    xdg.ack_configure(heard.serials[1]);
+                    xdg.ack_configure(first);
+                }
+                Wrong::BufferScaleBelowOne => surface.set_buffer_scale(0),
+                Wrong::CursorOnToplevel => {
+                    xdg.ack_configure(first);
+                    let pointer = seat.get_pointer(&handle, ());
+                    pointer.set_cursor(0, Some(&surface), 0, 0);
+                }
+                Wrong::BufferItsScaleDoesNotDivide => {
+                    xdg.ack_configure(first);
+                    surface.set_buffer_scale(2);
+                    surface.attach(Some(&buffer(63)), 0, 0);
+                    surface.commit();
+                }
+            }
+            queue.roundtrip(&mut heard).is_err()
+        }
     }
 }

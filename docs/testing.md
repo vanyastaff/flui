@@ -216,7 +216,7 @@ compositor `WAYLAND_DISPLAY` names. No one compositor runs them all:
 The `wayland_scripted` harness and `flui-app`'s
 `native_linux::an_app_whose_window_is_never_drawn_still_quits` need no
 compositor installed: each case starts `flui-native`'s
-`testing::wayland::compositor::ScriptedCompositor`, a compositor on
+`testing::wayland_compositor::ScriptedCompositor`, a compositor on
 `wayland-server`'s pure-Rust backend at a socket of its own, which offers the
 globals and versions an `Offer` names and plays typed `Step`s, and connects
 the host to that socket (`WaylandPlatform::try_new_at`, or `WAYLAND_DISPLAY`

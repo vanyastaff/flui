@@ -82,16 +82,14 @@
 //!
 //! ```rust,no_run
 //! # async fn frame(
-//! #     window: impl flui_engine::WindowTarget,
+//! #     window: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
 //! #     scene: &flui_layer::Scene,
 //! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::Renderer;
 //!
-//! // `window` is an OWNED, `'static` handle source (`WindowTarget`), not a
-//! // borrow: the renderer keeps it for as long as its surface lives, so it
-//! // outlives this stack frame. Almost anything that implements
-//! // `HasWindowHandle + HasDisplayHandle + Send + Sync + 'static` qualifies —
-//! // including the `Arc<dyn SurfaceTarget>` a `flui-platform` window hands out.
+//! // `window` is the window's surface target (`PlatformWindow::surface_target`):
+//! // the renderer keeps it for as long as its surface lives, so it outlives
+//! // this stack frame, and reads from it who paces the surface.
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render on every frame your event loop asks for; `render_scene` is sync
@@ -513,9 +511,6 @@ pub use frame_latency::FrameLatency;
 pub use gpu_backend::{BackendFailure, GpuBackend};
 pub use renderer::{GpuCapabilities, Renderer};
 pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
-// What a windowed `Renderer` draws into (issue #1043); exported beside
-// `Renderer` here at `flui_engine::wgpu`.
-pub use window_target::WindowTarget;
 // GPU frame profile — feature-independent type, always available so callers
 // can store/display profiling results without gating on `gpu-profiler`.
 pub use profiler::{GpuFrameProfile, PassTiming};

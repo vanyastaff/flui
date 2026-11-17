@@ -334,7 +334,7 @@ and the GPU is done with it; the function destroys nothing, takes a counted
 reference to the swap chain (`swap_chain()`), drops the guard before calling
 `GetFrameStatistics` on it, and runs on the presenting thread between
 presents, so no wgpu call on the surface overlaps it. Surfaces come from
-wgpu's safe `create_surface` over an owned `WindowTarget`
+wgpu's safe `create_surface` over an owned surface target
 ([ADR-0063](../../docs/adr/ADR-0063-the-renderer-owns-its-surface-target.md)),
 and there is no manual `Send`/`Sync` impl. `deny` rather than `forbid` because
 `wgsl_bindgen`'s generated wrappers declare an `unsafe fn from_raw` the crate
@@ -669,12 +669,18 @@ called once per slot operation, never per layer.
 
 ### 3. `Renderer::new` owns its surface target — [ADR-0063](../../docs/adr/ADR-0063-the-renderer-owns-its-surface-target.md)
 
-`WindowTarget` is an owned, `'static`, `Send + Sync` handle source; the
-surface is created over an `Arc<dyn WindowTarget>` and `SurfaceLease`
-guarantees the surface drops before the target it borrows. The compile-fail
-fixture `renderer_new_rejects_borrowed_window` pins that a borrow cannot be
-handed in; `surface_lease.rs`'s tests pin the drop order and that a released
-lease cannot present.
+`Renderer::new` and `SurfaceFactory::create` take the window's
+`Arc<dyn SurfaceTarget>`, owned and `'static`; the surface is created over it
+(held as the crate-private `WindowTarget` bound) and `SurfaceLease`
+guarantees the surface drops before the target it borrows. The lease also
+keeps who paces the surface, `SurfaceTarget::frame_pacing` read once when it
+is made, which picks the present mode at every configuration
+(`surface_pacing::present_mode`, ADR-0356): `Fifo` for a surface its display
+paces, `Mailbox` or else `Immediate` for one its compositor paces (Wayland).
+The compile-fail fixtures `renderer_new_rejects_borrowed_window` and
+`surface_factory_rejects_borrowed_window` pin that a borrow cannot be handed
+in; `surface_lease.rs`'s tests pin the drop order and that a released lease
+cannot present.
 
 `cancelling_renderer_new` exercises the production `probe_then_build` seam
 with a CPU-only handle source and a builder that remains pending. After the

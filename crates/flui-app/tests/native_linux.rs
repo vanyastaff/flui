@@ -75,8 +75,21 @@ pub(crate) fn an_app_runs_on_the_native_wayland_host() {
 /// The child draws through Vulkan, whose `Fifo` present on Wayland waits for
 /// that frame callback.
 pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
-    use flui_native::testing::wayland::compositor::{Offer, ScriptedCompositor};
+    use flui_native::testing::wayland_compositor::{Offer, ScriptedCompositor};
 
+    // The compositor offers `wl_shm` alone, which a software Vulkan driver
+    // presents to and a hardware one may not: the child is pinned to Mesa's
+    // lavapipe, and a machine without it fails here, naming it.
+    let lavapipe = [
+        "/usr/share/vulkan/icd.d/lvp_icd.json",
+        "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).exists())
+    .expect(
+        "this case draws through Mesa's lavapipe Vulkan driver (mesa-vulkan-drivers), \
+         which is not installed",
+    );
     let compositor = ScriptedCompositor::start(Offer::default().withhold_frame_callbacks())
         .expect("the compositor starts");
     let child = run_child(
@@ -84,6 +97,8 @@ pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
             ("WAYLAND_DISPLAY", path_text(compositor.socket())),
             (QUIT_AFTER, "4000"),
             ("WGPU_BACKEND", "vulkan"),
+            ("VK_DRIVER_FILES", lavapipe),
+            ("VK_ICD_FILENAMES", lavapipe),
         ],
         Duration::from_secs(45),
     );

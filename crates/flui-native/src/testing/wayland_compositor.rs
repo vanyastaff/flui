@@ -13,12 +13,21 @@
 //! as soon as they are played.
 //!
 //! What it offers is an [`Offer`]: the globals and their versions, chosen per
-//! test. It holds every surface to the rules of the protocol a strict
-//! compositor enforces, and answers one that breaks them with the protocol
-//! error that ends the connection, as KWin and mutter do: a buffer whose sides
-//! its buffer scale does not divide, with no viewport to size the surface
-//! (`wl_surface.invalid_size`). It draws nothing; a committed buffer is held
-//! until the next one replaces it, and then released.
+//! test. It enforces these rules of the protocol, and no others, answering a
+//! client that breaks one with the protocol error that ends the connection,
+//! as a strict compositor does:
+//!
+//! - `xdg_surface.invalid_serial`: an `ack_configure` of a serial it never
+//!   sent the surface, or of one older than a serial already acknowledged;
+//! - `xdg_surface.unconfigured_buffer`: a toplevel's buffer committed before
+//!   its first configure is acknowledged;
+//! - `wl_surface.invalid_scale`: a buffer scale below one;
+//! - `wl_surface.invalid_size`: a buffer whose sides its buffer scale does
+//!   not divide, with no viewport destination to size the surface;
+//! - `wl_pointer.role`: a cursor set on a surface that is a toplevel.
+//!
+//! It draws nothing; a committed buffer is held until the next one replaces
+//! it, and then released.
 
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::net::UnixStream;
@@ -321,8 +330,9 @@ pub struct CursorImage {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Heard {
-    /// How many connections are open now: a host holds two, its own and its
-    /// display source's.
+    /// How many connections are open now: the host's own, and its display
+    /// source's while that one is open (a first read of the outputs closes
+    /// again once it has them).
     pub clients: u32,
     /// How many connections ended.
     pub disconnects: u32,
@@ -458,9 +468,8 @@ fn serve(
         return;
     };
     let mut state = Compositor::new(offer, &display.handle(), Arc::clone(shared));
-    let timeout = rustix::time::Timespec {
-        tv_sec: 0,
-        tv_nsec: i64::from(TURN.subsec_nanos()),
+    let Ok(timeout) = rustix::time::Timespec::try_from(TURN) else {
+        return;
     };
     loop {
         let (accept, requests, woken) = {
@@ -581,7 +590,13 @@ struct ShellWindow {
     surface: WlSurface,
     xdg: XdgSurface,
     xdg_toplevel: XdgToplevel,
-    configured: bool,
+    /// Whether its first configure was sent.
+    first_sent: bool,
+    /// The serials of the configures sent and not yet acknowledged.
+    unacknowledged: Vec<u32>,
+    /// The serial last acknowledged; `None` before the first, while the
+    /// toplevel may commit no buffer.
+    acknowledged: Option<u32>,
 }
 
 /// One announced output.
@@ -696,7 +711,8 @@ impl Compositor {
             .xdg_toplevel
             .configure(configure.size.0, configure.size.1, states);
         toplevel.xdg.configure(serial);
-        toplevel.configured = true;
+        toplevel.first_sent = true;
+        toplevel.unacknowledged.push(serial);
         self.shared.note(|heard| heard.configures.push(serial));
     }
 
@@ -872,6 +888,22 @@ impl Compositor {
             );
             return;
         }
+        // A toplevel draws nothing before it acknowledged its first configure.
+        if role == Role::Toplevel
+            && new_buffer
+            && let Some(toplevel) = &self.toplevel
+            && toplevel.surface.id() == surface.id()
+            && toplevel.acknowledged.is_none()
+        {
+            let xdg = toplevel.xdg.clone();
+            self.post(
+                display,
+                &xdg,
+                xdg_surface::Error::UnconfiguredBuffer as u32,
+                "a buffer committed before the first configure was acknowledged".to_owned(),
+            );
+            return;
+        }
         let asked = u32::try_from(frames.len()).unwrap_or(u32::MAX);
         if withhold {
             self.withheld.extend(frames);
@@ -885,7 +917,7 @@ impl Compositor {
                 let first_configure = self
                     .toplevel
                     .as_ref()
-                    .is_some_and(|toplevel| !toplevel.configured && !new_buffer);
+                    .is_some_and(|toplevel| !toplevel.first_sent && !new_buffer);
                 self.shared.note(|heard| {
                     heard.frame_callbacks = heard.frame_callbacks.saturating_add(asked);
                     if withhold {
@@ -1003,6 +1035,14 @@ impl Dispatch<WlSurface, ()> for Compositor {
                 if let Some(held) = state.surface_mut(surface) {
                     held.frames.push(callback);
                 }
+            }
+            wl_surface::Request::SetBufferScale { scale } if scale < 1 => {
+                state.post(
+                    display,
+                    surface,
+                    wl_surface::Error::InvalidScale as u32,
+                    format!("a buffer scale of {scale}"),
+                );
             }
             wl_surface::Request::SetBufferScale { scale } => {
                 if let Some(held) = state.surface_mut(surface) {
@@ -1264,7 +1304,7 @@ impl Dispatch<XdgSurface, WlSurface> for Compositor {
         xdg: &XdgSurface,
         request: xdg_surface::Request,
         surface: &WlSurface,
-        _: &DisplayHandle,
+        display: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
         match request {
@@ -1277,7 +1317,9 @@ impl Dispatch<XdgSurface, WlSurface> for Compositor {
                     surface: surface.clone(),
                     xdg: xdg.clone(),
                     xdg_toplevel: toplevel,
-                    configured: false,
+                    first_sent: false,
+                    unacknowledged: Vec::new(),
+                    acknowledged: None,
                 });
                 if state.offer.hang_up == Some(HangUp::OnToplevel) {
                     state.offer.hang_up = None;
@@ -1286,6 +1328,29 @@ impl Dispatch<XdgSurface, WlSurface> for Compositor {
             }
             xdg_surface::Request::AckConfigure { serial } => {
                 state.shared.note(|heard| heard.acknowledged.push(serial));
+                let Some(toplevel) = state
+                    .toplevel
+                    .as_mut()
+                    .filter(|toplevel| toplevel.xdg.id() == xdg.id())
+                else {
+                    return;
+                };
+                // A serial is acknowledged once, and acknowledging one
+                // acknowledges the older ones with it.
+                if toplevel.unacknowledged.contains(&serial) {
+                    toplevel.unacknowledged.retain(|sent| *sent > serial);
+                    toplevel.acknowledged = Some(serial);
+                } else {
+                    let acknowledged = toplevel.acknowledged;
+                    state.post(
+                        display,
+                        xdg,
+                        xdg_surface::Error::InvalidSerial as u32,
+                        format!(
+                            "serial {serial} was never sent, or is older than the {acknowledged:?} acknowledged"
+                        ),
+                    );
+                }
             }
             _ => {}
         }
@@ -1441,10 +1506,10 @@ impl Dispatch<WlPointer, ()> for Compositor {
     fn request(
         state: &mut Self,
         _: &Client,
-        _: &WlPointer,
+        pointer: &WlPointer,
         request: wl_pointer::Request,
         (): &(),
-        _: &DisplayHandle,
+        display: &DisplayHandle,
         _: &mut DataInit<'_, Self>,
     ) {
         // The cursor shows what the surface holds now: a client draws it
@@ -1455,6 +1520,15 @@ impl Dispatch<WlPointer, ()> for Compositor {
         } = request
             && let Some(held) = state.surface_mut(&surface)
         {
+            if held.role == Role::Toplevel {
+                state.post(
+                    display,
+                    pointer,
+                    wl_pointer::Error::Role as u32,
+                    "a cursor set on a toplevel's surface".to_owned(),
+                );
+                return;
+            }
             held.role = Role::Cursor;
             if let Some(image) = held.cursor_image() {
                 state.shared.note(|heard| heard.cursor.push(image));

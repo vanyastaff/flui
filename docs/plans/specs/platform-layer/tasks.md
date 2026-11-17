@@ -7335,7 +7335,7 @@ GPU-память простаивающего или невидимого окн
   `vkQueuePresentKHR` в `Fifo` крутит `wl_display_dispatch_queue`, пока не придёт frame callback
   прошлого present, без предела) и прогоном: приложение под композитором, который не отвечает на
   frame callbacks, с `Fifo` не выполняет свой выход и убивается по бюджету. Построено:
-  `testing::wayland::compositor::ScriptedCompositor` (`flui-native`, фича `testing`, сервер на
+  `testing::wayland_compositor::ScriptedCompositor` (`flui-native`, фича `testing`, сервер на
   чисто-Rust бэкенде `wayland-server` 0.31, уже бывшем в `Cargo.lock`) — свой сокет, свой поток,
   глобалы и версии из `Offer` (`wl_compositor`, `xdg_wm_base`, `wl_shm`, `wp_viewporter`,
   `wp_fractional_scale_manager_v1`, `wl_seat` любой версии, выходы), типизированные `Step`
@@ -7344,10 +7344,12 @@ GPU-память простаивающего или невидимого окн
   разрыв), сбои `Offer::first_configure(None)` и `HangUp::{OnToplevel, OnFirstFrame}`, строгое
   правило `wl_surface.invalid_size`; что услышал — `Heard`. `WaylandPlatform::try_new_at(socket)`;
   источник дисплеев получает сокет от хоста (`WaylandHost::displays(socket)`,
-  `LinuxDisplays::new(Environment)`), а не читает окружение второй раз. Движок: `SurfacePacing`
-  (`flui-engine`, по дескриптору окна) — поверхность Wayland берёт `Mailbox`, иначе `Immediate`,
-  остальные — `Fifo`; читается при каждом `Surface::configure` (`SurfaceLease::pacing`). Решение —
-  ADR-0356 (заменяет первое предложение решения 0 ADR-0353, решение 5 ADR-0347 и столбец темпа
+  `LinuxDisplays::new(Environment)`), а не читает окружение второй раз. Темп: `SurfaceTarget::frame_pacing`
+  (`FramePacing`, у Wayland — `Compositor`); движок читает его один раз при создании поверхности и
+  держит в аренде (`SurfaceLease::pacing`): такая поверхность берёт `Mailbox`, иначе `Immediate`,
+  остальные — `Fifo`; `Renderer::new` принимает `Arc<dyn SurfaceTarget>`. Решение —
+  ADR-0356 (заменяет первое предложение решения 0 ADR-0353, решение 5 ADR-0347, публичную границу
+  решения 1 ADR-0063, оговорку §5 ADR-0254 и столбец темпа
   строки Wayland §4 ADR-0044). Тесты, в скобках результат с откатом: `wayland_scripted::`
   `a_window_opens_within_the_compositors_bounds` (без записи `configure_bounds` — 1600×1000
   вместо 1366×740); `a_theme_cursor_is_drawn_again_when_its_window_changes_scale` (без

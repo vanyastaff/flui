@@ -1398,9 +1398,11 @@ trait depends on `flui-platform` instead.
   (`wayland_scripted::an_output_removed_under_a_window_leaves_it_on_the_others`).
   The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
-  each configure takes effect with a commit; the configures read in one turn
-  are acknowledged once, the last of them, whose size the window takes
-  (`wayland_scripted::a_configure_storm_settles_on_the_last_configure`); its
+  each configure takes effect with a commit; each time the window carries out
+  what it read, it acknowledges only the newest configure, whose size it
+  takes, so a burst costs one acknowledgement per read of the socket, not one
+  per configure (`wayland_scripted::a_configure_storm_settles_on_the_last_configure`:
+  200 sent before the loop turns, at most four acknowledged, in order); its
   capabilities follow the
   compositor's `wm_capabilities` where it sends them (version 5); one that
   sends none (sway 1.9) is taken to offer every mode. A window tiled and in

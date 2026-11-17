@@ -11,6 +11,11 @@
   the pacer that does not rely on the present call blocking.
 - **Supersedes:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §4 only, the pacer of its Wayland
   row ("the blocking Fifo present"): the compositor's frame callback alone paces a Wayland surface.
+- **Supersedes:** [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) decision 1's
+  public bound only: `Renderer::new` takes the window's `Arc<dyn SurfaceTarget>`, and
+  `WindowTarget` is the lease's crate-private bound.
+- **Supersedes:** [ADR-0254](ADR-0254-window-contract.md) §5's clause that `Renderer::new` keeps
+  ADR-0063's `WindowTarget` bound: it takes the surface target, which says who paces the surface.
 - **Related:** [ADR-0254](ADR-0254-window-contract.md) §5 (`SurfaceTarget::pre_present_notify`
   arms the frame callback), [ADR-0305](ADR-0305-one-gpu-context-serves-every-surface-through-a-raster-executor.md)
   §5 (the window's slot configures its surface), [ADR-0243](ADR-0243-one-testing-kit-per-layer.md)
@@ -38,8 +43,10 @@ KWin 6.3), loops in `vkQueuePresentKHR` until the previous present's frame callb
 bound. So the frame the host delivers once the grace runs out blocks in its present until the
 compositor shows the window again, and the raster executor runs that present on the owner thread:
 input, timers, every other window and a quit wait with it. A run against the scripted compositor
-of `flui-native`'s testing kit showed it: an application whose window the compositor never draws
-does not carry out the quit it asks for after its window is resized.
+of `flui-native`'s testing kit showed it: an animating application whose window the compositor
+never draws does not carry out the quit it asks for. (A resize does not show it: the swapchain it
+recreates starts with no present outstanding, so the wait comes only with a second present on one
+swapchain.)
 
 How does a surface present so that no present waits on a compositor that does not draw it?
 
@@ -69,28 +76,36 @@ Chosen option: 1, because the compositor's frame callback already paces a Waylan
 present has nothing left to wait for, and the other options either freeze a window a skipped
 present left waiting or move the wait instead of removing it.
 
-The rule is a value of `flui-engine`, `SurfacePacing`, read from the surface's own target at every
-`Surface::configure` (`SurfaceLease::pacing`):
+Who paces a surface is a fact of the host that arms (or does not arm) its frame callback, so the
+surface target states it, and the engine reads it once, when it makes the surface:
 
 ```rust
-pub(crate) enum SurfacePacing {
-    Display,    // the swapchain's Fifo present blocks at the display's cadence
-    Compositor, // the host's frame callback paces it: a Wayland surface
+// flui-platform
+#[non_exhaustive]
+pub enum FramePacing {
+    Display,    // a present that waits for the display's refresh is the pacer (the default)
+    Compositor, // the host withholds the next frame until the present's frame callback is answered
 }
 
-impl SurfacePacing {
-    pub(crate) fn of(target: &(impl HasWindowHandle + ?Sized)) -> Self; // Wayland handle: Compositor
-    pub(crate) fn present_mode(self, offered: &[wgpu::PresentMode]) -> wgpu::PresentMode;
+pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static {
+    fn pre_present_notify(&self, frame: Option<FrameStamp>, statistics: SwapChainStatistics);
+    fn frame_pacing(&self) -> FramePacing { FramePacing::Display }
 }
+
+// flui-engine
+pub(crate) fn present_mode(pacing: FramePacing, offered: &[wgpu::PresentMode]) -> wgpu::PresentMode;
 ```
 
-- A surface the display paces (X11, Win32, AppKit, UIKit, Android, the web) presents in `Fifo`, as
-  ADR-0353 states.
-- A Wayland surface presents in `Mailbox` where the surface offers it, else `Immediate`, else
-  `Fifo`: Mesa offers both on Wayland, and wgpu's GL backend offers `Fifo` and the `Auto` modes,
-  which keep `Fifo`.
-- Every configuration path takes it from the target: the renderer's build, recovery, recreation and
-  colour change, and the raster executor's window slot.
+- The Wayland host's surface target answers `Compositor`, whether its window is open or retired;
+  every other host keeps the default.
+- `Renderer::new` and `SurfaceFactory::create` take the window's `Arc<dyn SurfaceTarget>`; the
+  surface lease records `frame_pacing()` when it is made and every configuration after (the
+  renderer's build, recovery, recreation and colour change, the raster executor's window slot)
+  reads it from the lease, so a reconfiguration after the window retired its target presents as
+  before. `WindowTarget` stays the lease's crate-private handle bound (ADR-0063).
+- A surface the display paces presents in `Fifo`, as ADR-0353 states. A compositor-paced surface
+  presents in `Mailbox` where the surface offers it, else `Immediate`, else `Fifo`: Mesa offers both
+  on Wayland, and wgpu's GL backend offers only `Fifo` on Linux.
 
 ### Consequences
 
@@ -109,10 +124,10 @@ impl SurfacePacing {
 
 - `flui-engine`'s `surface_pacing::tests::the_pacer_chooses_the_present_mode`: the mode for each
   pacing and each set of offered modes.
-- `flui-app`'s `native_linux::an_app_whose_window_is_never_drawn_still_quits`: an application on
-  the native Wayland host under the scripted compositor, which answers no frame callback, is resized
-  after its first frame and quits four seconds after its first paint; with every surface in `Fifo`
-  it is still running when its budget ends.
+- `flui-app`'s `native_linux::an_app_whose_window_is_never_drawn_still_quits`: an animating
+  application on the native Wayland host under the scripted compositor, which answers no frame
+  callback, drawing through Mesa's lavapipe, asks to quit four seconds after it is ready; with
+  every surface in `Fifo` it is still running when its budget ends.
 - `flui-native`'s `wayland_scripted::a_window_the_compositor_never_draws_keeps_the_loop_turning`:
   the host asks a window its compositor never draws for one frame per grace, and each turn returns
   in its time.
@@ -122,9 +137,11 @@ impl SurfacePacing {
 ### 1. The pacer chooses the present mode
 
 - Good, because it removes the only wait on the compositor from the present path.
-- Good, because the decision is a value read from the surface, so every configuration path agrees.
-- Bad, because a Wayland surface handed to FLUI by an embedder that does not pace by frame
-  callbacks would present unpaced; FLUI's Wayland host is the only producer of one.
+- Good, because the host that arms the frame callback is the one that states the pacing, read
+  once into the lease, so every configuration path agrees and no guess from a handle's kind is
+  made.
+- Bad, because `Renderer::new` no longer takes a bare raw-handle owner: a caller hands it a
+  `SurfaceTarget`.
 
 ### 2. `Fifo` everywhere, no grace
 

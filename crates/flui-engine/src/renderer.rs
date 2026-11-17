@@ -24,14 +24,14 @@
 //!
 //! ```rust,no_run
 //! # async fn render(
-//! #     window: impl flui_engine::WindowTarget,
+//! #     window: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
 //! #     scene: &flui_layer::Scene,
 //! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::Renderer;
 //!
-//! // Create renderer (automatically selects backend). `window` is moved in
-//! // — an owned, `'static` handle source (see `WindowTarget`), not a
-//! // borrow — so the renderer can outlive the caller's stack frame.
+//! // Create renderer (automatically selects backend). `window` is the
+//! // window's surface target, which the renderer keeps for as long as its
+//! // surface lives, so it can outlive the caller's stack frame.
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render frame. `true` means the frame reached the surface (a `false`
@@ -50,12 +50,12 @@ use crate::frame_latency::FrameLatency;
 use crate::raster::PresentDisposition;
 use crate::surface_color::{ColorRequest, OutputEncoding, ResolvedSurfaceColor, SurfaceColor};
 use crate::surface_lease::SurfaceLease;
-use crate::surface_pacing::SurfacePacing;
 use crate::surface_present::{
     SurfaceAcquireBackend, SurfaceAcquireOutcome, SurfaceRecovery, SwapchainFrame,
     acquire_surface_texture_with, classify_frame, reconfigure_after_suboptimal_present,
 };
 use crate::window_target::{TargetDisplay, WindowTarget};
+use flui_platform::{FramePacing, SurfaceTarget};
 
 #[cfg(test)]
 mod new_probes_before_gpu_work_tests {
@@ -115,7 +115,9 @@ mod new_probes_before_gpu_work_tests {
     fn renderer_new_fails_before_instance_creation_when_target_is_unavailable() {
         let target = Arc::new(FakeTarget::unavailable());
 
-        let result = pollster::block_on(Renderer::new(Arc::clone(&target)));
+        let result = pollster::block_on(Renderer::new(
+            Arc::clone(&target) as Arc<dyn flui_platform::SurfaceTarget>
+        ));
 
         // `Renderer` carries no `Debug` impl (wgpu handles don't), so match
         // explicitly instead of formatting the whole `Result`.
@@ -449,12 +451,12 @@ impl Renderer {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # async fn run(window: impl flui_engine::WindowTarget)
+    /// # async fn run(window: std::sync::Arc<dyn flui_platform::SurfaceTarget>)
     /// #     -> Result<(), flui_engine::EngineError> {
     /// use flui_engine::Renderer;
     ///
-    /// // `window` is moved in — an owned, `'static` handle source (see
-    /// // `WindowTarget`), not a borrow.
+    /// // `window` is the window's surface target, moved in: the renderer
+    /// // keeps it for as long as its surface lives.
     /// let renderer = Renderer::new(window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
     /// # Ok(())
@@ -471,7 +473,7 @@ impl Renderer {
     /// several renderers share a device. That mechanism is not built, so
     /// this constructor is the one this crate ships; it is the advertised
     /// entry point, not a temporary beside an unwired shared value type.
-    pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
+    pub async fn new(target: Arc<dyn SurfaceTarget>) -> EngineResult<Self> {
         Self::with_surface_color(target, SurfaceColor::default(), None).await
     }
 
@@ -493,16 +495,18 @@ impl Renderer {
     /// # Errors
     /// As [`Self::new`].
     pub async fn with_surface_color(
-        target: impl WindowTarget,
+        target: Arc<dyn SurfaceTarget>,
         requested: SurfaceColor,
         display: Option<flui_platform::DisplayColor>,
     ) -> EngineResult<Self> {
         let color = ColorRequest { requested, display };
-        // An `Arc<dyn SurfaceTarget>` (the common caller shape, a window's
-        // surface target) becomes an `Arc<Arc<dyn SurfaceTarget>>` here:
-        // `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn WindowTarget>`:
-        // the contract's trait cannot name this crate's as a supertrait.
-        // One extra pointer chase per surface creation.
+        // Who paces the surface is the target's word, read once and kept by
+        // the lease for every surface made after (ADR-0356).
+        let pacing = target.frame_pacing();
+        // The `Arc<dyn SurfaceTarget>` becomes an `Arc<Arc<dyn SurfaceTarget>>`
+        // here: `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn
+        // WindowTarget>`, since the contract's trait cannot name this crate's
+        // as a supertrait. One extra pointer chase per surface creation.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
         let device_lost_hook = Arc::default();
         let (target, stack) = Self::probe_then_build(Arc::new(target), |target| {
@@ -511,6 +515,7 @@ impl Renderer {
                 let stack = Self::build_windowed_gpu_stack(
                     &crate::frame_protocol::FrameProtocol::new(),
                     &target,
+                    pacing,
                     w,
                     h,
                     &device_lost_hook,
@@ -522,7 +527,7 @@ impl Renderer {
             }
         })
         .await?;
-        let lease = SurfaceLease::from_parts(target, stack.surface);
+        let lease = SurfaceLease::from_parts(target, stack.surface, pacing);
 
         Ok(Self {
             instance: stack.instance,
@@ -605,7 +610,7 @@ impl Renderer {
     pub(crate) fn derive_surface_config(
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
-        pacing: SurfacePacing,
+        pacing: FramePacing,
         width: u32,
         height: u32,
         latency: FrameLatency,
@@ -709,9 +714,14 @@ impl Renderer {
     /// Adapter or device creation can fail (e.g. driver still resetting after
     /// a TDR). Returns the underlying [`EngineError`]; the caller may retry on
     /// the next frame.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every input of one GPU stack, each read at a different site of its two callers"
+    )]
     async fn build_windowed_gpu_stack(
         frame: &crate::frame_protocol::FrameProtocol,
         target: &Arc<dyn WindowTarget>,
+        pacing: FramePacing,
         width: u32,
         height: u32,
         device_lost_hook: &Arc<DeviceLostSlot>,
@@ -754,15 +764,8 @@ impl Renderer {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
-            &surface,
-            &adapter,
-            SurfacePacing::of(&**target),
-            width,
-            height,
-            latency,
-            color,
-        )?;
+        let (config, supports_copy_src, surface_color) =
+            Self::derive_surface_config(&surface, &adapter, pacing, width, height, latency, color)?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
@@ -937,6 +940,7 @@ impl Renderer {
         let stack = Self::build_windowed_gpu_stack(
             &self.frame,
             released.target(),
+            self.lease.pacing(),
             width,
             height,
             &self.device_lost_hook,
@@ -1200,7 +1204,7 @@ impl Renderer {
     }
 
     /// The present mode of a surface offering `surface_caps` and paced by
-    /// `pacing` ([`SurfacePacing::present_mode`], ADR-0356).
+    /// `pacing` (`surface_pacing::present_mode`, ADR-0356).
     ///
     /// A surface the display paces presents in `Fifo`, and on X11 and Win32
     /// `render_scene`'s blocking `get_current_texture()`/`present()` pair is
@@ -1224,7 +1228,7 @@ impl Renderer {
     /// still does not expose.
     fn select_present_mode(
         surface_caps: &wgpu::SurfaceCapabilities,
-        pacing: SurfacePacing,
+        pacing: FramePacing,
     ) -> wgpu::PresentMode {
         debug_assert!(
             surface_caps
@@ -1232,7 +1236,7 @@ impl Renderer {
                 .contains(&wgpu::PresentMode::Fifo),
             "BUG: wgpu guarantees Fifo is always a supported present mode"
         );
-        pacing.present_mode(&surface_caps.present_modes)
+        crate::surface_pacing::present_mode(pacing, &surface_caps.present_modes)
     }
 
     /// Set how many frames this window's swapchain holds ahead of the display (ADR-0347).
@@ -1718,7 +1722,7 @@ impl Renderer {
         let (fresh_config, supports_copy_src, fresh_color) = Self::derive_surface_config(
             &surface,
             &self.adapter,
-            SurfacePacing::of(&**released.target()),
+            lease.pacing(),
             width,
             height,
             self.frame_latency,

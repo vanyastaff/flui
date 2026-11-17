@@ -213,8 +213,8 @@ pub use storage::{
     Stored, StoredVersion, WriteMode,
 };
 pub use surface_target::{
-    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, RedrawRequester,
-    SurfaceTarget, SwapChainStatistics,
+    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
+    RedrawRequester, SurfaceTarget, SwapChainStatistics,
 };
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use system_failure::SystemFailure;

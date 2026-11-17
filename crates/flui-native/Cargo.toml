@@ -436,7 +436,7 @@ rustix = { workspace = true, optional = true, features = ["time", "fs", "pipe"] 
 # has no `cursor-shape`.
 wayland-cursor = { version = "0.31", optional = true }
 # The compositor the `testing` kit plays to the Wayland host over a socket of
-# its own (`testing::wayland::compositor`): the server half of the crates the
+# its own (`testing::wayland_compositor`): the server half of the crates the
 # host speaks the client half of, on their pure-Rust backend, so a test needs
 # no compositor installed.
 wayland-server = { workspace = true, optional = true }
@@ -656,13 +656,16 @@ native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 # native recording codec the tests replay recordings through. Off by
 # default and not part of the release API; this crate's tests turn it on
 # through the dev-dependency on itself. On Linux it brings the server half of
-# the Wayland crates, which the kit's compositor speaks (with `wayland`).
+# the Wayland crates and the descriptor primitives the kit's compositor
+# (`testing::wayland_compositor`) runs on, a server that needs no host.
 testing = [
     "dep:flui-protocol",
     "dep:serde",
     "dep:serde_json",
     "dep:wayland-server",
-    "wayland-protocols?/server",
+    "dep:wayland-protocols",
+    "wayland-protocols/server",
+    "dep:rustix",
 ]
 
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
@@ -830,7 +833,7 @@ harness = false
 required-features = ["wayland"]
 
 # The native Wayland host against a compositor the case scripts
-# (`testing::wayland::compositor`), over a socket of its own: its own harness,
+# (`testing::wayland_compositor`), over a socket of its own: its own harness,
 # because it names a cursor theme of its own in the process's environment
 # before any thread starts.
 [[test]]
