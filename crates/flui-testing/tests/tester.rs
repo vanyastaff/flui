@@ -899,11 +899,21 @@ fn showing_an_unfocused_window_leaves_it_unfocused() {
 fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
     use flui_view::AppLifecycleState::{Hidden, Inactive, Paused, Resumed};
 
-    let (view, opened) = notebook(false);
-    let mut t = Tester::mount(view);
-    opened.borrow_mut().lifecycle.clear();
+    use flui_platform::{SessionEndAnswer, TargetPlatform};
 
-    t.background();
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().platform(TargetPlatform::Android),
+    );
+    opened.borrow_mut().lifecycle.clear();
+    assert_eq!(t.try_foreground(), Err(TestError::InForeground));
+
+    assert_eq!(
+        t.background(),
+        SessionEndAnswer::Proceed,
+        "nothing in flight"
+    );
     assert_eq!(opened.borrow().lifecycle, [Inactive, Hidden, Paused]);
     assert_eq!(
         opened.borrow().session_ended,
@@ -914,10 +924,70 @@ fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
         !t.is_closed(),
         "the window stays open for the user's return"
     );
+    assert_eq!(
+        t.try_background(),
+        Err(TestError::InBackground),
+        "a phone reports no second trip before a return"
+    );
+    assert_eq!(opened.borrow().session_ended, 1, "announced once a trip");
 
     opened.borrow_mut().lifecycle.clear();
     t.foreground();
     assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
+}
+
+/// Only a phone leaves the screen this way: a window that names no phone is
+/// refused, and nothing is reported to it.
+#[test]
+fn a_window_that_names_no_phone_has_no_trip_to_the_background() {
+    use flui_platform::TargetPlatform;
+
+    for platform in [
+        None,
+        Some(TargetPlatform::Windows),
+        Some(TargetPlatform::Linux),
+    ] {
+        let (view, opened) = notebook(false);
+        let mut window = TestWindow::default();
+        if let Some(platform) = platform {
+            window = window.platform(platform);
+        }
+        let mut t = Tester::mount_in(view, window);
+        opened.borrow_mut().lifecycle.clear();
+        assert_eq!(
+            t.try_background(),
+            Err(TestError::NotAPhone {
+                platform: platform.unwrap_or(TargetPlatform::Unknown)
+            })
+        );
+        assert!(opened.borrow().lifecycle.is_empty(), "{platform:?}");
+    }
+}
+
+/// A phone's trip to the background with a write still in flight answers
+/// `Block`, so the platform keeps the process running for it (ADR-0350 §2).
+///
+/// Fails against a host that answers `Proceed` to every session end.
+#[test]
+fn a_trip_to_the_background_with_a_write_in_flight_holds_the_process() {
+    use flui_platform::{SessionEndAnswer, TargetPlatform};
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount_in(
+        view,
+        TestWindow::default().platform(TargetPlatform::Android),
+    );
+    let _ = settle(&mut t, note(&opened).load()).expect("an empty storage loads");
+    let storage = t
+        .storage()
+        .cloned()
+        .expect("a mounted window has a storage");
+    let hold = storage.hold_writes();
+    note(&opened)
+        .set(Note("in flight".to_owned()))
+        .expect("a loaded note takes a value");
+    assert_eq!(t.background(), SessionEndAnswer::Block);
+    drop(hold);
 }
 
 /// Closing the application's only window retires it, as on a real host: the

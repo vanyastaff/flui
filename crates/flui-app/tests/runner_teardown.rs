@@ -152,17 +152,18 @@ pub(crate) fn a_hung_service_and_compute_job_end_within_the_exit_budget() {
         "the exit took {took:?}, past the six-second budget"
     );
 }
-/// A service watches the application's lifecycle from its own thread: the
-/// window's suspension pauses the application, its return resumes it, and
-/// once the last window's runtime retires the application is detached.
-///
-/// Fails against a runner that never feeds the services' lifecycle: the
-/// watch stays `Detached` throughout.
-pub(crate) fn a_service_watches_the_application_pause_and_resume() {
-    use flui_platform::WindowExecutionState::{Running, Suspended};
-    use flui_scheduler::AppLifecycleState::{Detached, Paused, Resumed};
 
+/// An application whose watcher service hands out its lifecycle watch and
+/// runs until the watch ends, ignoring its cancellation; the flag says it
+/// returned.
+fn watched_application() -> (
+    Application,
+    std::sync::mpsc::Receiver<flui_app::app::LifecycleWatch>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
     let (watches, watched) = std::sync::mpsc::channel();
+    let ended = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let ended_in = std::sync::Arc::clone(&ended);
     let watcher = ServiceDefinition::new(
         "watcher",
         ServiceLifetime::StopsWithLastWindow,
@@ -170,18 +171,37 @@ pub(crate) fn a_service_watches_the_application_pause_and_resume() {
             watches
                 .send(context.lifecycle().clone())
                 .expect("the test waits for the watch");
-            let cancelled = context.cancellation().clone();
-            Box::pin(async move { cancelled.cancelled().await })
+            let mut watch = context.lifecycle().clone();
+            let ended = std::sync::Arc::clone(&ended_in);
+            Box::pin(async move {
+                while watch.changed().await.is_some() {}
+                ended.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
         },
     );
-    let run = HeadlessRun::start(
-        Application::new().config(
-            AppConfig::new()
-                .exit_policy(ExitPolicy::OnLastWindowClosed)
-                .service(watcher),
-        ),
-        flui_widgets::SizedBox::new(10.0, 10.0),
+    let application = Application::new().config(
+        AppConfig::new()
+            .exit_policy(ExitPolicy::OnLastWindowClosed)
+            .service(watcher),
     );
+    (application, watched, ended)
+}
+
+/// A service watches the application's lifecycle from its own thread: the
+/// window's suspension pauses the application, its return resumes it, the
+/// last window's retirement detaches it, and the loop's end ends the watch,
+/// so a service waiting on it returns; a second run on the same thread
+/// watches a lifecycle of its own.
+///
+/// Fails against a runner that never feeds the services' lifecycle (the
+/// watch stays `Detached`), and against one that never closes it at the
+/// loop's end (the service waits past its join and never returns).
+pub(crate) fn a_service_watches_the_application_pause_and_resume() {
+    use flui_platform::WindowExecutionState::{Running, Suspended};
+    use flui_scheduler::AppLifecycleState::{Detached, Paused, Resumed};
+
+    let (application, watched, ended) = watched_application();
+    let run = HeadlessRun::start(application, flui_widgets::SizedBox::new(10.0, 10.0));
     run.run_owner_turn();
     let watch = watched
         .recv_timeout(Duration::from_secs(5))
@@ -209,6 +229,23 @@ pub(crate) fn a_service_watches_the_application_pause_and_resume() {
         "the last runtime retired with its window"
     );
     run.join().expect("an ordinary close returns Ok");
+    assert!(
+        ended.load(std::sync::atomic::Ordering::SeqCst),
+        "the loop's end ended the watch, so the service returned"
+    );
+
+    let (application, watched, _ended) = watched_application();
+    let run = HeadlessRun::start(application, flui_widgets::SizedBox::new(10.0, 10.0));
+    run.run_owner_turn();
+    let second = watched
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the second run's service started");
+    let window = run.open_windows().pop().expect("the main window is open");
+    window.simulate_focus(true);
+    run.run_owner_turn();
+    assert_eq!(second.current(), Resumed, "the second run watches its own");
+    assert_eq!(watch.current(), Detached, "the first run's stays ended");
+    run.join().expect("the second run returns Ok");
 }
 
 #[test]

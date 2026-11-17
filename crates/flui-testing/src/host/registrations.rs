@@ -94,7 +94,9 @@ pub(super) enum Registry {
 
 /// The registry a runner builds for an application on `platform`: the
 /// application's overrides first (the provided storage among them), then the
-/// built-ins with the host's storage, then the application's plugins.
+/// built-ins with the host's storage, then the application's plugins and the
+/// package plugin a test of that package names. Every registry a headless
+/// host builds for itself is built here.
 ///
 /// # Panics
 ///
@@ -105,6 +107,7 @@ pub(super) fn compose_registry(
     platform: flui_platform::TargetPlatform,
     storage: Option<&KitStorage>,
     application: &AppRegistrations,
+    package: Option<&dyn flui_platform::capability::Plugin>,
 ) -> flui_runtime::capability::CapabilityRegistry {
     let mut built_ins = scripted.registrar(platform);
     let mut overrides = flui_platform::capability::CapabilityRegistrar::new();
@@ -132,6 +135,9 @@ pub(super) fn compose_registry(
         .built_ins(built_ins);
     for plugin in &application.plugins {
         builder = builder.plugin(plugin.as_ref());
+    }
+    if let Some(package) = package {
+        builder = builder.plugin(package);
     }
     builder
         .build()

@@ -324,6 +324,15 @@ impl UiRuntime {
             .map(|presentation| presentation.close_guard().clone())
     }
 
+    /// Whether presentation `id`'s close guard holds a close recorded for
+    /// `reason`: a refusal it recorded, which the guard carries out once
+    /// released. `false` for a presentation the UI runtime does not host.
+    pub fn close_recorded(&self, id: PresentationId, reason: flui_view::CloseReason) -> bool {
+        self.presentations
+            .get(id)
+            .is_some_and(|presentation| presentation.close_guard().is_recorded(reason))
+    }
+
     /// Withdraw the close presentation `id`'s guard recorded for `reason`:
     /// the platform cancelled it, as when a log-off is cancelled. Closes
     /// recorded for other reasons stay recorded.
@@ -585,16 +594,12 @@ impl UiRuntime {
     }
 
     fn aggregate_lifecycle(&self) -> AppLifecycleState {
-        use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
-        [Resumed, Inactive, Hidden, Paused]
-            .into_iter()
-            .find(|state| {
-                self.presentations.iter().any(|presentation| {
-                    !presentation.closing_requested.get()
-                        && self.execution_lifecycle(presentation) == *state
-                })
-            })
-            .unwrap_or(Detached)
+        AppLifecycleState::most_active(
+            self.presentations
+                .iter()
+                .filter(|presentation| !presentation.closing_requested.get())
+                .map(|presentation| self.execution_lifecycle(presentation)),
+        )
     }
 
     fn seed_terminal_lifecycle_recovery(&self) {

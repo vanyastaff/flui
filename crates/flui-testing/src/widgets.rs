@@ -996,6 +996,12 @@ impl LaidOut {
     ///
     /// The frame advances no time.
     pub fn pump(&mut self) {
+        if self.host.ui_runtime().is_retired() {
+            // The window closed and the tree went with its runtime: only
+            // time, the writes and the background lanes move.
+            self.host.pump(Duration::ZERO);
+            return;
+        }
         let logical_root = self
             .host
             .shallowest(self.logical_root_type)

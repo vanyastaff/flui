@@ -239,13 +239,14 @@ fn an_uncontained_unwind_is_raised_as_itself() {
     let _outcome = assert_progress_after_unwind(&mut ui_runtime);
 }
 
-/// Counts the Detached deliveries its presentation makes, and asks for the
-/// close again from inside the first one, as an application closing its
-/// window from a lifecycle observer does.
+/// Counts the Detached deliveries its window makes, and asks its window to
+/// close again from inside the first one, through the window's handle, as an
+/// application closing its window from a lifecycle observer does.
 #[derive(Clone)]
 struct ClosesAgainOnDetach {
     detached: Rc<Cell<usize>>,
-    tree: Rc<RefCell<Weak<RefCell<LaidOut>>>>,
+    /// What each close asked from inside the observer was answered.
+    asked: Rc<RefCell<Vec<Result<(), flui_view::WindowClosed>>>>,
 }
 
 struct ClosesAgainOnDetachState {
@@ -272,20 +273,15 @@ impl View for ClosesAgainOnDetach {
 
 impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let ClosesAgainOnDetach { detached, tree } = self.view.clone();
+        let ClosesAgainOnDetach { detached, asked } = self.view.clone();
+        let handle = ctx.window().expect("a hosted window has a handle");
         let (_, observation) = ctx
             .lifecycle_handle()
             .expect("a ui_runtime presentation has a lifecycle")
             .subscribe(move |state| {
                 if state == AppLifecycleState::Detached {
                     detached.set(detached.get() + 1);
-                    // The host is closing, so a close asked from inside it
-                    // finds the host busy and reaches nothing.
-                    if let Some(tree) = tree.borrow().upgrade()
-                        && let Ok(mut tree) = tree.try_borrow_mut()
-                    {
-                        let _closed = tree.request_close(CloseReason::User);
-                    }
+                    asked.borrow_mut().push(handle.request_close());
                 }
             })
             .expect("the presentation is open");
@@ -297,35 +293,109 @@ impl ViewState<ClosesAgainOnDetach> for ClosesAgainOnDetachState {
     }
 }
 
-/// One close is delivered once: a close requested again from inside the
-/// Detached observer, and the close the UI runtime repeats when it drops, deliver
-/// nothing a second time.
+/// One close is delivered once: a close the window asks for again from
+/// inside its Detached observer reaches the host and closes nothing more,
+/// the turn after carries nothing out, and the close the UI runtime repeats
+/// as it retires delivers nothing a second time.
 ///
-/// Holds before the shared close delivery exists, because the lifecycle
-/// source commits Detached only once; it stays as the guard that the
-/// delivery's latch keeps it so.
+/// Fails against a host that carries out the ask the observer makes while
+/// its window closes: the retired host's next turn panics reaching the UI
+/// runtime it dropped.
 #[test]
 fn close_delivery_is_idempotent() {
     let detached = Rc::new(Cell::new(0));
-    let slot = Rc::new(RefCell::new(Weak::new()));
-    let tree = Rc::new(RefCell::new(lay_out(
-        ClosesAgainOnDetach {
-            detached: Rc::clone(&detached),
-            tree: Rc::clone(&slot),
-        },
-        tight(10.0, 10.0),
-    )));
-    *slot.borrow_mut() = Rc::downgrade(&tree);
+    let asked = Rc::new(RefCell::new(Vec::new()));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    host.attach(&ClosesAgainOnDetach {
+        detached: Rc::clone(&detached),
+        asked: Rc::clone(&asked),
+    })
+    .expect("a fresh host has no root");
+    let _ = host.pump(Duration::ZERO);
+    let primary = host.primary_window();
 
-    assert!(tree.borrow_mut().request_close(CloseReason::User));
-    assert!(!tree.borrow_mut().request_close(CloseReason::Program));
-    drop(tree);
-
+    assert!(host.request_close(primary, CloseReason::User));
+    assert_eq!(
+        asked.borrow().len(),
+        1,
+        "the observer asked for the close again"
+    );
+    assert!(
+        !host.request_close(primary, CloseReason::Program),
+        "a closed window closes no more"
+    );
+    let _ = host.pump(Duration::ZERO);
+    drop(host);
     assert_eq!(
         detached.get(),
         1,
         "the presentation is told it is detached exactly once"
     );
+}
+
+/// A close a widget asks for through its window's handle is carried out at
+/// the host's next turn, as a runner's window queue carries it out: the
+/// window's guard is asked first, and a hold keeps the window open.
+///
+/// Fails against a host that only counts the request: the window stays open.
+#[test]
+fn a_close_a_widget_asks_for_is_carried_out_at_the_next_turn() {
+    let handle = Rc::new(RefCell::new(None));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(10, 10));
+    let second = host.open_window(HeadlessWindow::new(10, 10));
+    host.attach_to(
+        second,
+        &TakesHandle {
+            handle: Rc::clone(&handle),
+        },
+    )
+    .expect("a fresh window has no root");
+    let _ = host.pump(Duration::ZERO);
+    let window = handle.borrow().clone().expect("init_state took the handle");
+
+    window.request_close().expect("the window is open");
+    assert!(!host.is_closed(second), "the close waits for the next turn");
+    let _ = host.pump(Duration::ZERO);
+    assert!(
+        host.is_closed(second),
+        "the next turn carried the close out"
+    );
+    assert_eq!(host.window_of(host.primary_window()).close_requests(), 0);
+    assert_eq!(
+        window.request_close(),
+        Err(flui_view::WindowClosed),
+        "a closed window's handle answers that it closed"
+    );
+}
+
+/// Keeps its window's handle.
+#[derive(Clone)]
+struct TakesHandle {
+    handle: Rc<RefCell<Option<flui_view::WindowHandle>>>,
+}
+
+/// Holds no state of its own.
+struct TakesHandleState;
+
+impl StatefulView for TakesHandle {
+    type State = TakesHandleState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        self.handle.replace(ctx.window());
+        TakesHandleState
+    }
+}
+
+impl View for TakesHandle {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<TakesHandle> for TakesHandleState {
+    fn build(&self, _view: &TakesHandle, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::SizedBox::new(10.0, 10.0)
+    }
 }
 
 /// A window opened after another closed gets an id no window of the host

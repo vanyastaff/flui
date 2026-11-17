@@ -7425,7 +7425,7 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
-- [x] **LY145** — ветка `testing/headless-fidelity`. Проверено на `main` @ `817b30989`.
+- [ ] **LY145** — ветка `testing/headless-fidelity`. Проверено на `main` @ `817b30989`.
   Закрытие: `HeadlessHost` больше не держит основное окно отдельно — открытые окна одним списком,
   основное читается и после закрытия; окно, которое переживает другое, закрывается через
   `close_presentation_entered` (снимается, фокус ОС переходит к выжившему), последнее
@@ -7463,6 +7463,28 @@ GPU-память простаивающего или невидимого окн
   (кадр засчитан показанным); `a_system_notice_reaches_the_subscribers`;
   `a_service_watches_the_application_pause_and_resume` (`Detached` всё время). Тесты выделения и
   средней кнопки называют `TargetPlatform::Linux` (`lay_out_on`, `harness::mount_with_ime_on`).
+  По независимому чтению: закрытие, которого просит виджет (`WindowHandle::request_close`), идёт
+  в очередь и исполняется на следующем ходе после вопроса стражу, как в очереди окна runner
+  (`a_close_a_widget_asks_for_is_carried_out_at_the_next_turn`); каждое созревшее закрытие
+  исполняется в сдерживании, первая паника — после всех
+  (`every_due_close_is_carried_out_past_one_that_panics`); созревшее закрытие `Program` — согласие
+  на выход, само ничего не закрывает
+  (`a_held_program_close_is_consent_to_a_quit_and_closes_nothing`); выход `request_quit` опрашивает
+  все окна, откладывается на записанном отказе и отменяется оставленным окном
+  (`a_quit_nothing_holds_closes_every_window`, `a_quit_a_hold_refuses_waits_for_its_release`,
+  `a_quit_a_window_stays_open_for_is_cancelled`); конец сеанса следует платформе окна: десктоп
+  закрывает и отставляет, телефон оставляет окна и отвечает `Block`, пока записи в полёте
+  (`a_session_end_follows_the_platform_the_window_names`,
+  `a_trip_to_the_background_with_a_write_in_flight_holds_the_process`); поездка в фон — только на
+  телефоне и одна до возврата (`a_window_that_names_no_phone_has_no_trip_to_the_background`);
+  закрытое окно не слышит ввода и фактов, команды его ручки отвечают `Closed`;
+  `close_delivery_is_idempotent` теперь действительно пробует повторное закрытие из наблюдателя;
+  `LifecycleWatch` кончается с циклом, следующий запуск получает свежий
+  (`a_service_watches_the_application_pause_and_resume`); ранг состояний —
+  `AppLifecycleState::most_active`, общий с агрегатом runtime. Строка не отмечена: headless-хост
+  зеркалит ход владельца runner, а не вызывает его (`flui-testing` ниже `flui-app`), и остаётся
+  без обработчика закрытия приложения, уведомления `SessionEnding`, возможности нативного окна и
+  моста хоста — запись `docs/gaps.md` «The headless host mirrors the runner's owner turn».
 
 ## Отступление от порядка, решённое владельцем
 

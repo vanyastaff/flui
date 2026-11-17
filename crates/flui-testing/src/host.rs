@@ -124,6 +124,8 @@ pub struct HeadlessWindow {
     /// The frame and mode the window was set to and the close requests it received,
     /// through its `WindowHandle` or a command applied to it.
     chrome: Mutex<KitChrome>,
+    /// Whether the host closed the window: its commands answer `Closed`.
+    closed: AtomicBool,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -244,12 +246,18 @@ impl HeadlessWindow {
         std::mem::take(&mut self.chrome.lock().unobserved)
     }
 
-    /// How many times the window was asked to close through its `WindowHandle`. The
-    /// window has no close-request handler of its own: a test closes it with
-    /// [`LaidOut::request_close`](crate::widgets::LaidOut::request_close).
+    /// How many times the window was asked to close through its
+    /// `WindowHandle`, one closed window's asks included. The host's next
+    /// turn carries an ask out ([`HeadlessHost::pump`]); this count only
+    /// observes them.
     #[must_use]
     pub fn close_requests(&self) -> usize {
         self.chrome.lock().close_requests
+    }
+
+    /// Whether the host closed the window.
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
     }
 }
 impl HeadlessWindow {
@@ -282,6 +290,7 @@ impl HeadlessWindow {
             reports_presentation: false,
             capabilities: Self::published_capabilities(false),
             chrome: Mutex::default(),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -937,6 +946,16 @@ pub struct HeadlessHost {
     /// The registry's writes waiting for the next pump to run them, as a
     /// runner's IO pool runs them.
     flush_writes: Arc<Mutex<Vec<FlushWrite>>>,
+    /// The closes the windows' widgets asked for, which the next turn
+    /// carries out.
+    close_asks: CloseAsks,
+    /// Where a quit the application or the user asked for stands.
+    quit: QuitAsk,
+    /// Whether a phone's session end answered `Block` and holds the
+    /// background until its writes end.
+    background_hold: bool,
+    /// How many such holds were released.
+    session_end_releases: usize,
 }
 
 impl std::fmt::Debug for HeadlessHost {
@@ -1045,11 +1064,13 @@ impl HeadlessHost {
         plugin: &dyn flui_platform::capability::Plugin,
     ) -> Result<Self, AlreadyDriven> {
         let scripted = ScriptedBuiltIns::on(scenario.drive()?);
-        let registry = flui_runtime::capability::CapabilityRegistry::builder()
-            .built_ins(scripted.registrar(window.platform))
-            .plugin(plugin)
-            .build()
-            .unwrap_or_else(|conflict| panic!("the plugin's registrations conflict: {conflict}"));
+        let registry = compose_registry(
+            &scripted,
+            window.platform,
+            None,
+            &AppRegistrations::new(),
+            Some(plugin),
+        );
         Ok(Self::assemble(
             window,
             None,
@@ -1140,7 +1161,7 @@ impl HeadlessHost {
         let registry = match registry {
             Registry::Given(registry) => registry,
             Registry::Composed(application) => {
-                compose_registry(&scripted, platform, storage.as_ref(), &application)
+                compose_registry(&scripted, platform, storage.as_ref(), &application, None)
             }
         };
         host = host.with_capabilities(registry);
@@ -1168,7 +1189,13 @@ impl HeadlessHost {
             host,
         )
         .expect("BUG: interaction lane identity exhausted");
-        install_window_control(&ui_runtime, ui_runtime.presentation_id(), &window);
+        let close_asks = CloseAsks::default();
+        install_window_control(
+            &ui_runtime,
+            ui_runtime.presentation_id(),
+            &window,
+            &close_asks,
+        );
         let failures = Arc::new(Mutex::new(Vec::new()));
         ui_runtime.set_frame_failure_detail(FrameFailureDetail::Verbatim);
         let recorded = Arc::clone(&failures);
@@ -1196,6 +1223,10 @@ impl HeadlessHost {
             presented: None,
             flush,
             flush_writes,
+            close_asks,
+            quit: QuitAsk::None,
+            background_hold: false,
+            session_end_releases: 0,
         }
     }
 
@@ -1207,7 +1238,7 @@ impl HeadlessHost {
     fn ui_runtime_mut(&mut self) -> &mut UiRuntime {
         self.ui_runtime
             .as_mut()
-            .expect("the host retired its UI runtime when its last window closed")
+            .expect("a host whose last window closed has retired its UI runtime; `try_ui_runtime` answers None then")
     }
 
     /// Whether the host's last window closed, retiring its UI runtime as a
@@ -1451,6 +1482,10 @@ impl HeadlessHost {
         surface: flui_interaction::InputSurface,
         input: PlatformInput,
     ) {
+        // A real host routes nothing to a window that closed.
+        if !self.is_open(HeadlessWindowId(presentation)) {
+            return;
+        }
         self.ui_runtime().enter(|ui_runtime| {
             #[expect(
                 clippy::disallowed_methods,
@@ -1578,9 +1613,15 @@ impl HeadlessHost {
     ///
     /// Once the host's last window closed, which retired it.
     pub(crate) fn ui_runtime(&self) -> &UiRuntime {
-        self.ui_runtime
-            .as_ref()
-            .expect("the host retired its UI runtime when its last window closed")
+        self.try_ui_runtime().expect(
+            "a host whose last window closed has retired its UI runtime; `try_ui_runtime` \
+             answers None then",
+        )
+    }
+
+    /// The hosted UI runtime, `None` once the host's last window closed.
+    pub(crate) fn try_ui_runtime(&self) -> Option<&UiRuntime> {
+        self.ui_runtime.as_ref()
     }
 
     /// The owner-local post-frame handle the UI runtime installed on its build
@@ -1710,6 +1751,10 @@ impl HeadlessHost {
     /// carries it out. `true` when the window closed now; `false` when the
     /// guard refused or the window is already gone.
     ///
+    /// A [`CloseReason::Program`] close a guard recorded is, when it comes
+    /// due, the window's consent to a quit ([`request_quit`](Self::request_quit)),
+    /// as a runner treats it: it closes nothing alone.
+    ///
     /// A window another one outlives is removed and the OS focus moves to a
     /// survivor; the last one retires the UI runtime, as on a real host
     /// ([`is_retired`](Self::is_retired)).
@@ -1748,7 +1793,7 @@ impl HeadlessHost {
     /// panic resumes once the write is done.
     pub(crate) fn end_session_now(&mut self) {
         let mut first = FirstPanic::new();
-        if let Some(runtime) = &self.ui_runtime {
+        if let Some(runtime) = self.try_ui_runtime() {
             first.contain(|| {
                 runtime.deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
             });
@@ -1799,16 +1844,28 @@ impl HeadlessHost {
     /// One phase of the user's session ending, as the operating system reports
     /// it (ADR-0260). `Query` asks every window's guard for the session's
     /// end and answers [`Block`](SessionEndAnswer::Block) when one refuses;
-    /// `Cancelled` withdraws only those session-end records; `Ending`
-    /// delivers the session-ended notice and then writes what the documents
-    /// published, not waiting for a write the storage holds, and closes no
-    /// window, as a phone's trip to the background does (ADR-0350 §2).
+    /// `Cancelled` withdraws only those session-end records; `Ending` is
+    /// what the platform the primary window names does
+    /// ([`session_end_support`](Self::session_end_support)), as a runner
+    /// does it (ADR-0260, ADR-0350 §2):
+    ///
+    /// - on a desktop (`Hold`, `Delay`) the session-ended notice is
+    ///   delivered, every window closes past every hold, what the documents
+    ///   published is written and the host retires;
+    /// - on a phone (`Background`) the notice is delivered and the documents
+    ///   are written with every window kept open for the user's return, and
+    ///   the answer is [`Block`](SessionEndAnswer::Block) while writes are
+    ///   still in flight: the hold is released at the turn after they end
+    ///   ([`session_end_releases`](Self::session_end_releases)), and a later
+    ///   trip's session end replaces it.
     ///
     /// # Panics
     ///
-    /// At `Ending`, with the first panic of a notice subscriber or the
-    /// write, once both have run.
-    pub fn end_session(&self, phase: SessionEndPhase) -> SessionEndAnswer {
+    /// At `Ending`, with the first panic of a notice subscriber, a close or
+    /// the write, once every step has run: a runner contains and logs it,
+    /// and the host raises it, as it raises a dropped frame (see the
+    /// [module docs](self#failures)).
+    pub fn end_session(&mut self, phase: SessionEndPhase) -> SessionEndAnswer {
         let windows = self.presentation_ids();
         match phase {
             SessionEndPhase::Query => {
@@ -1827,22 +1884,67 @@ impl HeadlessHost {
                 }
                 SessionEndAnswer::Proceed
             }
-            SessionEndPhase::Ending => {
-                // As a runner's: the notice first, so a subscriber still
-                // publishes what the write then takes.
-                let mut first = FirstPanic::new();
-                if let Some(runtime) = &self.ui_runtime {
-                    first.contain(|| {
-                        runtime.deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
-                    });
+            SessionEndPhase::Ending => match self.session_end_support() {
+                flui_platform::SessionEndSupport::Hold
+                | flui_platform::SessionEndSupport::Delay { .. } => {
+                    self.end_session_now();
+                    SessionEndAnswer::Proceed
                 }
-                first.contain(|| self.write_published());
-                first.resume();
-                SessionEndAnswer::Proceed
-            }
+                _ => self.end_session_in_background(),
+            },
             // A phase added later asks this host nothing.
             _ => SessionEndAnswer::Proceed,
         }
+    }
+
+    /// How the platform the primary window names lets the session end, as
+    /// its host reports it: `Background` on Android and iOS, `Delay` on
+    /// Linux (logind), and `Hold` on Windows, macOS and the platform-neutral
+    /// window, as the native headless platform does. A duration names the
+    /// session end's budget: this host's clock waits for nothing.
+    #[must_use]
+    pub fn session_end_support(&self) -> flui_platform::SessionEndSupport {
+        use flui_platform::{SessionEndSupport, TargetPlatform};
+        match self.primary.window.platform {
+            TargetPlatform::Android | TargetPlatform::iOS => SessionEndSupport::Background {
+                window: SESSION_END_BUDGET,
+            },
+            TargetPlatform::Linux => SessionEndSupport::Delay {
+                max: SESSION_END_BUDGET,
+            },
+            _ => SessionEndSupport::Hold,
+        }
+    }
+
+    /// How many holds a phone's session end took for its writes were
+    /// released once the writes ended.
+    #[must_use]
+    pub fn session_end_releases(&self) -> usize {
+        self.session_end_releases
+    }
+
+    /// A session end that leaves the application running: the notice, then
+    /// the write, every window open; `Block` while writes are in flight.
+    fn end_session_in_background(&mut self) -> SessionEndAnswer {
+        // As a runner's: the notice first, so a subscriber still publishes
+        // what the write then takes.
+        let mut first = FirstPanic::new();
+        if let Some(runtime) = self.try_ui_runtime() {
+            first.contain(|| {
+                runtime.deliver_host_notice(&flui_platform::HostNotice::SessionEnded);
+            });
+        }
+        first.contain(|| self.write_published());
+        // An earlier trip's hold answers for nothing now: this one answers
+        // for what is in flight.
+        self.background_hold = !self.flush_writes.lock().is_empty();
+        let answer = if self.background_hold {
+            SessionEndAnswer::Block
+        } else {
+            SessionEndAnswer::Proceed
+        };
+        first.resume();
+        answer
     }
 
     /// Open `window` beside the existing ones, as a runner installs a
@@ -1884,7 +1986,7 @@ impl HeadlessHost {
             .with_platform(platform),
         );
         let id = self.ui_runtime_mut().install_presentation(presentation);
-        install_window_control(self.ui_runtime(), id, &window);
+        install_window_control(self.ui_runtime(), id, &window, &self.close_asks);
         let seed = window.state();
         self.open.push(HostWindow {
             id,
@@ -2077,17 +2179,13 @@ impl HeadlessHost {
 
     /// Deliver `display` as the display `window` is on, as a runner delivers
     /// the one it derived from the platform's display snapshot: its refresh
-    /// period is what the UI runtime paces `window`'s presentation by.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host.
+    /// period is what the UI runtime paces `window`'s presentation by. A
+    /// window that closed hears nothing, as on a real host.
     pub fn set_window_display(
         &self,
         window: HeadlessWindowId,
         display: Option<flui_platform::WindowDisplay>,
     ) {
-        let _ = self.window_of(window);
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Display(
@@ -2098,13 +2196,9 @@ impl HeadlessHost {
 
     /// Report that `window` gained OS focus, as a backend's focus callback
     /// does: keyboard input goes to its presentation from now on, whatever
-    /// window it is stamped for, and the window that held focus loses it.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host.
+    /// window it is stamped for, and the window that held focus loses it. A
+    /// window that closed hears nothing, as on a real host.
     pub fn focus_window(&self, window: HeadlessWindowId) {
-        let _ = self.window_of(window);
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Focus(true),
@@ -2165,17 +2259,17 @@ impl HeadlessHost {
     /// frozen by the browser): the window's state says so, and the host
     /// delivers `WindowObservation::Execution(execution)`, which suspends
     /// (`Paused`) or resumes the window's lifecycle. Its focus and visibility
-    /// stay as they were.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host or has closed.
+    /// stay as they were. A window that closed hears nothing, as on a real
+    /// host.
     pub fn set_window_execution(
         &self,
         window: HeadlessWindowId,
         execution: flui_platform::WindowExecutionState,
     ) {
-        *self.open_window_of(window).window.execution.lock() = execution;
+        let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
+            return;
+        };
+        *open.window.execution.lock() = execution;
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Execution(execution),
@@ -2188,25 +2282,28 @@ impl HeadlessHost {
     /// A session's end has its own entries
     /// ([`end_session`](Self::end_session)).
     ///
+    /// A retired host has no subscriber left to tell.
+    ///
     /// # Panics
     ///
     /// With the first panic of a subscriber, once every subscriber heard the
-    /// notice; and once the host retired.
+    /// notice.
     pub fn notify(&self, notice: flui_platform::SystemNotice) {
-        self.ui_runtime()
-            .deliver_host_notice(&flui_platform::HostNotice::from(notice));
+        if let Some(runtime) = self.try_ui_runtime() {
+            runtime.deliver_host_notice(&flui_platform::HostNotice::from(notice));
+        }
     }
 
     /// Report `insets` as what covers `window`, as a host reports a change of
     /// its safe area, keyboard or system gesture regions: the presentation's
     /// `MediaQuery` carries them from the next [`pump`](Self::pump), and a
-    /// moving keyboard is sampled at each frame's time until it settles.
-    ///
-    /// # Panics
-    ///
-    /// If `window` was not opened by this host.
+    /// moving keyboard is sampled at each frame's time until it settles. A
+    /// window that closed hears nothing, as on a real host.
     pub fn set_window_insets(&self, window: HeadlessWindowId, insets: flui_platform::WindowInsets) {
-        *self.window_of(window).insets.lock() = insets;
+        let Some(open) = self.open.iter().find(|open| open.id == window.0) else {
+            return;
+        };
+        *open.window.insets.lock() = insets;
         self.observe(
             window.0,
             flui_runtime::owner::WindowObservation::Insets(insets),
@@ -2515,7 +2612,8 @@ impl HeadlessHost {
                 || runtime.scheduler().is_frame_scheduled()
                 || runtime.has_pending_work()
                 || self.background_runs_next_pump()
-                || self.observations_pending())
+                || self.observations_pending()
+                || self.turn_owed())
         {
             return Some(Duration::ZERO);
         }
@@ -2565,6 +2663,17 @@ impl HeadlessHost {
     #[must_use]
     pub fn pending_background(&self) -> usize {
         self.scripted.background.pending()
+    }
+
+    /// Whether the host owes a turn, as a runner's owner is woken for one: a
+    /// close a widget asked for, or a quit to ask the windows or to commit.
+    fn turn_owed(&self) -> bool {
+        !self.close_asks.borrow().is_empty()
+            || match &self.quit {
+                QuitAsk::None => false,
+                QuitAsk::Asked => true,
+                QuitAsk::Deferred(waiting) => waiting.is_empty(),
+            }
     }
 
     /// Whether a window changed since the host last told the UI runtime: the next pump
@@ -2622,6 +2731,7 @@ impl HeadlessHost {
             if runtime_idle
                 && self.pending_background() == 0
                 && !self.observations_pending()
+                && !self.turn_owed()
                 && self.scenario_wait().is_none()
             {
                 return Ok(frames);
@@ -2640,6 +2750,10 @@ impl HeadlessHost {
         presentation: PresentationId,
         observation: flui_runtime::owner::WindowObservation,
     ) {
+        // A real host hears nothing more of a window that closed.
+        if !self.is_open(HeadlessWindowId(presentation)) {
+            return;
+        }
         if let flui_runtime::owner::WindowObservation::Metrics(metrics) = observation {
             *self
                 .window_of(HeadlessWindowId(presentation))
@@ -2711,22 +2825,138 @@ impl HeadlessHost {
         )
     }
 
-    /// The owner turn's settle, before its frame: carry out the closes the
-    /// windows' guards now let through, run the registry's queued writes and
-    /// wake what they resolved.
+    /// The owner turn's settle, before its frame, in a runner's order: carry
+    /// out the closes the windows' widgets asked for, then what the windows'
+    /// guards now let through (a close is carried out; a quit's close is the
+    /// window's consent to the quit and closes nothing alone, and a quit's
+    /// close the application kept open cancels the quit), consult or commit
+    /// the quit, run the registry's queued writes and wake what they
+    /// resolved, and release a phone's background hold once its writes end.
+    ///
+    /// Each step and each close runs contained, so one that panics costs
+    /// none of the others; the first panic resumes once all have run.
     fn settle_lifecycle(&mut self) {
-        let due = self
+        let mut first = FirstPanic::new();
+        let asked = std::mem::take(&mut *self.close_asks.borrow_mut());
+        for id in asked {
+            first.contain(|| self.close_asked(id));
+        }
+        let settled = self
             .ui_runtime
             .as_ref()
-            .map_or_else(Vec::new, |runtime| runtime.settle_close_guards().due);
-        for (id, _reason) in due {
-            self.close_presentation(id);
+            .map(UiRuntime::settle_close_guards)
+            .unwrap_or_default();
+        for (id, reason) in settled.due {
+            if reason != CloseReason::Program {
+                first.contain(|| {
+                    self.close_presentation(id);
+                });
+            }
+            self.quit_consented(id);
         }
-        self.run_flush_writes();
+        for (id, reason) in settled.declined {
+            if reason == CloseReason::Program {
+                self.quit_declined(id);
+            }
+        }
+        self.consult_quit(&mut first);
+        first.contain(|| self.run_flush_writes());
         if let Some(flush) = &self.flush {
             for waker in flush.settle() {
-                waker.wake();
+                first.contain(|| waker.wake());
             }
+        }
+        if self.background_hold && self.flush_writes.lock().is_empty() {
+            self.background_hold = false;
+            self.session_end_releases += 1;
+        }
+        first.resume();
+    }
+
+    /// Carry out the close a widget of window `id` asked for, as a runner's
+    /// window queue does: the window's guard is asked as for the program's
+    /// close, and a refusal is recorded on it; otherwise the window commits
+    /// its composition and closes. A window already gone closes nothing.
+    fn close_asked(&mut self, id: PresentationId) {
+        if !self.is_open(HeadlessWindowId(id))
+            || self.ui_runtime().close_refused(id, CloseReason::Program)
+        {
+            return;
+        }
+        self.ui_runtime().commit_composition_for_close(id);
+        self.close_presentation(id);
+    }
+
+    /// Ask for the application to quit, as `AppHandle::request_quit` does and
+    /// as AppKit's Dock Quit reaches a runner (ADR-0350 §1): the next turn
+    /// asks every open window, in the order they opened, as for the program's
+    /// close, its guard recording a refusal. A window that refuses with a
+    /// record defers the quit until its close comes due; one that refuses
+    /// without one, or keeps itself open, cancels it; when no window holds it,
+    /// every window closes past every hold, what the documents published is
+    /// written and the host retires. A quit asked while one is under way
+    /// changes nothing.
+    pub fn request_quit(&mut self) {
+        if matches!(self.quit, QuitAsk::None) && !self.is_retired() {
+            self.quit = QuitAsk::Asked;
+        }
+    }
+
+    /// The quit a turn finds asked: ask every open window, or commit it once
+    /// no window holds it.
+    fn consult_quit(&mut self, first: &mut FirstPanic) {
+        match &self.quit {
+            QuitAsk::None => {}
+            QuitAsk::Asked => {
+                let mut waiting = Vec::new();
+                let mut cancelled = false;
+                // Every window is asked, not only up to the first refusal,
+                // so each one that refuses records its close.
+                for id in self.presentation_ids() {
+                    if self.ui_runtime().close_refused(id, CloseReason::Program) {
+                        if self.ui_runtime().close_recorded(id, CloseReason::Program) {
+                            waiting.push(id);
+                        } else {
+                            cancelled = true;
+                        }
+                    }
+                }
+                self.quit = if cancelled {
+                    tracing::info!(
+                        "a window refused the quit without recording it; quit cancelled"
+                    );
+                    QuitAsk::None
+                } else {
+                    QuitAsk::Deferred(waiting)
+                };
+                self.commit_quit_if_free(first);
+            }
+            QuitAsk::Deferred(_) => self.commit_quit_if_free(first),
+        }
+    }
+
+    /// Carry out a quit no window holds any more.
+    fn commit_quit_if_free(&mut self, first: &mut FirstPanic) {
+        if matches!(&self.quit, QuitAsk::Deferred(waiting) if waiting.is_empty()) {
+            self.quit = QuitAsk::None;
+            self.quit_into(first);
+        }
+    }
+
+    /// Window `id` consented to the deferred quit: its recorded close came
+    /// due, or it is gone.
+    fn quit_consented(&mut self, id: PresentationId) {
+        if let QuitAsk::Deferred(waiting) = &mut self.quit {
+            waiting.retain(|waited| *waited != id);
+        }
+    }
+
+    /// Window `id` kept itself open: the deferred quit that waited on it is
+    /// cancelled.
+    fn quit_declined(&mut self, id: PresentationId) {
+        if matches!(&self.quit, QuitAsk::Deferred(waiting) if waiting.contains(&id)) {
+            tracing::info!(?id, "a window stayed open; deferred quit cancelled");
+            self.quit = QuitAsk::None;
         }
     }
 
@@ -2767,7 +2997,10 @@ impl HeadlessHost {
         let Some(position) = self.open.iter().position(|window| window.id == id) else {
             return false;
         };
-        self.open.remove(position);
+        let closed = self.open.remove(position);
+        closed.window.closed.store(true, Ordering::Relaxed);
+        // A window that is gone holds no quit.
+        self.quit_consented(id);
         if !self.open.is_empty() {
             return self.ui_runtime_mut().close_presentation_entered(id);
         }
@@ -2840,32 +3073,63 @@ pub struct NotSettled {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HeadlessWindowId(PresentationId);
 
+/// The closes the windows' widgets asked for since the host's last turn, in
+/// order, which the turn carries out as a runner's window queue does.
+type CloseAsks = Rc<std::cell::RefCell<Vec<PresentationId>>>;
+
+/// Where a quit stands, as a runner's application control keeps it.
+#[derive(Debug)]
+enum QuitAsk {
+    /// No quit is asked.
+    None,
+    /// A quit is asked; the next turn asks the windows.
+    Asked,
+    /// The windows that refused with a record; the quit goes ahead once
+    /// each has consented.
+    Deferred(Vec<PresentationId>),
+}
+
 /// The host's control of a [`HeadlessWindow`], behind the `WindowHandle` its
 /// widgets reach through `LifecycleContext::window`, as a runner installs one
-/// for each window it opens. The double honours its frame and mode commands, at once.
-struct HeadlessWindowControl(Rc<HeadlessWindow>);
+/// for each window it opens. The double honours its frame and mode commands
+/// at once and answers [`Closed`](flui_platform::SubmitError::Closed) once its
+/// window closed; a close it is asked for waits for the host's next turn.
+struct HeadlessWindowControl {
+    window: Rc<HeadlessWindow>,
+    presentation: PresentationId,
+    close_asks: CloseAsks,
+}
 
 impl flui_platform::WindowControl for HeadlessWindowControl {
     fn state(&self) -> flui_platform::WindowState {
-        self.0.state()
+        self.window.state()
     }
 
     fn submit(
         &self,
         command: flui_platform::WindowCommand,
     ) -> Result<(), flui_platform::SubmitError> {
-        let admitted = command.admit(&self.0.capabilities())?;
+        if self.window.is_closed() {
+            return Err(flui_platform::SubmitError::Closed);
+        }
+        let admitted = command.admit(&self.window.capabilities())?;
         let command = admitted
-            .against(&self.0.capabilities())
+            .against(&self.window.capabilities())
             .expect("BUG: the double's capabilities never move");
-        self.0
+        self.window
             .take(command)
             .expect("BUG: the double carries out every command its capabilities honour");
         Ok(())
     }
 
+    /// Counted as the window's observation, and queued for the host's next
+    /// turn, which asks the window's guard and closes it (a window already
+    /// gone has nothing left to close), as a runner's window queue does.
     fn request_close(&self) {
-        self.0.chrome.lock().close_requests += 1;
+        self.window.chrome.lock().close_requests += 1;
+        if !self.window.is_closed() {
+            self.close_asks.borrow_mut().push(self.presentation);
+        }
     }
 }
 
@@ -2875,8 +3139,13 @@ fn install_window_control(
     ui_runtime: &UiRuntime,
     presentation: PresentationId,
     window: &Rc<HeadlessWindow>,
+    close_asks: &CloseAsks,
 ) {
-    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl(Rc::clone(window)));
+    let source = flui_view::__runtime::WindowSource::new(HeadlessWindowControl {
+        window: Rc::clone(window),
+        presentation,
+        close_asks: Rc::clone(close_asks),
+    });
     assert!(
         ui_runtime.install_window(presentation, source),
         "BUG: the window's presentation was just installed"

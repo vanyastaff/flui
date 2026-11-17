@@ -59,6 +59,21 @@ substrate driver over raw owners, which the raw-owner suites still use.
   only. `closing_the_focused_window_moves_the_focus_to_a_survivor` and the
   last-window row of `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
   pin both. The widget harness closes through the same path.
+- **A turn does what a runner's owner turn does, in its order.** A close a
+  widget asks for through its window's handle is queued and carried out at
+  the next turn after the guard is asked as for the program's close (a
+  runner's window queue); every close the guards let through is carried out
+  contained, the first panic resumed after the rest; a `Program` close that
+  comes due is a window's consent to a quit and closes nothing alone, and one
+  kept open cancels the quit; a quit (`request_quit`) asks every window,
+  defers on a recorded refusal and commits by closing every window past its
+  hold. The session's end follows the primary window's platform: `Hold` and
+  `Delay` close every window and retire, `Background` keeps them open and
+  answers `Block` while writes are in flight. A closed window hears no input
+  or fact, and its handle answers `Closed`. These are mirrors, not calls:
+  the runner's close router, application control and session end live in
+  `flui-app`, which sits above this crate, and `docs/gaps.md` ("The headless
+  host mirrors the runner's owner turn") names what that leaves out.
 - **The built-ins are a runner's built-ins.** Without a registry of the test's
   own, the host registers what `flui-app` registers on the primary window's
   platform with the test build's features: the clipboard and background lanes,
@@ -74,9 +89,14 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `Ending` (the session-ended notice, then the documents' write) with the
   window kept open, as Android's `onPause`/`onStop` and a UIKit scene entering
   the background do (ADR-0350 §2); `Tester::foreground` reports shown, running,
-  focused. `HeadlessHost::set_window_execution`, `notify` and `leave_unshown`
-  are the single entries for execution, system notices and a surface that
-  shows nothing.
+  focused. Only a window that names Android or iOS takes the trip, once
+  before each return, so a test reaches no state a phone does not
+  (`TestError::NotAPhone`, `InBackground`, `InForeground`); the session end's
+  answer comes back to the test. `HeadlessHost::set_window_execution`,
+  `notify` and `leave_unshown` are the single entries for execution, system
+  notices and a surface that shows nothing. A runner contains and logs a
+  panicking session-end subscriber; the host contains it the same way, so
+  every step still runs, and then raises it, as it raises a dropped frame.
 - **A scale change has one runtime entry.** `HeadlessHost::set_scale_factor`
   updates its native-window stand-in and surface dimensions through
   `UiRuntime::apply_window_observation` with a `Metrics` observation, the
