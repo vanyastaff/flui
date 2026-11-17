@@ -61,7 +61,7 @@ pub mod repeat {
     //! (`wl_keyboard.repeat_info`): a held key that repeats does so after the
     //! delay, then at the rate, until it is released, another key is
     //! pressed, or the keyboard leaves the window. A keyboard older than
-    //! `repeat_info` ([`TOLD_SINCE`]) is never told, and repeats at
+    //! `repeat_info` (version 4) is never told, and repeats at
     //! [`UNTOLD`].
 
     #![forbid(unsafe_code)]
@@ -511,7 +511,7 @@ pub mod cursor {
 
     /// The integer scale a theme cursor is drawn for on a window of `scale`
     /// device pixels per logical pixel: rounded up, so it is never blurred,
-    /// at most [`MAX_THEME_SCALE`], and one for a scale that is not a
+    /// at most eight, and one for a scale that is not a
     /// positive finite number.
     #[must_use]
     pub fn theme_scale(scale: f64) -> NonZeroU32 {
