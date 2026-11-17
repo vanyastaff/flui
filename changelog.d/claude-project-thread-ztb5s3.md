@@ -1,5 +1,9 @@
 ### Added
 
+- The book has a tutorial: a first window with `run_app`, `Application` and `#[flui::main]`, a
+  screen laid out with `Column`, `Row`, `Padding` and `Expanded`, and state in a `StatefulView`.
+  Every sample compiles, and the ones that do not open a window run.
+
 - `flui::testing::Tester`, the application test API: `Tester::mount` mounts a view as `run_app`
   does, `flui::testing::find` builds the driver's `Locator`s over the semantics tree, `tap`,
   `long_press`, `drag` and `enter_text` act through the window's input path after the
