@@ -7,7 +7,9 @@
   [ADR-0151](ADR-0151-platform-layer-boundary-and-names.md); the accepted ADR-0151 (2026-10-20)
   leaves system preferences to this ADR.
 - **Amended by:** [ADR-0212](ADR-0212-system-preferences-for-input.md) (haptics preference,
-  per-display gesture values, accessibility timing floors, preset order)
+  per-display gesture values, accessibility timing floors, preset order),
+  [ADR-0359](ADR-0359-system-preferences-carry-the-accent-colour-and-the-scroll-bar-behaviour.md)
+  (accent colour and scroll-bar behaviour)
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0171](ADR-0171-ui-runtime-and-host-vocabulary.md).
@@ -27,8 +29,9 @@ production, delivery and consumer integration with those existing crate names.
 The other decisions proposed in ADR-0151 through ADR-0154 retain their own status.
 
 `SystemPreferences` is an immutable, validated value. It describes text sizing,
-contrast, bold text, ordered preferred languages, motion, gesture timing/geometry
-and wheel preferences. Fields whose values are unavailable retain that fact;
+contrast, bold text, ordered preferred languages, motion, gesture timing/geometry,
+wheel preferences, the accent colour and the scroll-bar behaviour (ADR-0359).
+Fields whose values are unavailable retain that fact;
 framework fallback values belong to consumer policy. Failed refresh and an
 unsupported observation are distinct outcomes. A failed refresh preserves the
 last accepted value and its pending delivery.

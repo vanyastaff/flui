@@ -886,6 +886,22 @@ fn platform_recordings_replay_on_the_headless_host() {
     );
     assert_eq!(full.wheel().horizontal_characters(), Some(2));
     assert_eq!(
+        full.accent_color(),
+        Some(flui_platform::SrgbColor::from_rgba8(0, 120, 215, 255)),
+        "the accent survives the read"
+    );
+    assert_eq!(
+        (
+            full.scroll_bars().visibility(),
+            full.scroll_bars().track_click()
+        ),
+        (
+            Some(flui_platform::ScrollBarVisibility::Always),
+            Some(flui_platform::ScrollTrackClick::JumpToSpot)
+        ),
+        "the scroll-bar preferences survive the read, each in its own spelling"
+    );
+    assert_eq!(
         full.regional().hour_cycle(),
         Some(flui_platform::HourCycle::H11),
         "the regional formats survive the read"
@@ -1445,7 +1461,13 @@ fn captured_session(privacy: flui_native::journal::recorder::Privacy) -> Capture
         SystemPreferences::default()
             .with_high_contrast(true)
             .with_text_scale(2.0)
-            .expect("in range"),
+            .expect("in range")
+            .with_accent_color(Some(flui_platform::SrgbColor::from_rgba8(255, 45, 85, 255)))
+            .with_scroll_bars(
+                flui_platform::ScrollBarPreferences::default()
+                    .with_visibility(flui_platform::ScrollBarVisibility::WhenScrolling)
+                    .with_track_click(flui_platform::ScrollTrackClick::Page),
+            ),
     );
     reads.push(preferences());
     sources
