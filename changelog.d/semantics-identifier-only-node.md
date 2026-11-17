@@ -3,11 +3,11 @@
 - Agent protocol 0.18: a semantics read lists an `unpublished_identifier` diagnostic for an
   identifier on a node the agent and accessibility clients lift into its parent (no role, label
   or text, or the `Generic` or `Presentation` role), naming the node it is lifted into, at most
-  4 nodes per identifier and 256 per read; a 0.17 client ignores it. A Tester lookup or
-  expectation that matches nothing and names such an identifier (its own, or a scope's no
-  published node carries) fails with `TestError::UnpublishedIdentifier`; `to_be_gone` still passes.
-  The error says why and gives the form that is found: a role on the node, or the identifier on
-  the control it sits inside.
+  4 nodes per identifier and 256 per read; a 0.17 client ignores it. A Tester lookup, or an
+  expectation that gives up, matching nothing while it names such an identifier (its own, or a
+  scope's no published node carries) fails with `TestError::UnpublishedIdentifier`. The error
+  says why and gives the form that is found: a role on the node, or the identifier on the
+  control it sits inside.
 
 ### Fixed
 

@@ -1377,7 +1377,9 @@ impl Expectation<'_> {
         self.to_have_count(1);
     }
 
-    /// No element matches: `findsNothing`.
+    /// No element matches: `findsNothing`. A node whose identifier the read
+    /// lifts away matches nothing, so this passes for it: give such a node a
+    /// role to find it (ADR-0240 §3).
     #[track_caller]
     pub fn to_be_gone(self) {
         self.to_have_count(0);

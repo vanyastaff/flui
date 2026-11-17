@@ -1484,17 +1484,18 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
         ))),
     );
     let _ = t.rect(&find::button("Save"));
+    // The identifier blamed, and the message.
     let failure = |t: &mut Tester, locator: Locator| {
         let error = t
             .try_rect(&locator)
             .expect_err("an identifier on a lifted node selects nothing");
-        assert!(
-            matches!(error, TestError::UnpublishedIdentifier { .. }),
-            "{locator:?}: {error}"
-        );
-        error.to_string()
+        let message = error.to_string();
+        let TestError::UnpublishedIdentifier { identifier, .. } = error else {
+            panic!("{locator:?}: {message}");
+        };
+        (identifier, message)
     };
-    let swatch = failure(&mut t, find::id("swatch"));
+    let (_, swatch) = failure(&mut t, find::id("swatch"));
     assert!(
         swatch.contains("publishes nothing of its own")
             && swatch.contains(".role(SemanticsRole::Group)"),
@@ -1502,15 +1503,15 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
     );
     // Inside a control a group would cut the name its label gives it, so
     // the fix names the control instead.
-    let save = failure(&mut t, find::id("save"));
+    let (_, save) = failure(&mut t, find::id("save"));
     assert!(
         save.contains("Give the identifier to the control")
             && !save.contains(".role(SemanticsRole::Group)"),
         "{save}"
     );
     // A scope names the identifier as much as the target does.
-    let scoped = failure(&mut t, find::button("Save").within(find::id("swatch")));
-    assert!(scoped.contains("\"swatch\""), "{scoped}");
+    let (scoped, _) = failure(&mut t, find::button("Save").within(find::id("swatch")));
+    assert_eq!(scoped, "swatch");
     // An expectation that gives up says the same.
     let expected = panic_text(|| t.expect(find::id("swatch")).to_exist());
     assert!(
@@ -1522,8 +1523,8 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
     t.expect(find::id("swatch")).to_be_gone();
     // The target's own identifier is the likely reason even where a
     // published node carries it too.
-    let own = failure(&mut t, find::id("legend").within(find::button("Save")));
-    assert!(own.contains("\"legend\""), "{own}");
+    let (own, _) = failure(&mut t, find::id("legend").within(find::button("Save")));
+    assert_eq!(own, "legend");
     // An identifier a published node carries selects it, and a failure
     // there is the expectation's own, not the lifted node's.
     let _ = t.rect(&find::id("legend"));
