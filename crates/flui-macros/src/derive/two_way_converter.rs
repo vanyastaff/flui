@@ -92,6 +92,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         // vector only through that type, never through a local: rustc reports
         // a field that is not a converter once, at the field. A local of the
         // vector's type would carry the same failure to wherever it is read.
+        // A type a `macro_rules!` passes as a `ty` fragment is reported at the
+        // caller's type and again at the fragment, since rustc keeps both spans.
         reads.push(quote_spanned! {ty.span()=>
             #vector[#start..#end].copy_from_slice(::core::convert::AsRef::<[f64]>::as_ref(
                 &<#ty as #runtime::TwoWayConverter>::to_vector(&#this.#member),

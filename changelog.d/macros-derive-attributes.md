@@ -50,8 +50,7 @@
   `android_main` shadowed it.
 - `#[derive(InheritedData)]` reports a field that is not `PartialEq` at the field, where it
   pointed at the derive.
-- `InheritedData`, `TwoWayConverter` and a view's `#[view(key)]` build when the derive and
-  the fields come from different `macro_rules!` contexts, which the code spanned at a field
-  made fail with "cannot find value `self`".
+- `#[derive(TwoWayConverter)]` builds when the derive and the fields come from different
+  `macro_rules!` contexts, which failed with "cannot find value `self`".
 - `#[flui::main]` in a crate that has `flui-sdk` but no application runtime no longer advises
   adding `flui-sdk`.

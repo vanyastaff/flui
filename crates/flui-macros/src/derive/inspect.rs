@@ -180,8 +180,8 @@ impl FieldAttrs {
         Ok(())
     }
 
-    /// Read the field's `#[inspect(...)]` lists, then check the combinations of what was
-    /// read. An entry given twice is refused, since only one could take effect, and is still
+    /// Read the field's `#[inspect(...)]` lists, then check the combinations of the entries
+    /// written. An entry given twice is refused, since only one could take effect, and is still
     /// read, so what it holds is checked as well.
     fn parse(field: &syn::Field) -> syn::Result<Self> {
         Refusals::collect(|refusals| {
@@ -676,6 +676,18 @@ mod tests {
                     e: f64,
                     #[inspect(skip, name = 1)]
                     f: f64,
+                    #[inspect(debug, with = 3)]
+                    g: f64,
+                    #[inspect(debug, default = +)]
+                    h: f64,
+                    #[inspect(title = 1 2, nonsense)]
+                    i: f64,
+                    #[inspect(skip | a, debug | b)]
+                    j: f64,
+                    #[inspect(level = Foo::<A, B>::X, name = 3)]
+                    k: f64,
+                    #[inspect(with = a::b<c, d> extra, nonsense)]
+                    l: f64,
                 },
             }
         };
@@ -703,6 +715,25 @@ mod tests {
                 "unsupported inspect attribute",
                 "expected string literal",
                 "a skipped field takes no other inspect attribute",
+                // A combination is of the entries written, whether or not each value read.
+                "expected identifier",
+                "`debug` and `with` both map the field",
+                "expected an expression",
+                "a `debug` field has no typed value",
+                // An expression with tokens after it is stepped over to its comma.
+                "unsupported inspect attribute",
+                "unsupported inspect attribute",
+                // What follows an entry without `=` is no value: `| a, debug |` is no closure.
+                "expected `,`",
+                "expected `,`",
+                "a skipped field takes no other inspect attribute",
+                // A value is stepped over from its start: the reader stopped at `Foo`.
+                "expected `summary`, `detail` or `debug`",
+                "expected string literal",
+                // A reader that took more than the expression keeps its place: the path
+                // `a::b<c, d>` read, then `extra` is stepped over.
+                "expected `,`",
+                "unsupported inspect attribute",
             ],
         );
     }

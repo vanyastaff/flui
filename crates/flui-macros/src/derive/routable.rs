@@ -59,8 +59,9 @@ struct RouteField<'a> {
 struct QueryField<'a> {
     /// The query key: the field's name, or its `rename`.
     key: String,
-    /// Whether `key` is the one the author gave: false when a `rename` was
-    /// refused, so that the key is not compared with the other fields' keys.
+    /// Whether `key` is the one the author gave: false when anything of the
+    /// field's `#[query]` was refused, so that the key is not compared with
+    /// the other fields' keys.
     key_stated: bool,
     kind: QueryKind,
     /// The type one value parses as: `T` of `Option<T>` and `Vec<T>`, else
@@ -413,15 +414,17 @@ fn query_attribute<'a>(
 ) -> Option<QueryField<'a>> {
     let mut attributes = named(&field.attrs, "query");
     let attribute = attributes.next()?;
-    for repeated in attributes {
-        refusals.push(syn::Error::new_spanned(
-            repeated,
-            "a field takes one `#[query]` attribute",
-        ));
-    }
     let mut key: Option<String> = None;
-    let mut key_stated = true;
-    if !matches!(attribute.meta, syn::Meta::Path(_)) {
+    let refused = refusals.refused(|refusals| {
+        for repeated in attributes {
+            refusals.push(syn::Error::new_spanned(
+                repeated,
+                "a field takes one `#[query]` attribute",
+            ));
+        }
+        if matches!(attribute.meta, syn::Meta::Path(_)) {
+            return;
+        }
         let mut renamed = false;
         parse_entries(
             attribute,
@@ -439,19 +442,15 @@ fn query_attribute<'a>(
                 if twice {
                     refusals.push(meta.error("`rename` is given twice"));
                 }
-                // Until this `rename` reads, the field's key is unknown: which of two
-                // the author meant, or none for a value that is refused.
-                key_stated = false;
                 let name = name?;
                 if name.value().is_empty() {
                     return Err(syn::Error::new(name.span(), "a query key is not empty"));
                 }
                 key = Some(name.value());
-                key_stated = !twice;
                 Ok(())
             },
         );
-    }
+    });
     let (kind, value) = match single_argument(&field.ty, "Option") {
         Some(inner) => (QueryKind::Optional, inner),
         None => match single_argument(&field.ty, "Vec") {
@@ -461,7 +460,7 @@ fn query_attribute<'a>(
     };
     Some(QueryField {
         key: key.unwrap_or_else(|| name.to_owned()),
-        key_stated,
+        key_stated: !refused,
         kind,
         value,
     })
@@ -800,6 +799,32 @@ mod tests {
                     #[query(rename = "r")]
                     s: u8,
                 },
+                // A field whose `#[query]` is refused anywhere has no key to share,
+                // whatever its `rename` says.
+                #[route("/f")]
+                F {
+                    #[query(1, rename = "j")]
+                    t: u8,
+                    #[query(rename = "t")]
+                    u: u8,
+                    #[query(rename = "v")]
+                    #[query(rename = "w")]
+                    v: u8,
+                    #[query(rename = "v")]
+                    w: u8,
+                    #[query(rename = "k" x)]
+                    x: u8,
+                    #[query(rename = "k")]
+                    y: u8,
+                    #[query(order = 1)]
+                    z: u8,
+                    #[query(rename = "z")]
+                    zz: u8,
+                    #[query(rename = "m", rename = "n")]
+                    m: u8,
+                    #[query(rename = "n")]
+                    n: u8,
+                },
             }
         };
         assert_refused(
@@ -828,6 +853,12 @@ mod tests {
                 "expected string literal",
                 "`rename` is given twice",
                 "expected string literal",
+                // Nor of `F`.
+                "expected ident",
+                "a field takes one `#[query]` attribute",
+                "expected `,`",
+                "`#[query]` takes only `rename = \"key\"`",
+                "`rename` is given twice",
             ],
         );
 

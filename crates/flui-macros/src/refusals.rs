@@ -35,6 +35,23 @@ impl Refusals {
         }
     }
 
+    /// Run `read` over this record; whether it recorded a refusal.
+    ///
+    /// For a reading whose result stands only when every part of it read: a
+    /// fact the author stated, such as a query field's key, is known only from
+    /// an attribute that was not refused anywhere.
+    pub(crate) fn refused(&mut self, read: impl FnOnce(&mut Self)) -> bool {
+        let mut part = Self(None);
+        read(&mut part);
+        match part.0 {
+            Some(refusals) => {
+                self.push(refusals);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The value of `result`, or `None` with its refusal recorded.
     pub(crate) fn value<T>(&mut self, result: syn::Result<T>) -> Option<T> {
         match result {
@@ -96,6 +113,15 @@ mod tests {
                 Err::<u8, _>(refusal("last"))
             }),
             &["first", "last"],
+        );
+        assert_refused(
+            Refusals::collect(|refusals| {
+                refusals.push(refusal("first"));
+                assert!(!refusals.refused(|_| {}));
+                assert!(refusals.refused(|part| part.push(refusal("part"))));
+                Ok(7)
+            }),
+            &["first", "part"],
         );
     }
 }

@@ -49,6 +49,7 @@ pub(crate) fn parse_entries(
     let read = attr.parse_nested_meta(|meta| {
         any = true;
         let rest = meta.input;
+        let value = rest.fork();
         let read = entry(meta, refusals).and_then(|()| {
             if ends(rest) {
                 Ok(())
@@ -58,7 +59,7 @@ pub(crate) fn parse_entries(
         });
         if let Err(refused) = read {
             refusals.push(refused);
-            skip_entry(rest)?;
+            skip_entry(rest, &value)?;
         }
         Ok(())
     });
@@ -77,20 +78,27 @@ fn ends(rest: ParseStream<'_>) -> bool {
     rest.is_empty() || rest.peek(Token![,])
 }
 
-/// Step over what is left of a refused entry, up to the comma that ends it.
+/// Step `rest`, where the entry's reader stopped, over what is left of a
+/// refused entry, up to the comma that ends it.
 ///
-/// A value is read as an expression where it is one, so a comma inside its
-/// generic arguments (`HashMap::<u8, u8>::new()`, `<Map<K, V>>::describe`)
-/// does not end the entry. What does not read as one is stepped over a token
-/// at a time.
-fn skip_entry(rest: ParseStream<'_>) -> syn::Result<()> {
-    let value = rest.fork();
+/// `value` is the entry after its name, before the reader took anything, so
+/// the reader may have stopped inside the value: `level = Foo::<A, B>::X`
+/// refused at `Foo`. A value written as `= expression` is read again from
+/// there as one, so a comma inside its generic arguments
+/// (`HashMap::<u8, u8>::new()`, `<Map<K, V>>::describe`) does not end the
+/// entry. Whatever is left, and an entry without `=`, is stepped over a token
+/// at a time: read as an expression, `skip | a, debug | b` would be a closure
+/// that swallows the entry `debug`.
+fn skip_entry(rest: ParseStream<'_>, value: ParseStream<'_>) -> syn::Result<()> {
     if value.peek(Token![=]) {
-        value.parse::<Token![=]>()?;
-    }
-    if value.parse::<Expr>().is_ok() && ends(&value) {
-        rest.advance_to(&value);
-        return Ok(());
+        let expression = value.fork();
+        expression.parse::<Token![=]>()?;
+        // Only forward: a reader that took more than the expression (a path's
+        // generic arguments, `with = a::b<c, d>`) has passed the comma the
+        // expression stops at.
+        if expression.parse::<Expr>().is_ok() && expression.cursor() > rest.cursor() {
+            rest.advance_to(&expression);
+        }
     }
     while !ends(rest) {
         rest.parse::<TokenTree>()?;

@@ -131,13 +131,16 @@ before it is reported with it. An attribute that is not a list of entries
 `#[inspect(1)]`, `#[inspect(skip,, debug)]`) has no next entry to read on
 from; the item's other lists are still read. A refused entry does not end its
 list: `derive::attribute::parse_entries` records it and steps over the rest of
-it, its value read as an expression so that a comma between generic arguments
-(`HashMap::<u8, u8>::new()`) stays inside it, whether the derive does not know
+it. A value written `= expression` is read again from where it starts, so that a
+comma between generic arguments (`HashMap::<u8, u8>::new()`) stays inside it
+and a reader that stopped inside the value (`level = Foo::<A, B>::X`) does not
+leave its tail to be read as entries; what follows an entry without `=` is
+stepped over a token at a time. That holds whether the derive does not know
 the entry, refuses its value, was given it twice or finds tokens after it that
 it does not take (`skip = 1`). The checks of what a field's entries combine to
 (`skip` with another entry, `debug` with `with` or `default`) read which
 entries were written, so a refused value does not hide them; a `#[query]`
-whose `rename` was refused has no key the derive could compare with the other
+with anything refused has no key the derive could compare with the other
 fields' keys. `Routable` reads on past a variant it
 refuses: a variant whose pattern reads is compared with the patterns after it
 whatever its fields got wrong, and a field whose `#[query]` is refused still
