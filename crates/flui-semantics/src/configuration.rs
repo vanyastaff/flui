@@ -931,7 +931,10 @@ impl SemanticsConfiguration {
     /// ancestor, merged by `MergeSemantics`, or contributing nothing) publishes
     /// no identifier: [`absorb`](Self::absorb) never carries one upward, so a
     /// merged parent keeps its own. Name a node by setting the identifier where
-    /// its boundary is declared.
+    /// its boundary is declared. A node with no role, label or text, or with
+    /// the `Generic` or `Presentation` role, is lifted into its parent by the
+    /// agent and the AccessKit adapters, its identifier with it, and a wire
+    /// read reports that identifier as unpublished.
     pub fn set_identifier(&mut self, identifier: impl Into<Arc<str>>) {
         self.attributes.identifier = Some(identifier.into());
     }

@@ -475,11 +475,11 @@ pub enum TreeDiagnostic {
         /// The siblings carrying it, in tree order.
         elements: Vec<ElementId>,
     },
-    /// A node that publishes nothing but an identifier (no role, label or
-    /// text) carries one: the agent and the AccessKit adapters lift such a
-    /// node into its parent, so nothing can select it by that identifier
-    /// (ADR-0240 §3). Its author gives the node a role, or the identifier to
-    /// the node that publishes.
+    /// An identifier is on a node the agent and the AccessKit adapters lift
+    /// into its parent (one with no role, label or text, or with the
+    /// `Generic` or `Presentation` role), so no agent or OS automation
+    /// locator selects it (ADR-0240 §3). Its author gives the node a role,
+    /// or the identifier to the node that publishes.
     UnpublishedIdentifier {
         /// The identifier nothing can select.
         identifier: String,

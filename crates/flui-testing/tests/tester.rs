@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::MonotonicClock as _;
-use flui_testing::{TestError, TestWindow, Tester, find};
+use flui_testing::{Locator, TestError, TestWindow, Tester, find};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView};
 use flui_widgets::{Center, Column, RawButton, SizedBox, Text};
@@ -1474,21 +1474,40 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
         ))),
     );
     let _ = t.rect(&find::button("Save"));
-    for identifier in ["swatch", "save"] {
+    let failure = |t: &mut Tester, locator: Locator| {
         let error = t
-            .try_rect(&find::id(identifier))
+            .try_rect(&locator)
             .expect_err("an identifier on a lifted node selects nothing");
         assert!(
             matches!(error, TestError::UnpublishedIdentifier { .. }),
-            "{identifier}: {error}"
+            "{locator:?}: {error}"
         );
-        let message = error.to_string();
-        assert!(
-            message.contains("publishes nothing else")
-                && message.contains(".role(SemanticsRole::Group)"),
-            "{message}"
-        );
-    }
+        error.to_string()
+    };
+    let swatch = failure(&mut t, find::id("swatch"));
+    assert!(
+        swatch.contains("publishes nothing of its own")
+            && swatch.contains(".role(SemanticsRole::Group)"),
+        "{swatch}"
+    );
+    // Inside a control a group would cut the name its label gives it, so
+    // the fix names the control instead.
+    let save = failure(&mut t, find::id("save"));
+    assert!(
+        save.contains("Give the identifier to the control")
+            && !save.contains(".role(SemanticsRole::Group)"),
+        "{save}"
+    );
+    // A scope names the identifier as much as the target does.
+    let scoped = failure(&mut t, find::button("Save").within(find::id("swatch")));
+    assert!(scoped.contains("\"swatch\""), "{scoped}");
+    // An expectation that gives up says the same.
+    let expected = panic_text(|| t.expect(find::id("swatch")).to_exist());
+    assert!(
+        expected.contains("publishes nothing of its own"),
+        "{expected}"
+    );
+    t.expect(find::id("swatch")).to_be_gone();
     assert!(
         matches!(
             t.try_rect(&find::id("absent")),

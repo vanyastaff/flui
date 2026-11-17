@@ -1,10 +1,12 @@
 ### Added
 
 - Agent protocol 0.18: a semantics read lists an `unpublished_identifier` diagnostic for an
-  identifier on a node that publishes nothing else (no role, label or text), naming the node it
-  is lifted into; a 0.17 client ignores it. The Tester fails such a `find::id` with
-  `TestError::UnpublishedIdentifier`, which says why nothing selects it and gives the form that
-  is found.
+  identifier on a node the agent and accessibility clients lift into its parent (no role, label
+  or text, or the `Generic` or `Presentation` role), naming the node it is lifted into, at most
+  64 per read; a 0.17 client ignores it. A Tester lookup or expectation by `find::id` that finds
+  nothing because of such an identifier fails with `TestError::UnpublishedIdentifier`, which
+  says why and gives the form that is found: a role on the node, or the identifier on the
+  control it sits inside.
 
 ### Fixed
 

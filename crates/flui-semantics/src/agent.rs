@@ -500,6 +500,9 @@ struct Walk<'q> {
     /// AccessKit falls back to the root when nothing does.
     root_claims_focus: bool,
     diagnostics: Vec<TreeDiagnostic>,
+    /// How many lifted identifiers `diagnostics` reports, up to
+    /// [`MAX_LIFTED_IDENTIFIERS`].
+    lifted_reported: usize,
     filter: AgentFilter,
 }
 
@@ -545,8 +548,18 @@ impl Walk<'_> {
             .filtered_children(|child| filter.apply(child))
             .collect();
         // An identifier on a node the read lifts into this one selects
-        // nothing: reported, so an author learns why (ADR-0240 §1).
+        // nothing: reported once per identifier and parent, so an author
+        // learns why (ADR-0240 §3). A lifted node has exactly one published
+        // parent, so the identifiers seen here repeat nowhere else.
+        let mut seen: Vec<String> = Vec::new();
         lifted_identifiers(filter, node, &mut |identifier| {
+            if self.lifted_reported >= MAX_LIFTED_IDENTIFIERS
+                || seen.iter().any(|known| known == identifier)
+            {
+                return;
+            }
+            self.lifted_reported += 1;
+            seen.push(identifier.to_owned());
             self.diagnostics
                 .push(TreeDiagnostic::UnpublishedIdentifier {
                     identifier: identifier.to_owned(),
@@ -591,18 +604,25 @@ impl Walk<'_> {
     }
 }
 
+/// The most identifiers one read reports as lifted: a tree that hides
+/// thousands of them would otherwise grow the reply past what one line of
+/// the protocol carries. An author fixes the first ones and reads again.
+const MAX_LIFTED_IDENTIFIERS: usize = 64;
+
 /// Calls `found` with the identifier of each node `filter` lifts into
 /// `node`: a descendant it passes through (`ExcludeNode`), reached through
-/// such nodes only, in tree order.
-fn lifted_identifiers(filter: AgentFilter, node: &NodeRef<'_>, found: &mut impl FnMut(&str)) {
-    for child in node.children() {
+/// such nodes only, in tree order. The walk keeps its own stack, so a deep
+/// chain of lifted nodes does not grow the thread's.
+fn lifted_identifiers<'a>(filter: AgentFilter, node: &NodeRef<'a>, found: &mut impl FnMut(&str)) {
+    let mut pending: Vec<NodeRef<'a>> = node.children().rev().collect();
+    while let Some(child) = pending.pop() {
         if filter.apply(&child) != FilterResult::ExcludeNode {
             continue;
         }
         if let Some(identifier) = child.author_id() {
             found(identifier);
         }
-        lifted_identifiers(filter, &child, found);
+        pending.extend(child.children().rev());
     }
 }
 
@@ -785,6 +805,7 @@ impl SemanticsOwner {
                 truncated: false,
                 root_claims_focus,
                 diagnostics: Vec::new(),
+                lifted_reported: 0,
                 filter: AgentFilter::of(self),
             };
             if walk.remaining == 0 {

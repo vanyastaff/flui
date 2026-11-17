@@ -415,3 +415,52 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_is_reported() {
         .collect();
     assert_eq!(shown, [None, Some("legend")], "the button and the group");
 }
+
+#[test]
+fn unpublished_identifiers_are_reported_once_each_and_bounded() {
+    let mut owner = SemanticsOwner::new(Arc::new(|_: &TreeUpdate| {}));
+    let node = |index: u32, identifier: Option<String>| {
+        let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+        node.set_rect(Rect::from_ltwh(0.0, 0.0, 80.0, 10.0));
+        match identifier {
+            Some(identifier) => node.config_mut().set_identifier(identifier),
+            None => node.config_mut().set_label("Window"),
+        }
+        node
+    };
+    let root = owner.insert(node(1, None));
+    // Two lifted siblings share "repeat", then a hundred distinct ones follow.
+    let names = ["repeat".to_owned(), "repeat".to_owned()]
+        .into_iter()
+        .chain((0..100).map(|index| format!("item-{index}")));
+    for (index, name) in (2..).zip(names) {
+        let child = owner.insert(node(index, Some(name)));
+        owner.add_child(root, child);
+    }
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let placement = Placement::new(
+        DevicePixelRatio::try_new(1.0).expect("1 is a ratio"),
+        WindowId::from_u64(1).expect("non-zero"),
+    );
+    let tree = owner
+        .read_wire(&ReadQuery::new(), placement)
+        .expect("the published tree reads");
+    let reported: Vec<&str> = tree
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            flui_protocol::TreeDiagnostic::UnpublishedIdentifier { identifier, .. } => {
+                Some(identifier.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reported.len(), 64, "a read reports at most 64");
+    assert_eq!(reported[0], "repeat");
+    assert_eq!(
+        reported[1], "item-0",
+        "a shared identifier is reported once"
+    );
+}

@@ -356,11 +356,13 @@ impl Semantics {
     /// it does not make a node: it names this widget's node only when the
     /// widget forms one ([`container`](Self::container), or under a parent
     /// that requires explicit child nodes). Absorbed into an ancestor or
-    /// merged by `MergeSemantics`, it is dropped, not carried up. A node that
-    /// publishes nothing else (no role, label or text) is lifted into its
-    /// parent by the agent and the AccessKit adapters, its identifier with
-    /// it: to select a widget with no semantics of its own, give the node a
-    /// role as well, as `.role(SemanticsRole::Group)`.
+    /// merged by `MergeSemantics`, it is dropped, not carried up. A node with
+    /// no role, label or text, or with the `Generic` or `Presentation` role,
+    /// is lifted into its parent by the agent and the AccessKit adapters, its
+    /// identifier with it: to select a widget with no semantics of its own,
+    /// give the node a role as well, as `.role(SemanticsRole::Group)`. Inside
+    /// a control such as a button, give the identifier to the control
+    /// instead: a group there would cut the name its label gives it.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.configuration.set_identifier(identifier);
@@ -1654,7 +1656,9 @@ impl MergeSemantics {
     /// Set the merged node's stable identifier for tests and automation
     /// (ADR-0240). The merge forms the node, so this, not a descendant's
     /// [`Semantics::identifier`], names it: a descendant's identifier is
-    /// dropped by the merge.
+    /// dropped by the merge. A merged node that publishes nothing (no role,
+    /// label or text) is lifted into its parent with its identifier, as
+    /// [`Semantics::identifier`] describes.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.identifier = Some(identifier.into());
