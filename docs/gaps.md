@@ -742,3 +742,10 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 - `android-activity` 0.6.1 (`native_activity/mod.rs:225`) logs "Spurious ALOOPER_POLL_CALLBACK" about sixty times a second on a Galaxy S21 (Android 15, 2026-11-16), enough to wrap the logcat buffer; nothing else was seen to go wrong.
 - The entry closes when the loop no longer leaves a callback the looper reports as spurious, or the crate no longer logs it at that rate, checked in logcat on a device.
+
+### A phone's background hold waits only for writes already running
+
+> **Environments:** iOS · Android · **Who it hurts:** Applications whose earlier write failed or was refused just before the application left the screen · **Parity:** [App lifecycle](platform-parity.md#app-lifecycle) (Session end)
+
+- When a phone's session end leaves writes in flight, the process is held until they end (ADR-0350 §2). A value owed but not started then (an earlier write failed, or the IO pool refused it) is not written in the background: nothing starts a write off the owner thread, and the owner gets no turns while an Android Activity is stopped. The value is named in the log as unstored.
+- The entry closes when the hold starts and retries the owed values within its window, with a headless test of a failed write stored in the background.

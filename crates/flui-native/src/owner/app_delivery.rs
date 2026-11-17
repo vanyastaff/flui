@@ -46,7 +46,7 @@ use super::signal::{OwnerSignal, WindowWake};
 use super::slot::OwnerSlot;
 use super::{OwnerHooks, OwnerPlatform};
 use crate::error::BootstrapError;
-use crate::platform::{AppHandler, ExitAnswer, Platform};
+use crate::platform::{AppHandler, ExitAnswer, Platform, QuitAnswer};
 
 /// The most [`Report::Opened`] that wait for the handler at once. Each is
 /// bounded where the host makes it ([`Opened::bounded`]); this bounds how many a host that keeps opening
@@ -85,6 +85,19 @@ impl<R> Asked<R> {
             after.resume();
         }
         answer.or_resume(vacant)
+    }
+
+    /// [`Self::or_resume`], with `act` run on the answer before a report's
+    /// panic after it resumes: what the answer asks of the host is carried
+    /// out whatever a later report raised.
+    pub(crate) fn or_resume_after(self, vacant: R, act: impl FnOnce(&R)) -> R {
+        let Self { answer, after } = self;
+        let answer = answer.or_resume(vacant);
+        act(&answer);
+        if let Some(after) = after {
+            after.resume();
+        }
+        answer
     }
 
     /// What the handler answered, or `fallback` when none ran or it
@@ -452,8 +465,25 @@ impl AppDelivery {
         self.question(|handler, owner| handler.session_end(owner, phase))
     }
 
-    /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
-    ///
+    /// Ask the handler whether the platform quits on the quit the user or the
+    /// system asked for ([`AppHandler::quit_asked`]). [`QuitAnswer::Quit`]
+    /// with no handler to ask; [`QuitAnswer::KeepRunning`] when it panics,
+    /// for every host, since a panic is no consent to close the windows past
+    /// their handlers. The panic is contained and logged here, so the answer
+    /// stands on a host whose caller is a native callback and on one whose
+    /// caller is a test alike.
+    pub(crate) fn quit_asked(&self) -> Asked<QuitAnswer> {
+        let Asked { answer, after } = self.question(<dyn AppHandler>::quit_asked);
+        let answer = match answer {
+            Called::Panicked(failure) => {
+                failure.contain("the application's quit question");
+                Called::Returned(QuitAnswer::KeepRunning)
+            }
+            answer => answer,
+        };
+        Asked { answer, after }
+    }
+
     /// Ask the handler whether the loop may end ([`AppHandler::exit_policy`]).
     ///
     /// [`ExitAnswer::HostDecides`] with no handler to ask, and when the

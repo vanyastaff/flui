@@ -643,10 +643,12 @@ impl ActivityTarget for AndroidLoop {
         self.publish_activity_fact(|flags| flags.focused.store(focused, Ordering::SeqCst));
     }
 
-    /// The system does not wait for an answer, so this is
-    /// [`SessionEndPhase::Ending`] only: no query, no block.
+    /// [`SessionEndPhase::Ending`] only, with no query. An answer of
+    /// `Block` (the application's writes still running) needs nothing held:
+    /// the process keeps running after `onStop` until the system reclaims it
+    /// (`SessionEndSupport::Background`).
     fn session_ended(&self) {
-        // The system does not wait for an answer: there is nothing to veto.
+        // A stopped process runs on: whatever the answer, nothing is held.
         let _answer = self
             .app_delivery
             .session_end(SessionEndPhase::Ending)
@@ -1281,8 +1283,8 @@ impl host::Drag<AndroidLoop> for AndroidLoop {
 /// feature's position reaches the hooks through this.
 impl LifecycleHooks for AndroidLoop {
     fn release_session_end(&self) {
-        // The system does not wait for an answer to a session end, so no end
-        // is held open.
+        // A stopped Activity's process runs on until the system reclaims
+        // it: the writes a session end's answer held need nothing released.
     }
 }
 

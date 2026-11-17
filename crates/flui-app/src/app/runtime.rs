@@ -352,6 +352,13 @@ pub(crate) struct AppRuntime {
     /// windows whose handler or guard refused, each released when its window
     /// carries the close out, or when the session end is cancelled or happens.
     pub(super) session_end_refusals: SessionEndRefusals,
+    /// The writes a phone's session end left in flight, which hold the
+    /// process in the background until they end or their window does: set by
+    /// a waiting thread when they end, and released to the platform on the
+    /// owner's next turn. A later session end replaces it, so an earlier
+    /// trip's writes never release a later trip's hold.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) background_writes: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// The thread that installed the first UI runtime hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-UI runtime: every UI runtime this `AppRuntime` ever hosts lives on the same
@@ -629,6 +636,8 @@ impl AppRuntime {
             session_end: None,
             session_end_current: None,
             session_end_refusals: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            background_writes: None,
             host_memory: Arc::default(),
             #[cfg(all(
                 not(target_os = "android"),
