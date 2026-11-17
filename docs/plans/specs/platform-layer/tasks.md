@@ -8383,6 +8383,69 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   настоящие GTK и KDE file chooser и `OpenURI` на рабочем столе. macOS, iOS, Android и Web в
   `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
   на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
+- [x] **LY136** — ветка `native/android-bounded-reads`. Проверено на `main` @ `eeb70bf8d`: все три
+  находки подтверждены чтением. Чтение clipboard звало `coerceToText` у первого элемента
+  (`clipboard/android.rs`), вставка ниже API 31 — у каждого (`FluiInputConnection.paste`), то есть
+  поток URI-элемента читался целиком на потоке владельца (и на Java main thread) до любой проверки
+  размера; документы `content:` из intent открывались `HostQueue::open_document` на потоке
+  владельца, до 64 на intent; `FluiView.mimeTypes` копировал все типы `ClipDescription`, а
+  `java_view::strings` держал по локальной ссылке на тип в одном кадре. Решение (новое правило ADR
+  не нужно; записано в `crates/flui-native/ARCHITECTURE.md`, раздел «Another application's
+  content is read off the owner thread, its size first»): чтение clipboard берёт текст элемента
+  (`getText`, модель `clipboard::android::item_text` за трейтом вызовов Java) — URI- и
+  intent-элемент текста не держит и читается `Ok(None)`, как буфер без текстового представления на
+  каждом другом хосте, провайдер не открывается; длина меряется в байтах UTF-8 в Java
+  (`FluiView.utf8Length`) до любой копии, копия — один массив UTF-8 (`FluiView.utf8`), его копия в
+  Rust и общий текст ответа, не больше двух сразу; вставка из клавиатуры берёт тот же текст
+  (`FluiView.clipText`) под тем же пределом `MAX_TEXT` (`FluiView.MAX_PASTED_BYTES`), приёмник
+  содержимого возвращает то, что не взял; ни один класс не зовёт `coerceToText`. Документы intent
+  открывают рабочие потоки (`owner/android/documents.rs`): владелец принимает intent (не больше
+  `MAX_WAITING_INTENTS`, дальше — отказ целиком), каждый документ — работа со своим тикетом, исход
+  находит документ только по тикету, intents доставляются по порядку прихода, когда у каждого
+  документа есть исход, после уровней памяти того же хода; исход ровно один — файл или
+  `OpenRefusal` (`Failed`, `GrantEnded` на `SecurityException`, `TimedOut` после `OPEN_DEADLINE` с
+  отменой через `CancellationSignal` — односторонний binder-вызов, `Retired`, `NoThread`), поздний
+  ответ отброшенного документа закрывается, а не достаётся другому, поллинг просыпается к
+  ближайшему сроку (`LoopTurn::open_deadline`). Работник один, пока успевает; когда все внутри
+  брошенного открытия (провайдер может не слушать отмену), ждущая работа запускает новый, не больше
+  `MAX_WORKERS` (`host::MAX_PROVIDER_READS`, тот же предел у чтений брошенного URI); то, что
+  работник заканчивает после отставки, он закрывает сам. Чтение байтов брошенного URI сначала спрашивает
+  заявленный размер (`AssetFileDescriptor.getLength`) и отказывает до чтения, если он больше
+  предела; поток по-прежнему останавливается на пределе. Типы drag ограничены одним правилом на
+  всех хостах (`host::MAX_OFFERED_TYPES` = 100, `MAX_TYPE_LEN` = 255, `offered_types`):
+  X11 и Wayland берут общие константы (Wayland теперь считает события `offer`, повтор тоже), Windows
+  читает столько же записей перечислителя (было 256), Web — столько же типов и файлов, Android
+  копирует в Java не больше и читает по одной локальной ссылке (`clip::read_type_names`);
+  `java_view::strings` отпускает каждую ссылку. `PROTOCOL` 5 → 6. Тесты, в скобках результат с
+  откатом: `a_clipboard_read_takes_the_items_text_and_reads_no_provider` (копия до проверки длины —
+  копия сделана; проверка в единицах UTF-16 — текст из «€», чьи единицы входят в предел, а байты
+  нет, копируется); `a_late_answer_reaches_no_other_intents_document` (исход без сверки тикета —
+  поздний файл первого intent достаётся документу второго); `a_stalled_provider_holds_no_later_document`
+  (один работник — документ второго intent не открыт, пока провайдер первого держит открытие);
+  `a_dropped_uri_is_refused_on_its_stated_size_before_it_is_read` (порядок проверки размера в
+  `FluiView.readDropBytes`); `a_java_paste_reads_no_provider_and_holds_the_reads_limit` (старая
+  вставка с `coerceToText` в `FluiInputConnection` — находка); `android_drag_mapping` /
+  `a_drag_offers_no_more_types_than_every_host_reads` (без предела и отпускания ссылок —
+  прочитано 10002 элемента вместо 100); `html_drag_drop_table` /
+  `a_hover_offers_no_more_types_than_every_host_reads` (без правила — 10001 тип вместо 99);
+  `a_slow_provider_holds_no_owner_turn` (открытие, дожидающееся провайдера, как прежний путь на
+  потоке владельца, — `accept` ждёт 10 с, падает); `a_refused_document_is_withdrawn_and_its_open_cancelled`
+  (то же — тест не укладывается во время); `a_document_open_answers_as_the_java_classes_state_it`
+  (`OPEN_GRANT_ENDED` как `Failed` — `Err(Failed)` вместо `Err(GrantEnded)`);
+  `a_paused_loop_blocks_until_it_is_woken` (без `open_deadline` в опросе — `None` вместо 900 мс);
+  `every_accepted_document_ends_with_one_outcome`, `a_provider_panic_fails_its_job_alone` — модель и
+  работник; `an_offer_keeps_each_type_once_and_no_more_than_its_bound` (Wayland по прежнему
+  правилу держит 100, а не 98). Прогнано: на Windows `cargo heli nextest` по затронутым модулям
+  `flui-native` (все новые проходят; два теста Win32 clipboard падают на общем системном буфере,
+  который трогают другие сессии, и `an_intent_opens_its_link_or_documents` падает на хосте Windows
+  и на `main`), clippy `--all-targets -D warnings`; в WSL 71 тест Android-моделей и Wayland,
+  clippy и `cargo doc -D warnings` на Linux, `cargo +nightly check --target aarch64-linux-android`.
+  Dex пересобран здесь (javac 21.0.12, android-35: android-36 не установлен); workflow `Android dex`
+  пересобирает его закреплёнными инструментами. Должно на
+  устройстве (в строках `platform-parity.toml` «Plain-text clipboard», «Drop into the app», «Deep
+  links»): вставка URI-клипа и клипа больше предела, drag из чужого приложения с множеством
+  типов, документ облачного провайдера; на этой машине у закреплённого toolchain 1.100.0 нет
+  цели Android, а `rustup` не запускается.
 
 - [x] **LY147** — ветка `cli/apple-packaging-and-inputs`, решение по типам файлов — ADR-0361.
   Находки проверены по `main`. Подтвердились: `Info.plist` macOS писал `1` и `1.0`, а
