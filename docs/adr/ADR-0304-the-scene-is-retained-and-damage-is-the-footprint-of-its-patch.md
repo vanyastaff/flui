@@ -285,7 +285,8 @@ bounds it by the clip, its kernel spent. `Publish`
 recomputes both exactly from the children (O(children)); every other change grows the ancestors'
 bounds by union and their kernel by maximum
 up to the root (O(depth)) and never shrinks them, so a footprint can over-report and never
-under-report. A clip mapped to the surface cuts a footprint by the whole pixels it touches, since
+under-report. A clip on the chain from the surface to a node cuts the node's footprint by the whole
+pixels it touches once mapped to the surface, since
 the renderer shows content in a pixel the clip's edge covers in part. The engine culls with the
 same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and

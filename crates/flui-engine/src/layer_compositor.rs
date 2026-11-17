@@ -258,8 +258,8 @@ impl LayerCompositor {
             .filter_map(|layer| layer.image_filter.as_ref())
     }
 
-    /// The device bound, inside the current scope, of what the clips that
-    /// the enclosing layers apply to their composites can show.
+    /// The whole device pixels, inside the current scope, that the clips the
+    /// enclosing layers apply to their composites can show.
     ///
     /// A layer's children draw into it unclipped and the clip cuts its
     /// composite once, so what lies past that bound is never shown, and the
@@ -271,7 +271,7 @@ impl LayerCompositor {
         let mut bounds: Option<Rect<f64>> = None;
         for layer in &self.layer_stack {
             if let Some(rect) = match &layer.composite_clip {
-                Some(clip) => clip.chain.root_bounds()?,
+                Some(clip) => clip.chain.root_bounds()?.map(pixels_of),
                 None => None,
             } {
                 bounds = Some(match bounds {
@@ -282,7 +282,7 @@ impl LayerCompositor {
             if let (Some(filter), Some(shown)) = (&layer.image_filter, bounds)
                 && !shown.is_empty()
             {
-                bounds = Some(filter.required_input(shown)?);
+                bounds = Some(pixels_of(filter.required_input(shown)?));
             }
         }
         Ok(bounds)
@@ -442,4 +442,15 @@ impl LayerCompositor {
             }
         }
     }
+}
+
+/// The whole pixels `rect` touches: a composite clip shows a pixel its edge
+/// covers in part, and the scene's cull rounds each clip the same way.
+fn pixels_of(rect: Rect<f64>) -> Rect<f64> {
+    Rect::from_ltrb(
+        rect.left().floor(),
+        rect.top().floor(),
+        rect.right().ceil(),
+        rect.bottom().ceil(),
+    )
 }

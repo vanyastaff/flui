@@ -1160,12 +1160,12 @@ fn a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip() {
     }
 }
 
-/// One full frame of stripes in a save layer whose clip starts at `left`,
-/// under an image filter's blur of `spread` when there is one, with a blur
-/// backdrop over `backdrop` after them.
+/// One full frame of stripes and bars in save layers nested under `clips` (each an
+/// x range), under an image filter's blur of `spread` when there is one,
+/// with a blur backdrop over `backdrop` after them.
 fn clipped_stripes(
     renderer: &crate::headless::HeadlessRenderer,
-    left: f64,
+    clips: &[(f64, f64)],
     spread: Option<f64>,
     backdrop: Option<Rect<f64>>,
 ) -> Vec<u8> {
@@ -1187,6 +1187,14 @@ fn clipped_stripes(
                 &Paint::fill(color),
             );
         }
+        // White bars across, one over row 16, so a column also blurs along
+        // its length.
+        for y in [7.0, 15.0, 23.0, 31.0] {
+            canvas.draw_rect(
+                Rect::from_xywh(60.0, y, f64::from(SIDE) - 60.0, 2.0),
+                &Paint::fill(Color::WHITE),
+            );
+        }
         let stripes = Arc::new(Chunk::new(
             RenderId::new(2),
             0,
@@ -1194,14 +1202,16 @@ fn clipped_stripes(
             canvas.finish(),
         ));
         let mut content = BoundaryContent::builder();
-        content.push_effect(
-            Layer::from(ClipRectLayer::new(
-                Rect::from_ltrb(left, 0.0, 128.0, 40.0),
-                Clip::AntiAliasWithSaveLayer,
-            )),
-            RenderId::new(3),
-            0,
-        );
+        for (index, &(left, right)) in clips.iter().enumerate() {
+            content.push_effect(
+                Layer::from(ClipRectLayer::new(
+                    Rect::from_ltrb(left, 0.0, right, 40.0),
+                    Clip::AntiAliasWithSaveLayer,
+                )),
+                RenderId::new(10 + index),
+                0,
+            );
+        }
         if let Some(sigma) = spread {
             content.push_effect(
                 Layer::from(ImageFilterLayer::new(ImageFilter::blur(sigma))),
@@ -1225,7 +1235,9 @@ fn clipped_stripes(
         if spread.is_some() {
             content.pop_effect();
         }
-        content.pop_effect();
+        for _ in clips {
+            content.pop_effect();
+        }
         writer.push(SceneOp::Publish {
             node: writer.current().root(),
             content: Arc::new(content.finish()),
@@ -1263,30 +1275,46 @@ fn a_backdrop_filter_under_an_image_filter_draws_what_the_filter_spreads_into_th
     };
     // Wholly left of the clip, inside what the blur draws it from.
     let backdrop = Rect::from_ltrb(84.0, 8.0, 90.0, 24.0);
-    let with = clipped_stripes(&renderer, 90.0, Some(2.0), Some(backdrop));
-    let without = clipped_stripes(&renderer, 90.0, Some(2.0), None);
+    let with = clipped_stripes(&renderer, &[(90.0, 128.0)], Some(2.0), Some(backdrop));
+    let without = clipped_stripes(&renderer, &[(90.0, 128.0)], Some(2.0), None);
     assert!(
         row_differs(&with, &without, 90..96),
         "the image filter spreads the backdrop filter's output into the clip"
     );
 }
 
-/// A backdrop filter in a clipped layer filters the pixel the clip's
-/// fractional edge shows in part, as it does the pixels the clip covers.
+/// A backdrop filter in a clipped layer filters the pixel a clip's
+/// fractional edge shows in part, as it does the pixels the clip covers,
+/// and the pixel two nested clips' edges share though their exact
+/// intersection is empty.
 #[test]
 fn a_backdrop_filter_filters_the_pixel_a_clip_edge_shows_in_part() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
     let backdrop = Some(Rect::from_ltrb(80.0, 8.0, 110.0, 24.0));
-    let with = clipped_stripes(&renderer, 90.6, None, backdrop);
-    let without = clipped_stripes(&renderer, 90.6, None, None);
-    assert!(
-        row_differs(&with, &without, 91..92),
-        "precondition: the filter blurs the stripes the clip covers"
-    );
-    assert!(
-        row_differs(&with, &without, 90..91),
-        "the filter blurs the pixel the clip's edge covers in part"
-    );
+    // (case, the nested clips, the pixel their edges show in part)
+    for (case, clips, edge) in [
+        ("one clip", &[(90.6, 128.0)][..], 90),
+        (
+            "two clips sharing a pixel",
+            &[(89.6, 128.0), (0.0, 89.4)][..],
+            89,
+        ),
+    ] {
+        let with = clipped_stripes(&renderer, clips, None, backdrop);
+        let without = clipped_stripes(&renderer, clips, None, None);
+        if clips.len() == 1 {
+            assert!(
+                row_differs(&with, &without, edge + 1..edge + 2),
+                "{case}: precondition: the filter blurs the stripes the clip covers"
+            );
+        }
+        assert!(
+            row_differs(&with, &without, edge..edge + 1),
+            "{case}: the filter blurs the pixel the clip's edge covers in part: {:?} {:?}",
+            px(&with, edge, 16),
+            px(&without, edge, 16)
+        );
+    }
 }

@@ -90,16 +90,7 @@ impl WgpuPainter {
                 });
             }
         };
-        // Whole pixels: the composite clip shows a pixel its edge covers in
-        // part, so the filter reads and writes all of it.
-        let layer_clip_bounds = self.compositor.composite_clip_bounds()?.map(|bound| {
-            Rect::from_ltrb(
-                bound.left().floor(),
-                bound.top().floor(),
-                bound.right().ceil(),
-                bound.bottom().ceil(),
-            )
-        });
+        let layer_clip_bounds = self.compositor.composite_clip_bounds()?;
         let mut clip = self.captured_group_clip();
         clip.chain = match clip.chain.append(
             shape,
