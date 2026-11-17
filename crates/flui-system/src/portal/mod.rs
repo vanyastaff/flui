@@ -257,10 +257,10 @@ impl Portal {
     }
 }
 
-/// The `parent_window` a portal dialog is modal to: `x11:<XID>` for an X11
-/// window, empty (not modal) for a Wayland one, which needs an exported
-/// `xdg-foreign` handle the host does not hand out yet, and for a window with
-/// no handle.
+/// The `parent_window` a portal dialog or application chooser is attached
+/// to: `x11:<XID>` for an X11 window, empty (not attached) for a Wayland
+/// one, which needs an exported `xdg-foreign` handle the host does not hand
+/// out yet, and for a window with no handle.
 pub(crate) fn parent_window(window: &WindowRef) -> String {
     match window.window_handle().map(|handle| handle.as_raw()) {
         Ok(RawWindowHandle::Xlib(handle)) => format!("x11:{:x}", handle.window),
@@ -276,11 +276,93 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar, address: Option<Arc<
     registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
         let portal = ctx.runtime_local::<Portal>();
         portal.use_address(launcher_address.clone());
-        Ok::<_, Unsupported>(Launcher::new(PortalLauncher::new(portal), ctx))
+        Ok::<_, Unsupported>(Launcher::new(
+            PortalLauncher::new(portal, ctx.window()),
+            ctx,
+        ))
     });
     registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
         let portal = ctx.runtime_local::<Portal>();
         portal.use_address(address.clone());
         FileDialogs::try_new(PortalDialogs::new(portal), ctx)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use flui_platform::capability::{WindowCloser, WindowRef};
+    use flui_platform::{SurfaceTarget, SwapChainStatistics, WindowIdMint};
+    use flui_sdk::foundation::FrameStamp;
+    use raw_window_handle::{
+        DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
+        WindowHandle, XcbWindowHandle,
+    };
+
+    use super::{Portal, PortalLauncher, parent_window};
+
+    /// A window whose native handle names the X11 window `xid`, and nothing
+    /// else: no display, nothing to draw into.
+    struct X11Window {
+        xid: NonZeroU32,
+    }
+
+    impl HasWindowHandle for X11Window {
+        fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+            let raw = RawWindowHandle::Xcb(XcbWindowHandle::new(self.xid));
+            #[expect(
+                unsafe_code,
+                reason = "a raw handle is borrowed only through this upstream call"
+            )]
+            // SAFETY: the handle carries an X11 window id and no pointer, and
+            // the code under test only formats that id into a string; nothing
+            // hands it to X or reads through it, so it needs no live window.
+            let handle = unsafe { WindowHandle::borrow_raw(raw) };
+            Ok(handle)
+        }
+    }
+
+    impl HasDisplayHandle for X11Window {
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            Err(HandleError::Unavailable)
+        }
+    }
+
+    impl SurfaceTarget for X11Window {
+        fn pre_present_notify(&self, _: Option<FrameStamp>, _: SwapChainStatistics) {}
+
+        fn keep_past_close(&self) {}
+    }
+
+    fn x11_window(xid: u32) -> (WindowRef, WindowCloser) {
+        let (closer, lifetime) = WindowCloser::new();
+        let id = WindowIdMint::new()
+            .next()
+            .expect("BUG: a fresh mint issues its first id");
+        let target = X11Window {
+            xid: NonZeroU32::new(xid).expect("the test names a window"),
+        };
+        (WindowRef::new(id, 1.0, Arc::new(target), lifetime), closer)
+    }
+
+    #[test]
+    fn a_launch_is_attached_to_its_widgets_window_while_it_is_open() {
+        let (window, closer) = x11_window(0x2a);
+        assert_eq!(parent_window(&window), "x11:2a");
+
+        let launcher = PortalLauncher::new(Rc::new(Portal::default()), Some(window));
+        assert_eq!(launcher.parent(), "x11:2a", "the chooser names the window");
+        closer.close();
+        assert_eq!(
+            launcher.parent(),
+            "",
+            "a closed window's id is not handed on: it may name another window"
+        );
+
+        let windowless = PortalLauncher::new(Rc::new(Portal::default()), None);
+        assert_eq!(windowless.parent(), "");
+    }
 }

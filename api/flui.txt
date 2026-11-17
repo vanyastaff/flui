@@ -14836,7 +14836,7 @@ impl core::hash::Hash for flui::platform::launch::ExternalUri
 impl core::marker::StructuralPartialEq for flui::platform::launch::ExternalUri
 pub fn flui::platform::launch::ExternalUri::as_str(&self) -> &str
 pub fn flui::platform::launch::ExternalUri::scheme(&self) -> &str
-pub fn flui::platform::launch::ExternalUri::try_new(uri: impl Into<String>) -> Result<Self, flui::platform::launch::InvalidUri>
+pub fn flui::platform::launch::ExternalUri::try_new(uri: &str, allowed: &[flui::platform::launch::Scheme]) -> Result<Self, flui::platform::launch::InvalidUri>
 #[non_exhaustive] pub enum flui::platform::launch::InvalidUri
 impl Clone for flui::platform::launch::InvalidUri
 impl Copy for flui::platform::launch::InvalidUri
@@ -14846,10 +14846,15 @@ impl core::error::Error for flui::platform::launch::InvalidUri
 impl core::fmt::Debug for flui::platform::launch::InvalidUri
 impl core::fmt::Display for flui::platform::launch::InvalidUri
 impl core::marker::StructuralPartialEq for flui::platform::launch::InvalidUri
-variant flui::platform::launch::InvalidUri::ControlCharacter // at 3
+variant flui::platform::launch::InvalidUri::Credentials // at 4
+variant flui::platform::launch::InvalidUri::HiddenCharacter // at 8
+variant flui::platform::launch::InvalidUri::MailtoField // at 5
+variant flui::platform::launch::InvalidUri::MissingAuthority // at 3
 variant flui::platform::launch::InvalidUri::NotAbsolute // at 0
 variant flui::platform::launch::InvalidUri::RefusedScheme // at 1
-variant flui::platform::launch::InvalidUri::TooLong { limit: usize } // at 2
+variant flui::platform::launch::InvalidUri::SchemeNotAllowed // at 2
+variant flui::platform::launch::InvalidUri::TooLong { limit: usize } // at 6
+variant flui::platform::launch::InvalidUri::UnencodedCharacter // at 7
 #[non_exhaustive] pub enum flui::platform::launch::LaunchError
 impl Clone for flui::platform::launch::LaunchError
 impl Copy for flui::platform::launch::LaunchError
@@ -14862,12 +14867,14 @@ impl core::fmt::Debug for flui::platform::launch::LaunchError
 impl core::fmt::Display for flui::platform::launch::LaunchError
 impl core::marker::StructuralPartialEq for flui::platform::launch::LaunchError
 pub const fn flui::platform::launch::LaunchError::unsupported(&self) -> Option<flui::platform::Unsupported>
-variant flui::platform::launch::LaunchError::Denied // at 3
-variant flui::platform::launch::LaunchError::Failed(flui::platform::SystemFailure) // at 5
-variant flui::platform::launch::LaunchError::NoHandler // at 2
-variant flui::platform::launch::LaunchError::NotFound // at 1
+variant flui::platform::launch::LaunchError::Denied // at 5
+variant flui::platform::launch::LaunchError::Failed(flui::platform::SystemFailure) // at 7
+variant flui::platform::launch::LaunchError::NoHandler // at 4
+variant flui::platform::launch::LaunchError::NotADocument // at 2
+variant flui::platform::launch::LaunchError::NotFound // at 3
+variant flui::platform::launch::LaunchError::NotLocal // at 1
 variant flui::platform::launch::LaunchError::RelativePath // at 0
-variant flui::platform::launch::LaunchError::Unsupported(flui::platform::Unsupported) // at 4
+variant flui::platform::launch::LaunchError::Unsupported(flui::platform::Unsupported) // at 6
 pub type flui::platform::launch::LaunchResult = Result<(), flui::platform::launch::LaunchError>
 pub struct flui::platform::launch::Launcher { .. }
 impl Clone for flui::platform::launch::Launcher
@@ -14887,6 +14894,21 @@ impl core::fmt::Debug for flui::platform::launch::LauncherCapability
 impl flui::platform::capability::Capability for flui::platform::launch::LauncherCapability { type Handle = flui::platform::launch::Launcher; }
 pub const flui::platform::launch::MAX_EXTERNAL_URI_LEN: usize
 pub const flui::platform::launch::REFUSED_SCHEMES: [&str; 6]
+pub const flui::platform::launch::RUNNABLE_EXTENSIONS: [&str; 56]
+pub struct flui::platform::launch::Scheme(_)
+impl Clone for flui::platform::launch::Scheme
+impl Eq for flui::platform::launch::Scheme
+impl PartialEq for flui::platform::launch::Scheme
+impl core::hash::Hash for flui::platform::launch::Scheme
+impl core::fmt::Debug for flui::platform::launch::Scheme
+impl core::marker::StructuralPartialEq for flui::platform::launch::Scheme
+pub const flui::platform::launch::Scheme::HTTP: Self = _
+pub const flui::platform::launch::Scheme::HTTPS: Self = _
+pub const flui::platform::launch::Scheme::MAILTO: Self = _
+pub const flui::platform::launch::Scheme::TEL: Self = _
+pub fn flui::platform::launch::Scheme::as_str(&self) -> &str
+pub fn flui::platform::launch::Scheme::try_new(name: impl Into<alloc::borrow::Cow<'static, str>>) -> Option<Self>
+pub fn flui::platform::launch::runs_when_opened(path: &std::path::Path) -> bool
 pub mod flui::platform::os_options
 #[non_exhaustive] pub enum flui::platform::os_options::AndroidColorMode
 impl Clone for flui::platform::os_options::AndroidColorMode
@@ -23095,6 +23117,7 @@ impl Clone for flui::services::system::dialog::DialogError
 impl Copy for flui::services::system::dialog::DialogError
 impl Eq for flui::services::system::dialog::DialogError
 impl From<flui::platform::SystemFailure> for flui::services::system::dialog::DialogError
+impl From<flui::services::system::dialog::MalformedRequest> for flui::services::system::dialog::DialogError
 impl From<flui::platform::Unsupported> for flui::services::system::dialog::DialogError
 impl PartialEq for flui::services::system::dialog::DialogError
 impl core::error::Error for flui::services::system::dialog::DialogError
@@ -23104,7 +23127,7 @@ impl core::marker::StructuralPartialEq for flui::services::system::dialog::Dialo
 pub const fn flui::services::system::dialog::DialogError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::services::system::dialog::DialogError::Busy // at 0
 variant flui::services::system::dialog::DialogError::Failed(flui::platform::SystemFailure) // at 5
-variant flui::services::system::dialog::DialogError::InvalidRequest // at 1
+variant flui::services::system::dialog::DialogError::InvalidRequest(flui::services::system::dialog::MalformedRequest) // at 1
 variant flui::services::system::dialog::DialogError::NotAFile // at 4
 variant flui::services::system::dialog::DialogError::Unsupported(flui::platform::Unsupported) // at 2
 variant flui::services::system::dialog::DialogError::WindowClosed // at 3
@@ -23129,12 +23152,36 @@ impl Eq for flui::services::system::dialog::FileFilter
 impl PartialEq for flui::services::system::dialog::FileFilter
 impl core::fmt::Debug for flui::services::system::dialog::FileFilter
 impl core::marker::StructuralPartialEq for flui::services::system::dialog::FileFilter
+pub const flui::services::system::dialog::FileFilter::MAX_NAME_LEN: usize = 255
+pub const flui::services::system::dialog::FileFilter::MAX_PATTERNS: usize = 64
+pub const flui::services::system::dialog::FileFilter::MAX_PATTERN_LEN: usize = 255
+pub const flui::services::system::dialog::FileFilter::MAX_PER_REQUEST: usize = 64
 pub fn flui::services::system::dialog::FileFilter::extensions(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::mime_types(&self) -> &[String]
 pub fn flui::services::system::dialog::FileFilter::name(&self) -> &str
 pub fn flui::services::system::dialog::FileFilter::new(name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_extension(self, extension: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::FileFilter::with_mime_type(self, mime_type: impl Into<String>) -> Self
+#[non_exhaustive] pub enum flui::services::system::dialog::MalformedRequest
+impl Clone for flui::services::system::dialog::MalformedRequest
+impl Copy for flui::services::system::dialog::MalformedRequest
+impl Eq for flui::services::system::dialog::MalformedRequest
+impl From<flui::services::system::dialog::MalformedRequest> for flui::services::system::dialog::DialogError
+impl PartialEq for flui::services::system::dialog::MalformedRequest
+impl core::error::Error for flui::services::system::dialog::MalformedRequest
+impl core::fmt::Debug for flui::services::system::dialog::MalformedRequest
+impl core::fmt::Display for flui::services::system::dialog::MalformedRequest
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::MalformedRequest
+variant flui::services::system::dialog::MalformedRequest::DuplicateFilterName // at 6
+variant flui::services::system::dialog::MalformedRequest::EmptyFilter // at 1
+variant flui::services::system::dialog::MalformedRequest::Extension // at 4
+variant flui::services::system::dialog::MalformedRequest::FilterName // at 0
+variant flui::services::system::dialog::MalformedRequest::FiltersOnFolders // at 7
+variant flui::services::system::dialog::MalformedRequest::MimeType // at 5
+variant flui::services::system::dialog::MalformedRequest::RelativeDirectory // at 9
+variant flui::services::system::dialog::MalformedRequest::SuggestedName // at 8
+variant flui::services::system::dialog::MalformedRequest::TooManyFilters // at 3
+variant flui::services::system::dialog::MalformedRequest::TooManyPatterns // at 2
 #[non_exhaustive] pub struct flui::services::system::dialog::OpenRequest { .. }
 field flui::services::system::dialog::OpenRequest::accept_label: Option<String> // at 5
 field flui::services::system::dialog::OpenRequest::directory: Option<std::path::PathBuf> // at 3
@@ -23176,6 +23223,16 @@ pub fn flui::services::system::dialog::Picks::is_empty(&self) -> bool
 pub fn flui::services::system::dialog::Picks::iter(&self) -> impl Iterator<Item = &flui::services::system::dialog::PickedFile>
 pub fn flui::services::system::dialog::Picks::len(&self) -> usize
 pub fn flui::services::system::dialog::Picks::try_new(picks: Vec<flui::services::system::dialog::PickedFile>) -> Option<Self>
+pub struct flui::services::system::dialog::SaveLocation { .. }
+impl Clone for flui::services::system::dialog::SaveLocation
+impl Eq for flui::services::system::dialog::SaveLocation
+impl PartialEq for flui::services::system::dialog::SaveLocation
+impl core::fmt::Debug for flui::services::system::dialog::SaveLocation
+impl core::marker::StructuralPartialEq for flui::services::system::dialog::SaveLocation
+pub fn flui::services::system::dialog::SaveLocation::file(&self) -> &flui::services::system::dialog::PickedFile
+pub fn flui::services::system::dialog::SaveLocation::filter(&self) -> Option<usize>
+pub fn flui::services::system::dialog::SaveLocation::into_file(self) -> flui::services::system::dialog::PickedFile
+pub fn flui::services::system::dialog::SaveLocation::new(file: flui::services::system::dialog::PickedFile, filter: Option<usize>) -> Self
 #[non_exhaustive] pub struct flui::services::system::dialog::SaveRequest
 field flui::services::system::dialog::SaveRequest::accept_label: Option<String> // at 4
 field flui::services::system::dialog::SaveRequest::directory: Option<std::path::PathBuf> // at 1
@@ -23194,7 +23251,7 @@ pub fn flui::services::system::dialog::SaveRequest::filter(self, filter: flui::s
 pub fn flui::services::system::dialog::SaveRequest::new() -> Self
 pub fn flui::services::system::dialog::SaveRequest::suggested_name(self, name: impl Into<String>) -> Self
 pub fn flui::services::system::dialog::SaveRequest::title(self, title: impl Into<String>) -> Self
-pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::PickedFile>, flui::services::system::dialog::DialogError>
+pub type flui::services::system::dialog::SaveResult = Result<Option<flui::services::system::dialog::SaveLocation>, flui::services::system::dialog::DialogError>
 pub mod flui::services::system::testing
 #[non_exhaustive] pub enum flui::services::system::testing::DialogRequest
 impl Clone for flui::services::system::testing::DialogRequest
