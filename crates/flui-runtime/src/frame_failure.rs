@@ -237,17 +237,17 @@ pub enum FailureDisposition {
 /// invalidations wait for the interval.
 pub const FAILURE_RETRY_CAP: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// The doubling exponent's ceiling. It is applied before the shift, so a streak
-/// of any length computes `T · 1024` at most and the shift never overflows.
+/// The doubling exponent's ceiling (ADR-0258 §6): past it the wait stays at
+/// `T · 1024`, past [`FAILURE_RETRY_CAP`] on any display slower than 1024 Hz.
 const FAILURE_RETRY_MAX_DOUBLINGS: u32 = 10;
 
 /// How long a presentation on a display of `period` waits after its
-/// `streak`-th consecutive dropped frame; see [`FAILURE_RETRY_CAP`].
+/// `streak`-th consecutive dropped frame: the schedule every surface that shows
+/// nothing backs off on ([`flui_platform::Backoff`]), from one period up to
+/// [`FAILURE_RETRY_CAP`].
 pub(crate) fn failure_retry_delay(period: std::time::Duration, streak: u32) -> std::time::Duration {
-    let doublings = streak.saturating_sub(1).min(FAILURE_RETRY_MAX_DOUBLINGS);
-    period
-        .checked_mul(1 << doublings)
-        .map_or(FAILURE_RETRY_CAP, |delay| delay.min(FAILURE_RETRY_CAP))
+    flui_platform::Backoff::new(period, FAILURE_RETRY_CAP)
+        .delay(streak.saturating_sub(1).min(FAILURE_RETRY_MAX_DOUBLINGS))
 }
 
 /// The last frame segment entered for one presentation.
