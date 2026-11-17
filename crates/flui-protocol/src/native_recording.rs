@@ -22,7 +22,7 @@
 //! data, which the input recording's preference rows share.
 
 /// The native recording format's major version.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The header field that names the format and its major version.
 pub const VERSION_KEY: &str = "flui_native_recording";

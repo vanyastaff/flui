@@ -652,7 +652,7 @@ fn a_store_lock_the_recording_joined_after_is_refused() {
     // relaxed before, held in full after, and held in full in a recording that did not join.
     let header = |joined: bool| {
         format!(
-            r#"{{"flui_native_recording":2,"backend":"headless","stream":"window"{}}}"#,
+            r#"{{"flui_native_recording":3,"backend":"headless","stream":"window"{}}}"#,
             if joined { r#","joined_late":true"# } else { "" }
         )
     };
@@ -733,7 +733,7 @@ fn a_store_lock_the_recording_joined_after_is_refused() {
 /// granted, and a close whose cause contradicts the requests before it.
 fn close_rows_out_of_order_are_refused() {
     let header =
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
     let request = |answer: &str| format!(r#"{{"row":"close_request","answer":"{answer}"}}"#);
     let closed = |cause: &str| format!(r#"{{"row":"closed","cause":"{cause}"}}"#);
     for (case, rows, line) in [
@@ -842,7 +842,7 @@ fn a_recording_past_its_bound_is_written_cut() {
     );
 
     let header =
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
     let after =
         format!("{header}\n{{\"row\":\"cut\",\"reason\":\"bytes\"}}\n{{\"row\":\"reopen\"}}\n");
     assert!(matches!(
@@ -1237,19 +1237,19 @@ fn a_header_out_of_its_stream_is_refused() {
     for (case, header) in [
         (
             "registry without a clock",
-            r#"{"flui_native_recording":2,"backend":"web","devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","devices":[]}"#,
         ),
         (
             "application stream with a clock",
-            r#"{"flui_native_recording":2,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","stream":"app","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "platform stream with a clock",
-            r#"{"flui_native_recording":2,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","stream":"platform","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
         (
             "window state stream with a clock",
-            r#"{"flui_native_recording":2,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
+            r#"{"flui_native_recording":3,"backend":"web","stream":"window_state","epoch_ns":0,"uptime_ns":0,"devices":[]}"#,
         ),
     ] {
         assert!(
@@ -1274,7 +1274,7 @@ fn a_store_focus_keeps_every_field_of_its_status() {
     };
 
     let header =
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#;
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#;
     let focused = |status: &str| {
         format!(r#"{{"row":"store_focus","focus":{{"store":1,"status":{status}}}}}"#)
     };
@@ -2257,7 +2257,7 @@ fn every_close_answer_and_cause_replays() {
     }
 
     let mut no_handler = NativeRecording::read(
-        r#"{"flui_native_recording":2,"backend":"headless","stream":"window","devices":[]}"#
+        r#"{"flui_native_recording":3,"backend":"headless","stream":"window","devices":[]}"#
             .as_bytes(),
     )
     .expect("a window header reads");
