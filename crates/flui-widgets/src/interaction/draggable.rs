@@ -367,7 +367,8 @@ impl SourceConfig {
     }
 }
 
-/// The capabilities a draggable acquires in its lifecycle hooks.
+/// The capabilities a draggable takes from its ancestors, again on each
+/// dependency change; a host without one leaves it `None`.
 #[derive(Default)]
 struct Capabilities {
     drag_and_drop: Option<DragAndDrop>,
@@ -375,9 +376,6 @@ struct Capabilities {
     overlay: Option<OverlayHandle>,
     haptics: Option<HapticsHandle>,
     pipeline: Option<flui_rendering::pipeline::PipelineCell>,
-    rebuild: Option<RebuildHandle>,
-    writer: Option<WriterSource>,
-    keep_alive: Option<KeepAliveHandle>,
 }
 
 /// A contact pressed on the child: who pressed, and the press sequence its
@@ -393,6 +391,9 @@ struct PressedContact {
 struct Source {
     config: RefCell<SourceConfig>,
     capabilities: RefCell<Capabilities>,
+    rebuild_handle: RebuildHandle,
+    writer: WriterSource,
+    keep_alive: KeepAliveHandle,
     /// Drags of this draggable that are live, held transfers included.
     active: Cell<usize>,
     /// The cut or copy waiting for a paste.
@@ -406,17 +407,12 @@ struct Source {
 
 impl Source {
     fn rebuild(&self) {
-        let rebuild = self.capabilities.borrow().rebuild.clone();
-        if let Some(rebuild) = rebuild {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
-        }
+        self.rebuild_handle
+            .schedule(flui_view::RebuildReason::StateChange);
     }
 
     fn write(&self, invoke: impl FnOnce(&mut EventContext<'_>)) {
-        let writer = self.capabilities.borrow().writer.clone();
-        if let Some(writer) = writer {
-            writer.write(invoke);
-        }
+        self.writer.write(invoke);
     }
 
     fn haptic(&self, feedback: HapticFeedback, timing: HapticTiming) {
@@ -429,8 +425,8 @@ impl Source {
     /// A drag of this draggable began.
     fn started(&self) {
         if self.active.replace(self.active.get() + 1) == 0 {
-            let keep_alive = self.capabilities.borrow().keep_alive.clone();
-            *self.kept_alive.borrow_mut() = keep_alive.map(|handle| handle.hold());
+            let lease = self.keep_alive.hold();
+            *self.kept_alive.borrow_mut() = Some(lease);
         }
         self.rebuild();
         let callback = self.config.borrow().on_drag_started.clone();
@@ -647,6 +643,9 @@ struct FeedbackPlace {
     /// the tree that maps the window's space to it.
     overlay_node: Cell<Option<flui_foundation::RenderId>>,
     pipeline: Option<flui_rendering::pipeline::PipelineCell>,
+    /// The anchor's rebuild. The place exists before the overlay mounts its
+    /// entry, so this is `None` until the anchor's `init_state` publishes it
+    /// beside `overlay_node`.
     rebuild: RefCell<Option<RebuildHandle>>,
 }
 
@@ -818,11 +817,14 @@ impl std::fmt::Debug for DraggableState {
 impl StatefulView for Draggable {
     type State = DraggableState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         DraggableState {
             source: Rc::new(Source {
                 config: RefCell::new(SourceConfig::of(self)),
                 capabilities: RefCell::new(Capabilities::default()),
+                rebuild_handle: ctx.rebuild_handle(),
+                writer: ctx.writer_source(),
+                keep_alive: ctx.keep_alive_handle(),
                 active: Cell::new(0),
                 held: RefCell::new(None),
                 pressed: RefCell::new(Vec::new()),
@@ -884,9 +886,6 @@ impl DraggableState {
         capabilities.overlay = Overlay::maybe_of(ctx);
         capabilities.haptics = ctx.haptics();
         capabilities.pipeline = ctx.pipeline_owner();
-        capabilities.rebuild = Some(ctx.rebuild_handle());
-        capabilities.writer = Some(ctx.writer_source());
-        capabilities.keep_alive = Some(ctx.keep_alive_handle());
     }
 
     /// Build the recognizers for `trigger` under `settings`, retiring the ones

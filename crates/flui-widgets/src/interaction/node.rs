@@ -779,12 +779,15 @@ impl StatefulRenderView for InteractiveNode {
     type RenderObject = RenderInteractive;
     type State = InteractiveNodeState;
 
-    fn create_state(&self, _ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn flui_view::LifecycleContext) -> Self::State {
         let tap = TapSlot::new(self.live_tap(), self.states.as_ref());
         InteractiveNodeState {
             recognizers: RecognizerHost::new(tap.factory().as_slice()),
             tap,
-            focus: self.focus_config().as_ref().map(FocusHost::new),
+            focus: self
+                .focus_config()
+                .as_ref()
+                .map(|config| FocusHost::new(config, ctx)),
             own_actions: self.declared_actions(),
             ambient_actions: None,
             chain: None,

@@ -471,7 +471,7 @@ fn label_padding(tab: &Tab, bar_has_mixed_tabs: bool) -> EdgeInsets {
 pub struct TabBarState {
     controller: RefCell<Option<TabController>>,
     listener_id: RefCell<Option<Subscription>>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     /// The ambient clock the controller's position runs on.
     vsync: Option<Vsync>,
     /// This bar's registration of that clock with the subscribed controller.
@@ -500,11 +500,11 @@ impl std::fmt::Debug for TabBarState {
 impl StatefulView for TabBar {
     type State = TabBarState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         TabBarState {
             controller: RefCell::new(None),
             listener_id: RefCell::new(None),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             vsync: None,
             clock: RefCell::new(None),
             companion: RefCell::new(None),
@@ -549,10 +549,7 @@ impl TabBarState {
             drop(self.listener_id.borrow_mut().take());
             let _ = previous_controller;
 
-            let rebuild = self
-                .rebuild
-                .clone()
-                .expect("init_state runs before the first build");
+            let rebuild = self.rebuild.clone();
             let listening = resolved.listen(move || {
                 rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             });
@@ -580,7 +577,6 @@ impl TabBarState {
 
 impl ViewState<TabBar> for TabBarState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
         self.vsync = VsyncScope::maybe_of(ctx);
     }
 

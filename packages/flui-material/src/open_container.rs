@@ -571,6 +571,8 @@ fn finite(rect: Rect) -> bool {
 struct Shared<T> {
     seat: Rc<FlightSeat>,
     config: RefCell<OpenContainer<T>>,
+    /// Made in `create_state`; `dispose` takes both, so a closure that
+    /// outlives the container neither rebuilds it nor spawns on its driver.
     rebuild: RefCell<Option<RebuildHandle>>,
     driver: RefCell<Option<AsyncDriver>>,
     /// The landing of the latest flight; no second page opens before it.
@@ -692,13 +694,13 @@ impl<T: 'static> View for OpenContainer<T> {
 impl<T: 'static> StatefulView for OpenContainer<T> {
     type State = OpenContainerState<T>;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         OpenContainerState {
             shared: Rc::new(Shared {
                 seat: Rc::new(FlightSeat::new()),
                 config: RefCell::new(self.clone()),
-                rebuild: RefCell::new(None),
-                driver: RefCell::new(None),
+                rebuild: RefCell::new(Some(ctx.rebuild_handle())),
+                driver: RefCell::new(ctx.async_driver()),
                 flight: RefCell::new(None),
             }),
         }
@@ -710,10 +712,6 @@ impl<T: 'static> ViewState<OpenContainer<T>> for OpenContainerState<T> {
         self.shared
             .seat
             .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
-        let previous = self.shared.rebuild.replace(Some(ctx.rebuild_handle()));
-        drop(previous);
-        let previous = self.shared.driver.replace(ctx.async_driver());
-        drop(previous);
     }
 
     fn did_update_view(&mut self, _old: &OpenContainer<T>, new_view: &OpenContainer<T>) {

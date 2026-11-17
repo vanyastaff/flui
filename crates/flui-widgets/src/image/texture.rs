@@ -52,7 +52,7 @@ impl Texture {
 pub struct TextureState {
     id: TextureId,
     registry: Option<TextureRegistry>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     listener: Option<TextureListener>,
 }
 
@@ -61,10 +61,10 @@ impl TextureState {
     /// earlier listener.
     fn follow(&mut self) {
         self.listener = None;
-        let (Some(registry), Some(rebuild)) = (&self.registry, &self.rebuild) else {
+        let Some(registry) = &self.registry else {
             return;
         };
-        let rebuild = rebuild.clone();
+        let rebuild = self.rebuild.clone();
         self.listener = registry.listen(self.id, move || {
             rebuild.schedule(RebuildReason::StateChange);
         });
@@ -74,11 +74,11 @@ impl TextureState {
 impl StatefulView for Texture {
     type State = TextureState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         TextureState {
             id: self.id,
             registry: None,
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             listener: None,
         }
     }
@@ -87,7 +87,6 @@ impl StatefulView for Texture {
 impl ViewState<Texture> for TextureState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.registry = ctx.texture_registry();
-        self.rebuild = Some(ctx.rebuild_handle());
         self.follow();
     }
 

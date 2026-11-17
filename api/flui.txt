@@ -8535,7 +8535,6 @@ impl flui::prelude::View for flui::material::SnackBarAction where Self: flui::pr
 impl flui::prelude::ViewState<flui::material::SnackBarAction> for flui::material::SnackBarActionState
 pub fn flui::material::SnackBarAction::new<F, R>(label: impl Into<String>, on_pressed: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>) -> R + 'static, R: flui::prelude::EventOutcome
 pub struct flui::material::SnackBarActionState { .. }
-impl Default for flui::material::SnackBarActionState
 impl core::fmt::Debug for flui::material::SnackBarActionState
 impl flui::prelude::ViewState<flui::material::SnackBarAction> for flui::material::SnackBarActionState
 #[non_exhaustive] pub enum flui::material::SnackBarClosedReason

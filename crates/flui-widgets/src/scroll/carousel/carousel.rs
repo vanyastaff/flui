@@ -260,7 +260,7 @@ struct Shared {
     attachment: RefCell<Option<Attachment>>,
     scrolled: Rc<ChangeNotifier>,
     post_frame: RefCell<Option<PostFrameHandle>>,
-    writer: RefCell<Option<WriterSource>>,
+    writer: WriterSource,
     /// Set while the state lives: a delivery queued past its teardown finds it gone.
     alive: Cell<bool>,
     /// Whether the autoplay timer is bound to frames: a timer with none settles at once, and
@@ -339,9 +339,8 @@ impl Shared {
             return;
         }
         let callback = self.controller.borrow().callback();
-        let writer = self.writer.borrow().clone();
-        if let (Some(callback), Some(writer)) = (callback, writer) {
-            writer.write(|ctx| callback(ctx, index));
+        if let Some(callback) = callback {
+            self.writer.write(|ctx| callback(ctx, index));
         }
     }
 
@@ -385,7 +384,7 @@ pub struct CarouselState {
     focus: Rc<FocusNode>,
     focus_manager: Option<(Rc<FocusManager>, flui_foundation::Subscription)>,
     lifecycle: Option<LifecycleSubscription>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     timer: DrivenController,
     timer_status: Option<flui_animation::StatusSubscription>,
     vsync: Option<flui_animation::Vsync>,
@@ -408,7 +407,7 @@ impl fmt::Debug for CarouselState {
 impl StatefulView for Carousel {
     type State = CarouselState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let own = CarouselController::new();
         let controller = self.controller.clone().unwrap_or_else(|| own.clone());
         let period = self
@@ -423,7 +422,7 @@ impl StatefulView for Carousel {
                 attachment: RefCell::new(None),
                 scrolled: Rc::new(ChangeNotifier::new()),
                 post_frame: RefCell::new(None),
-                writer: RefCell::new(None),
+                writer: ctx.writer_source(),
                 alive: Cell::new(true),
                 autoplays: Cell::new(false),
             }),
@@ -438,7 +437,7 @@ impl StatefulView for Carousel {
             focus: FocusNode::new(),
             focus_manager: None,
             lifecycle: None,
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             timer: AnimationController::builder(period)
                 .debug_label("Carousel.autoplay")
                 .build_on(None),
@@ -499,9 +498,7 @@ impl CarouselState {
         let shared = Rc::downgrade(&self.shared);
         let timer = self.timer.controller().clone();
         let subscription = controller.listen_pause(Rc::new(move || {
-            if let Some(rebuild) = &rebuild {
-                rebuild.schedule(RebuildReason::StateChange);
-            }
+            rebuild.schedule(RebuildReason::StateChange);
             let Some(shared) = shared.upgrade() else {
                 return;
             };
@@ -554,9 +551,7 @@ impl CarouselState {
 
 impl ViewState<Carousel> for CarouselState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
         *self.shared.post_frame.borrow_mut() = ctx.post_frame_handle();
-        *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
         self.reduced_motion = MediaQuery::motion_of(ctx) == Some(MotionPolicy::Reduce);
         let view = self.view.clone();
         self.attach(&view);

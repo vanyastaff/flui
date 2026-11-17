@@ -188,7 +188,7 @@ impl Disclosure {
 pub struct DisclosureState {
     node: Terminal<Rc<FocusNode>>,
     focused: Terminal<Rc<Cell<bool>>>,
-    rebuild: Terminal<Option<RebuildHandle>>,
+    rebuild: Terminal<RebuildHandle>,
     live: Terminal<Rc<RefCell<LiveDisclosure>>>,
     /// The header and the panel it controls, kept across rebuilds so the
     /// relations between them name one target each.
@@ -224,7 +224,7 @@ struct LiveDisclosure {
     mounted: bool,
     state: ExpansionState,
     handler: Terminal<Option<ValueCallback<ExpansionState>>>,
-    writer: Terminal<Option<WriterSource>>,
+    writer: Terminal<WriterSource>,
 }
 
 impl Drop for LiveDisclosure {
@@ -253,12 +253,10 @@ fn propose(
         let Some(handler) = current.handler.as_ref() else {
             return false;
         };
-        let Some(writer) = current.writer.as_ref() else {
-            return false;
-        };
         (
             Terminal::new(Rc::clone(handler)),
-            Terminal::new(writer.clone()),
+            // Present while mounted: only `dispose` and the final drop withdraw it.
+            Terminal::new(WriterSource::clone(&current.writer)),
             target,
         )
     };
@@ -272,29 +270,26 @@ fn propose(
 impl StatefulView for Disclosure {
     type State = DisclosureState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         DisclosureState {
             node: Terminal::new(FocusNode::with_debug_label("Disclosure")),
             focused: Terminal::new(Rc::new(Cell::new(false))),
-            rebuild: Terminal::new(None),
+            rebuild: Terminal::new(ctx.rebuild_handle()),
             header: SemanticsAnchor::new(),
             panel: SemanticsAnchor::new(),
             live: Terminal::new(Rc::new(RefCell::new(LiveDisclosure {
                 mounted: false,
                 state: self.state,
                 handler: Terminal::new((*self.on_changed).clone()),
-                writer: Terminal::new(None),
+                writer: Terminal::new(ctx.writer_source()),
             }))),
         }
     }
 }
 
 impl ViewState<Disclosure> for DisclosureState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Terminal::new(Some(ctx.rebuild_handle()));
-        let mut live = self.live.borrow_mut();
-        live.writer = Terminal::new(Some(ctx.writer_source()));
-        live.mounted = true;
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.live.borrow_mut().mounted = true;
     }
 
     fn did_update_view(&mut self, _old: &Disclosure, new: &Disclosure) {
@@ -330,11 +325,7 @@ impl ViewState<Disclosure> for DisclosureState {
         let live = Terminal::new(Rc::clone(&self.live));
         let header_anchor = self.header.clone();
         let panel = self.panel.clone();
-        let rebuild = Terminal::new(
-            self.rebuild
-                .clone()
-                .expect("BUG: Disclosure built before init_state"),
-        );
+        let rebuild = Terminal::new(RebuildHandle::clone(&self.rebuild));
         LayoutBuilder::new(move |_ctx, constraints| {
             let side = 18.0_f64
                 .min(constraints.max_width)
