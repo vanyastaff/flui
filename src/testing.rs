@@ -38,22 +38,3 @@ pub mod rendering {
         RenderTester, TreeNode, box_node, collect_commands, sliver_node,
     };
 }
-
-/// The harnesses `flui::testing` exported before [`Tester`]: the substrate
-/// driver, the widget layout harness, gesture replay, the accessibility
-/// reader and the storage doubles. The facade's own consumer
-/// fixture `facade_extensions` is their last user ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#the-facades-old-test-harnesses)).
-///
-/// The compiler reports a deprecated module only for the items the module
-/// defines, and this one only re-exports, so a path through it raises no
-/// warning: this marker and the gaps entry are the notice, and the module
-/// goes before a release.
-#[deprecated(note = "use flui::testing::Tester and flui::testing::find")]
-pub mod harness {
-    pub use flui_interaction::binding::GestureBinding;
-    pub use flui_rendering::testing::inspect::render_snapshot;
-    pub use flui_testing::{
-        BuildCapabilities, HeadlessBinding, MountOptions, MountOwners, Mounted,
-    };
-    pub use flui_testing::{a11y, replay, storage, widgets};
-}

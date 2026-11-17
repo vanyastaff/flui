@@ -308,6 +308,7 @@ where
         address: owner_dispatch.address,
         size: (phys_size.width as u32, phys_size.height as u32),
         device: flui_engine::DeviceHealth::Healthy,
+        renderer_dead: false,
     };
 
     // 5. Register input callback -> entered ui_runtime input dispatch

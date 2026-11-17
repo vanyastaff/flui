@@ -471,10 +471,19 @@ pub enum DeviceRecovery {
         /// Consecutive failed rebuilds when the rebuild was given up.
         attempts: u32,
     },
+    /// The renderer stopped for good: its raster thread died or stopped
+    /// answering (ADR-0305 §9). The presentation keeps building and laying
+    /// out its frames, which its host answers without drawing, so input, the
+    /// semantics tree and the agent still follow the application. A rebuild
+    /// the application asks for changes nothing, since no second renderer is
+    /// made while the first still holds its windows. Reported once, when the
+    /// renderer is found dead.
+    Dead,
 }
 
 impl DeviceRecovery {
-    /// Whether the rebuild was given up.
+    /// Whether the rebuild was given up and waits for the application to ask
+    /// for another.
     #[must_use]
     pub fn is_abandoned(self) -> bool {
         matches!(self, Self::Abandoned { .. })

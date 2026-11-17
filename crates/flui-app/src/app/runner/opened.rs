@@ -68,35 +68,35 @@ impl OpenSettings {
         self
     }
 
-    /// The application id the run keeps one instance under: when the
+    /// Whether the run keeps one instance, under the application id: when the
     /// application asked for one instance, or, without
     /// [`single_instance`](crate::Application::single_instance), declared a
     /// URL scheme, whose links a second launch would otherwise open in a
-    /// second process. `None` without an application id in `identity`,
+    /// second process. Not without an application id in `identity`,
     /// which is warned about: the bus name and the pipe are named by it.
     #[cfg(all(
         feature = "single-instance",
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
-    pub(crate) fn single_instance_id(&self, identity: &flui_log::AppIdentity) -> Option<String> {
+    pub(crate) fn keeps_one_instance(&self, identity: &flui_log::AppIdentity) -> bool {
         // The Linux and Windows hosts keep one instance; macOS, iOS and
         // Android keep one themselves, and each page on the Web is an
         // application of its own.
         let kept_here = cfg!(any(target_os = "linux", windows));
         if !kept_here || !self.single_instance.unwrap_or(self.declares_a_launch()) {
-            return None;
+            return false;
         }
-        let app_id = identity.app_id().map(|app_id| app_id.as_str().to_owned());
-        if app_id.is_none() {
+        let named = identity.app_id().is_some();
+        if !named {
             tracing::warn!(
                 "one instance needs an application id (`AppConfig::application_identity`): \
                  the application runs as many instances as it is launched"
             );
         }
-        app_id
+        named
     }
 
-    /// None: a build without `single-instance` keeps no instance. An
+    /// No: a build without `single-instance` keeps no instance. An
     /// application that declares a URL scheme, whose links a second launch
     /// then opens in a second process, is warned about on the hosts that
     /// would keep one (`flui build` refuses such a build of its project).
@@ -104,7 +104,7 @@ impl OpenSettings {
         not(feature = "single-instance"),
         not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
     ))]
-    pub(crate) fn single_instance_id(&self, _identity: &flui_log::AppIdentity) -> Option<String> {
+    pub(crate) fn keeps_one_instance(&self, _identity: &flui_log::AppIdentity) -> bool {
         if cfg!(any(target_os = "linux", windows)) && self.declares_a_launch() {
             tracing::warn!(
                 "the application declares a URL scheme or a file type but is built without flui's \
@@ -112,7 +112,7 @@ impl OpenSettings {
                  process"
             );
         }
-        None
+        false
     }
 
     /// Whether the application declares a URL scheme or a file type: what
@@ -1108,7 +1108,8 @@ fn report_unreached(address: PresentationAddress, error: &flui_runtime::owner::D
 }
 #[cfg(all(test, feature = "single-instance", any(target_os = "linux", windows)))]
 mod tests {
-    use flui_log::{AppId, AppIdentity};
+    use flui_foundation::AppId;
+    use flui_log::AppIdentity;
     use flui_view::navigation::{FileTypeDeclaration, OpenDeclarations};
 
     use super::OpenSettings;
@@ -1136,33 +1137,27 @@ mod tests {
             "Note",
         )];
         let file_type = Some(OpenDeclarations::new().file_types(NOTE));
-        let id = Some("com.example.Notes".to_owned());
         let cases = [
-            (
-                "a declared scheme",
-                settings(scheme, None),
-                &named,
-                id.clone(),
-            ),
+            ("a declared scheme", settings(scheme, None), &named, true),
             (
                 "a declared file type",
                 settings(file_type, None),
                 &named,
-                id.clone(),
+                true,
             ),
-            ("turned off", settings(scheme, Some(false)), &named, None),
-            ("asked for", settings(None, Some(true)), &named, id),
-            ("domains only", settings(domain, None), &named, None),
-            ("nothing declared", settings(None, None), &named, None),
+            ("turned off", settings(scheme, Some(false)), &named, false),
+            ("asked for", settings(None, Some(true)), &named, true),
+            ("domains only", settings(domain, None), &named, false),
+            ("nothing declared", settings(None, None), &named, false),
             (
                 "no application id",
                 settings(scheme, Some(true)),
                 &unnamed,
-                None,
+                false,
             ),
         ];
         for (case, settings, identity, expected) in cases {
-            assert_eq!(settings.single_instance_id(identity), expected, "{case}");
+            assert_eq!(settings.keeps_one_instance(identity), expected, "{case}");
         }
     }
 }

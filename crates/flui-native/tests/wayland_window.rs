@@ -786,17 +786,21 @@ mod optional {
         FractionalScale,
         /// `zxdg_exporter_v2`.
         XdgForeign,
+        /// `zwlr_foreign_toplevel_manager_v1`, through which another client reads
+        /// a window's app id.
+        ForeignToplevels,
     }
 
     impl Optional {
         /// Every subject, which `FLUI_REQUIRE_COMPOSITOR` names from.
-        const ALL: [Self; 6] = [
+        const ALL: [Self; 7] = [
             Self::TwoOutputs,
             Self::Seat,
             Self::XdgActivation,
             Self::XdgDecoration,
             Self::FractionalScale,
             Self::XdgForeign,
+            Self::ForeignToplevels,
         ];
 
         /// The subjects `FLUI_REQUIRE_COMPOSITOR`, a comma-separated list,
@@ -831,6 +835,7 @@ mod optional {
                 Self::XdgDecoration => "xdg-decoration",
                 Self::FractionalScale => "fractional-scale",
                 Self::XdgForeign => "xdg-foreign",
+                Self::ForeignToplevels => "foreign-toplevel",
             }
         }
 
@@ -1380,6 +1385,177 @@ mod optional {
                 self.heard.destroyed
             }
         }
+    }
+
+    /// A second client that lists the compositor's toplevels with their titles
+    /// and app ids (`zwlr_foreign_toplevel_manager_v1`), as a dock or a task
+    /// bar does.
+    mod toplevel_list {
+        use wayland_client::globals::{GlobalListContents, registry_queue_init};
+        use wayland_client::protocol::wl_registry::{self, WlRegistry};
+        use wayland_client::{
+            Connection, Dispatch, EventQueue, Proxy as _, QueueHandle, event_created_child,
+        };
+        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::{
+            self, ZwlrForeignToplevelHandleV1,
+        };
+        use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_manager_v1::{
+            self, ZwlrForeignToplevelManagerV1,
+        };
+
+        /// A toplevel as the compositor describes it.
+        #[derive(Debug, Default, Clone)]
+        pub(super) struct Toplevel {
+            id: Option<wayland_client::backend::ObjectId>,
+            pub(super) title: Option<String>,
+            pub(super) app_id: Option<String>,
+        }
+
+        #[derive(Default)]
+        pub(super) struct Heard {
+            toplevels: Vec<Toplevel>,
+        }
+
+        impl Heard {
+            fn of(&mut self, handle: &ZwlrForeignToplevelHandleV1) -> &mut Toplevel {
+                let id = handle.id();
+                if let Some(index) = self
+                    .toplevels
+                    .iter()
+                    .position(|toplevel| toplevel.id.as_ref() == Some(&id))
+                {
+                    return &mut self.toplevels[index];
+                }
+                self.toplevels.push(Toplevel {
+                    id: Some(id),
+                    ..Toplevel::default()
+                });
+                self.toplevels.last_mut().expect("BUG: just pushed")
+            }
+        }
+
+        impl Dispatch<WlRegistry, GlobalListContents> for Heard {
+            fn event(
+                _: &mut Self,
+                _: &WlRegistry,
+                _: wl_registry::Event,
+                _: &GlobalListContents,
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+            }
+        }
+
+        impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for Heard {
+            fn event(
+                heard: &mut Self,
+                _: &ZwlrForeignToplevelManagerV1,
+                event: zwlr_foreign_toplevel_manager_v1::Event,
+                (): &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+                if let zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } = event {
+                    heard.of(&toplevel);
+                }
+            }
+
+            event_created_child!(Heard, ZwlrForeignToplevelManagerV1, [
+                zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+            ]);
+        }
+
+        impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for Heard {
+            fn event(
+                heard: &mut Self,
+                handle: &ZwlrForeignToplevelHandleV1,
+                event: zwlr_foreign_toplevel_handle_v1::Event,
+                (): &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+                match event {
+                    zwlr_foreign_toplevel_handle_v1::Event::Title { title } => {
+                        heard.of(handle).title = Some(title);
+                    }
+                    zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                        heard.of(handle).app_id = Some(app_id);
+                    }
+                    zwlr_foreign_toplevel_handle_v1::Event::Closed => {
+                        let id = handle.id();
+                        heard
+                            .toplevels
+                            .retain(|toplevel| toplevel.id.as_ref() != Some(&id));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        /// The other client.
+        pub(super) struct ToplevelList {
+            queue: EventQueue<Heard>,
+            heard: Heard,
+            _manager: ZwlrForeignToplevelManagerV1,
+        }
+
+        impl ToplevelList {
+            /// Connect to the compositor `WAYLAND_DISPLAY` names; `None` where
+            /// it lists no toplevels to clients.
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "a test's second client reads the whole registry of the compositor under test"
+            )]
+            pub(super) fn connect() -> Option<Self> {
+                let connection = Connection::connect_to_env().expect("the compositor answers");
+                let (globals, queue) =
+                    registry_queue_init::<Heard>(&connection).expect("the registry is read");
+                let manager = globals
+                    .bind::<ZwlrForeignToplevelManagerV1, _, _>(&queue.handle(), 1..=3, ())
+                    .ok()?;
+                Some(Self {
+                    queue,
+                    heard: Heard::default(),
+                    _manager: manager,
+                })
+            }
+
+            /// The toplevels the compositor lists now.
+            pub(super) fn toplevels(&mut self) -> Vec<Toplevel> {
+                self.queue
+                    .roundtrip(&mut self.heard)
+                    .expect("the compositor answers");
+                self.heard.toplevels.clone()
+            }
+        }
+    }
+
+    /// A window of a host started with an application id carries it as its
+    /// app id from its first commit, which another client (a dock, a task bar)
+    /// reads beside its title and a shell matches against the desktop entry
+    /// named by the id. Where the compositor lists no toplevels to clients
+    /// (Weston), the case is skipped.
+    #[test]
+    fn a_window_carries_the_application_id_it_was_started_with() {
+        let case = "a_window_carries_the_application_id_it_was_started_with";
+        if platform(case).is_none() {
+            return;
+        }
+        let Some(mut list) = toplevel_list::ToplevelList::connect() else {
+            Optional::ForeignToplevels.missing(case, "the app id was not read back");
+            return;
+        };
+        let app_id = flui_foundation::AppId::try_new("com.example.Notes").expect("an app id");
+        let platform = WaylandPlatform::try_new_for(&app_id)
+            .expect("the compositor WAYLAND_DISPLAY names answers");
+        let fixture = WaylandFixture::open(platform, "an identified window");
+        let toplevels = list.toplevels();
+        let listed = toplevels
+            .iter()
+            .find(|toplevel| toplevel.title.as_deref() == Some("an identified window"))
+            .unwrap_or_else(|| panic!("the window is listed: {toplevels:?}"));
+        assert_eq!(listed.app_id.as_deref(), Some("com.example.Notes"));
+        drop(fixture);
     }
 
     /// A window the compositor exports (`xdg-foreign` v2) hands out the portal
