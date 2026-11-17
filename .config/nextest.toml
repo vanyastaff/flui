@@ -31,14 +31,17 @@ leak-timeout = "1s"
 # process starts through `test-desktop` (tools/xtask/src/bin/test-desktop.rs)
 # on the run's own desktop, where nobody sees its windows and no mouse or
 # keyboard reaches them. Every test, so a new one cannot be left out. The
-# setup script builds the program first (a no-op once it is built), into
-# `<target>/debug/` whatever profile the tests use. `FLUI_TEST_VISIBLE_DESKTOP=1`
-# starts the tests on the caller's desktop instead.
+# setup script builds the program first (a no-op once it is built), in the
+# workspace root's `target/`, whatever target directory and profile the tests
+# use (`--target-dir`, `CARGO_TARGET_DIR`), since nothing tells a setup script
+# or a wrapper which one that is; a setup script runs in the workspace root.
+# `FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop
+# instead.
 [scripts.setup.build-test-desktop]
-command = "cargo build -p xtask --bin test-desktop --locked --quiet"
+command = "cargo build -p xtask --bin test-desktop --locked --quiet --target-dir target"
 
 [scripts.wrapper.test-desktop]
-command = { command-line = "debug/test-desktop.exe", relative-to = "target" }
+command = { command-line = "target/debug/test-desktop.exe", relative-to = "workspace-root" }
 
 [[profile.default.scripts]]
 platform = 'cfg(windows)'

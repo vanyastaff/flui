@@ -811,14 +811,9 @@ mod native_windows {
                 "{name} names no row of the contract"
             );
         }
-        let on_the_input_desktop = crate::on_the_input_desktop();
         let mut failures = Vec::new();
         for &(name, _) in CASES {
-            if !on_the_input_desktop && NEED_THE_INPUT_DESKTOP.contains(&name) {
-                eprintln!(
-                    "CANNOT_VERIFY {name}: it needs the desktop that takes the user's input \
-                     (FLUI_TEST_VISIBLE_DESKTOP=1 runs it there)"
-                );
+            if NEED_THE_INPUT_DESKTOP.contains(&name) && !crate::input_desktop_for(name) {
                 continue;
             }
             let outcome = std::panic::catch_unwind(|| run_child(name, &before));

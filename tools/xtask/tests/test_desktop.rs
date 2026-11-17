@@ -5,12 +5,9 @@
 //! waits; meanwhile it lists the windows of both desktops from this process.
 
 #![cfg(windows)]
-#![cfg_attr(
-    windows,
-    expect(
-        unsafe_code,
-        reason = "Win32 FFI; each call takes plain values or pointers to locals"
-    )
+#![expect(
+    unsafe_code,
+    reason = "Win32 FFI; each call takes plain values or pointers to locals"
 )]
 
 use std::io::{BufRead, BufReader, Read};

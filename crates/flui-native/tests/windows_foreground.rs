@@ -210,12 +210,9 @@ impl Drop for Peer {
 /// the window forward with the focus.
 #[test]
 fn an_activation_takes_the_foreground_only_when_it_is_handed_over() {
-    if !crate::on_the_input_desktop() {
-        eprintln!(
-            "CANNOT_VERIFY foreground hand-over: the foreground, the shell's flash notices and \
-             injected input belong to the desktop that takes the user's input \
-             (FLUI_TEST_VISIBLE_DESKTOP=1 runs it there)"
-        );
+    // The foreground, the shell's flash notices and injected input belong to the
+    // desktop that takes the user's input.
+    if !crate::input_desktop_for("the foreground hand-over") {
         return;
     }
     let platform = WindowsPlatform::try_new().expect("native Windows platform");

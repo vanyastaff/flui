@@ -64,7 +64,17 @@ mod windows_desktop {
         };
         let args: Vec<OsString> = args.collect();
         if std::env::var_os(VISIBLE).is_some_and(|value| value == "1") {
-            return on_this_desktop(&program, &args);
+            return match Command::new(&program).args(&args).status() {
+                // On Windows every exit has a code, a crash's NTSTATUS included.
+                Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+                Err(error) => {
+                    eprintln!(
+                        "test-desktop: could not start {}: {error}",
+                        program.display()
+                    );
+                    ExitCode::FAILURE
+                }
+            };
         }
         match on_the_test_desktop(&program, &args) {
             Ok(code) => {
@@ -80,23 +90,6 @@ mod windows_desktop {
                 eprintln!(
                     "test-desktop: could not start {} on the test desktop: {error}\n\
                      test-desktop: {VISIBLE}=1 runs it on this desktop instead",
-                    program.display()
-                );
-                ExitCode::FAILURE
-            }
-        }
-    }
-
-    /// Starts the program here, as if no wrapper were in between.
-    fn on_this_desktop(program: &OsStr, args: &[OsString]) -> ExitCode {
-        match Command::new(program).args(args).status() {
-            Ok(status) => status
-                .code()
-                .and_then(|code| u8::try_from(code).ok())
-                .map_or(ExitCode::FAILURE, ExitCode::from),
-            Err(error) => {
-                eprintln!(
-                    "test-desktop: could not start {}: {error}",
                     program.display()
                 );
                 ExitCode::FAILURE
@@ -209,10 +202,6 @@ mod windows_desktop {
             ..STARTUPINFOW::default()
         };
         let mut process = PROCESS_INFORMATION::default();
-        // The child shares this console; Ctrl+C reaches it, and this process waits for it to
-        // end instead of leaving it behind.
-        // SAFETY: no handler routine; `true` ignores Ctrl+C in this process.
-        let _ignored = unsafe { SetConsoleCtrlHandler(None, true) };
         // SAFETY: the command line and the desktop name are NUL-terminated buffers that outlive
         // the call; the environment and the working directory are inherited.
         unsafe {
@@ -231,6 +220,12 @@ mod windows_desktop {
         }?;
         let child = Owned(process.hProcess);
         drop(Owned(process.hThread));
+        // The child shares this console, so Ctrl+C reaches it; this process ignores it and
+        // waits for the child to end instead of leaving it behind. Set only now: a child
+        // inherits the flag, and the test must keep Ctrl+C as a test started without this
+        // program has it.
+        // SAFETY: no handler routine; `true` ignores Ctrl+C in this process.
+        let _ignored = unsafe { SetConsoleCtrlHandler(None, true) };
         // SAFETY: `child` is a live process handle.
         let waited = unsafe { WaitForSingleObject(child.0, INFINITE) };
         if waited != WAIT_OBJECT_0 {

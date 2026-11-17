@@ -240,20 +240,28 @@ window draws at the largest.
 
 On Windows, nextest starts every test on a desktop of its own (ADR-0355): `.config/nextest.toml`
 runs each test process through `test-desktop` (`tools/xtask/src/bin/test-desktop.rs`), which a
-setup script builds first. The desktop is `flui-test-<run id>` in the user's window station, one
-per nextest run, shared by that run's tests and gone when the last of them exits, crashed or not.
+setup script builds first, always into the workspace root's `target/`. The desktop is
+`flui-test-<run id>` in the user's window station, one per nextest run, shared by that run's tests
+and gone once nothing holds it: every test of the run has exited, crashed or not, and so has every
+process a test started. A process a test leaves behind keeps the desktop and runs on it unseen;
+Task Manager's Details tab lists it under the test binary's name, and ending it frees the desktop.
 A window there is never shown and no mouse or keyboard reaches it, while activation, focus,
 messages, hooks, DPI, the monitors, DWM, DXGI presentation, OLE drag and drop and the text
-services work as on the user's desktop. This holds for `cargo heli nextest run`,
+services work as on the user's desktop. No window there is in the foreground: the system moves
+the activation among a process's shown windows when one of them enters a modal loop, so a case
+that counts what ran during an idle modal loop runs in a process with no other shown window
+(`windows_window_commands::native_idle_modal_loops`). This holds for `cargo heli nextest run`,
 `cargo nextest run` and every `cargo xtask` task that runs nextest (`test`, `platform-test`,
 `gpu-test`); plain `cargo test` starts its tests on the caller's desktop.
+`windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` fails when a test nextest
+starts is not there.
 
 `FLUI_TEST_VISIBLE_DESKTOP=1` starts the tests on the caller's desktop instead, to watch them.
 
 The foreground, the cursor and injected input (`SendInput`, a synthetic pointer device) belong to
 the desktop that takes the user's input. A case that needs them checks
-(`on_the_input_desktop` in `crates/flui-native/tests/main.rs`), and on the test desktop prints
-`CANNOT_VERIFY` and returns:
+(`input_desktop_for` in `crates/flui-native/tests/main.rs`), and elsewhere prints `CANNOT_VERIFY`
+and returns, which nextest reports as a pass; `FLUI_REQUIRE_INPUT_DESKTOP=1` makes it fail instead:
 
 | Case | Needs |
 |------|-------|
@@ -261,7 +269,7 @@ the desktop that takes the user's input. A case that needs them checks
 | the contract rows in `NEED_THE_INPUT_DESKTOP` (`crates/flui-native/tests/contract.rs`) | a window brought to the foreground, then injected touch, pen, mouse or wheel input and the cursor |
 
 They run with `FLUI_TEST_VISIBLE_DESKTOP=1`, and every night on the Windows runner, which has no
-user (`nightly-platforms.yml`). A test that reads the cursor only to have a position is handed one
+user, under `FLUI_REQUIRE_INPUT_DESKTOP=1` (`nightly-platforms.yml`). A test that reads the cursor only to have a position is handed one
 instead, as the touchpad tests are (`TestCursor`).
 
 The clipboard belongs to the window station, which the test desktop shares with the user: the

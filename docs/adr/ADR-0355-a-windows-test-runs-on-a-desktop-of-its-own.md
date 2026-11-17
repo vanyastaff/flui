@@ -27,7 +27,7 @@ children inherit it. Measured on Windows 11 (build 26300) with the suites of `or
 
 | Suite | On a desktop of its own |
 |-------|-------------------------|
-| flui-native, all features (772 tests) | 763 pass at once; of the 9 that do not, 2 fail on the user's desktop too, the 5 touchpad tests read the OS cursor, which `GetCursorPos` refuses there, and `windows_foreground` and 3 contract rows need the foreground and injected input (5 more such rows already said they could not verify) |
+| flui-native, all features (772 tests) | 763 pass at once. Of the 9 that do not: an Android intent test fails on the user's desktop too; the idle modal-loop case counts the activation messages of windows earlier cases left shown (§4); the 5 touchpad tests read the OS cursor, which `GetCursorPos` refuses there; `windows_foreground` and 3 contract rows need the foreground and injected input (5 more such rows already said they could not verify) |
 | flui-engine readback and the facade's composited-layer readback on Direct3D 12 (133 tests) | all pass |
 | flui-native in the logon session's own window station | 25 more cases fail and one test hangs (§3) |
 
@@ -62,12 +62,17 @@ through, and a wrapper it applies to every test needs no code in any test.
 
 `.config/nextest.toml` names the wrapper script `test-desktop` for every test on Windows
 (`filter = 'all()'`, `platform = 'cfg(windows)'`) and the setup script `build-test-desktop`, which
-builds it with `cargo build -p xtask --bin test-desktop` before the tests run. `test-desktop`
-(`tools/xtask/src/bin/test-desktop.rs`) opens the desktop `flui-test-<NEXTEST_RUN_ID>` in the
-current window station with `CreateDesktopW`, which creates it when no test of the run holds it
-and opens it otherwise, starts the test there with `CreateProcessW`, inheriting its standard
-handles and environment, waits for it and exits with its exit code. Both scripts are nextest
-features that are still experimental (`experimental = ["setup-scripts", "wrapper-scripts"]`).
+builds it with `cargo build -p xtask --bin test-desktop --target-dir target` before the tests
+run: into the workspace root's `target/` whatever target directory the tests use, since nextest
+tells neither script which one that is, and the wrapper names the program from the workspace root.
+`test-desktop` (`tools/xtask/src/bin/test-desktop.rs`) opens the desktop
+`flui-test-<NEXTEST_RUN_ID>` in the current window station with `CreateDesktopW`, which creates it
+when no test of the run holds it and opens it otherwise, starts the test there with
+`CreateProcessW`, inheriting its standard handles and environment, waits for it and exits with its
+exit code, a crash's included. It ignores Ctrl+C from the moment the test has started, so it waits
+for the test, which shares its console, to end; the test itself keeps Ctrl+C. Both scripts are
+nextest features that are still experimental (`experimental = ["setup-scripts",
+"wrapper-scripts"]`).
 
 ### §2. One desktop per run, released by the kernel
 
@@ -75,7 +80,9 @@ The desktop is named per run: the tests of one run share it, and two runs at onc
 two worktrees) never share a desktop or the window active on it. Each `test-desktop` holds a
 handle while its test runs, and the kernel destroys the desktop when the last handle closes and no
 thread is attached to it, a crashed `test-desktop` included. There is no cleanup to forget and no
-desktop left behind, and the run's tests take one desktop heap, not one each.
+desktop left behind, and the run's tests take one desktop heap, not one each. A process a test
+starts and leaves running keeps its thread on the desktop, and the desktop with it, until that
+process ends.
 
 ### §3. The window station is the user's
 
@@ -98,12 +105,19 @@ fail it, and the user's clipboard holds what the test wrote.
 
 The foreground, the cursor and injected input (`SendInput`, a synthetic pointer device) belong to
 the input desktop. A case that needs them reads whether its desktop takes input
-(`GetUserObjectInformationW(UOI_IO)`, `on_the_input_desktop` in `crates/flui-native/tests/main.rs`)
-and, where it does not, prints `CANNOT_VERIFY` with the reason and returns. A test that reads the
-cursor for a position the case does not depend on is given one instead (the touchpad tests'
-`TestCursor`). `FLUI_TEST_VISIBLE_DESKTOP=1` makes `test-desktop` start the test on the caller's
-desktop, where those cases run; the nightly Windows run sets it for them, since its runner has no
-user. `docs/testing.md` ("The Windows test desktop") lists them.
+(`GetUserObjectInformationW(UOI_IO)`, `input_desktop_for` in `crates/flui-native/tests/main.rs`)
+and, where it does not, prints `CANNOT_VERIFY` with the reason and returns, or fails under
+`FLUI_REQUIRE_INPUT_DESKTOP=1`, as `FLUI_REQUIRE_GPU` and `FLUI_REQUIRE_WAYLAND` turn their
+skips into failures. A test that reads the cursor for a position the case does not depend on is
+given one instead (the touchpad tests' `TestCursor`). `FLUI_TEST_VISIBLE_DESKTOP=1` makes
+`test-desktop` start the test on the caller's desktop, where those cases run; the nightly Windows
+run sets both variables for them, since its runner has no user. `docs/testing.md` ("The Windows
+test desktop") lists them.
+
+No window of the test desktop is in the foreground. A process's other shown windows then take and
+lose the activation while one of them stands in a modal loop, so a case that counts what runs on
+the owner thread during an idle modal loop runs in a process of its own
+(`windows_window_commands::native_idle_modal_loops`).
 
 ### Consequences
 
@@ -117,7 +131,10 @@ user. `docs/testing.md` ("The Windows test desktop") lists them.
   and the CI jobs install the newest 0.9 release.
 - Bad, because the setup script runs a `cargo build` at the start of every Windows run (a no-op
   once built), and a run started while another uses `test-desktop.exe` cannot replace it after its
-  source changes.
+  source changes. A run whose tests build into another target directory builds xtask's
+  dependencies once more in `target/`, unless a shared build directory (heli's) holds them.
+- Bad, because a case that cannot verify off the input desktop is reported as passed; only
+  `FLUI_REQUIRE_INPUT_DESKTOP` and its `CANNOT_VERIFY` line tell it apart.
 - Bad, because plain `cargo test` still starts its tests on the caller's desktop.
 - Bad, because the clipboard is still shared with the user (§3).
 
@@ -126,10 +143,15 @@ user. `docs/testing.md` ("The Windows test desktop") lists them.
 - `a_window_of_a_test_is_on_the_test_desktop_and_not_on_the_users` (`tools/xtask/tests/test_desktop.rs`)
   starts a process through `test-desktop` that shows a window, and finds the window among the run
   desktop's windows and not among the input desktop's (`EnumDesktopWindows`), from another process.
+- `windows_test_desktop::nextest_starts_a_test_on_the_runs_own_desktop` (flui-native's
+  `platform_it`) reads, under nextest, its own thread's desktop: `flui-test-<run id>`, taking no
+  input, or not that desktop under `FLUI_TEST_VISIBLE_DESKTOP=1`. Without the scripts of §1 it
+  fails.
 - `a_command_line_parses_back_into_its_arguments` (in `test-desktop.rs`) pins the quoting that
   hands the test its arguments.
 - The nightly Windows run (`nightly-platforms.yml`) runs `platform-test` and `gpu-test` on the run's
-  desktop and the interactive cases with `FLUI_TEST_VISIBLE_DESKTOP=1`.
+  desktop and the interactive cases with `FLUI_TEST_VISIBLE_DESKTOP=1` and
+  `FLUI_REQUIRE_INPUT_DESKTOP=1`.
 
 ## Pros and cons of the options
 
