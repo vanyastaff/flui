@@ -65,7 +65,7 @@ oversized radii against the same public path commands without a shape hint.
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
 | Raster protocol | `raster_executor/`, `raster.rs`, `frame_timing.rs` | `RasterExecutor` (ADR-0305 §3–§6): slot ids the owner mints, the closed commands, each slot's inbox (a mutex held only to swap values; the device record has another) and settlement ring, the inline turn and the raster thread (`RasterExecutor::spawn`, `ExecutorHandle`, a doorbell every send rings, a deadline-bounded wait for an attach's answer, a detach and a stop, each settlement marked when a call on its slot panicked since the previous one and the owner has not taken the panic, a panic held in place of a refusal), and `RasterBackend`, its GPU-free seam; `PresentDisposition`, what a frame became; frame timers |
-| Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
+| Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The damage accumulator, a `Region` (ADR-0061, ADR-0304 §5), `plan_frame` (where a frame renders) and its `RegionPlan` (one pass under the bounding box or one per rect, ADR-0304 §9), `begin_partial` (a pass's scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `testing.rs`, `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | The `testing` kit (`ScriptedSlots`, a `RasterBackend` without a GPU, and `noop_surface_factory`, window surfaces from wgpu's no-op backend); device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
@@ -128,8 +128,8 @@ Scene (flui-layer)                the retained version (or a hand-built tree),
     ▼
 Renderer::render_frame            plans the frame from its damage (skip, direct,
     │                             or into the retained target), acquires the
-    │                             surface texture, clears (in full, or inside the
-    │                             damage scissor), walks the scene (layer_walk,
+    │                             surface texture, clears (in full, or inside each
+    │                             pass's rect), walks the scene per pass (layer_walk,
     │                             explicit stack); a retained frame is blitted
     │                             to the surface texture at the end
     ▼
@@ -224,8 +224,8 @@ A scene holding a retained `SceneVersion` is walked without building a tree
 (ADR-0304 §9): each node is an offset at its placement, each effect entry its
 layer over the entries under it, each chunk its recording, and each slot the
 child node where it stands, in the order `SceneVersion::flatten` would build
-(`a_version_walks_as_its_flattened_tree`). A partial frame passes its damage
-rect, rounded out to the whole pixels its scissor admits, and a slot whose
+(`a_version_walks_as_its_flattened_tree`). Each pass of a partial frame passes its
+rect, the whole pixels its scissor admits, and a slot whose
 subtree cannot reach it is skipped
 (`SceneVersion::subtree_cull`, which keeps the folded chains of the path it
 walks, so a slot costs its own effects and not the depth of the tree), and
@@ -1043,7 +1043,30 @@ footprint of the scene patches since the version on screen, which the host holds
 to that base with `RasterBase` (ADR-0304 §7). The enum is exhaustive (ADR-0304 §5): `Unchanged`,
 `Region` of up to eight disjoint rects, or `Full` with its `FullReason`, and the
 engine matches all three with no wildcard, so a new variant fails to compile
-here. The tracker plans by the region's bounds. The raster executor hands each frame's region to the
+here. The tracker keeps the region's rects (a further one merges the cheapest
+pair, as `Region` does), and a partial frame redraws them by a
+`damage::RegionPlan` (ADR-0304 §9): `Bounds`, one pass under the bounding box,
+or `Rects`, one pass per rect, each clearing its own rect under its own
+scissor and walking the scene culled by that rect, counted as
+`region_passes`. Production plans `Bounds` for every region
+(`RegionPlan::of`): a pass per rect records everything its rect reaches
+again, which costs more than one pass over the box, so `Rects` is switched on
+once a frame records once and replays per rect ([gaps](../../docs/gaps.md)).
+Until then the tests drive it through `RetainedCapture::plan_rect_by_rect`.
+Either way no pixel outside the plan's rects is written and every chunk that
+meets a written pixel is drawn there once, in paint order
+(`region_frames_match_a_full_frame`); one scissor around the region with the
+walk culled per rect would clear the gap without redrawing it and blend what
+meets both rects twice. The damage is closed over backdrop readers as the
+plan redraws it (`FrameProtocol::include_backdrop_dependencies`): the closure
+of a region leaves each read footprint it joined inside one rect, and a
+region planned as its box is closed as the box itself, so a reader in the
+gap between the rects is redrawn whole
+(`a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole`,
+`a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole`). A
+backdrop group shares one capture per pass, not per frame
+(`a_backdrop_group_captures_once_per_region_pass`): a later pass clears and
+redraws its rect after an earlier pass's capture. The raster executor hands each frame's region to the
 slot's backend; a frame rejected on a stale generation or hidden, and a failed
 render, make the slot owe a full repaint, a superseded frame's region is folded into
 the frame that replaced it, and the debt is forgotten only after a present.
@@ -1071,10 +1094,12 @@ swapchain buffer-age assertions do not apply to this API. FLUI's
 `bounded_reused_targets_preserve_pixels` row, pins failed-candidate preservation,
 two-slot reuse and resize recovery.
 
-A partial frame clears its damage with an opaque fill inside the scissor
+Each pass of a partial frame clears its rect with an opaque fill inside its scissor
 (`damage::begin_partial`) before the content, not with the full clear pass,
 which would wipe the retained pixels. The advanced-shape straddle self-heal
-stays: with the correct previous frame outside the damage, it bounds a
+stays, asked of each pass about the items it recorded under its own rect
+(`a_shape_straddling_a_region_pass_repaints_the_next_frame_in_full`):
+with the correct previous frame outside the damage, it bounds a
 straddling shape's out-of-damage slice to one frame. The full clear and the
 partial clear paint one constant, `frame_protocol::BACKGROUND`.
 

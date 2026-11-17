@@ -131,6 +131,7 @@ impl WgpuPainter {
             effect,
             blend,
             group: group.cloned(),
+            region_pass: self.region_pass,
         };
         self.finish_current_segment();
         self.draw_order.push(DrawItem::Backdrop(op));
@@ -272,6 +273,7 @@ impl GpuReplay {
         let snapshot = match &op.group {
             Some(group) => Some(snapshots.capture(
                 group,
+                op.region_pass,
                 backing,
                 (
                     viewport_size.0.min(attachment_size.0),
@@ -590,26 +592,38 @@ impl GpuReplay {
 }
 
 /// Backdrops captured for grouped filters within one ordered item list, i.e.
-/// one attachment. Dropped with the list, so a group never reads another
-/// surface's pixels or a later reuse of the same pooled attachment.
+/// one attachment, and one pass of a partial frame. Dropped with the list, so
+/// a group never reads another surface's pixels or a later reuse of the same
+/// pooled attachment; keyed by pass, because a later pass clears and redraws
+/// its own rect after an earlier pass's capture.
 #[derive(Default)]
 pub(crate) struct BackdropSnapshots {
-    captured: Vec<(flui_layer::BackdropGroupKey, PooledTexture)>,
+    captured: Vec<((flui_layer::BackdropGroupKey, u32), PooledTexture)>,
 }
 
 impl BackdropSnapshots {
-    /// The group's snapshot of `backing`, capturing the readable attachment
-    /// (texels `0..extent`) on the group's first read.
+    /// The snapshot of `backing` for `group` in pass `pass`, capturing the
+    /// readable attachment (texels `0..extent`) on the group's first read in
+    /// that pass.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one capture's attachment, extent and format, and the frame resources it is charged to"
+    )]
     fn capture(
         &mut self,
         group: &flui_layer::BackdropGroupKey,
+        pass: u32,
         backing: &wgpu::Texture,
         extent: (u32, u32),
         format: wgpu::TextureFormat,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<&wgpu::Texture> {
-        if let Some(index) = self.captured.iter().position(|(key, _)| key == group) {
+        if let Some(index) = self
+            .captured
+            .iter()
+            .position(|((key, at), _)| key == group && *at == pass)
+        {
             return Ok(self.captured[index].1.texture());
         }
         let bytes = (extent.0 as usize)
@@ -645,7 +659,7 @@ impl BackdropSnapshots {
             },
         );
         let index = self.captured.len();
-        self.captured.push((group.clone(), snapshot));
+        self.captured.push(((group.clone(), pass), snapshot));
         Ok(self.captured[index].1.texture())
     }
 }
