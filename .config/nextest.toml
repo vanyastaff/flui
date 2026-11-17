@@ -215,9 +215,11 @@ test-group = 'system-clipboard'
 # (`windows_foreground::`, which runs a second process), would read another
 # test's window shown meanwhile. They are modules of `platform_it`, run one
 # process each, so no in-process lock can keep them apart: the group runs them
-# one at a time, the contract's Win32 cases with them.
+# one at a time, the contract's Win32 cases with them. The OLE drag table of
+# the library runs with them on the input desktop (`nightly-platforms.yml`):
+# it raises windows topmost and runs `DoDragDrop`'s modal loop there.
 [[profile.default.overrides]]
-filter = 'package(flui-native) & binary(platform_it) & (test(/^windows_/) | test(/^contract::/))'
+filter = 'package(flui-native) & ((binary(platform_it) & (test(/^windows_/) | test(/^contract::/))) | test(=drag::windows::tests::ole_drag_and_drop_on_real_windows))'
 test-group = 'desktop-foreground'
 
 # The AppKit window cases share the one desktop the same way, and its Spaces
