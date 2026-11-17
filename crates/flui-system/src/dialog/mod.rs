@@ -23,7 +23,9 @@ use flui_platform::capability::{
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason, WindowId};
 use rustc_hash::FxHashMap;
 
-pub use request::{FileFilter, OpenRequest, PickedFile, Picks, SaveRequest};
+pub use request::{
+    FileFilter, MalformedRequest, OpenRequest, PickedFile, Picks, SaveLocation, SaveRequest,
+};
 
 /// The file dialog capability: `ctx.capability::<FileDialogCapability>()`
 /// hands out [`FileDialogs`].
@@ -47,12 +49,10 @@ pub enum DialogError {
     /// The window already shows a dialog; ask again once it answers.
     #[error("the window already shows a dialog")]
     Busy,
-    /// The request is malformed: a filter without a name or without
-    /// anything to match, an extension or MIME type that is not one, filters
-    /// on a folder dialog, a suggested name that is a path, or a relative
-    /// directory. Nothing was shown.
-    #[error("the dialog request is malformed")]
-    InvalidRequest,
+    /// The request is malformed, as the [`MalformedRequest`] says. Nothing
+    /// was shown.
+    #[error("the dialog request is malformed: {0}")]
+    InvalidRequest(#[from] MalformedRequest),
     /// The service the backend shows dialogs through is not here (no file
     /// chooser portal); the [`Unsupported`] says why and whether trying later
     /// may help.
@@ -79,7 +79,7 @@ impl DialogError {
         match self {
             Self::Unsupported(unsupported) => Some(*unsupported),
             Self::Busy
-            | Self::InvalidRequest
+            | Self::InvalidRequest(_)
             | Self::WindowClosed
             | Self::NotAFile
             | Self::Failed(_) => None,
@@ -92,8 +92,9 @@ impl DialogError {
 /// [allowed several](OpenRequest::allow_multiple).
 pub type OpenResult = Result<Option<Picks>, DialogError>;
 
-/// What a save dialog answers: the pick, `None` when the user cancelled.
-pub type SaveResult = Result<Option<PickedFile>, DialogError>;
+/// What a save dialog answers: where the user chose to save, `None` when the
+/// user cancelled.
+pub type SaveResult = Result<Option<SaveLocation>, DialogError>;
 
 /// What a [`FileDialogBackend`] gives the handle for each dialog it shows:
 /// the system's dialog stays up while the handle holds it.
@@ -250,10 +251,10 @@ impl FileDialogs {
     /// answers [`SystemFailure::MalformedAnswer`]: its answer is not one the
     /// request can have.
     pub fn open(&self, request: OpenRequest) -> Dialog<OpenResult> {
-        let valid = request.is_valid();
+        let checked = request.check();
         let multiple = request.is_multiple();
         self.show(
-            valid,
+            checked,
             |backend, window, answer| backend.open(window, request, answer),
             move |result| match result {
                 Ok(Some(picks)) if !multiple && picks.len() > 1 => {
@@ -265,18 +266,27 @@ impl FileDialogs {
     }
 
     /// Show a save dialog.
+    ///
+    /// A backend that names a selected filter the request does not have
+    /// answers [`SystemFailure::MalformedAnswer`].
     pub fn save(&self, request: SaveRequest) -> Dialog<SaveResult> {
-        let valid = request.is_valid();
+        let checked = request.check();
+        let filters = request.filters.len();
         self.show(
-            valid,
+            checked,
             |backend, window, answer| backend.save(window, request, answer),
-            |result| result,
+            move |result| match result {
+                Ok(Some(location)) if location.filter().is_some_and(|index| index >= filters) => {
+                    Err(SystemFailure::MalformedAnswer.into())
+                }
+                result => result,
+            },
         )
     }
 
-    /// Ask `backend` through `ask` when the request is `valid`, the window
-    /// is open and shows no dialog; answer the error at once otherwise. The
-    /// backend's answer reaches the caller through `check`.
+    /// Ask `backend` through `ask` when the request `checked` well formed,
+    /// the window is open and shows no dialog; answer the error at once
+    /// otherwise. The backend's answer reaches the caller through `check`.
     ///
     /// The window is marked busy until the dialog ends: the backend's answer
     /// settles (a backend that drops its resolver unanswered ends it too,
@@ -285,7 +295,7 @@ impl FileDialogs {
     /// the window closes.
     fn show<T: 'static>(
         &self,
-        valid: bool,
+        checked: Result<(), MalformedRequest>,
         ask: impl FnOnce(
             &dyn FileDialogBackend,
             &WindowRef,
@@ -295,8 +305,8 @@ impl FileDialogs {
     ) -> Dialog<Result<T, DialogError>> {
         let (completion, answer) = self.completions.pending();
         let window = self.window.id();
-        let refusal = if !valid {
-            Some(DialogError::InvalidRequest)
+        let refusal = if let Err(malformed) = checked {
+            Some(DialogError::InvalidRequest(malformed))
         } else if self.window.lifetime().is_closed() {
             Some(DialogError::WindowClosed)
         } else if self.open.0.borrow().contains_key(&window) {

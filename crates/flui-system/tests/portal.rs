@@ -16,10 +16,10 @@ use std::time::{Duration, Instant};
 
 use flui_platform::SystemFailure;
 use flui_platform::capability::{Abandoned, Completion};
-use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability};
+use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherCapability, Scheme};
 use flui_system::dialog::{
     Dialog, DialogError, FileDialogCapability, FileFilter, OpenRequest, OpenResult, PickedFile,
-    Picks, SaveRequest,
+    Picks, SaveLocation, SaveRequest,
 };
 use flui_system::testing::PortalOnBus;
 use flui_testing::HeadlessHost;
@@ -496,7 +496,8 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
     let launcher = launcher.expect("the portal provides a launcher on Linux");
     let file = scratch_file("launch.txt");
 
-    let uri = ExternalUri::try_new("https://example.com/a b").expect("a web URI");
+    let uri =
+        ExternalUri::try_new("https://example.com/a%20b", &[Scheme::HTTPS]).expect("a web URI");
     portal.answer(0, Results::new());
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
 
@@ -552,7 +553,7 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
         [
             Call::OpenUri {
                 parent: String::new(),
-                uri: "https://example.com/a b".to_owned(),
+                uri: "https://example.com/a%20b".to_owned(),
             },
             Call::OpenFile {
                 parent: String::new(),
@@ -660,6 +661,7 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
             title: "Pictures".to_owned(),
             options: [
                 "accept_label",
+                "current_filter",
                 "current_folder",
                 "directory",
                 "filters",
@@ -683,10 +685,123 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     assert_eq!(folder, b"/home/me\0", "the folder is NUL-terminated bytes");
     let filters = Vec::<(String, Vec<(u32, String)>)>::try_from(options[0]["filters"].clone())
         .expect("a(sa(us))");
+    let images = (
+        "Images".to_owned(),
+        vec![(0, "*.png".to_owned()), (0, "*.PNG".to_owned())],
+    );
     assert_eq!(
         filters,
-        [("Images".to_owned(), vec![(0, "*.png".to_owned())])]
+        std::slice::from_ref(&images),
+        "`PHOTO.PNG` is matched as Windows and macOS match it"
     );
+    assert_eq!(
+        <(String, Vec<(u32, String)>)>::try_from(options[0]["current_filter"].clone())
+            .expect("(sa(us))"),
+        images,
+        "the first filter is the selected one"
+    );
+}
+
+#[test]
+fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
+    let portal = StandIn::serve();
+    let (mut host, dialogs) = acquire::<FileDialogCapability>(&portal.plugin());
+    let dialogs = dialogs.expect("the portal provides dialogs on Linux");
+    let request = || {
+        SaveRequest::new()
+            .filter(FileFilter::new("PNG").with_extension("png"))
+            .filter(FileFilter::new("JPEG").with_extension("jpg"))
+    };
+    let answer = |current: Option<(&str, &str)>| {
+        let mut results = uris(&["file:///home/me/picture"]);
+        if let Some((name, glob)) = current {
+            let filter = (name.to_owned(), vec![(0_u32, glob.to_owned())]);
+            results.insert(
+                "current_filter".to_owned(),
+                OwnedVariant::try_from(Variant::from(filter)).expect("an owned structure"),
+            );
+        }
+        results
+    };
+    let file = PickedFile::try_new("/home/me/picture").expect("an absolute path");
+
+    portal.answer(0, answer(Some(("JPEG", "*.jpg"))));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(file.clone(), Some(1))))),
+        "the filter is found by its name"
+    );
+    portal.answer(0, answer(Some(("Raw", "*.raw"))));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(file.clone(), None)))),
+        "a filter the request did not offer is none: the file stands"
+    );
+    portal.answer(0, answer(None));
+    assert_eq!(
+        settle(&mut host, dialogs.save(request())),
+        Ok(Ok(Some(SaveLocation::new(file, None)))),
+        "a portal that does not say reports none"
+    );
+
+    let options = portal.script.dialog_options.lock().expect("options");
+    let current = <(String, Vec<(u32, String)>)>::try_from(options[0]["current_filter"].clone())
+        .expect("(sa(us))");
+    assert_eq!(
+        current,
+        (
+            "PNG".to_owned(),
+            vec![(0, "*.png".to_owned()), (0, "*.PNG".to_owned())]
+        )
+    );
+}
+
+#[test]
+fn a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let portal = StandIn::serve();
+    let (mut host, launcher) = acquire::<LauncherCapability>(&portal.plugin());
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+    let folder = std::env::temp_dir().join(format!("flui-system-runs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a scratch folder");
+
+    // A link whose name says document and whose target is a desktop entry.
+    let entry = folder.join("evil.desktop");
+    std::fs::write(&entry, b"[Desktop Entry]\nExec=true\n").expect("a desktop entry");
+    let disguised = folder.join("report.pdf");
+    std::os::unix::fs::symlink(&entry, &disguised).expect("a symbolic link");
+    // An executable whose name says nothing.
+    let program = folder.join("report");
+    std::fs::write(&program, b"#!/bin/sh\n").expect("a script");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable");
+
+    for path in [&disguised, &program] {
+        assert_eq!(
+            settle(&mut host, launcher.open_path(path)),
+            Ok(Err(LaunchError::NotADocument)),
+            "{}",
+            path.display()
+        );
+    }
+    assert!(portal.calls().is_empty(), "the portal was never asked");
+
+    // Showing one runs nothing.
+    portal.answer(0, Results::new());
+    assert_eq!(
+        settle(&mut host, launcher.reveal_path(&program)),
+        Ok(Ok(()))
+    );
+    assert_eq!(
+        portal.calls(),
+        [Call::OpenDirectory {
+            parent: String::new(),
+            path: program.canonicalize().expect("the script exists"),
+        }]
+    );
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]
@@ -695,7 +810,8 @@ fn without_a_portal_on_the_bus_the_services_are_unavailable() {
     let plugin = PortalOnBus::new(bus.address.as_str());
     let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
     let launcher = launcher.expect("the launcher is handed out before the bus is asked");
-    let uri = ExternalUri::try_new("mailto:someone@example.com").expect("a mail URI");
+    let uri =
+        ExternalUri::try_new("mailto:someone@example.com", &[Scheme::MAILTO]).expect("a mail URI");
     let answered: Result<LaunchResult, Abandoned> = settle(&mut host, launcher.open_uri(&uri));
     assert!(
         matches!(answered, Ok(Err(LaunchError::Unsupported(_)))),
@@ -737,7 +853,7 @@ fn an_installed_portal_that_is_not_running_is_started_first() {
     let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
     let launcher = launcher.expect("the portal provides a launcher on Linux");
 
-    let uri = ExternalUri::try_new("https://example.com/").expect("a web URI");
+    let uri = ExternalUri::try_new("https://example.com/", &[Scheme::HTTPS]).expect("a web URI");
     let slot = outcome_slot::<Result<LaunchResult, Abandoned>>();
     let into = Rc::clone(&slot);
     launcher
@@ -772,7 +888,7 @@ fn a_session_bus_that_restarts_is_connected_to_again() {
     let plugin = PortalOnBus::new(listen.as_str());
     let (mut host, launcher) = acquire::<LauncherCapability>(&plugin);
     let launcher = launcher.expect("the portal provides a launcher on Linux");
-    let uri = ExternalUri::try_new("https://example.com/").expect("a web URI");
+    let uri = ExternalUri::try_new("https://example.com/", &[Scheme::HTTPS]).expect("a web URI");
 
     let portal = StandIn::serve_on(PrivateBus::configured(&directory, &listen));
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));

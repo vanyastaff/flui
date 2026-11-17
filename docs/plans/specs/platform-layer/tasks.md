@@ -8274,6 +8274,65 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   сервисы, полосы хранилища и хуки разработки (`DevReload`, `DevAgent`; ADR-0311). Не собрано
   здесь: Android, iOS, macOS (правка `android.rs` — только CI); wasm проверен типами в WSL.
 
+- [x] **LY144** — ветка `system/filters-and-launch-policy`, решение — ADR-0360. Находки
+  подтверждены на `main` @ `d139b8188` чтением кода: `literal_glob` выдавал `*.png` без сложения
+  регистра; `with_extension("tar.gz")` отказывал (точка была запрещена); `current_filter` не
+  уходил и не читался; `ExternalUri` пропускал всё, кроме шести схем; тело `OpenURI`, `OpenFile`
+  и `OpenDirectory` строилось с `String::new()` вместо родителя (находка «предположительно»
+  подтверждена). Построено: `ExternalUri::try_new(uri: &str, allowed: &[Scheme])` — длина до
+  копирования; без символов, которые RFC 3986 велит кодировать (пробел, `"`, `<`, `>`, `` ` ``,
+  `{`, `|`, `}`, `^`, `\`: оболочка Windows подставляет URI в командную строку обработчика как
+  есть — `UnencodedCharacter`) и без скрытых (управляющие, двунаправленные, нулевой ширины, мягкий
+  перенос, BOM, пробелы и разделители вне ASCII — `HiddenCharacter`); схема из `allowed` без учёта
+  регистра ASCII, никогда не из `REFUSED_SCHEMES` (`Scheme::try_new` их не строит; `Scheme` —
+  `Eq` и `Hash`); у схем с авторитетом (`http`, `https`, `ftp`, `ws`, `wss`, `file`) `//`
+  обязателен (`MissingAuthority`: браузер читает `https:bank@evil` как авторитет), в авторитете нет
+  пользователя (`Credentials`); запрос `mailto` — только `to`, `cc`, `bcc`, `subject`, `body`
+  (`MailtoField`); процент-коды не раскрываются. `Launcher` решает по одному пути, без файловой
+  системы на потоке владельца: путь абсолютный, на Windows допустим только префикс буквы диска
+  (`Disk`, `VerbatimDisk`), любой другой — `NotLocal` (в том числе `\\?\GLOBALROOT\Device\Mup\…`);
+  `open_path` отказывает имени из `RUNNABLE_EXTENSIONS` или с CLSID (`.{…}`), читая имя как
+  Windows (без хвостовых точек и пробелов и без `:потока`) — `NotADocument`; показ и корзина
+  разрешены. Список — нижняя граница, не политика: бэкенд открывает файл вне потока владельца и
+  судит открытое. Launcher портала открывает файл на потоке портала, судит дескриптор
+  (`/proc/self/fd`: разрешённое имя и бит исполнения обычного файла) и отдаёт порталу этот же
+  дескриптор — подмена ссылки между проверкой и открытием ничего не меняет. `FileFilter`:
+  расширение — части из букв, цифр ASCII, `-`, `_`, `+`, через одиночную точку (`tar.gz`), хранится
+  без ведущей точки в нижнем регистре и один раз; MIME — два имени RFC 6838 или `тип/*`; границы
+  `MAX_PATTERN_LEN`, `MAX_NAME_LEN`, `MAX_PATTERNS`, `MAX_PER_REQUEST`; два фильтра с одним именем
+  отказаны. `DialogError::InvalidRequest(MalformedRequest)` называет причину. Портал получает
+  каждое расширение в нижнем и верхнем регистре (`*.png`, `*.PNG`, как шлют приложения GTK), имя в
+  смешанном регистре на чувствительной к регистру ФС не показывается (`docs/gaps.md`), и первый
+  фильтр как `current_filter`; сохранение отвечает `SaveLocation` с индексом выбранного фильтра
+  (портал сообщает фильтр значением — бэкенд находит его по имени; чужое имя — `None`); индекс вне
+  фильтров запроса — `MalformedAnswer` у handle для любого бэкенда. Launcher портала берёт окно
+  виджета и называет его `parent_window`, пока окно открыто. Схемы, объявленные приложением
+  (ADR-0307), в умолчание не вошли: это схемы, которые приложение принимает. Тесты (в скобках —
+  откат, который их роняет; таблицы называют каждую неверную строку):
+  `external_uri_admits_only_the_schemes_its_caller_names` (каждая проверка схемы, авторитета,
+  пользователя, `mailto`, кодирования и скрытых символов отдельно роняет свои строки);
+  `a_scheme_is_named_once_whatever_its_case_and_never_a_refused_one`;
+  `opening_a_program_a_script_or_a_shortcut_is_refused_without_asking_the_system` (без проверки
+  имени `setup.exe` доходит до системы, без CLSID — `readme.txt.{…}`);
+  `only_a_drive_letter_is_a_local_path` (Windows, по строке на каждый вид `Prefix`; со старым
+  запрет-списком до системы доходит `\\?\GLOBALROOT\…`); `a_filter_keeps_each_pattern_once_as_the_dialog_compares_it`
+  (без нижнего регистра и дедупликации — `["TAR.GZ", "tar.gz", "Zip", "zip"]`);
+  `a_malformed_request_is_refused_without_showing_a_dialog` (без каждой границы и проверки имён —
+  её строка); `a_save_reports_the_filter_selected_when_the_user_accepted` (без проверки индекса
+  доходит `Some(2)` при двух фильтрах); на Linux против подставного портала
+  `the_dialogs_reach_the_file_chooser_and_answer_its_picks` (без `current_filter` и без верхнего
+  регистра), `a_save_dialog_reports_the_filter_the_portal_says_was_selected` (без чтения
+  `current_filter` — `None` вместо `Some(1)`) и
+  `a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on` (без суда над
+  дескриптором ссылка `report.pdf` → `evil.desktop` открывается); модульные
+  `a_filter_becomes_globs_then_mime_types` и
+  `a_launch_is_attached_to_its_widgets_window_while_it_is_open` (без родителя — `""`). Прогнано:
+  `flui-system` на Windows через `cargo heli nextest` (25), в WSL (4 модульных и 35
+  интеграционных, с подставным порталом). Должно на устройствах (в строках `platform-parity.toml`):
+  настоящие GTK и KDE file chooser и `OpenURI` на рабочем столе. macOS, iOS, Android и Web в
+  `flui-system` без провайдера; отображение фильтров и суд над открытым файлом (`AssocIsDangerous`
+  на Windows, Launch Services на macOS) для них записаны в ADR-0360 §2, §4 и `docs/gaps.md`.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная
