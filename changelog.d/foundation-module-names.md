@@ -30,3 +30,5 @@
 
 - `FrameEpoch::next` and `SurfaceGeneration::next` refuse to wrap in a release build too; a wrap
   would make an earlier frame or surface current again.
+- A notifier's events (a listener's panic, use after dispose) carry the target `flui.notifier`
+  instead of the module path, so a log filter on them does not move with the source.

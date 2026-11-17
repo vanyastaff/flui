@@ -273,7 +273,7 @@ impl ChangeNotifier {
             // fires — hence `cfg_attr`, not a bare `expect`.
             #[cfg_attr(debug_assertions, expect(unreachable_code))]
             {
-                tracing::warn!("ChangeNotifier used after dispose");
+                tracing::warn!(target: "flui.notifier", "ChangeNotifier used after dispose");
                 return true;
             }
         }

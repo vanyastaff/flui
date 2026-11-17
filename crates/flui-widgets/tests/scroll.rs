@@ -4013,7 +4013,7 @@ fn assert_notification_failures(log: &flui_testing::log_capture::CapturedLog, ex
     let reported: Vec<_> = log
         .records()
         .iter()
-        .filter(|record| record.target == "flui_foundation::channel")
+        .filter(|record| record.target == "flui.notifier")
         .filter_map(|record| record.field("panic_payload"))
         .collect();
     assert!(

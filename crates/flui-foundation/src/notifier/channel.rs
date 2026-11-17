@@ -354,7 +354,7 @@ impl<Arg> Notifier<Arg> {
             // lint therefore only exists in debug builds — hence `cfg_attr`.
             #[cfg_attr(debug_assertions, expect(unreachable_code))]
             {
-                tracing::warn!("Notifier used after dispose");
+                tracing::warn!(target: "flui.notifier", "Notifier used after dispose");
                 return true;
             }
         }
@@ -726,6 +726,7 @@ impl<Arg> Notifier<Arg> {
                     recovery.capture(payload);
                     recovery.run(|| {
                         tracing::error!(
+                            target: "flui.notifier",
                             listener_id = ?id,
                             panic_payload = failure_text,
                             "Notifier listener panicked; continuing with remaining listeners"
