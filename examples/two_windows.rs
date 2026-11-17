@@ -3,9 +3,9 @@
 //! (ADR-0305). Each window counts its own presses, and its other button
 //! opens one more window.
 //!
-//! It is what the device runs of the threaded placement use (ADR-0305 §10):
-//! a debug build on Linux started with `FLUI_RASTER_PLACEMENT=threaded`
-//! draws every window from the raster thread.
+//! It is what the runs of the threaded placement use (ADR-0305 §10): on
+//! Wayland the raster thread draws every window, and on X11, Windows and
+//! macOS the owner thread does until a run there makes them threaded.
 //!
 //! Run with: cargo run --example two_windows --features unstable-windows
 

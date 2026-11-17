@@ -2260,3 +2260,87 @@ fn an_offscreen_slot_the_rebuilt_device_refuses_holds_why_and_asks_no_surface() 
         [(1, RasterVerdict::Presented)]
     );
 }
+
+/// A settlement counts as announced only once the wake that followed it has
+/// returned: read from inside that wake it is not counted yet, and a wake that
+/// panics announces nothing, so the owner keeps the in-flight floor that
+/// guards a lost wake (ADR-0305 §5).
+#[test]
+fn a_settlement_is_announced_only_by_a_wake_that_returned() {
+    let owner: std::rc::Rc<std::cell::OnceCell<(RasterSender, SlotId)>> = std::rc::Rc::default();
+    let seen_inside: std::rc::Rc<Cell<Option<usize>>> = std::rc::Rc::default();
+    let panics: std::rc::Rc<Cell<bool>> = std::rc::Rc::default();
+    let clock = ManualClock::new();
+    let backend = ScriptedSlots::new();
+    let (executor, sender) =
+        RasterExecutor::new(backend.clone(), std::rc::Rc::new(clock.clone()), {
+            let owner = std::rc::Rc::clone(&owner);
+            let seen_inside = std::rc::Rc::clone(&seen_inside);
+            let panics = std::rc::Rc::clone(&panics);
+            move || {
+                if let Some((sender, slot)) = owner.get() {
+                    seen_inside.set(Some(sender.settlements_announced(*slot)));
+                }
+                assert!(!panics.get(), "a window's redraw requester panics");
+            }
+        });
+    let mut rig = Rig {
+        executor,
+        sender: sender.clone(),
+        backend,
+        wakes: Arc::default(),
+        clock,
+    };
+    let at = attached(&mut rig, 1);
+    assert!(owner.set((sender, at.slot)).is_ok());
+
+    let _ = rig.sender.send(frame(at, 1)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        seen_inside.get(),
+        Some(0),
+        "inside its wake the settlement is not announced yet"
+    );
+    assert_eq!(
+        rig.sender.settlements_announced(at.slot),
+        1,
+        "the wake returned"
+    );
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(1, RasterVerdict::Presented)]
+    );
+    assert_eq!(rig.sender.settlements_announced(at.slot), 0, "drained");
+
+    panics.set(true);
+    let _ = rig.sender.send(frame(at, 2)).expect("accepted");
+    let mut caught = FirstPanic::new();
+    let turn = caught.contain(|| rig.executor.turn());
+    assert!(
+        turn.is_none() && caught.into_payload().is_some(),
+        "the wake's panic is resumed"
+    );
+    assert_eq!(
+        rig.sender.record(at.slot).map(|record| record.undrained),
+        Some(1),
+        "the settlement waits"
+    );
+    assert_eq!(
+        rig.sender.settlements_announced(at.slot),
+        0,
+        "a wake that panicked announces nothing"
+    );
+
+    panics.set(false);
+    assert_eq!(
+        verdicts(&rig.sender, at.slot),
+        [(2, RasterVerdict::Presented)]
+    );
+    let _ = rig.sender.send(frame(at, 3)).expect("accepted");
+    let _ = rig.executor.turn();
+    assert_eq!(
+        rig.sender.settlements_announced(at.slot),
+        1,
+        "the next wake that returns announces its settlement"
+    );
+}
