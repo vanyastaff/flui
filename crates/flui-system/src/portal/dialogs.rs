@@ -13,7 +13,7 @@ use super::request::{self, Response};
 use super::{Dismissal, Portal, PortalError, parent_window};
 use crate::dialog::{
     DialogError, DialogHold, FileDialogBackend, FileFilter, OpenRequest, OpenResult, PickedFile,
-    Picks, SaveRequest, SaveResult,
+    Picks, SaveLocation, SaveRequest, SaveResult,
 };
 
 const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
@@ -29,19 +29,21 @@ impl PortalDialogs {
     }
 
     /// Show `method`'s dialog with `options` and answer `answer` with what
-    /// `picked` makes of the files the user chose. The dialog stays up while
-    /// the returned hold is held; dropping it closes the portal's request.
-    fn show<T>(
+    /// `picked` makes of the files the user chose and the rest of the
+    /// portal's results. The dialog stays up while the returned hold is
+    /// held; dropping it closes the portal's request.
+    fn show<T, P>(
         &self,
         window: &WindowRef,
         method: &'static str,
         title: Option<&str>,
         mut options: Options,
         answer: Resolver<Result<Option<T>, DialogError>>,
-        picked: fn(Picks) -> Result<T, DialogError>,
+        picked: P,
     ) -> DialogHold
     where
         T: Send + 'static,
+        P: FnOnce(Picks, &Results) -> Result<T, DialogError> + Send + 'static,
     {
         if let Err(error) = self.portal.start() {
             let _ = answer.resolve(Err(dialog_error(error)));
@@ -70,7 +72,9 @@ impl PortalDialogs {
             }
             .await;
             let answered = match result {
-                Ok(Response::Answered(results)) => picks(&results).and_then(picked).map(Some),
+                Ok(Response::Answered(results)) => picks(&results)
+                    .and_then(|picks| picked(picks, &results))
+                    .map(Some),
                 Ok(Response::Cancelled) => Ok(None),
                 Ok(Response::Ended(code)) => Err(SystemFailure::PortalResponse(code).into()),
                 // Nobody waits: the resolver drops unanswered.
@@ -85,6 +89,13 @@ impl PortalDialogs {
 
 type Options = HashMap<&'static str, Variant<'static>>;
 
+/// A dialog's results, by name.
+type Results = HashMap<String, OwnedVariant>;
+
+/// One filter as the portal's `(sa(us))` carries it: the name, then each
+/// pattern with its kind, `0` for a glob and `1` for a MIME type.
+type PortalFilter = (String, Vec<(u32, String)>);
+
 fn dialog_error(error: PortalError) -> DialogError {
     match error {
         PortalError::Unsupported(unsupported) => DialogError::Unsupported(unsupported),
@@ -96,7 +107,7 @@ fn dialog_error(error: PortalError) -> DialogError {
 /// least: one that names none, or holds something other than a list of
 /// strings, is outside the portal's contract, and a URI that names no local
 /// file fails the whole answer, since the handle hands out paths only.
-fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Picks, DialogError> {
+fn picks(results: &Results) -> Result<Picks, DialogError> {
     let malformed = DialogError::Failed(SystemFailure::MalformedAnswer);
     let uris = results
         .get("uris")
@@ -115,44 +126,56 @@ fn picks(results: &HashMap<String, OwnedVariant>) -> Result<Picks, DialogError> 
     Picks::try_new(files).ok_or(malformed)
 }
 
-/// The one file a save dialog answers; several are outside the portal's
-/// contract.
-fn one_file(picks: Picks) -> Result<PickedFile, DialogError> {
+/// Where a save dialog answers: its one file, and the filter the portal
+/// reports as selected (`current_filter`), found in `names` by its name,
+/// which a request holds once. Several files are outside the portal's
+/// contract; a selected filter the request did not offer, or one the portal
+/// does not report, is no filter, since the file the user chose stands
+/// without it.
+fn save_location(
+    picks: Picks,
+    results: &Results,
+    names: &[String],
+) -> Result<SaveLocation, DialogError> {
     if picks.len() > 1 {
         return Err(SystemFailure::MalformedAnswer.into());
     }
-    Ok(picks.first().clone())
+    let selected = results
+        .get("current_filter")
+        .and_then(|filter| PortalFilter::try_from(filter.clone()).ok())
+        .and_then(|(name, _)| names.iter().position(|offered| *offered == name));
+    Ok(SaveLocation::new(picks.first().clone(), selected))
 }
 
-/// The portal's `a(sa(us))` filters: `0` with a glob, `1` with a MIME type.
-fn filters(filters: &[FileFilter]) -> Vec<(String, Vec<(u32, String)>)> {
-    filters
+/// One filter as the portal takes it: each extension a glob that matches it
+/// in either ASCII case, then each MIME type.
+fn portal_filter(filter: &FileFilter) -> PortalFilter {
+    let globs = filter
+        .extensions()
         .iter()
-        .map(|filter| {
-            let globs = filter
-                .extensions()
-                .iter()
-                .map(|extension| (0, format!("*.{}", literal_glob(extension))));
-            let types = filter
-                .mime_types()
-                .iter()
-                .map(|mime_type| (1, mime_type.clone()));
-            (
-                filter.name().to_owned(),
-                globs.chain(types).collect::<Vec<(u32, String)>>(),
-            )
-        })
-        .collect::<Vec<(String, Vec<(u32, String)>)>>()
+        .map(|extension| (0, format!("*.{}", case_folded_glob(extension))));
+    let types = filter
+        .mime_types()
+        .iter()
+        .map(|mime_type| (1, mime_type.clone()));
+    (
+        filter.name().to_owned(),
+        globs.chain(types).collect::<Vec<(u32, String)>>(),
+    )
 }
 
-/// `text` as a glob that matches only itself: each glob character in a
-/// bracket of its own, which every glob dialect reads as that character.
-fn literal_glob(text: &str) -> String {
-    let mut glob = String::with_capacity(text.len());
-    for character in text.chars() {
-        if matches!(character, '*' | '?' | '[' | ']') {
+/// `extension` as a glob that matches it in either ASCII case: each letter a
+/// bracket of its two cases (`png` is `[pP][nN][gG]`). The portal's backends
+/// match a glob case-sensitively, while the contract, as Windows and macOS,
+/// ignores case. A checked extension holds no glob character, so the rest
+/// stands for itself.
+fn case_folded_glob(extension: &str) -> String {
+    let mut glob = String::with_capacity(extension.len() * 4);
+    for character in extension.chars() {
+        if character.is_ascii_alphabetic() {
             glob.push('[');
-            glob.push(character);
+            glob.push(character.to_ascii_lowercase());
+            glob.push(character.to_ascii_uppercase());
             glob.push(']');
         } else {
             glob.push(character);
@@ -180,8 +203,15 @@ fn common(
     if let Some(directory) = directory {
         options.insert("current_folder", Variant::from(bytes(directory)));
     }
-    if !filter_list.is_empty() {
-        options.insert("filters", Variant::from(filters(filter_list)));
+    // The first filter is the selected one: said in `current_filter` as well
+    // as by its place, since a backend need not select the first.
+    if let Some(first) = filter_list.first() {
+        let filters = filter_list
+            .iter()
+            .map(portal_filter)
+            .collect::<Vec<PortalFilter>>();
+        options.insert("current_filter", Variant::from(portal_filter(first)));
+        options.insert("filters", Variant::from(filters));
     }
 }
 
@@ -207,7 +237,7 @@ impl FileDialogBackend for PortalDialogs {
             request.title.as_deref(),
             options,
             answer,
-            Ok,
+            |picks, _| Ok(picks),
         )
     }
 
@@ -227,41 +257,50 @@ impl FileDialogBackend for PortalDialogs {
             request.directory.as_deref(),
             &request.filters,
         );
+        let names = request
+            .filters
+            .iter()
+            .map(|filter| filter.name().to_owned())
+            .collect::<Vec<String>>();
         self.show(
             window,
             "SaveFile",
             request.title.as_deref(),
             options,
             answer,
-            one_file,
+            move |picks, results| save_location(picks, results, &names),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::filters;
+    use super::portal_filter;
     use crate::dialog::FileFilter;
 
     #[test]
     fn a_filter_becomes_globs_then_mime_types() {
         let filter = FileFilter::new("Images")
             .with_extension("png")
-            .with_extension("jpg")
-            .with_extension("a[1]?")
+            .with_extension("JPG")
+            .with_extension("tar.gz")
+            .with_extension("c++")
+            .with_extension("7z")
             .with_mime_type("image/webp");
         assert_eq!(
-            filters(&[filter]),
-            [(
+            portal_filter(&filter),
+            (
                 "Images".to_owned(),
                 vec![
-                    (0, "*.png".to_owned()),
-                    (0, "*.jpg".to_owned()),
-                    // Glob characters in an extension match only themselves.
-                    (0, "*.a[[]1[]][?]".to_owned()),
+                    // Each letter in both cases, as Windows and macOS match.
+                    (0, "*.[pP][nN][gG]".to_owned()),
+                    (0, "*.[jJ][pP][gG]".to_owned()),
+                    (0, "*.[tT][aA][rR].[gG][zZ]".to_owned()),
+                    (0, "*.[cC]++".to_owned()),
+                    (0, "*.7[zZ]".to_owned()),
                     (1, "image/webp".to_owned()),
                 ]
-            )]
+            )
         );
     }
 }

@@ -8,23 +8,37 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use flui_platform::SystemFailure;
-use flui_platform::capability::Resolver;
+use flui_platform::capability::{Resolver, WindowRef};
 use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, LauncherBackend};
 use zbus::Variant;
 
 use super::request::{self, DESTINATION, PATH, Response};
-use super::{Portal, PortalError};
+use super::{Portal, PortalError, parent_window};
 
 const OPEN_URI: &str = "org.freedesktop.portal.OpenURI";
 
 /// [`LauncherBackend`] over the desktop portal.
 pub(crate) struct PortalLauncher {
     portal: Rc<Portal>,
+    /// The acquiring widget's window, which the portal's application
+    /// chooser is attached to; `None` for a widget in no window.
+    window: Option<WindowRef>,
 }
 
 impl PortalLauncher {
-    pub(crate) fn new(portal: Rc<Portal>) -> Self {
-        Self { portal }
+    pub(crate) fn new(portal: Rc<Portal>, window: Option<WindowRef>) -> Self {
+        Self { portal, window }
+    }
+
+    /// The `parent_window` of a launch: the acquiring widget's window while
+    /// it is open, none once it closed (a closed window's id may name
+    /// another window by then) or for a widget in no window.
+    fn parent(&self) -> String {
+        self.window
+            .as_ref()
+            .filter(|window| !window.lifetime().is_closed())
+            .map(parent_window)
+            .unwrap_or_default()
     }
 
     /// Open `path` for the portal, which takes a descriptor rather than a
@@ -119,10 +133,11 @@ impl PortalLauncher {
     }
 
     fn ask_with_file(&self, method: &'static str, path: PathBuf, answer: Resolver<LaunchResult>) {
+        let parent = self.parent();
         self.ask_open_uri(method, answer, move |token| {
             let file = Self::open(&path, Purpose::Show)?;
             Ok(OpenUriBody::File((
-                String::new(),
+                parent,
                 zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
                 options(&token),
             )))
@@ -151,8 +166,9 @@ fn launch_error(error: PortalError) -> LaunchError {
 impl LauncherBackend for PortalLauncher {
     fn open_uri(&self, uri: ExternalUri, answer: Resolver<LaunchResult>) {
         let uri = uri.as_str().to_owned();
+        let parent = self.parent();
         self.ask_open_uri("OpenURI", answer, move |token| {
-            Ok(OpenUriBody::Uri((String::new(), uri, options(&token))))
+            Ok(OpenUriBody::Uri((parent, uri, options(&token))))
         });
     }
 
