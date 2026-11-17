@@ -5920,6 +5920,58 @@ the frame. `WM_GETMINMAXINFO` turns the app's logical inner-size limits into out
 window's current DPI with the frame measured for the style the window has
 (`window::windows::limits`); a fullscreen window keeps the system's rectangle.
 
+**A scale change keeps the content's logical size.** Left alone, the system scales the outer
+rectangle linearly across a DPI change, while the caption and border metrics are rounded at each
+DPI, so the content drifts by pixels at each change (an 800×600 content measured at 96, 120, 144
+and 168 DPI in `window::windows::rescale`'s test). A normal window answers `WM_GETDPISCALEDSIZE`
+with the outer size whose content is its logical size at the new DPI under the frame measured
+there (`rescale::rescaled_outer`), which the system then suggests in `WM_DPICHANGED` and positions
+against the pointer during a drag. The window keeps the logical size it rescaled from
+(`WindowContext::kept_logical`) for as long as its content still has that size's pixels, so
+several changes in a row come home at the size they left instead of walking a pixel at each
+rounding; a resize changes the pixels and the kept size gives way. A maximized, minimized or
+fullscreen window answers none; the rectangle a fullscreen window returns to is rescaled by the
+same rule under the style it returns to, with a kept size of its own. Tests:
+`a_rescaled_window_keeps_its_content_where_linear_scaling_drifts`,
+`a_kept_logical_size_comes_home_across_several_changes`,
+`a_scale_change_keeps_the_contents_logical_size`,
+`a_fullscreen_window_covers_its_monitor_through_a_dpi_change`. The rectangle a maximized window is
+restored to is the system's across a scale change
+([gaps](../../docs/gaps.md#a-maximized-win32-window-is-restored-to-the-rectangle-the-system-scaled)).
+
+**A maximized window without the system's title bar leaves the taskbar uncovered.** Its client is
+the work area: an application's title bar takes it in `WM_NCCALCSIZE`, a window without a frame,
+which the system would maximize over the whole monitor, in `WM_GETMINMAXINFO`
+(`chrome::maximized_area`). Either stands `chrome::AUTO_HIDE_BAR_REVEAL` back from each monitor
+edge that holds an auto-hide app bar, since a window covering the whole monitor reads to the shell
+as fullscreen and the bar would no longer slide in. The monitor is the one the proposed rectangle
+lies on (a window restored straight to maximized is still parked off every monitor). The shell's
+answer (`ABM_GETSTATE`, then `ABM_GETAUTOHIDEBAREX` per edge) is a cross-process call that runs
+the thread's sent messages meanwhile and blocks on a hung shell, so the window keeps it per monitor
+(`WindowContext::app_bars`, read with no borrow held) until `WM_SETTINGCHANGE` or
+`WM_DISPLAYCHANGE`, which also measure a maximized window again when its monitor's bars changed:
+moving an auto-hide bar to another edge leaves the work area the whole monitor, so the system
+sizes nothing. Tests: `the_client_reaches_the_top_and_a_maximized_one_leaves_an_auto_hide_bar_its_edge`,
+`a_frameless_window_is_maximized_to_the_work_area` (the rules),
+`a_maximized_window_leaves_each_auto_hide_bar_its_edge` and
+`a_settings_change_measures_the_bars_again` (the shell's answer supplied in the window's kept bars).
+
+**An application's caption buttons** (ADR-0286 §7) take the non-client pointer messages and,
+where `EnableMouseInPointer` was refused, the legacy non-client mouse messages over them as the
+client messages they stand for (`input::windows::caption`): a press captures the mouse as a press in
+the content does, a move tracks the non-client leave. The input keeps which pointer the buttons
+last saw (`InputWindow::caption_hover`); the first non-client move of it over the bar or a border,
+which the application hears nothing of, delivers one leave at the button, as does
+`WM_NCMOUSELEAVE` when the cursor left the window, and a message in the content clears it. The
+input takes those messages only after asking the window whose caption buttons they are
+(`owner::windows::WindowChrome`, the window's own hook as the class's chrome, so the hooks still
+answer disjoint messages): where the system draws the title bar, or the window is fullscreen, they
+stay the default procedure's, so a press on the system's own button is never the application's.
+Tests: `caption_buttons_take_the_legacy_mouse_messages_over_them`,
+`a_move_off_a_caption_button_ends_the_hover_it_saw`,
+`the_input_takes_only_the_applications_caption_buttons_and_ends_their_hover` (both routes; a
+pointer's packets need a real pointer, so the pointer route is checked by what the input keeps).
+
 **Fullscreen from another mode:** a visible maximized or minimized window is restored (`SC_RESTORE`)
 before the style is replaced, and the style saved to return to has no `WS_MAXIMIZE` or
 `WS_MINIMIZE`. A resize does not end fullscreen, and a minimized fullscreen window comes back

@@ -272,7 +272,7 @@ impl FrameProtocol {
                 // fixed point is reached before the partial clear and any
                 // recording, not next frame (ADR-0304 §6).
                 self.close_as_planned(region, |damage| {
-                    flui_layer::close_over(damage, closures.iter().copied(), size)
+                    flui_layer::close_over(damage, &closures, size)
                 })
             }
         };
@@ -461,12 +461,12 @@ impl FrameProtocol {
 ///
 /// Clips and isolation are ignored: extra repaint is safe, a missing input
 /// is not. Replay still admits its exact read footprint.
-fn tree_backdrop_closures(tree: &flui_layer::LayerTree) -> Vec<flui_layer::Closure> {
+fn tree_backdrop_closures(tree: &flui_layer::LayerTree) -> flui_layer::Closures {
     use flui_foundation::geometry::Matrix4;
     use flui_layer::Layer;
 
     let mut stack = vec![(tree.root(), Matrix4::IDENTITY)];
-    let mut closures = Vec::new();
+    let mut closures = flui_layer::Closures::new();
     while let Some((id, parent)) = stack.pop() {
         let Some(node) = tree.get(id) else {
             continue;
@@ -486,7 +486,7 @@ fn tree_backdrop_closures(tree: &flui_layer::LayerTree) -> Vec<flui_layer::Closu
             }
         };
         if let Layer::BackdropFilter(_) = layer {
-            closures.push(flui_layer::read_closure(layer, &transform, Rect::ZERO));
+            closures.push_effect(layer, &transform, Rect::ZERO);
         }
         stack.extend(node.children().iter().map(|&child| (child, transform)));
     }
