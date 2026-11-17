@@ -1,7 +1,8 @@
 //! What an X11 window tells its window manager to hold beyond its mode: its
 //! size hints (`WM_NORMAL_HINTS`: the limits, the resize steps and the
-//! proportion the user's resize keeps) and its level (`_NET_WM_STATE_ABOVE`,
-//! `_NET_WM_STATE_BELOW`).
+//! proportion the user's resize keeps), its level (`_NET_WM_STATE_ABOVE`,
+//! `_NET_WM_STATE_BELOW`), its title (`_NET_WM_NAME`, `WM_NAME`) and its
+//! decorations (`_MOTIF_WM_HINTS`).
 
 use x11rb::properties::{WmSizeHints, WmSizeHintsSpecification};
 use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt as _, PropMode};
@@ -10,7 +11,7 @@ use x11rb::wrapper::ConnectionExt as _;
 use flui_foundation::geometry::Size;
 use flui_platform::WindowLevel;
 
-use super::super::hints::{resize_steps, size_limits};
+use super::super::hints::{motif_hints, resize_steps, size_limits};
 use super::super::mode::with_level;
 use super::{StateAction, X11Window};
 
@@ -99,6 +100,41 @@ impl X11Window {
                 self.send_state(StateAction::Remove, levels.above, 0);
                 self.send_state(StateAction::Add, levels.below, 0);
             }
+        }
+    }
+
+    /// Set the title in `_NET_WM_NAME` (UTF-8) and `WM_NAME`, which older
+    /// window managers read.
+    pub(super) fn write_title(&self, title: &str) {
+        let net_name = self.xcb().change_property8(
+            PropMode::REPLACE,
+            self.xid,
+            self.atoms.net_wm_name,
+            self.atoms.utf8_string,
+            title.as_bytes(),
+        );
+        let name = self.xcb().change_property8(
+            PropMode::REPLACE,
+            self.xid,
+            AtomEnum::WM_NAME,
+            AtomEnum::STRING,
+            title.as_bytes(),
+        );
+        if let Err(error) = net_name.and(name) {
+            tracing::debug!(%error, "cannot set an X11 window's title");
+        }
+    }
+
+    /// Set `_MOTIF_WM_HINTS` to `decorated`.
+    pub(super) fn write_decorations(&self, decorated: bool) {
+        if let Err(error) = self.xcb().change_property32(
+            PropMode::REPLACE,
+            self.xid,
+            self.atoms.motif_wm_hints,
+            self.atoms.motif_wm_hints,
+            &motif_hints(decorated),
+        ) {
+            tracing::debug!(%error, "cannot set an X11 window's decorations");
         }
     }
 }

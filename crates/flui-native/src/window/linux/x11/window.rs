@@ -119,7 +119,6 @@ use raw_window_handle::{
 };
 use rustc_hash::FxHashMap;
 use x11rb::connection::Connection as _;
-
 use x11rb::protocol::Event;
 use x11rb::protocol::sync::{self as xsync, ConnectionExt as _};
 use x11rb::protocol::xproto::{
@@ -129,7 +128,7 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::hints::{WM_HINTS, motif_hints};
+use super::hints::WM_HINTS;
 use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_mode,
 };
@@ -1505,41 +1504,6 @@ impl X11Window {
             .set_input_focus(InputFocus::PARENT, self.xid, time);
         if let Err(error) = raised.and(focused) {
             tracing::debug!(%error, "cannot focus an X11 window");
-        }
-    }
-
-    /// Set the title in `_NET_WM_NAME` (UTF-8) and `WM_NAME`, which older
-    /// window managers read.
-    fn write_title(&self, title: &str) {
-        let net_name = self.xcb().change_property8(
-            PropMode::REPLACE,
-            self.xid,
-            self.atoms.net_wm_name,
-            self.atoms.utf8_string,
-            title.as_bytes(),
-        );
-        let name = self.xcb().change_property8(
-            PropMode::REPLACE,
-            self.xid,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            title.as_bytes(),
-        );
-        if let Err(error) = net_name.and(name) {
-            tracing::debug!(%error, "cannot set an X11 window's title");
-        }
-    }
-
-    /// Set `_MOTIF_WM_HINTS` to `decorated`.
-    fn write_decorations(&self, decorated: bool) {
-        if let Err(error) = self.xcb().change_property32(
-            PropMode::REPLACE,
-            self.xid,
-            self.atoms.motif_wm_hints,
-            self.atoms.motif_wm_hints,
-            &motif_hints(decorated),
-        ) {
-            tracing::debug!(%error, "cannot set an X11 window's decorations");
         }
     }
 
