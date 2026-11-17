@@ -13,6 +13,7 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_platform::capability::{Resolver, WindowRef};
@@ -28,7 +29,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HSTRING, Interface as _, PCWSTR};
 
-use super::modal::{Dismisser, show_answering};
+use super::modal::{Dismisser, ModalWindows, show_answering};
 use super::{Owner, os_code, wide};
 use crate::dialog::{
     DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileFilter, OpenRequest,
@@ -110,15 +111,16 @@ pub(super) trait DialogSystem: Send + Sync + 'static {
 /// [`FileDialogBackend`] over the common item dialogs.
 pub(crate) struct WindowsDialogs {
     system: Arc<dyn DialogSystem>,
+    windows: Rc<ModalWindows>,
 }
 
 impl WindowsDialogs {
-    pub(crate) fn new() -> Self {
-        Self::over(Arc::new(ComDialogs))
+    pub(crate) fn new(windows: Rc<ModalWindows>) -> Self {
+        Self::over(Arc::new(ComDialogs), windows)
     }
 
-    pub(super) fn over(system: Arc<dyn DialogSystem>) -> Self {
-        Self { system }
+    pub(super) fn over(system: Arc<dyn DialogSystem>, windows: Rc<ModalWindows>) -> Self {
+        Self { system, windows }
     }
 }
 
@@ -249,6 +251,8 @@ impl FileDialogBackend for WindowsDialogs {
         let owner = Owner::of(window);
         let system = Arc::clone(&self.system);
         show_answering::<FileDialogCapability, _, _>(
+            &self.windows,
+            window.id(),
             answer,
             move |dismisser| system.open(owner, &spec, dismisser),
             open_answer,
@@ -272,6 +276,8 @@ impl FileDialogBackend for WindowsDialogs {
         let owner = Owner::of(window);
         let system = Arc::clone(&self.system);
         show_answering::<FileDialogCapability, _, _>(
+            &self.windows,
+            window.id(),
             answer,
             move |dismisser| system.save(owner, &spec, dismisser),
             move |answer| save_answer(answer, filters),
@@ -480,7 +486,7 @@ mod tests {
     use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
 
-    use flui_platform::capability::Abandoned;
+    use flui_platform::capability::{Abandoned, WindowRef};
     use flui_platform::{SystemFailure, UnsupportedReason};
 
     use super::{
@@ -621,6 +627,9 @@ mod tests {
     struct ModalSystem {
         answers: Mutex<mpsc::Receiver<OsAnswer<Vec<OsPick>>>>,
         ended: Mutex<mpsc::Sender<Ended>>,
+        /// When set, a closed dialog stays in its thread until this hears:
+        /// a system dialog that takes its time to go down.
+        linger: Mutex<Option<mpsc::Receiver<()>>>,
     }
 
     impl DialogSystem for ModalSystem {
@@ -646,6 +655,10 @@ mod tests {
                         .lock()
                         .expect("BUG: the test's lock")
                         .send(Ended::ClosedByItsDismissal);
+                    let linger = self.linger.lock().expect("BUG: the test's lock").take();
+                    if let Some(linger) = linger {
+                        let _ = linger.recv();
+                    }
                     return Ok(None);
                 }
                 let answer = self
@@ -673,13 +686,53 @@ mod tests {
     type Answers = mpsc::Sender<OsAnswer<Vec<OsPick>>>;
 
     fn modal() -> (Arc<ModalSystem>, Answers, mpsc::Receiver<Ended>) {
+        let (system, answer, ended, _) = modal_lingering(false);
+        (system, answer, ended)
+    }
+
+    fn modal_lingering(
+        lingers: bool,
+    ) -> (
+        Arc<ModalSystem>,
+        Answers,
+        mpsc::Receiver<Ended>,
+        Option<mpsc::Sender<()>>,
+    ) {
         let (answer, answers) = mpsc::channel();
         let (end, ended) = mpsc::channel();
+        let (let_go, linger) = mpsc::channel();
         let system = ModalSystem {
             answers: Mutex::new(answers),
             ended: Mutex::new(end),
+            linger: Mutex::new(lingers.then_some(linger)),
         };
-        (Arc::new(system), answer, ended)
+        (Arc::new(system), answer, ended, lingers.then_some(let_go))
+    }
+
+    fn dialogs_over(system: Arc<ModalSystem>, owner: &TestOwner, window: WindowRef) -> FileDialogs {
+        FileDialogs::try_new(
+            WindowsDialogs::over(system, Rc::default()),
+            &owner.ctx(Some(window)),
+        )
+        .expect("a window")
+    }
+
+    /// Open a dialog on `dialogs` once the window's previous dialog thread
+    /// has left its dialog, which it does just after its close ran.
+    fn open_when_free(owner: &TestOwner, dialogs: &FileDialogs) -> Landed {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let next = land(dialogs.open(OpenRequest::files()));
+            // A refusal reaches the caller two turns on: the backend's
+            // answer settles at the first, the handle's at the second.
+            owner.turn();
+            owner.turn();
+            if *next.borrow() != Some(Ok(Err(DialogError::Busy))) {
+                return next;
+            }
+            assert!(std::time::Instant::now() < deadline, "the thread left");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     type Landed = Rc<RefCell<Option<Result<OpenResult, Abandoned>>>>;
@@ -696,8 +749,7 @@ mod tests {
         let owner = TestOwner::new();
         let (window, _closer) = win32::window();
         let (system, answer, ended) = modal();
-        let dialogs = FileDialogs::try_new(WindowsDialogs::over(system), &owner.ctx(Some(window)))
-            .expect("a window");
+        let dialogs = dialogs_over(system, &owner, window);
         let landed = land(dialogs.open(OpenRequest::files()));
         assert_eq!(
             ended.recv_timeout(Duration::from_secs(10)),
@@ -723,8 +775,7 @@ mod tests {
         let owner = TestOwner::new();
         let (window, _closer) = win32::window();
         let (system, _answer, ended) = modal();
-        let dialogs = FileDialogs::try_new(WindowsDialogs::over(system), &owner.ctx(Some(window)))
-            .expect("a window");
+        let dialogs = dialogs_over(system, &owner, window);
         let dialog = dialogs.open(OpenRequest::files());
         assert_eq!(
             ended.recv_timeout(Duration::from_secs(10)),
@@ -740,8 +791,7 @@ mod tests {
             Ok(Ended::ClosedByItsDismissal),
             "the dialog's own close ran on its thread"
         );
-        let next = land(dialogs.open(OpenRequest::files()));
-        owner.turn();
+        let next = open_when_free(&owner, &dialogs);
         assert_eq!(
             *next.borrow(),
             None,
@@ -750,12 +800,48 @@ mod tests {
     }
 
     #[test]
+    fn a_window_takes_no_new_dialog_until_the_dismissed_one_has_left_its_thread() {
+        let owner = TestOwner::new();
+        let (window, _closer) = win32::window();
+        let (system, _answer, ended, let_go) = modal_lingering(true);
+        let let_go = let_go.expect("a lingering dialog");
+        let dialogs = dialogs_over(system, &owner, window);
+        let dialog = dialogs.open(OpenRequest::files());
+        assert_eq!(
+            ended.recv_timeout(Duration::from_secs(10)),
+            Ok(Ended::Shown)
+        );
+        drop(dialog);
+        assert_eq!(
+            ended.recv_timeout(Duration::from_secs(10)),
+            Ok(Ended::ClosedByItsDismissal)
+        );
+
+        // Closed, but still in its thread: the old dialog would re-enable
+        // the window under a new one.
+        let early = land(dialogs.open(OpenRequest::files()));
+        owner.turn_until(|| early.borrow().is_some());
+        assert_eq!(
+            early.borrow_mut().take(),
+            Some(Ok(Err(DialogError::Busy))),
+            "a typed refusal while the old dialog is leaving"
+        );
+
+        let_go.send(()).expect("the old dialog lingers");
+        let next = open_when_free(&owner, &dialogs);
+        assert_eq!(*next.borrow(), None, "the next dialog is up");
+        assert_eq!(
+            ended.recv_timeout(Duration::from_secs(10)),
+            Ok(Ended::Shown)
+        );
+    }
+
+    #[test]
     fn a_dialog_ends_with_its_window_and_is_closed_on_its_thread() {
         let owner = TestOwner::new();
         let (window, closer) = win32::window();
         let (system, _answer, ended) = modal();
-        let dialogs = FileDialogs::try_new(WindowsDialogs::over(system), &owner.ctx(Some(window)))
-            .expect("a window");
+        let dialogs = dialogs_over(system, &owner, window);
         let landed = land(dialogs.open(OpenRequest::files()));
         assert_eq!(
             ended.recv_timeout(Duration::from_secs(10)),

@@ -98,10 +98,11 @@ pub(crate) struct WindowsJumpList {
 
 impl WindowsJumpList {
     pub(crate) fn new(threads: Rc<ShellThreads>) -> Self {
-        Self {
-            system: Arc::new(DestinationLists),
-            threads,
-        }
+        Self::over(Arc::new(DestinationLists), threads)
+    }
+
+    pub(super) fn over(system: Arc<dyn JumpListSystem>, threads: Rc<ShellThreads>) -> Self {
+        Self { system, threads }
     }
 }
 
@@ -248,6 +249,98 @@ mod tests {
                 arguments: "--new \"my notes\"".to_owned(),
                 description: Some("Start a note".to_owned()),
             }]
+        );
+    }
+
+    /// A destination list that keeps the links it was committed, and fails
+    /// a commit with the code it was given.
+    #[derive(Default)]
+    struct KeptLists {
+        committed: std::sync::Mutex<Vec<Vec<TaskLink>>>,
+        fail: Option<i32>,
+    }
+
+    impl super::JumpListSystem for KeptLists {
+        fn commit(&self, _: &std::path::Path, links: &[TaskLink]) -> Result<(), i32> {
+            if let Some(code) = self.fail {
+                return Err(code);
+            }
+            self.committed
+                .lock()
+                .expect("BUG: the test's lock")
+                .push(links.to_vec());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_task_list_is_committed_on_a_shell_thread_and_a_failure_is_the_systems() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        use flui_platform::SystemFailure;
+        use flui_platform::capability::Abandoned;
+
+        use crate::jump_list::{JumpList, JumpListError, JumpListResult};
+        use crate::testing::win32::TestOwner;
+        use crate::win32::ShellThreads;
+
+        let owner = TestOwner::new();
+        let ctx = owner.ctx(None);
+        let set = |jump_list: &JumpList, tasks: Vec<JumpListTask>| {
+            let landed: Rc<RefCell<Option<Result<JumpListResult, Abandoned>>>> = Rc::default();
+            let into = Rc::clone(&landed);
+            jump_list
+                .set_tasks(tasks)
+                .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+            owner.turn_until(|| landed.borrow().is_some());
+            landed
+                .borrow_mut()
+                .take()
+                .expect("landed")
+                .expect("not abandoned")
+        };
+
+        let kept = Arc::new(KeptLists::default());
+        let jump_list = JumpList::new(
+            super::WindowsJumpList::over(
+                Arc::clone(&kept) as Arc<dyn super::JumpListSystem>,
+                Rc::new(ShellThreads::default()),
+            ),
+            &ctx,
+        );
+        assert_eq!(
+            set(&jump_list, vec![JumpListTask::new("New").argument("a b")]),
+            Ok(())
+        );
+        assert_eq!(set(&jump_list, Vec::new()), Ok(()));
+        assert_eq!(
+            *kept.committed.lock().expect("BUG: the test's lock"),
+            [
+                vec![TaskLink {
+                    title: "New".to_owned(),
+                    arguments: "\"a b\"".to_owned(),
+                    description: None,
+                }],
+                Vec::new(),
+            ],
+            "an empty list deletes the tasks"
+        );
+
+        let failing = JumpList::new(
+            super::WindowsJumpList::over(
+                Arc::new(KeptLists {
+                    fail: Some(5),
+                    ..KeptLists::default()
+                }),
+                Rc::new(ShellThreads::default()),
+            ),
+            &ctx,
+        );
+        assert_eq!(
+            set(&failing, vec![JumpListTask::new("New")]),
+            Err(JumpListError::Failed(SystemFailure::Os(5)))
         );
     }
 }

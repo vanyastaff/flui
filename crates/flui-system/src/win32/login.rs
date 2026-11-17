@@ -15,6 +15,8 @@
 //!
 //! Each request runs on its own thread ([`ShellThreads`]).
 
+use std::ffi::{OsStr, OsString};
+use std::os::windows::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -47,11 +49,11 @@ pub(super) trait LoginRegistry: Send + Sync + 'static {
     /// The running executable's path.
     fn executable(&self) -> Result<PathBuf, i32>;
 
-    /// The `Run` value `name`, if there is one.
-    fn run_value(&self, name: &str) -> Result<Option<String>, i32>;
+    /// The `Run` value `name`, if there is one, as the registry holds it.
+    fn run_value(&self, name: &str) -> Result<Option<OsString>, i32>;
 
     /// Write the `Run` value `name`.
-    fn set_run_value(&self, name: &str, command: &str) -> Result<(), i32>;
+    fn set_run_value(&self, name: &str, command: &OsStr) -> Result<(), i32>;
 
     /// Remove the `Run` value `name`; one that is not there is removed.
     fn delete_run_value(&self, name: &str) -> Result<(), i32>;
@@ -76,9 +78,13 @@ pub(super) fn entry_name(executable: &Path) -> String {
 }
 
 /// The command the entry runs: the executable's path, quoted, with no
-/// arguments.
-pub(super) fn command(executable: &Path) -> String {
-    format!("\"{}\"", executable.display())
+/// arguments, unit for unit (no lossy conversion, so an entry is compared
+/// with exactly what was written).
+pub(super) fn command(executable: &Path) -> OsString {
+    let mut command = OsString::from("\"");
+    command.push(executable.as_os_str());
+    command.push("\"");
+    command
 }
 
 /// The error a registry call's `code` means.
@@ -126,10 +132,11 @@ pub(crate) struct WindowsLaunchAtLogin {
 
 impl WindowsLaunchAtLogin {
     pub(crate) fn new(threads: Rc<ShellThreads>) -> Self {
-        Self {
-            registry: Arc::new(Registry),
-            threads,
-        }
+        Self::over(Arc::new(Registry), threads)
+    }
+
+    pub(super) fn over(registry: Arc<dyn LoginRegistry>, threads: Rc<ShellThreads>) -> Self {
+        Self { registry, threads }
     }
 }
 
@@ -175,7 +182,9 @@ impl LoginRegistry for Registry {
         std::env::current_exe().map_err(|error| error.raw_os_error().unwrap_or(i32::MAX))
     }
 
-    fn run_value(&self, name: &str) -> Result<Option<String>, i32> {
+    fn run_value(&self, name: &str) -> Result<Option<OsString>, i32> {
+        // The longest value read: a command line is at most 32 767 units.
+        const MAX_UNITS: usize = 32 * 1024;
         let name = wide(name);
         let mut buffer = vec![0_u16; 1024];
         loop {
@@ -196,8 +205,15 @@ impl LoginRegistry for Registry {
             if read == ERROR_FILE_NOT_FOUND {
                 return Ok(None);
             }
-            if read == ERROR_MORE_DATA && buffer.len() < 32 * 1024 {
-                buffer.resize(usize::try_from(bytes).unwrap_or(0) / 2 + 1, 0);
+            if read == ERROR_MORE_DATA {
+                // The size the registry reports is checked before anything
+                // is allocated for it: a value longer than a command line
+                // is not this entry's.
+                let needed = usize::try_from(bytes).unwrap_or(usize::MAX) / 2 + 1;
+                if needed > MAX_UNITS || needed <= buffer.len() {
+                    return Err(code(ERROR_MORE_DATA));
+                }
+                buffer.resize(needed, 0);
                 continue;
             }
             if read.is_err() {
@@ -206,11 +222,11 @@ impl LoginRegistry for Registry {
             let units = usize::try_from(bytes).unwrap_or(0) / 2;
             let text = buffer.get(..units).unwrap_or_default();
             let text = text.split(|unit| *unit == 0).next().unwrap_or_default();
-            return Ok(Some(String::from_utf16_lossy(text)));
+            return Ok(Some(OsString::from_wide(text)));
         }
     }
 
-    fn set_run_value(&self, name: &str, command: &str) -> Result<(), i32> {
+    fn set_run_value(&self, name: &str, command: &OsStr) -> Result<(), i32> {
         let name = wide(name);
         let data = wide(command);
         let bytes = u32::try_from(data.len() * 2).map_err(|_| code(ERROR_MORE_DATA))?;
@@ -273,6 +289,7 @@ impl LoginRegistry for Registry {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::ffi::{OsStr, OsString};
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
@@ -285,7 +302,7 @@ mod tests {
     struct MemoryRegistry {
         packaged: bool,
         executable: PathBuf,
-        run: Mutex<BTreeMap<String, String>>,
+        run: Mutex<BTreeMap<String, OsString>>,
         approved: Mutex<BTreeMap<String, bool>>,
         write_error: Option<i32>,
     }
@@ -311,7 +328,7 @@ mod tests {
             Ok(self.executable.clone())
         }
 
-        fn run_value(&self, name: &str) -> Result<Option<String>, i32> {
+        fn run_value(&self, name: &str) -> Result<Option<OsString>, i32> {
             Ok(self
                 .run
                 .lock()
@@ -320,14 +337,14 @@ mod tests {
                 .cloned())
         }
 
-        fn set_run_value(&self, name: &str, command: &str) -> Result<(), i32> {
+        fn set_run_value(&self, name: &str, command: &OsStr) -> Result<(), i32> {
             if let Some(code) = self.write_error {
                 return Err(code);
             }
             self.run
                 .lock()
                 .expect("BUG: the test's lock")
-                .insert(name.to_owned(), command.to_owned());
+                .insert(name.to_owned(), command.to_os_string());
             Ok(())
         }
 
@@ -360,7 +377,7 @@ mod tests {
         let name = entry_name(&registry.executable);
         assert_eq!(
             registry.run_value(&name),
-            Ok(Some(r#""C:\Apps\Notes\notes.exe""#.to_owned()))
+            Ok(Some(OsString::from(r#""C:\Apps\Notes\notes.exe""#)))
         );
 
         registry
@@ -440,6 +457,43 @@ mod tests {
             one,
             entry_name(Path::new(r"c:\a\APP.exe")),
             "a path differing only in case is the same file on Windows"
+        );
+    }
+
+    #[test]
+    fn a_login_request_is_answered_from_a_shell_thread_through_the_handle() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        use flui_platform::capability::Abandoned;
+
+        use crate::login::{LaunchAtLogin, LoginItemResult};
+        use crate::testing::win32::TestOwner;
+        use crate::win32::ShellThreads;
+
+        let owner = TestOwner::new();
+        let ctx = owner.ctx(None);
+        let registry = Arc::new(MemoryRegistry::new());
+        let login = LaunchAtLogin::new(
+            super::WindowsLaunchAtLogin::over(
+                Arc::clone(&registry) as Arc<dyn LoginRegistry>,
+                Rc::new(ShellThreads::default()),
+            ),
+            &ctx,
+        );
+        let landed: Rc<RefCell<Option<Result<LoginItemResult, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&landed);
+        login
+            .enable()
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        assert!(landed.borrow().is_none(), "never inside the call");
+        owner.turn_until(|| landed.borrow().is_some());
+        assert_eq!(*landed.borrow(), Some(Ok(Ok(LoginItemState::Enabled))));
+        assert!(
+            registry
+                .run_value(&entry_name(&registry.executable))
+                .is_ok_and(|value| value.is_some())
         );
     }
 }

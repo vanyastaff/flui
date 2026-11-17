@@ -67,6 +67,9 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The panic an OS entry contains, and a shell thread abandoned past its
+# deadline, are logged.
+tracing = { workspace = true }
 # The shared files, as the `IIterable` the share sheet takes.
 windows-collections = { workspace = true }
 raw-window-handle = { workspace = true }

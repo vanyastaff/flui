@@ -1,17 +1,26 @@
 //! The launcher over the shell: `ShellExecuteExW` with the `open` verb for a
-//! URI (through its scheme's registered class) and a document,
-//! `SHOpenFolderAndSelectItems` to reveal, and `IFileOperation` with
-//! `FOFX_RECYCLEONDELETE` to trash. Never a command line: no string reaches
-//! `cmd` or `explorer`.
+//! URI and a document, `SHOpenFolderAndSelectItems` to reveal, and
+//! `IFileOperation` with `FOFX_RECYCLEONDELETE` to trash. Never a command
+//! line: no string reaches `cmd` or `explorer`.
+//!
+//! A URI goes to the shell as it is, so Windows resolves the handler the
+//! user chose for its scheme (`UrlAssociations\…\UserChoice`, the default
+//! browser); the seam admitted only the schemes its caller named. A
+//! one-letter scheme is refused, since the shell reads `c:…` as a path on
+//! drive C.
 //!
 //! Each request runs on its own apartment thread ([`ShellThreads`]), since
 //! every one may touch the file system or start a handler that takes its
 //! time, and answers its own resolver from there. An open first opens the
 //! file and judges what the handle holds (ADR-0360 §2): its final name
 //! (`GetFinalPathNameByHandleW`, which follows every link the open
-//! followed) against the floor, then the system's own `AssocIsDangerous`;
-//! only a file both admit is handed to the shell, by that final name, while
-//! the handle keeps it from being renamed or deleted.
+//! followed) must be on a local drive, then pass the floor and the
+//! system's own `AssocIsDangerous`; only a file all three admit is handed
+//! to the shell, by that final name. The handle reads the file's data and
+//! does not share deletion, so while it is held, until `ShellExecuteExW`
+//! returns, nobody can rename, move or delete the file; writing to it stays
+//! shared, since refusing that would refuse a document another application
+//! keeps open.
 
 use std::ffi::{OsStr, OsString};
 use std::os::windows::ffi::OsStringExt as _;
@@ -22,7 +31,8 @@ use std::sync::Arc;
 
 use flui_platform::capability::{Resolver, WindowRef};
 use flui_platform::launch::{
-    ExternalUri, LaunchError, LaunchResult, LauncherBackend, LauncherCapability, runs_when_opened,
+    ExternalUri, LaunchError, LaunchResult, LauncherBackend, LauncherCapability, is_local_path,
+    runs_when_opened,
 };
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 use windows::Win32::Foundation::{
@@ -32,9 +42,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_BASIC_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FileBasicInfo,
-    GETFINALPATHNAMEBYHANDLE_FLAGS, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
-    OPEN_EXISTING, VOLUME_NAME_DOS,
+    FILE_NAME_NORMALIZED, FILE_READ_ATTRIBUTES, FILE_READ_DATA, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileBasicInfo, GETFINALPATHNAMEBYHANDLE_FLAGS, GetFileInformationByHandleEx,
+    GetFinalPathNameByHandleW, OPEN_EXISTING, VOLUME_NAME_DOS,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
 use windows::Win32::System::Threading::GetProcessId;
@@ -42,8 +52,8 @@ use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     AssocIsDangerous, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
     FOF_WANTNUKEWARNING, FOFX_EARLYFAILURE, FOFX_RECYCLEONDELETE, FileOperation, IFileOperation,
-    ILFree, SEE_MASK_CLASSNAME, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
-    SHELLEXECUTEINFOW, SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW,
+    ILFree, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    SHOpenFolderAndSelectItems, SHParseDisplayName, ShellExecuteExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, SW_SHOWNORMAL};
 use windows::core::{PCWSTR, w};
@@ -82,10 +92,8 @@ pub(crate) trait ShellSystem: Send + Sync + 'static {
     /// (`AssocIsDangerous` on its extension).
     fn is_dangerous(&self, final_path: &Path) -> bool;
 
-    /// Open `target` with the `open` verb; for a URI, `class` is its
-    /// scheme, whose registered handler alone may take it.
-    fn execute(&self, target: &OsStr, class: Option<&str>, owner: Option<Owner>)
-    -> Result<(), i32>;
+    /// Open `target`, a URI or a file's name, with the `open` verb.
+    fn execute(&self, target: &OsStr, owner: Option<Owner>) -> Result<(), i32>;
 
     /// Show `path` selected in its folder.
     fn reveal(&self, path: &Path) -> Result<(), i32>;
@@ -117,37 +125,47 @@ fn launch_error(code: i32) -> LaunchError {
 }
 
 /// Open the document at `path`: hold it, judge what the handle holds, and
-/// hand the final name to the shell only when both the floor and the
-/// system admit it.
+/// hand the final name to the shell only when it is local and both the
+/// floor and the system admit it.
 pub(super) fn open_document(
     system: &dyn ShellSystem,
     path: &Path,
     owner: Option<Owner>,
 ) -> LaunchResult {
     let held = system.hold(path).map_err(launch_error)?;
+    // A link on a local drive that leads to a share is judged where it led.
+    if !is_local_path(&held.final_path) {
+        return Err(LaunchError::NotLocal);
+    }
     if !held.directory
         && (runs_when_opened(&held.final_path) || system.is_dangerous(&held.final_path))
     {
         return Err(LaunchError::NotADocument);
     }
     let opened = system
-        .execute(held.final_path.as_os_str(), None, owner)
+        .execute(held.final_path.as_os_str(), owner)
         .map_err(launch_error);
     // Released only after the shell took the file.
     drop(held);
     opened
 }
 
-/// Open `uri` through its scheme's registered handler.
+/// Open `uri` in the handler the user chose for its scheme. A one-letter
+/// scheme is refused: the shell reads `c:…` as a path on drive C.
 pub(super) fn open_uri(
     system: &dyn ShellSystem,
     uri: &str,
     scheme: &str,
     owner: Option<Owner>,
 ) -> LaunchResult {
-    system
-        .execute(OsStr::new(uri), Some(scheme), owner)
-        .map_err(launch_error)
+    if scheme.len() == 1 {
+        return Err(LaunchError::Unsupported(Unsupported::of::<
+            LauncherCapability,
+        >(
+            UnsupportedReason::NotOnThisPlatform,
+        )));
+    }
+    system.execute(OsStr::new(uri), owner).map_err(launch_error)
 }
 
 /// Move `path` to the recycle bin; an operation called off is refused.
@@ -259,14 +277,16 @@ fn without_verbatim(path: Vec<u16>) -> PathBuf {
 impl ShellSystem for Shell {
     fn hold(&self, path: &Path) -> Result<HeldFile, i32> {
         let name = wide(path);
-        // SAFETY: `name` is a NUL-terminated buffer that outlives the call;
-        // the handle asks for attributes only, shares reading and writing
-        // but not deleting (so the file cannot be renamed or removed while
-        // it is held), and opens a folder too (`BACKUP_SEMANTICS`).
+        // SAFETY: `name` is a NUL-terminated buffer that outlives the call.
+        // The handle reads data, so the sharing rules apply to it (an open
+        // for attributes only would hold nothing back): it shares reading
+        // and writing and not deletion, so while it is open no other open may
+        // rename, move or delete the file; it opens a folder too
+        // (`BACKUP_SEMANTICS`, where reading data is listing it).
         let handle = unsafe {
             CreateFileW(
                 PCWSTR(name.as_ptr()),
-                FILE_READ_ATTRIBUTES.0,
+                FILE_READ_DATA.0 | FILE_READ_ATTRIBUTES.0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE,
                 None,
                 OPEN_EXISTING,
@@ -336,28 +356,15 @@ impl ShellSystem for Shell {
         unsafe { AssocIsDangerous(PCWSTR(dotted.as_ptr())) }.as_bool()
     }
 
-    fn execute(
-        &self,
-        target: &OsStr,
-        class: Option<&str>,
-        owner: Option<Owner>,
-    ) -> Result<(), i32> {
+    fn execute(&self, target: &OsStr, owner: Option<Owner>) -> Result<(), i32> {
         let target = wide(target);
-        let class = class.map(wide);
-        let mut mask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOCLOSEPROCESS;
-        if class.is_some() {
-            mask |= SEE_MASK_CLASSNAME;
-        }
         let mut info = SHELLEXECUTEINFOW {
             cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>())
                 .expect("BUG: SHELLEXECUTEINFOW is a few hundred bytes"),
-            fMask: mask,
+            fMask: SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOCLOSEPROCESS,
             hwnd: owner.map_or_default(Owner::hwnd),
             lpVerb: w!("open"),
             lpFile: PCWSTR(target.as_ptr()),
-            lpClass: class
-                .as_ref()
-                .map_or(PCWSTR::null(), |class| PCWSTR(class.as_ptr())),
             nShow: SW_SHOWNORMAL.0,
             ..Default::default()
         };
@@ -436,13 +443,21 @@ impl ShellSystem for Shell {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::sync::Arc;
 
-    use flui_platform::SystemFailure;
-    use flui_platform::launch::LaunchError;
+    use flui_platform::capability::Abandoned;
+    use flui_platform::launch::{ExternalUri, LaunchError, LaunchResult, Launcher, Scheme};
+    use flui_platform::{SystemFailure, UnsupportedReason};
 
-    use super::{Trashed, launch_error, open_document, open_uri, trash, without_verbatim};
-    use crate::testing::win32::FakeShell;
+    use super::{
+        Shell, ShellSystem, Trashed, WindowsLauncher, launch_error, open_document, open_uri, trash,
+        without_verbatim,
+    };
+    use crate::testing::win32::{FakeShell, TestOwner};
+    use crate::win32::ShellThreads;
 
     #[test]
     fn an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given() {
@@ -452,7 +467,7 @@ mod tests {
         assert_eq!(open_document(&document, asked, None), Ok(()));
         assert_eq!(
             document.executed(),
-            [(r"C:\docs\report.pdf".to_owned(), None)],
+            [r"C:\docs\report.pdf".to_owned()],
             "the shell is handed the judged name"
         );
 
@@ -463,7 +478,7 @@ mod tests {
             open_document(&swapped, asked, None),
             Err(LaunchError::NotADocument)
         );
-        assert_eq!(swapped.executed(), []);
+        assert_eq!(swapped.executed(), Vec::<String>::new());
 
         // A type the floor does not list and the system calls dangerous.
         let dangerous = FakeShell {
@@ -474,7 +489,7 @@ mod tests {
             open_document(&dangerous, asked, None),
             Err(LaunchError::NotADocument)
         );
-        assert_eq!(dangerous.executed(), []);
+        assert_eq!(dangerous.executed(), Vec::<String>::new());
 
         // A folder is shown, whatever its name.
         let folder = FakeShell {
@@ -494,19 +509,41 @@ mod tests {
     }
 
     #[test]
-    fn a_uri_goes_to_its_schemes_registered_class() {
+    fn a_link_on_a_local_drive_that_leads_off_it_is_refused_where_it_led() {
+        let asked = Path::new(r"C:\docs\report.pdf");
+        for led_to in [
+            r"\\?\UNC\server\share\report.pdf",
+            r"\\server\share\report.pdf",
+            r"\\?\GLOBALROOT\Device\Mup\server\share\report.pdf",
+        ] {
+            let shell = FakeShell::holding(led_to);
+            assert_eq!(
+                open_document(&shell, asked, None),
+                Err(LaunchError::NotLocal),
+                "{led_to}"
+            );
+            assert_eq!(shell.executed(), Vec::<String>::new(), "{led_to}");
+        }
+        let verbatim_drive = FakeShell::holding(r"\\?\D:\docs\report.pdf");
+        assert_eq!(open_document(&verbatim_drive, asked, None), Ok(()));
+    }
+
+    #[test]
+    fn a_uri_goes_as_it_is_to_the_users_handler_and_a_one_letter_scheme_is_refused() {
         let shell = FakeShell::holding(r"C:\unused");
         assert_eq!(
             open_uri(&shell, "https://example.com/a?b", "https", None),
             Ok(())
         );
+        assert_eq!(shell.executed(), ["https://example.com/a?b".to_owned()]);
+
+        let refused = open_uri(&shell, "c:report.pdf", "c", None)
+            .expect_err("the shell reads a one-letter scheme as a drive");
         assert_eq!(
-            shell.executed(),
-            [(
-                "https://example.com/a?b".to_owned(),
-                Some("https".to_owned())
-            )]
+            refused.unsupported().map(|unsupported| unsupported.reason),
+            Some(UnsupportedReason::NotOnThisPlatform)
         );
+        assert_eq!(shell.executed().len(), 1, "nothing more reached the shell");
     }
 
     #[test]
@@ -543,7 +580,72 @@ mod tests {
         assert_eq!(
             without_verbatim(wide(r"\\?\UNC\server\share\a.pdf")),
             PathBuf::from(r"\\?\UNC\server\share\a.pdf"),
-            "a share keeps its prefix, so the floor's locality still reads it"
+            "a share keeps its prefix, so the locality judge still reads it"
         );
+    }
+
+    /// The real `hold` on a file of the test's own in the temporary folder:
+    /// nothing is launched.
+    #[test]
+    fn a_held_file_cannot_be_renamed_until_it_is_let_go() {
+        let folder = std::env::temp_dir().join(format!("flui-system-held-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("a temporary folder");
+        let document = folder.join("a.pdf");
+        let program = folder.join("b.exe");
+        std::fs::write(&document, b"%PDF").expect("a document");
+
+        let held = Shell.hold(&document).expect("the document opens");
+        assert!(!held.directory);
+        assert_eq!(
+            held.final_path.file_name(),
+            document.file_name(),
+            "the final name is the document's"
+        );
+        assert!(
+            std::fs::rename(&document, &program).is_err(),
+            "a held file cannot become a program under the judged name"
+        );
+        drop(held);
+        std::fs::rename(&document, &program).expect("a file let go can be renamed");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_launcher_request_runs_off_the_owner_and_answers_at_an_owner_turn() {
+        let owner = TestOwner::new();
+        let ctx = owner.ctx(None);
+        let launcher = Launcher::new(
+            WindowsLauncher::over(
+                Arc::new(FakeShell::holding(r"C:\Windows\System32\cmd.exe")),
+                Rc::new(ShellThreads::default()),
+                None,
+            ),
+            &ctx,
+        );
+        let answered: Rc<RefCell<Option<Result<LaunchResult, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&answered);
+        launcher
+            .open_path(&std::env::temp_dir().join("report.pdf"))
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        assert!(answered.borrow().is_none(), "never inside the call");
+        owner.turn_until(|| answered.borrow().is_some());
+        assert_eq!(
+            *answered.borrow(),
+            Some(Ok(Err(LaunchError::NotADocument))),
+            "judged by the file the handle holds"
+        );
+
+        let drive = Scheme::try_new("c").expect("a scheme the caller allows");
+        let uri = ExternalUri::try_new("c:report.pdf", &[drive]).expect("admitted at the seam");
+        let refused: Rc<RefCell<Option<Result<LaunchResult, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&refused);
+        launcher
+            .open_uri(&uri)
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        owner.turn_until(|| refused.borrow().is_some());
+        assert!(matches!(
+            *refused.borrow(),
+            Some(Ok(Err(LaunchError::Unsupported(_))))
+        ));
     }
 }

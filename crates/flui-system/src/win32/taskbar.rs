@@ -24,19 +24,22 @@ use windows::Win32::Graphics::Gdi::{
     DeleteObject, HGDIOBJ,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
-use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Shell::{
     ITaskbarList3, SUBCLASSPROC, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
     TBPF_PAUSED, TBPFLAG, TaskbarList,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateIconIndirect, DestroyIcon, HICON, ICONINFO, RegisterWindowMessageW, SM_CXSMICON,
-    WM_NCDESTROY,
+    ChangeWindowMessageFilterEx, CreateIconIndirect, DestroyIcon, HICON, ICONINFO, MSGFLT_ALLOW,
+    RegisterWindowMessageW, SM_CXSMICON, WM_NCDESTROY,
 };
 use windows::core::{BOOL, HSTRING, PCSTR, w};
 
 use super::{Owner, os_code};
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::taskbar::{
     TaskbarBackend, TaskbarBadge, TaskbarCapability, TaskbarError, TaskbarProgress,
 };
@@ -390,11 +393,13 @@ struct Subclassing {
 impl Subclassing {
     fn load() -> Result<Self, i32> {
         let failed = || os_code(windows::core::Error::from_thread().code());
-        // SAFETY: loads (or finds loaded) the system's common controls; the
-        // module stays loaded for the process's life, which the pointers
+        // SAFETY: loads (or finds loaded) the common controls from the
+        // system folder only, never a `comctl32.dll` beside the executable;
+        // the module stays loaded for the process's life, which the pointers
         // below rely on.
         let module =
-            unsafe { LoadLibraryW(w!("comctl32.dll")) }.map_err(|error| os_code(error.code()))?;
+            unsafe { LoadLibraryExW(w!("comctl32.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }
+                .map_err(|error| os_code(error.code()))?;
         let find = |ordinal: usize| {
             // SAFETY: an ordinal passed as the name, as `MAKEINTRESOURCE`
             // does; the module is the one loaded above.
@@ -567,6 +572,13 @@ impl TaskbarSystem for ComTaskbar {
             )
         };
         if installed.as_bool() {
+            // An elevated process hears Explorer, which runs at medium
+            // integrity, only for the messages its windows let through: let
+            // this one through on this window.
+            // SAFETY: the window is the owner thread's; no out-parameter.
+            let _ = unsafe {
+                ChangeWindowMessageFilterEx(owner.hwnd(), self.button_created, MSGFLT_ALLOW, None)
+            };
             Ok(())
         } else {
             // SAFETY: the box was not handed to a subclass: freed here, once.
@@ -605,43 +617,69 @@ struct Watching {
     subclassing: Subclassing,
 }
 
+/// What the OS calls the subclass procedure with.
+type SubclassCall = (HWND, u32, WPARAM, LPARAM, usize, usize);
+
 /// The subclass procedure: on `TaskbarButtonCreated`, show the window's
 /// button again; on `WM_NCDESTROY`, remove itself. It calls nothing of the
-/// application's: the buttons show a value through the taskbar.
+/// application's: the buttons show a value through the taskbar. A panic in
+/// it is contained, and the message goes on down the window's chain.
 unsafe extern "system" fn button_procedure(
     window: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-    _subclass: usize,
+    subclass: usize,
     reference: usize,
 ) -> LRESULT {
+    os_entry(
+        "the taskbar button's subclass",
+        (window, message, wparam, lparam, subclass, reference),
+        AfterPanic::Answer(chain_on),
+        || button_message((window, message, wparam, lparam, subclass, reference)),
+    )
+}
+
+/// The subclass's work for one message, then the rest of the chain.
+fn button_message(call: SubclassCall) -> LRESULT {
+    let (window, message, wparam, lparam, _, reference) = call;
     let raw = reference as *mut Watching;
     // SAFETY: the reference data is the live box `watch` installed with
     // this subclass, on this thread, until it is freed below or by
     // `unwatch`, each of which first removes the subclass.
-    let Some(subclassing) = (unsafe { raw.as_ref() }).map(|watching| watching.subclassing) else {
+    let Some(watching) = (unsafe { raw.as_ref() }) else {
         return LRESULT(0);
     };
-    // SAFETY: as above.
-    if let Some(watching) = unsafe { raw.as_ref() } {
-        if message == watching.button_created
-            && let Some(buttons) = watching.buttons.upgrade()
-            && let Some(owner) = std::num::NonZeroIsize::new(window.0 as isize)
-        {
-            buttons.button_created(Owner(owner));
-        }
-        if message == WM_NCDESTROY {
-            // SAFETY: removes this subclass, then frees its box once; the
-            // calls it chains through were copied out first.
-            unsafe {
-                let _ = (subclassing.remove)(window, Some(button_procedure), SUBCLASS);
-                drop(Box::from_raw(raw));
-            }
+    let subclassing = watching.subclassing;
+    if message == watching.button_created
+        && let Some(buttons) = watching.buttons.upgrade()
+        && let Some(owner) = std::num::NonZeroIsize::new(window.0 as isize)
+    {
+        buttons.button_created(Owner(owner));
+    }
+    if message == WM_NCDESTROY {
+        // SAFETY: removes this subclass, then frees its box once, the last
+        // use of it; the calls it chains through were copied out first.
+        unsafe {
+            let _ = (subclassing.remove)(window, Some(button_procedure), SUBCLASS);
+            drop(Box::from_raw(raw));
         }
     }
     // SAFETY: the rest of the window's chain, with the arguments given.
     unsafe { (subclassing.default)(window, message, wparam, lparam) }
+}
+
+/// After a panic in [`button_message`], the rest of the window's chain: the
+/// box is still the subclass's, since freeing it is the work's last step
+/// and runs nothing that panics.
+fn chain_on(call: SubclassCall) -> LRESULT {
+    let (window, message, wparam, lparam, _, reference) = call;
+    // SAFETY: as in `button_message`: the live box of this subclass.
+    let Some(watching) = (unsafe { (reference as *const Watching).as_ref() }) else {
+        return LRESULT(0);
+    };
+    // SAFETY: the rest of the window's chain, with the arguments given.
+    unsafe { (watching.subclassing.default)(window, message, wparam, lparam) }
 }
 
 #[cfg(test)]

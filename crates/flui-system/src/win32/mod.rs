@@ -10,7 +10,7 @@
 //!   dismissal window when its caller lets it go or its window closes.
 //! - The launcher, launch at login, the jump list and the user's folders
 //!   run each request on a short-lived apartment thread, at most
-//!   [`ShellThreads::MAX_IN_FLIGHT`] at once per UI runtime ([`threads`]).
+//!   [`threads::MAX_IN_FLIGHT`] at once per UI runtime ([`threads`]).
 //! - The share sheet, the global shortcuts and the taskbar run on the owner
 //!   thread, whose apartment the host entered: they call the window's own
 //!   thread's objects and read no file there.
@@ -124,10 +124,16 @@ pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
         ))
     });
     registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-        FileDialogs::try_new(dialogs::WindowsDialogs::new(), ctx)
+        FileDialogs::try_new(
+            dialogs::WindowsDialogs::new(ctx.runtime_local::<modal::ModalWindows>()),
+            ctx,
+        )
     });
     registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
-        MessageBoxes::try_new(message_box::WindowsMessageBoxes::new(), ctx)
+        MessageBoxes::try_new(
+            message_box::WindowsMessageBoxes::new(ctx.runtime_local::<modal::ModalWindows>()),
+            ctx,
+        )
     });
     registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
         Share::try_new(share::WindowsShare::new(ctx), ctx)

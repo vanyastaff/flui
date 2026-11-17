@@ -138,6 +138,12 @@ pub enum ShortcutError {
     /// The system cannot register a chord on this key.
     #[error("the system cannot register a shortcut on this key")]
     KeyNotSupported,
+    /// The UI runtime has registered as many shortcuts as the system can
+    /// number for it (Windows numbers an application's hot keys up to
+    /// 0xBFFF, and a number is never given twice, so a press meant for a
+    /// dropped shortcut never reaches a later one): a lasting refusal.
+    #[error("the runtime has registered every shortcut the system can number")]
+    Exhausted,
     /// This system has no global shortcuts, or not for this application
     /// (a sandbox without the portal); the [`Unsupported`] says why.
     #[error("global shortcuts cannot do this: {0}")]

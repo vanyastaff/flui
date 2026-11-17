@@ -13,9 +13,9 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
+use flui_platform::SystemFailure;
 use flui_platform::capability::Resolver;
 use flui_platform::keyboard::{Code, Modifiers};
-use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 use rustc_hash::FxHashMap;
 use windows::Win32::Foundation::{ERROR_HOTKEY_ALREADY_REGISTERED, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -29,9 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::shortcut::{
-    GlobalShortcutBackend, GlobalShortcutCapability, Shortcut, ShortcutError, ShortcutHold,
-    ShortcutPresses,
+    GlobalShortcutBackend, Shortcut, ShortcutError, ShortcutHold, ShortcutPresses,
 };
 
 /// The highest id an application's hot key may have.
@@ -189,25 +189,23 @@ pub(crate) trait HotkeySystem: 'static {
     fn unregister(&self, id: i32);
 }
 
-/// The presses each registered hot key reports to, by id, and the ids free
-/// for the next.
+/// The presses each registered hot key reports to, by id, and the last id
+/// handed out.
 #[derive(Default)]
-pub(super) struct HotkeyTable {
+pub(crate) struct HotkeyTable {
     entries: RefCell<FxHashMap<i32, ShortcutPresses>>,
-    free: RefCell<Vec<i32>>,
-    next: Cell<i32>,
+    last: Cell<i32>,
 }
 
 impl HotkeyTable {
-    /// An id no live hot key of this runtime has; `None` when all
-    /// [`MAX_HOTKEY_ID`] are taken.
+    /// An id no hot key of this runtime has had: never handed out again,
+    /// so a `WM_HOTKEY` still queued for a dropped registration finds no
+    /// entry rather than a later one. `None` once all [`MAX_HOTKEY_ID`]
+    /// were handed out.
     fn mint(&self) -> Option<i32> {
-        if let Some(id) = self.free.borrow_mut().pop() {
-            return Some(id);
-        }
-        let next = self.next.get() + 1;
+        let next = self.last.get().checked_add(1)?;
         (next <= MAX_HOTKEY_ID).then(|| {
-            self.next.set(next);
+            self.last.set(next);
             next
         })
     }
@@ -228,7 +226,6 @@ impl HotkeyTable {
 
     fn remove(&self, id: i32) {
         let removed = self.entries.borrow_mut().remove(&id);
-        self.free.borrow_mut().push(id);
         drop(removed);
     }
 }
@@ -274,14 +271,7 @@ impl HotkeyWindow {
         let system = self
             .system()
             .map_err(|code| ShortcutError::Failed(SystemFailure::Os(code)))?;
-        let id = self
-            .table
-            .mint()
-            .ok_or(ShortcutError::Unsupported(Unsupported::of::<
-                GlobalShortcutCapability,
-            >(
-                UnsupportedReason::Unavailable
-            )))?;
+        let id = self.table.mint().ok_or(ShortcutError::Exhausted)?;
         // In the table first: a press the system reports at once finds it.
         self.table.insert(id, presses);
         if let Err(code) = system.register(id, hotkey_modifiers(shortcut.modifiers()), key) {
@@ -444,13 +434,23 @@ impl Drop for MessageWindow {
     }
 }
 
-/// The hot key window's procedure: a `WM_HOTKEY` is handed to the table.
+/// The hot key window's procedure: a `WM_HOTKEY` is handed to the table. A
+/// panic in it is contained and the message answered 0.
 unsafe extern "system" fn hotkey_procedure(
     window: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    os_entry(
+        "the global shortcuts' window",
+        (window, message, wparam, lparam),
+        AfterPanic::Answer(|_| LRESULT(0)),
+        || hotkey_message(window, message, wparam, lparam),
+    )
+}
+
+fn hotkey_message(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if message == WM_HOTKEY {
         // SAFETY: the user data is null until `create` stores the table,
         // which its `MessageWindow` keeps alive until it destroys the window;
@@ -570,6 +570,77 @@ mod tests {
         assert!(matches!(
             answered.borrow_mut().take(),
             Some(Ok(Err(ShortcutError::Taken)))
+        ));
+        assert_eq!(*held.borrow(), []);
+    }
+
+    /// Register `shortcut` counting presses into `count`, and run turns
+    /// until the system answered.
+    fn registered(
+        owner: &TestOwner,
+        shortcuts: &GlobalShortcuts,
+        shortcut: Shortcut,
+        count: &Rc<Cell<u32>>,
+    ) -> ShortcutResult {
+        let counting = Rc::clone(count);
+        let answered: Rc<RefCell<Option<Result<ShortcutResult, Abandoned>>>> = Rc::default();
+        let into = Rc::clone(&answered);
+        shortcuts
+            .register(shortcut, move || counting.set(counting.get() + 1))
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        owner.turn_until(|| answered.borrow().is_some());
+        answered
+            .borrow_mut()
+            .take()
+            .expect("answered")
+            .expect("not abandoned")
+    }
+
+    #[test]
+    fn a_press_queued_for_a_dropped_chord_never_reaches_the_chord_after_it() {
+        let owner = TestOwner::new();
+        let (hotkeys, held) = window_over(FakeHotkeys::default());
+        let ctx = owner.ctx(None);
+        let shortcuts = GlobalShortcuts::new(WindowsShortcuts::new(Rc::clone(&hotkeys)), &ctx);
+        let first = Shortcut::try_new(Modifiers::CONTROL, Code::KeyA).expect("a chord");
+        let second = Shortcut::try_new(Modifiers::CONTROL, Code::KeyB).expect("a chord");
+        let (first_count, second_count) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+
+        let registration = registered(&owner, &shortcuts, first, &first_count).expect("first");
+        let first_id = held.borrow()[0].0;
+        drop(registration);
+        // The second takes a fresh id in the same turn, before the queued
+        // `WM_HOTKEY` of the first is dispatched.
+        let second_registration =
+            registered(&owner, &shortcuts, second, &second_count).expect("second");
+        let second_id = held.borrow()[0].0;
+        assert_ne!(first_id, second_id, "an id is never handed out twice");
+
+        hotkeys.table.pressed(first_id);
+        owner.turn();
+        assert_eq!(
+            (first_count.get(), second_count.get()),
+            (0, 0),
+            "the late press of the dropped chord runs nobody"
+        );
+        hotkeys.table.pressed(second_id);
+        owner.turn();
+        assert_eq!(second_count.get(), 1);
+        drop(second_registration);
+    }
+
+    #[test]
+    fn a_runtime_that_numbered_every_hot_key_refuses_the_next_for_good() {
+        let owner = TestOwner::new();
+        let (hotkeys, held) = window_over(FakeHotkeys::default());
+        hotkeys.table.last.set(super::MAX_HOTKEY_ID);
+        let ctx = owner.ctx(None);
+        let shortcuts = GlobalShortcuts::new(WindowsShortcuts::new(hotkeys), &ctx);
+        let chord = Shortcut::try_new(Modifiers::CONTROL, Code::KeyZ).expect("a chord");
+        let count = Rc::new(Cell::new(0));
+        assert!(matches!(
+            registered(&owner, &shortcuts, chord, &count),
+            Err(ShortcutError::Exhausted)
         ));
         assert_eq!(*held.borrow(), []);
     }

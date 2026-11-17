@@ -85,11 +85,21 @@ pub(super) fn folder_answer(found: Result<PathBuf, i32>) -> FolderResult {
 /// [`OsBackend`] over the shell's known folders.
 pub(crate) struct WindowsOs {
     threads: Rc<ShellThreads>,
+    /// Finds a known folder, on a shell thread: the system's lookup, or a
+    /// test's answers.
+    lookup: fn(GUID) -> Result<PathBuf, i32>,
 }
 
 impl WindowsOs {
     pub(crate) fn new(threads: Rc<ShellThreads>) -> Self {
-        Self { threads }
+        Self::over(threads, known_folder)
+    }
+
+    pub(super) fn over(
+        threads: Rc<ShellThreads>,
+        lookup: fn(GUID) -> Result<PathBuf, i32>,
+    ) -> Self {
+        Self { threads, lookup }
     }
 }
 
@@ -110,6 +120,7 @@ fn known_folder(id: GUID) -> Result<PathBuf, i32> {
 impl OsBackend for WindowsOs {
     fn folder(&self, folder: KnownFolder, answer: Resolver<FolderResult>) {
         let id = folder_id(folder);
+        let lookup = self.lookup;
         self.threads.answer(
             "flui-known-folder",
             answer,
@@ -118,7 +129,7 @@ impl OsBackend for WindowsOs {
                     UnsupportedReason::Unavailable,
                 )))
             },
-            move || folder_answer(known_folder(id)),
+            move || folder_answer(lookup(id)),
         );
     }
 
@@ -188,6 +199,55 @@ mod tests {
         assert_eq!(
             folder_answer(Ok(PathBuf::from(r"C:\Users\a"))),
             Ok(PathBuf::from(r"C:\Users\a"))
+        );
+    }
+
+    /// The known folders of a system whose user has no videos folder.
+    fn lookup(id: windows::core::GUID) -> Result<PathBuf, i32> {
+        if id == windows::Win32::UI::Shell::FOLDERID_Videos {
+            Err(2)
+        } else if id == windows::Win32::UI::Shell::FOLDERID_Profile {
+            Ok(PathBuf::from(r"C:\Users\a"))
+        } else {
+            Ok(PathBuf::from("relative"))
+        }
+    }
+
+    #[test]
+    fn a_folder_is_found_on_a_shell_thread_and_answered_as_the_system_said() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use flui_platform::capability::Abandoned;
+
+        use crate::os::{FolderResult, KnownFolder, Os};
+        use crate::testing::win32::TestOwner;
+        use crate::win32::ShellThreads;
+
+        let owner = TestOwner::new();
+        let ctx = owner.ctx(None);
+        let os = Os::new(
+            super::WindowsOs::over(Rc::new(ShellThreads::default()), lookup),
+            &ctx,
+        );
+        let find = |folder| {
+            let landed: Rc<RefCell<Option<Result<FolderResult, Abandoned>>>> = Rc::default();
+            let into = Rc::clone(&landed);
+            os.folder(folder)
+                .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+            owner.turn_until(|| landed.borrow().is_some());
+            landed
+                .borrow_mut()
+                .take()
+                .expect("landed")
+                .expect("not abandoned")
+        };
+        assert_eq!(find(KnownFolder::Home), Ok(PathBuf::from(r"C:\Users\a")));
+        assert_eq!(find(KnownFolder::Videos), Err(FolderError::NotFound));
+        assert_eq!(
+            find(KnownFolder::Music),
+            Err(FolderError::Failed(SystemFailure::MalformedAnswer)),
+            "a relative folder is outside the system's contract"
         );
     }
 }

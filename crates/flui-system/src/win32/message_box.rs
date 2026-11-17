@@ -6,6 +6,7 @@
 //! entry does not load). Dismissing ends the box with `EndDialog` from its
 //! own thread; the answer is then dropped.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_platform::SystemFailure;
@@ -19,12 +20,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR};
 
-use super::modal::{Dismisser, show_answering};
+use super::modal::{Dismisser, ModalWindows, show_answering};
 use super::{Owner, wide};
 use crate::dialog::{
     DialogError, DialogHold, MessageAnswer, MessageBoxBackend, MessageBoxCapability,
     MessageBoxRequest, MessageBoxResult, MessageButtons, MessageLevel,
 };
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
 
 /// The message box as the provider reaches it, on the box's thread: show
 /// it with `style`, installing its close on `dismisser`, and return the
@@ -71,13 +73,16 @@ pub(super) fn answer(chosen: MESSAGEBOX_RESULT) -> MessageBoxResult {
 /// [`MessageBoxBackend`] over `MessageBoxW`.
 pub(crate) struct WindowsMessageBoxes {
     system: Arc<dyn MessageBoxSystem>,
+    windows: Rc<ModalWindows>,
 }
 
 impl WindowsMessageBoxes {
-    pub(crate) fn new() -> Self {
-        Self {
-            system: Arc::new(Win32MessageBox),
-        }
+    pub(crate) fn new(windows: Rc<ModalWindows>) -> Self {
+        Self::over(Arc::new(Win32MessageBox), windows)
+    }
+
+    pub(super) fn over(system: Arc<dyn MessageBoxSystem>, windows: Rc<ModalWindows>) -> Self {
+        Self { system, windows }
     }
 }
 
@@ -92,6 +97,8 @@ impl MessageBoxBackend for WindowsMessageBoxes {
         let style = style(&request);
         let system = Arc::clone(&self.system);
         show_answering::<MessageBoxCapability, _, _>(
+            &self.windows,
+            window.id(),
             answer_to,
             move |dismisser| {
                 system.show(
@@ -153,8 +160,18 @@ impl MessageBoxSystem for Win32MessageBox {
 }
 
 /// Ends the message box among this thread's windows: the dialog class
-/// `#32770`, which is what `MessageBoxW` makes.
-unsafe extern "system" fn end_box(window: HWND, _: LPARAM) -> BOOL {
+/// `#32770`, which is what `MessageBoxW` makes. A panic in it is contained
+/// and ends the enumeration.
+unsafe extern "system" fn end_box(window: HWND, lparam: LPARAM) -> BOOL {
+    os_entry(
+        "the message box's dismissal",
+        (window, lparam),
+        AfterPanic::Answer(|_| BOOL(0)),
+        || end_box_window(window),
+    )
+}
+
+fn end_box_window(window: HWND) -> BOOL {
     let mut class = [0_u16; 16];
     // SAFETY: `class` is a live buffer of the length the call is given.
     let length = unsafe { GetClassNameW(window, &mut class) };
@@ -223,6 +240,76 @@ mod tests {
             answer(IDABORT),
             Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
             "a button the request did not offer"
+        );
+    }
+
+    /// A message box the user answers at once with the button it was given,
+    /// recording the style it was shown with.
+    struct AnsweringBox {
+        button: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT,
+        styles: std::sync::Mutex<Vec<windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE>>,
+    }
+
+    impl super::MessageBoxSystem for AnsweringBox {
+        fn show(
+            &self,
+            _: Option<crate::win32::Owner>,
+            _: &str,
+            _: Option<&str>,
+            style: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE,
+            _: &crate::win32::modal::Dismisser,
+        ) -> Result<windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT, i32> {
+            self.styles
+                .lock()
+                .expect("BUG: the test's lock")
+                .push(style);
+            Ok(self.button)
+        }
+    }
+
+    #[test]
+    fn a_box_answers_from_its_thread_and_a_button_it_did_not_offer_is_refused() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use std::sync::Arc;
+
+        use flui_platform::capability::Abandoned;
+
+        use crate::dialog::{MessageBoxResult, MessageBoxes};
+        use crate::testing::win32::{TestOwner, window};
+
+        let owner = TestOwner::new();
+        let ask = |button, buttons| {
+            let (win, _closer) = window();
+            let ctx = owner.ctx(Some(win));
+            let boxes = MessageBoxes::try_new(
+                super::WindowsMessageBoxes::over(
+                    Arc::new(AnsweringBox {
+                        button,
+                        styles: std::sync::Mutex::new(Vec::new()),
+                    }),
+                    Rc::default(),
+                ),
+                &ctx,
+            )
+            .expect("a window");
+            let landed: Rc<RefCell<Option<Result<MessageBoxResult, Abandoned>>>> = Rc::default();
+            let into = Rc::clone(&landed);
+            boxes
+                .show(MessageBoxRequest::new("Delete?").buttons(buttons))
+                .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+            owner.turn_until(|| landed.borrow().is_some());
+            landed
+                .borrow_mut()
+                .take()
+                .expect("landed")
+                .expect("not abandoned")
+        };
+        assert_eq!(ask(IDYES, MessageButtons::YesNo), Ok(MessageAnswer::Yes));
+        assert_eq!(
+            ask(IDCANCEL, MessageButtons::YesNo),
+            Err(DialogError::Failed(SystemFailure::MalformedAnswer)),
+            "a yes-or-no box has no cancel"
         );
     }
 }

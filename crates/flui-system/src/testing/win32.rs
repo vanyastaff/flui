@@ -195,7 +195,7 @@ pub(crate) struct FakeShell {
     pub(crate) directory: bool,
     pub(crate) dangerous: bool,
     pub(crate) hold_error: Option<i32>,
-    pub(crate) executed: Mutex<Vec<(String, Option<String>)>>,
+    pub(crate) executed: Mutex<Vec<String>>,
     pub(crate) trashed: Result<Trashed, i32>,
 }
 
@@ -212,8 +212,8 @@ impl FakeShell {
         }
     }
 
-    /// What it was asked to execute, and with which class.
-    pub(crate) fn executed(&self) -> Vec<(String, Option<String>)> {
+    /// What it was asked to execute.
+    pub(crate) fn executed(&self) -> Vec<String> {
         self.executed.lock().expect("BUG: the test's lock").clone()
     }
 }
@@ -234,11 +234,11 @@ impl ShellSystem for FakeShell {
         self.dangerous
     }
 
-    fn execute(&self, target: &OsStr, class: Option<&str>, _: Option<Owner>) -> Result<(), i32> {
-        self.executed.lock().expect("BUG: the test's lock").push((
-            target.to_string_lossy().into_owned(),
-            class.map(str::to_owned),
-        ));
+    fn execute(&self, target: &OsStr, _: Option<Owner>) -> Result<(), i32> {
+        self.executed
+            .lock()
+            .expect("BUG: the test's lock")
+            .push(target.to_string_lossy().into_owned());
         Ok(())
     }
 

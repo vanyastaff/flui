@@ -27,6 +27,8 @@ pub mod dialog;
 pub mod jump_list;
 pub mod login;
 pub mod os;
+#[cfg(windows)]
+mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
 pub mod share;
