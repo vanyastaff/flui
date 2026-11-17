@@ -138,6 +138,11 @@ impl WindowDpi {
     pub(crate) fn get(self) -> u32 {
         self.dpi
     }
+
+    /// Its ratio to the 96 of 100%.
+    pub(crate) fn ratio(self) -> DevicePixelRatio {
+        self.ratio
+    }
 }
 
 /// A window's DPI: one value per window, which the window's procedure sets
@@ -181,7 +186,7 @@ impl WindowScale {
 
     /// Its scale as a device pixel ratio.
     pub(crate) fn ratio(&self) -> DevicePixelRatio {
-        self.0.get().ratio
+        self.0.get().ratio()
     }
 
     /// The window is now at `dpi`; answers the scale it was at.

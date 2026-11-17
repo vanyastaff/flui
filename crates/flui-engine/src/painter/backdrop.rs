@@ -266,10 +266,10 @@ impl GpuReplay {
             f64::from(viewport_size.1.min(attachment_size.1)),
         );
         // A grouped filter reads the backdrop its group captured on this
-        // surface; the first member captures the whole readable attachment.
-        // It captures before any crop below can skip it, so a member that
-        // shows nothing still fixes the group's backdrop before its children
-        // paint.
+        // surface; the first member that writes captures the whole readable
+        // attachment; one that writes nothing has returned above. A partial
+        // frame captures where a full one does because the damage closure
+        // keeps every member of a group it meets inside one rect (ADR-0230).
         let snapshot = match &op.group {
             Some(group) => Some(snapshots.capture(
                 group,

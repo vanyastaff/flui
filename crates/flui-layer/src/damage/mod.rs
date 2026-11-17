@@ -22,7 +22,7 @@ mod differ;
 mod tests;
 
 pub use base::RasterBase;
-pub use closure::{Closure, MAX_CLOSURE_ROUNDS, close_over, read_closure};
+pub use closure::{Closure, Closures, MAX_CLOSURE_ROUNDS, close_over, read_closure};
 #[cfg(any(test, feature = "testing"))]
 pub use differ::LayerDiffer;
 
