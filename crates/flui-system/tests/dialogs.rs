@@ -373,8 +373,28 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
             MalformedRequest::FilterName,
         ),
         (
+            OpenRequest::files().filter(
+                FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN + 1)).with_extension("png"),
+            ),
+            MalformedRequest::FilterName,
+        ),
+        (
             OpenRequest::files().filter(FileFilter::new("Nothing")),
             MalformedRequest::EmptyFilter,
+        ),
+        (
+            OpenRequest::files().filter(
+                (0..=FileFilter::MAX_PATTERNS).fold(FileFilter::new("Many"), |filter, index| {
+                    filter.with_extension(format!("e{index}"))
+                }),
+            ),
+            MalformedRequest::TooManyPatterns,
+        ),
+        (
+            (0..=FileFilter::MAX_PER_REQUEST).fold(OpenRequest::files(), |request, index| {
+                request.filter(FileFilter::new(format!("F{index}")).with_extension("png"))
+            }),
+            MalformedRequest::TooManyFilters,
         ),
         // A wildcard, a separator or an empty part reads differently on
         // each system, so no extension holds one.
@@ -476,21 +496,26 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     let save_answers = saves.map(|(request, malformed)| (land(handle.save(request)), malformed));
     turn(&mut host);
 
+    // Every row is checked, and every row that answers otherwise is named.
+    let wrong_opens = open_answers.iter().filter_map(|(answer, malformed)| {
+        let answered = answer.borrow();
+        let as_wanted = matches!(
+            &*answered,
+            Some(Ok(Err(DialogError::InvalidRequest(reason)))) if reason == malformed
+        );
+        (!as_wanted).then(|| format!("{malformed:?}: {answered:?}"))
+    });
+    let wrong_saves = save_answers.iter().filter_map(|(answer, malformed)| {
+        let answered = answer.borrow();
+        let as_wanted = matches!(
+            &*answered,
+            Some(Ok(Err(DialogError::InvalidRequest(reason)))) if reason == malformed
+        );
+        (!as_wanted).then(|| format!("{malformed:?}: {answered:?}"))
+    });
+    let wrong = wrong_opens.chain(wrong_saves).collect::<Vec<String>>();
+    assert!(wrong.is_empty(), "{wrong:#?}");
     assert!(dialogs.requests().is_empty(), "no dialog was shown");
-    for (answer, malformed) in open_answers {
-        assert_eq!(
-            *answer.borrow(),
-            Some(Ok(Err(DialogError::InvalidRequest(malformed)))),
-            "{malformed:?}"
-        );
-    }
-    for (answer, malformed) in save_answers {
-        assert_eq!(
-            *answer.borrow(),
-            Some(Ok(Err(DialogError::InvalidRequest(malformed)))),
-            "{malformed:?}"
-        );
-    }
 
     // Several parts, digits and `-_+` are an extension; the longest one is
     // taken, and a MIME type may name every subtype.
@@ -510,6 +535,24 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     );
     turn(&mut host);
     assert_eq!(*wide.borrow(), Some(Ok(Ok(None))));
+
+    // Each bound is taken at its limit.
+    let at_limits = (1..FileFilter::MAX_PER_REQUEST).fold(
+        OpenRequest::files().filter((1..FileFilter::MAX_PATTERNS).fold(
+            FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN)).with_extension("e0"),
+            |filter, index| filter.with_extension(format!("e{index}")),
+        )),
+        |request, index| request.filter(FileFilter::new(format!("F{index}")).with_extension("png")),
+    );
+    assert_eq!(at_limits.filters.len(), FileFilter::MAX_PER_REQUEST);
+    assert_eq!(
+        at_limits.filters[0].extensions().len(),
+        FileFilter::MAX_PATTERNS
+    );
+    dialogs.answer_next_open(Ok(None));
+    let limits = land(handle.open(at_limits));
+    turn(&mut host);
+    assert_eq!(*limits.borrow(), Some(Ok(Ok(None))));
 
     // A refused request leaves the window free for the next one.
     dialogs.answer_next_open(Ok(None));

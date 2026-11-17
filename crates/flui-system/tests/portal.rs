@@ -496,7 +496,8 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
     let launcher = launcher.expect("the portal provides a launcher on Linux");
     let file = scratch_file("launch.txt");
 
-    let uri = ExternalUri::try_new("https://example.com/a b", &[Scheme::HTTPS]).expect("a web URI");
+    let uri =
+        ExternalUri::try_new("https://example.com/a%20b", &[Scheme::HTTPS]).expect("a web URI");
     portal.answer(0, Results::new());
     assert_eq!(settle(&mut host, launcher.open_uri(&uri)), Ok(Ok(())));
 
@@ -552,7 +553,7 @@ fn the_launcher_reaches_the_open_uri_and_trash_portals() {
         [
             Call::OpenUri {
                 parent: String::new(),
-                uri: "https://example.com/a b".to_owned(),
+                uri: "https://example.com/a%20b".to_owned(),
             },
             Call::OpenFile {
                 parent: String::new(),
@@ -684,11 +685,14 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
     assert_eq!(folder, b"/home/me\0", "the folder is NUL-terminated bytes");
     let filters = Vec::<(String, Vec<(u32, String)>)>::try_from(options[0]["filters"].clone())
         .expect("a(sa(us))");
-    let images = ("Images".to_owned(), vec![(0, "*.[pP][nN][gG]".to_owned())]);
+    let images = (
+        "Images".to_owned(),
+        vec![(0, "*.png".to_owned()), (0, "*.PNG".to_owned())],
+    );
     assert_eq!(
         filters,
         std::slice::from_ref(&images),
-        "the glob matches `PHOTO.PNG` as Windows and macOS do"
+        "`PHOTO.PNG` is matched as Windows and macOS match it"
     );
     assert_eq!(
         <(String, Vec<(u32, String)>)>::try_from(options[0]["current_filter"].clone())
@@ -721,7 +725,7 @@ fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
     };
     let file = PickedFile::try_new("/home/me/picture").expect("an absolute path");
 
-    portal.answer(0, answer(Some(("JPEG", "*.[jJ][pP][gG]"))));
+    portal.answer(0, answer(Some(("JPEG", "*.jpg"))));
     assert_eq!(
         settle(&mut host, dialogs.save(request())),
         Ok(Ok(Some(SaveLocation::new(file.clone(), Some(1))))),
@@ -745,8 +749,59 @@ fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
         .expect("(sa(us))");
     assert_eq!(
         current,
-        ("PNG".to_owned(), vec![(0, "*.[pP][nN][gG]".to_owned())])
+        (
+            "PNG".to_owned(),
+            vec![(0, "*.png".to_owned()), (0, "*.PNG".to_owned())]
+        )
     );
+}
+
+#[test]
+fn a_file_that_would_run_is_judged_by_what_was_opened_and_never_handed_on() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let portal = StandIn::serve();
+    let (mut host, launcher) = acquire::<LauncherCapability>(&portal.plugin());
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+    let folder = std::env::temp_dir().join(format!("flui-system-runs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a scratch folder");
+
+    // A link whose name says document and whose target is a desktop entry.
+    let entry = folder.join("evil.desktop");
+    std::fs::write(&entry, b"[Desktop Entry]\nExec=true\n").expect("a desktop entry");
+    let disguised = folder.join("report.pdf");
+    std::os::unix::fs::symlink(&entry, &disguised).expect("a symbolic link");
+    // An executable whose name says nothing.
+    let program = folder.join("report");
+    std::fs::write(&program, b"#!/bin/sh\n").expect("a script");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("an executable");
+
+    for path in [&disguised, &program] {
+        assert_eq!(
+            settle(&mut host, launcher.open_path(path)),
+            Ok(Err(LaunchError::NotADocument)),
+            "{}",
+            path.display()
+        );
+    }
+    assert!(portal.calls().is_empty(), "the portal was never asked");
+
+    // Showing one runs nothing.
+    portal.answer(0, Results::new());
+    assert_eq!(
+        settle(&mut host, launcher.reveal_path(&program)),
+        Ok(Ok(()))
+    );
+    assert_eq!(
+        portal.calls(),
+        [Call::OpenDirectory {
+            parent: String::new(),
+            path: program.canonicalize().expect("the script exists"),
+        }]
+    );
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 #[test]

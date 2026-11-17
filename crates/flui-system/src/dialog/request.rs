@@ -9,15 +9,19 @@ use std::path::{Path, PathBuf};
 /// in `.` and one of the extensions, compared ignoring ASCII case
 /// (`PHOTO.PNG` matches `png`, `a.tar.gz` matches `tar.gz`), or when its type
 /// is one of the MIME types. A host whose dialog matches otherwise maps each
-/// pattern to its own (the portal folds case into its globs), or refuses the
-/// request; none narrows or widens it silently.
+/// pattern to its own, or refuses the request. The portal is the one host
+/// that falls short: its backends match globs case-sensitively, so it sends
+/// each extension in lower and in upper case, and a name in mixed case
+/// (`Photo.Png`) on a case-sensitive file system is not shown.
 ///
 /// Patterns are kept as the dialog will compare them: an extension without
 /// its leading `.` and a MIME type in ASCII lower case, and one added twice
-/// is kept once. The rest is checked when the request is shown:
-/// [`FileDialogs`](super::FileDialogs) refuses a malformed filter with
+/// is kept once. The rest is checked when the request is shown, before the
+/// system is asked or anything is copied for it:
+/// [`FileDialogs`](super::FileDialogs) refuses a malformed filter, or too
+/// many filters or patterns, with
 /// [`DialogError::InvalidRequest`](super::DialogError::InvalidRequest)
-/// naming what is wrong, before the system is asked.
+/// naming what is wrong.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct FileFilter {
@@ -31,6 +35,15 @@ impl FileFilter {
     /// name is at most 255 bytes on the systems FLUI supports, and RFC 6838
     /// §4.2 bounds a MIME type's two names at 127 bytes each.
     pub const MAX_PATTERN_LEN: usize = 255;
+
+    /// The longest name a filter shows, in bytes: a dialog shows one line.
+    pub const MAX_NAME_LEN: usize = 255;
+
+    /// The most extensions and MIME types one filter holds, together.
+    pub const MAX_PATTERNS: usize = 64;
+
+    /// The most filters one request offers.
+    pub const MAX_PER_REQUEST: usize = 64;
 
     /// A filter named `name` that matches nothing until extensions or MIME
     /// types are added.
@@ -94,11 +107,17 @@ impl FileFilter {
     /// The first thing wrong with the filter: its name, matching nothing, or
     /// an extension or MIME type that is not one.
     fn check(&self) -> Result<(), MalformedRequest> {
-        if self.name.trim().is_empty() || self.name.chars().any(char::is_control) {
+        if self.name.len() > Self::MAX_NAME_LEN
+            || self.name.trim().is_empty()
+            || self.name.chars().any(char::is_control)
+        {
             return Err(MalformedRequest::FilterName);
         }
         if self.extensions.is_empty() && self.mime_types.is_empty() {
             return Err(MalformedRequest::EmptyFilter);
+        }
+        if self.extensions.len() + self.mime_types.len() > Self::MAX_PATTERNS {
+            return Err(MalformedRequest::TooManyPatterns);
         }
         if !self
             .extensions
@@ -153,6 +172,9 @@ fn is_mime_type(mime_type: &str) -> bool {
 /// that reports the selected filter by its value (the portal) could not
 /// tell apart either.
 fn check_filters(filters: &[FileFilter]) -> Result<(), MalformedRequest> {
+    if filters.len() > FileFilter::MAX_PER_REQUEST {
+        return Err(MalformedRequest::TooManyFilters);
+    }
     for (index, filter) in filters.iter().enumerate() {
         filter.check()?;
         let name = filter.name.trim();
@@ -173,12 +195,20 @@ fn check_filters(filters: &[FileFilter]) -> Result<(), MalformedRequest> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MalformedRequest {
-    /// A filter's name is blank or holds a control character.
+    /// A filter's name is blank, longer than [`FileFilter::MAX_NAME_LEN`],
+    /// or holds a control character.
     #[error("a filter has no name to show")]
     FilterName,
     /// A filter has neither an extension nor a MIME type.
     #[error("a filter matches nothing")]
     EmptyFilter,
+    /// A filter holds more than [`FileFilter::MAX_PATTERNS`] extensions and
+    /// MIME types.
+    #[error("a filter holds too many patterns")]
+    TooManyPatterns,
+    /// A request offers more than [`FileFilter::MAX_PER_REQUEST`] filters.
+    #[error("the request offers too many filters")]
+    TooManyFilters,
     /// An extension is empty, longer than [`FileFilter::MAX_PATTERN_LEN`],
     /// or holds a character outside ASCII letters, digits, `-`, `_`, `+` and
     /// the single dots between its parts (a wildcard, a separator).
