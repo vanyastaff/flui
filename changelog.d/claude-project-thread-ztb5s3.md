@@ -11,7 +11,8 @@
   window's last submitted scene: its render object and every one below it, after the frames due
   now, in paint order and each placed in the window, so a test checks what one `CustomPainter` or
   render object drew beside others. A subtree larger than one inspection is read in several, and
-  a frame between those reads starts the read again. `try_draw_commands` refuses an authored
+  a frame between those reads starts the read again unless two in a row find the same render
+  objects, as under a running animation. `try_draw_commands` refuses an authored
   region (`TestError::NoRenderObject`) and a render object with more children than one inspection
   lists (`TestError::TooManyChildren`) rather than return part of a drawing.
 

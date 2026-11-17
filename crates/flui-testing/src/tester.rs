@@ -685,7 +685,9 @@ impl Tester {
     /// larger than one inspection lists is read in several: each node one
     /// cut is inspected a level deep, and each child it did not list is read
     /// from there, so the drawing is read whole. A frame that
-    /// submits a scene between those reads starts the read again.
+    /// submits a scene between those reads starts the read again, and two
+    /// such reads in a row that find the same render objects stand, as an
+    /// animation submits a scene every frame.
     ///
     /// # Errors
     ///
@@ -698,6 +700,10 @@ impl Tester {
         &mut self,
         locator: &Locator,
     ) -> Result<Vec<flui_painting::DrawCommandBuf>, TestError> {
+        // The subtree a read found when a frame ran during it: an animation
+        // submits a scene on every frame without changing which render
+        // objects the element has, so two reads that agree stand.
+        let mut changed: Option<rustc_hash::FxHashSet<flui_foundation::RenderId>> = None;
         for _ in 0..VISIBLE_READS {
             self.run_due_now();
             let submits = self.host.sink().submits();
@@ -712,11 +718,19 @@ impl Tester {
             };
             let painters = self.render_subtree(render, &found.node);
             // A frame between the locate and the inspections may have
-            // replaced what they read, its failure included: read again.
-            if self.host.sink().submits() != submits {
-                continue;
-            }
-            let painters = painters?;
+            // replaced what they read, its failure included: read again,
+            // unless this read and the last agree.
+            let painters = if self.host.sink().submits() == submits {
+                painters?
+            } else {
+                match painters {
+                    Ok(painters) if changed.as_ref() == Some(&painters) => painters,
+                    other => {
+                        changed = other.ok();
+                        continue;
+                    }
+                }
+            };
             return Ok(self.host.sink().layer_tree().map_or_else(Vec::new, |tree| {
                 scene_commands(tree, |painter| painters.contains(&painter))
             }));
