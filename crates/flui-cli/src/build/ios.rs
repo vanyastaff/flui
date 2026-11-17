@@ -1,11 +1,11 @@
 use std::path::Path;
-use tokio::process::Command;
 
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts};
-use crate::build::util::{check_command_exists, environment, process};
+use crate::build::util::{check_command_exists, environment};
 
-/// Builder for iOS platform (.app bundles via Xcode).
+/// Builder for iOS: an application `.app` or a library XCFramework, each
+/// packaged with Xcode's command-line tools and no Xcode project.
 #[derive(Debug, Default)]
 pub(crate) struct IosBuilder;
 
@@ -122,76 +122,10 @@ impl IosBuilder {
             ));
         }
 
-        crate::ui::debug("Building iOS app with Xcode...".to_string());
-
-        let ios_dir = ctx.workspace_root.join("platforms").join("ios");
-
-        // Check if Xcode project exists
-        let xcodeproj = ios_dir.join("flui.xcodeproj");
-        if !xcodeproj.exists() {
-            return crate::build::ios_package::package(ctx, artifacts).await;
-        }
-
-        // Determine scheme and configuration
-        let configuration = match ctx.profile {
-            crate::build::platform::Profile::Debug => "Debug",
-            crate::build::platform::Profile::Release => "Release",
-        };
-
-        // xcodebuild takes the project path as a UTF-8 CLI argument; a
-        // non-UTF-8 workspace root is a caller-supplied environment problem.
-        let xcodeproj_str = xcodeproj.to_str().ok_or_else(|| {
-            BuildError::invalid_config(
-                "workspace_root",
-                format!(
-                    "Xcode project path {} is not valid UTF-8",
-                    xcodeproj.display()
-                ),
-            )
-        })?;
-
-        let args = vec![
-            "-project",
-            xcodeproj_str,
-            "-scheme",
-            "flui",
-            "-configuration",
-            configuration,
-            "-sdk",
-            "iphoneos",
-            "build",
-        ];
-
-        process::run(Command::new("xcodebuild").args(&args).current_dir(&ios_dir)).await?;
-
-        // Find the .app bundle
-        let build_dir = ios_dir.join("build").join(configuration).join("iphoneos");
-
-        let app_path = std::fs::read_dir(&build_dir)?
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.path())
-            .find(|path| path.extension().is_some_and(|ext| ext == "app"))
-            .ok_or_else(|| BuildError::PathNotFound {
-                path: build_dir.clone(),
-                context: ".app bundle not found in build output".to_string(),
-            })?;
-
-        // Calculate size of .app bundle (recursive)
-        let size_bytes = calculate_dir_size(&app_path)?;
-
-        // Copy to output directory
-        let output_app = ctx.output_dir.join("flui.app");
-        if output_app.exists() {
-            std::fs::remove_dir_all(&output_app)?;
-        }
-        copy_dir_recursive(&app_path, &output_app)?;
-
-        crate::ui::debug(format!("iOS app copied to: {}", output_app.display()));
-
-        Ok(FinalArtifacts {
-            app_binary: output_app,
-            size_bytes,
-        })
+        // A library build delivers the archives it built as an XCFramework,
+        // whatever Xcode project the application keeps: that project consumes
+        // the framework, it does not build in its place.
+        crate::build::ios_package::package(ctx, artifacts).await
     }
 }
 
@@ -212,39 +146,43 @@ fn cargo_args_for(ctx: &BuilderContext, target: &str) -> Vec<String> {
     args
 }
 
-/// Calculate total size of a directory recursively
-fn calculate_dir_size(dir: &Path) -> BuildResult<u64> {
-    let mut total_size = 0u64;
+#[cfg(test)]
+mod tests {
+    use super::IosBuilder;
+    use crate::build::{BuildArtifacts, BuildUnit, BuilderContextBuilder, Platform, Profile};
 
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            total_size += calculate_dir_size(&path)?;
-        } else {
-            total_size += std::fs::metadata(&path)?.len();
-        }
+    /// A library build is delivered by the XCFramework packager even when
+    /// the application keeps an Xcode project in `platforms/ios`: the
+    /// packager, not `xcodebuild -project`, answers, here by refusing a
+    /// build whose targets have no archive each. No tool runs before that
+    /// refusal, so the case holds on every host.
+    #[test]
+    fn a_library_build_beside_an_xcode_project_is_delivered_as_a_framework() {
+        let project = tempfile::tempdir().expect("fixture");
+        std::fs::create_dir_all(project.path().join("platforms/ios/flui.xcodeproj"))
+            .expect("an Xcode project");
+        let ctx = BuilderContextBuilder::new(project.path().to_path_buf())
+            .platform(Platform::Ios {
+                targets: vec!["aarch64-apple-ios".to_owned()],
+            })
+            .target(BuildUnit::Library { package: None })
+            .profile(Profile::Release)
+            .output_dir(project.path().join("out"))
+            .build();
+        let artifacts = BuildArtifacts {
+            rust_libs: Vec::new(),
+            executable: None,
+            package: None,
+        };
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let refusal = runtime
+            .block_on(IosBuilder::new().build_platform(&ctx, &artifacts))
+            .expect_err("no archive to deliver");
+        assert!(
+            refusal
+                .to_string()
+                .contains("requested triples must have exactly one archive each"),
+            "{refusal}"
+        );
     }
-
-    Ok(total_size)
-}
-
-/// Recursively copy directory
-fn copy_dir_recursive(src: &Path, dst: &Path) -> BuildResult<()> {
-    std::fs::create_dir_all(dst)?;
-
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-
-    Ok(())
 }

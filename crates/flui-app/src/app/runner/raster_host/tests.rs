@@ -1126,7 +1126,8 @@ fn threaded_host_over(
     (shared, slots, wakes)
 }
 
-const THREAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+pub(in crate::app::runner) const THREAD_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(5);
 
 /// Submit `scene`'s newest version through the shared host and answer its
 /// epoch and verdict.
@@ -2196,4 +2197,34 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
         "the lifecycle change reached the window"
     );
     render.release();
+}
+
+/// A raster thread drawing two windows, `first`'s woken through the counter
+/// it answers and `second`'s through none. For the frame drivers' wake tests,
+/// which read the in-flight floors through the loop's wake
+/// (`AppRuntime::next_wake`).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(in crate::app::runner) fn threaded_host_for_two(
+    first: PresentationAddress,
+    second: PresentationAddress,
+) -> (
+    SharedRasterHost,
+    ScriptedSlots,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
+    let (shared, slots, wakes) = threaded_host_at(first, None);
+    shared
+        .try_with(|host| {
+            host.attach_target(
+                Arc::new(FakeWindow::new(2)),
+                None,
+                second,
+                &crate::app::AppConfig::default(),
+                None,
+                None,
+            )
+        })
+        .expect("the host is idle")
+        .expect("the scripted backend attaches any window");
+    (shared, slots, wakes)
 }

@@ -186,7 +186,7 @@ pub const BREAKING: &[Break] = &[
     },
     Break {
         version: ProtocolVersion::new(0, 25),
-        adr: "ADR-0362",
+        adr: "ADR-0363",
         // A recorded window position names the display it is measured on, in that display's
         // logical pixels from its corner, where it was a point in a global space; a recorded
         // display carries its arrangement origin, its logical extent and its usable area in its

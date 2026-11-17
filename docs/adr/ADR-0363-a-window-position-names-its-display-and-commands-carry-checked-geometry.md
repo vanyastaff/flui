@@ -1,4 +1,4 @@
-# ADR-0362: A window position names its display, a display's bounds are its own logical pixels, and commands carry checked geometry
+# ADR-0363: A window position names its display, a display's bounds are its own logical pixels, and commands carry checked geometry
 
 - **Status:** Accepted (2026-11-17)
 - **Date:** 2026-11-17

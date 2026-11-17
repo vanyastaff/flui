@@ -340,7 +340,7 @@ fn bundle_at(
     match std::fs::symlink_metadata(&manifest) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&manifest)?;
-            Ok(AppBundle::new(&config.app.name, identifier(&config.app.id)).declared())
+            Ok(AppBundle::of_app(&config.app, identifier(&config.app.id)))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let name = root

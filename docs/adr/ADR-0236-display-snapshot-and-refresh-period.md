@@ -12,7 +12,7 @@
   window's display is a field of the window state snapshot and "your display may have changed"
   arrives through the window handler's state-changed obligation, not through `display_id()` and a
   callback. The snapshot, its keys and the refresh period stand.
-- **Superseded-by:** [ADR-0362](ADR-0362-a-window-position-names-its-display-and-commands-carry-checked-geometry.md), decision 1's
+- **Superseded-by:** [ADR-0363](ADR-0363-a-window-position-names-its-display-and-commands-carry-checked-geometry.md), decision 1's
   bounds only: a display carries its extent and usable area in its own logical pixels and its
   place in the window system's desktop as an opaque origin.
 - **Amends:** [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) decision 2 only: where
