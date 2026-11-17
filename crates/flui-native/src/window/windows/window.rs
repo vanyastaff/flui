@@ -877,11 +877,7 @@ impl WindowsWindow {
 
     /// Get current window bounds
     pub fn bounds(&self) -> Bounds<f64> {
-        let state = self.state.get();
-        Bounds {
-            origin: state.bounds.origin,
-            size: state.bounds.size,
-        }
+        self.state.get().bounds
     }
 
     pub(crate) fn show_native(

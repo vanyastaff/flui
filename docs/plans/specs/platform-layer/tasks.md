@@ -7329,6 +7329,37 @@ GPU-память простаивающего или невидимого окн
   каждого хоста свой (рабочая область монитора при открытии против configure Wayland), запись в
   `docs/gaps.md` и заметка строки `position-size-move-and-resize-events`.
 
+- [x] **LY127** — ветка `native/win32-owner-thread-forms`. Находка подтверждена на `main` @
+  `fbd43ebf2` чтением и компилятором: `WindowsLoop`, `WindowsPlatform` (`assert_not_impl_any!`) и
+  `WindowsWindow` (сырой `HWND`, без `unsafe impl`; теперь тоже с `assert_not_impl_any!`) не
+  `Send`, а формы для платформы, которая могла бы им быть, жили. Снято: `ApartmentHold` с
+  `unsafe impl Send`/`Sync`, проверкой потока в `share` и `Drop` и путём утечки — теперь поле цикла
+  `apartment: Rc<ComApartment>`, окно получает `Rc` без `Option`; запись `ApartmentHold` в
+  `tools/xtask/allowlists/send-impls.toml` снята; ветка «dropped off owner; native resource
+  retained» в `OwnerControl::close`; `OwnerAffinity` цикла (`bind_current` в конструкторе и `run`,
+  `debug_assert_owner` в `quit`); рукав `ForeignThread` в `register_layout_callback`. Правило
+  `TeardownRoute` с `PostClose` заменено `hwnd_affinity::handle_names` (`Nothing`,
+  `AnotherWindow`, `ItsWindow`), которое поток не спрашивает: закрытие и последний drop обёртки
+  только уничтожают окно, поле `queue` обёртки и ошибка «show must run on the native window owner»
+  ушли; поверхность из потока рендера спрашивает то же правило. Класс (ADR-0323 §5): запись окна
+  (`WindowRecord`: границы, масштаб, видимость, фокус) из `Arc<Mutex<_>>` стала `Copy` в
+  `Rc<Cell<_>>` — чтение внутри обновления видит последнюю записанную запись, а не ждёт замка,
+  который держит его же поток; флаг слияния запроса политики выхода из `Arc<AtomicBool>` —
+  `Rc<Cell<bool>>` (оба спрашивающих, `WM_DESTROY` последнего окна и
+  `request_exit_policy_reevaluation`, на потоке владельца). Остались, с причиной у места: адрес
+  окна владельца под замком (его читает межпоточный wake сигнала), `OwnerPost` (его держит
+  `DragTransport`, `Send + Sync` в `flui-platform`), посты кадра и доставки окна себе,
+  `Win32Surface`, часы модального цикла. Журнал: `WM_SIZE` пишет `debug!`/`trace!` с полями, без
+  эмодзи; headless больше не зовёт себя mock. Документы: модульные доки `com_apartment.rs`,
+  `control.rs`, `hwnd_affinity.rs`, `proc.rs`; раздел `ARCHITECTURE.md` о колбэках Win32
+  переписан; ADR-0063 называет `handle_names`; статус ADR-0039; запись ADR-0327 §1 в
+  `docs/gaps.md` называет, что осталось у Win32 (мост UIA за `PlatformAccessibility: Send + Sync`,
+  OLE за `DragTransport`, `Arc` из общего хоста). Тесты, в скобках результат с откатом:
+  `a_read_inside_a_record_update_sees_the_last_record_set` (на `main` с `Mutex` чтение внутри
+  обновления ждёт свой же замок: `Timeout` через 10 с);
+  `a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers` (чистое правило, на
+  всех хостах); остальное держат компилятор и `send-impls` с коротким списком.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
