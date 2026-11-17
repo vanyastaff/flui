@@ -1320,10 +1320,57 @@ fn a_com_entry_asks_a_running_modal_loop_again() {
     );
 }
 
+/// Whether the calling thread's desktop takes the user's input: the one the
+/// system pointer belongs to. nextest starts a test on a desktop that does
+/// not (ADR-0355).
+fn on_the_input_desktop() -> bool {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::StationsAndDesktops::{
+        GetThreadDesktop, GetUserObjectInformationW, UOI_IO,
+    };
+
+    // SAFETY: the calling thread's own desktop, which is not closed.
+    let Ok(desktop) = (unsafe { GetThreadDesktop(GetCurrentThreadId()) }) else {
+        return false;
+    };
+    let mut takes_input = windows_core::BOOL(0);
+    // SAFETY: `takes_input` is a writable `BOOL`, the size passed.
+    let read = unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_IO,
+            Some((&raw mut takes_input).cast()),
+            u32::try_from(size_of::<windows_core::BOOL>()).expect("a BOOL's size"),
+            None,
+        )
+    };
+    read.is_ok() && takes_input.as_bool()
+}
+
 /// A drag dropped into a window of this process goes through OLE's own
 /// loop: the window is entered, answers, gets the drop and fetches the data,
 /// and the source hears the action.
+///
+/// Runs on the desktop that takes input. Which window `DoDragDrop` finds
+/// under the pointer is the Windows build's: on Windows 11 build 26300 it is
+/// the one under the position of the posted move, on Windows Server 2025
+/// (build 26100) one under a point the move does not set, so off the input
+/// desktop, where a test can place neither the cursor nor that point, only a
+/// window covering the whole screen is entered there.
 fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
+    if !on_the_input_desktop() {
+        assert!(
+            std::env::var_os("FLUI_REQUIRE_INPUT_DESKTOP").is_none_or(|required| required != "1"),
+            "a drag into a window of this process needs the desktop that takes the user's \
+             input, which this test does not run on (FLUI_REQUIRE_INPUT_DESKTOP=1)"
+        );
+        eprintln!(
+            "CANNOT_VERIFY a drag into a window of this process: where DoDragDrop looks for \
+             the window under the pointer is not the test's to set off the desktop that takes \
+             the user's input (FLUI_TEST_VISIBLE_DESKTOP=1 runs it there)"
+        );
+        return;
+    }
     let transport = OleTransfer::new();
     let platform = platform_over(&transport);
     let transfer = platform.data_transfer();

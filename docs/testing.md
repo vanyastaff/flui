@@ -283,6 +283,7 @@ and returns, which nextest reports as a pass; `FLUI_REQUIRE_INPUT_DESKTOP=1` mak
 |------|-------|
 | `windows_foreground::an_activation_takes_the_foreground_only_when_it_is_handed_over` | the foreground lock between two processes, the shell's flash notice, `SendInput` |
 | the contract rows in `NEED_THE_INPUT_DESKTOP` (`crates/flui-native/tests/contract.rs`) | a window brought to the foreground, then injected touch, pen, mouse or wheel input and the cursor |
+| `a_drag_into_a_window_of_this_process_drops_through_the_loop`, a row of `drag::windows::tests::ole_drag_and_drop_on_real_windows` | the window OLE's `DoDragDrop` loop finds under the pointer: on Windows Server 2025 it is not the one under the posted move's position, and elsewhere a test cannot place the cursor |
 
 They run with `FLUI_TEST_VISIBLE_DESKTOP=1`, and every night on the Windows runner, which has no
 user, under `FLUI_REQUIRE_INPUT_DESKTOP=1` (`nightly-platforms.yml`). A test that reads the cursor only to have a position is handed one

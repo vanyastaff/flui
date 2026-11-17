@@ -109,7 +109,13 @@ the input desktop. A case that needs them reads whether its desktop takes input
 and, where it does not, prints `CANNOT_VERIFY` with the reason and returns, or fails under
 `FLUI_REQUIRE_INPUT_DESKTOP=1`, as `FLUI_REQUIRE_GPU` and `FLUI_REQUIRE_WAYLAND` turn their
 skips into failures. A test that reads the cursor for a position the case does not depend on is
-given one instead (the touchpad tests' `TestCursor`). `FLUI_TEST_VISIBLE_DESKTOP=1` makes
+given one instead (the touchpad tests' `TestCursor`). OLE's `DoDragDrop` loop is such a case: a
+drop target called directly works on the test desktop, but which window the loop finds under the
+pointer is the Windows build's. On Windows 11 build 26300 it is the window under the position of
+a posted mouse move; on Windows Server 2025 (build 26100) it is one under a point the move does
+not set, and only a window covering the whole screen is entered, so the case that drops through
+the loop runs on the input desktop
+(`a_drag_into_a_window_of_this_process_drops_through_the_loop`). `FLUI_TEST_VISIBLE_DESKTOP=1` makes
 `test-desktop` start the test on the caller's desktop, where those cases run; the nightly Windows
 run sets both variables for them, since its runner has no user. `docs/testing.md` ("The Windows
 test desktop") lists them.
