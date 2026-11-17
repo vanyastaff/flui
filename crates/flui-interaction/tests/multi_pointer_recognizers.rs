@@ -270,12 +270,12 @@ pub(crate) fn scale_recognizes_native_pan_zoom_source_lifecycle() {
     use flui_platform::{
         EventTime,
         pointer::{
-            DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
+            DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerPosition, PointerSource,
         },
     };
     let rig = Rig::new();
     let (_scale, log) = scale_on(&rig);
-    let source = PointerInfo::new(id(90), PointerKind::Touch)
+    let source = PointerSource::new(id(90), PointerKind::Touch)
         .with_device(DeviceId::try_from(19_u64).expect("nonzero device"));
     let packet = |millis: u64, phase| {
         PointerEvent::PanZoom(PanZoomEvent::new(

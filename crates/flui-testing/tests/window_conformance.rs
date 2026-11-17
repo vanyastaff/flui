@@ -9,9 +9,9 @@ use std::sync::Arc;
 use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform};
 use flui_platform::input_capabilities::InputCapabilities;
 use flui_platform::{
-    AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformHaptics,
-    PlatformSystemChrome, PlatformTextInput, PlatformWindow, WindowCommand, WindowFrame, WindowId,
-    WindowMode, WindowState,
+    AdmittedCommand, ApplyError, CommandRefusal, Cursor, CursorError, PlatformSystemChrome,
+    PlatformTextInput, PlatformWindow, WindowCommand, WindowFrame, WindowId, WindowMode,
+    WindowState, haptics::PlatformHaptics,
 };
 use flui_platform::{
     Availability, EventTime, FrameRequest, WindowCapabilities, WindowCapability, WindowOptions,

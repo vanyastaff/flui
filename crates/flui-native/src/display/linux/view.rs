@@ -3,7 +3,7 @@
 //!
 //! Both protocol models (`wayland_model`, `x11_model`, each built with its
 //! feature) end in a list of [`OutputView`]s; this
-//! module turns that list into [`DisplayInfo`]s. An output the protocol keys
+//! module turns that list into [`DisplayDescription`]s. An output the protocol keys
 //! gets the id of its key; an output it cannot key gets one fresh id that stays
 //! its own while the native object it stands for exists.
 
@@ -13,7 +13,7 @@ use flui_foundation::geometry::{Bounds, DevicePixelRatio};
 #[cfg(any(feature = "x11", test))]
 use flui_foundation::geometry::{Point, Size};
 use flui_platform::{
-    CapabilityAbsence, DisplayColor, DisplayId, DisplayInfo, DisplayKey, RefreshPeriod,
+    CapabilityAbsence, DisplayColor, DisplayDescription, DisplayId, DisplayKey, RefreshPeriod,
 };
 
 /// How an output is told apart from the others.
@@ -43,10 +43,10 @@ pub(crate) struct OutputView {
     pub refresh_period: Option<RefreshPeriod>,
     pub is_primary: bool,
     /// What names the output again after a restart; see
-    /// [`DisplayInfo::persistent_key`].
+    /// [`DisplayDescription::persistent_key`].
     pub persistent_key: Option<String>,
     /// The output's colour, or why the protocol gives none; see
-    /// [`DisplayInfo::color`].
+    /// [`DisplayDescription::color`].
     pub color: Result<DisplayColor, CapabilityAbsence>,
 }
 
@@ -61,7 +61,7 @@ pub(crate) struct NativeIds {
 /// which of them.
 #[derive(Debug)]
 pub(crate) struct Resolved {
-    pub displays: Vec<DisplayInfo>,
+    pub displays: Vec<DisplayDescription>,
     pub natives: Vec<NativeIds>,
 }
 
@@ -101,10 +101,11 @@ impl FreshIds {
                 }),
             };
             let Some(id) = id else { continue };
-            let mut info = DisplayInfo::new(id, view.name.clone(), view.bounds, view.scale_factor)
-                .with_usable_bounds(view.usable_bounds)
-                .with_primary(view.is_primary)
-                .with_color(view.color);
+            let mut info =
+                DisplayDescription::new(id, view.name.clone(), view.bounds, view.scale_factor)
+                    .with_usable_bounds(view.usable_bounds)
+                    .with_primary(view.is_primary)
+                    .with_color(view.color);
             info.refresh_period = view.refresh_period;
             info.persistent_key.clone_from(&view.persistent_key);
             displays.push(info);

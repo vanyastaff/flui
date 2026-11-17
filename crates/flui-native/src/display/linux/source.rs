@@ -36,7 +36,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
-use flui_platform::{DisplayInfo, DisplaySnapshot};
+use flui_platform::{DisplayDescription, DisplaySnapshot};
 use parking_lot::Mutex;
 use rustix::event::{EventfdFlags, eventfd};
 
@@ -121,7 +121,7 @@ impl LinuxDisplays {
         )
     }
 
-    fn sample(&self) -> Result<(Vec<DisplayInfo>, Vec<NativeIds>), PlatformError> {
+    fn sample(&self) -> Result<(Vec<DisplayDescription>, Vec<NativeIds>), PlatformError> {
         let (known, reread) = {
             let state = self.state.lock();
             if let Some(message) = &state.unavailable {

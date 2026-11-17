@@ -4,14 +4,14 @@ use core::num::NonZeroU8;
 
 use flui_foundation::geometry::Offset;
 
-use super::PointerInfo;
+use super::PointerSource;
 use super::value::{InputValueError, PointerPosition, Quantity, finite};
 use crate::EventTime;
 use crate::keyboard::Modifiers;
 
 /// Where a touchpad hold is.
 ///
-/// A hold is `Begin`, then `End` or `Cancelled`, all with one [`PointerInfo::id`].
+/// A hold is `Begin`, then `End` or `Cancelled`, all with one [`PointerSource::id`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(
     clippy::exhaustive_enums,
@@ -37,7 +37,7 @@ pub enum TouchpadHoldPhase {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct TouchpadHoldEvent {
-    pointer: PointerInfo,
+    pointer: PointerSource,
     /// When the platform observed the event.
     pub time: EventTime,
     /// Where the pointer rests.
@@ -53,7 +53,7 @@ impl TouchpadHoldEvent {
     /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad) whatever `pointer` carried.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: EventTime,
         position: PointerPosition,
         phase: TouchpadHoldPhase,
@@ -78,7 +78,7 @@ impl TouchpadHoldEvent {
     /// The hold's pointer; its kind is always
     /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
     #[must_use]
-    pub const fn pointer(&self) -> &PointerInfo {
+    pub const fn pointer(&self) -> &PointerSource {
         &self.pointer
     }
 }
@@ -153,7 +153,7 @@ pub enum TouchpadSwipePhase {
 /// reports one): Wayland's `zwp_pointer_gesture_swipe_v1`, XInput 2.4's `XI_GestureSwipe*`.
 ///
 /// A swipe is `Start`, any number of `Update`s, then `End` or `Cancelled`, all with the same
-/// [`PointerInfo::id`] and finger count. It is a gesture of its own, never a
+/// [`PointerSource::id`] and finger count. It is a gesture of its own, never a
 /// [`ScrollEvent`](super::ScrollEvent): a two-finger pan is the scroll, and the pointer does
 /// not move while the fingers swipe, so [`position`](Self::position) stays where the swipe
 /// started.
@@ -162,7 +162,7 @@ pub enum TouchpadSwipePhase {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct TouchpadSwipeEvent {
-    pointer: PointerInfo,
+    pointer: PointerSource,
     /// When the platform observed the event.
     pub time: EventTime,
     /// Where the pointer rests while the fingers swipe.
@@ -180,7 +180,7 @@ impl TouchpadSwipeEvent {
     /// to [`PointerKind::Trackpad`](super::PointerKind::Trackpad) whatever `pointer` carried.
     #[must_use]
     pub const fn new(
-        pointer: PointerInfo,
+        pointer: PointerSource,
         time: EventTime,
         position: PointerPosition,
         fingers: NonZeroU8,
@@ -207,7 +207,7 @@ impl TouchpadSwipeEvent {
     /// The swipe's pointer; its kind is always
     /// [`PointerKind::Trackpad`](super::PointerKind::Trackpad).
     #[must_use]
-    pub const fn pointer(&self) -> &PointerInfo {
+    pub const fn pointer(&self) -> &PointerSource {
         &self.pointer
     }
 }

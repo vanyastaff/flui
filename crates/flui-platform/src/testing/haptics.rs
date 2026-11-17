@@ -6,7 +6,9 @@ use std::sync::{Mutex, MutexGuard};
 use crate::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use crate::{DeviceId, HapticFeedback, PlatformHaptics, Unsupported, UnsupportedReason};
+use crate::{
+    HapticFeedback, Unsupported, UnsupportedReason, haptics::PlatformHaptics, pointer::DeviceId,
+};
 
 /// What a request asked a [`FakeHaptics`] to play.
 #[derive(Debug, Clone, PartialEq)]

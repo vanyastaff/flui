@@ -17,8 +17,8 @@ use flui_widgets::{Listener, SizedBox};
 /// intermediate point; the default policy retains its immediate harness path.
 pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
     use flui_platform::pointer::{
-        PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+        PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+        PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
     };
     use flui_platform::{EventTime, PlatformInput};
     use flui_testing::{HeadlessHost, HeadlessWindow, PointerResampling};
@@ -49,7 +49,7 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
         }
         host.attach(&view).expect("mount Listener");
         let _ = host.pump(Duration::from_millis(16));
-        let pointer = PointerInfo::new(
+        let pointer = PointerSource::new(
             PointerId::try_from(1_u64).expect("nonzero contact"),
             PointerKind::Touch,
         );

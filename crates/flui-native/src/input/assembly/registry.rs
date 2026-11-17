@@ -9,8 +9,8 @@ use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, MotionAcceleration, MotionDelta,
     PanZoomEvent, PenOrientation, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, PointerSignal, PressId, Pressure, RawMotion,
+    PointerId, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, PointerSignal, PointerSource, PressId, Pressure, RawMotion,
     SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
     TouchpadSwipePhase, Twist,
 };
@@ -276,7 +276,7 @@ struct OpenPress {
 #[derive(Debug, Clone)]
 struct Contact {
     key: ContactKey,
-    info: PointerInfo,
+    info: PointerSource,
     buttons: HeldButtons,
     clock: ClockChoice,
     last_time: Option<EventTime>,
@@ -525,7 +525,7 @@ impl ContactRegistry {
         surface: NativeSurface,
         device: Option<NativeDevice>,
         contact: NativeContact,
-    ) -> Option<PointerInfo> {
+    ) -> Option<PointerSource> {
         let index = self.find(ContactKey {
             surface,
             device,
@@ -629,7 +629,7 @@ impl ContactRegistry {
                 }
             }
             None => RawMotion::new(
-                PointerInfo::new(PointerId::new(RESERVED_POINTER), PointerKind::Mouse)
+                PointerSource::new(PointerId::new(RESERVED_POINTER), PointerKind::Mouse)
                     .with_role(PointerRole::Primary),
                 time,
                 delta,
@@ -859,7 +859,7 @@ impl ContactRegistry {
         } else {
             PointerRole::Additional
         };
-        let mut info = PointerInfo::new(PointerId::new(id), reading.kind).with_role(role);
+        let mut info = PointerSource::new(PointerId::new(id), reading.kind).with_role(role);
         if let Some(native) = reading.device {
             let (device, added) = self.devices.admit(native, reading.kind)?;
             info = info.with_device(device);

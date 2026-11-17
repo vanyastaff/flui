@@ -457,7 +457,7 @@ pub(crate) mod events {
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
         pointer::{
             ButtonChange, MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerButtons,
-            PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, PointerRole,
+            PointerEvent, PointerId, PointerKind, PointerPosition, PointerRole, PointerSource,
             ScrollEvent, ScrollInversion,
         },
     };
@@ -1828,7 +1828,7 @@ pub(crate) mod events {
             .borrow()
             .pointer(SURFACE, None, MOUSE_CONTACT)
             .unwrap_or_else(|| {
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(1_u64)
                         .expect("BUG: the mouse's reserved identity is nonzero"),
                     PointerKind::Mouse,

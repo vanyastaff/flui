@@ -833,7 +833,7 @@ pollster = { workspace = true }
 tracing.workspace = true
 
 [features]
-testing = ["dep:flui-testing", "flui-rendering/testing"]
+testing = ["dep:flui-testing", "flui-rendering/testing", "flui-platform/scripted"]
 animation-diagnostics = ["flui-animation/diagnostics"]
 # No catalog, tool or capability is on by default: an application names what it
 # uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`

@@ -21,7 +21,7 @@ pub(crate) mod frame {
     //! own scale.
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayInfo, SizeConstraints, WindowExtent};
+    use flui_platform::{DisplayDescription, SizeConstraints, WindowExtent};
 
     /// Any content limit at or beyond this counts as AppKit's "no limit"
     /// (`contentMaxSize` defaults to `CGFLOAT_MAX`, or `FLT_MAX` on older systems).
@@ -76,7 +76,7 @@ pub(crate) mod frame {
     /// A position or size measured on `display` (from the origin of its usable
     /// area, in its logical pixels), as global logical pixels. With no display the
     /// point already is global.
-    pub(crate) fn globalize(at: Point<f64>, display: Option<&DisplayInfo>) -> Point<f64> {
+    pub(crate) fn globalize(at: Point<f64>, display: Option<&DisplayDescription>) -> Point<f64> {
         let Some(display) = display else {
             return at;
         };
@@ -232,13 +232,13 @@ pub(crate) mod frame {
             }
         }
 
-        fn display(scale: f64, usable_origin: (i32, i32)) -> DisplayInfo {
+        fn display(scale: f64, usable_origin: (i32, i32)) -> DisplayDescription {
             use flui_platform::{DisplayId, DisplayKey, DisplayRegistry};
 
             let id: DisplayId = DisplayRegistry::new()
                 .mint(&DisplayKey::MacosUuid([1; 16]))
                 .expect("a fresh registry has ids");
-            let mut info = DisplayInfo::new(
+            let mut info = DisplayDescription::new(
                 id,
                 "test".to_string(),
                 Bounds {
