@@ -61,3 +61,5 @@ impl ViewState<NotesScreen> for NotesState {
 
 [State](../concepts/state.md) covers the other forms of state: data shared down the tree with an
 `InheritedView`, and a `ValueNotifier` that code outside the tree listens to.
+
+Next, [Handling input](input.md) lets the user name each note.

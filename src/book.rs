@@ -31,6 +31,12 @@ chapters! {
     screen_layout => "tutorial/layout.md",
     #[cfg(feature = "testing")]
     adding_state => "tutorial/state.md",
+    #[cfg(feature = "testing")]
+    handling_input => "tutorial/input.md",
+    #[cfg(feature = "testing")]
+    lists_and_keys => "tutorial/lists.md",
+    #[cfg(feature = "testing")]
+    navigation => "tutorial/navigation.md",
     overview => "concepts/overview.md",
     view_element_render => "concepts/view-element-render.md",
     keys => "concepts/keys.md",
