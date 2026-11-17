@@ -318,8 +318,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// patch retires each one still in the version it patches.
     abandoned_nodes: Vec<flui_layer::SceneNodeId>,
     /// Nodes of removed boundaries, retired by the paint that republishes
-    /// the parent that named them; a removal after a paint pass appends to
-    /// the list the pass read.
+    /// the parent that named them; a removal after a paint pass, and the
+    /// report of that pass for a boundary it painted, append to the list the
+    /// pass read.
     orphaned_nodes: Vec<flui_layer::SceneNodeId>,
 
     /// The device pixel ratio the recorded output above was recorded under.

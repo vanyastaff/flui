@@ -1376,11 +1376,10 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             match refreshed {
                 // A boundary removed since the pass commits no record: the
                 // node the pass published for it waits with the orphans, as
-                // the removal left the node of the record it took.
+                // the removal left the node of the record it took. A node
+                // listed twice is retired once (`retired_set` in `finish`).
                 Some(Refreshed::Repainted(record)) if self.render_tree.get(id).is_none() => {
-                    if !orphans.contains(&record.node) {
-                        orphans.push(record.node);
-                    }
+                    orphans.push(record.node);
                 }
                 Some(Refreshed::Repainted(record)) => {
                     if record.followers.is_empty() {
