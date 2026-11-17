@@ -9,6 +9,8 @@
 //!   chrome regions (ADR-0286);
 //! - `rescale`: the pure half too: the outer size that keeps a window's
 //!   content at its logical size when its DPI changes;
+//! - `app_bars`: the auto-hide app bars the shell answers for a monitor, which
+//!   a maximized window without the system's title bar leaves their edge;
 //! - [`material`]: the pure half too: from which build the window draws a
 //!   material behind it;
 //! - `window`: [`WindowsWindow`], the handle a host hands out, how it opens
@@ -32,6 +34,8 @@
 // that makes it sound. The pure half forbids it.
 #![cfg_attr(windows, expect(unsafe_code))]
 
+#[cfg(windows)]
+mod app_bars;
 #[cfg(windows)]
 pub(crate) mod backdrop;
 pub(crate) mod chrome;

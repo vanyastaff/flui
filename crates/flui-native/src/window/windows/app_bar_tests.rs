@@ -21,8 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_SETTINGCHANGE,
 };
 
+use super::app_bars::{MonitorAppBars, monitor_at};
 use super::chrome::{AUTO_HIDE_BAR_REVEAL, AutoHideEdges};
-use super::proc::{MonitorAppBars, with_window_context};
+use super::proc::with_window_context;
 use super::window::WindowsWindow;
 use crate::WindowsPlatform;
 use crate::host_window::HostWindow;
@@ -92,7 +93,7 @@ fn with_bars(hwnd: HWND, edges: AutoHideEdges) -> RECT {
     let mut window = RECT::default();
     // SAFETY: a stack local out-parameter of the live window.
     unsafe { GetWindowRect(hwnd, &raw mut window) }.expect("the window rectangle");
-    let (monitor, _) = super::proc::monitor_at(&window).expect("the window's monitor");
+    let (monitor, _) = monitor_at(&window).expect("the window's monitor");
     with_window_context(hwnd, "test app bars", |ctx| {
         ctx.app_bars.set(Some(MonitorAppBars { monitor, edges }));
     })
