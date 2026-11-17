@@ -5505,7 +5505,14 @@ GPU-память простаивающего или невидимого окн
   `a_button_made_late_or_again_shows_what_its_window_last_asked`,
   `an_argument_is_quoted_as_the_command_line_splitter_reads_it_back`,
   `a_runtime_runs_a_bounded_number_of_shell_requests_and_frees_each_place` и таблицы
-  отображений. С откатами: REVERTS. Не запускалось: ни один настоящий диалог, запуск, горячая
+  отображений. С откатами: без проверки заголовка и подписи падает
+  `a_malformed_request_is_refused_without_showing_a_dialog`; без `MessageButtons::admits` —
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`; без флага
+  `active` у нажатий — `a_registered_shortcut_runs_its_listener_at_a_turn_until_its_registration_drops`
+  и `a_press_runs_the_listener_at_the_next_turn_until_the_registration_drops`; с ответом
+  отменённого диалога — `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`;
+  с судом по данному пути вместо итогового —
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`. Не запускалось: ни один настоящий диалог, запуск, горячая
   клавиша, элемент автозапуска, изменение панели задач, jump list или share на рабочем столе —
   owed в заметках строк parity (System services, Dock menu/jump list); macOS, iOS, Android, wasm
   не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`, `reveal_path`,
