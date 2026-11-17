@@ -62,7 +62,9 @@ fn open_another() -> String {
         WindowPolicy::Isolated,
         WindowView,
     );
-    opened.err().map_or_else(String::new, |error| error.to_string())
+    opened
+        .err()
+        .map_or_else(String::new, |error| error.to_string())
 }
 
 /// A phone or a browser tab has one window.
