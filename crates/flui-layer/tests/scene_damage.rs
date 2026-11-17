@@ -1916,6 +1916,14 @@ pub(crate) fn a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixe
             Rect::from_ltrb(35.0, 140.0, 60.0, 178.1),
             Rect::from_ltrb(70.0, 89.0, 120.0, 90.0),
         ),
+        // The first row mirrored: a reflection grows lengths as its turn does.
+        (
+            "a mirror scaling by 0.5",
+            Matrix4::scaling(-0.5, 0.5, 1.0),
+            Rect::from_ltrb(-256.0, 0.0, -179.2, 80.0),
+            Rect::from_ltrb(-178.1, 8.0, -140.0, 56.0),
+            Rect::from_ltrb(89.0, 4.0, 90.0, 28.0),
+        ),
     ] {
         let (damage, kept) = content_clip_repaint(clip, boxed, Some(transform), pixels);
         let shared = DamageRect::try_covering(pixels, SURFACE.size)
@@ -1927,6 +1935,95 @@ pub(crate) fn a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixe
         );
         assert!(kept, "{name}: a cull of the shared pixels keeps the holder");
     }
+}
+
+/// A map that takes the plane out of itself bounds no distance in it, so a
+/// clip under it that cuts a box away whole keeps itself whole.
+pub(crate) fn a_clip_under_a_map_out_of_the_plane_keeps_the_whole_clip() {
+    let mut transform = Matrix4::IDENTITY;
+    // x feeds z.
+    transform.m[2] = 0.5;
+    let (_, kept) = content_clip_repaint(
+        Rect::from_ltrb(89.6, 0.0, 128.0, 40.0),
+        Rect::from_ltrb(70.0, 4.0, 80.0, 28.0),
+        Some(transform),
+        Rect::from_ltrb(100.0, 4.0, 101.0, 28.0),
+    );
+    assert!(kept, "a cull inside the clip keeps the holder");
+}
+
+/// A follower over an anti-aliased clip over a box, its leader under a
+/// scale of 0.5: the box ends 1.1 short of the clip in the follower's
+/// space, one pixel on the surface. The fold takes the scale the follower
+/// resolves to, so the cull keeps the follower's node and a move of the
+/// leader damages the pixel it leaves and the one it comes to.
+pub(crate) fn a_follower_over_a_content_clip_takes_the_scale_it_resolves_to() {
+    let scale = 0.5;
+    let local = 1.0 / scale;
+    let link = LayerLink::new();
+    let mut owner = SceneOwner::new();
+    let mut writer = owner.writer();
+    let root = writer.current().root();
+    let (leader, follower) = (writer.mint_node(), writer.mint_node());
+    let mut leading = BoundaryContent::builder();
+    leading.push_effect(
+        Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
+        RenderId::new(1),
+        0,
+    );
+    leading.pop_effect();
+    writer.push(publish(leader, leading.finish()));
+    let version = writer.next_content_version().expect("a version");
+    let mut following = BoundaryContent::builder();
+    following.push_effect(Layer::from(FollowerLayer::new(link)), RenderId::new(2), 0);
+    following.push_effect(
+        Layer::from(ClipRectLayer::new(
+            Rect::from_ltrb(89.6 * local, 0.0, 128.0 * local, 40.0 * local),
+            Clip::AntiAlias,
+        )),
+        RenderId::new(4),
+        0,
+    );
+    following.chunk(chunk(
+        5,
+        version,
+        Rect::from_ltrb(70.0 * local, 4.0 * local, 89.05 * local, 28.0 * local),
+    ));
+    following.pop_effect();
+    following.pop_effect();
+    writer.push(publish(follower, following.finish()));
+    let mut top = BoundaryContent::builder();
+    top.push_effect(
+        Layer::from(TransformLayer::new(Matrix4::scaling(scale, scale, 1.0))),
+        RenderId::new(3),
+        0,
+    );
+    top.slot(leader);
+    top.pop_effect();
+    top.slot(follower);
+    writer.push(publish(root, top.finish()));
+    writer.push(place(leader, 0.0, 0.0));
+    writer.push(place(follower, 0.0, 0.0));
+    owner
+        .apply(SURFACE)
+        .expect("a follower of a leader under a scale");
+    assert!(
+        owner
+            .current()
+            .subtree_cull(Rect::from_ltrb(89.0, 4.0, 90.0, 28.0))
+            .meets(follower),
+        "a cull of the shared pixel keeps the follower's node"
+    );
+
+    let mut writer = owner.writer();
+    writer.push(place(leader, 0.0, 100.0 * local));
+    owner.apply(SURFACE).expect("the leader moves");
+    let damage = shown(owner.patch_damage());
+    assert!(
+        covered(&damage, covering(89.0, 4.0, 90.0, 28.0))
+            && covered(&damage, covering(89.0, 104.0, 90.0, 128.0)),
+        "the move damages the pixel the box leaves and the one it comes to: {damage:?}"
+    );
 }
 
 /// A holder whose content is a scale of 0.5 over an anti-aliased clip over

@@ -424,6 +424,14 @@ fn scene_patch_damage() {
                 d::a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares,
             ),
             (
+                "a_clip_under_a_map_out_of_the_plane_keeps_the_whole_clip",
+                d::a_clip_under_a_map_out_of_the_plane_keeps_the_whole_clip,
+            ),
+            (
+                "a_follower_over_a_content_clip_takes_the_scale_it_resolves_to",
+                d::a_follower_over_a_content_clip_takes_the_scale_it_resolves_to,
+            ),
+            (
                 "a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares",
                 d::a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares,
             ),

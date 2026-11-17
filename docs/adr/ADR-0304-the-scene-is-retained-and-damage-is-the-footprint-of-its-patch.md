@@ -295,7 +295,8 @@ keeps the strip of itself within one device pixel of the content, a pixel the tw
 strip's width is one pixel over the least scale of the maps between the clip and the surface that
 the footprint knows: the node's own content for its stored bound, which the cull and the
 footprint of a placed or slotted node read, and the whole chain for the footprint of an entry of
-the content. A stored bound takes the chain above its node, and a follower's map, at a scale of 1
+the content; a follower's map counts at the scale it resolves to, and a map that moves the plane
+out of itself keeps the whole clip. A stored bound takes the chain above its node at a scale of 1
 or more ([gap](../gaps.md#a-clip-in-a-nodes-own-content-under-an-ancestors-scale-below-1)). A
 child's growth takes its own strip, which the fold of a parent's content can leave out where
 the parent's other content already meets the clip: an over-report, as any growth may be. The

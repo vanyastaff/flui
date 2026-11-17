@@ -254,8 +254,9 @@ pub(crate) fn least_scale_of(links: &Links<'_>) -> f64 {
 }
 
 /// The least factor by which `matrix` grows a length in the plane: the
-/// smaller singular value of its 2×2 linear part, from the two hypotenuses
-/// that neither overflow nor cancel. A map that moves the plane out of
+/// smaller singular value of its 2×2 linear part, from two hypotenuses,
+/// which spare the squared form its overflow and its cancellation; one that
+/// is not finite counts as 0. A map that moves the plane out of
 /// itself (a turn about an axis in it, a projection) is 0: a length it maps
 /// has no lower bound there.
 fn least_scale(matrix: &Matrix4) -> f64 {
@@ -275,7 +276,10 @@ fn least_scale(matrix: &Matrix4) -> f64 {
     }
     let [a, b, c, d] = [entries[0], entries[1], entries[4], entries[5]];
     let (sum, difference) = ((a + d).hypot(b - c), (a - d).hypot(b + c));
-    (sum - difference).abs() / 2.0
+    let least = (sum - difference).abs() / 2.0;
+    // Entries near the limits of f64 overflow the hypotenuses; a scale not
+    // known bounds no distance either.
+    if least.is_finite() { least } else { 0.0 }
 }
 
 /// Where something lands, in one space.
@@ -669,9 +673,22 @@ impl<'v> Geometry<'v> {
         out: &mut Links<'v>,
         nesting: usize,
     ) {
+        self.effect_links_resolved(layer, at, out, nesting, None);
+    }
+
+    /// [`Self::effect_links`], with a follower's map already resolved when
+    /// `resolution` holds it.
+    fn effect_links_resolved(
+        self,
+        layer: &'v Layer,
+        at: Address,
+        out: &mut Links<'v>,
+        nesting: usize,
+        resolution: Option<Result<Matrix4, Unresolved>>,
+    ) {
         match layer {
             Layer::Transform(transform) => out.push(Link::Matrix(transform.transform())),
-            Layer::Follower(_) => match self.resolve(at, nesting) {
+            Layer::Follower(_) => match resolution.unwrap_or_else(|| self.resolve(at, nesting)) {
                 Ok(transform) => out.push_resolved(transform),
                 Err(Unresolved::Hidden | Unresolved::TooDeep) => out.push(Link::Hidden),
             },
@@ -836,6 +853,8 @@ impl<'v> Geometry<'v> {
         let mut positions: SmallVec<[usize; 16]> = SmallVec::with_capacity(structural.len());
         let mut held_at: SmallVec<[f64; 16]> = SmallVec::with_capacity(structural.len());
         let mut under: SmallVec<[f64; 16]> = SmallVec::with_capacity(structural.len());
+        // Each follower's resolved map, by its offset in `structural`.
+        let mut followers: SmallVec<[(usize, Result<Matrix4, Unresolved>); 2]> = SmallVec::new();
         let mut next_effect = first_effect;
         for (offset, &index) in structural.iter().enumerate() {
             let entry = &entries[index.get()];
@@ -855,7 +874,25 @@ impl<'v> Geometry<'v> {
                         local: content.effect_scope(next_effect).chunks,
                         kernel: 0.0,
                     });
-                    under.push(held * Self::map_scale(&content.layers()[next_effect]));
+                    let layer = &content.layers()[next_effect];
+                    let scale = match layer {
+                        Layer::Transform(transform) => least_scale(transform.transform()),
+                        // Resolved once here, for its scale and its links.
+                        Layer::Follower(_) => {
+                            let resolution = self.resolve(
+                                Address {
+                                    node: key,
+                                    entry: index,
+                                },
+                                0,
+                            );
+                            let scale = resolution.as_ref().map_or(1.0, least_scale);
+                            followers.push((offset, resolution));
+                            scale
+                        }
+                        _ => 1.0,
+                    };
+                    under.push(held * scale);
                     positions.push(next_effect);
                     next_effect += 1;
                 }
@@ -878,7 +915,11 @@ impl<'v> Geometry<'v> {
                         node: key,
                         entry: index,
                     };
-                    self.effect_links(layer, at, &mut links, 0);
+                    let resolution = followers
+                        .binary_search_by_key(&offset, |(at, _)| *at)
+                        .ok()
+                        .map(|at| followers[at].1);
+                    self.effect_links_resolved(layer, at, &mut links, 0, resolution);
                     if let Layer::ImageFilter(_) = layer
                         && let Some(filters) = filters.as_deref_mut()
                     {
@@ -900,17 +941,6 @@ impl<'v> Geometry<'v> {
             }
         }
         whole
-    }
-
-    /// The least the map of the effect `layer` grows a length: a
-    /// transform's, 1 for a translation and for a follower, whose map the
-    /// fold resolves once, for its links, and does not resolve again here
-    /// ([gap](../../../../docs/gaps.md#a-clip-in-a-nodes-own-content-under-an-ancestors-scale-below-1)).
-    fn map_scale(layer: &Layer) -> f64 {
-        match layer {
-            Layer::Transform(transform) => least_scale(transform.transform()),
-            _ => 1.0,
-        }
     }
 
     /// What the child boundary `child` slotted here draws, in its parent's
