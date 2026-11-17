@@ -6593,14 +6593,14 @@ impl core::fmt::Debug for flui::interaction::PointerEvent
 impl core::marker::StructuralPartialEq for flui::interaction::PointerEvent
 variant flui::interaction::PointerEvent::ButtonChange(flui::interaction::ButtonChange) // at 1
 variant flui::interaction::PointerEvent::Cancel(flui::platform::PointerCancel) // at 4
-variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 12
-variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 13
+variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 13
+variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 14
 variant flui::interaction::PointerEvent::Down(flui::interaction::PointerPress) // at 0
 variant flui::interaction::PointerEvent::Enter(flui::platform::pointer::PointerSignal) // at 5
 variant flui::interaction::PointerEvent::Leave(flui::platform::pointer::PointerSignal) // at 6
 variant flui::interaction::PointerEvent::Move(flui::interaction::PointerMove) // at 3
 variant flui::interaction::PointerEvent::PanZoom(flui::interaction::PanZoomEvent) // at 9
-variant flui::interaction::PointerEvent::RawMotion(flui::platform::pointer::RawMotion) // at 11
+variant flui::interaction::PointerEvent::RawMotion(flui::platform::pointer::RawMotion) // at 12
 variant flui::interaction::PointerEvent::Scroll(flui::interaction::ScrollEvent) // at 7
 variant flui::interaction::PointerEvent::SmartZoom(flui::platform::SmartZoomEvent) // at 11
 variant flui::interaction::PointerEvent::TouchpadHold(flui::platform::TouchpadHoldEvent) // at 8
@@ -15068,7 +15068,7 @@ variant flui::platform::pointer::Quantity::Pressure // at 1
 variant flui::platform::pointer::Quantity::Rotation // at 10
 variant flui::platform::pointer::Quantity::Scale // at 9
 variant flui::platform::pointer::Quantity::ScrollDelta // at 7
-variant flui::platform::pointer::Quantity::SwipeOffset // at 11
+variant flui::platform::pointer::Quantity::SwipeOffset // at 12
 variant flui::platform::pointer::Quantity::TangentialPressure // at 2
 variant flui::platform::pointer::Quantity::Twist // at 5
 #[non_exhaustive] pub struct flui::platform::pointer::RawMotion
@@ -32353,14 +32353,14 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::P
 variant flui_protocol::input_recording::PointerEvent::ButtonPressed(flui_protocol::input_recording::ButtonEvent) // at 1
 variant flui_protocol::input_recording::PointerEvent::ButtonReleased(flui_protocol::input_recording::ButtonEvent) // at 2
 variant flui_protocol::input_recording::PointerEvent::Cancel { pointer: flui_protocol::input_recording::PointerInfo, t: u64, reason: flui_protocol::input_recording::CancelReason } // at 5
-variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 13
-variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 14
+variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 14
+variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 15
 variant flui_protocol::input_recording::PointerEvent::Down(flui_protocol::input_recording::ButtonEvent) // at 0
 variant flui_protocol::input_recording::PointerEvent::Enter(flui_protocol::input_recording::Signal) // at 6
 variant flui_protocol::input_recording::PointerEvent::Leave(flui_protocol::input_recording::Signal) // at 7
 variant flui_protocol::input_recording::PointerEvent::Move { pointer: flui_protocol::input_recording::PointerInfo, buttons: Vec<u8>, modifiers: Vec<String>, current: flui_protocol::input_recording::Sample, coalesced: Vec<flui_protocol::input_recording::Sample>, predicted: Vec<flui_protocol::input_recording::Sample> } // at 4
 variant flui_protocol::input_recording::PointerEvent::PanZoom(flui_protocol::input_recording::PanZoom) // at 10
-variant flui_protocol::input_recording::PointerEvent::RawMotion(flui_protocol::input_recording::RawMotion) // at 12
+variant flui_protocol::input_recording::PointerEvent::RawMotion(flui_protocol::input_recording::RawMotion) // at 13
 variant flui_protocol::input_recording::PointerEvent::Scroll(flui_protocol::input_recording::Scroll) // at 8
 variant flui_protocol::input_recording::PointerEvent::SmartZoom(flui_protocol::input_recording::SmartZoom) // at 12
 variant flui_protocol::input_recording::PointerEvent::TouchpadHold(flui_protocol::input_recording::TouchpadHold) // at 9
