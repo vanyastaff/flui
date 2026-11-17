@@ -135,18 +135,27 @@ mod tests {
     /// The walk reads a window covered exactly when the windows above it
     /// leave none of its content on any monitor: one window over all of it,
     /// several that tile it between them, or no monitor under it at all.
-    /// Red-check: answer `Seen` while pieces are left after the first
-    /// window only, and the tiled rows read covered.
+    /// Red-check: subtract the topmost window only, and the tiled rows read
+    /// seen; start from the target instead of its part on the monitors, and
+    /// the window off every monitor reads seen.
     #[test]
     fn a_window_is_covered_once_the_windows_above_leave_none_of_it_on_screen() {
+        /// (case, monitors, target, windows above it top first, expected)
+        type Row<'a> = (
+            &'a str,
+            &'a [ScreenRect],
+            ScreenRect,
+            &'a [ScreenRect],
+            Coverage,
+        );
+
         let one = [rect(0, 0, 1920, 1080)];
         let two = [rect(0, 0, 1920, 1080), rect(1920, 0, 3840, 1080)];
         let inside = rect(100, 100, 900, 700);
         let edge = rect(1800, 100, 2000, 700);
         let across = rect(1800, 100, 2100, 700);
         let nowhere = rect(-900, -900, -100, -100);
-        // (case, monitors, target, windows above it top first, expected)
-        let table: &[(&str, &[ScreenRect], ScreenRect, &[ScreenRect], Coverage)] = &[
+        let table: &[Row<'_>] = &[
             ("nothing above", &one, inside, &[], Coverage::Seen),
             (
                 "one window over all of it",

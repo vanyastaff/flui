@@ -194,7 +194,7 @@ mod toplevel {
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
     use super::foreign::PortalParent;
-    use super::frame::{Pacing, Sight, first_live, waiting_on_callback};
+    use super::frame::{Callbacks, Pacing, Sight, first_live};
     use super::presented;
     use super::scale::{self, BufferScale, ScaleTold, ToldScale, buffer_scale};
     use crate::executor::NativeExecutor;
@@ -224,10 +224,11 @@ mod toplevel {
         protocol: Mutex<Told>,
         /// A frame was asked for.
         redraw: AtomicBool,
-        /// When the frame callback that is out was armed: the compositor has
-        /// not shown the last frame yet, and the next waits for it, for the
-        /// grace at most (`frame::CALLBACK_GRACE`).
-        callback_armed: Mutex<Option<Instant>>,
+        /// The frame callback that is out, if any: the compositor has not
+        /// shown the last frame yet, and the next waits for it, for its grace
+        /// at most, which grows while callbacks go unanswered
+        /// (`frame::Callbacks`).
+        callbacks: Mutex<Callbacks>,
         /// The presentation feedbacks the surface asked for, until the
         /// compositor answers each or the window forgets it.
         feedbacks: Mutex<presented::CommitFeedbacks>,
@@ -317,7 +318,7 @@ mod toplevel {
             Self {
                 protocol: Mutex::new(Told::default()),
                 redraw: AtomicBool::new(false),
-                callback_armed: Mutex::new(None),
+                callbacks: Mutex::default(),
                 feedbacks: Mutex::default(),
                 close_granted: AtomicBool::new(false),
                 tokens: Mutex::new(Tokens::default()),
@@ -1278,7 +1279,7 @@ mod toplevel {
                 asked: self.record.redraw.load(Ordering::Acquire),
                 configured: applied.configured,
                 suspended: applied.sizing.states().suspended,
-                armed: *self.record.callback_armed.lock(),
+                callback_until: self.record.callbacks.lock().gives_up_at(),
             }
         }
 
@@ -1504,6 +1505,8 @@ mod toplevel {
     pub(crate) struct ArmedCallback {
         record: Arc<ToplevelRecord>,
         confirms: Option<u64>,
+        /// The ticket the callback was armed with (`frame::Callbacks::arm`).
+        ticket: u64,
     }
 
     impl HasWindowHandle for WaylandSurface {
@@ -1596,20 +1599,16 @@ mod toplevel {
                     );
                 }
             }
-            let now = Instant::now();
-            {
-                let mut armed = self.record.callback_armed.lock();
-                if waiting_on_callback(*armed, now) {
-                    return;
-                }
-                *armed = Some(now);
-            }
+            let Some(ticket) = self.record.callbacks.lock().arm(Instant::now()) else {
+                return;
+            };
             let confirms = self.record.feedbacks.lock().arm();
             let _callback = self.surface.0.frame(
                 &self.queue,
                 ArmedCallback {
                     record: Arc::clone(&self.record),
                     confirms,
+                    ticket,
                 },
             );
         }
@@ -1942,8 +1941,9 @@ mod toplevel {
             if self.frame_due() {
                 self.record.redraw.store(false, Ordering::Release);
                 // A callback past its grace is given up: the present that
-                // armed it committed nothing.
-                *self.record.callback_armed.lock() = None;
+                // armed it committed nothing, or the compositor does not draw
+                // the window, and the next callback waits longer.
+                self.record.callbacks.lock().deliver(Instant::now());
                 self.delivery.dispatch_request_frame();
             }
         }
@@ -2225,7 +2225,7 @@ mod toplevel {
         ) {
             if let wl_callback::Event::Done { .. } = event {
                 let record = &armed.record;
-                *record.callback_armed.lock() = None;
+                record.callbacks.lock().answered(armed.ticket);
                 if let Some(through) = armed.confirms {
                     record.feedbacks.lock().confirm(through);
                 }
