@@ -1334,6 +1334,10 @@ pub(crate) struct BackdropOp {
     pub(crate) clip: GroupClip,
     pub(crate) scissor: ScissorRect,
     pub(crate) output_bounds: Rect<f64>,
+    /// What the clips of the enclosing layers' composites leave of the
+    /// target (`LayerCompositor::composite_clip_bounds`): the filter neither
+    /// reads nor writes past it, as the scene's cull skips what lies there.
+    pub(crate) layer_clip_bounds: Option<Rect<f64>>,
     pub(crate) effect: BackdropEffect,
     pub(crate) blend: BlendMode,
     /// Grouped filters read one backdrop snapshot per item list and pass.

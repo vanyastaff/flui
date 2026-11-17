@@ -90,6 +90,7 @@ impl WgpuPainter {
                 });
             }
         };
+        let layer_clip_bounds = self.compositor.composite_clip_bounds()?;
         let mut clip = self.captured_group_clip();
         clip.chain = match clip.chain.append(
             shape,
@@ -128,6 +129,7 @@ impl WgpuPainter {
             clip,
             scissor: self.state.current_scissor(),
             output_bounds,
+            layer_clip_bounds,
             effect,
             blend,
             group: group.cloned(),
@@ -235,6 +237,14 @@ impl GpuReplay {
             };
             output = cropped;
         }
+        // The enclosing layers' composite clips hide the rest, and a filter
+        // that wrote nothing there captures nothing (ADR-0230).
+        if let Some(bound) = op.layer_clip_bounds {
+            let Some(cropped) = output.intersect(&bound).filter(|rect| !rect.is_empty()) else {
+                return Ok(());
+            };
+            output = cropped;
+        }
         if let Some((x, y, width, height)) = op.scissor {
             let writes = Rect::from_xywh(x as f64, y as f64, f64::from(width), f64::from(height));
             let Some(cropped) = output.intersect(&writes).filter(|rect| !rect.is_empty()) else {
@@ -259,12 +269,28 @@ impl GpuReplay {
         // During resize the acquired image can still have the preceding extent.
         // Copy and output use attachment texels; never stretch their correspondence
         // through the painter's newer viewport uniform.
-        let readable = Rect::from_xywh(
+        let attachment = Rect::from_xywh(
             root_x,
             root_y,
             f64::from(viewport_size.0.min(attachment_size.0)),
             f64::from(viewport_size.1.min(attachment_size.1)),
         );
+        // A layer's children draw into it unclipped, and the scene's cull
+        // skips a node its composite clip hides: past that clip the filter
+        // reads as at the attachment's edge, in every frame alike. A pixel
+        // the clip's edge covers in part is read whole.
+        let Some(readable) = (match op.layer_clip_bounds {
+            Some(bound) => attachment.intersect(&Rect::from_ltrb(
+                bound.left().floor(),
+                bound.top().floor(),
+                bound.right().ceil(),
+                bound.bottom().ceil(),
+            )),
+            None => Some(attachment),
+        })
+        .filter(|rect| !rect.is_empty()) else {
+            return Ok(());
+        };
         // A grouped filter reads the backdrop its group captured on this
         // surface; the first member that writes captures the whole readable
         // attachment; one that writes nothing has returned above. A partial
