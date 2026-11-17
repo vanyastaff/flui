@@ -447,7 +447,7 @@ fn text_input_contracts() {
         ),
         (
             "text_field::the input purpose reaches the text store",
-            text_field::the_input_purpose_reaches_the_text_store,
+            text_field::the_text_input_reaches_the_text_store,
         ),
         (
             "text_field::the field carries its label hint and error for assistive technology",

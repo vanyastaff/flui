@@ -120,3 +120,32 @@ pub(crate) fn full_keeps_its_first_reason() {
     assert_eq!(region.union(first).union(second), first);
     assert_eq!(DamageRegion::Unchanged.union(second).union(first), second);
 }
+
+pub(crate) fn an_enclosing_rect_takes_its_whole_pixels_without_a_margin() {
+    let enclosing = |rect| DamageRect::try_enclosing(rect, SURFACE);
+    let damage = enclosing(Rect::from_ltrb(10.25, 20.5, 30.75, 40.0))
+        .expect("finite")
+        .expect("on the surface");
+    assert_eq!(
+        ltrb(damage),
+        (10, 20, 31, 40),
+        "floor/ceil outward, and no anti-aliasing margin"
+    );
+    let clamped = enclosing(Rect::from_ltrb(-5.0, 990.5, 1005.0, 1200.0))
+        .expect("finite")
+        .expect("overlaps the surface");
+    assert_eq!(
+        ltrb(clamped),
+        (0, 990, 1000, 1000),
+        "clamped to the surface"
+    );
+    assert_eq!(
+        enclosing(Rect::from_ltrb(0.0, 0.0, f64::NAN, 10.0)),
+        Err(NonFinite)
+    );
+    assert_eq!(
+        enclosing(Rect::from_ltrb(1000.0, 0.0, 1010.0, 10.0)),
+        Ok(None),
+        "off the surface"
+    );
+}

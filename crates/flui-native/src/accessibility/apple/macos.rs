@@ -173,6 +173,9 @@ impl crate::host::WindowAccessibility for MacosAccessibility {
             events.raise();
         }
     }
+
+    /// AppKit places the nodes from the subclassed view's own position.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 /// Each AppKit window's content view is subclassed for VoiceOver as the
@@ -199,9 +202,12 @@ impl std::fmt::Debug for MacosAccessibility {
 
 impl PlatformAccessibility for MacosAccessibility {
     fn publish(&self, update: TreeUpdate) {
-        // Same retention contract as the AT-SPI bridge: only self-contained
-        // updates may answer a late activation — see `BridgeShared`.
-        self.shared.retain_if_self_contained(&update);
+        // Retained when self-contained; inside the activation's own call the
+        // adapter's view state is borrowed, and the update is its answer
+        // instead (`BridgeShared::publish`).
+        let Some(update) = self.shared.publish(update) else {
+            return;
+        };
         // AccessKit's contract: `QueuedEvents` are raised OUTSIDE the
         // adapter lock, because NSAccessibility notification handlers can
         // re-enter. A shut-down capability (adapter taken by teardown)

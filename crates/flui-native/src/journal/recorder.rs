@@ -327,10 +327,12 @@ pub(super) fn fold(
 /// `event` with its text replaced, and whether it had any to replace.
 fn redacted(event: &ImeEvent) -> (ImeEvent, bool) {
     match event {
+        // The cursor is the input method's target clause; of a redacted
+        // preedit nothing is left to select, so a caret after it stays.
         ImeEvent::Preedit { cursor, .. } => (
             ImeEvent::Preedit {
                 text: REDACTED.to_owned(),
-                cursor: cursor.map(|_| (0, REDACTED.len())),
+                cursor: cursor.map(|_| (REDACTED.len(), REDACTED.len())),
             },
             true,
         ),

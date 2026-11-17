@@ -1,7 +1,9 @@
 # ADR-0058: The platform paces production; a sleep never does
 
-- **Status:** Accepted (2026-09-05)
+- **Status:** Superseded (2026-11-17)
 - **Date:** 2026-09-05
+- **Superseded-by:** [ADR-0353](ADR-0353-production-is-paced-by-the-platform-and-a-frame-that-showed-nothing-waits-for-the-fallback.md) whole: it states the
+  current rule, with decision 4 changed, and restates the pacing clauses of the records below.
 - **Amended:** 2026-10-11 — removed the self-referential absorption label; platform pacing and fallback-deadline decisions are unchanged.
 - **Superseded-by:** [ADR-0347](ADR-0347-a-frame-request-carries-the-hosts-frame-times-and-reports-that-name-their-frame.md), decision 0 only: the swapchain's frame
   latency is a setting whose default is 2.

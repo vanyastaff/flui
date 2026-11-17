@@ -23,7 +23,7 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 
 use flui_platform::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OwnerCalls, PointMode, RangeRect,
-    Selection, TextChange, TextInputPurpose, TextStore, TextStoreChange, TextStoreEdit,
+    Selection, TextChange, TextInputOptions, TextStore, TextStoreChange, TextStoreEdit,
     TextStoreError, TextStoreObserver, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
     utf16,
 };
@@ -47,7 +47,7 @@ pub struct InMemoryTextStore {
     /// was held or the gate was shut when they happened.
     pending: RefCell<Vec<Notice>>,
     protected: Cell<bool>,
-    purpose: Cell<TextInputPurpose>,
+    text_input: Cell<TextInputOptions>,
     single_line: Cell<bool>,
     owner_notifications: Cell<usize>,
     /// A session changed the committed text and its owner notification is
@@ -128,7 +128,7 @@ impl InMemoryTextStore {
             observer: RefCell::new(None),
             pending: RefCell::new(Vec::new()),
             protected: Cell::new(false),
-            purpose: Cell::new(TextInputPurpose::Text),
+            text_input: Cell::new(TextInputOptions::TEXT),
             single_line: Cell::new(true),
             owner_notifications: Cell::new(0),
             owner_owed: Cell::new(false),
@@ -162,10 +162,10 @@ impl InMemoryTextStore {
         }
     }
 
-    /// Give the store `purpose` (an address, a query, …) and tell the
-    /// observer.
-    pub fn set_purpose(&self, purpose: TextInputPurpose) {
-        if self.purpose.replace(purpose) != purpose {
+    /// Give the store what it asks of the input method (its purpose, its
+    /// Enter key's label, …) and tell the observer.
+    pub fn set_text_input(&self, text_input: TextInputOptions) {
+        if self.text_input.replace(text_input) != text_input {
             self.report(Notice::Status);
         }
     }
@@ -427,11 +427,10 @@ impl InMemoryTextStore {
 
 impl TextStore for InMemoryTextStore {
     fn status(&self) -> TextStoreStatus {
-        let mut status = TextStoreStatus::EDITABLE_SINGLE_LINE
+        TextStoreStatus::EDITABLE_SINGLE_LINE
             .with_protected(self.protected.get())
-            .with_purpose(self.purpose.get());
-        status.single_line = self.single_line.get();
-        status
+            .with_single_line(self.single_line.get())
+            .with_text_input(self.text_input.get())
     }
 
     fn request_lock(

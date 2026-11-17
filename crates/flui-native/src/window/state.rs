@@ -611,6 +611,17 @@ impl WindowStateCell {
         self.last.lock().state.capabilities
     }
 
+    /// The scale of the last published snapshot's metrics, without reading
+    /// the OS or copying the snapshot; one before any metrics.
+    #[cfg(wayland_host)]
+    pub(crate) fn published_scale(&self) -> f64 {
+        self.last
+            .lock()
+            .state
+            .metrics
+            .map_or(1.0, |metrics| metrics.scale().get())
+    }
+
     /// The last published snapshot, without reading the OS.
     #[cfg(any(windows, x11_host, wayland_host))]
     pub(crate) fn published(&self) -> WindowState {

@@ -341,6 +341,17 @@ public final class FluiView extends View {
     }
 
     /**
+     * The focused field's status changed: the next connection, which the
+     * {@link #pushState} restart that follows creates, carries it. Shows no
+     * keyboard: the keyboard is shown by a focus or the field's own tap.
+     */
+    public void reconfigureEditor(int type, int options, boolean stylus) {
+        inputType = type;
+        imeOptions = options;
+        handwriting = stylus;
+    }
+
+    /**
      * The user tapped the focused field: show the soft keyboard again, as a
      * tap on a platform text field does, so a keyboard put away with Back
      * returns. Nothing happens while the editor has no field.

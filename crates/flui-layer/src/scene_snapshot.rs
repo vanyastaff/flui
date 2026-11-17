@@ -262,6 +262,30 @@ impl DamageRect {
     /// [`NonFinite`] when an edge of `rect` is not finite: a producer turns it
     /// into [`FullReason::NonFinite`].
     pub fn try_covering(rect: Rect<f64>, surface: (u32, u32)) -> Result<Option<Self>, NonFinite> {
+        Self::try_touched(rect, surface, f64::from(Self::AA_MARGIN))
+    }
+
+    /// The whole pixels `rect` (in surface pixels) touches, clamped to a
+    /// `surface` of `(width, height)`, with no margin: for a rect that already
+    /// bounds every pixel that changed, such as a damage rect a renderer's
+    /// caller marks, where [`Self::try_covering`] would redraw a ring more.
+    ///
+    /// `Ok(None)` means empty or off the surface, nothing else.
+    ///
+    /// # Errors
+    ///
+    /// [`NonFinite`] when an edge of `rect` is not finite.
+    pub fn try_enclosing(rect: Rect<f64>, surface: (u32, u32)) -> Result<Option<Self>, NonFinite> {
+        Self::try_touched(rect, surface, 0.0)
+    }
+
+    /// The whole pixels `rect` touches grown by `margin` on every side,
+    /// clamped to `surface`.
+    fn try_touched(
+        rect: Rect<f64>,
+        surface: (u32, u32),
+        margin: f64,
+    ) -> Result<Option<Self>, NonFinite> {
         let (width, height) = surface;
         let (l, t, r, b) = (rect.left(), rect.top(), rect.right(), rect.bottom());
         if !(l.is_finite() && t.is_finite() && r.is_finite() && b.is_finite()) {
@@ -270,7 +294,6 @@ impl DamageRect {
         if r <= l || b <= t {
             return Ok(None);
         }
-        let margin = f64::from(Self::AA_MARGIN);
         // Clamped in `f64` first, so the casts below are in range by
         // construction (`0.0..=width` and `0.0..=height`).
         let clamp = |v: f64, max: u32| v.clamp(0.0, f64::from(max));

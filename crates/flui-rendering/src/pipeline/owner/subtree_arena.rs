@@ -1011,7 +1011,7 @@ unsafe fn layout_subtree_borrowed(
 /// violation" — which is not a cosmetic problem: an animated demo logged it
 /// twice per frame for a whole run and it was recorded as a suspected
 /// rendering defect while the run's actual defect was frame pacing
-/// (ADR-0058). A named classification keeps the distinction where a reader
+/// (ADR-0353). A named classification keeps the distinction where a reader
 /// and a test can both see it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CacheMiss {
@@ -1208,7 +1208,7 @@ unsafe fn layout_subtree_borrowed_impl(
         // three is how a normal relayout gets reported as an invariant
         // violation. (It did: an animated demo logged this warning twice
         // per frame for the whole run, and the frame it was blamed for was
-        // a pacing defect elsewhere entirely — ADR-0058.)
+        // a pacing defect elsewhere entirely — ADR-0353.)
         match classify_cache_miss(has_cached_constraints, constraints_match) {
             CacheMiss::FirstLayout => {
                 tracing::trace!(node_id = id.as_u64(), "first layout: no cached constraints");

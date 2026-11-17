@@ -1336,8 +1336,11 @@ pub(crate) struct BackdropOp {
     pub(crate) output_bounds: Rect<f64>,
     pub(crate) effect: BackdropEffect,
     pub(crate) blend: BlendMode,
-    /// Grouped filters read one backdrop snapshot per item list.
+    /// Grouped filters read one backdrop snapshot per item list and pass.
     pub(crate) group: Option<flui_layer::BackdropGroupKey>,
+    /// The pass of a partial frame the filter was recorded in
+    /// (`WgpuPainter::begin_region_pass`); `0` in a frame of one pass.
+    pub(crate) region_pass: u32,
 }
 
 impl Drop for BackdropOp {

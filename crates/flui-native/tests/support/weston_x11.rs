@@ -18,7 +18,14 @@ impl Session {
     /// Call it before any thread starts: it sets the environment.
     pub(crate) fn start(shell: &str, output: (u16, u16), socket: &str) -> Option<Self> {
         let prepared = x11_session::Prepared::start("weston", socket)?;
+        // The desktop shell's panel shrinks the work area only once it is
+        // mapped, and the shell starts after the socket: a window that maps
+        // first is placed below where the panel goes, one that maps after
+        // it has its title bar under the panel. No panel, one work area.
+        let config = prepared.runtime().join("weston.ini");
+        std::fs::write(&config, "[shell]\npanel-position=none\n").expect("the Weston config");
         let weston = Command::new("weston")
+            .arg(format!("--config={}", config.display()))
             .args([
                 "--backend=x11",
                 "--renderer=pixman",

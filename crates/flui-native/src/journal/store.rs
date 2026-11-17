@@ -23,7 +23,8 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Point;
 use flui_platform::text_store::{
-    Composition, LockGrant, LockKind, LockOutcome, LockTiming, PointMode, Selection, TextChange,
+    Autofill, Capitalization, Composition, Correction, EnterAction, LockGrant, LockKind,
+    LockOutcome, LockTiming, NumberFormat, PointMode, Selection, TextChange, TextInputOptions,
     TextInputPurpose, TextStore, TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus,
     Utf16Offset, Utf16Range,
 };
@@ -268,18 +269,148 @@ pub fn error_kind(error: &TextStoreError) -> Option<StoreError> {
     })
 }
 
-/// `purpose` as the schema spells it; `None` for one it does not mirror.
-#[must_use]
-pub const fn purpose_to_wire(purpose: TextInputPurpose) -> Option<wire::InputPurpose> {
-    Some(match purpose {
-        TextInputPurpose::Text => wire::InputPurpose::Text,
-        TextInputPurpose::Email => wire::InputPurpose::Email,
-        TextInputPurpose::Url => wire::InputPurpose::Url,
-        TextInputPurpose::Phone => wire::InputPurpose::Phone,
-        TextInputPurpose::Number => wire::InputPurpose::Number,
-        TextInputPurpose::Search => wire::InputPurpose::Search,
-        _ => return None,
+/// `status` as the schema spells it: every field of the status and of its
+/// [`TextInputOptions`], each written as it is, so what a recording means
+/// never depends on the defaults a later build picks.
+///
+/// # Errors
+///
+/// [`DtoError::Unmirrored`] for a value the schema has no word for yet.
+fn status_to_wire(status: TextStoreStatus) -> DtoResult<wire::StoreStatus> {
+    let options = status.text_input;
+    let (purpose, format) = match options.purpose {
+        TextInputPurpose::Text => (wire::InputPurpose::Text, NumberFormat::WHOLE),
+        TextInputPurpose::Email => (wire::InputPurpose::Email, NumberFormat::WHOLE),
+        TextInputPurpose::Url => (wire::InputPurpose::Url, NumberFormat::WHOLE),
+        TextInputPurpose::Phone => (wire::InputPurpose::Phone, NumberFormat::WHOLE),
+        TextInputPurpose::Number(format) => (wire::InputPurpose::Number, format),
+        TextInputPurpose::Search => (wire::InputPurpose::Search, NumberFormat::WHOLE),
+        _ => return Err(DtoError::Unmirrored("TextInputPurpose")),
+    };
+    let enter_action = match options.enter_action {
+        EnterAction::Default => Some(wire::EnterAction::Default),
+        EnterAction::Done => Some(wire::EnterAction::Done),
+        EnterAction::Go => Some(wire::EnterAction::Go),
+        EnterAction::Next => Some(wire::EnterAction::Next),
+        EnterAction::Previous => Some(wire::EnterAction::Previous),
+        EnterAction::Search => Some(wire::EnterAction::Search),
+        EnterAction::SendMessage => Some(wire::EnterAction::SendMessage),
+        _ => return Err(DtoError::Unmirrored("EnterAction")),
+    };
+    let capitalization = match options.capitalization {
+        Capitalization::None => wire::Capitalization::None,
+        Capitalization::Sentences => wire::Capitalization::Sentences,
+        Capitalization::Words => wire::Capitalization::Words,
+        Capitalization::Characters => wire::Capitalization::Characters,
+        _ => return Err(DtoError::Unmirrored("Capitalization")),
+    };
+    let correction = match options.correction {
+        Correction::Off => Some(wire::Correction::Off),
+        Correction::Suggestions => Some(wire::Correction::Suggestions),
+        Correction::Autocorrect => Some(wire::Correction::Autocorrect),
+        _ => return Err(DtoError::Unmirrored("Correction")),
+    };
+    let autofill = match options.autofill {
+        None => None,
+        Some(Autofill::Username) => Some(wire::Autofill::Username),
+        Some(Autofill::CurrentPassword) => Some(wire::Autofill::CurrentPassword),
+        Some(Autofill::NewPassword) => Some(wire::Autofill::NewPassword),
+        Some(Autofill::OneTimeCode) => Some(wire::Autofill::OneTimeCode),
+        Some(_) => return Err(DtoError::Unmirrored("Autofill")),
+    };
+    Ok(wire::StoreStatus {
+        protected: status.protected,
+        single_line: status.single_line,
+        purpose,
+        signed: format.signed,
+        decimal: format.decimal,
+        enter_action,
+        capitalization,
+        correction,
+        autofill,
     })
+}
+
+/// The status a recording holds: the inverse of [`status_to_wire`]. A
+/// recording taken before the options existed has no Enter action or
+/// correction: it reads as what the hosts did then, pinned here.
+///
+/// # Errors
+///
+/// A value this build does not read, or a sign or separator on a purpose that
+/// is not a number.
+fn status_from_wire(status: wire::StoreStatus) -> DtoResult<TextStoreStatus> {
+    let format = NumberFormat {
+        signed: status.signed,
+        decimal: status.decimal,
+    };
+    let purpose = match status.purpose {
+        wire::InputPurpose::Number => TextInputPurpose::Number(format),
+        _ if format != NumberFormat::WHOLE => {
+            return Err(invalid(
+                "a sign or a separator on a purpose that is not a number",
+            ));
+        }
+        wire::InputPurpose::Text => TextInputPurpose::Text,
+        wire::InputPurpose::Email => TextInputPurpose::Email,
+        wire::InputPurpose::Url => TextInputPurpose::Url,
+        wire::InputPurpose::Phone => TextInputPurpose::Phone,
+        wire::InputPurpose::Search => TextInputPurpose::Search,
+        other => return Err(unread(other.name())),
+    };
+    // A recording older than the options: what the hosts then did, pinned
+    // here rather than read from today's defaults (a query's Enter searched,
+    // prose was corrected, an address or a number was not).
+    let mut options = TextInputOptions::new(purpose)
+        .enter_action(if purpose == TextInputPurpose::Search {
+            EnterAction::Search
+        } else {
+            EnterAction::Default
+        })
+        .correction(match purpose {
+            TextInputPurpose::Text | TextInputPurpose::Search => Correction::Autocorrect,
+            _ => Correction::Off,
+        });
+    if let Some(action) = status.enter_action {
+        options = options.enter_action(match action {
+            wire::EnterAction::Default => EnterAction::Default,
+            wire::EnterAction::Done => EnterAction::Done,
+            wire::EnterAction::Go => EnterAction::Go,
+            wire::EnterAction::Next => EnterAction::Next,
+            wire::EnterAction::Previous => EnterAction::Previous,
+            wire::EnterAction::Search => EnterAction::Search,
+            wire::EnterAction::SendMessage => EnterAction::SendMessage,
+            other => return Err(unread(other.name())),
+        });
+    }
+    options = options.capitalization(match status.capitalization {
+        wire::Capitalization::None => Capitalization::None,
+        wire::Capitalization::Sentences => Capitalization::Sentences,
+        wire::Capitalization::Words => Capitalization::Words,
+        wire::Capitalization::Characters => Capitalization::Characters,
+        other => return Err(unread(other.name())),
+    });
+    if let Some(correction) = status.correction {
+        options = options.correction(match correction {
+            wire::Correction::Off => Correction::Off,
+            wire::Correction::Suggestions => Correction::Suggestions,
+            wire::Correction::Autocorrect => Correction::Autocorrect,
+            other => return Err(unread(other.name())),
+        });
+    }
+    if let Some(autofill) = status.autofill {
+        options = options.autofill(match autofill {
+            wire::Autofill::Username => Autofill::Username,
+            wire::Autofill::CurrentPassword => Autofill::CurrentPassword,
+            wire::Autofill::NewPassword => Autofill::NewPassword,
+            wire::Autofill::OneTimeCode => Autofill::OneTimeCode,
+            other => return Err(unread(other.name())),
+        });
+    }
+    Ok(TextStoreStatus::EDITABLE_SINGLE_LINE
+        .with_protected(status.protected)
+        .with_single_line(status.single_line)
+        .with_text_input(options))
 }
 
 impl StoreLock {
@@ -746,12 +877,7 @@ pub(super) fn lock_from_wire(lock: wire::StoreLock) -> DtoResult<StoreLock> {
 pub(super) fn focus_to_wire(focus: &StoreFocus) -> DtoResult<wire::StoreFocus> {
     Ok(wire::StoreFocus {
         store: focus.store.get(),
-        status: wire::StoreStatus {
-            protected: focus.status.protected,
-            single_line: focus.status.single_line,
-            purpose: purpose_to_wire(focus.status.purpose)
-                .ok_or(DtoError::Unmirrored("TextInputPurpose"))?,
-        },
+        status: status_to_wire(focus.status)?,
     })
 }
 
@@ -759,18 +885,8 @@ pub(super) fn focus_from_wire(focus: wire::StoreFocus) -> DtoResult<StoreFocus> 
     let store = NonZeroU64::new(focus.store)
         .map(RecordedStore::from_raw)
         .ok_or_else(|| invalid("store 0 names no store"))?;
-    let purpose = match focus.status.purpose {
-        wire::InputPurpose::Text => TextInputPurpose::Text,
-        wire::InputPurpose::Email => TextInputPurpose::Email,
-        wire::InputPurpose::Url => TextInputPurpose::Url,
-        wire::InputPurpose::Phone => TextInputPurpose::Phone,
-        wire::InputPurpose::Number => TextInputPurpose::Number,
-        wire::InputPurpose::Search => TextInputPurpose::Search,
-        other => return Err(unread(other.name())),
-    };
-    let mut status = TextStoreStatus::EDITABLE_SINGLE_LINE
-        .with_protected(focus.status.protected)
-        .with_purpose(purpose);
-    status.single_line = focus.status.single_line;
-    Ok(StoreFocus { store, status })
+    Ok(StoreFocus {
+        store,
+        status: status_from_wire(focus.status)?,
+    })
 }

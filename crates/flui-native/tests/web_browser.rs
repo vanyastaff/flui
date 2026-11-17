@@ -375,6 +375,12 @@ export function editorHints() {
     const area = editor();
     return JSON.stringify(['inputmode', 'autocomplete', 'enterkeyhint'].map(name => area.getAttribute(name)));
 }
+// The textarea's [autocapitalize, autocorrect, spellcheck], each null when
+// absent.
+export function editorCorrection() {
+    const area = editor();
+    return JSON.stringify(['autocapitalize', 'autocorrect', 'spellcheck'].map(name => area.getAttribute(name)));
+}
 // The input method types into the textarea: its value becomes `value`.
 export function typeIntoEditor(value, caret, composing) {
     const area = editor();
@@ -503,6 +509,8 @@ extern "C" {
     fn blur_all();
     #[wasm_bindgen(js_name = editorHints)]
     fn editor_hints() -> String;
+    #[wasm_bindgen(js_name = editorCorrection)]
+    fn editor_correction() -> String;
 }
 
 /// What one dispatched drag event did.
@@ -1672,7 +1680,7 @@ fn a_tap_focuses_an_editor_the_field_attached_after_it_takes_over() {
     assert_eq!((state.value.as_str(), state.focused), ("ab", true));
     assert_eq!(
         editor_hints(),
-        r#"["text","off",null]"#,
+        r#"["text","off","enter"]"#,
         "the field's hints"
     );
     assert_eq!(editor_aria_hidden(), None);
@@ -1812,7 +1820,7 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     let password = InMemoryTextStore::new("");
     password.set_protected(true);
     canvas.host.focus_store(Some(as_store(&password)));
-    assert_eq!(editor_hints(), r#"["text","new-password",null]"#);
+    assert_eq!(editor_hints(), r#"["text","new-password","enter"]"#);
     assert_eq!(editor_aria_hidden(), None);
     insert_into_editor("secret");
     assert_eq!(password.text(), "secret", "typed through the browser");
@@ -1822,7 +1830,9 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     assert_eq!(editor_hints(), r#"["none","off",null]"#);
     assert_eq!(editor_aria_hidden().as_deref(), Some("true"));
     let plain = InMemoryTextStore::new("ab");
-    plain.set_purpose(flui_platform::text_store::TextInputPurpose::Search);
+    plain.set_text_input(flui_platform::text_store::TextInputOptions::new(
+        flui_platform::text_store::TextInputPurpose::Search,
+    ));
     canvas.host.focus_store(Some(as_store(&plain)));
     assert_eq!(editor_hints(), r#"["search","off","search"]"#);
     assert_eq!(editor_aria_hidden(), None);
@@ -2013,32 +2023,42 @@ fn a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone() {
 /// The hidden editor tells the browser, for each purpose, each enter action
 /// and protection, which keyboard to show (`inputmode`), what it may fill the
 /// field with (`autocomplete`: nothing beside the canvas, `new-password` for a
-/// protected field) and how to label Return (`enterkeyhint`: a search, a new
-/// line for a field of many lines, else the browser's own).
+/// protected field), how to label Return (`enterkeyhint`: the action the
+/// field names, else a search for a query, else `enter`, never left to the
+/// browser) and how to capitalize and correct.
 #[wasm_bindgen_test]
 fn the_hidden_editor_states_each_purpose_and_enter_action() {
-    use flui_platform::text_store::TextInputPurpose::{Email, Number, Phone, Search, Text, Url};
+    use flui_platform::text_store::TextInputPurpose::{Email, Phone, Search, Text, Url};
+    use flui_platform::text_store::{
+        Capitalization, Correction, EnterAction, NumberFormat, TextInputOptions, TextInputPurpose,
+    };
 
     let _hidden = EditContextHidden::hide();
     let canvas = HostedCanvas::open();
     assert!(focus_canvas());
+    let number = TextInputPurpose::Number(NumberFormat::WHOLE);
+    let decimal = TextInputPurpose::Number(NumberFormat {
+        signed: false,
+        decimal: true,
+    });
     // (purpose, single line, protected, [inputmode, autocomplete, enterkeyhint])
     let cases = [
-        (Text, true, false, r#"["text","off",null]"#),
+        (Text, true, false, r#"["text","off","enter"]"#),
         (Text, false, false, r#"["text","off","enter"]"#),
-        (Email, true, false, r#"["email","off",null]"#),
+        (Email, true, false, r#"["email","off","enter"]"#),
         (Email, false, false, r#"["email","off","enter"]"#),
-        (Url, true, false, r#"["url","off",null]"#),
-        (Phone, true, false, r#"["tel","off",null]"#),
-        (Number, true, false, r#"["numeric","off",null]"#),
+        (Url, true, false, r#"["url","off","enter"]"#),
+        (Phone, true, false, r#"["tel","off","enter"]"#),
+        (number, true, false, r#"["numeric","off","enter"]"#),
+        (decimal, true, false, r#"["decimal","off","enter"]"#),
         (Search, true, false, r#"["search","off","search"]"#),
         (Search, false, false, r#"["search","off","search"]"#),
-        (Text, true, true, r#"["text","new-password",null]"#),
-        (Number, true, true, r#"["numeric","new-password",null]"#),
+        (Text, true, true, r#"["text","new-password","enter"]"#),
+        (number, true, true, r#"["numeric","new-password","enter"]"#),
     ];
     for (purpose, single_line, protected, expected) in cases {
         let store = InMemoryTextStore::new("ab");
-        store.set_purpose(purpose);
+        store.set_text_input(TextInputOptions::new(purpose));
         store.set_single_line(single_line);
         store.set_protected(protected);
         canvas.host.focus_store(Some(as_store(&store)));
@@ -2049,35 +2069,59 @@ fn the_hidden_editor_states_each_purpose_and_enter_action() {
     // A status that changes while the field is served reaches the element.
     let store = InMemoryTextStore::new("ab");
     canvas.host.focus_store(Some(as_store(&store)));
-    store.set_purpose(Search);
+    assert_eq!(
+        editor_correction(),
+        r#"["off","on","true"]"#,
+        "free text is corrected and spell-checked"
+    );
+    store.set_text_input(TextInputOptions::new(Search));
     assert_eq!(editor_hints(), r#"["search","off","search"]"#, "refreshed");
-    store.set_purpose(Text);
+    store.set_text_input(
+        TextInputOptions::TEXT
+            .enter_action(EnterAction::SendMessage)
+            .capitalization(Capitalization::Sentences)
+            .correction(Correction::Suggestions),
+    );
     store.set_single_line(false);
-    assert_eq!(editor_hints(), r#"["text","off","enter"]"#, "refreshed");
+    assert_eq!(editor_hints(), r#"["text","off","send"]"#, "refreshed");
+    assert_eq!(editor_correction(), r#"["sentences","off","true"]"#);
+    store.set_protected(true);
+    assert_eq!(
+        editor_correction(),
+        r#"["off","off","false"]"#,
+        "a password is neither shifted nor corrected"
+    );
     canvas.host.focus_store(None);
+    assert_eq!(editor_correction(), r#"["off","off","false"]"#, "idle");
 }
 
 /// An `EditContext` serving a field on the page's own canvas writes its
-/// `inputmode`, and the page's own value comes back once the field goes;
-/// closing the window leaves a canvas that had no `style` attribute with
-/// none.
+/// `inputmode` and `enterkeyhint`, and the page's own values come back once
+/// the field goes; closing the window leaves a canvas that had no `style`
+/// attribute with none.
 #[wasm_bindgen_test]
 fn a_page_canvas_gets_back_the_inputmode_and_the_style_it_had() {
+    use flui_platform::text_store::{EnterAction, TextInputOptions, TextInputPurpose};
+
     let canvas = HostedCanvas::open_on(bare_canvas);
     let store = InMemoryTextStore::new("ab");
-    store.set_purpose(flui_platform::text_store::TextInputPurpose::Email);
+    store.set_text_input(
+        TextInputOptions::new(TextInputPurpose::Email).enter_action(EnterAction::Next),
+    );
     canvas.host.focus_store(Some(as_store(&store)));
     assert_eq!(
         canvas_attribute("inputmode").as_deref(),
         Some("email"),
         "the field's"
     );
+    assert_eq!(canvas_attribute("enterkeyhint").as_deref(), Some("next"));
     canvas.host.focus_store(None);
     assert_eq!(
         canvas_attribute("inputmode").as_deref(),
         Some("decimal"),
         "the page's"
     );
+    assert_eq!(canvas_attribute("enterkeyhint"), None, "the page had none");
     canvas.window.close_now();
     assert_eq!(canvas_attribute("style"), None, "no style attribute");
     assert_eq!(canvas_attribute("tabindex"), None);

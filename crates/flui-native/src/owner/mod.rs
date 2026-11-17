@@ -30,7 +30,7 @@
 //!   thread, each on the targets its host runs on (headless everywhere);
 //!   `redraw_poll`, the redraw decision around one native poll,
 //!   `wake_deadline`, the rules by which a loop arms and delivers the
-//!   application's turn and wake deadlines, and `modal_pace`, how often a
+//!   application's turn and wake deadlines, and `modal_pace`, when a
 //!   Windows modal loop asks for frames, each pure and checked on every host. A loop
 //!   that serves several features through one operating-system object
 //!   dispatches through hooks declared beside it, which the host registers. A

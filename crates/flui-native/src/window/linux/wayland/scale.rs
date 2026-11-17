@@ -4,7 +4,8 @@
 //! the buffer any size, so the buffer is drawn at the scale the compositor
 //! prefers: a fractional one where it offers `wp_fractional_scale_v1`
 //! (`preferred_scale`, as a numerator over 120), else the whole one `wl_surface`
-//! version 6 prefers, else that of the output the surface entered.
+//! version 6 prefers, else the largest of the outputs the surface is on
+//! (`OnOutputs`).
 //! Without the viewporter the buffer is the surface's size: scale 1, and
 //! the compositor scales it.
 //!
@@ -22,10 +23,14 @@
 
 #![forbid(unsafe_code)]
 
-use flui_foundation::geometry::{DevicePixelRatio, Size, WindowMetrics};
+use flui_foundation::geometry::{
+    Bounds, DevicePixelRatio, Point, Size, WindowMetrics, device_size,
+};
 use flui_platform::MAX_SURFACE_EXTENT;
 
 use crate::display::scale::{RefusedScale, ScaleStreak};
+use crate::host::ScreenBounds;
+use crate::owner::linux::wayland::outputs::OnOutputs;
 
 /// The scale a surface's buffer is drawn at: the scale the compositor
 /// named, up to [`Self::MAX`].
@@ -158,31 +163,50 @@ impl<T: Copy> ToldScale<T> {
 }
 
 /// What the compositor said of the scale a surface is drawn at, each a ratio
-/// a screen can have by its type.
+/// a screen can have by its type, and the outputs the surface is on.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct ScaleTold {
     /// `wp_fractional_scale_v1.preferred_scale`.
     pub(crate) fractional: Option<DevicePixelRatio>,
     /// `wl_surface.preferred_buffer_scale`.
     pub(crate) preferred: Option<DevicePixelRatio>,
-    /// The scale of the output the surface is on.
-    pub(crate) output: Option<DevicePixelRatio>,
+    /// The outputs the surface is on, whose densest scale is the fallback.
+    pub(crate) outputs: OnOutputs,
 }
 
 /// The scale a window's buffers are drawn at: the compositor's (the
-/// fractional scale, else the preferred one, else the output's), fitted so
-/// that `drawn`, the logical size of everything drawn at it (the content,
-/// and the frame around it where the window draws one), fits the largest
-/// surface.
+/// fractional scale, else the preferred one, else the densest output's),
+/// fitted so that `drawn`, the logical size of everything drawn at it (the
+/// content, and the frame around it where the window draws one), fits the
+/// largest surface.
 pub(crate) fn buffer_scale(viewported: bool, told: ScaleTold, drawn: Size<f64>) -> BufferScale {
     if !viewported {
         return BufferScale::ONE;
     }
     told.fractional
         .or(told.preferred)
-        .or(told.output)
+        .or(told.outputs.densest)
         .map_or(BufferScale::ONE, BufferScale::of)
         .fitted(drawn)
+}
+
+/// Where a window lies as its accessibility bridge places it, when the
+/// compositor keeps the window's position to itself: the window at the
+/// origin, and the content of `metrics` below the title bar of `header`
+/// logical pixels the window draws itself (zero where it draws none), both
+/// at the content's scale. `None` where the window and its title bar are
+/// taller than a coordinate holds.
+pub(crate) fn unplaced_bounds(metrics: WindowMetrics, header: f64) -> Option<ScreenBounds> {
+    let content = metrics.physical();
+    let header = device_size(Size::new(0.0, header), metrics.scale()).height;
+    ScreenBounds::try_new(
+        Bounds::new(
+            Point::new(0, 0),
+            Size::new(content.width, content.height.checked_add(header)?),
+        ),
+        Bounds::new(Point::new(0, header), content),
+    )
+    .ok()
 }
 
 #[cfg(test)]
@@ -190,9 +214,9 @@ mod tests {
     use super::*;
 
     /// What a window holds after the compositor told it `fractional` (each a
-    /// numerator over 120) and `preferred` in turn, on an output of scale
-    /// `output`: each event through the hosts' one rule, as the window's
-    /// handlers send it.
+    /// numerator over 120) and `preferred` in turn, the densest output it is
+    /// on of scale `output`: each event through the hosts' one rule, as the
+    /// window's handlers send it.
     fn told(fractional: &[u32], preferred: &[i32], output: Option<f64>) -> ScaleTold {
         let mut held_fractional = ToldScale::default();
         for &numerator in fractional {
@@ -205,7 +229,10 @@ mod tests {
         ScaleTold {
             fractional: held_fractional.ratio(),
             preferred: held_preferred.ratio(),
-            output: output.map(|scale| DevicePixelRatio::try_new(scale).expect("a ratio")),
+            outputs: OnOutputs {
+                first: None,
+                densest: output.map(|scale| DevicePixelRatio::try_new(scale).expect("a ratio")),
+            },
         }
     }
 
@@ -433,6 +460,37 @@ mod tests {
             assert_eq!(
                 published(viewported, numerator, content),
                 expected,
+                "{case}"
+            );
+        }
+    }
+
+    /// The bridge of a window the compositor does not place puts it at the
+    /// origin and its content below the title bar the window draws itself,
+    /// in the device pixels the tree's nodes are laid out in.
+    #[test]
+    fn an_unplaced_window_has_its_content_below_its_own_title_bar() {
+        let bounds = |x, y, width, height| Bounds::new(Point::new(x, y), Size::new(width, height));
+        for (case, metrics, header, outer, content) in [
+            (
+                "no title bar of its own",
+                WindowMetrics::from_logical(Size::new(400.0, 300.0), 1.0),
+                0.0,
+                bounds(0, 0, 400, 300),
+                bounds(0, 0, 400, 300),
+            ),
+            (
+                "its own title bar at a fractional scale",
+                WindowMetrics::from_logical(Size::new(400.0, 300.0), 1.5),
+                37.0,
+                bounds(0, 0, 600, 506),
+                bounds(0, 56, 600, 450),
+            ),
+        ] {
+            let metrics = metrics.expect("a window's metrics");
+            assert_eq!(
+                unplaced_bounds(metrics, header),
+                ScreenBounds::try_new(outer, content).ok(),
                 "{case}"
             );
         }

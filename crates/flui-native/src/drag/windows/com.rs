@@ -40,20 +40,27 @@ use super::{OleTransfer, clipboard_format, describe, global_format, write_global
 use crate::drag::windows::crossing::{
     DragContinuation, NativeFormat, actions_of, continue_drag, effect_bits, encode, native_format,
 };
-use crate::owner::windows::CreatedWindow;
+use crate::owner::windows::{CreatedWindow, ModalLoops};
 
 pub(super) use objects::{
     DropSource, DropSource_Impl, FormatList, FormatList_Impl, SourceData, SourceData_Impl,
     WindowDropTarget, WindowDropTarget_Impl,
 };
 
-/// Run one vtable method's body; a panic answers `E_UNEXPECTED`.
+/// Run one vtable method's body; a panic answers `E_UNEXPECTED`. OLE calls
+/// the objects directly, outside FLUI's procedures, so the method tells the
+/// thread's modal loops itself that the platform's code ran: a drop target's
+/// event, a drop source's question or a fetch that ran the provider may have
+/// moved a deadline.
 fn com_method<R>(body: impl FnOnce() -> windows_core::Result<R>) -> windows_core::Result<R> {
     os_entry(
         "OLE drag and drop",
         (),
         AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
-        body,
+        || {
+            let _ask_again = ModalLoops::ask_again_on_this_thread();
+            body()
+        },
     )
 }
 
@@ -63,7 +70,10 @@ fn com_hresult(body: impl FnOnce() -> HRESULT) -> HRESULT {
         "OLE drag and drop",
         (),
         AfterPanic::Answer(|()| E_UNEXPECTED),
-        body,
+        || {
+            let _ask_again = ModalLoops::ask_again_on_this_thread();
+            body()
+        },
     )
 }
 

@@ -638,7 +638,7 @@ fn wake_deadlines() -> Arc<super::super::desktop::DesktopWakeDeadlines> {
     })
 }
 
-/// 0.95 of a period, the fraction the fallback waits (ADR-0058).
+/// 0.95 of a period, the fraction the fallback waits (ADR-0353).
 fn deferral(period: Duration) -> Duration {
     period.mul_f64(0.95)
 }

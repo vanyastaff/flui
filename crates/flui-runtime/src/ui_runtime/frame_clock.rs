@@ -508,18 +508,59 @@ impl UiRuntime {
     }
 
     /// Check if there is pending work in ANY presentation this UI runtime hosts:
-    /// a due task deadline, a pending build, pending gesture motion/deadlines, or a dirty render
-    /// node. A presentation waiting out a dropped frame's backoff counts its
-    /// frame work only once the wait is over.
-    /// The runner's wake gate (`needs_redraw() || has_pending_work()`)
-    /// reads this every frame. Production may host multiple presentations,
-    /// although secondary windows are contentless today, so the union must
-    /// remain presentation-wide rather than assuming the primary is the
-    /// UI runtime's only source of pending work.
+    /// its [tree work](Self::has_pending_tree_work), its
+    /// [input work](Self::has_pending_input_work) or its
+    /// [due work](Self::has_pending_due_work).
+    /// The runner's frame gate keeps itself open on it. Production may host
+    /// multiple presentations, although secondary windows are contentless
+    /// today, so the union must remain presentation-wide rather than assuming
+    /// the primary is the UI runtime's only source of pending work.
     /// This observation applies no invalidation, queries no deadline extension
     /// and invokes no observer or diagnostics. Queued requests, including ones
     /// whose attachment later retired, contribute until the next owner turn.
     pub fn has_pending_work(&self) -> bool {
+        // Input work before due work: a gesture deadline that comes due
+        // between the two reads is then counted at least once.
+        self.has_pending_tree_work() || self.has_pending_input_work() || self.has_pending_due_work()
+    }
+
+    /// Whether a presentation's tree waits for a frame: a pending build, a
+    /// dirty render node, or a completion the next frame takes. A
+    /// presentation waiting out a dropped frame's backoff, one whose sink
+    /// holds as many frames as it may and one whose device rebuild was given
+    /// up have none: the backoff's deadline is
+    /// [due work](Self::has_pending_due_work), and a settlement or a new
+    /// rebuild asks for the frame. A frame that showed nothing and left tree
+    /// work behind is what a runner paces (ADR-0353 decision 4).
+    pub fn has_pending_tree_work(&self) -> bool {
+        self.presentations.iter().any(|presentation| {
+            presentation.failure_retry_at().is_none()
+                && !presentation.frames_in_flight().is_saturated()
+                && !presentation.device_abandoned()
+                && (presentation.has_pending_work_snapshot()
+                    || presentation.has_eligible_completion())
+        })
+    }
+
+    /// Whether a presentation carries input its frames continue: pointer
+    /// motion to resample, or a gesture deadline (a long press, a double
+    /// tap's window) still armed and not yet come. Each frame serves it, but
+    /// none is owed before the display's next period (ADR-0353 decision 4).
+    pub fn has_pending_input_work(&self) -> bool {
+        self.presentations.iter().any(|presentation| {
+            presentation.gestures().has_pending_motion()
+                || (flui_interaction::__runtime::has_pending_deadlines_snapshot(
+                    presentation.gestures(),
+                ) && !Self::gesture_deadline_due(presentation))
+        })
+    }
+
+    /// Whether work is due now, at an instant of its own: a due task deadline,
+    /// a dropped frame whose backoff is over, a gesture deadline that came
+    /// due, a haptic delivery, or a frame-rate hold that ran out. A runner
+    /// serves it on the wake its deadline brings, never behind a pacing
+    /// deferral (ADR-0353 decision 4).
+    pub fn has_pending_due_work(&self) -> bool {
         // A deadline a task sleeps until is owner work once it is due.
         let deadline_due = self
             .owner_frame
@@ -527,33 +568,30 @@ impl UiRuntime {
             .is_some_and(|due| flui_foundation::MonotonicClock::now(&self.clock) >= due);
         deadline_due
             || self.presentations.iter().any(|presentation| {
-                // A presentation waiting out a dropped frame's backoff has its
-                // frame work counted once the wait is over, not before; one whose
-                // device rebuild was given up has none until a rebuild is asked
-                // for again.
-                let frame_work = match presentation.failure_retry_at() {
-                    // A presentation whose sink holds as many frames as it may produces none
-                    // until a settlement frees a place. That settlement wakes the loop unless a
-                    // backoff still runs or the device was abandoned; the backoff's deadline
-                    // (counted below once the sink frees a place) or a new rebuild wakes it then.
-                    _ if presentation.frames_in_flight().is_saturated() => false,
-                    _ if presentation.device_abandoned() => false,
-                    Some(at) => presentation.clock().now() >= at,
-                    None => {
-                        presentation.has_pending_work_snapshot()
-                            || presentation.has_eligible_completion()
-                    }
-                };
-                frame_work
-                    || presentation.gestures().has_pending_motion()
-                    || flui_interaction::__runtime::has_pending_deadlines_snapshot(
-                        presentation.gestures(),
-                    )
+                // A sink at its in-flight limit or a given-up device asks for
+                // no frame until a settlement or a new rebuild does.
+                let retry_due = !presentation.frames_in_flight().is_saturated()
+                    && !presentation.device_abandoned()
+                    && presentation
+                        .failure_retry_at()
+                        .is_some_and(|at| presentation.clock().now() >= at);
+                retry_due
+                    || Self::gesture_deadline_due(presentation)
                     || presentation.haptics().has_pending_delivery()
                     || presentation
                         .frame_rate_hold()
                         .is_some_and(|due| presentation.clock().now() >= due)
             })
+    }
+
+    /// Whether `presentation`'s earliest armed gesture deadline (a long
+    /// press, a double tap's window) has come.
+    fn gesture_deadline_due(presentation: &crate::presentation::PresentationState) -> bool {
+        flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
+            .and_then(|deadline| {
+                flui_interaction::__runtime::wake_instant(presentation.gestures(), deadline)
+            })
+            .is_some_and(|at| presentation.clock().now() >= at)
     }
 
     /// Fold what every presentation wants of its display's refresh rate at the
