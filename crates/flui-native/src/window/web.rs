@@ -18,7 +18,6 @@ use std::{
     sync::Arc,
 };
 
-use cursor_icon::CursorIcon;
 use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, prelude::*};
@@ -35,11 +34,13 @@ use crate::{
     window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell},
 };
 use flui_platform::{
-    AdmittedCommand, ApplyError, Brightness, CursorError, PlatformWindow, Unsupported,
-    UnsupportedReason, WindowCapabilities, WindowCommand, WindowExecutionState, WindowGeometry,
-    WindowId, WindowMode, WindowOptions, WindowState,
+    AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, CursorImage,
+    PlatformWindow, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
+    WindowExecutionState, WindowGeometry, WindowId, WindowLevel, WindowMode, WindowOptions,
+    WindowState,
 };
 
+use crate::owner::web::event::holds_pointer_lock;
 use crate::owner::web::listener::CanvasListener;
 use crate::owner::web::{
     Accepting, CanvasEditor, CanvasFocus, CanvasRef, CanvasRegistration, CanvasTimer, HostDisplays,
@@ -76,6 +77,9 @@ pub struct WebWindow {
     redraw: std::cell::OnceCell<Arc<crate::owner::web::FrameRequests>>,
     /// The published window state (ADR-0237).
     snapshot: Arc<WindowStateCell>,
+    /// The last image cursor made into a CSS `cursor` value, with that
+    /// value: an image the presentation sends again is not encoded again.
+    cursor_image: RefCell<Option<(CursorImage, String)>>,
 }
 
 /// What the layout, focus and visibility observers need to republish the
@@ -196,6 +200,15 @@ fn sample_state(
             // The user can resize the browser window, which this host does
             // not read as a placement: it cannot tell.
             interaction: flui_platform::WindowInteraction::Unknown,
+            // The page's pointer lock, as the browser holds it: it answers a
+            // request later, and ends the lock on Escape and on blur.
+            cursor_grab: if holds_pointer_lock(canvas) {
+                CursorGrab::Locked
+            } else {
+                CursorGrab::None
+            },
+            // A page has no levels among the desktop's windows.
+            level: WindowLevel::Normal,
         }
         .onto(state)
     })
@@ -556,6 +569,7 @@ impl WebWindow {
             displays,
             redraw: std::cell::OnceCell::new(),
             snapshot: Arc::new(WindowStateCell::open(initial)),
+            cursor_image: RefCell::new(None),
         })
     }
 
@@ -638,6 +652,7 @@ impl WebWindow {
         self.register_appearance_events(&mut registration)?;
         self.register_page_lifecycle_events(&mut registration)?;
         self.register_fullscreen_events(&mut registration)?;
+        self.register_pointer_lock_events(&mut registration)?;
         self.register_keyboard_events(&mut registration)?;
         self.register_context_loss_events(&mut registration)?;
         // Host registration calls can change native state before its listeners
@@ -823,6 +838,31 @@ impl WebWindow {
                 publisher.publish();
             }),
         )
+    }
+
+    /// `pointerlockchange` and `pointerlockerror`: the browser answers
+    /// `requestPointerLock` later, and ends a lock on Escape, on blur and when
+    /// the tab is hidden, with these events, so the snapshot's grab is read
+    /// again here. A lock the canvas still holds when the window retires is
+    /// let go: nothing would hold the pointer for it afterwards.
+    fn register_pointer_lock_events(
+        &self,
+        registration: &mut Registration,
+    ) -> Result<(), OpenWindowError> {
+        let document = self.document();
+        for kind in ["pointerlockchange", "pointerlockerror"] {
+            let publisher = self.publisher();
+            registration.listen(
+                document.as_ref(),
+                kind,
+                Rc::new(move |_: web_sys::Event| {
+                    publisher.publish();
+                }),
+            )?;
+        }
+        let canvas = self.canvas.clone();
+        registration.on_retire(Box::new(move || release_pointer_lock(&canvas)));
+        Ok(())
     }
 
     /// The keyboard moving over the canvas: `navigator.virtualKeyboard`'s
@@ -1030,6 +1070,12 @@ impl FocusSync {
         if self.observed.replace(focused) == focused {
             return;
         }
+        // A grab ends with the focus: the browser ends a lock when the page
+        // loses it, and the window when focus leaves the canvas within the
+        // page.
+        if !focused {
+            release_pointer_lock(&self.canvas);
+        }
         // Committed where the snapshot reads it, then published.
         self.state.lock().focused = focused;
         self.publisher.cell.invalidate();
@@ -1051,6 +1097,10 @@ impl VisibilitySync {
         // A host getter can synchronously retire this registration.
         if !self.accepting.get() || self.observed.replace(hidden) == hidden {
             return;
+        }
+        // A hidden page holds no pointer, as a hidden window does not.
+        if hidden {
+            release_pointer_lock(&self.publisher.canvas);
         }
         // Committed where the snapshot reads it, then published.
         self.state.lock().hidden = hidden;
@@ -1257,6 +1307,28 @@ pub(crate) const fn window_capabilities() -> WindowCapabilities {
     // the keyboard from its visual viewport (`keyboard_over`), which is an
     // estimate; `page_capabilities` says where it names the keyboard itself.
     capabilities.reports_keyboard_inset = flui_platform::WindowCapability::Emulated;
+    // A CSS `cursor` takes an image as a data URL (`image_cursor`).
+    capabilities.cursor_image = flui_platform::Availability::Native;
+    // The Pointer Lock API holds the pointer for the canvas; the web keeps no
+    // pointer inside an element otherwise.
+    capabilities.locks_cursor = flui_platform::WindowCapability::Native;
+    capabilities.confines_cursor = flui_platform::WindowCapability::Absent(
+        flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+    );
+    // A page is not stacked among the desktop's windows, and the browser
+    // window, not the page, is what the user resizes.
+    capabilities.keeps_on_top = flui_platform::WindowCapability::Absent(
+        flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+    );
+    capabilities.keeps_on_bottom = flui_platform::WindowCapability::Absent(
+        flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+    );
+    capabilities.sets_resize_increments = flui_platform::WindowCapability::Absent(
+        flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+    );
+    capabilities.sets_aspect_ratio = flui_platform::WindowCapability::Absent(
+        flui_platform::CapabilityAbsence::NOT_ON_THIS_PLATFORM,
+    );
     capabilities.into_capabilities()
 }
 
@@ -1457,12 +1529,40 @@ impl PlatformWindow for WebWindow {
                     document.exit_fullscreen();
                 }
             }
+            // Only a focused canvas on a shown page asks: the browser grants
+            // the lock to such a page alone, and the window holds a grab only
+            // while it has the focus. The browser answers later, with
+            // `pointerlockchange`, or `pointerlockerror` for a refusal (no
+            // user gesture, a lock the user just left with Escape), each of
+            // which publishes; a request this window does not send, or one the
+            // browser throws at, is published at once, so the snapshot says
+            // what is held on every path. The browser holds the locked pointer
+            // where it was, over the element, however the page lays the
+            // canvas out afterwards: there is no point to put back.
+            WindowCommand::SetCursorGrab(CursorGrab::Locked) => {
+                let (focused, hidden) = {
+                    let state = self.state.lock();
+                    (state.focused, state.hidden)
+                };
+                let asked = if focused && !hidden && !holds_pointer_lock(&self.canvas) {
+                    request_pointer_lock(&self.canvas)
+                        .map_err(|error| ApplyError::failed(format!("{error:?}")))
+                } else {
+                    Ok(())
+                };
+                self.publisher().publish();
+                return asked;
+            }
+            WindowCommand::SetCursorGrab(CursorGrab::None) => release_pointer_lock(&self.canvas),
+            // A page has one level.
+            WindowCommand::SetLevel(WindowLevel::Normal) => {}
             // Every other command is refused by `admit` through a capability
             // this backend leaves `Unavailable`.
             other => return Err(crate::window::state::not_carried_out(&other)),
         }
-        // The page answers a fullscreen request later, with
-        // `fullscreenchange`; the title is ours to report at once.
+        // The page answers a fullscreen or pointer-lock request later, with
+        // `fullscreenchange` or `pointerlockchange`; the title is ours to
+        // report at once.
         self.publisher().publish();
         Ok(())
     }
@@ -1506,11 +1606,84 @@ impl PlatformWindow for WebWindow {
         self.text_input_of().and_then(WindowTextInput::ime)
     }
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+    /// The canvas's CSS `cursor`: an icon by its CSS name, `none` for a
+    /// hidden cursor, and an image as a PNG data URL with its hotspot, the
+    /// arrow behind it for a browser that refuses the image. The last image's
+    /// value is kept, so an image sent again is not encoded again.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        let value = match cursor {
+            Cursor::Icon(icon) => icon.name().to_owned(),
+            Cursor::Hidden => "none".to_owned(),
+            Cursor::Image(image) => {
+                let kept = self
+                    .cursor_image
+                    .borrow()
+                    .as_ref()
+                    .filter(|(kept, _)| kept == image)
+                    .map(|(_, value)| value.clone());
+                if let Some(value) = kept {
+                    value
+                } else {
+                    let value = image_cursor(image)?;
+                    *self.cursor_image.borrow_mut() = Some((image.clone(), value.clone()));
+                    value
+                }
+            }
+        };
         self.canvas
             .style()
-            .set_property("cursor", cursor.name())
+            .set_property("cursor", &value)
             .map_err(|error| CursorError::failed(format!("{error:?}")))
+    }
+}
+
+/// `image` as a CSS `cursor` value: its pixels drawn into a canvas of their
+/// own, read back as a PNG data URL, at the image's hotspot, with the arrow
+/// for a browser that shows no image. A CSS cursor is measured in CSS pixels,
+/// so the image shows one pixel per CSS pixel whatever the page's scale.
+///
+/// # Errors
+/// [`CursorError::Platform`] when the page makes no canvas or 2D context, or
+/// refuses the pixels or their encoding.
+fn image_cursor(image: &CursorImage) -> Result<String, CursorError> {
+    let failed = |error: JsValue| CursorError::failed(format!("{error:?}"));
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| CursorError::failed("the page has no document".to_owned()))?;
+    let canvas: web_sys::HtmlCanvasElement = document
+        .create_element("canvas")
+        .map_err(failed)?
+        .dyn_into()
+        .map_err(|element| failed(element.into()))?;
+    canvas.set_width(u32::from(image.width()));
+    canvas.set_height(u32::from(image.height()));
+    let context: web_sys::CanvasRenderingContext2d = canvas
+        .get_context("2d")
+        .map_err(failed)?
+        .ok_or_else(|| CursorError::failed("the cursor's canvas has no 2D context".to_owned()))?
+        .dyn_into()
+        .map_err(|context| failed(context.into()))?;
+    // Straight-alpha RGBA rows from the top, which is what `ImageData` holds.
+    let pixels = web_sys::ImageData::new_with_u8_clamped_array_and_sh(
+        wasm_bindgen::Clamped(image.rgba()),
+        u32::from(image.width()),
+        u32::from(image.height()),
+    )
+    .map_err(failed)?;
+    context.put_image_data(&pixels, 0.0, 0.0).map_err(failed)?;
+    let url = canvas.to_data_url().map_err(failed)?;
+    let (x, y) = image.hotspot();
+    Ok(format!("url(\"{url}\") {x} {y}, auto"))
+}
+
+/// Let the page's pointer lock go when `canvas` holds it; a lock another
+/// element holds is not this window's to end. The browser says so later,
+/// with `pointerlockchange`.
+fn release_pointer_lock(canvas: &web_sys::HtmlCanvasElement) {
+    if holds_pointer_lock(canvas)
+        && let Some(document) = canvas.owner_document()
+    {
+        document.exit_pointer_lock();
     }
 }
 
@@ -1655,6 +1828,13 @@ export function devicePixelSize(entries) {
     return valid(width) && valid(height) ? [width, height] : [];
 }
 export function disconnectObserver(observer) { observer.disconnect(); }
+// A browser that answers with a promise rejects it for a refusal it also
+// reports as `pointerlockerror`, which the window reads: the rejection is
+// handled here so that it is not reported a second time as an error.
+export function requestPointerLock(canvas) {
+    const answer = canvas.requestPointerLock();
+    if (answer && typeof answer.catch === 'function') answer.catch(() => {});
+}
 export function admitPointerCapture(canvas, token, id) {
     if (canvas[ownerKey] !== token) return false;
     token.pointerAdmissions.add(id);
@@ -1700,6 +1880,8 @@ extern "C" {
     fn device_pixel_size(entries: &JsValue) -> Vec<u32>;
     #[wasm_bindgen(catch, js_name = disconnectObserver)]
     fn disconnect_observer(observer: &web_sys::ResizeObserver) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = requestPointerLock)]
+    fn request_pointer_lock(canvas: &web_sys::HtmlCanvasElement) -> Result<(), JsValue>;
     #[wasm_bindgen(catch, js_name = releasePointerCapture)]
     fn release_capture(
         canvas: &web_sys::HtmlCanvasElement,

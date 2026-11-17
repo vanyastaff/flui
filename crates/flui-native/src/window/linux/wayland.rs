@@ -145,14 +145,14 @@ mod toplevel {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Weak};
 
-    use cursor_icon::CursorIcon;
     use flui_foundation::geometry::{DevicePixelRatio, Size};
     use flui_platform::input_capabilities::InputCapabilities;
     use flui_platform::{
-        AdmittedCommand, ApplyError, CloseDecision, CursorError, PlatformTextInput, PlatformWindow,
-        SizeConstraints, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand,
-        WindowExecutionState, WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowMode,
-        WindowOptions, WindowState,
+        AdmittedCommand, ApplyError, CloseDecision, Cursor, CursorError, CursorGrab,
+        PlatformTextInput, PlatformWindow, SizeConstraints, Unsupported, UnsupportedReason,
+        WindowCapabilities, WindowCommand, WindowExecutionState, WindowFrame, WindowGeometry,
+        WindowHandler, WindowId, WindowInteraction, WindowLevel, WindowMode, WindowOptions,
+        WindowState,
     };
     use flui_semantics::platform::PlatformAccessibility;
     use parking_lot::Mutex;
@@ -189,7 +189,7 @@ mod toplevel {
     use super::client_frame::{self, Action, Frame, Look, Offers};
     use super::configure::{
         Activation, GeometryConfigure, Sizing, ToplevelStates, WmCapabilities, capabilities, clamp,
-        protocol_extent,
+        pointer_reported, protocol_extent,
     };
     use super::decoration::{Decoration, Drawn, FrameDrawer};
     #[cfg(any(test, feature = "testing"))]
@@ -207,8 +207,8 @@ mod toplevel {
     use crate::owner::linux::wayland::activation::ActivationToken;
     use crate::owner::linux::wayland::{
         DragWindow, LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName,
-        PresentationTime, SeatWindow, WaylandDisplays, WaylandDrag, WaylandInput, WaylandLoop,
-        WaylandState, WindowSeed, WindowTable,
+        PointerOffer, PresentationTime, SeatWindow, WaylandDisplays, WaylandDrag, WaylandInput,
+        WaylandLoop, WaylandState, WindowSeed, WindowTable,
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
@@ -636,6 +636,10 @@ mod toplevel {
         draws_own: bool,
         reports_presentation: bool,
         activation: Activation,
+        /// What the compositor offers for the window's pointer.
+        pointer: PointerOffer,
+        /// What the window holds of the pointer, as the seats' input holds it.
+        cursor_grab: CursorGrab,
         /// The window's `xdg_toplevel` is version 6 or newer: the compositor
         /// tells it when it suspends it.
         tells_suspension: bool,
@@ -720,20 +724,31 @@ mod toplevel {
                     hovered: self.hovered,
                     // xdg-shell has one `activated` state for both.
                     focus: flui_platform::WindowFocus::reported(states.activated, states.activated),
-                    // A move or resize the compositor runs for the user is not
-                    // read yet (docs/gaps.md).
-                    interaction: flui_platform::WindowInteraction::Unknown,
-                    capabilities: presented::reported(
-                        capabilities(
-                            applied.told.wm,
-                            decoration.absence(),
-                            decoration.app_title_bar_absence(),
-                            states,
-                            self.activation,
-                            self.tells_suspension,
+                    // The configure says when the user resizes the window by
+                    // its frame; a move the compositor runs for the user is
+                    // not read yet (docs/gaps.md).
+                    interaction: if states.resizing {
+                        WindowInteraction::UserResizing
+                    } else {
+                        WindowInteraction::Unknown
+                    },
+                    capabilities: pointer_reported(
+                        presented::reported(
+                            capabilities(
+                                applied.told.wm,
+                                decoration.absence(),
+                                decoration.app_title_bar_absence(),
+                                states,
+                                self.activation,
+                                self.tells_suspension,
+                            ),
+                            self.reports_presentation,
                         ),
-                        self.reports_presentation,
+                        self.pointer,
                     ),
+                    cursor_grab: self.cursor_grab,
+                    // xdg-shell keeps no window above or below the others.
+                    level: WindowLevel::Normal,
                 }
                 .onto(state)
             })
@@ -999,6 +1014,8 @@ mod toplevel {
                 } else {
                     Activation::Missing
                 },
+                pointer: self.input.pointer_offer(),
+                cursor_grab: self.input.pointer_grab(self.id),
                 tells_suspension: self
                     .roles
                     .borrow()
@@ -1028,6 +1045,8 @@ mod toplevel {
                 draws_own: self.frame_globals.is_some(),
                 reports_presentation: false,
                 activation: Activation::Missing,
+                pointer: PointerOffer::default(),
+                cursor_grab: CursorGrab::None,
                 tells_suspension: false,
                 closed: false,
                 shown: false,
@@ -1934,6 +1953,20 @@ mod toplevel {
                 }
                 // Admitted only where the compositor takes activation requests.
                 WindowCommand::Activate => self.ask_activation()?,
+                // The seats' input constrains the pointer of the seat whose
+                // keyboard is in the window; one in no seat's keyboard holds
+                // nothing.
+                // A refusal (a compositor that withdrew the constraint
+                // globals) leaves the hold the window had ended, which the
+                // snapshot says before the refusal is answered.
+                WindowCommand::SetCursorGrab(grab) => {
+                    if let Err(refused) = self.input.hold_pointer(self.id, grab) {
+                        self.refresh_state();
+                        return Err(ApplyError::Platform(refused));
+                    }
+                }
+                // xdg-shell has no levels: every window is at the normal one.
+                WindowCommand::SetLevel(WindowLevel::Normal) => {}
                 // `admit` refuses what a Wayland window cannot do.
                 other => return Err(not_carried_out(&other)),
             }
@@ -1943,9 +1976,11 @@ mod toplevel {
             Ok(())
         }
 
-        /// The cursor is the seats' input's, which shows it through
-        /// `cursor-shape` while the pointer is over the window.
-        fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
+        /// The cursor is the seats' input's, which shows it while the pointer
+        /// is over the window: a system cursor through `cursor-shape` or the
+        /// theme, an image as a buffer on the pointer's cursor surface, a
+        /// hidden one as no surface.
+        fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
             self.input.set_cursor(self.id, cursor)
         }
 
@@ -2175,20 +2210,23 @@ mod toplevel {
                 told: None,
                 answered: false,
             };
-            presented::reported(
-                capabilities(
-                    None,
-                    decoration.absence(),
-                    decoration.app_title_bar_absence(),
-                    ToplevelStates::default(),
-                    if owner.offers_activation() {
-                        Activation::Offered
-                    } else {
-                        Activation::Missing
-                    },
-                    owner.tells_suspension(),
+            pointer_reported(
+                presented::reported(
+                    capabilities(
+                        None,
+                        decoration.absence(),
+                        decoration.app_title_bar_absence(),
+                        ToplevelStates::default(),
+                        if owner.offers_activation() {
+                            Activation::Offered
+                        } else {
+                            Activation::Missing
+                        },
+                        owner.tells_suspension(),
+                    ),
+                    owner.offers_presentation(),
                 ),
-                owner.offers_presentation(),
+                owner.pointer_offer(),
             )
         }
 

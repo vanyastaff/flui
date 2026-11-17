@@ -77,9 +77,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cursor_icon::CursorIcon;
-use flui_platform::CursorError;
 use flui_platform::input_capabilities::InputCapabilities;
+use flui_platform::{Cursor, CursorError, CursorGrab, PlatformFailure};
 use std::sync::{Arc, Weak};
 
 use flui_foundation::panic::FirstPanic;
@@ -617,7 +616,24 @@ pub(crate) trait LoopInput {
     /// # Errors
     /// What [`PlatformWindow::set_cursor`](flui_platform::PlatformWindow::set_cursor)
     /// reports.
-    fn set_cursor(&self, window: WindowRef, cursor: CursorIcon) -> Result<(), CursorError>;
+    fn set_cursor(&self, window: WindowRef, cursor: &Cursor) -> Result<(), CursorError>;
+
+    /// Hold the pointer for `window`, which has the keyboard focus, as
+    /// `grab` asks, after letting go of what any window held;
+    /// [`CursorGrab::None`] only lets go. The input lets a grab go itself
+    /// when its window loses the focus, is unmapped or closes.
+    ///
+    /// # Errors
+    /// [`PlatformFailure::Failed`] when the server refuses the grab (another
+    /// client holds the pointer); nothing is held then.
+    fn hold_pointer(&self, window: WindowRef, grab: CursorGrab) -> Result<(), PlatformFailure>;
+
+    /// Let go of the pointer if `window` holds it: the window is hidden, or
+    /// hands the pointer to the window manager.
+    fn let_pointer_go(&self, window: WindowRef);
+
+    /// What `window` holds of the pointer now.
+    fn pointer_grab(&self, window: WindowRef) -> CursorGrab;
 
     /// The active keyboard layout's name; empty before a keymap came.
     fn keyboard_layout(&self) -> String;

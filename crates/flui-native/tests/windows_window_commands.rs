@@ -30,15 +30,18 @@ use flui_native::{HostWindow, Platform as _, WindowsPlatform};
 use crate::Opened;
 use flui_platform::{
     ApplyError, DispatchEventResult, MAX_SURFACE_EXTENT, PlatformFailure, PlatformWindow,
-    SizeConstraints, WindowCommand, WindowInteraction, WindowMode, WindowOptions, WindowReveal,
-    WindowState,
+    SizeConstraints, WindowCommand, WindowExtent, WindowInteraction, WindowMode, WindowOptions,
+    WindowReveal, WindowState,
 };
 use flui_testing::window_conformance::{self, Readback, WindowFixture};
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, RECT, WPARAM},
+    Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
     Graphics::{
         Dwm::{DWMWA_CLOAK, DWMWA_CLOAKED, DwmGetWindowAttribute, DwmSetWindowAttribute},
-        Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow},
+        Gdi::{
+            ClientToScreen, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+            MonitorFromWindow,
+        },
     },
     UI::{
         HiDpi::GetDpiForWindow,
@@ -46,7 +49,7 @@ use windows::Win32::{
             GetActiveWindow, GetFocus, SetFocus, VK_ESCAPE, VK_F11, VK_RETURN, VK_RIGHT,
         },
         WindowsAndMessaging::{
-            DispatchMessageW, GUI_INMOVESIZE, GUITHREADINFO, GWL_STYLE, GetClientRect,
+            DispatchMessageW, GUI_INMOVESIZE, GUITHREADINFO, GWL_EXSTYLE, GWL_STYLE, GetClientRect,
             GetGUIThreadInfo, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
             HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MSG, PM_REMOVE, PeekMessageW,
             PostMessageW, SC_MOVE, SC_SIZE, SW_MINIMIZE, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
@@ -2390,6 +2393,8 @@ struct Win32Fixture {
     platform: WindowsPlatform,
     window: Rc<dyn HostWindow>,
     hwnd: HWND,
+    /// The window that took the focus away, kept open until the fixture goes.
+    focus_holder: Option<Opened>,
 }
 
 /// A flip-model DXGI swap chain on a window, presented the way wgpu's DX12
@@ -2506,6 +2511,30 @@ impl DxgiPresenter {
 impl WindowFixture for Win32Fixture {
     fn window(&self) -> Rc<dyn PlatformWindow> {
         Rc::clone(&self.window) as Rc<dyn PlatformWindow>
+    }
+
+    /// The desktop's cursor clip: the client area is a confined pointer, one
+    /// pixel of it a locked one, anything else none.
+    fn held_grab(&self) -> Option<flui_platform::CursorGrab> {
+        Some(cursor_clip_of(self.hwnd))
+    }
+
+    /// Another window of this thread takes the keyboard focus, as a click
+    /// in it would; `false` where the window under test does not have it to
+    /// lose (the test process is not in the foreground).
+    fn take_focus_away(&mut self) -> bool {
+        // SAFETY: a plain query of this thread's focus.
+        if unsafe { GetFocus() } != self.hwnd {
+            return false;
+        }
+        let other = open(&self.platform, options());
+        // SAFETY: a window of this thread, live while `other` is held.
+        let _ = unsafe { SetFocus(Some(hwnd_of(&other.window))) };
+        settle();
+        // SAFETY: as above.
+        let moved = unsafe { GetFocus() } != self.hwnd;
+        self.focus_holder = Some(other);
+        moved
     }
 
     fn readback(&self) -> Readback {
@@ -2650,7 +2679,416 @@ fn the_win32_window_conforms() {
         platform,
         window: window.window,
         hwnd,
+        focus_holder: None,
     });
+}
+
+/// Whether `upper` is above `lower` in the desktop's stacking order.
+fn is_above(upper: HWND, lower: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GW_HWNDNEXT, GetWindow};
+    let mut next = upper;
+    // SAFETY: plain queries of the desktop's window list; a window that
+    // closes in between ends the walk.
+    while let Ok(below) = unsafe { GetWindow(next, GW_HWNDNEXT) } {
+        if below == lower {
+            return true;
+        }
+        next = below;
+    }
+    false
+}
+
+/// A window kept below the others is held on top by fullscreen while it
+/// lasts, keeps its level in the snapshot, and goes back under the others
+/// when it leaves fullscreen.
+fn fullscreen_wins_over_a_level_below_while_it_lasts() {
+    use flui_platform::WindowLevel;
+
+    let platform = platform();
+    let other = open(&platform, options());
+    let window = open(&platform, options());
+    settle();
+    let (hwnd, other_hwnd) = (hwnd_of(&window), hwnd_of(&other.window));
+    apply(
+        &window,
+        WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom),
+    );
+    settle();
+    assert!(is_above(other_hwnd, hwnd), "kept below the other window");
+    // A restack to the top, as an activation or a click asks for, is put
+    // back under the others outside fullscreen and kept inside it.
+    let raised = |hwnd: HWND| {
+        use windows::Win32::UI::WindowsAndMessaging::{HWND_TOP, WINDOWPOS, WM_WINDOWPOSCHANGING};
+        let mut pending = WINDOWPOS {
+            hwnd,
+            hwndInsertAfter: HWND_TOP,
+            flags: SWP_NOMOVE | SWP_NOSIZE,
+            ..Default::default()
+        };
+        // SAFETY: `WM_WINDOWPOSCHANGING`'s `lParam` is the address of the
+        // pending `WINDOWPOS`, a live local the window reads and writes.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_WINDOWPOSCHANGING,
+                Some(WPARAM(0)),
+                Some(LPARAM((&raw mut pending) as isize)),
+            )
+        };
+        pending.hwndInsertAfter == HWND_TOP
+    };
+    assert!(
+        !raised(hwnd),
+        "a normal window kept below is put back under"
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    settle();
+    assert!(
+        raised(hwnd),
+        "fullscreen keeps the window on top while it lasts"
+    );
+    assert_eq!(
+        window.state().level,
+        WindowLevel::AlwaysOnBottom,
+        "the level is kept"
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    settle();
+    assert!(
+        is_above(other_hwnd, hwnd),
+        "under the others again once fullscreen ends"
+    );
+    assert_eq!(window.state().level, WindowLevel::AlwaysOnBottom);
+}
+
+/// Bring `hwnd` to the foreground as a user's click would, from a process the
+/// foreground rules do not favour: join the input of the thread in front for
+/// the call, then press and release Shift, which makes this process the one
+/// that received the last input (the foreground suite's way). Whether `hwnd`
+/// is in front.
+fn take_foreground(hwnd: HWND) -> bool {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        VK_SHIFT,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+    };
+
+    // SAFETY: plain calls on this thread's own window and the thread in
+    // front, whose input is joined only for the one call and let go after;
+    // the input array is a stack local of the size named.
+    unsafe {
+        if !SetForegroundWindow(hwnd).as_bool() {
+            let ours = GetCurrentThreadId();
+            let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let joined = theirs != 0
+                && theirs != ours
+                && windows::Win32::System::Threading::AttachThreadInput(ours, theirs, true)
+                    .as_bool();
+            let _ = SetForegroundWindow(hwnd);
+            if joined {
+                let _ = windows::Win32::System::Threading::AttachThreadInput(ours, theirs, false);
+            }
+        }
+        let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_SHIFT,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let tap = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+        let _ = SendInput(&tap, std::mem::size_of::<INPUT>() as i32);
+        settle();
+        GetForegroundWindow() == hwnd
+    }
+}
+
+/// The grab the desktop's cursor clip holds for `hwnd`: its client area is a
+/// confined pointer, one pixel of it a locked one, anything else none.
+fn cursor_clip_of(hwnd: HWND) -> flui_platform::CursorGrab {
+    use windows::Win32::UI::WindowsAndMessaging::GetClipCursor;
+    let mut clip = RECT::default();
+    let mut client = RECT::default();
+    let mut origin = POINT::default();
+    // SAFETY: plain queries into live locals.
+    let read = unsafe {
+        GetClipCursor(&raw mut clip).is_ok()
+            && GetClientRect(hwnd, &raw mut client).is_ok()
+            && ClientToScreen(hwnd, &raw mut origin).as_bool()
+    };
+    if !read {
+        return flui_platform::CursorGrab::None;
+    }
+    let on_screen = RECT {
+        left: origin.x,
+        top: origin.y,
+        right: origin.x + client.right,
+        bottom: origin.y + client.bottom,
+    };
+    if clip == on_screen {
+        flui_platform::CursorGrab::Confined
+    } else if clip.right - clip.left == 1
+        && clip.bottom - clip.top == 1
+        && (on_screen.left..on_screen.right).contains(&clip.left)
+        && (on_screen.top..on_screen.bottom).contains(&clip.top)
+    {
+        flui_platform::CursorGrab::Locked
+    } else {
+        flui_platform::CursorGrab::None
+    }
+}
+
+/// A focused window holds the pointer as asked, on the desktop's cursor clip
+/// and in its snapshot, follows the client area while confined, and lets it
+/// go with the focus; an unfocused window takes no grab.
+fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
+    use flui_platform::CursorGrab;
+
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let hwnd = hwnd_of(&window);
+    // A grab is taken only by the window with the keyboard: the test brings
+    // the window forward as a click would (on a desktop of the test's own it
+    // is in front already), gives it the focus, and cannot check anything
+    // without it.
+    let _ = take_foreground(hwnd);
+    // SAFETY: this thread's window.
+    let _ = unsafe { SetFocus(Some(hwnd)) };
+    settle();
+    // SAFETY: a plain query of this thread's focus.
+    let focus = unsafe { GetFocus() };
+    assert_eq!(
+        focus, hwnd,
+        "the test window must hold the keyboard to hold the pointer"
+    );
+    for grab in [CursorGrab::Confined, CursorGrab::Locked] {
+        apply(&window, WindowCommand::SetCursorGrab(grab));
+        settle();
+        assert_eq!(window.state().cursor_grab, grab, "{grab:?} published");
+        assert_eq!(cursor_clip_of(hwnd), grab, "{grab:?} held by the desktop");
+    }
+    // A lock keeps its pixel of the client area when the window moves and
+    // resizes, never an old screen pixel over another window.
+    apply(
+        &window,
+        WindowCommand::SetPosition(Point::new(900.0, 700.0)),
+    );
+    settle();
+    assert_eq!(
+        cursor_clip_of(hwnd),
+        CursorGrab::Locked,
+        "the lock follows a move"
+    );
+    apply(&window, WindowCommand::SetSize(Size::new(200.0, 150.0)));
+    settle();
+    assert_eq!(
+        cursor_clip_of(hwnd),
+        CursorGrab::Locked,
+        "the lock stays inside a smaller client"
+    );
+    assert_eq!(window.state().cursor_grab, CursorGrab::Locked);
+    apply(&window, WindowCommand::SetCursorGrab(CursorGrab::Confined));
+    apply(&window, WindowCommand::SetSize(Size::new(500.0, 300.0)));
+    settle();
+    assert_eq!(
+        cursor_clip_of(hwnd),
+        CursorGrab::Confined,
+        "the clip follows the resized client area"
+    );
+    let other = open(&platform, options());
+    // SAFETY: a window of this thread, live while `other` is held.
+    let _ = unsafe { SetFocus(Some(hwnd_of(&other.window))) };
+    settle();
+    assert_eq!(
+        window.state().cursor_grab,
+        CursorGrab::None,
+        "published let go"
+    );
+    assert_eq!(
+        cursor_clip_of(hwnd),
+        CursorGrab::None,
+        "the clip went with the focus"
+    );
+    apply(&window, WindowCommand::SetCursorGrab(CursorGrab::Locked));
+    settle();
+    assert_eq!(
+        window.state().cursor_grab,
+        CursorGrab::None,
+        "a window without the focus takes no grab"
+    );
+    assert_eq!(cursor_clip_of(hwnd), CursorGrab::None);
+}
+
+/// A resize by the frame is the user resizing the window from the loop's
+/// first sizing step to its end; the snapshot after the loop says the user
+/// no longer is.
+fn a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends() {
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let events = record_interactions(&window);
+    // The first arrow picks the right edge, the rest move it; Enter keeps the
+    // size.
+    let sizer = post_keys(
+        &window,
+        vec![VK_RIGHT, VK_RIGHT, VK_RIGHT, VK_RIGHT, VK_RETURN],
+    );
+    send(&window, WM_SYSCOMMAND, SC_SIZE as usize, 0);
+    sizer.join().expect("the key thread");
+    let events = events.lock().expect("log").clone();
+    assert!(
+        events.iter().any(|(placed, _)| *placed),
+        "the loop resized the window: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|(placed, _)| *placed)
+            .all(|(_, interaction)| *interaction == WindowInteraction::UserResizing),
+        "every report that resized it says the user is resizing it: {events:?}"
+    );
+    assert_eq!(
+        window.state().interaction,
+        WindowInteraction::None,
+        "the end of the loop ends the live resize: {events:?}"
+    );
+}
+
+/// The rectangle a drag of the frame proposes keeps the steps and the
+/// proportion the application asked for, the dragged edges giving way; with
+/// neither asked, the default procedure keeps the proposal.
+fn a_frame_drag_keeps_the_steps_and_the_proportion() {
+    use std::num::NonZeroU32;
+    use windows::Win32::UI::WindowsAndMessaging::{WM_SIZING, WMSZ_BOTTOMRIGHT};
+
+    let platform = platform();
+    let window = open(&platform, options());
+    settle();
+    let hwnd = hwnd_of(&window);
+    let scale = window.state().metrics.expect("drawable").scale().get();
+    let outer = rect(&window);
+    let mut client = RECT::default();
+    // SAFETY: a plain query into a live local.
+    unsafe { GetClientRect(hwnd, &raw mut client) }.expect("a client area");
+    let frame = (
+        (outer.right - outer.left) - client.right,
+        (outer.bottom - outer.top) - client.bottom,
+    );
+    let drag = |proposed: RECT| {
+        let mut proposed = proposed;
+        // SAFETY: `WM_SIZING`'s `lParam` is the address of the dragged
+        // rectangle, a live local the window reads and writes back.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_SIZING,
+                Some(WPARAM(WMSZ_BOTTOMRIGHT as usize)),
+                Some(LPARAM((&raw mut proposed) as isize)),
+            )
+        };
+        proposed
+    };
+    let proposal = RECT {
+        left: outer.left,
+        top: outer.top,
+        right: outer.left + frame.0 + 333,
+        bottom: outer.top + frame.1 + 251,
+    };
+    assert_eq!(drag(proposal), proposal, "nothing asked, nothing held");
+
+    let step = (50.0 * scale).round() as i32;
+    apply(
+        &window,
+        WindowCommand::SetResizeIncrements(Some(
+            WindowExtent::try_new(Size::new(50.0, 50.0)).expect("a step"),
+        )),
+    );
+    let held = drag(proposal);
+    assert_eq!(
+        (held.left, held.top),
+        (proposal.left, proposal.top),
+        "the anchor stays"
+    );
+    let content = (
+        held.right - held.left - frame.0,
+        held.bottom - held.top - frame.1,
+    );
+    assert_eq!(
+        (content.0 % step, content.1 % step),
+        (0, 0),
+        "{content:?} in steps of {step}"
+    );
+    assert!(
+        content.0 <= 333 && content.1 <= 251,
+        "{content:?} rounded down"
+    );
+
+    apply(&window, WindowCommand::SetResizeIncrements(None));
+    apply(
+        &window,
+        WindowCommand::SetAspectRatio(Some(flui_platform::AspectRatio::new(
+            NonZeroU32::new(2).expect("nonzero"),
+            NonZeroU32::new(1).expect("nonzero"),
+        ))),
+    );
+    let held = drag(proposal);
+    let content = (
+        held.right - held.left - frame.0,
+        held.bottom - held.top - frame.1,
+    );
+    assert_eq!(content, (333, 167), "the width decides at a corner");
+}
+
+/// The snapshot's level is what Win32 holds: kept above is the window's
+/// `WS_EX_TOPMOST`, which Win32 grants a window of the foreground and may
+/// leave unset for one in the background, and the snapshot says so either
+/// way; kept below is the host's, and back to neither.
+fn a_level_is_what_win32_holds() {
+    use flui_platform::WindowLevel;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, WS_EX_TOPMOST};
+
+    let platform = platform();
+    let window = open(&platform, options());
+    apply(&window, WindowCommand::Activate);
+    settle();
+    let hwnd = hwnd_of(&window);
+    // SAFETY: plain queries.
+    let foreground = unsafe { GetForegroundWindow() } == hwnd;
+    let topmost = || {
+        // SAFETY: a plain style query of the live window.
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        style & WS_EX_TOPMOST.0 != 0
+    };
+    for level in [
+        WindowLevel::AlwaysOnTop,
+        WindowLevel::AlwaysOnBottom,
+        WindowLevel::Normal,
+    ] {
+        apply(&window, WindowCommand::SetLevel(level));
+        settle();
+        let held = match (topmost(), level) {
+            (true, _) => WindowLevel::AlwaysOnTop,
+            (false, WindowLevel::AlwaysOnBottom) => WindowLevel::AlwaysOnBottom,
+            (false, _) => WindowLevel::Normal,
+        };
+        assert_eq!(
+            window.state().level,
+            held,
+            "asked {level:?}: the snapshot says what Win32 holds"
+        );
+        if foreground {
+            assert_eq!(held, level, "a foreground window takes {level:?}");
+        }
+    }
 }
 
 /// A live resize runs Win32's modal sizing loop: each `WM_SIZE` of it
@@ -3247,6 +3685,23 @@ fn native_window_commands() {
         (
             "a_live_resize_publishes_inside_its_modal_loop",
             a_live_resize_publishes_inside_its_modal_loop,
+        ),
+        (
+            "a_grab_is_held_while_focused_and_let_go_with_the_focus",
+            a_grab_is_held_while_focused_and_let_go_with_the_focus,
+        ),
+        (
+            "a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends",
+            a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends,
+        ),
+        (
+            "a_frame_drag_keeps_the_steps_and_the_proportion",
+            a_frame_drag_keeps_the_steps_and_the_proportion,
+        ),
+        ("a_level_is_what_win32_holds", a_level_is_what_win32_holds),
+        (
+            "fullscreen_wins_over_a_level_below_while_it_lasts",
+            fullscreen_wins_over_a_level_below_while_it_lasts,
         ),
         (
             "the_size_move_loop_states_the_users_placement_and_ends_it",

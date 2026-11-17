@@ -13,7 +13,7 @@ use flui_native::testing::keyboard_layout;
 use flui_native::testing::x11::run_for;
 use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_platform::pointer::{ButtonChange, PointerEvent};
-use flui_platform::{PlatformInput, UnsupportedReason, WindowCommand};
+use flui_platform::{Cursor, PlatformInput, UnsupportedReason, WindowCommand};
 use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_conformance::WindowFixture as _;
 use flui_testing::window_handler::RecordingWindowHandler;
@@ -38,6 +38,26 @@ pub(crate) const CASES: &[(&str, fn())] = &[
     (
         "a_window_shows_the_cursor_it_asks_for",
         a_window_shows_the_cursor_it_asks_for,
+    ),
+    (
+        "a_focused_window_holds_the_pointer_as_it_asks",
+        a_focused_window_holds_the_pointer_as_it_asks,
+    ),
+    (
+        "a_window_keeps_the_level_it_asks_for",
+        a_window_keeps_the_level_it_asks_for,
+    ),
+    (
+        "a_refused_hold_leaves_the_window_holding_none",
+        a_refused_hold_leaves_the_window_holding_none,
+    ),
+    (
+        "a_locked_pointer_stays_with_the_content_as_the_window_moves",
+        a_locked_pointer_stays_with_the_content_as_the_window_moves,
+    ),
+    (
+        "a_level_holds_through_fullscreen",
+        a_level_holds_through_fullscreen,
     ),
     (
         "losing_the_focus_ends_a_dead_key_and_releases_held_keys",
@@ -857,15 +877,27 @@ fn xtest_keys_reach_the_focused_window() {
 }
 
 /// A window shows the cursor it asks for, from the theme or the cursor
-/// font; a closed one has none to show.
+/// font, none, or an image made a Render cursor, the same image again
+/// included; a closed one has none to show.
 fn a_window_shows_the_cursor_it_asks_for() {
     let mut fixture = X11Fixture::open_with("cursor", RecordingWindowHandler::new());
-    for cursor in [CursorIcon::Pointer, CursorIcon::Text, CursorIcon::Default] {
+    let image = flui_platform::CursorImage::try_new(16, 16, (3, 5), vec![0x80; 16 * 16 * 4])
+        .expect("a 16x16 image");
+    let cursors = [
+        Cursor::Icon(CursorIcon::Pointer),
+        Cursor::Icon(CursorIcon::Text),
+        Cursor::Hidden,
+        Cursor::Image(image.clone()),
+        Cursor::Image(image),
+        Cursor::Icon(CursorIcon::Default),
+    ];
+    for cursor in &cursors {
         fixture
             .window
             .set_cursor(cursor)
             .unwrap_or_else(|error| panic!("{cursor:?}: {error}"));
     }
+    fixture.settle();
     fixture
         .window
         .admit_and_apply(WindowCommand::Close)
@@ -873,11 +905,312 @@ fn a_window_shows_the_cursor_it_asks_for() {
     fixture.settle();
     let refused = fixture
         .window
-        .set_cursor(CursorIcon::Pointer)
+        .set_cursor(&Cursor::Icon(CursorIcon::Pointer))
         .expect_err("a closed window shows no cursor");
     assert_eq!(
         refused.unsupported().map(|unsupported| unsupported.reason),
         Some(UnsupportedReason::NoWindow)
+    );
+}
+
+/// A focused window holds the pointer as it asks, as the server's grab no
+/// other client can take: confined, then locked, its motion arriving as raw
+/// motion, unaccelerated, and as no move; let go, nothing holds it.
+fn a_focused_window_holds_the_pointer_as_it_asks() {
+    use flui_platform::CursorGrab;
+    use flui_platform::pointer::MotionAcceleration;
+
+    park_pointer();
+    let handler = RecordingWindowHandler::new();
+    let mut fixture = X11Fixture::open_with("grab", Rc::clone(&handler));
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .expect("the window activates");
+    fixture.settle();
+    assert!(
+        fixture.window.state().focus.is_focused(),
+        "the window has the focus"
+    );
+    Xtest::new(&fixture).move_to(100, 100);
+
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Confined))
+        .expect("the window confines the pointer");
+    fixture.settle();
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::Confined);
+    // The grab is the server's: no other client takes the pointer. (XTest's
+    // motion is not held to a grab's confinement on Xvfb, so where the
+    // pointer may go is not read here.)
+    assert!(fixture.pointer_grabbed_elsewhere());
+
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Locked))
+        .expect("the window locks the pointer");
+    fixture.settle();
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::Locked);
+    let before = pointer_events(&handler).len();
+    // XTest's relative motion: a device's counts, before acceleration.
+    Xtest::new(&fixture).send(MOTION_NOTIFY_EVENT, 1, (7, -3));
+    let locked = pointer_events(&handler).split_off(before);
+    assert!(
+        !locked
+            .iter()
+            .any(|event| matches!(event, PointerEvent::Move(_))),
+        "a locked pointer moves by no move: {locked:#?}"
+    );
+    let raw: Vec<(f64, f64, MotionAcceleration)> = locked
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::RawMotion(motion) => {
+                Some((motion.delta.x(), motion.delta.y(), motion.acceleration))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(raw, [(7.0, -3.0, MotionAcceleration::None)], "{locked:#?}");
+
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::None))
+        .expect("the window lets the pointer go");
+    fixture.settle();
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::None);
+    assert!(!fixture.pointer_grabbed_elsewhere());
+    Xtest::new(&fixture).move_to_root(1270, 1010);
+}
+
+/// A window keeps the level it asks for, as the window manager keeps it in
+/// `_NET_WM_STATE`, and its snapshot reads it back.
+fn a_window_keeps_the_level_it_asks_for() {
+    use flui_platform::WindowLevel;
+
+    let mut fixture = X11Fixture::open_with("level", RecordingWindowHandler::new());
+    for level in [
+        WindowLevel::AlwaysOnTop,
+        WindowLevel::AlwaysOnBottom,
+        WindowLevel::Normal,
+    ] {
+        fixture
+            .window
+            .admit_and_apply(WindowCommand::SetLevel(level))
+            .unwrap_or_else(|error| panic!("{level:?}: {error}"));
+        fixture.settle();
+        assert_eq!(fixture.window.state().level, level);
+    }
+}
+
+/// A focused fixture window, its pointer parked away from it first.
+fn focused_fixture(title: &str) -> X11Fixture {
+    park_pointer();
+    let mut fixture = X11Fixture::open_with(title, RecordingWindowHandler::new());
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::Activate)
+        .expect("the window activates");
+    fixture.settle();
+    assert!(
+        fixture.window.state().focus.is_focused(),
+        "the window has the focus"
+    );
+    fixture
+}
+
+/// A hold the server refuses leaves the window holding none, and its
+/// snapshot says so: another client holds the pointer, the window's hold is
+/// refused, and once that client lets go the window's next hold is taken.
+fn a_refused_hold_leaves_the_window_holding_none() {
+    use flui_platform::CursorGrab;
+    use x11rb::protocol::xproto::{EventMask, GrabMode, GrabStatus};
+
+    let mut fixture = focused_fixture("refused grab");
+    let (other, _) =
+        x11rb::rust_connection::RustConnection::connect(None).expect("the X server answers");
+    let taken = other
+        .grab_pointer(
+            false,
+            fixture.root(),
+            EventMask::NO_EVENT,
+            GrabMode::ASYNC,
+            GrabMode::ASYNC,
+            x11rb::NONE,
+            x11rb::NONE,
+            x11rb::CURRENT_TIME,
+        )
+        .expect("request")
+        .reply()
+        .expect("the grab's answer")
+        .status;
+    assert_eq!(
+        taken,
+        GrabStatus::SUCCESS,
+        "the other client holds the pointer"
+    );
+    let refused = fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Confined))
+        .expect_err("the server refuses a second client's grab");
+    eprintln!("refused: {refused}");
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::None);
+    fixture.settle();
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::None);
+
+    other.ungrab_pointer(x11rb::CURRENT_TIME).expect("request");
+    other
+        .get_input_focus()
+        .expect("request")
+        .reply()
+        .expect("a round trip");
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Confined))
+        .expect("the pointer is free again");
+    fixture.settle();
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::Confined);
+    assert!(fixture.pointer_grabbed_elsewhere());
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::None))
+        .expect("the window lets the pointer go");
+    fixture.settle();
+}
+
+/// A lock holds the pointer at a point of the window's content, not of the
+/// screen: as the window shrinks the point stays inside the content, and as
+/// the window moves the pointer goes with it.
+fn a_locked_pointer_stays_with_the_content_as_the_window_moves() {
+    use flui_foundation::geometry::{Point, Size};
+    use flui_platform::CursorGrab;
+
+    let mut fixture = focused_fixture("lock point");
+    Xtest::new(&fixture).move_to(300, 250);
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::Locked))
+        .expect("the window locks the pointer");
+    fixture.settle();
+    assert_eq!(fixture.window.state().cursor_grab, CursorGrab::Locked);
+    let in_window = |fixture: &X11Fixture| {
+        let at = fixture
+            .server
+            .query_pointer(fixture.xid)
+            .expect("request")
+            .reply()
+            .expect("the pointer");
+        (at.win_x, at.win_y)
+    };
+    assert_eq!(in_window(&fixture), (300, 250), "held where it was");
+
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetSize(Size::new(200.0, 150.0)))
+        .expect("the window resizes");
+    fixture.settle();
+    assert_eq!(
+        in_window(&fixture),
+        (199, 149),
+        "held at the nearest point inside the smaller content"
+    );
+
+    // Moved by less than its size, the window still holds the pointer's old
+    // place on the screen, which the server leaves alone; the lock's point
+    // is the content's, so the pointer goes with the window.
+    let origin = fixture.window.state().outer.position().expect("placed");
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetPosition(Point::new(
+            origin.x + 50.0,
+            origin.y + 40.0,
+        )))
+        .expect("the window moves");
+    fixture.settle();
+    assert_eq!(
+        fixture.window.state().outer.position(),
+        Some(Point::new(origin.x + 50.0, origin.y + 40.0)),
+        "the window manager moved the window"
+    );
+    assert_eq!(in_window(&fixture), (199, 149), "the pointer moved with it");
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetCursorGrab(CursorGrab::None))
+        .expect("the window lets the pointer go");
+    fixture.settle();
+    Xtest::new(&fixture).move_to_root(1270, 1010);
+}
+
+/// A window kept below the others keeps its level through fullscreen: the
+/// window manager stacks a focused fullscreen window above every other while
+/// it lasts, the snapshot publishes the level throughout, and once the window
+/// leaves fullscreen it is below the others again.
+fn a_level_holds_through_fullscreen() {
+    use flui_platform::{WindowLevel, WindowMode};
+
+    let mut fixture = X11Fixture::open_with("level and fullscreen", RecordingWindowHandler::new());
+    let other = fixture.open_other_window();
+    let stacked_above_other = |fixture: &X11Fixture| {
+        let stacking = crate::cases::atom(&fixture.server, "_NET_CLIENT_LIST_STACKING");
+        let windows: Vec<u32> = fixture
+            .server
+            .get_property(
+                false,
+                fixture.root(),
+                stacking,
+                x11rb::protocol::xproto::AtomEnum::WINDOW,
+                0,
+                1024,
+            )
+            .expect("request")
+            .reply()
+            .expect("the property")
+            .value32()
+            .map_or_default(Iterator::collect);
+        let place = |xid: u32| windows.iter().position(|window| *window == xid);
+        place(fixture.xid).expect("the window is stacked")
+            > place(other).expect("the other window is stacked")
+    };
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom))
+        .expect("the window is kept below");
+    fixture.settle();
+    assert_eq!(fixture.window.state().level, WindowLevel::AlwaysOnBottom);
+    assert!(!stacked_above_other(&fixture), "below the other window");
+
+    for command in [
+        WindowCommand::Activate,
+        WindowCommand::SetMode(WindowMode::Fullscreen),
+    ] {
+        fixture
+            .window
+            .admit_and_apply(command)
+            .expect("the window goes fullscreen with the focus");
+        fixture.settle();
+    }
+    let state = fixture.window.state();
+    assert_eq!(state.mode, WindowMode::Fullscreen);
+    assert_eq!(
+        state.level,
+        WindowLevel::AlwaysOnBottom,
+        "the level stays published"
+    );
+    assert!(
+        stacked_above_other(&fixture),
+        "a focused fullscreen window is above the others"
+    );
+
+    fixture
+        .window
+        .admit_and_apply(WindowCommand::SetMode(WindowMode::Normal))
+        .expect("the window leaves fullscreen");
+    fixture.settle();
+    let state = fixture.window.state();
+    assert_eq!(state.mode, WindowMode::Normal);
+    assert_eq!(state.level, WindowLevel::AlwaysOnBottom);
+    assert!(
+        !stacked_above_other(&fixture),
+        "below the other window again"
     );
 }
 

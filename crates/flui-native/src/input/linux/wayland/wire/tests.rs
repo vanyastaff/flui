@@ -177,6 +177,14 @@ fn pointer(event: &PointerEvent) -> String {
                 position.y
             )
         }
+        PointerEvent::RawMotion(motion) => format!(
+            "{} {},{} {:?} resting at {:?}",
+            head("raw", &motion.pointer),
+            motion.delta.x(),
+            motion.delta.y(),
+            motion.acceleration,
+            motion.position.map(flui_platform::PointerPosition::get)
+        ),
         PointerEvent::DeviceAdded(change) => format!("added {:?}", change.kind),
         PointerEvent::DeviceRemoved(change) => format!("removed {:?}", change.kind),
         other => format!("{other:?}"),
@@ -256,6 +264,42 @@ fn a_mouse_is_one_pointer_from_enter_to_leave() {
             "s1 down p1 Mouse PRIMARY at Point { x: 12.5, y: 21.0 }",
             "s1 up p1 Mouse PRIMARY",
             "s1 leave p1 Mouse",
+        ]
+    );
+}
+
+/// A pointer the window holds in place moves by its relative motion: raw
+/// motion of the pointer it is, unaccelerated, at the place it rests, and
+/// no move.
+#[test]
+fn a_locked_pointer_moves_by_its_raw_motion() {
+    let lines = feed(
+        &mut seated(),
+        &[
+            mouse(PointerWire::Enter {
+                surface: WINDOW,
+                x: 10.0,
+                y: 20.0,
+            }),
+            mouse(PointerWire::Frame),
+            mouse(PointerWire::RawMotion {
+                surface: WINDOW,
+                dx: 3.5,
+                dy: -2.0,
+            }),
+            mouse(PointerWire::Button {
+                code: BTN_LEFT,
+                pressed: true,
+            }),
+            mouse(PointerWire::Frame),
+        ],
+    );
+    assert_eq!(
+        lines,
+        [
+            "s1 enter p1 Mouse",
+            "s1 raw p1 Mouse 3.5,-2 None resting at Some(Point { x: 10.0, y: 20.0 })",
+            "s1 down p1 Mouse PRIMARY at Point { x: 10.0, y: 20.0 }",
         ]
     );
 }

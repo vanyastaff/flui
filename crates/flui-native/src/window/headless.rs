@@ -17,11 +17,11 @@ use flui_foundation::geometry::{Bounds, Point, Size, device_size, snap};
 use flui_platform::input_regions::{DeviceInputRegion, InputRegion};
 use flui_platform::text_store::TextStoreHost;
 use flui_platform::{
-    AdmittedCommand, ApplyError, Brightness, CursorError, DispatchEventResult, DisplayId,
-    PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints,
+    AdmittedCommand, ApplyError, Brightness, Cursor, CursorError, CursorGrab, DispatchEventResult,
+    DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow, SizeConstraints,
     SurfaceChange, Unsupported, UnsupportedReason, WindowCapabilities, WindowCommand, WindowFocus,
     WindowFrame, WindowGeometry, WindowHandler, WindowId, WindowIdMint, WindowInteraction,
-    WindowMaterial, WindowMode, WindowOptions, WindowState,
+    WindowLevel, WindowMaterial, WindowMode, WindowOptions, WindowState,
 };
 use parking_lot::Mutex;
 
@@ -404,6 +404,16 @@ pub struct HeadlessWindowSystem {
     /// The material the simulated system draws behind the window: the last
     /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
     pub material: WindowMaterial,
+    /// The grab the simulated system holds for the window.
+    pub cursor_grab: CursorGrab,
+    /// Where the simulated system stacks the window.
+    pub level: WindowLevel,
+    /// The steps the simulated system holds the user's resize to: the last
+    /// [`WindowCommand::SetResizeIncrements`] it applied.
+    pub resize_increments: Option<flui_platform::WindowExtent>,
+    /// The proportion the simulated system holds the user's resize to: the
+    /// last [`WindowCommand::SetAspectRatio`] it applied.
+    pub aspect_ratio: Option<flui_platform::AspectRatio>,
     /// Where the window last told its accessibility bridge it lies, as every
     /// native window tells its own ([`WindowAccessibility::bounds_changed`](crate::host::WindowAccessibility::bounds_changed)).
     pub accessibility_bounds: Option<ScreenBounds>,
@@ -683,7 +693,15 @@ struct HeadlessHostWindowState {
     closed: bool,
 
     brightness: Brightness,
-    cursor: CursorIcon,
+    cursor: Cursor,
+    /// The grab the simulated window system holds; let go when the window
+    /// loses the focus.
+    cursor_grab: CursorGrab,
+    level: WindowLevel,
+    /// The steps and the proportion the last commands asked the user's
+    /// resize to keep ([`HeadlessHostWindow::window_system`]).
+    resize_increments: Option<flui_platform::WindowExtent>,
+    aspect_ratio: Option<flui_platform::AspectRatio>,
     /// The display this window is on; `None` when the platform has no displays.
     display: Option<DisplayId>,
     /// What the simulated window system lets this window do now.
@@ -875,6 +893,8 @@ fn sample_window_state(model: &HeadlessHostWindowState, hovered: bool) -> Sample
             focus: WindowFocus::reported(model.focused, model.focused),
             capabilities: *capabilities,
             interaction: model.interaction,
+            cursor_grab: model.cursor_grab,
+            level: model.level,
         }
         .onto(state)
     })
@@ -949,7 +969,11 @@ impl HeadlessHostWindow {
             closed: false,
 
             brightness: Brightness::default(),
-            cursor: CursorIcon::default(),
+            cursor: Cursor::Icon(CursorIcon::default()),
+            cursor_grab: CursorGrab::None,
+            level: WindowLevel::Normal,
+            resize_increments: None,
+            aspect_ratio: None,
             display,
             capabilities,
             reported: None,
@@ -1205,6 +1229,10 @@ impl HeadlessHostWindow {
             focused: state.focused,
             visible: state.visible && !state.closed,
             occluded: state.occluded,
+            cursor_grab: state.cursor_grab,
+            level: state.level,
+            resize_increments: state.resize_increments,
+            aspect_ratio: state.aspect_ratio,
             accessibility_bounds: state.bridge_bounds,
         }
     }
@@ -1219,6 +1247,13 @@ impl HeadlessHostWindow {
     #[must_use]
     pub fn materials(&self) -> Vec<WindowMaterial> {
         self.state.borrow_mut().materials.clone()
+    }
+
+    /// The cursor the simulated window system shows over the window: the
+    /// last one [`PlatformWindow::set_cursor`] took.
+    #[must_use]
+    pub fn cursor(&self) -> Cursor {
+        self.state.borrow().cursor.clone()
     }
 
     /// Inject a platform input event for testing.
@@ -1295,7 +1330,15 @@ impl HeadlessHostWindow {
     /// Simulate focus change for testing. Fires the handler's `state_changed` when the
     /// snapshot differs.
     pub fn simulate_focus(&self, focused: bool) {
-        self.state.borrow_mut().focused = focused;
+        {
+            let mut state = self.state.borrow_mut();
+            state.focused = focused;
+            // The simulated window system lets a grab go with the focus, as
+            // every native one does.
+            if !focused {
+                state.cursor_grab = CursorGrab::None;
+            }
+        }
         self.publish_state();
     }
 
@@ -1536,9 +1579,26 @@ impl PlatformWindow for HeadlessHostWindow {
                     }
                     state.visible = true;
                 }
-                WindowCommand::Hide => state.visible = false,
+                // A hidden window stands nowhere (`WindowState::successor`),
+                // so its grab ends with it.
+                WindowCommand::Hide => {
+                    state.visible = false;
+                    state.cursor_grab = CursorGrab::None;
+                }
                 WindowCommand::Activate => state.focused = true,
                 WindowCommand::SetMaterial(material) => state.materials.push(material),
+                // Only a window with the focus takes a grab, as the native
+                // window systems grant one.
+                WindowCommand::SetCursorGrab(grab) => {
+                    state.cursor_grab = if state.focused && state.visible {
+                        grab
+                    } else {
+                        CursorGrab::None
+                    };
+                }
+                WindowCommand::SetLevel(level) => state.level = level,
+                WindowCommand::SetResizeIncrements(step) => state.resize_increments = step,
+                WindowCommand::SetAspectRatio(ratio) => state.aspect_ratio = ratio,
                 // `Close` returned above; a command the contract gained
                 // before this host learnt it is not carried out, and says so.
                 other => return Err(crate::window::state::not_carried_out(&other)),
@@ -1652,8 +1712,14 @@ impl PlatformWindow for HeadlessHostWindow {
 
     // ==================== Control Methods ====================
 
-    fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
-        self.state.borrow_mut().cursor = cursor;
+    /// Shows any cursor; an image only while the simulated window system's
+    /// capabilities take one, as a native host answers.
+    fn set_cursor(&self, cursor: &Cursor) -> Result<(), CursorError> {
+        let mut state = self.state.borrow_mut();
+        if matches!(cursor, Cursor::Image(_)) && !state.capabilities.cursor_image().is_available() {
+            return Err(Unsupported::new(UnsupportedReason::NotOnThisPlatform).into());
+        }
+        cursor.clone_into(&mut state.cursor);
         Ok(())
     }
 }

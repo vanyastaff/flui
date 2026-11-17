@@ -13,7 +13,7 @@ use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_native::HeadlessPlatform;
 use flui_platform::WindowId;
-use flui_platform::{CursorError, CursorIcon};
+use flui_platform::{Cursor, CursorError};
 use flui_platform::{Unsupported, UnsupportedReason};
 use flui_platform::{WindowCapabilities, WindowFrame, WindowMode, WindowOptions};
 use flui_view::{WindowClosed, WindowHandle};
@@ -369,7 +369,7 @@ impl PlatformWindow for RecordingWindow {
 
     fn reveal_after_first_frame(&self) {}
 
-    fn set_cursor(&self, _: CursorIcon) -> Result<(), CursorError> {
+    fn set_cursor(&self, _: &Cursor) -> Result<(), CursorError> {
         Ok(())
     }
     fn state(&self) -> WindowState {

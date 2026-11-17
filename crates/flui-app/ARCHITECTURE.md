@@ -600,7 +600,9 @@ run with nothing borrowed.
   read that timed out, was refused or panicked, the recorder holds
   `StoredPlacement::Unknown`, which owes nothing until a change the host
   states was the user's (`ChangeOrigin::User`): the report that carries the
-  change says `WindowState::interaction` is `UserPlacing` (ADR-0343 §2).
+  change says `WindowState::interaction` is the user's
+  (`WindowInteraction::is_user`: `UserPlacing` or `UserResizing`; ADR-0343
+  §2, ADR-0354 §4).
   Nothing is inferred from what did not change nor from the report before:
   where the window opened, a display or scale change, a window manager's
   adjustment, an application's command and a change after the user's

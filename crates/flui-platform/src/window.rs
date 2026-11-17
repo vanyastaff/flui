@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Point, Size};
 use flui_foundation::{IdExhausted, IdMint};
 
 use crate::os_options::OsWindowOptions;
-use crate::{Unsupported, WindowExtent, WindowFrame, WindowGeometry, WindowMode};
+use crate::{WindowExtent, WindowFrame, WindowGeometry, WindowMode};
 
 // ==================== Creation ====================
 
@@ -522,35 +522,4 @@ pub enum WindowMaterial {
     /// The window system's material for a long-lived window's background,
     /// tinted by the desktop behind it: Mica on Windows 11.
     System,
-}
-
-/// Failure to apply a cursor to one exact platform window.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum CursorError {
-    /// The backend has no pointer-cursor facility for this window.
-    #[error("the window shows no pointer cursor: {0}")]
-    Unsupported(#[from] Unsupported),
-    /// The window system refused or failed the cursor update, in the shape
-    /// every refusal of a window's window system takes
-    /// ([`ApplyError::Platform`](crate::ApplyError::Platform)).
-    #[error("platform cursor update failed: {0}")]
-    Platform(#[from] crate::PlatformFailure),
-}
-
-impl CursorError {
-    /// A window-system failure with this message.
-    #[must_use]
-    pub fn failed(message: String) -> Self {
-        Self::Platform(crate::PlatformFailure::Failed { message })
-    }
-
-    /// What is not here, when that is why the cursor was not applied.
-    #[must_use]
-    pub const fn unsupported(&self) -> Option<Unsupported> {
-        match self {
-            Self::Unsupported(unsupported) => Some(*unsupported),
-            Self::Platform(_) => None,
-        }
-    }
 }

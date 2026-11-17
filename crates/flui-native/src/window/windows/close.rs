@@ -110,6 +110,11 @@ impl WindowContext {
             return;
         }
         let mut failure = FirstPanic::new();
+        // The cursor clip is the desktop's: it must not outlive the window,
+        // whether the window is destroyed now or hidden past a wedged raster
+        // thread; nor does a retired window stay kept above or below.
+        failure.contain(|| self.let_pointer_go(hwnd));
+        self.kept_below.set(false);
         if end == NativeEnd::Granted {
             // The visible effect waits for nothing, a handler that is slow
             // to answer `closed` included.

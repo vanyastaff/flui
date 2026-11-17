@@ -7,11 +7,12 @@ use flui_foundation::geometry::{Offset, Point, Size};
 use flui_platform::EventTime;
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
-    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, PointerSignal, PressId, Pressure, SwipeOffset, TangentialPressure,
-    TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, MotionAcceleration, MotionDelta,
+    PanZoomEvent, PenOrientation, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent,
+    PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress,
+    PointerRelease, PointerRole, PointerSample, PointerSignal, PressId, Pressure, RawMotion,
+    SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
+    TouchpadSwipePhase, Twist,
 };
 
 use super::batch::MoveBatch;
@@ -595,6 +596,47 @@ impl ContactRegistry {
             None => pens.max_by_key(|contact| contact.last_time),
         }
         .map(|contact| contact.key.contact)
+    }
+
+    /// A locked pointer's motion (`CursorGrab::Locked`) from the backend's one
+    /// cursor, `contact` on `surface`: the identity and resting place of its
+    /// open contact, or of the reserved mouse pointer with no place when it
+    /// has none open (the pointer was locked off the content). `None` when
+    /// `time` is not on the event timeline. Every host that locks the pointer
+    /// builds the event here, so its identity is the one its moves carried.
+    #[must_use]
+    pub fn raw_motion(
+        &self,
+        surface: NativeSurface,
+        device: Option<NativeDevice>,
+        contact: NativeContact,
+        time: ReadingTime,
+        delta: MotionDelta,
+        acceleration: MotionAcceleration,
+    ) -> Option<PlatformInput> {
+        let time = self.stamp(time)?;
+        let open = self.find(ContactKey {
+            surface,
+            device,
+            contact,
+        });
+        let motion = match open.map(|index| &self.contacts[index]) {
+            Some(open) => {
+                let motion = RawMotion::new(open.info, time, delta, acceleration);
+                match open.last_position {
+                    Some((position, _)) => motion.with_position(position),
+                    None => motion,
+                }
+            }
+            None => RawMotion::new(
+                PointerInfo::new(PointerId::new(RESERVED_POINTER), PointerKind::Mouse)
+                    .with_role(PointerRole::Primary),
+                time,
+                delta,
+                acceleration,
+            ),
+        };
+        Some(PlatformInput::Pointer(PointerEvent::RawMotion(motion)))
     }
 
     /// Whether `input`'s contact is still open, so it may still be delivered

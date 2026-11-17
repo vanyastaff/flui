@@ -41,6 +41,8 @@ pub enum Quantity {
     Scale,
     /// A trackpad gesture's rotation.
     Rotation,
+    /// A locked pointer's motion.
+    Motion,
     /// A touchpad swipe's travel.
     SwipeOffset,
 }
