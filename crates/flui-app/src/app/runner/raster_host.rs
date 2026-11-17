@@ -1452,7 +1452,8 @@ impl RasterHost {
             return false;
         }
         // Recorded whether or not it is taken: a send is refused only for a
-        // slot that is gone, which asking again cannot change.
+        // slot that is gone or an executor that died, which asking again
+        // cannot change.
         slot.display = Some(color);
         match placed.sender.send(RasterCommand::Configure {
             slot: slot.slot,
@@ -1583,6 +1584,12 @@ impl RasterHost {
     /// Android `Resume` before its `InitWindow`) is taken as released by the
     /// platform until it reports one again.
     fn restore_surface(placed: &mut Placed, address: PresentationAddress, now: Instant) -> bool {
+        // A dead executor restores nothing, whoever asks (the restore pace, a
+        // surface the platform gives back, a lent frame): a surface made for
+        // it would only be refused and dropped again.
+        if placed.sender.health() == flui_engine::ExecutorHealth::Died {
+            return false;
+        }
         let Some(slot) = placed.slots.get_mut(&address) else {
             return false;
         };
@@ -1748,11 +1755,6 @@ impl RasterHost {
         let Some(placed) = self.placed.as_mut() else {
             return false;
         };
-        // A dead executor restores nothing: its record may still owe a
-        // surface, which no attempt can make.
-        if placed.sender.health() == flui_engine::ExecutorHealth::Died {
-            return false;
-        }
         let Some(slot) = placed.slots.get(&address) else {
             return false;
         };
