@@ -43,7 +43,10 @@
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::Write;
-use std::{num::NonZeroU64, time::Duration};
+use std::{
+    num::{NonZeroU8, NonZeroU64},
+    time::Duration,
+};
 
 use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::events::{
@@ -54,8 +57,9 @@ use flui_interaction::{HitTestResult, PointerEvent, PointerId};
 use flui_platform::pointer::{
     CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool, PointerButton,
     PointerButtons, PointerCancel, PointerInfo, PointerMove, PointerPosition, PointerPress,
-    PointerRelease, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta, ScrollEvent,
-    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
+    PointerRelease, PointerRole, PointerSample, Pressure, ScrollDelta, ScrollEvent, ScrollPhase,
+    ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
+    TouchpadSwipeEvent, TouchpadSwipePhase,
 };
 use flui_platform::{EventTime, PlatformInput, WindowId};
 use flui_runtime::HostInput;
@@ -238,8 +242,7 @@ pub struct ScriptedPanZoom {
     pub phase: PinchPhase,
 }
 
-/// A discrete trackpad action where the cursor rests: a smart zoom, or
-/// fingers coming to rest.
+/// A discrete trackpad action where the cursor rests: a smart zoom.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScriptedTrackpadAction {
     /// Virtual time from the start of the script.
@@ -248,6 +251,55 @@ pub struct ScriptedTrackpadAction {
     pub pointer: PointerId,
     /// Where the cursor rests.
     pub position: Offset<f64>,
+}
+
+/// Fingers resting on the trackpad where the cursor rests: one step of their
+/// hold.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScriptedTouchpadHold {
+    /// Virtual time from the start of the script.
+    pub at: Duration,
+    /// The hold's pointer.
+    pub pointer: PointerId,
+    /// Where the cursor rests.
+    pub position: Offset<f64>,
+    /// Where the hold is.
+    pub phase: TouchpadHoldPhase,
+}
+
+/// One step of a trackpad swipe of several fingers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScriptedTouchpadSwipe {
+    /// Virtual time from the start of the script.
+    pub at: Duration,
+    /// The swipe's pointer.
+    pub pointer: PointerId,
+    /// Where the cursor rests while the fingers swipe.
+    pub position: Offset<f64>,
+    /// How many fingers swipe.
+    pub fingers: NonZeroU8,
+    /// Where the swipe is.
+    pub phase: ScriptedSwipePhase,
+}
+
+/// Where a scripted trackpad swipe is.
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "a swipe starts, travels, then ends or is taken back"
+)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScriptedSwipePhase {
+    /// The swipe starts.
+    Start,
+    /// The fingers have travelled `travel` since the start.
+    Update {
+        /// The travel since the start, in logical pixels.
+        travel: Offset<f64>,
+    },
+    /// The fingers lift.
+    End,
+    /// The platform takes the swipe back.
+    Cancelled,
 }
 
 /// Where a scripted trackpad pinch is.
@@ -279,8 +331,11 @@ pub enum ScriptStep {
     PanZoom(ScriptedPanZoom),
     /// A trackpad smart zoom (two-finger double-tap).
     SmartZoom(ScriptedTrackpadAction),
-    /// Fingers come to rest on the trackpad, stopping a fling.
-    InertiaCancel(ScriptedTrackpadAction),
+    /// Fingers rest on the trackpad (stopping a fling), lift, or start a
+    /// gesture.
+    TouchpadHold(ScriptedTouchpadHold),
+    /// A trackpad swipe of several fingers.
+    TouchpadSwipe(ScriptedTouchpadSwipe),
     /// A frame, its vsync at `at`.
     Frame {
         /// Virtual time from the start of the script.
@@ -296,7 +351,9 @@ impl ScriptStep {
             Self::Pointer(step) => step.at,
             Self::Scroll(step) => step.at,
             Self::PanZoom(step) => step.at,
-            Self::SmartZoom(step) | Self::InertiaCancel(step) => step.at,
+            Self::SmartZoom(step) => step.at,
+            Self::TouchpadHold(step) => step.at,
+            Self::TouchpadSwipe(step) => step.at,
             Self::Frame { at } => *at,
         }
     }
@@ -357,14 +414,33 @@ impl ScriptStep {
                     position(step.position),
                 )),
             )),
-            Self::InertiaCancel(step) => {
-                HostInput::Platform(PlatformInput::Pointer(PointerEvent::ScrollInertiaCancel(
-                    PointerSignal::new(
+            Self::TouchpadHold(step) => HostInput::Platform(PlatformInput::Pointer(
+                PointerEvent::TouchpadHold(TouchpadHoldEvent::new(
+                    PointerInfo::new(step.pointer, PointerKind::Trackpad)
+                        .with_role(PointerRole::Primary),
+                    base + step.at,
+                    position(step.position),
+                    step.phase,
+                )),
+            )),
+            Self::TouchpadSwipe(step) => {
+                let phase = match step.phase {
+                    ScriptedSwipePhase::Start => TouchpadSwipePhase::Start,
+                    ScriptedSwipePhase::Update { travel } => TouchpadSwipePhase::Update(
+                        SwipeOffset::try_new(travel).expect("scripted travel must be finite"),
+                    ),
+                    ScriptedSwipePhase::End => TouchpadSwipePhase::End,
+                    ScriptedSwipePhase::Cancelled => TouchpadSwipePhase::Cancelled,
+                };
+                HostInput::Platform(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
+                    TouchpadSwipeEvent::new(
                         PointerInfo::new(step.pointer, PointerKind::Trackpad)
                             .with_role(PointerRole::Primary),
                         base + step.at,
-                    )
-                    .with_position(position(step.position)),
+                        position(step.position),
+                        step.fingers,
+                        phase,
+                    ),
                 )))
             }
             Self::Frame { at } => HostInput::Frame {
@@ -402,6 +478,17 @@ pub enum ScriptError {
     /// ended.
     #[error("a trackpad pinch step is outside its start and end")]
     UnpairedPinch,
+    /// A trackpad swipe step outside a started swipe, a swipe never ended, or
+    /// one started inside a pinch.
+    #[error("a trackpad swipe step is outside its start and end")]
+    UnpairedSwipe,
+    /// Fingers rested while they already rested or swiped, lifted without
+    /// resting, or never lifted.
+    #[error("a trackpad hold is not begun and ended once")]
+    UnpairedHold,
+    /// A swipe's travel is NaN or infinite.
+    #[error("a trackpad swipe's travel is not finite")]
+    NonFiniteTravel,
 }
 
 /// A time-ordered script of host input, built by a per-device builder.
@@ -688,11 +775,29 @@ impl fmt::Display for PointerScript {
                     "trackpad smart zoom at ({}, {})",
                     zoom.position.dx, zoom.position.dy
                 )?,
-                ScriptStep::InertiaCancel(rest) => writeln!(
-                    f,
-                    "trackpad fingers rest at ({}, {})",
-                    rest.position.dx, rest.position.dy
-                )?,
+                ScriptStep::TouchpadHold(hold) => match hold.phase {
+                    TouchpadHoldPhase::Begin => writeln!(
+                        f,
+                        "trackpad fingers rest at ({}, {})",
+                        hold.position.dx, hold.position.dy
+                    )?,
+                    TouchpadHoldPhase::End => writeln!(f, "trackpad fingers lift")?,
+                    TouchpadHoldPhase::Cancelled => {
+                        writeln!(f, "trackpad fingers start a gesture")?;
+                    }
+                },
+                ScriptStep::TouchpadSwipe(swipe) => match swipe.phase {
+                    ScriptedSwipePhase::Start => writeln!(
+                        f,
+                        "trackpad {}-finger swipe start at ({}, {})",
+                        swipe.fingers, swipe.position.dx, swipe.position.dy
+                    )?,
+                    ScriptedSwipePhase::Update { travel } => {
+                        writeln!(f, "trackpad swipe travel ({}, {})", travel.dx, travel.dy)?;
+                    }
+                    ScriptedSwipePhase::End => writeln!(f, "trackpad swipe end")?,
+                    ScriptedSwipePhase::Cancelled => writeln!(f, "trackpad swipe cancelled")?,
+                },
                 ScriptStep::Frame { .. } => writeln!(f, "frame")?,
             }
         }
@@ -722,6 +827,14 @@ struct Timeline {
     steps: Vec<ScriptStep>,
     down: BTreeSet<PointerId>,
     pinching: bool,
+    holding: bool,
+    /// The pointer of the hold or swipe under way: a fresh one for each, as a
+    /// host mints one for each gesture, so none shares the cursor's contest.
+    gesture: PointerId,
+    /// The holds and swipes begun so far.
+    gestures_begun: u64,
+    /// The finger count of the swipe under way.
+    swiping: Option<NonZeroU8>,
     error: Option<ScriptError>,
 }
 
@@ -733,12 +846,22 @@ impl Timeline {
             steps: Vec::new(),
             down: BTreeSet::new(),
             pinching: false,
+            holding: false,
+            gesture: contact(GESTURE_IDS),
+            gestures_begun: 0,
+            swiping: None,
             error: None,
         }
     }
 
     fn fail(&mut self, error: ScriptError) {
         self.error.get_or_insert(error);
+    }
+
+    /// A hold or swipe begins under a pointer of its own.
+    fn begin_gesture(&mut self) {
+        self.gesture = contact(GESTURE_IDS.saturating_add(self.gestures_begun));
+        self.gestures_begun = self.gestures_begun.saturating_add(1);
     }
 
     fn pointer(&mut self, mut event: ScriptedPointer) {
@@ -806,6 +929,12 @@ impl Timeline {
         }
         if self.pinching {
             self.fail(ScriptError::UnpairedPinch);
+        }
+        if self.swiping.is_some() {
+            self.fail(ScriptError::UnpairedSwipe);
+        }
+        if self.holding {
+            self.fail(ScriptError::UnpairedHold);
         }
         match self.error {
             Some(error) => Err(error),
@@ -932,6 +1061,10 @@ pub struct MouseScript {
 
 /// The mouse's contact id in a script.
 const CURSOR: u64 = 1;
+
+/// The first id a trackpad script gives a hold or swipe, past every contact
+/// a script numbers.
+const GESTURE_IDS: u64 = 1 << 32;
 
 impl MouseScript {
     /// An empty mouse script under `name`.
@@ -1151,7 +1284,8 @@ impl PenScript {
     timing!();
 }
 
-/// A trackpad: two-finger pans (phased scrolls) and pinches.
+/// A trackpad: two-finger pans (phased scrolls), pinches, resting fingers and
+/// swipes of several fingers.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct TrackpadScript {
@@ -1169,6 +1303,9 @@ impl TrackpadScript {
     }
 
     fn scroll(mut self, delta: Offset<f64>, phase: ScrollPhase) -> Self {
+        if phase == ScrollPhase::Began {
+            self = self.gesture_starts();
+        }
         let at = self.timeline.now;
         self.timeline.steps.push(ScriptStep::Scroll(ScriptedScroll {
             at,
@@ -1220,6 +1357,10 @@ impl TrackpadScript {
         if self.timeline.pinching {
             self.timeline.fail(ScriptError::UnpairedPinch);
         }
+        if self.timeline.swiping.is_some() {
+            self.timeline.fail(ScriptError::UnpairedSwipe);
+        }
+        self = self.gesture_starts();
         self.timeline.pinching = true;
         self.pan_zoom(PinchPhase::Start)
     }
@@ -1258,20 +1399,105 @@ impl TrackpadScript {
         self
     }
 
-    /// Fingers come to rest on the trackpad where the cursor rests: the
-    /// platform's inertia cancel, which stops a fling. It may not fall
-    /// inside a pinch.
+    /// Fingers come to rest on the trackpad where the cursor rests: a hold
+    /// begins, which stops a fling. It may not fall inside a pinch or a swipe.
+    /// The hold ends with [`lift`](Self::lift), or is cancelled by the next
+    /// pan, pinch or swipe, as a platform cancels it when the fingers move.
     pub fn rest(mut self) -> Self {
         if self.timeline.pinching {
             self.timeline.fail(ScriptError::UnpairedPinch);
         }
+        if self.timeline.swiping.is_some() {
+            self.timeline.fail(ScriptError::UnpairedSwipe);
+        }
+        if self.timeline.holding {
+            self.timeline.fail(ScriptError::UnpairedHold);
+        }
+        self.timeline.holding = true;
+        self.timeline.begin_gesture();
+        self.hold(TouchpadHoldPhase::Begin)
+    }
+
+    /// The resting fingers lift without moving: the hold ends.
+    pub fn lift(mut self) -> Self {
+        if !self.timeline.holding {
+            self.timeline.fail(ScriptError::UnpairedHold);
+        }
+        self.timeline.holding = false;
+        self.hold(TouchpadHoldPhase::End)
+    }
+
+    /// A swipe of `fingers` begins where the cursor rests.
+    pub fn swipe_start(mut self, fingers: NonZeroU8) -> Self {
+        if self.timeline.pinching || self.timeline.swiping.is_some() {
+            self.timeline.fail(ScriptError::UnpairedSwipe);
+        }
+        self = self.gesture_starts();
+        self.timeline.swiping = Some(fingers);
+        self.timeline.begin_gesture();
+        self.swipe(ScriptedSwipePhase::Start)
+    }
+
+    /// The swiping fingers have travelled `travel` since the swipe started.
+    /// A travel that is not finite fails the script.
+    pub fn swipe_to(mut self, travel: Offset<f64>) -> Self {
+        if !(travel.dx.is_finite() && travel.dy.is_finite()) {
+            self.timeline.fail(ScriptError::NonFiniteTravel);
+            return self;
+        }
+        self.swipe(ScriptedSwipePhase::Update { travel })
+    }
+
+    /// The swiping fingers lift.
+    pub fn swipe_end(mut self) -> Self {
+        self = self.swipe(ScriptedSwipePhase::End);
+        self.timeline.swiping = None;
+        self
+    }
+
+    /// The platform takes the swipe back.
+    pub fn swipe_cancel(mut self) -> Self {
+        self = self.swipe(ScriptedSwipePhase::Cancelled);
+        self.timeline.swiping = None;
+        self
+    }
+
+    /// A gesture starts: resting fingers that start it cancel their hold first.
+    fn gesture_starts(mut self) -> Self {
+        if self.timeline.holding {
+            self.timeline.holding = false;
+            self = self.hold(TouchpadHoldPhase::Cancelled);
+        }
+        self
+    }
+
+    fn hold(mut self, phase: TouchpadHoldPhase) -> Self {
         let at = self.timeline.now;
         self.timeline
             .steps
-            .push(ScriptStep::InertiaCancel(ScriptedTrackpadAction {
+            .push(ScriptStep::TouchpadHold(ScriptedTouchpadHold {
                 at,
-                pointer: contact(CURSOR),
+                pointer: self.timeline.gesture,
                 position: self.at,
+                phase,
+            }));
+        self
+    }
+
+    fn swipe(mut self, phase: ScriptedSwipePhase) -> Self {
+        let Some(fingers) = self.timeline.swiping else {
+            self.timeline.fail(ScriptError::UnpairedSwipe);
+            return self;
+        };
+        let at = self.timeline.now;
+        self.timeline
+            .steps
+            .push(ScriptStep::TouchpadSwipe(ScriptedTouchpadSwipe {
+                at,
+                pointer: self.timeline.gesture,
+                position: self.at,
+                fingers,
+                phase,
             }));
         self
     }

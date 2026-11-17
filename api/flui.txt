@@ -5692,6 +5692,7 @@ pub fn flui::interaction::GestureProfiles::uniform(settings: flui::interaction::
 pub fn flui::interaction::GestureProfiles::with_kind(self, kind: flui::interaction::PointerKind, settings: flui::interaction::GestureSettings) -> Self
 pub trait flui::interaction::GestureRecognizer: flui::interaction::GestureArenaMember
 fn flui::interaction::GestureRecognizer::add_pointer(&self, down: flui::interaction::PointerDispatch<'_>)
+fn flui::interaction::GestureRecognizer::add_touchpad_swipe(&self, start: flui::interaction::PointerDispatch<'_>) { .. }
 fn flui::interaction::GestureRecognizer::allowed_devices(&self) -> flui::interaction::PointerKindSet { .. }
 fn flui::interaction::GestureRecognizer::cancel(&self) -> flui::interaction::CancelOutcome
 fn flui::interaction::GestureRecognizer::feeds_scroll_contact(&self) -> bool { .. }
@@ -6592,16 +6593,17 @@ impl core::fmt::Debug for flui::interaction::PointerEvent
 impl core::marker::StructuralPartialEq for flui::interaction::PointerEvent
 variant flui::interaction::PointerEvent::ButtonChange(flui::interaction::ButtonChange) // at 1
 variant flui::interaction::PointerEvent::Cancel(flui::platform::PointerCancel) // at 4
-variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 11
-variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 12
+variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 12
+variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 13
 variant flui::interaction::PointerEvent::Down(flui::interaction::PointerPress) // at 0
 variant flui::interaction::PointerEvent::Enter(flui::platform::pointer::PointerSignal) // at 5
 variant flui::interaction::PointerEvent::Leave(flui::platform::pointer::PointerSignal) // at 6
 variant flui::interaction::PointerEvent::Move(flui::interaction::PointerMove) // at 3
 variant flui::interaction::PointerEvent::PanZoom(flui::interaction::PanZoomEvent) // at 9
 variant flui::interaction::PointerEvent::Scroll(flui::interaction::ScrollEvent) // at 7
-variant flui::interaction::PointerEvent::ScrollInertiaCancel(flui::platform::pointer::PointerSignal) // at 8
-variant flui::interaction::PointerEvent::SmartZoom(flui::platform::SmartZoomEvent) // at 10
+variant flui::interaction::PointerEvent::SmartZoom(flui::platform::SmartZoomEvent) // at 11
+variant flui::interaction::PointerEvent::TouchpadHold(flui::platform::TouchpadHoldEvent) // at 8
+variant flui::interaction::PointerEvent::TouchpadSwipe(flui::platform::TouchpadSwipeEvent) // at 10
 variant flui::interaction::PointerEvent::Up(flui::interaction::PointerRelease) // at 2
 pub trait flui::interaction::PointerEventExt: flui_interaction::events::sealed::Sealed
 fn flui::interaction::PointerEventExt::device_id(&self) -> Option<flui::interaction::DeviceId>
@@ -12824,6 +12826,16 @@ impl core::fmt::Debug for flui::platform::SwapChainStatistics
 impl core::marker::StructuralPartialEq for flui::platform::SwapChainStatistics
 variant flui::platform::SwapChainStatistics::Dxgi(flui::platform::DxgiStatistics) // at 1
 variant flui::platform::SwapChainStatistics::None // at 0
+pub struct flui::platform::SwipeOffset(_)
+impl Clone for flui::platform::SwipeOffset
+impl Copy for flui::platform::SwipeOffset
+impl Default for flui::platform::SwipeOffset
+impl PartialEq for flui::platform::SwipeOffset
+impl core::fmt::Debug for flui::platform::SwipeOffset
+impl core::marker::StructuralPartialEq for flui::platform::SwipeOffset
+pub const flui::platform::SwipeOffset::ZERO: Self = _
+pub const fn flui::platform::SwipeOffset::get(self) -> flui::geometry::Offset<f64>
+pub fn flui::platform::SwipeOffset::try_new(offset: flui::geometry::Offset<f64>) -> Result<Self, flui::platform::pointer::InputValueError>
 #[non_exhaustive] pub enum flui::platform::SystemControls
 impl Clone for flui::platform::SystemControls
 impl Copy for flui::platform::SystemControls
@@ -12962,6 +12974,54 @@ pub const fn flui::platform::TextWeightPreference::from_adjustment(value: i32) -
 variant flui::platform::TextWeightPreference::Adjustment(core::num::nonzero::NonZeroI32) // at 2
 variant flui::platform::TextWeightPreference::Bold // at 1
 variant flui::platform::TextWeightPreference::NoPreference // at 0
+#[non_exhaustive] pub struct flui::platform::TouchpadHoldEvent { .. }
+field flui::platform::TouchpadHoldEvent::modifiers: flui::interaction::Modifiers // at 4
+field flui::platform::TouchpadHoldEvent::phase: flui::platform::TouchpadHoldPhase // at 3
+field flui::platform::TouchpadHoldEvent::position: flui::interaction::PointerPosition // at 2
+field flui::platform::TouchpadHoldEvent::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::TouchpadHoldEvent
+impl Copy for flui::platform::TouchpadHoldEvent
+impl PartialEq for flui::platform::TouchpadHoldEvent
+impl core::fmt::Debug for flui::platform::TouchpadHoldEvent
+impl core::marker::StructuralPartialEq for flui::platform::TouchpadHoldEvent
+pub const fn flui::platform::TouchpadHoldEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, phase: flui::platform::TouchpadHoldPhase) -> Self
+pub const fn flui::platform::TouchpadHoldEvent::pointer(&self) -> &flui::interaction::PointerInfo
+pub const fn flui::platform::TouchpadHoldEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
+pub enum flui::platform::TouchpadHoldPhase
+impl Clone for flui::platform::TouchpadHoldPhase
+impl Copy for flui::platform::TouchpadHoldPhase
+impl Eq for flui::platform::TouchpadHoldPhase
+impl PartialEq for flui::platform::TouchpadHoldPhase
+impl core::fmt::Debug for flui::platform::TouchpadHoldPhase
+impl core::hash::Hash for flui::platform::TouchpadHoldPhase
+impl core::marker::StructuralPartialEq for flui::platform::TouchpadHoldPhase
+variant flui::platform::TouchpadHoldPhase::Begin // at 0
+variant flui::platform::TouchpadHoldPhase::Cancelled // at 2
+variant flui::platform::TouchpadHoldPhase::End // at 1
+#[non_exhaustive] pub struct flui::platform::TouchpadSwipeEvent { .. }
+field flui::platform::TouchpadSwipeEvent::fingers: core::num::nonzero::NonZeroU8 // at 3
+field flui::platform::TouchpadSwipeEvent::modifiers: flui::interaction::Modifiers // at 5
+field flui::platform::TouchpadSwipeEvent::phase: flui::platform::TouchpadSwipePhase // at 4
+field flui::platform::TouchpadSwipeEvent::position: flui::interaction::PointerPosition // at 2
+field flui::platform::TouchpadSwipeEvent::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::TouchpadSwipeEvent
+impl Copy for flui::platform::TouchpadSwipeEvent
+impl PartialEq for flui::platform::TouchpadSwipeEvent
+impl core::fmt::Debug for flui::platform::TouchpadSwipeEvent
+impl core::marker::StructuralPartialEq for flui::platform::TouchpadSwipeEvent
+pub const fn flui::platform::TouchpadSwipeEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, fingers: core::num::nonzero::NonZeroU8, phase: flui::platform::TouchpadSwipePhase) -> Self
+pub const fn flui::platform::TouchpadSwipeEvent::pointer(&self) -> &flui::interaction::PointerInfo
+pub const fn flui::platform::TouchpadSwipeEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
+pub enum flui::platform::TouchpadSwipePhase
+impl Clone for flui::platform::TouchpadSwipePhase
+impl Copy for flui::platform::TouchpadSwipePhase
+impl PartialEq for flui::platform::TouchpadSwipePhase
+impl core::fmt::Debug for flui::platform::TouchpadSwipePhase
+impl core::marker::StructuralPartialEq for flui::platform::TouchpadSwipePhase
+variant flui::platform::TouchpadSwipePhase::Cancelled // at 3
+variant flui::platform::TouchpadSwipePhase::End // at 2
+variant flui::platform::TouchpadSwipePhase::Start // at 0
+variant flui::platform::TouchpadSwipePhase::Update(flui::platform::SwipeOffset) // at 1
 #[non_exhaustive] pub struct flui::platform::Unsupported { .. }
 field flui::platform::Unsupported::reason: flui::platform::UnsupportedReason // at 0
 impl Clone for flui::platform::Unsupported
@@ -14474,6 +14534,8 @@ pub const fn flui::platform::input_capabilities::InputCapabilities::pen(&self) -
 pub const fn flui::platform::input_capabilities::InputCapabilities::precise_scroll(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::present(&self) -> flui::interaction::PointerKindSet
 pub const fn flui::platform::input_capabilities::InputCapabilities::to_builder(self) -> flui_platform::input_capabilities::InputCapabilitiesBuilder
+pub const fn flui::platform::input_capabilities::InputCapabilities::touchpad_hold(&self) -> flui::platform::Availability
+pub const fn flui::platform::input_capabilities::InputCapabilities::touchpad_swipe(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::trackpad_gestures(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::with_present(self, present: flui::interaction::PointerKindSet) -> Self
 reexport flui::platform::input_capabilities::PointerKindSet => flui::interaction::PointerKindSet
@@ -14889,6 +14951,7 @@ variant flui::platform::pointer::Quantity::Pressure // at 1
 variant flui::platform::pointer::Quantity::Rotation // at 10
 variant flui::platform::pointer::Quantity::Scale // at 9
 variant flui::platform::pointer::Quantity::ScrollDelta // at 7
+variant flui::platform::pointer::Quantity::SwipeOffset // at 11
 variant flui::platform::pointer::Quantity::TangentialPressure // at 2
 variant flui::platform::pointer::Quantity::Twist // at 5
 pub struct flui::platform::pointer::Release;
@@ -14908,6 +14971,7 @@ reexport flui::platform::pointer::ScrollPhase => flui::interaction::ScrollPhase
 reexport flui::platform::pointer::ScrollPrecision => flui::interaction::ScrollPrecision
 reexport flui::platform::pointer::ScrollUnit => flui::interaction::ScrollUnit
 reexport flui::platform::pointer::SmartZoomEvent => flui::platform::SmartZoomEvent
+reexport flui::platform::pointer::SwipeOffset => flui::platform::SwipeOffset
 pub struct flui::platform::pointer::TangentialPressure(_)
 impl Clone for flui::platform::pointer::TangentialPressure
 impl Copy for flui::platform::pointer::TangentialPressure
@@ -14918,6 +14982,10 @@ impl core::marker::StructuralPartialEq for flui::platform::pointer::TangentialPr
 pub const fn flui::platform::pointer::TangentialPressure::get(self) -> f32
 pub fn flui::platform::pointer::TangentialPressure::saturating(value: f32) -> Result<Self, flui::platform::pointer::InputValueError>
 pub fn flui::platform::pointer::TangentialPressure::try_new(value: f32) -> Result<Self, flui::platform::pointer::InputValueError>
+reexport flui::platform::pointer::TouchpadHoldEvent => flui::platform::TouchpadHoldEvent
+reexport flui::platform::pointer::TouchpadHoldPhase => flui::platform::TouchpadHoldPhase
+reexport flui::platform::pointer::TouchpadSwipeEvent => flui::platform::TouchpadSwipeEvent
+reexport flui::platform::pointer::TouchpadSwipePhase => flui::platform::TouchpadSwipePhase
 pub struct flui::platform::pointer::Twist(_)
 impl Clone for flui::platform::pointer::Twist
 impl Copy for flui::platform::pointer::Twist
@@ -31261,6 +31329,8 @@ pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::pen(se
 pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::precise_scroll(self, availability: flui::platform::Availability) -> Self
 pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::present(self, present: flui::interaction::PointerKindSet) -> Self
 pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::system_gesture_exclusion(self, availability: flui::platform::Availability) -> Self
+pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::touchpad_hold(self, availability: flui::platform::Availability) -> Self
+pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::touchpad_swipe(self, availability: flui::platform::Availability) -> Self
 pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::trackpad_gestures(self, availability: flui::platform::Availability) -> Self
 pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::window_move(self, availability: flui::platform::Availability) -> Self
 pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::window_resize(self, availability: flui::platform::Availability) -> Self
@@ -31741,6 +31811,7 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::A
 pub enum flui_protocol::input_recording::Availability
 impl Clone for flui_protocol::input_recording::Availability
 impl Copy for flui_protocol::input_recording::Availability
+impl Default for flui_protocol::input_recording::Availability
 impl Eq for flui_protocol::input_recording::Availability
 impl PartialEq for flui_protocol::input_recording::Availability
 impl core::fmt::Debug for flui_protocol::input_recording::Availability
@@ -31807,15 +31878,17 @@ variant flui_protocol::input_recording::CancelReason::InvalidInput // at 4
 variant flui_protocol::input_recording::CancelReason::Platform // at 0
 variant flui_protocol::input_recording::CancelReason::Superseded // at 6
 pub struct flui_protocol::input_recording::Capabilities
-field flui_protocol::input_recording::Capabilities::caption_buttons: flui_protocol::input_recording::Availability // at 6
-field flui_protocol::input_recording::Capabilities::outgoing_drag: flui_protocol::input_recording::Availability // at 7
+field flui_protocol::input_recording::Capabilities::caption_buttons: flui_protocol::input_recording::Availability // at 8
+field flui_protocol::input_recording::Capabilities::outgoing_drag: flui_protocol::input_recording::Availability // at 9
 field flui_protocol::input_recording::Capabilities::pen: flui_protocol::input_recording::Availability // at 0
 field flui_protocol::input_recording::Capabilities::precise_scroll: flui_protocol::input_recording::Availability // at 1
-field flui_protocol::input_recording::Capabilities::present: Vec<flui_protocol::input_recording::PointerKind> // at 8
-field flui_protocol::input_recording::Capabilities::system_gesture_exclusion: flui_protocol::input_recording::Availability // at 3
+field flui_protocol::input_recording::Capabilities::present: Vec<flui_protocol::input_recording::PointerKind> // at 10
+field flui_protocol::input_recording::Capabilities::system_gesture_exclusion: flui_protocol::input_recording::Availability // at 5
+field flui_protocol::input_recording::Capabilities::touchpad_hold: flui_protocol::input_recording::Availability // at 3
+field flui_protocol::input_recording::Capabilities::touchpad_swipe: flui_protocol::input_recording::Availability // at 4
 field flui_protocol::input_recording::Capabilities::trackpad_gestures: flui_protocol::input_recording::Availability // at 2
-field flui_protocol::input_recording::Capabilities::window_move: flui_protocol::input_recording::Availability // at 4
-field flui_protocol::input_recording::Capabilities::window_resize: flui_protocol::input_recording::Availability // at 5
+field flui_protocol::input_recording::Capabilities::window_move: flui_protocol::input_recording::Availability // at 6
+field flui_protocol::input_recording::Capabilities::window_resize: flui_protocol::input_recording::Availability // at 7
 impl Clone for flui_protocol::input_recording::Capabilities
 impl Eq for flui_protocol::input_recording::Capabilities
 impl PartialEq for flui_protocol::input_recording::Capabilities
@@ -32147,16 +32220,17 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::P
 variant flui_protocol::input_recording::PointerEvent::ButtonPressed(flui_protocol::input_recording::ButtonEvent) // at 1
 variant flui_protocol::input_recording::PointerEvent::ButtonReleased(flui_protocol::input_recording::ButtonEvent) // at 2
 variant flui_protocol::input_recording::PointerEvent::Cancel { pointer: flui_protocol::input_recording::PointerInfo, t: u64, reason: flui_protocol::input_recording::CancelReason } // at 5
-variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 12
-variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 13
+variant flui_protocol::input_recording::PointerEvent::DeviceAdded(flui_protocol::input_recording::DeviceChange) // at 13
+variant flui_protocol::input_recording::PointerEvent::DeviceRemoved(flui_protocol::input_recording::DeviceChange) // at 14
 variant flui_protocol::input_recording::PointerEvent::Down(flui_protocol::input_recording::ButtonEvent) // at 0
 variant flui_protocol::input_recording::PointerEvent::Enter(flui_protocol::input_recording::Signal) // at 6
 variant flui_protocol::input_recording::PointerEvent::Leave(flui_protocol::input_recording::Signal) // at 7
 variant flui_protocol::input_recording::PointerEvent::Move { pointer: flui_protocol::input_recording::PointerInfo, buttons: Vec<u8>, modifiers: Vec<String>, current: flui_protocol::input_recording::Sample, coalesced: Vec<flui_protocol::input_recording::Sample>, predicted: Vec<flui_protocol::input_recording::Sample> } // at 4
 variant flui_protocol::input_recording::PointerEvent::PanZoom(flui_protocol::input_recording::PanZoom) // at 10
 variant flui_protocol::input_recording::PointerEvent::Scroll(flui_protocol::input_recording::Scroll) // at 8
-variant flui_protocol::input_recording::PointerEvent::ScrollInertiaCancel(flui_protocol::input_recording::Signal) // at 9
-variant flui_protocol::input_recording::PointerEvent::SmartZoom(flui_protocol::input_recording::SmartZoom) // at 11
+variant flui_protocol::input_recording::PointerEvent::SmartZoom(flui_protocol::input_recording::SmartZoom) // at 12
+variant flui_protocol::input_recording::PointerEvent::TouchpadHold(flui_protocol::input_recording::TouchpadHold) // at 9
+variant flui_protocol::input_recording::PointerEvent::TouchpadSwipe(flui_protocol::input_recording::TouchpadSwipe) // at 11
 variant flui_protocol::input_recording::PointerEvent::Up(flui_protocol::input_recording::ButtonEvent) // at 3
 pub struct flui_protocol::input_recording::PointerInfo
 field flui_protocol::input_recording::PointerInfo::device: Option<u64> // at 1
@@ -32419,6 +32493,60 @@ impl core::marker::StructuralPartialEq for flui_protocol::input_recording::TextP
 impl schemars::JsonSchema for flui_protocol::input_recording::TextPosition
 impl serde_core::ser::Serialize for flui_protocol::input_recording::TextPosition
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::TextPosition
+pub struct flui_protocol::input_recording::TouchpadHold
+field flui_protocol::input_recording::TouchpadHold::modifiers: Vec<String> // at 5
+field flui_protocol::input_recording::TouchpadHold::phase: flui_protocol::input_recording::TouchpadHoldPhase // at 4
+field flui_protocol::input_recording::TouchpadHold::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::TouchpadHold::t: u64 // at 1
+field flui_protocol::input_recording::TouchpadHold::x: f64 // at 2
+field flui_protocol::input_recording::TouchpadHold::y: f64 // at 3
+impl Clone for flui_protocol::input_recording::TouchpadHold
+impl PartialEq for flui_protocol::input_recording::TouchpadHold
+impl core::fmt::Debug for flui_protocol::input_recording::TouchpadHold
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::TouchpadHold
+impl schemars::JsonSchema for flui_protocol::input_recording::TouchpadHold
+impl serde_core::ser::Serialize for flui_protocol::input_recording::TouchpadHold
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::TouchpadHold
+pub enum flui_protocol::input_recording::TouchpadHoldPhase
+impl Clone for flui_protocol::input_recording::TouchpadHoldPhase
+impl Copy for flui_protocol::input_recording::TouchpadHoldPhase
+impl Eq for flui_protocol::input_recording::TouchpadHoldPhase
+impl PartialEq for flui_protocol::input_recording::TouchpadHoldPhase
+impl core::fmt::Debug for flui_protocol::input_recording::TouchpadHoldPhase
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::TouchpadHoldPhase
+impl schemars::JsonSchema for flui_protocol::input_recording::TouchpadHoldPhase
+impl serde_core::ser::Serialize for flui_protocol::input_recording::TouchpadHoldPhase
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::TouchpadHoldPhase
+variant flui_protocol::input_recording::TouchpadHoldPhase::Begin // at 0
+variant flui_protocol::input_recording::TouchpadHoldPhase::Cancelled // at 2
+variant flui_protocol::input_recording::TouchpadHoldPhase::End // at 1
+pub struct flui_protocol::input_recording::TouchpadSwipe
+field flui_protocol::input_recording::TouchpadSwipe::fingers: u8 // at 4
+field flui_protocol::input_recording::TouchpadSwipe::modifiers: Vec<String> // at 6
+field flui_protocol::input_recording::TouchpadSwipe::phase: flui_protocol::input_recording::TouchpadSwipePhase // at 5
+field flui_protocol::input_recording::TouchpadSwipe::pointer: flui_protocol::input_recording::PointerInfo // at 0
+field flui_protocol::input_recording::TouchpadSwipe::t: u64 // at 1
+field flui_protocol::input_recording::TouchpadSwipe::x: f64 // at 2
+field flui_protocol::input_recording::TouchpadSwipe::y: f64 // at 3
+impl Clone for flui_protocol::input_recording::TouchpadSwipe
+impl PartialEq for flui_protocol::input_recording::TouchpadSwipe
+impl core::fmt::Debug for flui_protocol::input_recording::TouchpadSwipe
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::TouchpadSwipe
+impl schemars::JsonSchema for flui_protocol::input_recording::TouchpadSwipe
+impl serde_core::ser::Serialize for flui_protocol::input_recording::TouchpadSwipe
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::TouchpadSwipe
+pub enum flui_protocol::input_recording::TouchpadSwipePhase
+impl Clone for flui_protocol::input_recording::TouchpadSwipePhase
+impl PartialEq for flui_protocol::input_recording::TouchpadSwipePhase
+impl core::fmt::Debug for flui_protocol::input_recording::TouchpadSwipePhase
+impl core::marker::StructuralPartialEq for flui_protocol::input_recording::TouchpadSwipePhase
+impl schemars::JsonSchema for flui_protocol::input_recording::TouchpadSwipePhase
+impl serde_core::ser::Serialize for flui_protocol::input_recording::TouchpadSwipePhase
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::input_recording::TouchpadSwipePhase
+variant flui_protocol::input_recording::TouchpadSwipePhase::Cancelled // at 3
+variant flui_protocol::input_recording::TouchpadSwipePhase::End // at 2
+variant flui_protocol::input_recording::TouchpadSwipePhase::Start // at 0
+variant flui_protocol::input_recording::TouchpadSwipePhase::Update { dx: f64, dy: f64 } // at 1
 pub enum flui_protocol::input_recording::TransferFormat
 impl Clone for flui_protocol::input_recording::TransferFormat
 impl Eq for flui_protocol::input_recording::TransferFormat
@@ -32678,10 +32806,12 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::
 variant flui_protocol::native_recording::Action::Cancel(flui_protocol::native_recording::CancelReason) // at 5
 variant flui_protocol::native_recording::Action::Enter // at 0
 variant flui_protocol::native_recording::Action::Gesture(flui_protocol::native_recording::Gesture) // at 6
+variant flui_protocol::native_recording::Action::Hold(flui_protocol::native_recording::HoldPhase) // at 7
 variant flui_protocol::native_recording::Action::Leave // at 1
 variant flui_protocol::native_recording::Action::Move // at 2
 variant flui_protocol::native_recording::Action::Press(u8) // at 3
 variant flui_protocol::native_recording::Action::Release(u8) // at 4
+variant flui_protocol::native_recording::Action::Swipe(flui_protocol::native_recording::Swipe) // at 8
 #[non_exhaustive] pub enum flui_protocol::native_recording::Angles
 impl Clone for flui_protocol::native_recording::Angles
 impl Copy for flui_protocol::native_recording::Angles
@@ -33212,6 +33342,22 @@ impl serde_core::ser::Serialize for flui_protocol::native_recording::Headroom
 impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Headroom
 variant flui_protocol::native_recording::Headroom::Absent(flui_protocol::native_recording::Absence) // at 1
 variant flui_protocol::native_recording::Headroom::Multiple(f32) // at 0
+#[non_exhaustive] pub enum flui_protocol::native_recording::HoldPhase
+impl Clone for flui_protocol::native_recording::HoldPhase
+impl Copy for flui_protocol::native_recording::HoldPhase
+impl Eq for flui_protocol::native_recording::HoldPhase
+impl PartialEq for flui_protocol::native_recording::HoldPhase
+impl core::fmt::Debug for flui_protocol::native_recording::HoldPhase
+impl core::hash::Hash for flui_protocol::native_recording::HoldPhase
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::HoldPhase
+impl schemars::JsonSchema for flui_protocol::native_recording::HoldPhase
+impl serde_core::ser::Serialize for flui_protocol::native_recording::HoldPhase
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::HoldPhase
+pub const flui_protocol::native_recording::HoldPhase::ALL: &'static [Self] = _
+pub const fn flui_protocol::native_recording::HoldPhase::name(self) -> &'static str
+variant flui_protocol::native_recording::HoldPhase::Begin // at 0
+variant flui_protocol::native_recording::HoldPhase::Cancelled // at 2
+variant flui_protocol::native_recording::HoldPhase::End // at 1
 #[non_exhaustive] pub enum flui_protocol::native_recording::Ime
 impl Clone for flui_protocol::native_recording::Ime
 impl Eq for flui_protocol::native_recording::Ime
@@ -33741,6 +33887,19 @@ variant flui_protocol::native_recording::Stream::Platform // at 3
 variant flui_protocol::native_recording::Stream::Registry // at 0
 variant flui_protocol::native_recording::Stream::Window // at 2
 variant flui_protocol::native_recording::Stream::WindowState // at 4
+pub struct flui_protocol::native_recording::Swipe
+field flui_protocol::native_recording::Swipe::dx: f64 // at 2
+field flui_protocol::native_recording::Swipe::dy: f64 // at 3
+field flui_protocol::native_recording::Swipe::fingers: u8 // at 0
+field flui_protocol::native_recording::Swipe::phase: flui_protocol::native_recording::GesturePhase // at 1
+impl Clone for flui_protocol::native_recording::Swipe
+impl Copy for flui_protocol::native_recording::Swipe
+impl PartialEq for flui_protocol::native_recording::Swipe
+impl core::fmt::Debug for flui_protocol::native_recording::Swipe
+impl core::marker::StructuralPartialEq for flui_protocol::native_recording::Swipe
+impl schemars::JsonSchema for flui_protocol::native_recording::Swipe
+impl serde_core::ser::Serialize for flui_protocol::native_recording::Swipe
+impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::Swipe
 pub enum flui_protocol::native_recording::SystemControls
 impl Clone for flui_protocol::native_recording::SystemControls
 impl Copy for flui_protocol::native_recording::SystemControls

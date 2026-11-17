@@ -141,9 +141,11 @@ fn pointer_step(event: &PointerEvent, now: &impl Fn() -> EventTime) -> Option<St
         PointerEvent::Move(_) => InputKind::PointerMove,
         PointerEvent::Cancel(_) => InputKind::PointerCancel,
         PointerEvent::Scroll(_) => InputKind::Scroll,
-        PointerEvent::PanZoom(_) | PointerEvent::SmartZoom(_) => InputKind::Gesture,
-        // Entering, leaving, a revision, a squeeze, a device coming or going: not a step a
-        // driver plays.
+        PointerEvent::PanZoom(_)
+        | PointerEvent::SmartZoom(_)
+        | PointerEvent::TouchpadHold(_)
+        | PointerEvent::TouchpadSwipe(_) => InputKind::Gesture,
+        // Entering, leaving, a device coming or going: not a step a driver plays.
         _ => return None,
     };
     let device = match event.pointer_kind() {

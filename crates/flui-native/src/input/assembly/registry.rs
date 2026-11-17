@@ -1,16 +1,17 @@
 //! Contact and device identity, and the pure decoder over them.
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU8, NonZeroU64};
 
 use flui_foundation::IdMint;
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::{Offset, Point, Size};
 use flui_platform::EventTime;
 use flui_platform::input_capabilities::PointerKindSet;
 use flui_platform::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
     PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, PointerSignal, PressId, Pressure, TangentialPressure, Twist,
+    PointerSample, PointerSignal, PressId, Pressure, SwipeOffset, TangentialPressure,
+    TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
 
 use super::batch::MoveBatch;
@@ -283,9 +284,23 @@ struct Contact {
     /// cancellation.
     press: Option<OpenPress>,
     gesture: PanZoomAccumulator,
+    /// The touchpad hold or swipe this contact carries, from its begin to its
+    /// end or cancellation.
+    touchpad: Option<TouchpadGesture>,
     /// Whether an `Enter` was delivered for it, which its removal pairs
     /// with a `Leave`.
     entered: bool,
+}
+
+/// A touchpad gesture open on a contact: a hold, or a swipe with its finger
+/// count and its travel so far.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TouchpadGesture {
+    Hold,
+    Swipe {
+        fingers: NonZeroU8,
+        travel: SwipeOffset,
+    },
 }
 
 impl Contact {
@@ -314,6 +329,26 @@ impl Contact {
 
     /// The event that ends this contact's sequence, if it has one in progress.
     fn ending(&self, time: EventTime, reason: CancelReason) -> Option<Ending> {
+        if let Some(touchpad) = self.touchpad {
+            let position = self.last_position?.0;
+            return Some(match touchpad {
+                TouchpadGesture::Hold => Ending::TouchpadHold(Box::new(TouchpadHoldEvent::new(
+                    self.info,
+                    time,
+                    position,
+                    TouchpadHoldPhase::Cancelled,
+                ))),
+                TouchpadGesture::Swipe { fingers, .. } => {
+                    Ending::TouchpadSwipe(Box::new(TouchpadSwipeEvent::new(
+                        self.info,
+                        time,
+                        position,
+                        fingers,
+                        TouchpadSwipePhase::Cancelled,
+                    )))
+                }
+            });
+        }
         if self.gesture.is_active() {
             let position = self.last_position?.0;
             let mut gesture = self.gesture;
@@ -727,7 +762,9 @@ impl ContactRegistry {
             .stamp(reading.time, choice)
             .ok_or(DecodeFault::Time)?;
         let time = floor.map_or(time, |floor| time.max(floor));
-        let needs_scale = reading.position.is_some() || reading.sensors.contact_size.is_some();
+        let needs_scale = reading.position.is_some()
+            || reading.sensors.contact_size.is_some()
+            || matches!(reading.action, ReadingAction::Swipe(_));
         if needs_scale && !(reading.scale.is_finite() && reading.scale > 0.0) {
             return Err(DecodeFault::Scale(reading.scale));
         }
@@ -799,6 +836,7 @@ impl ContactRegistry {
             last_position: None,
             press: None,
             gesture: PanZoomAccumulator::default(),
+            touchpad: None,
             entered: false,
         });
         Some(self.contacts.len() - 1)
@@ -869,6 +907,8 @@ impl ContactRegistry {
             ReadingAction::Leave | ReadingAction::Release(_) | ReadingAction::Cancel(_) => true,
             ReadingAction::Move => reading.kind == PointerKind::Touch,
             ReadingAction::Gesture(gesture) => gesture.phase != GesturePhase::Began,
+            ReadingAction::Hold(phase) => phase != TouchpadHoldPhase::Begin,
+            ReadingAction::Swipe(swipe) => swipe.phase != GesturePhase::Began,
             ReadingAction::Enter | ReadingAction::Press(_) => false,
         };
         if index.is_none() && needs_open {
@@ -902,6 +942,7 @@ impl ContactRegistry {
                 contact.buttons.clear();
                 contact.press = None;
                 contact.gesture = PanZoomAccumulator::default();
+                contact.touchpad = None;
                 contact.last_time = Some(time);
                 ending
             } else {
@@ -1125,6 +1166,94 @@ impl ContactRegistry {
                     }
                 }
                 remove = !contact.gesture.is_active();
+            }
+            ReadingAction::Hold(phase) => {
+                if let Some((position, _)) = contact.last_position {
+                    let hold = |phase| {
+                        PlatformInput::Pointer(PointerEvent::TouchpadHold(
+                            TouchpadHoldEvent::new(info, time, position, phase)
+                                .with_modifiers(modifiers),
+                        ))
+                    };
+                    let open = contact.touchpad == Some(TouchpadGesture::Hold);
+                    match phase {
+                        TouchpadHoldPhase::Begin => {
+                            // A begin over a hold whose end was lost ends
+                            // that one first: no hold is left open behind it.
+                            if open {
+                                output.push(hold(TouchpadHoldPhase::Cancelled));
+                            }
+                            contact.touchpad = Some(TouchpadGesture::Hold);
+                            output.push(hold(TouchpadHoldPhase::Begin));
+                        }
+                        // An end of a hold that never began says nothing.
+                        TouchpadHoldPhase::End | TouchpadHoldPhase::Cancelled if open => {
+                            contact.touchpad = None;
+                            output.push(hold(phase));
+                        }
+                        TouchpadHoldPhase::End | TouchpadHoldPhase::Cancelled => {}
+                    }
+                }
+                remove = contact.touchpad.is_none() && !contact.gesture.is_active();
+            }
+            ReadingAction::Swipe(swipe) => {
+                if let Some((position, _)) = contact.last_position {
+                    let phase = match (swipe.phase, &mut contact.touchpad) {
+                        (GesturePhase::Began, open) => {
+                            // A start over a swipe whose end was lost ends
+                            // that one first: its steps never feed the next.
+                            if let Some(TouchpadGesture::Swipe { fingers, .. }) = *open {
+                                output.push(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
+                                    TouchpadSwipeEvent::new(
+                                        info,
+                                        time,
+                                        position,
+                                        fingers,
+                                        TouchpadSwipePhase::Cancelled,
+                                    )
+                                    .with_modifiers(modifiers),
+                                )));
+                            }
+                            *open = Some(TouchpadGesture::Swipe {
+                                fingers: swipe.fingers,
+                                travel: SwipeOffset::ZERO,
+                            });
+                            Some((swipe.fingers, TouchpadSwipePhase::Start))
+                        }
+                        (
+                            GesturePhase::Changed,
+                            Some(TouchpadGesture::Swipe { fingers, travel }),
+                        ) => {
+                            // A step that would take the travel past the
+                            // finite range keeps the travel it had.
+                            let step = Offset::new(swipe.dx, swipe.dy) / reading.scale;
+                            if let Ok(next) = SwipeOffset::try_new(travel.get() + step) {
+                                *travel = next;
+                            }
+                            Some((*fingers, TouchpadSwipePhase::Update(*travel)))
+                        }
+                        (GesturePhase::Ended, Some(TouchpadGesture::Swipe { fingers, .. })) => {
+                            let fingers = *fingers;
+                            contact.touchpad = None;
+                            Some((fingers, TouchpadSwipePhase::End))
+                        }
+                        (GesturePhase::Cancelled, Some(TouchpadGesture::Swipe { fingers, .. })) => {
+                            let fingers = *fingers;
+                            contact.touchpad = None;
+                            Some((fingers, TouchpadSwipePhase::Cancelled))
+                        }
+                        // A step or an end of a swipe that never started
+                        // says nothing.
+                        _ => None,
+                    };
+                    if let Some((fingers, phase)) = phase {
+                        output.push(PlatformInput::Pointer(PointerEvent::TouchpadSwipe(
+                            TouchpadSwipeEvent::new(info, time, position, fingers, phase)
+                                .with_modifiers(modifiers),
+                        )));
+                    }
+                }
+                remove = contact.touchpad.is_none() && !contact.gesture.is_active();
             }
             ReadingAction::Cancel(_) => unreachable!("BUG: cancels return before measuring"),
         }

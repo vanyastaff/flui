@@ -94,6 +94,7 @@ impl RecognizerInput {
                     | PointerEvent::ButtonChange(_)
                     | PointerEvent::Up(_)
                     | PointerEvent::Cancel(_)
+                    | PointerEvent::TouchpadSwipe(_)
             )
     }
 }
@@ -186,7 +187,7 @@ impl RawCallbacks {
             PointerEvent::Move(update) if update.buttons.is_empty() => &self.hover,
             PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &self.moved,
             PointerEvent::Cancel(_) => &self.cancel,
-            PointerEvent::Scroll(_) | PointerEvent::ScrollInertiaCancel(_) => &self.signal,
+            PointerEvent::Scroll(_) | PointerEvent::TouchpadHold(_) => &self.signal,
             PointerEvent::PanZoom(pan_zoom) => {
                 if let Some(callback) = &self.pan_zoom_update
                     && matches!(pan_zoom.phase, PanZoomPhase::Update(_))
@@ -378,8 +379,9 @@ impl Listener {
     /// Called when a pointer signal occurs over the listener.
     ///
     /// Pointer signals are [`PointerEvent::Scroll`] and
-    /// [`PointerEvent::ScrollInertiaCancel`] (fingers that came to rest on a
-    /// trackpad, stopping a fling).
+    /// [`PointerEvent::TouchpadHold`] (fingers that came to rest on a
+    /// touchpad, whose `Begin` stops a fling, then lifted or started a
+    /// gesture).
     ///
     /// This channel *observes*: every listener on the hit path sees the
     /// signal (this fires for the whole path). A widget that should *act* on the tick only when it is the
