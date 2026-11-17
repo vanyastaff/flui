@@ -181,12 +181,12 @@ pub trait View: Downcast + DynClone + 'static {
         false
     }
 
-    /// Get the Key associated with this View, if any.
+    /// The key this view is matched by, if it has one: a parent keeps the element of a keyed
+    /// child across a reorder, and a `GlobalKey` finds its element anywhere in the tree.
     ///
-    /// Keys are used for:
-    /// - Preserving state across reorderings
-    /// - GlobalKey lookups
-    /// - Efficient reconciliation
+    /// `None` by default. A view type that holds its key in a field marks the field
+    /// `#[view(key)]` in its derive, which implements this method
+    /// ([`AsViewKey`](flui_foundation::key::AsViewKey) lists the field types).
     fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         None
     }

@@ -39,4 +39,9 @@ fn ui_tests() {
     t.compile_fail("tests/ui/unit_closure_where_event_context_expected.rs");
     t.compile_fail("tests/ui/let_bound_event_closure_without_helper.rs");
     t.compile_fail("tests/ui/writer_escapes_the_dispatch.rs");
+    // A `#[view(...)]` the derive could not act on is refused, not ignored.
+    t.compile_fail("tests/ui/view_attribute_placement.rs");
+    t.compile_fail("tests/ui/view_key_field_is_not_a_key.rs");
+    // A provider's field that cannot be compared is reported at the field.
+    t.compile_fail("tests/ui/inherited_data_field_is_not_partial_eq.rs");
 }

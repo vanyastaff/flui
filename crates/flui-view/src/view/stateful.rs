@@ -192,15 +192,8 @@ pub trait ViewState<V: StatefulView>: 'static {
     fn dispose(&mut self) {}
 }
 
-// The legacy `impl_stateful_view!` declarative macro was deleted
-// (FR-010 "MUST NOT be two parallel authoring paths").
-// Widget authors now write `#[derive(StatefulView)]` from
-// `flui-macros` instead; the derive is re-exported from
-// `flui_view::prelude` for ergonomic single-import access. See
-// `crates/flui-macros/src/derive_stateful.rs` for the generated
-// `impl View` block this used to emit by hand-rolled `macro_rules!`.
-//
-// NOTE: StatefulElement implementation has been moved to unified Element
-// architecture. See crates/flui-view/src/element/unified.rs and
-// element/behavior.rs The type alias is exported from element/mod.rs:
-//   pub type StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>;
+// `#[derive(StatefulView)]` (`crates/flui-macros/src/derive/view.rs`, exported beside the trait
+// and from
+// `flui_view::prelude`) writes the `impl View` of a stateful view. Its element is
+// `StatefulElement<V> = Element<V, Single, StatefulBehavior<V>>`, exported from
+// `element/mod.rs`.

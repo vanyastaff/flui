@@ -17,7 +17,7 @@
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
@@ -40,19 +40,95 @@ const UNANSWERED_KEYS: usize = 8;
 /// Whether a window's native retirement has started, as any thread reads it.
 ///
 /// Every host clears its window's delivery where the native window is
-/// retired (Win32's `WM_DESTROY`, AppKit's `windowWillClose:`, the Linux hosts'
+/// retired (Win32's window retirement, AppKit's `windowWillClose:`, the Linux hosts'
 /// window retirement, the Android loop's exit, UIKit's scene teardown, the web
 /// canvas's retirement, the headless close), so this is set before the
 /// native window it describes is gone. A window's surface target and redraw
 /// requester (ADR-0254 §5) live on other threads and outlive the window: they
 /// read it to answer for a window that is no longer there.
+///
+/// It also carries what becomes of the native window once its handler is let
+/// go ([`Self::settle`]): destroyed, as every close does, or hidden and kept
+/// when the window's surface target asked for it
+/// ([`SurfaceTarget::keep_past_close`](flui_platform::SurfaceTarget::keep_past_close),
+/// ADR-0305 §9), because a raster thread that did not answer may still
+/// present over a surface made from the window's handles.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Retirement(Arc<AtomicBool>);
+pub(crate) struct Retirement(Arc<RetirementState>);
+
+#[derive(Debug, Default)]
+struct RetirementState {
+    retired: AtomicBool,
+    /// One of [`Fate::UNDECIDED`], [`Fate::KEPT`] and [`Fate::DESTROYED`]:
+    /// it leaves `UNDECIDED` once, by a keep or by the host's settle, and
+    /// never changes again.
+    fate: AtomicU8,
+}
+
+/// The values of [`RetirementState::fate`].
+struct Fate;
+
+impl Fate {
+    const UNDECIDED: u8 = 0;
+    const KEPT: u8 = 1;
+    const DESTROYED: u8 = 2;
+}
+
+/// What a host's retirement does with its native window once the handler was
+/// let go ([`Retirement::settle`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeFate {
+    /// Destroy it.
+    Destroy,
+    /// Hide it and keep it, and everything its handles name, for the life of
+    /// the process: the window stays closed to the application.
+    Keep,
+}
 
 impl Retirement {
     /// Whether the window's native retirement has started.
     pub(crate) fn is_retired(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.retired.load(Ordering::SeqCst)
+    }
+
+    /// Ask that the close hide the native window instead of destroying it.
+    /// `true` for the call that kept it; `false` when an earlier call did, or
+    /// when the host settled the window's fate already (its native window is
+    /// destroyed, or the OS or another client destroyed it), in which case
+    /// nothing changes.
+    pub(crate) fn keep_past_close(&self) -> bool {
+        self.0
+            .fate
+            .compare_exchange(
+                Fate::UNDECIDED,
+                Fate::KEPT,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    /// Whether a keep reached the window before its fate was settled.
+    pub(crate) fn is_kept(&self) -> bool {
+        self.0.fate.load(Ordering::SeqCst) == Fate::KEPT
+    }
+
+    /// Settle the native window's fate, where the host's retirement is about
+    /// to destroy it: [`NativeFate::Keep`] when a keep came first, and
+    /// [`NativeFate::Destroy`] otherwise, after which a keep does nothing. A
+    /// host whose native window the OS destroyed settles it too, before it
+    /// lets go of the handler, so a keep made while that happens does
+    /// nothing. Every later call answers the same.
+    pub(crate) fn settle(&self) -> NativeFate {
+        match self.0.fate.compare_exchange(
+            Fate::UNDECIDED,
+            Fate::DESTROYED,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Err(Fate::KEPT) => NativeFate::Keep,
+            Ok(_) | Err(_) => NativeFate::Destroy,
+        }
     }
 }
 
@@ -530,7 +606,7 @@ impl WindowDelivery {
     /// surface is built from the window and must go while the native window
     /// still exists, ADR-0063), so a host calls this where the native window
     /// is retired: the Linux hosts' window retirement, the headless
-    /// `complete_close`, Win32's `WM_DESTROY`, AppKit's `windowWillClose:`
+    /// `complete_close`, Win32's window retirement, AppKit's `windowWillClose:`
     /// and the Android loop's exit.
     ///
     /// **Drain-ordered, not immediate, while this window's FIFO is draining.**
@@ -541,8 +617,17 @@ impl WindowDelivery {
     /// that `closed`. So the clear is queued too, behind it, and the running
     /// drain reaches it in order. A clone of the handler out for a method
     /// still running is dropped when that method returns.
+    ///
+    /// Once the handler let go, the native window's fate is settled
+    /// ([`Retirement::settle`]): a keep recorded before then, the handler's
+    /// own release included, is the one that stands, and a later keep does
+    /// nothing. A host whose native window outlives the release uses
+    /// [`Self::clear_then`] to act on that fate.
     pub(crate) fn clear(&self) {
-        self.clear_with(None);
+        let retirement = self.retirement();
+        self.clear_then(move || {
+            let _fate = retirement.settle();
+        });
     }
 
     /// What tells the window's surface target and redraw requester, on any
@@ -555,19 +640,15 @@ impl WindowDelivery {
     /// this window's FIFO is draining, that is after the running method
     /// returns and the queued clear runs, not when this call returns. A backend
     /// uses it to order a notice after the release of what the handler owns
-    /// (a renderer and its surface).
-    #[cfg(any(
-        windows,
-        wayland_host,
-        x11_host,
-        all(test, not(target_arch = "wasm32"))
-    ))]
+    /// (a renderer and its surface), and to destroy its native window after
+    /// that release, or keep it when a keep was recorded before it; the
+    /// completion settles the fate itself ([`Retirement::settle`]).
     pub(crate) fn clear_then(&self, on_retired: impl FnOnce() + Send + 'static) {
         self.clear_with(Some(Box::new(on_retired)));
     }
 
     fn clear_with(&self, retired: Option<RetirementNotice>) {
-        self.retiring.0.store(true, Ordering::SeqCst);
+        self.retiring.0.retired.store(true, Ordering::SeqCst);
         self.drain(Delivery::Clear(retired));
     }
 

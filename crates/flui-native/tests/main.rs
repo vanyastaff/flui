@@ -55,6 +55,9 @@ mod headless_redraw;
 mod input_capabilities;
 #[path = "input_regions.rs"]
 mod input_regions;
+#[path = "kept_past_close.rs"]
+#[cfg(not(target_arch = "wasm32"))]
+mod kept_past_close;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "launch_values.rs"]
 mod launch_values;

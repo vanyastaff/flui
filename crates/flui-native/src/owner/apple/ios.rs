@@ -1548,7 +1548,10 @@ impl IOSLoop {
         if let Some((window, _)) = self.current(origin)
             && window.attachment_matches(origin.attachment, marker)
         {
-            window.observe_lifecycle(observation);
+            // A panicking observation still lets a running window on screen;
+            // its panic resumes once it is.
+            let mut failure = flui_foundation::panic::FirstPanic::new();
+            failure.contain(|| window.observe_lifecycle(observation));
             let can_publish = self
                 .state()
                 .borrow()
@@ -1567,8 +1570,9 @@ impl IOSLoop {
                 && window.state().is_seen()
                 && window.state().execution == flui_platform::WindowExecutionState::Running
             {
-                window.publish(origin.attachment, marker);
+                failure.contain(|| window.publish(origin.attachment, marker));
             }
+            failure.resume();
         }
     }
 
@@ -1713,19 +1717,28 @@ impl IOSLoop {
                     installation.origin = None;
                     return;
                 }
+                // The window is installed and on screen: a panicking
+                // observation neither skips the next one nor rolls the
+                // installation back, and the first panic resumes after both.
+                let mut failure = flui_foundation::panic::FirstPanic::new();
                 match scene.activationState() {
                     UISceneActivationState::Background => {
-                        window.observe_lifecycle(LifecycleObservation::Background);
+                        failure
+                            .contain(|| window.observe_lifecycle(LifecycleObservation::Background));
                     }
                     UISceneActivationState::Unattached => {}
                     state => {
-                        window.observe_lifecycle(LifecycleObservation::Foreground);
+                        failure
+                            .contain(|| window.observe_lifecycle(LifecycleObservation::Foreground));
                         if state == UISceneActivationState::ForegroundActive {
-                            window.observe_lifecycle(LifecycleObservation::Active);
+                            failure.contain(|| {
+                                window.observe_lifecycle(LifecycleObservation::Active);
+                            });
                         }
                     }
                 }
                 installation.origin = None;
+                failure.resume();
             }
             SceneAction::Observe(origin, observation) => {
                 self.observe_scene(&origin, observation);
@@ -1735,12 +1748,18 @@ impl IOSLoop {
                     if !window.attachment_matches(origin.attachment, marker) {
                         return;
                     }
-                    window.disconnect(marker);
-                    if let Err(error) = self.tell_scene_consumer(|consumer| {
-                        consumer.disconnected(origin.session, origin.attachment)
-                    }) {
-                        tracing::error!(%error, "scene disconnect observer failed");
-                    }
+                    // The consumer hears the disconnection whether or not the
+                    // window's detach panicked; that panic resumes after it.
+                    let mut failure = flui_foundation::panic::FirstPanic::new();
+                    failure.contain(|| window.disconnect(marker));
+                    failure.contain(|| {
+                        if let Err(error) = self.tell_scene_consumer(|consumer| {
+                            consumer.disconnected(origin.session, origin.attachment)
+                        }) {
+                            tracing::error!(%error, "scene disconnect observer failed");
+                        }
+                    });
+                    failure.resume();
                 }
             }
             SceneAction::Open(origin, urls, launch) => {
@@ -1780,12 +1799,18 @@ impl IOSLoop {
                     }
                 };
                 if let Some(record) = record {
-                    record.window.close_for_good();
-                    if let Err(error) = self.tell_scene_consumer(|consumer| {
-                        consumer.installation_aborted(origin.session, origin.attachment)
-                    }) {
-                        tracing::error!(%error, "scene installation rollback observer failed");
-                    }
+                    // A panic out of the close (its handler's `closed`) waits
+                    // until the consumer has heard the rollback.
+                    let mut failure = flui_foundation::panic::FirstPanic::new();
+                    failure.contain(|| record.window.close_for_good());
+                    failure.contain(|| {
+                        if let Err(error) = self.tell_scene_consumer(|consumer| {
+                            consumer.installation_aborted(origin.session, origin.attachment)
+                        }) {
+                            tracing::error!(%error, "scene installation rollback observer failed");
+                        }
+                    });
+                    failure.resume();
                 }
             }
             SceneAction::Discard(session, request_native) => {
@@ -1802,11 +1827,17 @@ impl IOSLoop {
                     }
                 };
                 let Some(record) = record else { return };
-                record.window.close_for_good();
-                if let Err(error) = self.tell_scene_consumer(|consumer| consumer.discarded(session))
-                {
-                    tracing::error!(%error, "scene discard observer failed");
-                }
+                // A panic out of the close (its handler's `closed`) waits
+                // until the scene is torn down.
+                let mut failure = flui_foundation::panic::FirstPanic::new();
+                failure.contain(|| record.window.close_for_good());
+                failure.contain(|| {
+                    if let Err(error) =
+                        self.tell_scene_consumer(|consumer| consumer.discarded(session))
+                    {
+                        tracing::error!(%error, "scene discard observer failed");
+                    }
+                });
                 if request_native {
                     let handler = scene_error::destruction_error_handler();
                     UIApplication::sharedApplication(marker)
@@ -1816,6 +1847,7 @@ impl IOSLoop {
                             Some(&handler),
                         );
                 }
+                failure.resume();
             }
         }
     }

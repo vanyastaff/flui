@@ -1141,6 +1141,17 @@ impl SurfaceTarget for MacOSSurface {
             content_view::layer_presenting(view, frame);
         }
     }
+
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its close, whichever way it comes
+    /// (`windowWillClose:`, or the window's drop without one), then orders it
+    /// out and keeps its view, and so the view's Metal layer, for the life of
+    /// the process (`MacOSWindow::clear_then_keep_if_kept`), when the keep
+    /// came before the close let go of the handler. A keep after that does
+    /// nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
+    }
 }
 
 /// How many owner-lane turns a deferred redraw request may take before it is
@@ -1771,8 +1782,14 @@ impl Drop for MacOSWindow {
 
         // The window's surface targets and the features beside it outlive
         // it; from here on they hand out nothing of a view the release below
-        // may free. A window that closed set this already.
-        self.closed.store(true, Ordering::SeqCst);
+        // may free. A window that closed set this already, and its close
+        // (`handle_close`) let go of its handler there, whatever step of it
+        // panicked.
+        if !self.closed.swap(true, Ordering::SeqCst) {
+            // A handler method queued ahead of the release may panic: the
+            // drop still finishes.
+            crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
+        }
 
         // The close delegate pins its native receiver in the outer autorelease
         // pool, so a final callback-local wrapper drop cannot deallocate the
@@ -1805,6 +1822,27 @@ impl Drop for MacOSWindow {
 }
 
 impl MacOSWindow {
+    /// Let go of the handler where the window closes (`windowWillClose:`, or
+    /// its drop without one), then settle its fate
+    /// ([`super::clear_then_keep_if_kept`]): when a keep was recorded for it
+    /// (`SurfaceTarget::keep_past_close`, ADR-0305 §9), the window is ordered
+    /// out and its view, and so the view's Metal layer, outlives the window's
+    /// own release.
+    fn clear_then_keep_if_kept(&self) {
+        // SAFETY: `self.view` is the window's content view, which the window
+        // holds while it lives.
+        let view = unsafe { super::MainRetainedView::retain(self.view_ptr()) };
+        super::clear_then_keep_if_kept(&self.delivery, view, |view| {
+            // SAFETY: `view` is a live `NSView`, messaged on the main thread;
+            // `window` answers nil once the view's window is gone, and a
+            // message to nil does nothing.
+            unsafe {
+                let window: ObjcId = msg_send![view, window];
+                let _: () = msg_send![window, orderOut: NIL];
+            }
+        });
+    }
+
     /// The window's published state for a caller that reads it
     /// (`PlatformWindow::state`), read from AppKit again first when something
     /// invalidated it. A revision the read publishes is announced at the

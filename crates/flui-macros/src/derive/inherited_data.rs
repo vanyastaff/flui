@@ -16,50 +16,57 @@
 //! would need per-parameter `PartialEq` bounds the derive cannot infer).
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt as _;
 use syn::{Data, DeriveInput, Fields, Ident};
+
+use crate::hygiene::{local, receiver};
+use crate::refusals::Refusals;
 
 /// The mask carries this many fields.
 const MAX_FIELDS: usize = 64;
 
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let ident = &input.ident;
-
-    if !input.generics.params.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.generics,
-            "InheritedData cannot be derived for a generic type: a provider's data type is \
-             concrete (the derive would have to invent `PartialEq` bounds per parameter)",
-        ));
-    }
-
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => &named.named,
-            Fields::Unnamed(_) | Fields::Unit => {
-                return Err(syn::Error::new_spanned(
-                    ident,
-                    "InheritedData can only be derived for a struct with named fields",
-                ));
-            }
-        },
-        Data::Enum(_) | Data::Union(_) => {
-            return Err(syn::Error::new_spanned(
-                ident,
-                "InheritedData can only be derived for a struct",
+    // Every refusal is recorded before any is reported, so one build shows
+    // them all.
+    let fields = Refusals::collect(|refusals| {
+        if !input.generics.params.is_empty() {
+            refusals.push(syn::Error::new_spanned(
+                &input.generics,
+                "InheritedData cannot be derived for a generic type: a provider's data type is \
+                 concrete (the derive would have to invent `PartialEq` bounds per parameter)",
             ));
         }
-    };
-    if fields.len() > MAX_FIELDS {
-        return Err(syn::Error::new_spanned(
-            ident,
-            format!(
-                "InheritedData carries {MAX_FIELDS} fields; this struct has {} — split the provider data",
-                fields.len()
-            ),
-        ));
-    }
+
+        let fields = match &input.data {
+            Data::Struct(data) => match &data.fields {
+                Fields::Named(named) => &named.named,
+                Fields::Unnamed(_) | Fields::Unit => {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        "InheritedData can only be derived for a struct with named fields",
+                    ));
+                }
+            },
+            Data::Enum(_) | Data::Union(_) => {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    "InheritedData can only be derived for a struct",
+                ));
+            }
+        };
+        if fields.len() > MAX_FIELDS {
+            refusals.push(syn::Error::new_spanned(
+                ident,
+                format!(
+                    "InheritedData carries {MAX_FIELDS} fields; this struct has {} — split the provider data",
+                    fields.len()
+                ),
+            ));
+        }
+        Ok(fields)
+    })?;
 
     // Shape errors above are reported before the runtime path is needed, so
     // they do not depend on the consumer's manifest.
@@ -87,10 +94,16 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             pub const #const_ident: #runtime::FieldMask<Self> = #runtime::FieldMask::bit(#index);
         }
     });
+    // The parameter and the local of the generated `field_mask_diff`.
+    let other = local("other");
+    let changed = local("changed");
+    let this = receiver();
+    // Spanned at the field, so a field that is not `PartialEq` is reported
+    // there and not at the derive.
     let diffs = entries.iter().map(|(name, const_ident, _)| {
-        quote! {
-            if self.#name != other.#name {
-                changed = changed.union(Self::#const_ident);
+        quote_spanned! {name.span()=>
+            if #this.#name != #other.#name {
+                #changed = #changed.union(Self::#const_ident);
             }
         }
     });
@@ -103,10 +116,10 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
         #[automatically_derived]
         impl #runtime::InheritedData for #ident {
-            fn field_mask_diff(&self, other: &Self) -> #runtime::FieldMask<Self> {
-                let mut changed = #runtime::FieldMask::NONE;
+            fn field_mask_diff(&self, #other: &Self) -> #runtime::FieldMask<Self> {
+                let mut #changed = #runtime::FieldMask::NONE;
                 #(#diffs)*
-                changed
+                #changed
             }
         }
     })
@@ -117,6 +130,7 @@ mod tests {
     use syn::parse_quote;
 
     use super::*;
+    use crate::refusals::assert_refused;
 
     // The positive path (constants, `field_mask_diff`, `r#type` → `FIELD_TYPE`)
     // is exercised from a consuming crate's tests: expansion resolves the
@@ -138,5 +152,17 @@ mod tests {
         assert!(error_of(en).contains("only be derived for a struct"));
         let generic: DeriveInput = parse_quote! { struct G<T> { value: T } };
         assert!(error_of(generic).contains("cannot be derived for a generic type"));
+    }
+
+    #[test]
+    fn every_refusal_of_a_providers_data_is_reported_in_one_build() {
+        let input: DeriveInput = parse_quote! { struct S<T>(T); };
+        assert_refused(
+            expand(&input),
+            &[
+                "cannot be derived for a generic type",
+                "can only be derived for a struct with named fields",
+            ],
+        );
     }
 }

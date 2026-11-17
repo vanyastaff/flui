@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Procedural macros for the FLUI framework (View derives, builder helpers)"
+description = "Procedural macros for the FLUI framework: the view, inspection, animation and route derives and the entry attribute"
 repository.workspace = true
 keywords = ["flui", "proc-macro", "view", "derive"]
 categories = ["gui"]
@@ -26,10 +26,7 @@ quote = "1"
 syn = { workspace = true, features = ["full", "visit"] }
 # `#[flui::main]` reads the crate's `[package.metadata.flui.declares]`; the
 # same parser `proc-macro-crate` already brings.
-toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
-
-[features]
-default = []
+toml_edit = { workspace = true, features = ["parse"] }
 
 [lints]
 workspace = true

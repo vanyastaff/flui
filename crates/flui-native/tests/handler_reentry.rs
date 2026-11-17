@@ -596,6 +596,46 @@ fn headless_failing_method_keeps_the_first_failure() {
     });
 }
 
+/// A handler whose `closed` panics does not cut the close short: the panic
+/// reaches the caller, and the handler is still let go of and the window
+/// untracked from the platform. Red-check: with `complete_close` running its
+/// steps uncontained, the handler stays held and the platform still tracks
+/// the window.
+fn headless_close_whose_handler_panics_still_releases_the_window() {
+    within("headless close whose handler panics", || {
+        let platform = HeadlessPlatform::new();
+        let open_windows = platform.open_windows();
+        let handler = RecordingWindowHandler::new();
+        let window = platform
+            .open_window(WindowOptions::default(), Rc::clone(&handler) as _)
+            .expect("a headless window opens");
+        let id = window.id();
+        handler.react_to_close(|| panic!("a handler's `closed` panics"));
+        let released = Rc::downgrade(&handler);
+        drop(handler);
+
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            window
+                .admit_and_apply(WindowCommand::Close)
+                .expect("the window closes");
+        }))
+        .expect_err("the handler's panic reaches the caller");
+        assert_eq!(
+            payload_text(failure.as_ref()),
+            Some("a handler's `closed` panics"),
+            "the panic that reaches the caller is the handler's"
+        );
+        assert!(
+            released.upgrade().is_none(),
+            "the close let go of the handler despite its panic"
+        );
+        assert!(
+            open_windows.get(id).is_none(),
+            "the close untracked the window despite the handler's panic"
+        );
+    });
+}
+
 /// The exit policy, asked when the last window closes, opens a window and
 /// allows the exit: the window it opened keeps the platform running.
 fn headless_exit_policy_that_opens_a_window_keeps_the_platform() {
@@ -743,6 +783,10 @@ fn handlers_run_outside_every_lock_of_the_headless_platform() {
             (
                 "a failing method keeps the first failure",
                 headless_failing_method_keeps_the_first_failure,
+            ),
+            (
+                "a close whose handler panics still releases the window",
+                headless_close_whose_handler_panics_still_releases_the_window,
             ),
             (
                 "an exit policy that opens a window keeps the platform",

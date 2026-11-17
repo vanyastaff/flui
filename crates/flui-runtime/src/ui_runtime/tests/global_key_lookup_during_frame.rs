@@ -28,8 +28,9 @@ fn frame_constraints() -> BoxConstraints {
 
 /// A stateful toggle, the shape of the Material drawer controller: its
 /// state is mutated through `&self` from outside, by `GlobalKey`.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct Toggle {
+    #[view(key)]
     key: flui_view::GlobalKey<ToggleState>,
     initially_open: bool,
     child: Option<ToggleReader>,
@@ -65,16 +66,6 @@ impl flui_view::ViewState<Toggle> for ToggleState {
             Some(reader) => flui_view::ViewExt::boxed(reader.clone()),
             None => flui_view::ViewExt::boxed(SizedBox::new(0.0, 0.0)),
         }
-    }
-}
-
-impl flui_view::View for Toggle {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-        Some(&self.key)
     }
 }
 
