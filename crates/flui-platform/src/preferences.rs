@@ -578,10 +578,12 @@ impl SystemPreferences {
         self.accent_color
     }
 
-    /// Record the observed accent colour.
+    /// Record the observed accent colour; `None` records that there is none
+    /// to observe (the user set none, or the host cannot read one), so a
+    /// source withdraws an accent it accepted before.
     #[must_use]
-    pub const fn with_accent_color(mut self, value: SrgbColor) -> Self {
-        self.accent_color = Some(value);
+    pub const fn with_accent_color(mut self, value: Option<SrgbColor>) -> Self {
+        self.accent_color = value;
         self
     }
 

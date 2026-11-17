@@ -45,7 +45,7 @@ fn preferences_round_trip_through_their_parts() {
                 .with_vertical(WheelStep::Page)
                 .with_horizontal_characters(4),
         )
-        .with_accent_color(SrgbColor::from_rgba8(0, 120, 215, 255))
+        .with_accent_color(Some(SrgbColor::from_rgba8(0, 120, 215, 255)))
         .with_scroll_bars(
             ScrollBarPreferences::default()
                 .with_visibility(ScrollBarVisibility::Always)

@@ -11,9 +11,10 @@
 //! the fade, so a scroll frame repaints the bar and rebuilds nothing. Where
 //! the painter reports the thumb or the track, the bar takes the contact,
 //! from any device: dragging the thumb moves the position, and a tap on the
-//! track pages by most of a viewport, or moves the thumb to the spot tapped
-//! where the system asks for that (macOS's "Click in the scroll bar to: Jump
-//! to the spot that's clicked").
+//! track pages by most of a viewport. Where the system asks for it (macOS's
+//! "Click in the scroll bar to: Jump to the spot that's clicked") a press on
+//! the track moves the thumb under the pointer at once, and moving on drags
+//! it from there.
 //!
 //! A bar whose author did not set [`thumb_visibility`](Scrollbar::thumb_visibility)
 //! follows the system's scroll-bar visibility (`MediaQuery::scroll_bars_of`,
@@ -744,8 +745,8 @@ impl Bar {
         } else {
             return;
         };
-        if self.system.get().track_click() == Some(ScrollTrackClick::JumpToSpot) {
-            Self::jump_to_spot(&shown, &geometry, at);
+        if self.jumps_to_spot() {
+            // The press already moved the thumb (`press`).
             return;
         }
         let forward = toward_end != shown.axis_direction.is_reversed();
@@ -793,10 +794,33 @@ impl Bar {
         let (min, max) = (position.min_scroll_extent(), position.max_scroll_extent());
         let target = min + along * (max - min);
         if target.is_finite() {
-            // A jump, as the system's own scroll bars move: the thumb lands
-            // under the pointer, ready to be dragged on.
+            // A jump, as the system's own scroll bars move.
             let _ = shown.controller.jump_to(target);
         }
+    }
+
+    /// Whether the system asks a press on the track to move the thumb there.
+    fn jumps_to_spot(&self) -> bool {
+        self.system.get().track_click() == Some(ScrollTrackClick::JumpToSpot)
+    }
+
+    /// Where a press at `local` lands, after moving the thumb under it when
+    /// it lands on the track and the system asks for that: then it lands on
+    /// the thumb, so moving on drags the thumb from there, as AppKit's
+    /// scroller does.
+    fn press(&self, local: Offset) -> Option<Landing> {
+        let landing = self.takes(local)?;
+        if landing == Landing::Track && self.jumps_to_spot() {
+            let shown = self.shown()?;
+            let geometry = self.geometry()?;
+            let at = match shown.axis_direction.axis() {
+                Axis::Vertical => local.dy,
+                Axis::Horizontal => local.dx,
+            };
+            Self::jump_to_spot(&shown, &geometry, at);
+            return Some(Landing::Thumb);
+        }
+        Some(landing)
     }
 }
 
@@ -1013,7 +1037,7 @@ impl ViewState<Scrollbar> for ScrollbarState {
             // The contact the drag follows: a second finger that lands
             // elsewhere does not change where this one went down.
             .on_down(move |_ctx, details| {
-                pressed.pressed.set(pressed.takes(details.local_position));
+                pressed.pressed.set(pressed.press(details.local_position));
             })
             .on_start(move |_ctx, _details| {
                 if started.pressed.get() == Some(Landing::Thumb) {

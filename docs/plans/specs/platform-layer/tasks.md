@@ -7434,7 +7434,7 @@ GPU-память простаивающего или невидимого окн
   `-0.0` читается как `0.0`), `SystemPreferences::accent_color`, `ScrollBarPreferences`
   (`ScrollBarVisibility::{WhenScrolling, Always}`, `ScrollTrackClick::{Page, JumpToSpot}`),
   поля в `PreferenceParts`, в обоих зеркалах записи и в схеме (`accent_color`,
-  `scroll_bar_visibility`, `scroll_track_click`; протокол 0.22, добавление). Источники: Windows —
+  `scroll_bar_visibility`, `scroll_track_click`; протокол 0.23, добавление). Источники: Windows —
   `UISettings.GetColorValue(Accent)` и `AutoHideScrollBars`, события `ColorValuesChanged` и
   `AutoHideScrollBarsChanged` (общий список `UiSettingsEvent` вместо двух полей токенов;
   интерфейс, которого нет у старой Windows, — не наблюдение), приёмник широковещаний слышит ещё
@@ -7444,9 +7444,9 @@ GPU-память простаивающего или невидимого окн
   (`Retries`: тот же шаг, счёт попыток), второй тип графика снят; macOS —
   `controlAccentColor` в `sRGBColorSpace`, `preferredScrollerStyle`, `AppleScrollerPagingBehavior`,
   уведомления `NSSystemColorsDidChangeNotification` и
-  `NSPreferredScrollerStyleDidChangeNotification`; Web — вычисленный `AccentColor` при каждом
-  чтении. iOS и Android акцента не дают (решение §4 ADR-0359: у Android палитра, роли которой
-  зависят от светлой и тёмной темы). Кольцо фокуса из строки не построено: ни один виджет не
+  `NSPreferredScrollerStyleDidChangeNotification`, распределённое
+  `AppleInterfaceThemeChangedNotification`, акцент разрешён во внешнем виде приложения; iOS, Android и Web акцента не дают (решение §4 ADR-0359: у Android палитра, роли которой
+  зависят от светлой и тёмной темы; Web — `AccentColor` у браузера против отпечатков фиксирован, прогон в браузерах в долгах). Кольцо фокуса из строки не построено: ни один виджет не
   читает его цвет, а новое публичное поле без потребителя запрещено. Потребители:
   `MediaQueryData::{accent_color, scroll_bars}`; `Scrollbar` без `thumb_visibility` следует
   видимости системы, тап по дорожке переносит бегунок в точку при `JumpToSpot`; основной цвет
@@ -7461,7 +7461,7 @@ GPU-память простаивающего или невидимого окн
   `overlay_scrolling_is_scroll_bars_that_show_while_scrolling`, случаи `accent-color` и
   `overlay-scrolling` в `linux_preferences` (с «не задан», который оставляет прежний акцент, —
   владелец не видит снятия за 30 с), WSL со стоящим порталом;
-  `a_computed_colour_reads_back_only_in_srgb`; `preference_rows_keep_their_json_spelling`
+  `preference_rows_keep_their_json_spelling`
   (новая строка, прежние байты не тронуты),
   `every_vocabulary_variant_round_trips_through_the_recording_dto`;
   `a_track_tap_jumps_to_the_spot_where_the_system_asks` и
@@ -7469,7 +7469,22 @@ GPU-память простаивающего или невидимого окн
   `an_unset_primary_follows_the_system_accent` (без акцента — системный синий). Не прогнаны:
   живая смена акцента и полос на Windows (настройки машины не меняли), GNOME или KDE, macOS
   (только проверка типов), браузер — заметки строк «Accent colour» и «Scroll-bar behaviour»
-  в `platform-parity.toml` и `docs/gaps.md`.
+  в `platform-parity.toml` и `docs/gaps.md`. После независимого чтения: каждое значение
+  снимка Windows читается отдельно (упавший геттер оставляет прежнее значение и требует
+  повтора), повторы — `Retries` над `flui_platform::Backoff` (0,1–3,2 с, шесть; Linux 1–16 с,
+  пять) вместо 100 мс без конца; macOS читает каждое значение отдельно; ключ, которого нет у
+  портала, снимает значение после смены владельца портала (`MissingKey::Withdraws`); бегунок
+  переносится по нажатию и тащится дальше; Cupertino берёт акцент только при яркости платформы,
+  цвет на акценте — белый или чёрный по контрасту. Тесты (в скобках — с откатом):
+  `failed_reads_retry_on_a_doubling_schedule_and_stop` (фиксированные 100 мс — паузы не
+  удваиваются), `an_unreadable_value_keeps_the_others_and_owes_a_retry` (неполное чтение без
+  повтора), `every_settings_event_is_observed`,
+  `a_missing_key_withdraws_its_field_only_after_the_portal_changed_hands`, случай
+  `accent-withdrawn` (с `Keeps` после смены владельца — снятия нет за 30 с),
+  `platform_recordings_replay_on_the_headless_host` и `native_recordings_write_back_byte_for_byte`
+  (перепутанные `Always`/`WhenScrolling` в разборе — падают),
+  `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
+  падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
 
 ## Отступление от порядка, решённое владельцем
 

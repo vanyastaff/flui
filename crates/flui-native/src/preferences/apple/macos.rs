@@ -1,10 +1,10 @@
 //! Public AppKit observations sampled on the application owner lane.
 //!
-//! Five notifications only wake the owner, which samples every value again:
+//! Six notifications only wake the owner, which samples every value again:
 //! the workspace's accessibility display options (reduce motion, increase
 //! contrast), the current locale (preferred languages and regional formats),
-//! the system colours (the accent), the preferred scroller style, and the
-//! application becoming active. AppKit posts nothing when the double-click
+//! the system colours and a switch between light and dark (the accent), the
+//! preferred scroller style, and the application becoming active. AppKit posts nothing when the double-click
 //! interval or "Click in the scroll bar to" changes. The user changes them in
 //! System Settings, another application, so they are read again when this
 //! one is active again; a change written while it stays active
@@ -28,13 +28,14 @@ use flui_platform::{
 };
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSApplicationDidBecomeActiveNotification, NSColor, NSColorSpace, NSEvent,
+    NSApplication, NSApplicationDidBecomeActiveNotification, NSColor, NSColorSpace, NSEvent,
     NSPreferredScrollerStyleDidChangeNotification, NSScroller, NSScrollerStyle,
     NSSystemColorsDidChangeNotification, NSWorkspace,
     NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
 };
 use objc2_foundation::{
-    NSCurrentLocaleDidChangeNotification, NSLocale, NSNotificationCenter, NSUserDefaults, ns_string,
+    NSCurrentLocaleDidChangeNotification, NSDistributedNotificationCenter, NSLocale,
+    NSNotificationCenter, NSUserDefaults, ns_string,
 };
 
 use crate::owner::apple::macos::observation::Observation;
@@ -91,7 +92,7 @@ impl std::fmt::Debug for PreferenceSource {
 /// The notifications that invalidate a [`PreferenceSource`]. Owned on the main
 /// thread beside the source and removed when dropped.
 struct PreferenceObservers {
-    _observations: [Observation; 5],
+    _observations: [Observation; 6],
 }
 
 impl PreferenceSource {
@@ -219,6 +220,15 @@ impl PreferenceObservers {
                     NSPreferredScrollerStyleDidChangeNotification,
                     wake(),
                 ),
+                // A switch between light and dark changes the accent the
+                // appearance resolves; AppKit posts it to other applications
+                // only through the distributed centre, and while this one is
+                // inactive the activation notice reads it again.
+                Observation::new(
+                    NSDistributedNotificationCenter::defaultCenter().into_super(),
+                    ns_string!("AppleInterfaceThemeChangedNotification"),
+                    wake(),
+                ),
             ]
         };
         Self {
@@ -233,12 +243,12 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
             message: "AppKit preferences require the application owner thread".into(),
         });
     };
-    let seconds = NSEvent::doubleClickInterval();
-    let interval =
-        Duration::try_from_secs_f64(seconds).map_err(|error| PlatformError::Preferences {
-            message: error.to_string(),
-        })?;
-    let gestures = GesturePreferences::default().with_double_click_interval(interval);
+    // Each value is read alone: an interval AppKit gives as no duration is
+    // no observation, and the rest of the snapshot stands.
+    let gestures = Duration::try_from_secs_f64(NSEvent::doubleClickInterval()).map_or_else(
+        |_| GesturePreferences::default(),
+        |interval| GesturePreferences::default().with_double_click_interval(interval),
+    );
     let workspace = NSWorkspace::sharedWorkspace();
     let motion = if workspace.accessibilityDisplayShouldReduceMotion() {
         MotionPreference::Reduce
@@ -249,11 +259,8 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
         .with_gestures(gestures)
         .with_motion(motion)
         .with_high_contrast(workspace.accessibilityDisplayShouldIncreaseContrast())
-        .with_scroll_bars(scroll_bars(main_thread));
-    let preferences = match accent_color()? {
-        Some(accent) => preferences.with_accent_color(accent),
-        None => preferences,
-    };
+        .with_scroll_bars(scroll_bars(main_thread))
+        .with_accent_color(accent_color(main_thread));
     let languages = NSLocale::preferredLanguages();
     let locales = preferred_locales::from_language_tags(
         languages.iter().map(|language| language.to_string()),
@@ -267,26 +274,43 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
     })
 }
 
-/// `controlAccentColor` in sRGB: a catalog colour, converted before its
-/// components are read. A colour AppKit cannot convert is no observation;
-/// components outside what an `SrgbColor` admits are a failed read, which
-/// keeps the accent accepted before and owes a retry.
-fn accent_color() -> Result<Option<SrgbColor>, PlatformError> {
-    let Some(accent) =
-        NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
-    else {
-        return Ok(None);
-    };
+/// `controlAccentColor` as the application's appearance resolves it (dark
+/// or light, increased contrast or not), in sRGB: a catalog colour, resolved
+/// and converted before its components are read. The host publishes the
+/// accent of the appearance it publishes beside it, and reads it again when
+/// that appearance changes (ADR-0359 §1). A colour AppKit cannot convert, or
+/// components an `SrgbColor` refuses, is no observation; the rest of the
+/// snapshot stands.
+fn accent_color(main_thread: MainThreadMarker) -> Option<SrgbColor> {
+    let resolved = std::cell::Cell::new(None);
+    // AppKit calls the block while the appearance is current, inside the
+    // OS-entry boundary like every callback it makes.
+    let read = block2::StackBlock::new(|| {
+        crate::owner::panic_boundary::os_entry(
+            "the accent read",
+            (),
+            crate::owner::panic_boundary::AfterPanic::Answer(|()| ()),
+            || resolved.set(control_accent()),
+        );
+    });
+    NSApplication::sharedApplication(main_thread)
+        .effectiveAppearance()
+        .performAsCurrentDrawingAppearance(&read);
+    resolved.get()
+}
+
+/// `controlAccentColor` as the current drawing appearance resolves it, in
+/// sRGB; `None` when AppKit cannot convert it or the result is refused.
+fn control_accent() -> Option<SrgbColor> {
+    let accent =
+        NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
     SrgbColor::try_new(
         accent.redComponent(),
         accent.greenComponent(),
         accent.blueComponent(),
         accent.alphaComponent(),
     )
-    .map(Some)
-    .map_err(|error| PlatformError::Preferences {
-        message: format!("controlAccentColor: {error}"),
-    })
+    .ok()
 }
 
 /// "Show scroll bars" as `preferredScrollerStyle` resolves it (an overlay

@@ -127,6 +127,7 @@ pub mod linux {
         "late-backend",
         "accent-color",
         "overlay-scrolling",
+        "accent-withdrawn",
     ];
 
     /// The X11 platform on the harness's X server, shared as `run_shared` takes it.
@@ -167,8 +168,9 @@ pub mod linux {
         text_scale: std::sync::atomic::AtomicU64,
         /// Wakes whoever waits for the source to read `text-scaling-factor`.
         scale_read: Arc<tokio::sync::Notify>,
-        /// `accent-color`'s red, green and blue; out of range is unset.
-        accent: std::sync::Mutex<(f64, f64, f64)>,
+        /// `accent-color`'s red, green and blue; out of range is unset, and
+        /// `None` is a backend without the key.
+        accent: std::sync::Mutex<Option<(f64, f64, f64)>>,
         overlay_scrolling: AtomicBool,
     }
 
@@ -198,8 +200,13 @@ pub mod linux {
                 }
                 ("org.freedesktop.appearance", "accent-color") => {
                     let accent = *self.accent.lock().expect("accent fixture");
-                    Ok(zbus::OwnedVariant::try_from(zbus::Variant::from(accent))
-                        .expect("an accent tuple is an owned value"))
+                    match accent {
+                        Some(accent) => {
+                            Ok(zbus::OwnedVariant::try_from(zbus::Variant::from(accent))
+                                .expect("an accent tuple is an owned value"))
+                        }
+                        None => Err(SettingsError::NotFound("no accent-color".into())),
+                    }
                 }
                 ("org.gnome.desktop.interface", "overlay-scrolling") => {
                     Ok(self.overlay_scrolling.load(Ordering::SeqCst).into())
@@ -239,6 +246,9 @@ pub mod linux {
         /// The user unset the accent: the portal reports `(-1, -1, -1)`.
         UnsetAccent,
         OverlayScrolling(bool),
+        /// Another portal takes the bus name, one whose backend has no
+        /// `accent-color`; no setting signal is sent.
+        PortalWithoutAccent,
     }
 
     impl Change {
@@ -247,7 +257,7 @@ pub mod linux {
             match self {
                 Self::Contrast(high) => Value::Contrast(high),
                 Self::TextScale(scale) => Value::TextScale(Some(scale)),
-                Self::UnsetAccent => Value::Accent(None),
+                Self::UnsetAccent | Self::PortalWithoutAccent => Value::Accent(None),
                 Self::OverlayScrolling(true) => {
                     Value::ScrollBars(flui_platform::ScrollBarVisibility::WhenScrolling)
                 }
@@ -301,14 +311,18 @@ pub mod linux {
                 Value::TextScale(None),
                 Change::TextScale(1.5),
             ),
-            "accent-color" => (
+            "accent-color" | "accent-withdrawn" => (
                 1.25,
                 None,
                 Value::Accent(Some(
                     flui_platform::SrgbColor::try_new(ACCENT.0, ACCENT.1, ACCENT.2, 1.0)
                         .expect("an accent in range"),
                 )),
-                Change::UnsetAccent,
+                if case == "accent-color" {
+                    Change::UnsetAccent
+                } else {
+                    Change::PortalWithoutAccent
+                },
             ),
             "overlay-scrolling" => (
                 1.25,
@@ -324,7 +338,7 @@ pub mod linux {
             high_contrast: AtomicBool::new(true),
             text_scale: std::sync::atomic::AtomicU64::new(f64::to_bits(initial_scale)),
             scale_read: Arc::clone(&scale_read),
-            accent: std::sync::Mutex::new(ACCENT),
+            accent: std::sync::Mutex::new(Some(ACCENT)),
             overlay_scrolling: AtomicBool::new(true),
         };
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -418,7 +432,7 @@ pub mod linux {
                 }
                 Change::UnsetAccent => {
                     let unset = (-1.0_f64, -1.0_f64, -1.0_f64);
-                    *server.get().await.accent.lock().expect("accent fixture") = unset;
+                    *server.get().await.accent.lock().expect("accent fixture") = Some(unset);
                     (
                         "org.freedesktop.appearance",
                         "accent-color",
@@ -436,6 +450,31 @@ pub mod linux {
                         "overlay-scrolling",
                         zbus::Variant::from(overlay),
                     )
+                }
+                Change::PortalWithoutAccent => {
+                    // The same values but no accent, behind another
+                    // connection: the bus tells the watch its owner changed.
+                    let replacement = Values {
+                        gnome,
+                        high_contrast: AtomicBool::new(true),
+                        text_scale: std::sync::atomic::AtomicU64::new(f64::to_bits(1.25)),
+                        scale_read: Arc::new(tokio::sync::Notify::new()),
+                        accent: std::sync::Mutex::new(None),
+                        overlay_scrolling: AtomicBool::new(true),
+                    };
+                    connection
+                        .release_name("org.freedesktop.portal.Desktop")
+                        .await
+                        .expect("the first portal gives up its name");
+                    let _replacement = zbus::connection::Builder::session()
+                        .name("org.freedesktop.portal.Desktop")
+                        .serve_at("/org/freedesktop/portal/desktop", replacement)
+                        .build()
+                        .await
+                        .expect("the replacement portal takes the name");
+                    // Kept until the case aborts this task.
+                    std::future::pending::<()>().await;
+                    return;
                 }
             };
             emit_value(&connection, namespace, key, value).await;
@@ -758,6 +797,7 @@ pub mod linux {
                 | "text-scale-out-of-range"
                 | "accent-color"
                 | "overlay-scrolling"
+                | "accent-withdrawn"
         ) {
             return run_value_case(case);
         }

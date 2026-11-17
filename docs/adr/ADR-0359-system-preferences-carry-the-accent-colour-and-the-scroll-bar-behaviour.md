@@ -63,6 +63,14 @@ alpha as `f32`, sRGB-encoded with straight alpha, each finite and within `0..=1`
 A host converts the system's colour into sRGB before it builds the value, so a wide-gamut colour
 arrives clipped to sRGB rather than misread.
 
+The accent a host publishes is the colour resolved for the appearance it publishes beside it:
+where the system's accent depends on light or dark and on increased contrast (AppKit's catalog
+colours), the host resolves it under the application's appearance and reads it again when that
+appearance or the contrast setting changes, so one revision carries the accent and the appearance
+it belongs to. Where the accent does not depend on them (Windows' `Accent`, the portal's
+`accent-color`), the user's colour is published as it is. An accent a host cannot read is no
+observation; it does not fail the rest of the snapshot.
+
 ### §2 Scroll-bar behaviour
 
 `SystemPreferences::scroll_bars() -> &ScrollBarPreferences`, two independent observations:
@@ -78,16 +86,17 @@ Both enums are `#[non_exhaustive]`.
 | Host | Accent colour | Visibility | Track click |
 |------|---------------|------------|-------------|
 | Windows | `UISettings.GetColorValue(Accent)` | "Always show scrollbars" (`UISettings.AutoHideScrollBars`) | none: Windows pages, Shift-click jumps, and has no setting |
-| macOS | `NSColor.controlAccentColor` in `sRGBColorSpace` | `NSScroller.preferredScrollerStyle` | `AppleScrollerPagingBehavior` (absent: page) |
+| macOS | `NSColor.controlAccentColor` under the application's effective appearance, in `sRGBColorSpace` | `NSScroller.preferredScrollerStyle` | `AppleScrollerPagingBehavior` (absent: page) |
 | Wayland, X11 | the Settings portal's `org.freedesktop.appearance accent-color` | GNOME's `overlay-scrolling` through the portal | none: GTK's `gtk-primary-button-warps-slider` is an XSETTING the portal does not carry |
-| Web | the computed CSS system colour `AccentColor` | none | none |
+| Web | none: a browser resisting fingerprinting resolves the CSS `AccentColor` to a fixed colour a page cannot tell from the user's | none | none |
 | iOS | none: the tint belongs to each application | none | none |
 | Android | none (§4) | none | none |
 | Headless | what the test sets | what the test sets | what the test sets |
 
 A portal `accent-color` with a component outside `0..=1` is the portal specification's "unset":
-no accent, which clears one accepted before. A browser that does not know `AccentColor` refuses
-the declaration; the host reads that as no observation, not as the inherited colour.
+no accent, which clears one accepted before. The web host reads no accent until a run in each
+browser shows which ones resolve `AccentColor` to the user's colour; that run is owed in the parity
+table.
 
 ### §4 Android reports no accent
 
@@ -99,15 +108,23 @@ built from all of it, a preference of its own; until one exists, `accent_color` 
 
 ### §5 Delivery
 
-Each source follows ADR-0172's rules and adds no mechanism. Windows registers
-`ColorValuesChanged` and `AutoHideScrollBarsChanged` beside its text-scale and animation events,
-and its broadcast receiver hears `WM_DWMCOLORIZATIONCOLORCHANGED` beside `WM_SETTINGCHANGE`; an
-interface an older Windows lacks is no observation. macOS observes
-`NSSystemColorsDidChangeNotification` and `NSPreferredScrollerStyleDidChangeNotification`; the
-paging default posts nothing and is read again when the application is active again, as the
-double-click interval is. The Linux watch reads the two keys with the others and retries them on
-the same bounded schedule, whose pauses come from `flui_platform::Backoff`. The browser announces
-no accent change, so the web host reads the accent at every sample another notice starts.
+Each source follows ADR-0172's rules. Every value of a snapshot is read alone: a getter that
+fails keeps the value accepted before it and owes a retry, and the others stand. A read that
+fails or leaves a value unread is retried on a bounded schedule of `flui_platform::Backoff`
+pauses (`Retries`: Windows 0.1 to 3.2 s, six retries; the Linux watch 1 to 16 s, five), then not
+until the system next reports a change; nothing polls.
+
+Windows registers `ColorValuesChanged` and `AutoHideScrollBarsChanged` beside its text-scale and
+animation events, and its broadcast receiver hears `WM_DWMCOLORIZATIONCOLORCHANGED` beside
+`WM_SETTINGCHANGE`; an interface an older Windows lacks is no observation. macOS observes
+`NSSystemColorsDidChangeNotification`, `NSPreferredScrollerStyleDidChangeNotification` and the
+distributed `AppleInterfaceThemeChangedNotification` (a switch between light and dark), beside
+the accessibility display options it already observes; the paging default posts nothing and is
+read again when the application is active again, as the double-click interval is. The Linux
+watch reads the two keys with the others. A key the portal answers it does not have keeps its
+value while the same portal answers, and withdraws it once the portal changed hands or the watch
+connected anew: the backend answering now is the one to believe (for GNOME's `clock-format`, the
+environment's hour cycle stands again).
 
 ### §6 Consumers
 
@@ -116,11 +133,16 @@ runtime) and `scroll_bars: ScrollBarPreferences`, with the field-scoped readers
 `MediaQuery::accent_color_of` and `MediaQuery::scroll_bars_of`.
 
 - `Scrollbar::thumb_visibility` is optional: unset, the thumb shows at rest where the system asks
-  for `Always` and only while scrolling otherwise; an authored value wins. A tap on the track,
-  off the thumb, moves the thumb's middle to the spot at once where the system asks for
-  `JumpToSpot`, and pages otherwise.
-- An unset `CupertinoThemeData` primary colour resolves to the accent when the host observes one,
-  as AppKit tints its controls, and to system blue otherwise; an authored primary wins.
+  for `Always` and only while scrolling otherwise; an authored value wins. Where the system asks
+  for `JumpToSpot`, a press on the track moves the thumb's middle under the pointer at once and
+  moving on drags the thumb from there, as AppKit's scroller does; otherwise a tap on the track
+  pages.
+- An unset `CupertinoThemeData` primary colour resolves to the accent when the host observes one
+  and the theme's brightness is the platform's, as AppKit tints its controls. The accent is
+  resolved for the platform's appearance (§1), so a theme forced to the other brightness keeps the
+  dynamic system blue with its dark and high-contrast variants, as it does without an accent. An
+  unset contrasting colour on the accent is white or black, whichever contrasts more with it
+  (`Color::contrasting_text_color`). An authored primary or contrasting colour wins.
 
 ### Consequences
 
@@ -129,7 +151,8 @@ runtime) and `scroll_bars: ScrollBarPreferences`, with the field-scoped readers
 - Good, because the recordings carry both fields, so a replay sees what the run saw.
 - Bad, because a Material application does not follow the accent yet: a Material colour scheme
   seeded from it is a design decision of its own.
-- Bad, because the web host shows an accent change only at its next sample.
+- Bad, because a web application follows no accent until a browser run shows which browsers
+  report the user's.
 - Neutral, because Windows' derived accent shades stay Windows' policy; a design system derives
   its own.
 
@@ -139,15 +162,22 @@ runtime) and `scroll_bars: ScrollBarPreferences`, with the field-scoped readers
   `scroll_bar_observations_stay_apart_and_unknown_until_read` in `flui-platform`'s
   `preferences_contract`; `preferences_round_trip_through_their_parts`.
 - Windows: `windows_reads_preferences_before_a_user_window_exists` compares the snapshot with
-  `UISettings`' own answers; `a_colorization_change_wakes_the_owner_without_a_user_window`.
+  `UISettings`' own answers; `a_colorization_change_wakes_the_owner_without_a_user_window`;
+  `failed_reads_retry_on_a_doubling_schedule_and_stop`,
+  `an_unreadable_value_keeps_the_others_and_owes_a_retry` and `every_settings_event_is_observed`
+  in `native_preference_read_recovery`.
 - Linux: `the_portal_accent_is_a_colour_in_range_and_unset_outside_it`,
-  `overlay_scrolling_is_scroll_bars_that_show_while_scrolling`, and the stand-in portal cases
-  `accent-color` and `overlay-scrolling` of `linux_preferences`.
-- Web: `a_computed_colour_reads_back_only_in_srgb`.
+  `overlay_scrolling_is_scroll_bars_that_show_while_scrolling`,
+  `a_missing_key_withdraws_its_field_only_after_the_portal_changed_hands`, and the stand-in portal
+  cases `accent-color`, `overlay-scrolling` and `accent-withdrawn` of `linux_preferences`.
+- The schedule: `a_retry_schedule_doubles_and_runs_out`, `the_watchs_retries_are_bounded`.
 - Recordings: `preference_rows_keep_their_json_spelling`,
-  `every_vocabulary_variant_round_trips_through_the_recording_dto`.
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`,
+  `platform_recordings_replay_on_the_headless_host` (each new field in its own spelling) and
+  `native_recordings_write_back_byte_for_byte`.
 - Consumers: `a_track_tap_jumps_to_the_spot_where_the_system_asks` and
   `an_unset_thumb_follows_the_systems_scroll_bar_visibility` in `flui-widgets`' `scrollbar`
-  table; `an_unset_primary_follows_the_system_accent` in `flui-cupertino`.
+  table; `an_unset_primary_follows_the_system_accent` and
+  `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` in `flui-cupertino`.
 - Native runs owed on each host are notes of the "Accent colour" and "Scroll-bar behaviour" rows
   of [`docs/platform-parity.md`](../platform-parity.md#system-preferences).

@@ -441,9 +441,10 @@ fn system_scroll_bars(preferences: ScrollBarPreferences) -> SystemPreferences {
 }
 
 /// Where the system asks for it (macOS's "Jump to the spot that's
-/// clicked"), a tap on the track moves the thumb's middle to the spot at
-/// once; where it asks for paging, or says nothing, the tap pages. Red-check:
-/// page whatever the system says.
+/// clicked"), a press on the track moves the thumb's middle to the spot at
+/// once and moving on drags it from there; where it asks for paging, or says
+/// nothing, a tap pages. Red-check: page whatever the system says, or jump on
+/// the release.
 pub(crate) fn a_track_tap_jumps_to_the_spot_where_the_system_asks() {
     for (track_click, after_tap) in [
         // 300 of 3000 show: a thumb of 30 travels 270; its middle at 150 is
@@ -463,6 +464,28 @@ pub(crate) fn a_track_tap_jumps_to_the_spot_where_the_system_asks() {
         run(&mut laid, Duration::from_millis(200));
         assert_close(scroll.pixels(), after_tap, &format!("{track_click:?}"));
     }
+    // The jump happens on the press, and moving on drags the thumb from
+    // there: 30 more pixels of the track's 270 are 300 of the list's 2700.
+    let scroll = ScrollController::new();
+    let (mut laid, _vsync) = animated(shown(column(&scroll, 3000.0)));
+    laid.set_system_preferences(system_scroll_bars(
+        ScrollBarPreferences::default().with_track_click(ScrollTrackClick::JumpToSpot),
+    ));
+    laid.pump_for(Duration::ZERO);
+    laid.dispatch_pointer_down(297.0, 150.0);
+    run(&mut laid, FRAME);
+    assert_close(scroll.pixels(), 1350.0, "the press jumps");
+    for y in [160.0, 170.0, 180.0] {
+        laid.dispatch_pointer_move(297.0, y);
+        run(&mut laid, FRAME);
+    }
+    laid.dispatch_pointer_up(297.0, 180.0);
+    run(&mut laid, Duration::from_millis(200));
+    assert!(
+        scroll.pixels() > 1350.0 && scroll.pixels() <= 1650.0,
+        "moving on drags the thumb from the spot: {}",
+        scroll.pixels()
+    );
     // A reversed list measures the spot from its far end.
     let scroll = ScrollController::new();
     let (mut laid, _vsync) = animated(shown(

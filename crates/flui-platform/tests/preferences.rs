@@ -336,7 +336,7 @@ fn an_accent_colour_enters_only_as_finite_srgb_in_range() {
         SrgbColor::try_new(0.0, 0.2, 1.0, 1.0).expect("in range"),
         "an 8-bit component is divided by 255"
     );
-    let snapshot = SystemPreferences::default().with_accent_color(color);
+    let snapshot = SystemPreferences::default().with_accent_color(Some(color));
     assert_eq!(snapshot.accent_color(), Some(color));
     assert_eq!(SystemPreferences::default().accent_color(), None);
 }

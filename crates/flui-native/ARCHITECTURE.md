@@ -2667,7 +2667,9 @@ motion is unobserved, as every other key without a value is; failed reads
 preserve the last accepted snapshot. The appearance `accent-color` is an sRGB
 `(ddd)`; a component outside `0..=1` is the portal specification's "unset", which
 clears an accepted accent rather than failing the read. GNOME's
-`overlay-scrolling` gives the scroll-bar visibility (ADR-0359). Settings v1 uses
+`overlay-scrolling` gives the scroll-bar visibility (ADR-0359). A key the portal
+answers it lacks keeps what it gave while the same portal answers, and withdraws
+it after `NameOwnerChanged` or on a new connection (`MissingKey`). Settings v1 uses
 its double-variant `Read` reply. The watch never polls. A refresh is retried on
 `READ_RETRIES`' doubling schedule (`flui_platform::Backoff`, counted so it
 runs out), which unrelated notifications cannot postpone,
