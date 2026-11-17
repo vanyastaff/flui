@@ -1069,19 +1069,26 @@ impl HeadlessHostWindow {
             state.visible = false;
             state.closed = true;
         }
+        // The steps below run user code (the state publication, `closed` and
+        // the deliveries queued ahead of it, the facets' detach, the exit
+        // policy, the handler's release). Every step runs whichever one
+        // before it panics: `closed` is already set, so nothing later
+        // releases what this close skips. The first panic resumes at the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         // Hidden and detached, in one revision, before the window is gone.
-        self.publish_state();
-        self.delivery.dispatch_close();
+        failure.contain(|| self.publish_state());
+        failure.contain(|| self.delivery.dispatch_close());
         // What the window-level positions put on the window goes with it.
-        self.facets.text.detach();
-        self.facets.accessibility.detach();
-        self.notify_closed();
+        failure.contain(|| self.facets.text.detach());
+        failure.contain(|| self.facets.accessibility.detach());
+        failure.contain(|| self.notify_closed());
         // After the exit-policy consult, never before: a hook that inspects
         // the window it was just told about must not find its handler
         // already gone. Its fate is settled once the handler, which owns the
         // renderer, let go: a keep recorded before then, while the window was
         // open or by that release, is the one reported.
-        self.delivery.clear();
+        failure.contain(|| self.delivery.clear());
+        failure.resume();
     }
 
     /// Whether the window's surface target was asked, before the close let

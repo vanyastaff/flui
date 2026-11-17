@@ -1414,23 +1414,32 @@ impl SceneWindow for IOSWindow {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.begin_retirement();
+        // Every step below runs whichever one before it panics (the state
+        // publication, the surface release, `closed` and the deliveries
+        // queued ahead of it, the handler's release, the facets' detach):
+        // `closed` is already set, so nothing later releases what this close
+        // skips. The first panic resumes at the end.
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| self.begin_retirement());
         // A closed window's snapshot is detached, hidden and unfocused.
-        self.delivery.publish_state();
-        let failure = self
-            .delivery
-            .dispatch_surface_immediate(SurfaceChange::Release);
-        crate::owner::panic_boundary::contain_owner_callback(|| self.delivery.dispatch_close());
-        crate::owner::panic_boundary::contain_owner_callback(|| self.clear_then_keep_if_kept());
-        self.facets.text.detach();
-        self.facets.accessibility.detach();
+        failure.contain(|| self.delivery.publish_state());
+        if let Some(released) = failure
+            .contain(|| {
+                self.delivery
+                    .dispatch_surface_immediate(SurfaceChange::Release)
+            })
+            .flatten()
+        {
+            failure.record(released.into_payload());
+        }
+        failure.contain(|| self.delivery.dispatch_close());
+        failure.contain(|| self.clear_then_keep_if_kept());
+        failure.contain(|| self.facets.text.detach());
+        failure.contain(|| self.facets.accessibility.detach());
         if let Some(marker) = MainThreadMarker::new() {
-            self.detach_native(marker);
+            failure.contain(|| self.detach_native(marker));
         }
-        // The release's panic is the first failure; the close finished first.
-        if let Some(failure) = failure {
-            failure.resume();
-        }
+        failure.resume();
     }
 }
 

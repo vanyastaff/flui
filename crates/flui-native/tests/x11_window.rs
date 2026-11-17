@@ -1114,7 +1114,14 @@ mod cases {
                 .expect("the window closes");
             run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
         }));
-        assert!(closing.is_err(), "the handler's panic reaches the caller");
+        let Err(payload) = closing else {
+            panic!("the handler's panic reaches the caller");
+        };
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"a handler's `closed` panics"),
+            "the panic that reaches the caller is the handler's"
+        );
         run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
 
         assert!(

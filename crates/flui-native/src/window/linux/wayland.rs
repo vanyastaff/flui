@@ -1381,24 +1381,32 @@ mod toplevel {
         /// Leave the seats' input, take down the frame the window drew, let
         /// go of the handler, then destroy the role objects.
         fn retire(&self) {
+            // Every step runs whichever one before it panics (the input's or
+            // the drag's detach can resume a panic of user code), so the frame
+            // and the role objects always go and the handler is always let go
+            // of. The first panic resumes at the end.
+            let mut failure = flui_foundation::panic::FirstPanic::new();
             // No later request names a serial the closed window took.
-            self.last_input.surface_gone(&self.surface.0);
-            self.input.detach(self.id);
-            self.drag.detach(self.id);
+            failure.contain(|| self.last_input.surface_gone(&self.surface.0));
+            failure.contain(|| self.input.detach(self.id));
+            failure.contain(|| self.drag.detach(self.id));
             if let Some(client_frame) = self.client_frame.borrow_mut().take() {
-                client_frame.destroy();
+                failure.contain(|| client_frame.destroy());
             }
             let roles = self.roles.borrow_mut().take();
             let retirement = self.delivery.retirement();
-            self.delivery.clear_then(move || {
-                // The `wl_surface` stays with its last holder either way
-                // (`WaylandSurface`'s `keep_past_close`); the fate is settled
-                // so that a later keep does nothing.
-                let _fate = retirement.settle();
-                if let Some(roles) = roles {
-                    roles.destroy();
-                }
+            failure.contain(|| {
+                self.delivery.clear_then(move || {
+                    // The `wl_surface` stays with its last holder either way
+                    // (`WaylandSurface`'s `keep_past_close`); the fate is
+                    // settled so that a later keep does nothing.
+                    let _fate = retirement.settle();
+                    if let Some(roles) = roles {
+                        roles.destroy();
+                    }
+                });
             });
+            failure.resume();
         }
     }
 

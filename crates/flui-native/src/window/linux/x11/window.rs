@@ -1609,17 +1609,18 @@ impl X11Window {
             record.shown = false;
             record.reveal_pending = false;
         }
+        // The steps below run user code (a tracing subscriber, `closed` and a
+        // delivery queued ahead of it, the facets' detach). Every step runs
+        // whichever one before it panics: `closed` is already set, so nothing
+        // later releases what this close skips. The first panic resumes at
+        // the end.
+        let mut failure = FirstPanic::new();
         // The visible effect does not wait for the handler.
         if self.native.get() == NativeWindow::Live
             && let Err(error) = self.xcb().unmap_window(self.xid)
         {
-            tracing::debug!(%error, "cannot unmap a closing X11 window");
+            failure.contain(|| tracing::debug!(%error, "cannot unmap a closing X11 window"));
         }
-        // `closed`, a delivery queued ahead of it and the facets' detach run
-        // user code. Every step runs whichever one before it panics: `closed`
-        // is already set, so nothing later releases what this close skips.
-        // The first panic resumes at the end.
-        let mut failure = FirstPanic::new();
         failure.contain(|| self.delivery.dispatch_close());
         if let Some(windows) = self.windows.upgrade() {
             windows.forget(self.id, self.xid);
