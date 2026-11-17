@@ -291,6 +291,33 @@ mod cases {
         }
     }
 
+    /// Turn the loop until two shots in a row are the same and `find` reads
+    /// what it looks for in them, or 10 s pass; that shot and what `find`
+    /// read, or `None`. A shot taken while Weston is still drawing the window
+    /// can show part of a bar, so a measurement waits for the output to
+    /// settle.
+    fn settled_shot<T>(
+        opened: &Opened,
+        screen: &Screen,
+        find: impl Fn(&Shot) -> Option<T>,
+    ) -> Option<(Shot, T)> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut previous: Option<Shot> = None;
+        while Instant::now() < deadline {
+            opened.turn(Duration::from_millis(30));
+            let shot = Shot::take(screen);
+            if previous
+                .as_ref()
+                .is_some_and(|before| before.data == shot.data)
+                && let Some(found) = find(&shot)
+            {
+                return Some((shot, found));
+            }
+            previous = Some(shot);
+        }
+        None
+    }
+
     /// Weston draws no frame: the window draws its own above its content, a
     /// title bar of its content's width with its title and three buttons,
     /// which Weston composites; turned off, it is gone, and back on, it
@@ -316,15 +343,8 @@ mod cases {
             ))
         );
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let (shot, (left, top)) = loop {
-            opened.turn(Duration::from_millis(30));
-            let shot = Shot::take(&screen);
-            if let Some(bar) = shot.title_bar() {
-                break (shot, bar);
-            }
-            assert!(Instant::now() < deadline, "Weston shows no title bar");
-        };
+        let (shot, (left, top)) =
+            settled_shot(&opened, &screen, Shot::title_bar).expect("Weston shows no title bar");
         eprintln!("the title bar is at ({left}, {top})");
         let width = CONTENT.0 as i32;
         // As wide as the content, and as tall as the bar: the bar's
@@ -541,17 +561,10 @@ mod cases {
         );
 
         let maximized_width = content.width as i32;
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let top = loop {
-            opened.turn(Duration::from_millis(30));
-            let shot = Shot::take(&screen);
-            if let Some(top) =
-                (0..shot.height).find(|y| shot.bar_run(*y).1 >= maximized_width - 120)
-            {
-                break top;
-            }
-            assert!(Instant::now() < deadline, "the maximized title bar");
-        };
+        let (_, top) = settled_shot(&opened, &screen, |shot| {
+            (0..shot.height).find(|y| shot.bar_run(*y).1 >= maximized_width - 120)
+        })
+        .expect("the maximized title bar");
         let close = (
             maximized_width - (GAP + BUTTON) + BUTTON / 2,
             top + HEADER / 2,
