@@ -658,3 +658,43 @@ fn nodes_after_removal(remove_g: bool) -> usize {
     }
     scene.version().len()
 }
+
+/// A frame whose semantics fail after paint leaves its patch staged; a host
+/// that drops that patch unapplied and then runs a frame with no root gets
+/// no frame back, and nothing stays staged for a later report to commit.
+pub(crate) fn a_frame_without_a_root_drops_a_patch_never_applied() {
+    let (mut owner, [_, p, ..]) = mount_nested_under_opacity();
+    let mut host = flui_layer::SceneOwner::new();
+    {
+        let mut writer = host.writer();
+        let painted = owner
+            .run_frame_in_place(&mut writer)
+            .expect("the first frame");
+        assert!(painted, "the first frame paints the tree");
+    }
+    owner.mark_needs_paint(p);
+    owner.fail_next_semantics_after_paint_for_test(
+        flui_rendering::error::RenderError::contract_violation("semantics", "fails after paint"),
+    );
+    {
+        let mut writer = host.writer();
+        owner
+            .run_frame_in_place(&mut writer)
+            .expect_err("semantics fails after paint");
+        // The host drops the failed frame's patch without applying it.
+    }
+    assert!(
+        owner.scene_staged(),
+        "the failed frame's patch stays staged"
+    );
+    owner.set_root_id(None);
+    let mut writer = host.writer();
+    let painted = owner
+        .run_frame_in_place(&mut writer)
+        .expect("a frame with no root");
+    assert!(!painted, "a frame with no root paints nothing");
+    assert!(
+        !owner.scene_staged(),
+        "the patch never applied is dropped, not left for a report to commit"
+    );
+}

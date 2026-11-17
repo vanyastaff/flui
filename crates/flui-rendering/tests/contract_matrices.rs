@@ -112,6 +112,7 @@ fn paint_matrix() {
         ("retained_boundary_layers::an_alpha_change_updates_the_layer_without_repainting_the_subtree", crate::retained_boundary_layers::an_alpha_change_updates_the_layer_without_repainting_the_subtree),
         ("retained_boundary_layers::the_content_of_a_clean_boundary_is_not_repainted", crate::retained_boundary_layers::the_content_of_a_clean_boundary_is_not_repainted),
         ("retained_boundary_layers::a_boundary_removed_before_its_patch_applies_retires_every_node_under_it", crate::retained_boundary_layers::a_boundary_removed_before_its_patch_applies_retires_every_node_under_it),
+        ("retained_boundary_layers::a_frame_without_a_root_drops_a_patch_never_applied", crate::retained_boundary_layers::a_frame_without_a_root_drops_a_patch_never_applied),
     ];
     for &(name, case) in cases {
         if let Err(payload) = std::panic::catch_unwind(case) {

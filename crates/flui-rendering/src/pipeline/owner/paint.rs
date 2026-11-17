@@ -96,6 +96,15 @@ impl PipelineOwner<PaintPhase> {
                     .as_ref()
                     .is_none_or(|frame| frame.node.lineage() != writer.current().id().lineage()));
         if !self.scheduler.has_paint_work() && !owed {
+            // A patch still staged here was built for a root that is gone
+            // (`owed` holds whenever a root and a staged patch coexist). It
+            // describes nothing this frame publishes, so a later report must
+            // not commit it; the records it was built against are forgotten
+            // with it, and the next root repaints from scratch.
+            if let Some(staged) = self.staged_scene.take() {
+                self.discard_staged(staged, writer);
+                self.forget_scene();
+            }
             return Ok(());
         }
 
