@@ -1248,7 +1248,21 @@ impl core::fmt::Display for flui::app::AppId
 impl core::hash::Hash for flui::app::AppId
 impl core::marker::StructuralPartialEq for flui::app::AppId
 pub fn flui::app::AppId::as_str(&self) -> &str
-pub fn flui::app::AppId::try_new(identifier: impl Into<String>) -> Result<Self, flui_log::identity::IdentityError>
+pub fn flui::app::AppId::try_new(identifier: impl Into<String>) -> Result<Self, flui::app::AppIdError>
+#[non_exhaustive] pub enum flui::app::AppIdError
+impl Clone for flui::app::AppIdError
+impl Eq for flui::app::AppIdError
+impl PartialEq for flui::app::AppIdError
+impl core::error::Error for flui::app::AppIdError
+impl core::fmt::Debug for flui::app::AppIdError
+impl core::fmt::Display for flui::app::AppIdError
+impl core::marker::StructuralPartialEq for flui::app::AppIdError
+variant flui::app::AppIdError::EmptyLabel { identifier: String, position: usize } // at 1
+variant flui::app::AppIdError::InvalidCharacter { identifier: String, character: char } // at 2
+variant flui::app::AppIdError::LabelStartsWithNonLetter { identifier: String, position: usize } // at 3
+variant flui::app::AppIdError::NotReverseDns(String) // at 0
+variant flui::app::AppIdError::ReservedLabel { identifier: String, label: String } // at 4
+variant flui::app::AppIdError::TooLong(String) // at 5
 pub struct flui::app::AppIdentity { .. }
 impl Clone for flui::app::AppIdentity
 impl Default for flui::app::AppIdentity
@@ -2432,6 +2446,9 @@ impl core::fmt::Debug for flui::devtools::timeline::EventGuard
 reexport flui::devtools::timeline::Timeline => flui::devtools::prelude::Timeline
 reexport flui::devtools::timeline::TimelineEvent => flui::devtools::prelude::TimelineEvent
 pub mod flui::foundation
+pub const flui::foundation::APP_ID_MAX_LEN: usize
+reexport flui::foundation::AppId => flui::app::AppId
+reexport flui::foundation::AppIdError => flui::app::AppIdError
 pub type flui::foundation::ArgCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg) + 'static>
 pub trait flui::foundation::Arity: flui_foundation::arity::sealed::Sealed + core::fmt::Debug + Copy + Default + 'static
 const flui::foundation::Arity::DESCRIPTION: &'static str
@@ -3297,6 +3314,11 @@ fn flui::foundation::WithKey::with_view_key(self, key: impl flui::foundation::Vi
 impl<T> flui::foundation::WithKey for T
 pub mod flui::foundation::affinity
 reexport flui::foundation::affinity::OwnerAffinity => flui::foundation::OwnerAffinity
+pub mod flui::foundation::app_id
+reexport flui::foundation::app_id::APP_ID_MAX_LEN => flui::foundation::APP_ID_MAX_LEN
+reexport flui::foundation::app_id::AppId => flui::app::AppId
+reexport flui::foundation::app_id::AppIdError => flui::app::AppIdError
+reexport flui::foundation::app_id::executable_class => flui::foundation::executable_class
 pub mod flui::foundation::arena
 pub struct flui::foundation::arena::FrameArena { .. }
 impl Default for flui::foundation::arena::FrameArena
@@ -3346,6 +3368,7 @@ reexport flui::foundation::epoch::GenerationGate => flui::foundation::Generation
 reexport flui::foundation::epoch::ResourceGeneration => flui::foundation::ResourceGeneration
 reexport flui::foundation::epoch::SurfaceGeneration => flui::foundation::SurfaceGeneration
 pub fn flui::foundation::event_epoch() -> std::time::Instant
+pub fn flui::foundation::executable_class(stem: &str) -> String
 pub mod flui::foundation::frame_stamp
 reexport flui::foundation::frame_stamp::FrameStamp => flui::foundation::FrameStamp
 pub mod flui::foundation::generation
@@ -31703,14 +31726,8 @@ impl core::error::Error for flui_log::identity::IdentityError
 impl core::fmt::Debug for flui_log::identity::IdentityError
 impl core::fmt::Display for flui_log::identity::IdentityError
 impl core::marker::StructuralPartialEq for flui_log::identity::IdentityError
-variant flui_log::identity::IdentityError::DisplayNameHasNul(String) // at 7
-variant flui_log::identity::IdentityError::EmptyDisplayName // at 6
-variant flui_log::identity::IdentityError::EmptyLabel { identifier: String, position: usize } // at 1
-variant flui_log::identity::IdentityError::InvalidCharacter { identifier: String, character: char } // at 2
-variant flui_log::identity::IdentityError::LabelStartsWithNonLetter { identifier: String, position: usize } // at 3
-variant flui_log::identity::IdentityError::NotReverseDns(String) // at 0
-variant flui_log::identity::IdentityError::ReservedLabel { identifier: String, label: String } // at 4
-variant flui_log::identity::IdentityError::TooLong(String) // at 5
+variant flui_log::identity::IdentityError::DisplayNameHasNul(String) // at 1
+variant flui_log::identity::IdentityError::EmptyDisplayName // at 0
 pub struct flui_native::host_window::sealed::OwnerThreadToken(_)
 impl core::fmt::Debug for flui_native::host_window::sealed::OwnerThreadToken
 pub trait flui_native::host_window::sealed::Sealed
