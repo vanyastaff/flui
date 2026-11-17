@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::task::{Poll, Waker};
 use std::time::Duration;
 
-use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerObserver};
 use flui_foundation::panic::{FirstPanic, commit, payload_text};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerObserver};
 use flui_platform::{
     CopiedAside, StorageError, StorageFuture, Stored, StoredVersion, Unsupported,
     UnsupportedReason, WriteMode,

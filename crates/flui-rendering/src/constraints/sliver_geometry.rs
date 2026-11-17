@@ -10,7 +10,7 @@ use std::{
 
 use flui_foundation::geometry::canonical_bits_f64;
 
-const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
+const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERROR_TOLERANCE;
 
 /// Layout output describing space occupied by a sliver.
 ///

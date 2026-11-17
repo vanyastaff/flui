@@ -1,7 +1,7 @@
 //! Slot identity: the generational key a presentation's slot carries, and the
 //! mint the owner issues it from (ADR-0305 §3).
 
-use flui_foundation::{Marker, generation::GenSlots, id::GenId};
+use flui_foundation::{GenId, Marker, generation::GenSlots};
 
 use crate::error::{EngineError, EngineResult};
 
@@ -92,7 +92,7 @@ mod tests {
 
         mint.generations
             .seed_generation(second.index(), 0x7FFF_FFFF);
-        let last = flui_foundation::id::GenId::new_gen(
+        let last = flui_foundation::GenId::new_gen(
             second.index(),
             mint.generations
                 .generation(second.index())

@@ -37,7 +37,7 @@ fn device() -> DeviceId {
 #[test]
 fn a_script_with_an_unpaired_down_fails_to_build() {
     let point = at(1.0, 2.0);
-    let refused: [(&str, Result<PointerScript, ScriptError>, ScriptError); 7] = [
+    let refused: [(&str, Result<PointerScript, ScriptError>, ScriptError); 11] = [
         (
             "touch down, never up",
             TouchScript::new("t").down(1, point).build(),
@@ -91,6 +91,32 @@ fn a_script_with_an_unpaired_down_fails_to_build() {
                 .pinch_to(1.5, 0.0)
                 .build(),
             ScriptError::UnpairedPinch,
+        ),
+        (
+            "trackpad swipe never ended",
+            TrackpadScript::new("tp", point)
+                .swipe_start(std::num::NonZeroU8::new(3).expect("three fingers"))
+                .build(),
+            ScriptError::UnpairedSwipe,
+        ),
+        (
+            "trackpad swipe travel not finite",
+            TrackpadScript::new("tp", point)
+                .swipe_start(std::num::NonZeroU8::new(3).expect("three fingers"))
+                .swipe_to(Offset::new(f64::NAN, 0.0))
+                .swipe_end()
+                .build(),
+            ScriptError::NonFiniteTravel,
+        ),
+        (
+            "trackpad fingers rest and never lift",
+            TrackpadScript::new("tp", point).rest().build(),
+            ScriptError::UnpairedHold,
+        ),
+        (
+            "trackpad fingers lift without resting",
+            TrackpadScript::new("tp", point).lift().build(),
+            ScriptError::UnpairedHold,
         ),
     ];
     for (case, built, expected) in refused {

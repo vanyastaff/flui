@@ -22,14 +22,15 @@ it). The native Wayland host (`WaylandPlatform`, the
 windows with their state and commands, displays, preferences, lifecycle and AT-SPI; the Wayland
 host ran the window conformance against a headless Weston, the X11 host under openbox on Xvfb.
 The Wayland host also has its seats' input (keyboard through XKB with its layout and repeat,
-pointer and wheel, touch, `tablet-v2` pens, `pointer-gestures` pinches, `cursor-shape` cursors):
-the cursor, a click, a wheel notch and a key ran from a real Weston seat (Weston 13 on its X11
-backend under Xvfb, driven through XTest, 2026-10-28), recorded and replayed; touch, pens and
-pinches are held by their translation tests only, with no device behind them; Weston 13 offers no
-`cursor-shape`, so the cursor ran from the cursor theme only. The X11 host has its input too:
-XInput 2's pointers, touches, pens, touchpad pinches and unphased smooth scrolling, XKB's keys,
+pointer and wheel, touch, `tablet-v2` pens, `pointer-gestures` pinches, swipes and holds,
+`cursor-shape` cursors): the cursor, a click, a wheel notch and a key ran from a real Weston seat
+(Weston 13 on its X11 backend under Xvfb, driven through XTest, 2026-10-28), recorded and
+replayed; touch, pens, pinches, swipes and holds are held by their translation tests only, with
+no device behind them; Weston 13 offers no `cursor-shape`, so the cursor ran from the cursor theme
+only. The X11 host has its input too: XInput 2's pointers, touches, pens, touchpad pinches and
+swipes and unphased smooth scrolling, XKB's keys,
 compose and layout, and the cursor theme; XTest's pointer, buttons, wheel and keys ran through it
-on Xvfb under openbox and held against a native recording, while touch, pen, pinch and smooth
+on Xvfb under openbox and held against a native recording, while touch, pen, pinch, swipe and smooth
 scrolling are checked by their decoder only (no such device on Xvfb). The Wayland host reads and
 writes its seats' selection through `wl_data_device`: two clients of one Weston 13 (X11 backend
 under Xvfb, 2026-10-30) read each other's text through the compositor, and its primary selection
@@ -533,6 +534,20 @@ feature = 'Trackpad pinch and rotate'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
 note = 'Windows, Android and the Web decode a pinch, none from a hardware trackpad; the iPad decodes a pinch and a rotation, type-checked only; Wayland (`pointer-gestures`) and X11 (XInput 2.4 gestures) decode a pinch, held by their decoders only.'
 evidence = "Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); Android (API 34+) decodes a touchpad's pinch gesture as `PanZoom` scale about its cursor, ran by a manual Android run on a Galaxy S21 from a `uinput` touchpad, not a hardware one (Android has no touchpad rotation); the Web decodes the Control-held wheel events Chromium and Firefox send for a pinch (`Emulated`, classified by a sequence's first event, End at a deadline on the event timeline, refused in favour of the browser's zoom) and WebKit's `gesture*` events (scale and rotation): run in headless Chrome with constructed events through a manual Web run, never with a trackpad or in Safari; Wayland (`pointer-gestures`) and X11 (XInput 2.4) decode a pinch, held by their decoders only. `PanZoom` carries only scale and rotation about a focal point"
+
+[[group.section.row]]
+id = "touchpad-hold-stops-a-fling"
+feature = 'Touchpad hold stops a fling'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "na", ios = "missing", android = "missing", web = "na", headless = "yes" }
+note = "Windows, macOS and Wayland deliver resting fingers as `TouchpadHold`: Wayland through the wire from a scripted compositor, Windows and macOS held by their decoders; no touchpad has run. X11 has no hold in XInput 2.4 and the Web has no such event; UIKit and Android report none."
+evidence = "Fingers resting on a touchpad are `PointerEvent::TouchpadHold` (`Begin`, then `End` when they lift without moving or `Cancelled` when they start a gesture), and a `Scrollable`'s fling and an `InteractiveViewer`'s inertia stop at `Begin` and stay stopped (`resting_fingers_catch_a_fling_and_leave_wheel_easing`, `viewer_focal_fling_advances_then_stops_on_new_input`); an `AnchoredDrag`'s settle is not stopped. Windows: a DirectManipulation viewport that runs before its manipulation passes a slop (`a_manipulation_inside_the_slop_is_a_hold`, and the replayed `win32_direct_manipulation` recording); macOS: a scroll in `NSEventPhaseMayBegin`, its cancel or its scroll's `Began` (`resting_fingers_begin_a_hold_that_a_lift_ends_and_a_scroll_cancels`); Wayland: `zwp_pointer_gesture_hold_v1`, bound at version 3 of the gestures global, sent through the wire protocol by the scripted compositor to the unmodified host (`a_touchpad_swipe_and_hold_reach_the_window_through_the_wire`; at version 2 no hold object is bound and the window is told none reaches it, `a_gestures_global_without_holds_gives_the_window_none`) and held at the seat assembly (`a_hold_rests_until_it_lifts_or_a_gesture_starts`). `InputCapabilities::touchpad_hold` says where a hold reaches a window. Owed device runs: a precision touchpad on Windows, a MacBook trackpad, a libinput touchpad under GNOME or KDE."
+
+[[group.section.row]]
+id = "touchpad-swipe-is-a-gesture"
+feature = 'Touchpad swipe is a gesture'
+status = { windows = "missing", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "missing", web = "na", headless = "yes" }
+note = "Wayland and X11 deliver a swipe of three fingers or more as `TouchpadSwipe`: Wayland through the wire from a scripted compositor, X11 held by its decoder. Windows keeps such swipes for the shell, AppKit reports only a finished direction, and Android's system navigation takes them."
+evidence = "A swipe is `PointerEvent::TouchpadSwipe` with its finger count and its travel since the start; the binding delivers it along the path its start took and keys its arena contest by the swipe's pointer, so `SwipeGestureRecognizer` takes it and no scrollable scrolls (`a_touchpad_swipe_is_a_gesture_and_no_scroll`). Wayland: `zwp_pointer_gesture_swipe_v1` (`a_touchpad_swipe_and_hold_reach_the_window_through_the_wire` through the wire from the scripted compositor, `a_swipe_is_one_gesture_where_the_cursor_rests` at the seat assembly); X11: XInput 2.4's `XI_GestureSwipe*` (`a_touchpad_swipe_is_one_gesture_of_its_fingers`, at the decoder; Xvfb has no touchpad). A compositor keeps the swipes its own gestures bind (GNOME and KDE take three and four fingers). Windows: three- and four-finger swipes on a precision touchpad drive the shell's task view and desktops and reach no window; reading them would mean the touchpad's raw HID reports. macOS: `swipeWithEvent:` reports only a finished direction under the system's swipe-between-pages setting, with no travel. Android: the system's navigation takes multi-finger swipes, and `AXIS_GESTURE_X_OFFSET` is a fraction of the touchpad, not a distance. `InputCapabilities::touchpad_swipe` says where a swipe reaches a window."
 
 [[group.section.row]]
 id = "pointer-lock-and-warp"

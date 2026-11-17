@@ -4,9 +4,9 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use flui_foundation::IdMint;
 use flui_foundation::generation::GenSlots;
 use flui_foundation::geometry::Offset;
-use flui_foundation::sequence::IdMint;
 use flui_foundation::{RenderId, SurfaceGeneration};
 use flui_painting::DisplayList;
 use smallvec::SmallVec;

@@ -73,11 +73,13 @@ impl Listenable for AnimationController {
             // inert subscription (ADR-0180's refusal contract).
             let callback = callback.take();
             let mut retired = RetiredSources::new();
-            retired.value_callbacks.push(Opaque::new(
-                flui_foundation::notifier_generic::NotificationCallback::user(Rc::new(
-                    move |(): &()| callback(),
-                )),
-            ));
+            retired
+                .value_callbacks
+                .push(Opaque::new(flui_foundation::NotificationCallback::user(
+                    Rc::new(move |(): &()| {
+                        callback();
+                    }),
+                )));
             Self::retire_after(inner, retired);
             return flui_foundation::Subscription::inert();
         }
@@ -86,7 +88,7 @@ impl Listenable for AnimationController {
     }
     fn listen_with_recovery(
         &self,
-        relay: flui_foundation::notifier::ListenerObserver,
+        relay: flui_foundation::ListenerObserver,
     ) -> flui_foundation::Subscription {
         let mut relay = Opaque::new(relay);
         let inner = self.inner.borrow_mut();
@@ -94,9 +96,9 @@ impl Listenable for AnimationController {
             let relay = relay.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
-                flui_foundation::notifier_generic::NotificationCallback::relay(Rc::new(
-                    move |(): &(), recovery| relay(recovery),
-                )),
+                flui_foundation::NotificationCallback::relay(Rc::new(move |(): &(), recovery| {
+                    relay(recovery);
+                })),
             ));
             Self::retire_after(inner, retired);
             // The refusal admitted no registration: the subscription is inert.

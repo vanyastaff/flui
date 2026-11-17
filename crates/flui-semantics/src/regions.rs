@@ -1,9 +1,9 @@
 //! Accessible regions authored by one render object.
 
+use flui_foundation::GenId;
 use flui_foundation::Marker;
 use flui_foundation::generation::{DOMAIN_BIT, GenSlots};
 use flui_foundation::geometry::{Matrix4, Rect};
-use flui_foundation::id::GenId;
 
 use crate::{AccessibilityNodeId, SemanticsConfiguration};
 

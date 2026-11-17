@@ -544,7 +544,7 @@ fn web_textarea() -> Profile {
 }
 
 /// A Wayland window on a compositor with `tablet-v2` and
-/// `pointer-gestures`: its seats name every device, its stamps are the
+/// `pointer-gestures` (version 3): its seats name every device, its stamps are the
 /// compositor's milliseconds, its keys come through XKB's keysyms, and a
 /// desktop window has no haptic actuator and starts no drag yet.
 fn wayland() -> Profile {
@@ -555,6 +555,7 @@ fn wayland() -> Profile {
         capabilities: input_availability::wayland(WaylandInputGlobals {
             tablet: true,
             pointer_gestures: true,
+            pointer_gesture_hold: true,
         }),
         haptics: None,
         drag: None,
@@ -572,6 +573,8 @@ fn with_os_drag(profile: Profile, start: OsDragStart) -> Profile {
             .pen(c.pen())
             .precise_scroll(c.precise_scroll())
             .trackpad_gestures(c.trackpad_gestures())
+            .touchpad_hold(c.touchpad_hold())
+            .touchpad_swipe(c.touchpad_swipe())
             .system_gesture_exclusion(c.input_region(InputRegionKind::SystemGestureExclusion))
             .window_move(c.input_region(InputRegionKind::WindowMove))
             .window_resize(c.input_region(InputRegionKind::WindowResize(ResizeEdge::Top)))
@@ -927,6 +930,8 @@ impl SharedAssembly {
             .pen(self.profile.capabilities.pen())
             .precise_scroll(self.profile.capabilities.precise_scroll())
             .trackpad_gestures(self.profile.capabilities.trackpad_gestures())
+            .touchpad_hold(self.profile.capabilities.touchpad_hold())
+            .touchpad_swipe(self.profile.capabilities.touchpad_swipe())
             .system_gesture_exclusion(
                 self.profile
                     .capabilities

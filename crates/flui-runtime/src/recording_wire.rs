@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::generation::Generation;
-use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size, WindowMetrics};
+use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Offset, Point, Size, WindowMetrics};
 use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
 use flui_interaction::{
     GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
@@ -42,7 +42,8 @@ use flui_platform::pointer::{
     PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
     ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
-    TangentialPressure, Twist,
+    SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
+    TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
@@ -780,8 +781,40 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(scroll.modifiers),
                 })
             }
-            PointerEvent::ScrollInertiaCancel(signal) => {
-                Self::ScrollInertiaCancel(signal.try_convert_into()?)
+            PointerEvent::TouchpadHold(hold) => {
+                let point = hold.position.get();
+                Self::TouchpadHold(rec::TouchpadHold {
+                    pointer: hold.pointer().try_convert_into()?,
+                    t: hold.time.as_nanos(),
+                    x: point.x,
+                    y: point.y,
+                    phase: match hold.phase {
+                        TouchpadHoldPhase::Begin => rec::TouchpadHoldPhase::Begin,
+                        TouchpadHoldPhase::End => rec::TouchpadHoldPhase::End,
+                        TouchpadHoldPhase::Cancelled => rec::TouchpadHoldPhase::Cancelled,
+                    },
+                    modifiers: modifiers_dto(hold.modifiers),
+                })
+            }
+            PointerEvent::TouchpadSwipe(swipe) => {
+                let point = swipe.position.get();
+                Self::TouchpadSwipe(rec::TouchpadSwipe {
+                    pointer: swipe.pointer().try_convert_into()?,
+                    t: swipe.time.as_nanos(),
+                    x: point.x,
+                    y: point.y,
+                    fingers: swipe.fingers.get(),
+                    phase: match swipe.phase {
+                        TouchpadSwipePhase::Start => rec::TouchpadSwipePhase::Start,
+                        TouchpadSwipePhase::Update(travel) => rec::TouchpadSwipePhase::Update {
+                            dx: travel.get().dx,
+                            dy: travel.get().dy,
+                        },
+                        TouchpadSwipePhase::End => rec::TouchpadSwipePhase::End,
+                        TouchpadSwipePhase::Cancelled => rec::TouchpadSwipePhase::Cancelled,
+                    },
+                    modifiers: modifiers_dto(swipe.modifiers),
+                })
             }
             PointerEvent::PanZoom(gesture) => {
                 let point = gesture.position.get();
@@ -902,9 +935,37 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 }
                 Self::Scroll(event)
             }
-            rec::PointerEvent::ScrollInertiaCancel(signal) => {
-                Self::ScrollInertiaCancel(signal.try_convert_into()?)
-            }
+            rec::PointerEvent::TouchpadHold(hold) => Self::TouchpadHold(
+                TouchpadHoldEvent::new(
+                    hold.pointer.try_convert_into()?,
+                    EventTime::from_nanos(hold.t),
+                    position(hold.x, hold.y)?,
+                    match hold.phase {
+                        rec::TouchpadHoldPhase::Begin => TouchpadHoldPhase::Begin,
+                        rec::TouchpadHoldPhase::End => TouchpadHoldPhase::End,
+                        rec::TouchpadHoldPhase::Cancelled => TouchpadHoldPhase::Cancelled,
+                    },
+                )
+                .with_modifiers(modifiers(&hold.modifiers)?),
+            ),
+            rec::PointerEvent::TouchpadSwipe(swipe) => Self::TouchpadSwipe(
+                TouchpadSwipeEvent::new(
+                    swipe.pointer.try_convert_into()?,
+                    EventTime::from_nanos(swipe.t),
+                    position(swipe.x, swipe.y)?,
+                    NonZeroU8::new(swipe.fingers)
+                        .ok_or_else(|| invalid("a touchpad swipe of no fingers"))?,
+                    match swipe.phase {
+                        rec::TouchpadSwipePhase::Start => TouchpadSwipePhase::Start,
+                        rec::TouchpadSwipePhase::Update { dx, dy } => TouchpadSwipePhase::Update(
+                            SwipeOffset::try_new(Offset::new(dx, dy)).map_err(invalid)?,
+                        ),
+                        rec::TouchpadSwipePhase::End => TouchpadSwipePhase::End,
+                        rec::TouchpadSwipePhase::Cancelled => TouchpadSwipePhase::Cancelled,
+                    },
+                )
+                .with_modifiers(modifiers(&swipe.modifiers)?),
+            ),
             rec::PointerEvent::PanZoom(gesture) => Self::PanZoom(
                 PanZoomEvent::new(
                     gesture.pointer.try_convert_into()?,
@@ -1211,6 +1272,8 @@ impl Convert<&InputCapabilities> for rec::Capabilities {
             pen: rec::Availability::convert(capabilities.pen()),
             precise_scroll: rec::Availability::convert(capabilities.precise_scroll()),
             trackpad_gestures: rec::Availability::convert(capabilities.trackpad_gestures()),
+            touchpad_hold: rec::Availability::convert(capabilities.touchpad_hold()),
+            touchpad_swipe: rec::Availability::convert(capabilities.touchpad_swipe()),
             system_gesture_exclusion: region(InputRegionKind::SystemGestureExclusion),
             window_move: region(InputRegionKind::WindowMove),
             window_resize: region(InputRegionKind::WindowResize(ResizeEdge::Top)),
@@ -1237,6 +1300,8 @@ impl Convert<rec::Capabilities> for InputCapabilities {
             .pen(Availability::convert(capabilities.pen))
             .precise_scroll(Availability::convert(capabilities.precise_scroll))
             .trackpad_gestures(Availability::convert(capabilities.trackpad_gestures))
+            .touchpad_hold(Availability::convert(capabilities.touchpad_hold))
+            .touchpad_swipe(Availability::convert(capabilities.touchpad_swipe))
             .system_gesture_exclusion(Availability::convert(capabilities.system_gesture_exclusion))
             .window_move(Availability::convert(capabilities.window_move))
             .window_resize(Availability::convert(capabilities.window_resize))

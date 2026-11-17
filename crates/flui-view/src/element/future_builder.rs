@@ -45,7 +45,7 @@
 
 use std::{future::Future, pin::Pin, rc::Rc, sync::Arc};
 
-use flui_foundation::{AsyncSnapshot, ConnectionState};
+use super::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
 use parking_lot::Mutex;
 

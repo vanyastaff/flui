@@ -203,7 +203,7 @@ site's context (`a_derive_reads_fields_a_macro_rules_caller_wrote` in
 ### A view's key is a field
 
 `#[view(key)]` writes `View::key` from the marked field through
-`flui_foundation::key::AsViewKey`, so the field keeps the type the view needs:
+`flui_foundation::AsViewKey`, so the field keeps the type the view needs:
 a key, an `Option` of one, an `Rc<dyn ViewKey>` or a `Box<dyn ViewKey>`. The
 derive names no key type. A field that holds no key fails at the field's type
 with the trait's `on_unimplemented` note (trybuild `view_key_field_is_not_a_key`

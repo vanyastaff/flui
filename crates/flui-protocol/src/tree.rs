@@ -789,7 +789,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.20",
+                "protocol": crate::PROTOCOL_VERSION.to_string(),
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false

@@ -5,7 +5,7 @@
 - **Supersedes:** [ADR-0026](ADR-0026-focus-traversal-seam.md) §1 only (the node layer's
   listener primitives: `add_listener`/`remove_listener(ListenerId)` and the
   `FocusSubscription` guard do not exist; listeners hold the owned
-  [`Subscription`](../../crates/flui-foundation/src/notifier.rs))
+  [`Subscription`](../../crates/flui-foundation/src/notifier/mod.rs))
 - **Related:** [ADR-0178](ADR-0178-notification-first-failure-custody.md) (the channel
   delivery contract these ledgers join),
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (the receipt a round

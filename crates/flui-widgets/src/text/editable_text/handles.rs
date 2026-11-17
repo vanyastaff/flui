@@ -14,8 +14,8 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
 use flui_foundation::geometry::Offset;
-use flui_foundation::notifier::{ChangeNotifier, Listenable};
 use flui_foundation::panic::FirstPanic;
+use flui_foundation::{ChangeNotifier, Listenable};
 use flui_interaction::HapticsHandle;
 use flui_interaction::{
     GestureEndReason, GestureRecognizer, LongPressGestureRecognizer, PointerKindSet,

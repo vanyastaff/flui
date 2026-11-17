@@ -143,7 +143,7 @@ pub fn localize_hit_point(transform: Matrix4, global_x: f64, global_y: f64) -> O
 /// own fields (color, padding, direction, ...), the tree's facts (protocol, committed size or
 /// geometry, offset, dirty flags), and the parent/child structure.
 ///
-/// Read it by type: `node.get::<f64>("width")`, `node.get_fact::<Size>("size")`.
+/// Read it by type: `node.get::<f64>("width")`, `node.fact_as::<Size>("size")`.
 pub fn render_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>) -> SnapshotNode {
     snapshot(&owner.inspect(), SnapshotQuery::default())
         .expect("BUG: a mounted harness tree always has a root")

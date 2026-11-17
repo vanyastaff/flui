@@ -60,7 +60,7 @@ mod measured {
         Simulation as _, SimulationError as _, SpringDescription as _, SpringSimulation as _,
         Tolerance as _,
     };
-    use flui_sdk::foundation::notifier::Listenable as _;
+    use flui_sdk::foundation::Listenable as _;
     use flui_sdk::foundation::observe::{
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
         TreeObserver as _,

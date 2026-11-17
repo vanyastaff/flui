@@ -277,8 +277,9 @@ its content's bounds and each child's `subtree_bounds` mapped through the child'
 effects above its slot. Its kernel is how far, in device pixels, the filters in the subtree spread
 past those bounds once mapped: the renderer takes a blur or morphology kernel in physical pixels
 whatever the transform, so a bound in the boundary's space, which a shrinking ancestor shrinks,
-cannot hold it; a magnifier scales the kernel it takes, and a transform filter that is not a uniform
-scale has no kernel bound inside its boundary. A filter adds its own kernel to the maximum of its
+cannot hold it; a magnifier scales the kernel it takes, with the source pixel its input covers in
+part, which it reads whole, and a transform filter that is not a uniform scale has no kernel bound
+inside its boundary. A filter adds its own kernel to the maximum of its
 children's, so kernels sum along a chain and take the maximum across siblings; inside a boundary a
 filter moves what it takes and leaves its spread to the kernel, and a clip over a scope with a kernel
 bounds it by the clip, its kernel spent. `Publish`

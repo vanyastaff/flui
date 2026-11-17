@@ -4,8 +4,8 @@ use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 
 use flui_animation::FrameTick;
+use flui_foundation::IdMint;
 use flui_foundation::geometry::DevicePixelRatio;
-use flui_foundation::sequence::IdMint;
 use flui_foundation::{PresentationId, TextSizeRequest};
 use flui_painting::{
     RetiredTextSizingCohort, TextPreparationPending, TextSizing, TextSizingCohort, TextSizingSource,

@@ -1520,6 +1520,15 @@ impl flui_widgets::CustomPainter for SwatchPainter {
     }
 }
 
+/// `child` inside a group `find::id(identifier)` locates.
+fn named(identifier: &str, child: impl IntoView) -> impl IntoView {
+    flui_widgets::Semantics::new()
+        .container(true)
+        .role(flui_widgets::SemanticsRole::Group)
+        .identifier(identifier)
+        .child(child)
+}
+
 /// `draw_commands` reads the scene the window submitted last, after the
 /// frames due now: a change from outside the tree repaints the swatch, and
 /// the next read sees the new colour with no pump between.
@@ -1535,15 +1544,16 @@ fn draw_commands_read_the_last_submitted_scene() {
     let mut t = Tester::mount(flui_widgets::AnimatedBuilder::new(
         Rc::clone(&changed) as Rc<dyn flui_foundation::Listenable>,
         move || {
-            Center::new().child(
+            Center::new().child(named(
+                "swatch",
                 flui_widgets::CustomPaint::new()
                     .size(flui_foundation::geometry::Size::new(24.0, 16.0))
                     .painter(SwatchPainter(Color::rgb(read.get(), 0, 0))),
-            )
+            ))
         },
     ));
     let rectangles = |t: &mut Tester| -> Vec<(flui_foundation::geometry::Rect, Color)> {
-        t.draw_commands()
+        t.draw_commands(&find::id("swatch"))
             .into_iter()
             .filter_map(|command| match command.op {
                 flui_painting::DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
@@ -1578,13 +1588,16 @@ fn draw_commands_follow_paint_order_across_repaint_boundaries() {
             .size(Size::new(10.0, 10.0))
             .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
     };
-    let mut t = Tester::mount(Center::new().child(flui_widgets::Row::new(vec![
+    let mut t = Tester::mount(Center::new().child(named(
+        "row",
+        flui_widgets::Row::new(vec![
         flui_widgets::RepaintBoundary::new().child(swatch(1)).into_view().boxed(),
         swatch(2).into_view().boxed(),
         flui_widgets::RepaintBoundary::new().child(swatch(3)).into_view().boxed(),
-    ])));
+        ]),
+    )));
     let painted: Vec<(Rect, Color, Matrix4)> = t
-        .draw_commands()
+        .draw_commands(&find::id("row"))
         .into_iter()
         .filter_map(|command| match command.op {
             flui_painting::DrawOp::Rect { rect, paint } => {
@@ -1632,18 +1645,19 @@ fn draw_commands_place_a_command_through_a_transform_layer() {
     let mut t = Tester::mount(
         Center::new().child(
             flui_widgets::Transform::new(Matrix4::scaling(2.0, 2.0, 1.0)).child(
-                flui_widgets::RepaintBoundary::new().child(
+                flui_widgets::RepaintBoundary::new().child(named(
+                    "swatch",
                     flui_widgets::Padding::all(5.0).child(
                         flui_widgets::CustomPaint::new()
                             .size(Size::new(10.0, 10.0))
                             .painter(SwatchPainter(flui_painting::styling::Color::rgb(1, 0, 0))),
                     ),
-                ),
+                )),
             ),
         ),
     );
     let transforms: Vec<Matrix4> = t
-        .draw_commands()
+        .draw_commands(&find::id("swatch"))
         .into_iter()
         .filter(|command| matches!(command.op, flui_painting::DrawOp::Rect { .. }))
         .map(|command| command.transform)
@@ -1775,5 +1789,180 @@ fn an_identifier_on_a_node_that_publishes_nothing_else_fails_saying_so() {
             Err(TestError::NotFound { .. })
         ),
         "an identifier nothing carries is not found"
+    );
+}
+
+/// Paints a swatch over its own bounds and a mark past their right edge.
+#[derive(Debug)]
+struct OverhangPainter(flui_painting::styling::Color);
+
+impl flui_widgets::CustomPainter for OverhangPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        use flui_foundation::geometry::{Point, Rect, Size};
+        let paint = flui_painting::Paint::fill(self.0);
+        canvas.draw_rect(Rect::from_origin_size(Point::ZERO, size), &paint);
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::new(size.width, 0.0), Size::new(4.0, 4.0)),
+            &paint,
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        true
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` reads one element's drawing: of two painted siblings,
+/// each read finds its own painter's commands, the mark one draws past its
+/// bounds over the other included, and none of the other's.
+///
+/// Fails if the read selects by the element's bounds, or returns the whole
+/// scene.
+#[test]
+fn draw_commands_read_one_element_and_none_of_its_sibling() {
+    use flui_foundation::geometry::Size;
+    use flui_painting::styling::Color;
+
+    let painter = |shade: u8| {
+        flui_widgets::CustomPaint::new()
+            .size(Size::new(10.0, 10.0))
+            .painter(OverhangPainter(Color::rgb(shade, 0, 0)))
+    };
+    let mut t = Tester::mount(Center::new().child(flui_widgets::Row::new(vec![
+        named("left", painter(1)).into_view().boxed(),
+        named("right", painter(2)).into_view().boxed(),
+    ])));
+    let colours = |t: &mut Tester, identifier: &str| -> Vec<Color> {
+        t.draw_commands(&find::id(identifier))
+            .into_iter()
+            .filter_map(|command| match command.op {
+                flui_painting::DrawOp::Rect { paint, .. } => Some(paint.color),
+                _ => None,
+            })
+            .collect()
+    };
+    let left = Color::rgb(1, 0, 0);
+    let right = Color::rgb(2, 0, 0);
+    assert_eq!(
+        colours(&mut t, "left"),
+        [left, left],
+        "the overhang is the left painter's"
+    );
+    assert_eq!(colours(&mut t, "right"), [right, right]);
+}
+
+/// `draw_commands` reads a subtree larger than one inspection lists whole,
+/// in several inspections: six columns of a thousand render objects, each
+/// ending in a swatch, give all six swatches in paint order.
+///
+/// Fails if the read stops at the first inspection's 4096 nodes, or if it
+/// pages only from the node an inspection cut, which never reaches the
+/// columns after the one the budget ran out in.
+#[test]
+fn draw_commands_read_a_subtree_past_one_inspection_whole() {
+    use flui_painting::styling::Color;
+
+    let column = |shade: u8| {
+        let mut children: Vec<_> = (0..1000)
+            .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
+            .collect();
+        children.push(
+            flui_widgets::CustomPaint::new()
+                .size(flui_foundation::geometry::Size::new(1.0, 1.0))
+                .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
+                .into_view()
+                .boxed(),
+        );
+        flui_widgets::Column::new(children).into_view().boxed()
+    };
+    let columns: Vec<_> = (1..=6).map(column).collect();
+    let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Row::new(columns))));
+    let colours: Vec<Color> = t
+        .draw_commands(&find::id("many"))
+        .into_iter()
+        .filter_map(|command| match command.op {
+            flui_painting::DrawOp::Rect { paint, .. } => Some(paint.color),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<Color> = (1..=6).map(|shade| Color::rgb(shade, 0, 0)).collect();
+    assert_eq!(colours, expected);
+}
+
+/// `draw_commands` refuses an element under which one render object has
+/// more children than one inspection lists, rather than returning part of
+/// its drawing.
+///
+/// Fails if the read returns the commands of the listed children.
+#[test]
+fn draw_commands_refuse_a_render_object_with_more_children_than_one_inspection() {
+    let boxes: Vec<_> = (0..4200)
+        .map(|_| SizedBox::new(1.0, 0.0).into_view().boxed())
+        .collect();
+    let mut t = Tester::mount(Center::new().child(named("many", flui_widgets::Column::new(boxes))));
+    let refused = t.try_draw_commands(&find::id("many"));
+    assert!(
+        matches!(refused, Err(TestError::TooManyChildren { .. })),
+        "{refused:?}"
+    );
+}
+
+/// A painter's region of its own semantics, with a stable identifier.
+#[derive(Debug)]
+struct RegionPainter;
+
+impl flui_widgets::CustomPainter for RegionPainter {
+    fn paint(&self, canvas: &mut flui_painting::Canvas, size: flui_foundation::geometry::Size) {
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::rgb(1, 0, 0)),
+        );
+    }
+    fn should_repaint(&self, _old: &dyn flui_widgets::CustomPainter) -> bool {
+        false
+    }
+    fn semantics_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Vec<flui_semantics::SemanticsRegion> {
+        let mut config = flui_semantics::SemanticsConfiguration::new();
+        config.set_label("dot");
+        config.set_identifier("dot");
+        vec![flui_semantics::SemanticsRegion::new(
+            flui_semantics::SemanticsRegionKey(1),
+            flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
+                size,
+            ),
+            config,
+        )]
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// `draw_commands` refuses a painter's authored region, which no render
+/// object forms: its drawing is the painter's, located by the painter.
+///
+/// Fails if the read decodes the region's identity as a render object's.
+#[test]
+fn draw_commands_refuse_an_authored_region() {
+    let mut t = Tester::mount(
+        Center::new().child(
+            flui_widgets::CustomPaint::new()
+                .size(flui_foundation::geometry::Size::new(10.0, 10.0))
+                .painter(RegionPainter),
+        ),
+    );
+    let refused = t.try_draw_commands(&find::id("dot"));
+    assert!(
+        matches!(refused, Err(TestError::NoRenderObject { .. })),
+        "{refused:?}"
     );
 }
