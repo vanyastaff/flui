@@ -150,8 +150,9 @@ pub struct GpuContext {
   headless renderer when it is made. The frame that first needs the library joins the worker, so
   the driver's compilation overlaps the application's first build instead of following it. A
   panic of the worker resumes on that frame, which settles `Retry` as any panicking frame does
-  (§7), and the next frame builds the library itself; a device rebuild drops a warm-up under way,
-  whose library is the lost device's. A first frame in another format than the warm-up's (a colour
+  (§7), and the next frame builds the library itself; a device rebuild drops a warm-up under way
+  (its library is the lost device's) and the first frame after it builds the new device's library
+  itself. A first frame in another format than the warm-up's (a colour
   change before the first size, an offscreen slot of another format attached first) waits for the
   warm-up and builds its own format too. A second format, and the variants the shape and gradient
   caches build on demand, are built on the frame that first draws them. wasm32 has no thread to

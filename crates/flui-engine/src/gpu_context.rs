@@ -318,7 +318,7 @@ pub struct GpuContext {
     #[cfg(test)]
     panic_in_next_setup: bool,
     /// When set, the next warm-up panics on its worker.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     panic_in_warmup: bool,
     /// When set, the next torn painter's drop panics.
     #[cfg(test)]
@@ -567,7 +567,7 @@ impl GpuContext {
             panic_in_next_cleanup: false,
             #[cfg(test)]
             panic_in_next_setup: false,
-            #[cfg(test)]
+            #[cfg(all(test, not(target_arch = "wasm32")))]
             panic_in_warmup: false,
             #[cfg(test)]
             rebuilds_failing: 0,
@@ -1103,14 +1103,10 @@ impl GpuContext {
         self.builds
     }
 
-    /// Whether a pipeline warm-up is under way; never on wasm32.
-    #[cfg(test)]
+    /// Whether a pipeline warm-up is under way.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn warming_up(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        let warming = self.warmup.is_some();
-        #[cfg(target_arch = "wasm32")]
-        let warming = false;
-        warming
+        self.warmup.is_some()
     }
 
     /// Make the next offscreen frame panic after its recording, before its
@@ -1136,7 +1132,7 @@ impl GpuContext {
 
     /// Make the next pipeline warm-up panic on its worker, as wgpu's error
     /// handler can.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn panic_in_next_warmup(&mut self) {
         self.panic_in_warmup = true;
     }
@@ -2752,6 +2748,7 @@ mod tests {
     }
 
     /// Attach one RGBA offscreen slot of 32×16 to `sender`'s executor.
+    #[cfg(not(target_arch = "wasm32"))]
     fn attach_rgba(
         sender: &crate::raster_executor::RasterSender,
     ) -> (SlotId, PresentationAddress, SurfaceGeneration) {
@@ -2778,6 +2775,7 @@ mod tests {
     }
 
     /// Send `slot` one frame, turn the executor and answer its verdict.
+    #[cfg(not(target_arch = "wasm32"))]
     fn draw_once(
         executor: &mut RasterExecutor<GpuContext>,
         sender: &crate::raster_executor::RasterSender,
@@ -2800,6 +2798,7 @@ mod tests {
     /// Red-check: drop the `warm_pipelines` call from `attach_offscreen` and
     /// no warm-up is under way after the attach.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn the_first_slots_attach_builds_its_pipelines_on_a_worker_once() {
         let Some(context) = context_or_skip() else {
             return;
@@ -2813,7 +2812,7 @@ mod tests {
         // The executor applies the attach on its turn.
         let _ = executor.turn();
         assert!(
-            executor.backend().warmup.is_some(),
+            executor.backend().warming_up(),
             "the attach starts the warm-up"
         );
         assert_eq!(executor.backend().builds().pipeline_sets, 1);
@@ -2822,7 +2821,7 @@ mod tests {
             draw_once(&mut executor, &sender, slot),
             RasterVerdict::Presented
         );
-        assert!(executor.backend().warmup.is_none(), "the frame took it");
+        assert!(!executor.backend().warming_up(), "the frame took it");
         assert_eq!(
             executor.backend().builds().pipeline_sets,
             1,
@@ -2831,7 +2830,7 @@ mod tests {
         // A second slot of the same format starts nothing.
         let _second = attach_rgba(&sender);
         let _ = executor.turn();
-        assert!(executor.backend().warmup.is_none());
+        assert!(!executor.backend().warming_up());
     }
 
     /// A warm-up whose worker panics resumes that panic on the frame that
@@ -2841,6 +2840,7 @@ mod tests {
     /// Red-check: discard the worker's payload in `PipelineWarmup::finish`
     /// instead of resuming it and the first frame has no library to draw with.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_warm_up_that_panics_fails_the_frame_that_joins_it_and_the_next_builds_inline() {
         use crate::raster_executor::SlotFailure;
 
@@ -2866,7 +2866,7 @@ mod tests {
             Some(&"injected panic in a pipeline warm-up")
         );
         flui_foundation::panic::discard_payload(payload);
-        assert!(executor.backend().warmup.is_none(), "the join took it");
+        assert!(!executor.backend().warming_up(), "the join took it");
 
         assert_eq!(
             draw_once(&mut executor, &sender, slot),
@@ -2885,6 +2885,7 @@ mod tests {
     /// Red-check: keep the warm-up across `GpuContext::rebuild` and it is still
     /// under way after the rebuild, its library the lost device's.
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn a_device_rebuild_drops_a_warm_up_under_way() {
         let Some(context) = context_or_skip() else {
             return;
@@ -2896,13 +2897,10 @@ mod tests {
         );
         let (slot, address, _generation) = attach_rgba(&sender);
         let _ = executor.turn();
-        assert!(executor.backend().warmup.is_some());
+        assert!(executor.backend().warming_up());
         executor.backend().lose_device();
         let _ = executor.turn();
-        assert!(
-            executor.backend().warmup.is_none(),
-            "the rebuild dropped it"
-        );
+        assert!(!executor.backend().warming_up(), "the rebuild dropped it");
         let generation = sender
             .record(slot)
             .expect("the owner holds the slot")

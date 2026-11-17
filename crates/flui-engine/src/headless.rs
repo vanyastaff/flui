@@ -917,6 +917,7 @@ mod target_size_tests {
 /// Serialized with the other GPU readbacks: its module name matches the
 /// `gpu-readback` test group in `.config/nextest.toml`.
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod warmup_readback_tests {
     use super::HeadlessRenderer;
     use flui_layer::LayerTree;
