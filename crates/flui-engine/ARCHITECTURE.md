@@ -1321,6 +1321,22 @@ extent so a copied texel is written in the same device coordinate system. The
 public texture-target API still requires matching extents. Sigma remains two-dimensional;
 a transform must either preserve the implemented kernel semantics or be refused.
 Partial-frame damage may constrain writes but must not truncate input dependencies.
+Inside a layer whose composite a clip cuts (a `Clip::AntiAliasWithSaveLayer`
+clip, or any clip above an opacity, colour-filter or blend layer), the layer's
+children draw unclipped and the clip cuts the composite once; the scene's cull
+skips a node that clip hides. So a backdrop filter there reads and writes only
+inside the whole pixels those composite clips show (`LayerCompositor::composite_clip_bounds`,
+each layer's clip rounded out before the next meets it, as the scene rounds each clip on
+the chain from the surface to a node
+when it culls: a pixel an anti-aliased clip's edge covers in
+part shows what lies in it), which an image filter between the clip and the filter
+widens to the input it requires; past that bound the source is transparent, as past
+the attachment, and a grouped filter that writes nothing there does not capture. The
+bound takes in a partial frame's damage scissor as well, which truncates nothing:
+damage that meets a backdrop takes its whole read into one rect of the region
+(ADR-0304 §6). `a_backdrop_filter_in_a_clipped_layer_reads_only_inside_the_clip`,
+`a_backdrop_filter_under_an_image_filter_draws_what_the_filter_spreads_into_the_clip`
+and `a_backdrop_filter_filters_the_pixel_a_clip_edge_shows_in_part` read it back.
 Allocations and captured records remain owned by the existing DeviceDomain and
 frame admission/completion protocol; there is no nested submission owner.
 

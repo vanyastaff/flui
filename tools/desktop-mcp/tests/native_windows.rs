@@ -1,6 +1,7 @@
 //! Real Win32 controls driven only through MCP, with observable postconditions.
-//! Run explicitly on an interactive Windows desktop:
-//! `cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only --test-threads 1 --no-capture`.
+//! Run explicitly on the desktop that takes input (nextest otherwise starts a
+//! test on a desktop of its own, docs/testing.md):
+//! `FLUI_TEST_VISIBLE_DESKTOP=1 cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only --test-threads 1 --no-capture`.
 #![cfg(target_os = "windows")]
 #![expect(
     unsafe_code,

@@ -339,7 +339,7 @@ pub(crate) fn map_out_spread(links: &Links<'_>, reach: Reach, kernel: f64) -> Re
                     .pop()
                     .expect("BUG: every clip, filter and extent of the chain has its map");
                 match *link {
-                    Link::Clip(clip) => clipped(out, mapped(&ctm, clip)),
+                    Link::Clip(clip) => clipped(out, pixels_of(mapped(&ctm, clip))),
                     Link::Filter(filter) => filtered(filter, out, &ctm, Spread::Reach),
                     Link::Extent(rect) => out.union(mapped(&ctm, rect)),
                     _ => out,
@@ -348,6 +348,18 @@ pub(crate) fn map_out_spread(links: &Links<'_>, reach: Reach, kernel: f64) -> Re
         };
     }
     out
+}
+
+/// The whole device pixels a clip mapped to the surface touches, an
+/// over-report for a hard clip, which snaps. The
+/// renderer multiplies a pixel's coverage by an anti-aliased clip's, so content in a
+/// pixel the clip's edge covers in part shows there even where its exact
+/// geometry misses the clip.
+fn pixels_of(clip: Reach) -> Reach {
+    match clip {
+        Reach::Rect(rect) => Reach::rect(flui_foundation::geometry::cover(rect)),
+        other => other,
+    }
 }
 
 /// `out` cut by `clip`, both in one space.
@@ -1262,7 +1274,7 @@ impl<'v> Folded<'v> {
                     continue;
                 }
                 Link::Clip(clip) => {
-                    let clip = mapped(&self.ctm, clip);
+                    let clip = pixels_of(mapped(&self.ctm, clip));
                     if let Some(Outer::Clip(outer)) = self.outer.last_mut() {
                         *outer = meet(*outer, clip);
                         continue;

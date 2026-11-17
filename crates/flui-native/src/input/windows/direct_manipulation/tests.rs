@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     KillTimer, SendMessageW, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KILLFOCUS, WM_PAINT,
 };
 
-use super::PUMP_TIMER;
+use super::{PUMP_TIMER, TestCursor};
 use crate::WindowsPlatform;
 use crate::input::assembly::{ContentTransform, ViewportReading, ViewportStatus};
 use crate::input::availability as input_availability;
@@ -142,6 +142,16 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
     handler.react_to_frame(move |_| {
         frames.lock().expect("log").push("frame".to_owned());
     });
+    // The cursor rests in the middle of the window, as a person's would over
+    // the content they scroll. The OS's cursor is not read: a test runs on a
+    // desktop of its own, where it cannot be, and on the desktop the user
+    // sees it is wherever their mouse is.
+    {
+        let input = input(hwnd);
+        let mut host = input.touchpad.host.borrow_mut();
+        let host = host.as_mut().expect("the window's viewport initialised");
+        host.test_cursor = TestCursor::At(100.0 * scale, 60.0 * scale);
+    }
     // What the viewport reported while it was built is not a manipulation.
     pump(hwnd);
     let _ = take_timer(hwnd);
@@ -423,7 +433,7 @@ fn unreadable_cursor(hwnd: HWND, forget: bool) {
     let input = input(hwnd);
     let mut host = input.touchpad.host.borrow_mut();
     let host = host.as_mut().expect("the window's viewport initialised");
-    host.cursor_unreadable = true;
+    host.test_cursor = TestCursor::Unreadable;
     if forget {
         host.cursor = None;
     }
