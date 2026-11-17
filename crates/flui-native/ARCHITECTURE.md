@@ -2977,16 +2977,24 @@ posts a window makes to itself, the surface target, the pacer of a modal loop.
   windows. The gates keep their thread check, because the slot is a raw pointer
   and the handles another thread holds reach the same window handle. What the
   window procedure records of a window (bounds, scale, visibility, focus) is a
-  `Copy` record in an `Rc<Cell<_>>` the wrappers and the context share, and the
-  exit policy's coalescing flag is a `Cell`: no read or update holds them
-  (`a_read_inside_a_record_update_sees_the_last_record_set`). The COM apartment
-  is an `Rc<ComApartment>` the loop, each window's text services and its
-  touchpad viewport hold, so it ends with its last user.
+  `Copy` record in an `Rc<Cell<_>>` the wrappers and the context share
+  (`window/windows/record.rs`): an update takes the record and returns the next
+  one, so no read or update holds it
+  (`a_read_inside_a_record_update_sees_the_last_record_set`); the exit policy's
+  coalescing flag is a `Cell` as well. The COM apartment is an
+  `Rc<ComApartment>`, and every COM user of the thread that can outlive the
+  loop holds one: each window's wrapper and context, its drop-target
+  registration, its text services and its touchpad viewport
+  (`a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com`).
+  A drag source holds none: its `DoDragDrop` runs from the owner window, which
+  lives no longer than the loop that holds its own `Rc`.
 - **Refusal.** A registration on a window that is gone, or on a handle the OS
   recycled for another window, is refused, and the callback is dropped right
   there. Whether a handle still names its wrapper's window is
-  `hwnd_affinity::handle_names` (`Nothing`, `AnotherWindow`, `ItsWindow`), which
-  asks no thread
+  `hwnd_affinity::handle_names` (`Nothing`, `AnotherWindow`, `ItsWindow`): the
+  window's thread against the one that created it (which keeps the answer in
+  this process), its class and its slot against what the wrapper installed,
+  never the caller's thread
   (`a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers`).
 - **Restore through the call point.** Dispatching the window-event or
   keyboard-layout handler goes through `owner::call_point::call`: it is taken

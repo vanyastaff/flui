@@ -317,7 +317,16 @@ impl WindowMessages for Tsf {
         if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
             hook(hwnd);
         }
-        match TextServices::activate(this, window.scale.clone(), apartment) {
+        #[cfg(test)]
+        let refused = REFUSE_TSF_ACTIVATION.get();
+        #[cfg(not(test))]
+        let refused = false;
+        let activated = if refused {
+            Err(windows_core::Error::from_hresult(windows::Win32::Foundation::E_FAIL))
+        } else {
+            TextServices::activate(this, window.scale.clone(), apartment)
+        };
+        match activated {
             Ok(services) => {
                 let kept = self
                     .windows
@@ -399,6 +408,10 @@ thread_local! {
     /// stand in for a message the activation dispatches.
     static BEFORE_TSF_ACTIVATION: std::cell::Cell<Option<fn(HWND)>> =
         const { std::cell::Cell::new(None) };
+    /// While set, a window's text services fail to activate, as TSF refuses
+    /// them on a machine without a text service.
+    pub(crate) static REFUSE_TSF_ACTIVATION: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// The hooks made on this thread, for the tests that reach a window's

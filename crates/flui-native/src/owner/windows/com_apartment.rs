@@ -2,11 +2,15 @@
 //!
 //! [`ComApartment`] is one `OleInitialize` (the single-threaded apartment
 //! plus the OLE state `RegisterDragDrop` and `DoDragDrop` need) whose `Drop`
-//! is the matching `OleUninitialize`. Everything that uses COM objects past the platform's own
-//! lifetime holds an `Rc` of it — the platform, and each window's TSF
-//! connection (the text feature's `TextServices`) and touchpad viewport — so
-//! the apartment ends only after its last user has released its interfaces,
-//! in whatever order the platform and its windows are dropped.
+//! is the matching `OleUninitialize`. Every COM user of the thread that can
+//! outlive the loop holds an `Rc` of it: the loop itself, each window's
+//! wrapper and context (which outlive every teardown the window's
+//! `WM_DESTROY` runs), its drop-target registration, its TSF connection (the
+//! text feature's `TextServices`) and its touchpad viewport. So the apartment
+//! ends only after its last user has released its interfaces, in whatever
+//! order the loop and its windows are dropped. A drag source holds none: its
+//! `DoDragDrop` runs from the owner window, which lives no longer than the
+//! loop.
 //!
 //! `!Send`, like the platform and the windows that hold it (ADR-0327 §5): the
 //! apartment belongs to the thread that entered it, so every clone and the

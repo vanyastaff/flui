@@ -598,29 +598,35 @@ fn a_window_registers_its_drop_target() {
 }
 
 /// A window that outlives its platform revokes its drop target inside the
-/// thread's COM apartment: the registration, the window and its context keep
-/// OLE entered, whichever of the window's other COM users (its text services,
-/// its touchpad viewport) let go of it first.
-///
-/// Red-check: let the drop target, the wrapper and the context hold no
-/// apartment, and the revoke runs after the text services' retirement and the
-/// viewport's release left COM.
+/// thread's COM apartment, with neither text services nor a touchpad viewport
+/// to keep it entered: the registration, the window and its context hold the
+/// apartment themselves.
 fn a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com() {
-    let platform = WindowsPlatform::try_new().expect("platform");
-    let window = platform
-        .open_window(
-            WindowOptions::default()
-                .title("flui outlives its platform")
-                .visible(false),
-            RecordingWindowHandler::new(),
-        )
-        .expect("window");
-    super::testing::REVOKED_IN_APARTMENT.set(None);
-    drop(platform);
-    window.close_now();
-    drop(window);
+    // A thread of its own, so no apartment an earlier row entered on this one
+    // stands in for the window's. Its window has neither text services nor a
+    // touchpad viewport, as on a machine without them: nothing of its own
+    // keeps COM entered but what the window holds.
+    let revoked = std::thread::spawn(|| {
+        crate::text::windows::REFUSE_TSF_ACTIVATION.set(true);
+        crate::input::windows::direct_manipulation::testing::REFUSE_VIEWPORT.set(true);
+        let platform = WindowsPlatform::try_new().expect("platform");
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .title("flui outlives its platform")
+                    .visible(false),
+                RecordingWindowHandler::new(),
+            )
+            .expect("window");
+        drop(platform);
+        window.close_now();
+        drop(window);
+        super::testing::REVOKED_IN_APARTMENT.get()
+    })
+    .join()
+    .expect("the window's thread");
     assert_eq!(
-        super::testing::REVOKED_IN_APARTMENT.get(),
+        revoked,
         Some(true),
         "the window's drop target was revoked inside the COM apartment"
     );
