@@ -94,18 +94,21 @@ pub(crate) fn publishes_generic(attrs: &SemanticsAttributes) -> bool {
 /// `accesskit_consumer`'s `NodeRef::labelled_by` names from descendant
 /// labels, read through generic containers.
 pub(crate) fn names_from_contents(attrs: &SemanticsAttributes) -> bool {
+    explicit_role(attrs.effective_role()).is_some_and(is_named_from_contents)
+}
+
+/// Whether AccessKit names a node of `role` from its contents.
+pub(crate) fn is_named_from_contents(role: Role) -> bool {
     matches!(
-        explicit_role(attrs.effective_role()),
-        Some(
-            Role::Button
-                | Role::CheckBox
-                | Role::DefaultButton
-                | Role::Link
-                | Role::MenuItem
-                | Role::MenuItemCheckBox
-                | Role::MenuItemRadio
-                | Role::RadioButton
-        )
+        role,
+        Role::Button
+            | Role::CheckBox
+            | Role::DefaultButton
+            | Role::Link
+            | Role::MenuItem
+            | Role::MenuItemCheckBox
+            | Role::MenuItemRadio
+            | Role::RadioButton
     )
 }
 

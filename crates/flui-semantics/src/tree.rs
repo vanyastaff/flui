@@ -663,18 +663,46 @@ impl SemanticsTree {
             .find_map(|(_, child)| child.config().attributes().identifier.as_deref())
     }
 
-    /// The nodes whose published payload reads `node`'s role or identifier
-    /// besides `node` itself: the nearest ancestor with a role of its own,
-    /// which a generic `node` is lifted into (or was, before a change gave
-    /// `node` a role), and the generic containers lifted into `node`. An
-    /// incremental publish re-translates them with `node`, since they are not
-    /// dirty themselves.
-    pub(crate) fn placement_dependents(&self, node: &SemanticsNode) -> SmallVec<[SemanticsId; 4]> {
-        self.contents_owner(node)
-            .map(|(id, _)| id)
-            .into_iter()
-            .chain(self.lifted_contents(node).map(|(id, _)| id))
-            .collect()
+    /// The clean nodes whose published payload reads `node`'s role or
+    /// identifier, given the role `node` was last published with (ADR-0240
+    /// §2): the control a generic `node` is lifted into, or was, and the
+    /// identifier-only containers lifted into `node` when its kind changed
+    /// or is a control's, so their placement may have moved. A structural
+    /// change reshapes the tree and is published in full, so only a change
+    /// of attributes reaches here; a node whose kind and owner did not
+    /// change walks nothing.
+    pub(crate) fn placement_dependents(
+        &self,
+        node: &SemanticsNode,
+        published: accesskit::Role,
+    ) -> SmallVec<[SemanticsId; 4]> {
+        use crate::accesskit_translation::{
+            is_named_from_contents, names_from_contents, publishes_generic,
+        };
+        let attrs = node.config().attributes();
+        let generic = publishes_generic(attrs);
+        // An identifier-only container publishes as a group: a group may
+        // have been generic before.
+        let was_generic = matches!(
+            published,
+            accesskit::Role::GenericContainer | accesskit::Role::Group
+        );
+        let mut dependents = SmallVec::new();
+        if (generic || was_generic)
+            && let Some((id, owner)) = self.contents_owner(node)
+            && names_from_contents(owner.config().attributes())
+        {
+            dependents.push(id);
+        }
+        if names_from_contents(attrs) || is_named_from_contents(published) || generic != was_generic
+        {
+            dependents.extend(
+                self.lifted_contents(node)
+                    .filter(|(_, child)| child.config().attributes().identifier.is_some())
+                    .map(|(id, _)| id),
+            );
+        }
+        dependents
     }
 
     /// The text runs `node` lists after its children: the runs of the text it

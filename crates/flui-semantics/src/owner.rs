@@ -2135,15 +2135,24 @@ impl SemanticsOwner {
         }
 
         // A container's role and a control's identifier read the nodes around
-        // them (ADR-0240 §3), so the clean nodes a dirty one places are
-        // re-translated and diffed too. A relation's target can change
-        // identity while its source stays clean, so every clean source is as
-        // well.
+        // them (ADR-0240 §2), so the clean nodes a dirty one places are
+        // re-translated and diffed too, judged against the role the adapter
+        // holds for it. A node the adapter does not hold reshapes the tree,
+        // which is published in full. A relation's target can change
+        // identity while its source stays clean, so every clean source is
+        // re-translated as well.
         let mut placed: SmallVec<[SemanticsId; 8]> = SmallVec::new();
         for &sid in &dirty {
-            if let Some(node) = self.tree.get(sid).filter(|node| node.is_dirty()) {
-                placed.extend(self.tree.placement_dependents(node));
-            }
+            let Some(node) = self.tree.get(sid).filter(|node| node.is_dirty()) else {
+                continue;
+            };
+            let Some(published) = node
+                .accessibility_id()
+                .and_then(|identity| held(&accesskit::NodeId(identity.as_u64())))
+            else {
+                continue;
+            };
+            placed.extend(self.tree.placement_dependents(node, published.role()));
         }
         placed.retain(|sid| !self.relations.sources.contains(sid));
         placed.sort_unstable();
