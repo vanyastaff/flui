@@ -34,7 +34,6 @@
 //! raised by the next pump, before it frames. A lifecycle panic the tree recovered from (an `ErrorView`
 //! substitution) is not raised: the frame it happened in completed.
 
-use std::cell::OnceCell;
 use std::num::NonZeroU32;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
@@ -57,7 +56,7 @@ use flui_platform::{
     Unsupported, UnsupportedReason, WindowId, WindowIdMint,
 };
 use flui_platform::{SessionEndAnswer, SessionEndPhase, TextStoreHost};
-use flui_rendering::layer::{LayerTree, ScenePublication, SceneVersion};
+
 use flui_runtime::dev_agent::DevAgentHost;
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
@@ -65,7 +64,7 @@ use flui_runtime::frame_failure::{
 };
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
-use flui_runtime::sink::{FrameSink, SubmitVerdict};
+
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_scheduler::{ClockSource, PostFrameHandle};
 use flui_semantics::platform::{
@@ -75,11 +74,17 @@ use flui_semantics::platform::{
 use flui_view::__runtime::{FlushHost, FlushWrite, OwnerNotify};
 use flui_view::CloseReason;
 use flui_view::dev_agent::DevAgentHook;
-use flui_view::persist::{StorageCapability, StorageHandle};
 use parking_lot::Mutex;
 
 use crate::a11y::A11yTree;
 use crate::text_store_host::RecordingTextStoreHost;
+
+mod registrations;
+mod sink;
+
+pub(crate) use registrations::AppRegistrations;
+use registrations::{Registry, compose_registry};
+pub use sink::{HeadlessSink, UnshownFrame};
 
 /// The window a [`HeadlessHost`] presents into: window 1 at scale factor 1 (a
 /// window [opened](HeadlessHost::open_window) beside it takes the next
@@ -700,150 +705,6 @@ impl PlatformAccessibility for HeadlessAccessibility {
     }
 }
 
-/// The frame sink of a [`HeadlessHost`]: a surface of fixed size that
-/// presents every scene and keeps the last version, unless told to leave
-/// some unshown ([`HeadlessHost::leave_unshown`]).
-///
-/// The version is flattened into a layer tree only when a test reads it, so a
-/// frame costs the sink nothing that grows with the tree.
-#[derive(Debug)]
-pub struct HeadlessSink {
-    size: (u32, u32),
-    last: Option<(SceneVersion, OnceCell<Option<LayerTree>>)>,
-    submits: u64,
-    /// The next frames left unshown, and how.
-    unshown: Option<(NonZeroU32, UnshownFrame)>,
-    /// The epochs of the frames presented most recently, oldest first, at
-    /// most [`PRESENTED_KEPT`].
-    presented: std::collections::VecDeque<flui_foundation::FrameEpoch>,
-}
-
-/// Why a [`HeadlessSink`] leaves a frame unshown, as a real surface does:
-/// each is the verdict a runner's sink answers then, and the UI runtime
-/// recovers from it as it does on screen (ADR-0334, ADR-0335).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum UnshownFrame {
-    /// The surface is not ready to show the window yet
-    /// ([`SubmitVerdict::Retry`]): the frame is retried at the next paced
-    /// wake, and pointer input waits for the first frame shown (ADR-0048).
-    NotReady,
-    /// The surface is covered or released and shows nothing
-    /// ([`SubmitVerdict::NotShown`]): the frame is retried.
-    Withdrawn,
-    /// The surface was lost or went stale ([`SubmitVerdict::SurfaceStale`]):
-    /// the frame is retried against the surface configured again.
-    SurfaceLost,
-    /// The GPU device was lost ([`SubmitVerdict::DeviceLost`]): the frame is
-    /// retried after the dropped-frame backoff. The UI runtime reports it as
-    /// a dropped frame, which [`HeadlessHost::pump`] raises (see the
-    /// [module docs](self#failures)).
-    DeviceLost,
-    /// The frame failed in a way its retry cannot fix
-    /// ([`SubmitVerdict::Failed`]): it is painted again after the
-    /// dropped-frame backoff.
-    Failed,
-    /// The window cannot show a frame until it changes
-    /// ([`SubmitVerdict::Refused`]): nothing is retried until its next
-    /// change asks for a frame.
-    Refused,
-}
-
-impl UnshownFrame {
-    const fn verdict(self) -> SubmitVerdict {
-        match self {
-            Self::NotReady => SubmitVerdict::Retry,
-            Self::Withdrawn => SubmitVerdict::NotShown,
-            Self::SurfaceLost => SubmitVerdict::SurfaceStale,
-            Self::DeviceLost => SubmitVerdict::DeviceLost,
-            Self::Failed => SubmitVerdict::Failed,
-            Self::Refused => SubmitVerdict::Refused,
-        }
-    }
-}
-
-/// How many presented frames a [`HeadlessSink`] remembers for a presentation
-/// report to name.
-const PRESENTED_KEPT: usize = 16;
-
-impl HeadlessSink {
-    /// A `width` × `height` surface that has presented nothing yet.
-    #[must_use]
-    pub(crate) fn new(width: u32, height: u32) -> Self {
-        Self {
-            size: (width, height),
-            last: None,
-            submits: 0,
-            unshown: None,
-            // Its room is taken here, so a frame that presents allocates nothing.
-            presented: std::collections::VecDeque::with_capacity(PRESENTED_KEPT),
-        }
-    }
-
-    /// The epoch of the frame presented last, which a presentation report
-    /// may name ([`HeadlessHost::report_presented`]).
-    #[must_use]
-    pub fn last_presented(&self) -> Option<flui_foundation::FrameEpoch> {
-        self.presented.back().copied()
-    }
-
-    /// Whether the frame of `epoch` is one of the frames presented recently.
-    fn presented(&self, epoch: flui_foundation::FrameEpoch) -> bool {
-        self.presented.contains(&epoch)
-    }
-
-    /// The layer tree the pipeline's frame node paints in the last version
-    /// submitted, rooted at its device-pixel-ratio layer and retained across
-    /// frames that painted nothing.
-    #[must_use]
-    pub fn layer_tree(&self) -> Option<&LayerTree> {
-        let (version, tree) = self.last.as_ref()?;
-        tree.get_or_init(|| {
-            let root = version.node(version.root())?;
-            let frame = root.content().slots().next()?;
-            version.flatten_node(frame)
-        })
-        .as_ref()
-    }
-
-    /// The last version submitted.
-    #[must_use]
-    pub fn version(&self) -> Option<&SceneVersion> {
-        self.last.as_ref().map(|(version, _)| version)
-    }
-
-    /// How many scenes have been presented: a frame left unshown is not
-    /// counted.
-    #[must_use]
-    pub fn submits(&self) -> u64 {
-        self.submits
-    }
-}
-
-impl FrameSink for HeadlessSink {
-    fn surface_size(&mut self) -> (u32, u32) {
-        self.size
-    }
-
-    fn submit(
-        &mut self,
-        epoch: flui_foundation::FrameEpoch,
-        publication: ScenePublication,
-    ) -> SubmitVerdict {
-        if let Some((frames, how)) = self.unshown {
-            self.unshown = NonZeroU32::new(frames.get() - 1).map(|left| (left, how));
-            return how.verdict();
-        }
-        self.last = Some((publication.scene, OnceCell::new()));
-        self.submits = self.submits.saturating_add(1);
-        if self.presented.len() == PRESENTED_KEPT {
-            self.presented.pop_front();
-        }
-        self.presented.push_back(epoch);
-        SubmitVerdict::Presented
-    }
-}
-
 /// A development-agent hook attached the way a runner's event loop attaches
 /// it: once, when this value is built, and detached when it is dropped.
 ///
@@ -1090,142 +951,14 @@ impl std::fmt::Debug for HeadlessHost {
 }
 
 /// The storage a headless host gives its UI runtime: the host's own, and
-/// the storage the application provides as the [`StorageCapability`] in its
+/// the storage the application provides as the
+/// [`StorageCapability`](flui_view::persist::StorageCapability) in its
 /// place, if any. The host's flush writes each document's bytes to the
 /// storage that document acquired.
 #[derive(Clone)]
 pub(crate) struct KitStorage {
     pub(crate) host: Arc<dyn flui_platform::Storage>,
     pub(crate) provided: Option<Arc<dyn flui_platform::Storage>>,
-}
-
-/// What an application registers over the built-ins (ADR-0152): its
-/// overrides, which answer in place of a built-in, and its plugins, which
-/// provide what nothing else does. Shared, so a relaunch registers them again.
-#[derive(Clone, Default)]
-pub(crate) struct AppRegistrations {
-    /// Each registers its one provider in the overrides tier.
-    overrides: Vec<Rc<dyn flui_platform::capability::Plugin>>,
-    plugins: Vec<Rc<dyn flui_platform::capability::Plugin>>,
-}
-
-/// One override: `C` provided by the shared `P`.
-struct Override<C, P> {
-    provider: Rc<P>,
-    capability: std::marker::PhantomData<fn() -> C>,
-}
-
-impl<C, P> flui_platform::capability::Plugin for Override<C, P>
-where
-    C: flui_platform::capability::Capability,
-    P: flui_platform::capability::CapabilityProvider<C>,
-{
-    fn register(&self, registrar: &mut flui_platform::capability::CapabilityRegistrar) {
-        registrar.provide::<C>(SharedProvider(Rc::clone(&self.provider)));
-    }
-}
-
-impl AppRegistrations {
-    /// Nothing registered.
-    pub(crate) const fn new() -> Self {
-        Self {
-            overrides: Vec::new(),
-            plugins: Vec::new(),
-        }
-    }
-
-    /// Provide `C` with `provider`, in place of the built-in and any plugin's.
-    pub(crate) fn capability<C, P>(&mut self, provider: P)
-    where
-        C: flui_platform::capability::Capability,
-        P: flui_platform::capability::CapabilityProvider<C>,
-    {
-        self.overrides.push(Rc::new(Override::<C, P> {
-            provider: Rc::new(provider),
-            capability: std::marker::PhantomData,
-        }));
-    }
-
-    /// Register `plugin`'s providers after the built-ins.
-    pub(crate) fn plugin(&mut self, plugin: impl flui_platform::capability::Plugin) {
-        self.plugins.push(Rc::new(plugin));
-    }
-
-    /// How many overrides and plugins are registered.
-    pub(crate) fn counts(&self) -> (usize, usize) {
-        (self.overrides.len(), self.plugins.len())
-    }
-}
-
-/// One provider registered again by each run that shares it.
-struct SharedProvider<P>(Rc<P>);
-
-impl<C, P> flui_platform::capability::CapabilityProvider<C> for SharedProvider<P>
-where
-    C: flui_platform::capability::Capability,
-    P: flui_platform::capability::CapabilityProvider<C>,
-{
-    fn provide(
-        &self,
-        ctx: &flui_platform::capability::ProviderContext<'_>,
-    ) -> Result<C::Handle, Unsupported> {
-        self.0.provide(ctx)
-    }
-}
-
-/// Where a [`HeadlessHost`]'s registry comes from.
-enum Registry {
-    /// The test's own, alone.
-    Given(flui_runtime::capability::CapabilityRegistry),
-    /// What a runner builds for an application on the primary window's
-    /// platform ([`compose_registry`]).
-    Composed(AppRegistrations),
-}
-
-/// The registry a runner builds for an application on `platform`: the
-/// application's overrides first (the provided storage among them), then the
-/// built-ins with the host's storage, then the application's plugins.
-///
-/// # Panics
-///
-/// When the application's registrations conflict, as a run fails before its
-/// platform starts.
-fn compose_registry(
-    scripted: &ScriptedBuiltIns,
-    platform: flui_platform::TargetPlatform,
-    storage: Option<&KitStorage>,
-    application: &AppRegistrations,
-) -> flui_runtime::capability::CapabilityRegistry {
-    let mut built_ins = scripted.registrar(platform);
-    let mut overrides = flui_platform::capability::CapabilityRegistrar::new();
-    for registration in &application.overrides {
-        registration.register(&mut overrides);
-    }
-    if let Some(KitStorage { host, provided }) = storage {
-        let host = Arc::clone(host);
-        built_ins.provide::<StorageCapability>(
-            move |_: &flui_platform::capability::ProviderContext<'_>| {
-                Ok(StorageHandle::new(Arc::clone(&host)))
-            },
-        );
-        if let Some(provided) = provided {
-            let provided = Arc::clone(provided);
-            overrides.provide::<StorageCapability>(
-                move |_: &flui_platform::capability::ProviderContext<'_>| {
-                    Ok(StorageHandle::new(Arc::clone(&provided)))
-                },
-            );
-        }
-    }
-    let mut builder = flui_runtime::capability::CapabilityRegistry::builder()
-        .overrides(overrides)
-        .built_ins(built_ins);
-    for plugin in &application.plugins {
-        builder = builder.plugin(plugin.as_ref());
-    }
-    builder
-        .build()
-        .unwrap_or_else(|conflict| panic!("the application's registrations conflict: {conflict}"))
 }
 
 impl HeadlessHost {
@@ -1326,7 +1059,7 @@ impl HeadlessHost {
     }
 
     /// [`Self::new`], its widgets acquiring `storage` as
-    /// the [`StorageCapability`].
+    /// the [`StorageCapability`](flui_view::persist::StorageCapability).
     pub(crate) fn with_storage(window: HeadlessWindow, storage: Option<KitStorage>) -> Self {
         Self::with_application(window, storage, AppRegistrations::default())
     }
