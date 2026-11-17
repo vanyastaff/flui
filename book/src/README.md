@@ -20,7 +20,8 @@ the repository; the linked source has the required features.
 
 ## Where to start
 
-- New to FLUI and want to build an application: [Getting Started](getting-started/installation.md).
+- New to FLUI and want to build an application: [Getting Started](getting-started/installation.md),
+  then the [Tutorial](tutorial/first-app.md).
 - Ready to change a working example: the [Cookbook](cookbook/overview.md) for forms, async work,
   themes, animation, and testing.
 - Choosing a state model or learning how a view becomes a frame:
