@@ -15,10 +15,10 @@
 //! writes.
 //!
 //! What the IR bakes from outside the chunk is in its key: the device
-//! transform ([`RasterKey`]), the scissor and opacity it was entered under
-//! ([`AmbientKey`]) and the painter's resources ([`ResourceEpoch`]): a glyph
-//! texel or an image's atlas rectangle is valid only while no slot the
-//! recording names was freed since.
+//! transform ([`RasterKey`]), the scissor and opacity it was entered under and
+//! the size of the target ([`AmbientKey`]) and the painter's resources
+//! ([`ResourceEpoch`]): a glyph texel or an image's atlas rectangle is valid
+//! only while no slot the recording names was freed since.
 
 use std::num::NonZeroU64;
 
