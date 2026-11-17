@@ -24,7 +24,7 @@
 use std::sync::Arc;
 
 use flui_platform::{Storage, StorageError, StorageName, WriteMode};
-use sha2::{Digest, Sha256};
+use std::hash::Hasher as _;
 
 /// The stored value: this machine's compiled pipelines, which another
 /// machine's driver cannot use.
@@ -37,8 +37,10 @@ pub(crate) const MAX_ENVELOPE_BYTES: u64 = 64 * 1024 * 1024;
 /// The first bytes of every envelope, and its format's version.
 const TAG: [u8; 8] = *b"FLUIPLC1";
 
-/// The bytes of the envelope's SHA-256 digest.
-const DIGEST_BYTES: usize = 32;
+/// The bytes of the envelope's digest, an `FxHasher` sum: it catches a value
+/// torn or altered by accident, which is what a store only its owner writes
+/// can suffer (see `create_cache`).
+const DIGEST_BYTES: usize = 8;
 
 /// Why stored bytes are not a pipeline cache for this adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +68,7 @@ pub(crate) enum Refusal {
 /// | 4 | the key's length, `u32` little-endian |
 /// | key's length | the key, UTF-8 |
 /// | 8 | the payload's length, `u64` little-endian |
-/// | 32 | SHA-256 of the key's length, the key and the payload |
+/// | 8 | `FxHasher` sum of the key's length, the key and the payload, little-endian |
 /// | payload's length | the payload |
 ///
 /// `None` when the envelope would be longer than [`MAX_ENVELOPE_BYTES`],
@@ -148,11 +150,11 @@ fn array<const N: usize>(bytes: &[u8]) -> [u8; N] {
 }
 
 fn digest(key_len: u32, key: &[u8], payload: &[u8]) -> [u8; DIGEST_BYTES] {
-    let mut hasher = Sha256::new();
-    hasher.update(key_len.to_le_bytes());
-    hasher.update(key);
-    hasher.update(payload);
-    hasher.finalize().into()
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write_u32(key_len);
+    hasher.write(key);
+    hasher.write(payload);
+    hasher.finish().to_le_bytes()
 }
 
 /// A context's pipeline cache and the storage its data is saved in.
@@ -232,6 +234,24 @@ impl PipelineStore {
         })
     }
 
+    /// A cold cache on `device` for `adapter`, saved to `storage`, for a
+    /// context whose stored data was not read; `None` where that device has
+    /// no pipeline cache.
+    pub(crate) fn cold(
+        device: &wgpu::Device,
+        adapter: &wgpu::AdapterInfo,
+        storage: Arc<dyn Storage>,
+    ) -> Option<Self> {
+        let key = cache_key(device, adapter)?;
+        Some(Self {
+            cache: create_cache(device, None).0,
+            key: key.into(),
+            storage,
+            #[cfg(test)]
+            seeded: false,
+        })
+    }
+
     /// A cold cache on `device`, a rebuilt device on `adapter`, saved to the
     /// same storage; `None` where that device has no pipeline cache.
     pub(crate) fn restart(
@@ -239,14 +259,7 @@ impl PipelineStore {
         device: &wgpu::Device,
         adapter: &wgpu::AdapterInfo,
     ) -> Option<Self> {
-        let key = cache_key(device, adapter)?;
-        Some(Self {
-            cache: create_cache(device, None).0,
-            key: key.into(),
-            storage: self.storage,
-            #[cfg(test)]
-            seeded: false,
-        })
+        Self::cold(device, adapter, self.storage)
     }
 
     /// The cache every pipeline of the context is created through.
@@ -312,7 +325,7 @@ fn create_cache(device: &wgpu::Device, data: Option<&[u8]>) -> (wgpu::PipelineCa
     // returned: `save` wrapped exactly what `get_data` returned with the key
     // of the device's adapter, and `decode` returns it only when the stored
     // key equals this adapter's key (`load` derives both with `cache_key`) and
-    // the SHA-256 digest over key and payload matches, so the bytes are the
+    // the digest over key and payload matches, so the bytes are the
     // ones `get_data` returned for this adapter key, unaltered. The digest
     // proves integrity, not origin: the value lives in the application's own
     // machine-local data directory, which the platform store creates for its
@@ -329,7 +342,7 @@ fn create_cache(device: &wgpu::Device, data: Option<&[u8]>) -> (wgpu::PipelineCa
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_ENVELOPE_BYTES, Refusal, decode, encode};
+    use super::{DIGEST_BYTES, MAX_ENVELOPE_BYTES, Refusal, decode, encode};
 
     const KEY: &str = "wgpu_pipeline_cache_vulkan_4318_7938";
     const PAYLOAD: &[u8] = b"compiled pipelines";
@@ -393,7 +406,7 @@ mod tests {
         let over = vec![0_u8; limit + 1];
         assert_eq!(decode(KEY, &over), Err(Refusal::TooLarge));
         assert_eq!(encode(KEY, &over[..limit]), None);
-        let fits = limit - (8 + 4 + KEY.len() + 8 + 32);
+        let fits = limit - (8 + 4 + KEY.len() + 8 + DIGEST_BYTES);
         let largest = encode(KEY, &over[..fits]).expect("the largest payload that fits");
         assert_eq!(largest.len(), limit);
         assert_eq!(decode(KEY, &largest), Ok(Some(&over[..fits])));

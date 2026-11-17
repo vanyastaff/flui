@@ -52,13 +52,51 @@ pub(super) fn wait_within<F: Future>(future: F, bound: Duration) -> Option<F::Ou
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use super::wait_within;
 
+    /// Ready once another thread, woken by the first poll, has set `done`
+    /// and woken the waiter.
+    struct DoneElsewhere {
+        done: Arc<AtomicBool>,
+        started: bool,
+    }
+
+    impl Future for DoneElsewhere {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<()> {
+            if self.done.load(Ordering::Acquire) {
+                return Poll::Ready(());
+            }
+            if !self.started {
+                self.started = true;
+                let done = Arc::clone(&self.done);
+                let waker = ctx.waker().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(10));
+                    done.store(true, Ordering::Release);
+                    waker.wake();
+                });
+            }
+            Poll::Pending
+        }
+    }
+
     #[test]
-    fn a_ready_future_is_answered_and_a_pending_one_is_dropped_at_the_bound() {
+    fn a_future_is_answered_when_ready_or_woken_and_dropped_at_the_bound() {
         assert_eq!(wait_within(async { 7 }, Duration::ZERO), Some(7));
+        let woken = DoneElsewhere {
+            done: Arc::new(AtomicBool::new(false)),
+            started: false,
+        };
+        assert_eq!(wait_within(woken, Duration::from_secs(10)), Some(()));
         assert_eq!(
             wait_within(std::future::pending::<()>(), Duration::from_millis(20)),
             None

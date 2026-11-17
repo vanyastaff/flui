@@ -338,8 +338,6 @@ mod path_cache;
 /// (opaque/alpha-blend factory methods + bitfield queries), `PipelineCache`
 /// (get_or_create, viewport_bind_group_layout), and `pipeline_key_from_paint`.
 mod pipeline_cache;
-/// A device paired with the driver pipeline cache its pipelines are created
-/// through.
 mod pipeline_device;
 /// `pipeline_set.rs` — `PipelineSet` composes the live `PipelineCache` from
 /// `pipeline_cache.rs` and adds the nine named pipelines previously scattered
@@ -347,7 +345,6 @@ mod pipeline_device;
 /// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
 /// half.
 pub(crate) mod pipeline_set;
-/// The pipeline cache's data saved between runs in machine-local storage.
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_store;
 #[cfg(not(target_arch = "wasm32"))]

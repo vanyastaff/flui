@@ -121,10 +121,6 @@ wgpu = { workspace = true, default-features = false, features = ["vulkan", "gles
 # waits for wgpu's adapter and device requests there (ADR-0305 §8); on the web
 # the rebuild is a future the owner spawns.
 pollster = { workspace = true }
-# The digest of the stored pipeline cache's envelope (`pipeline_store`),
-# which proves the bytes handed to the driver are the ones it saved. WebGPU
-# has no pipeline cache.
-sha2 = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the

@@ -1154,18 +1154,19 @@ impl RasterHost {
         if let Some(storage) = super::host::host_storage() {
             // The read runs on the application's IO pool, which may be one
             // the owner thread itself drives: past the bound the context
-            // starts with no cache rather than wait for a read that cannot
-            // come.
+            // starts with a cold cache rather than wait for a read that
+            // cannot come, and its warm-up still saves for the next launch.
             let loaded = wait_within(
-                bootstrap.context.load_pipeline_cache(storage),
+                bootstrap.context.load_pipeline_cache(Arc::clone(&storage)),
                 PIPELINE_CACHE_LOAD_BOUND,
             );
             if loaded.is_none() {
                 tracing::warn!(
                     target: "flui.gpu",
                     event = "pipeline_cache_load_timed_out",
-                    "the pipeline cache was not read in time; the GPU context starts without one"
+                    "the pipeline cache was not read in time; the GPU context starts it cold"
                 );
+                bootstrap.context.start_pipeline_cache_cold(storage);
             }
         }
         Ok(bootstrap)

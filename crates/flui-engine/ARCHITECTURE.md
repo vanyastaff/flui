@@ -335,7 +335,7 @@ production exceptions, each with its own `expect`. `pipeline_store::create_cache
 creates the driver's pipeline cache from stored bytes, which wgpu offers only as
 an `unsafe fn` whose precondition is that the bytes are ones `PipelineCache::get_data`
 returned on an adapter with the same `pipeline_cache_key`; the bytes reach it only
-through the store's envelope, which names that key and carries a SHA-256 digest of
+through the store's envelope, which names that key and carries a 64-bit `FxHasher` digest of
 key and payload, so a torn, foreign or corrupted value is refused before wgpu sees
 it, and the value lives in the application's own machine-local data directory.
 The other is `renderer::dxgi_frame_statistics`

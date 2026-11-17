@@ -821,6 +821,16 @@ impl GpuContext {
         self.pipeline_store = PipelineStore::load(self.domain.device(), &adapter, storage).await;
     }
 
+    /// A cold pipeline cache saved to `storage`, for a context whose stored
+    /// data could not be read in time: this run compiles every pipeline, and
+    /// its warm-up still saves them for the next. Nothing where the device has
+    /// no pipeline cache.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_pipeline_cache_cold(&mut self, storage: Arc<dyn flui_platform::Storage>) {
+        let adapter = self.adapter.get_info();
+        self.pipeline_store = PipelineStore::cold(self.domain.device(), &adapter, storage);
+    }
+
     /// Whether wgpu created the pipeline cache from stored data; `None`
     /// without a cache.
     #[cfg(all(test, not(target_arch = "wasm32")))]

@@ -1964,7 +1964,6 @@ dependencies = [
  "raw-window-handle",
  "regex",
  "rustc-hash 2.1.3",
- "sha2",
  "smallvec",
  "static_assertions",
  "thiserror 2.0.21",

@@ -168,7 +168,9 @@ pub struct GpuContext {
   `gpu-pipeline-cache` (`crates/flui-engine/src/pipeline_store.rs`), loaded by
   `GpuContext::load_pipeline_cache` before the first window attaches. The stored value is an
   envelope: a tag, the adapter's `wgpu::util::pipeline_cache_key` (vendor and device), the
-  payload's length and a SHA-256 digest over key and payload, refused above 64 MiB. wgpu checks
+  payload's length and a 64-bit `FxHasher` digest over key and payload (a crate the engine
+  already has; the store has one writer, so the digest catches a torn or altered value, not a
+  forger), refused above 64 MiB. wgpu checks
   only the payload's header, so a truncated, extended or altered value, or another adapter's, is
   the envelope's to refuse; a refused value is emptied at once and the context starts cold,
   without failing, and a driver update is wgpu's and the driver's to refuse inside the payload.
@@ -176,7 +178,9 @@ pub struct GpuContext {
   platform store stages and renames, so a crash mid-write leaves the previous value or none.
   Pipelines built later (another format, effects, variants built on first use) are not saved:
   the runners stop admitting storage writes before the context retires. The load waits a bounded
-  time on the owner thread and starts cold past it, since an IO pool may run on that thread. A
+  time on the owner thread and past it starts a cold cache, which the warm-up still saves, since
+  an IO pool may run on that thread (an application whose pool the owner drives never loads
+  one). A
   lost device's data is not saved, and a rebuild starts a cold cache on the new device. This is
   what a driver without a disk cache of its own (Android's Vulkan drivers) needs between
   launches; lavapipe stores only a header in it.
