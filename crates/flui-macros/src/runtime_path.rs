@@ -46,10 +46,17 @@ impl Runtime {
         if let Ok(found) = crate_name("flui") {
             return module_path(found, "flui", module, span);
         }
+        // The application runtime is not in the SDK, so a crate that already
+        // has `flui-sdk` is not told to add it.
+        let facade = if matches!(self, Self::App) {
+            "add `flui` to Cargo.toml (`flui-sdk` has no application entry)"
+        } else {
+            "add `flui` to Cargo.toml (a package adds `flui-sdk`)"
+        };
         Err(syn::Error::new(
             span,
             format!(
-                "FLUI macros expand to paths in a runtime crate; add `flui` to Cargo.toml (a package adds `flui-sdk`), or use a direct `{package}` dependency (renamed dependencies are supported)"
+                "FLUI macros expand to paths in a runtime crate; {facade}, or use a direct `{package}` dependency (renamed dependencies are supported)"
             ),
         ))
     }
@@ -79,4 +86,27 @@ fn absolute_path(found: FoundCrate, package: &str, span: Span) -> syn::Result<Pa
                 format!("FLUI dependency alias `{name}` is not a Rust crate identifier"),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// This crate's own manifest names no runtime crate, so every lookup
+    /// from its unit tests ends in the error a consumer without one sees.
+    #[test]
+    fn a_crate_without_the_runtime_is_told_which_dependency_to_add() {
+        let advice = |runtime: Runtime| match runtime.resolve(Span::call_site()) {
+            Ok(_) => panic!("BUG: flui-macros resolves a runtime crate"),
+            Err(error) => error.to_string(),
+        };
+        let view = advice(Runtime::View);
+        assert!(view.contains("a package adds `flui-sdk`"), "{view}");
+        assert!(view.contains("a direct `flui-view` dependency"), "{view}");
+
+        let app = advice(Runtime::App);
+        assert!(app.contains("`flui-sdk` has no application entry"), "{app}");
+        assert!(!app.contains("a package adds `flui-sdk`"), "{app}");
+        assert!(app.contains("a direct `flui-app` dependency"), "{app}");
+    }
 }

@@ -27,7 +27,7 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::ext::IdentExt;
 use syn::parse::Parser;
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Fields, Ident, LitStr, Path, Type, Variant};
+use syn::{Attribute, Data, DeriveInput, Fields, Ident, LitStr, Path, Type, Variant};
 
 use pattern::Segment;
 
@@ -90,6 +90,8 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             "derive(Routable) needs at least one variant",
         ));
     }
+
+    refuse_misplaced_attributes(input, data)?;
 
     let mut errors: Option<syn::Error> = None;
     let mut push = |error: syn::Error| match &mut errors {
@@ -275,6 +277,45 @@ fn route(variant: &Variant) -> syn::Result<Route<'_>> {
         fields,
         named,
     })
+}
+
+/// `route` gives a variant its pattern and `query` marks a variant's field.
+/// The derive registers both for the whole item, so anywhere else rustc
+/// accepts them and the derive would not read them: they are refused.
+fn refuse_misplaced_attributes(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<()> {
+    fn refuse(attrs: &[Attribute], name: &str, message: &str) -> syn::Result<()> {
+        attrs
+            .iter()
+            .find(|attribute| attribute.path().is_ident(name))
+            .map_or(Ok(()), |attribute| {
+                Err(syn::Error::new(attribute.span(), message))
+            })
+    }
+    refuse(
+        &input.attrs,
+        "route",
+        "`#[route]` gives a variant its path pattern; the type takes none",
+    )?;
+    refuse(
+        &input.attrs,
+        "query",
+        "`#[query]` marks a field of a variant; the type takes none",
+    )?;
+    for variant in &data.variants {
+        refuse(
+            &variant.attrs,
+            "query",
+            "`#[query]` marks a field; the variant takes `#[route(\"/path\")]`",
+        )?;
+        for field in &variant.fields {
+            refuse(
+                &field.attrs,
+                "route",
+                "`#[route]` gives a variant its path pattern; a field takes `#[query]`",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// The one `#[route("…")]` of `variant`.
@@ -511,6 +552,48 @@ fn candidate(route: &Route<'_>) -> TokenStream {
                     return ::core::result::Result::Ok(#value);
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    #[test]
+    fn a_route_or_query_attribute_out_of_place_is_refused() {
+        let cases: [(&str, DeriveInput, &str); 4] = [
+            (
+                "route on the type",
+                parse_quote! { #[route("/")] enum R { #[route("/")] Home } },
+                "`#[route]` gives a variant its path pattern; the type takes none",
+            ),
+            (
+                "query on the type",
+                parse_quote! { #[query(rename = "q")] enum R { #[route("/")] Home } },
+                "`#[query]` marks a field of a variant; the type takes none",
+            ),
+            (
+                "query on a variant",
+                parse_quote! { enum R { #[route("/search")] #[query] Search { q: String } } },
+                "`#[query]` marks a field; the variant takes",
+            ),
+            (
+                "route on a field",
+                parse_quote! {
+                    enum R { #[route("/note/:id")] Note { #[route("/ignored")] id: u32 } }
+                },
+                "`#[route]` gives a variant its path pattern; a field takes `#[query]`",
+            ),
+        ];
+        for (case, input, expected) in cases {
+            let error = match expand(&input) {
+                Ok(_) => panic!("BUG: `{case}` expands"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains(expected), "{case}: {error}");
         }
     }
 }

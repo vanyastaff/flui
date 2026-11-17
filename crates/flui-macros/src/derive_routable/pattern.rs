@@ -120,12 +120,15 @@ mod tests {
             ("/notes", vec![literal("notes")]),
             ("/note/:id", vec![literal("note"), param("id")]),
             ("/:type/x", vec![param("type"), literal("x")]),
-            ("/caf\u{e9}/a b", vec![literal("caf\u{e9}"), literal("a b")]),
+            (
+                "/\u{e9}t\u{e9}/a b",
+                vec![literal("\u{e9}t\u{e9}"), literal("a b")],
+            ),
         ];
         for (pattern, expected) in accepted {
             assert_eq!(parse(pattern), Ok(expected), "{pattern:?}");
         }
-        let refused: [(&str, &str); 10] = [
+        let refused: [(&str, &str); 11] = [
             ("", "starts with `/`"),
             ("notes", "starts with `/`"),
             ("/notes/", "no trailing `/`"),
@@ -136,6 +139,7 @@ mod tests {
             ("/a%20b", "no `?` query"),
             ("/note/:", "`:` is not a parameter"),
             ("/note/:my-id", "`:my-id` is not a parameter"),
+            ("/note/: id", "`: id` is not a parameter"),
         ];
         for (pattern, reason) in refused {
             let error = parse(pattern).expect_err(pattern);

@@ -453,7 +453,7 @@ clap = { version = "4.5", features = ["derive"] }
 proc-macro2 = "1"
 syn = "3"
 # TOML that keeps a document's layout: `#[flui::main]` reads the crate's manifest with it, and
-# `flui-cli` rewrites one key of a project's `.cargo/config.toml`. Each member names the
+# `flui-cli` edits a project's `Cargo.toml` and `.cargo/config.toml`. Each member names the
 # features it needs (`parse`, `display`).
 toml_edit = { version = "0.25", default-features = false }
 # Markdown events for `cargo xtask markers`: prose apart from code spans and blocks.

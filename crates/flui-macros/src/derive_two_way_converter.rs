@@ -24,6 +24,15 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     };
 
+    // A field that borrows for a lifetime of the type would put that lifetime
+    // into the vector's length, which a constant expression cannot name.
+    if let Some(lifetime) = input.generics.lifetimes().next() {
+        return Err(syn::Error::new(
+            lifetime.span(),
+            "#[derive(TwoWayConverter)] requires a type without lifetime parameters: a vector's width cannot depend on one",
+        ));
+    }
+
     let parameters: Vec<_> = input
         .generics
         .params
@@ -121,4 +130,56 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use syn::parse_quote;
+
+    use super::*;
+
+    /// A shape the derive cannot convert is refused before the runtime crate
+    /// is looked up, which this crate's own manifest does not name.
+    #[test]
+    fn a_shape_without_a_fixed_vector_is_refused() {
+        let cases: [(&str, DeriveInput, &str); 6] = [
+            (
+                "an enum",
+                parse_quote! { enum V { A(f64) } },
+                "requires a struct with at least one field",
+            ),
+            (
+                "a unit struct",
+                parse_quote! { struct V; },
+                "requires a struct with at least one field",
+            ),
+            (
+                "an empty struct",
+                parse_quote! { struct V {} },
+                "requires a struct with at least one field",
+            ),
+            (
+                "a field of a type parameter",
+                parse_quote! { struct V<T> { a: f64, b: T } },
+                "requires concrete field types",
+            ),
+            (
+                "a field sized by a const parameter",
+                parse_quote! { struct V<const N: usize>([f64; N]); },
+                "requires concrete field types",
+            ),
+            (
+                "a lifetime parameter",
+                parse_quote! { struct V<'a>(f64, ::core::marker::PhantomData<&'a ()>); },
+                "requires a type without lifetime parameters",
+            ),
+        ];
+        for (case, input, expected) in cases {
+            let error = match expand(&input) {
+                Ok(_) => panic!("BUG: `{case}` expands"),
+                Err(error) => error.to_string(),
+            };
+            assert!(error.contains(expected), "{case}: {error}");
+        }
+    }
 }

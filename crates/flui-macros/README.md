@@ -1,8 +1,11 @@
 # flui-macros
 
 The procedural macros of FLUI. An author never names this crate: each macro is
-re-exported beside the trait or function it serves, and an application gets
-all of them from `flui::prelude`.
+re-exported beside the trait or function it serves, at the path the table
+gives. An application reaches the same items through the facade:
+`flui::prelude` carries the view derives, `InheritedData` and `Routable`,
+`Inspect` is `flui::Inspect`, `TwoWayConverter` is in `flui::animation`, and
+the entry attribute is `flui::main`.
 
 | Macro | Writes | Import it from |
 |-------|--------|----------------|
@@ -17,6 +20,8 @@ The attributes each macro takes, what it refuses and why are in its rustdoc
 (`cargo doc -p flui-macros --open`). [`ARCHITECTURE.md`](ARCHITECTURE.md) records the
 decisions behind them: how an expansion finds its runtime crate, how `Inspect`
 maps a field, how `Routable` orders its patterns.
+
+A view, as an application writes one:
 
 ```rust,ignore
 use flui::prelude::*;
@@ -40,7 +45,7 @@ cargo heli clippy -p flui-macros --all-targets -- -D warnings
 cargo heli nextest run -p flui-macros
 ```
 
-The refusals each derive makes are unit-tested here. What an accepted derive
+Each macro's refusals of its input are unit tests of its `expand` here. What an accepted derive
 expands to is tested where the runtime is: `flui-view`, `flui-foundation`,
 `flui-animation` and `flui-widgets` for behaviour, and the trybuild suites of
 `flui-sdk`, `flui-view` and `flui-widgets` for diagnostics.

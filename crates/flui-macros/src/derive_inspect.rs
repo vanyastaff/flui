@@ -130,10 +130,12 @@ impl FieldAttrs {
                     };
                     set_once(&mut attrs.default, default, &meta)
                 } else if meta.path.is_ident("level") {
-                    let level = Level::parse(&meta.value()?.parse()?)?;
+                    let level: Ident = meta.value()?.parse()?;
+                    let level = Level::parse(&level)?;
                     set_once(&mut attrs.level, level, &meta)
                 } else if meta.path.is_ident("unit") {
-                    let unit = Unit::parse(&meta.value()?.parse()?)?;
+                    let unit: Ident = meta.value()?.parse()?;
+                    let unit = Unit::parse(&unit)?;
                     set_once(&mut attrs.unit, unit, &meta)
                 } else if meta.path.is_ident("with") {
                     let with: Path = meta.value()?.parse()?;
@@ -258,6 +260,19 @@ impl<'a> Shape<'a> {
             )),
         }
     }
+
+    /// The variants of an enum that has some and whose variants all carry no field: the shape
+    /// that is a value of its own.
+    fn fieldless_variants(&self) -> Option<impl Iterator<Item = &'a syn::Variant>> {
+        let Self::Enum(variants) = self else {
+            return None;
+        };
+        let fieldless = !variants.is_empty()
+            && variants
+                .iter()
+                .all(|(variant, _)| matches!(variant.fields, Fields::Unit));
+        fieldless.then(|| variants.iter().map(|(variant, _)| *variant))
+    }
 }
 
 /// The name a `match` arm binds a variant's field at `index` to.
@@ -342,7 +357,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     });
 
-    let to_value = fieldless_variants(&input.data).map(|variants| {
+    let to_value = shape.fieldless_variants().map(|variants| {
         let arms = variants.map(|variant| {
             let variant_ident = &variant.ident;
             let name = variant_ident.unraw().to_string();
@@ -377,20 +392,6 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
         #to_value
     })
-}
-
-/// The variants of an enum that has some and whose variants all carry no field: the shape
-/// that is a value of its own.
-fn fieldless_variants(data: &Data) -> Option<impl Iterator<Item = &syn::Variant>> {
-    let Data::Enum(data) = data else {
-        return None;
-    };
-    let fieldless = !data.variants.is_empty()
-        && data
-            .variants
-            .iter()
-            .all(|variant| matches!(variant.fields, Fields::Unit));
-    fieldless.then(|| data.variants.iter())
 }
 
 /// The fields to describe, with their attributes; skipped fields are left out.

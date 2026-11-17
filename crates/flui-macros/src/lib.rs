@@ -23,6 +23,8 @@
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// A macro that prints writes into the compiler's output of every crate that uses it.
+#![warn(clippy::print_stdout, clippy::print_stderr)]
 
 mod derive_inherited_data;
 mod derive_inspect;
@@ -163,7 +165,12 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 /// `InheritedView` can report which fields changed and dependents that used
 /// `depend_on_field` rebuild only for those (issue #1090).
 ///
-/// Every field must be `PartialEq`; at most 64 fields.
+/// The type is a struct with named fields and no generic parameters: a
+/// provider's data type is concrete, and the constants are named after the
+/// fields (`r#type` gives `FIELD_TYPE`). Every field must be `PartialEq`,
+/// which the generated comparison reports at the field. A struct with more
+/// than 64 fields is refused, since a mask carries 64 bits: split the
+/// provider's data.
 ///
 /// ```rust,ignore
 /// #[derive(Clone, PartialEq, InheritedData)]
@@ -209,8 +216,9 @@ pub fn derive_inspect(input: TokenStream) -> TokenStream {
 ///
 /// Each field must implement `TwoWayConverter` and `Lerp`, with a concrete
 /// vector width. Nested values are flattened in declaration order, and each
-/// field retains its interpolation contract. Generic-dependent widths cannot
-/// be summed in an array length on stable Rust. The struct must be `Clone`.
+/// field retains its interpolation contract. A width that depends on a type,
+/// const or lifetime parameter cannot be summed in an array length on stable
+/// Rust, so such a type is refused. The struct must be `Clone`.
 ///
 /// # Example
 ///

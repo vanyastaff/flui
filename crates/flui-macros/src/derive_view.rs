@@ -67,6 +67,9 @@ impl ViewAttrs {
         for attr in view_attributes(&input.attrs) {
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("inspect") {
+                    if attrs.inspect {
+                        return Err(meta.error("`inspect` is given twice"));
+                    }
                     attrs.inspect = true;
                     Ok(())
                 } else {
@@ -84,10 +87,16 @@ impl ViewAttrs {
                                     meta.error("expected `site`; `inspect` goes on the type")
                                 );
                             }
-                            if attrs.site.is_some() {
-                                return Err(
-                                    meta.error("only one field can be marked `#[view(site)]`")
-                                );
+                            match &attrs.site {
+                                Some(marked) if *marked == member => {
+                                    return Err(meta.error("`site` is given twice for the field"));
+                                }
+                                Some(_) => {
+                                    return Err(
+                                        meta.error("only one field can be marked `#[view(site)]`")
+                                    );
+                                }
+                                None => {}
                             }
                             attrs.site = Some(member.clone());
                             Ok(())
@@ -95,16 +104,15 @@ impl ViewAttrs {
                     }
                 }
             }
-            // A view reads its site from `self.<field>`, which only a struct has.
             Data::Enum(data) => {
                 for variant in &data.variants {
-                    refuse_field_attributes(
+                    refuse_outside_a_struct(
                         view_attributes(&variant.attrs).chain(field_attributes(&variant.fields)),
                     )?;
                 }
             }
             Data::Union(data) => {
-                refuse_field_attributes(
+                refuse_outside_a_struct(
                     data.fields
                         .named
                         .iter()
@@ -126,7 +134,9 @@ fn field_attributes(fields: &syn::Fields) -> impl Iterator<Item = &Attribute> {
         .flat_map(|field| view_attributes(&field.attrs))
 }
 
-fn refuse_field_attributes<'a>(mut attrs: impl Iterator<Item = &'a Attribute>) -> syn::Result<()> {
+/// A view reads its site from `self.<field>`, which only a struct has: `#[view(...)]` on an
+/// enum's variant, on a variant's field or on a union's field is refused.
+fn refuse_outside_a_struct<'a>(mut attrs: impl Iterator<Item = &'a Attribute>) -> syn::Result<()> {
     attrs.next().map_or(Ok(()), |attr| {
         Err(syn::Error::new_spanned(
             attr,
@@ -197,7 +207,7 @@ mod tests {
 
     #[test]
     fn a_misplaced_view_attribute_is_refused_with_its_place() {
-        let cases: [(&str, DeriveInput, &str); 6] = [
+        let cases: [(&str, DeriveInput, &str); 8] = [
             (
                 "site on the type",
                 parse_quote! { #[view(site)] struct V { site: CreationSite } },
@@ -212,6 +222,16 @@ mod tests {
                 "two sites",
                 parse_quote! { struct V(#[view(site)] CreationSite, #[view(site)] CreationSite); },
                 "only one field can be marked `#[view(site)]`",
+            ),
+            (
+                "one site twice",
+                parse_quote! { struct V { #[view(site, site)] site: CreationSite } },
+                "`site` is given twice for the field",
+            ),
+            (
+                "inspect twice",
+                parse_quote! { #[view(inspect)] #[view(inspect)] struct V; },
+                "`inspect` is given twice",
             ),
             (
                 "a variant's field",

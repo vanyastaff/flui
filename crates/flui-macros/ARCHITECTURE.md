@@ -78,14 +78,16 @@ A derive registers its helper attribute (`view`, `inspect`, `route`, `query`)
 for the whole item, so rustc accepts it anywhere inside: on the type, a
 variant or a field. Each derive reads its input into a typed description
 before it looks up a runtime path, and that reading refuses every place and
-every repetition it could not act on: `#[view(site)]` on an enum's field,
-`#[inspect(...)]` on a type or a variant, one `inspect` key twice on a field.
-Accepting them would leave the author with a view that reports no creation
-site, or a field that reports under a name they did not expect, and no
-diagnostic. Because the refusals precede the manifest lookup they are unit
-tests of `expand` in this crate
-(`a_misplaced_view_attribute_is_refused_with_its_place`,
-`an_inspect_attribute_that_would_do_nothing_is_refused`); the trybuild cases
+every repetition it could not act on: `#[view(site)]` on an enum's field or
+twice on one field, `#[inspect(...)]` on a type or a variant, one `inspect`
+key twice on a field, `#[route]` on the type or a field, `#[query]` on the
+type or a variant. Accepting them would leave the author with a view that
+reports no creation site, a field that reports under a name they did not
+expect, or a route whose query never parses, and no diagnostic. Because the
+refusals precede the manifest lookup they are unit tests of `expand` in this
+crate (`a_misplaced_view_attribute_is_refused_with_its_place`,
+`an_inspect_attribute_that_would_do_nothing_is_refused`,
+`a_route_or_query_attribute_out_of_place_is_refused`); the trybuild cases
 `view_attribute_placement` in `flui-view` and `inspect_unsupported_shape` in
 `flui-sdk` pin what the author sees.
 
