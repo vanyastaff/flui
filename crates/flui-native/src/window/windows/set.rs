@@ -318,16 +318,13 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
                 rejected: Some(Box::new(options)),
             });
         }
-        // An HWND's message queue belongs to the creating thread, and the
-        // window context shares the owner-only platform handlers, so a
-        // window is opened on the owner thread or not at all (ADR-0039).
+        // The loop is neither `Send` nor `Sync`, so this is its owner thread;
+        // the owner's state is refused only once the platform has shut down.
         let shares = owner
             .owner_control
             .shares("open_window")
             .map_err(|reason| OpenWindowError::Backend {
-                message: format!(
-                    "Win32 windows are opened on the platform's owner thread ({reason:?})"
-                ),
+                message: format!("the platform has shut down ({reason:?})"),
             })?;
         tracing::info!("Opening window: {:?}", options.title);
 
@@ -340,7 +337,7 @@ impl crate::host::Window<WindowsLoop> for WindowsWindow {
             handler,
             Arc::clone(windows),
             shares,
-            owner.apartment.share(),
+            Rc::clone(&owner.apartment),
             Arc::clone(&owner.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;

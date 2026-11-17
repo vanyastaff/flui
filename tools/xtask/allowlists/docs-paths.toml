@@ -54,7 +54,7 @@ reason = "the decision's context names the layout the decision changed"
 [[allow]]
 path = "docs/adr/ADR-0082-platform-api-contract-crate.md"
 kind = "path"
-count = 9
+count = 8
 reason = "the decision's context names the layout the decision changed, and files where they lay when the record was written (a measurement touched the Win32 window's file of the day, and the Linux stub sat in the Linux backend's module, the backends under `platforms`); records are not rewritten"
 
 [[allow]]

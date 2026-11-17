@@ -103,3 +103,17 @@ impl HasDisplayHandle for FakeTarget {
         Ok(handle)
     }
 }
+
+/// A window's surface target with no frame callback: the renderer's
+/// constructors take one, as a window hands it out.
+impl flui_platform::SurfaceTarget for FakeTarget {
+    fn pre_present_notify(
+        &self,
+        _: Option<flui_foundation::FrameStamp>,
+        _: flui_platform::SwapChainStatistics,
+    ) {
+    }
+
+    /// The double names no native window, so there is nothing to keep.
+    fn keep_past_close(&self) {}
+}

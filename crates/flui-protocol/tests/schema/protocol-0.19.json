@@ -5555,6 +5555,9 @@
         "reports_keyboard_inset": {
           "$ref": "#/$defs/Capability"
         },
+        "reports_occlusion": {
+          "$ref": "#/$defs/Capability"
+        },
         "reports_presentation": {
           "$ref": "#/$defs/Capability"
         },
@@ -10564,26 +10567,6 @@
         },
         {
           "properties": {
-            "identifier": {
-              "type": "string"
-            },
-            "kind": {
-              "const": "unpublished_identifier",
-              "type": "string"
-            },
-            "parent": {
-              "$ref": "#/$defs/ElementId"
-            }
-          },
-          "required": [
-            "kind",
-            "identifier",
-            "parent"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
             "kind": {
               "const": "unknown",
               "type": "string"
@@ -12559,26 +12542,6 @@
               "identifier",
               "parent",
               "elements"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "identifier": {
-                "type": "string"
-              },
-              "kind": {
-                "const": "unpublished_identifier",
-                "type": "string"
-              },
-              "parent": {
-                "$ref": "#/$defs/ElementId"
-              }
-            },
-            "required": [
-              "kind",
-              "identifier",
-              "parent"
             ],
             "type": "object"
           },

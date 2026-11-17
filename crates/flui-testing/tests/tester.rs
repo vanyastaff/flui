@@ -818,6 +818,37 @@ fn hiding_the_window_hides_the_application_and_showing_it_resumes() {
     );
 }
 
+/// A window that is not seen asks for no wake even while an animation runs in
+/// it: the host's loop waits for input alone until the window is seen again,
+/// when its frames come back. The hidden lifecycle disables frames, and no
+/// host fact of an unseen window may arm a wake of its own.
+#[test]
+fn an_unseen_window_asks_for_no_wake_until_it_is_seen() {
+    use flui_testing::{HeadlessHost, HeadlessWindow};
+
+    let mut host = HeadlessHost::new(HeadlessWindow::new(40, 40));
+    host.attach(&flui_widgets::ActivityIndicator::new())
+        .expect("the indicator mounts");
+    let _ = host.pump(Duration::from_millis(16));
+    assert!(
+        host.time_to_next_frame().is_some(),
+        "a seen window keeps its animation's frames"
+    );
+    host.set_window_visible(false);
+    let _ = host.pump(Duration::from_millis(16));
+    assert_eq!(
+        host.time_to_next_frame(),
+        None,
+        "unseen, the loop waits for input alone"
+    );
+    assert!(host.pump_next_frame().is_none(), "and pumps nothing");
+    host.set_window_visible(true);
+    assert!(
+        host.time_to_next_frame().is_some(),
+        "seen again, the animation asks for its frames"
+    );
+}
+
 /// A window opened beside the focused one takes the focus, as a native host
 /// reports it once the window is installed: the first window steps down to
 /// `Inactive`.

@@ -60,6 +60,7 @@ fn session_notices(executor: &NativeExecutor, signal: &Arc<OwnerSignal>) -> Arc<
 
 #[cfg(wayland_host)]
 mod wayland {
+    use std::path::Path;
     use std::sync::Arc;
 
     use super::{
@@ -110,8 +111,8 @@ mod wayland {
             crate::owner::launch_arguments::process_arguments()
         }
 
-        fn displays() -> Arc<dyn WaylandDisplays> {
-            Arc::new(WaylandDisplaySource::new())
+        fn displays(socket: &Path) -> Arc<dyn WaylandDisplays> {
+            Arc::new(WaylandDisplaySource::at(socket))
         }
 
         /// The keyboards, pointers, touchscreens, tablet tools and touchpad
@@ -186,6 +187,19 @@ mod wayland {
             Self::try_new_with(NativeExecutor::own(), None, Some(app_id))
         }
 
+        /// [`try_new`](Self::try_new) on the compositor at `socket`, which
+        /// the windows and the display source both connect to, whatever the
+        /// environment names: a test's own compositor
+        /// (`testing::wayland_compositor`).
+        ///
+        /// # Errors
+        /// As [`try_new`](Self::try_new).
+        #[cfg(feature = "testing")]
+        #[doc(hidden)]
+        pub fn try_new_at(socket: &Path) -> Result<Self, PlatformError> {
+            Self::try_new_on(socket, NativeExecutor::own(), None, None)
+        }
+
         /// [`try_new`](Self::try_new) on `executor`'s runtime, its windows
         /// carrying `app_id` as their app id, as
         /// [`CurrentHost::start_with`](crate::CurrentHost::start_with) starts it.
@@ -201,10 +215,20 @@ mod wayland {
                               XDG_RUNTIME_DIR)"
                         .to_owned(),
                 })?;
+            Self::try_new_on(&socket, executor, instance, app_id)
+        }
+
+        /// The platform on the compositor at `socket`.
+        fn try_new_on(
+            socket: &Path,
+            executor: NativeExecutor,
+            instance: Option<FirstInstance>,
+            app_id: Option<&AppId>,
+        ) -> Result<Self, PlatformError> {
             let class = AppClass::current(app_id);
             Self::try_from_parts(
                 |positions| WaylandWindows::new(positions, class),
-                |_| WaylandLoop::try_new::<Wayland>(&socket, executor, instance),
+                |_| WaylandLoop::try_new::<Wayland>(socket, executor, instance),
             )
         }
     }
@@ -221,6 +245,7 @@ mod x11 {
         UnixAccessibility, UserDataDirs, position,
     };
     use crate::clipboard::linux::x11::X11Clipboard;
+    use crate::display::linux::protocol::Environment;
     use crate::display::linux::source::LinuxDisplays;
     use crate::drag::linux::x11::X11Drag;
     use crate::input::linux::x11::X11Input;
@@ -263,7 +288,7 @@ mod x11 {
 
         /// The X server's outputs, through RandR on a connection of their own.
         fn displays() -> Arc<dyn HostDisplays> {
-            LinuxDisplays::new()
+            LinuxDisplays::new(Environment::current())
         }
 
         fn notices(app: &Arc<AppDelivery>) -> Arc<dyn NoticeChannel> {

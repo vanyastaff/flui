@@ -823,11 +823,21 @@ trait depends on `flui-platform` instead.
   `isVisible` or `isMiniaturized`, and on Wayland, Android, iOS and the Web,
   where the application cannot hide its window, open. Occluded is what
   each window system tells of a shown window kept off the screen: a DWM
-  cloak or a locked session, an X11 `VisibilityNotify` of `FullyObscured` or
+  cloak or a locked session, an X11
+  `VisibilityNotify` of `FullyObscured` or
   an unviewable map state, AppKit's `occlusionState` without its visible
   bit, a Wayland toplevel unconfigured, on no output or
   `suspended`, an Activity stopped, a scene in the background, a hidden
-  document. The pure `held_to` holds a size to the window's constraints
+  document. Whether a covering by other windows is among them is the
+  capabilities' `reports_occlusion` (ADR-0357): native on AppKit; on X11
+  while no compositing manager owns `_NET_WM_CM_S<n>` (the server reads a
+  redirected window unobscured); on Wayland where the window's
+  `xdg_toplevel` is version 6 or newer (`SUSPENSION_VERSION`), whose
+  `suspended` covers a toplevel the compositor does not show; absent on
+  Win32, which tells no covering and tracks none, and on Android, iOS and the
+  Web, whose window systems tell a stop or a hidden page and never a covering.
+  A host states "not seen" only from what it knows for certain, so nothing that
+  stops frames and cancels pointer sequences rests on a guess. The pure `held_to` holds a size to the window's constraints
   for the hosts whose window system applies a size as given (AppKit's
   `setContentSize:`, the headless model). Each platform's
   window is one file beside it (`android`, `web`, `headless`, and
@@ -1375,15 +1385,35 @@ trait depends on `flui-platform` instead.
   accepts work asks for no deadline. A turn whose dispatch recorded events
   ends before it would block, so they are applied first, and a flush the socket cut short makes the
   wait watch the socket for writing (`wait::before_poll`). A frame callback a
-  skipped present never committed is given up after `frame::CALLBACK_GRACE`.
+  skipped present never committed is given up after `frame::CALLBACK_GRACE`, so
+  a window the compositor does not draw is asked for one frame per grace and
+  no turn waits on it
+  (`wayland_scripted::a_window_the_compositor_never_draws_keeps_the_loop_turning`);
+  its renderer presents without waiting on the compositor either (ADR-0356).
+  A connection the compositor closes, while a window opens or after, fails
+  the open or ends the loop with `PlatformError::EventLoop`
+  (`wayland_scripted::a_compositor_that_hangs_up_while_a_window_opens_fails_the_open`,
+  `a_compositor_that_hangs_up_on_a_frame_ends_the_loop_with_an_error`).
   The loop belongs to the thread that made it: its event queue, window table
   and the outputs the compositor announces are `Rc`/`RefCell` state of that
   thread (ADR-0327 §5), while the objects' dispatch data stays `Send + Sync`,
   as `wayland-client` requires of it.
   The host and the display source connect to the one socket `WAYLAND_DISPLAY`
-  names. The window (`window::linux::wayland`) sizes its surface
+  names, read once: the host hands the display source the socket it connected
+  to (`WaylandHost::displays`), so the outputs are its compositor's whatever
+  the environment says later, and a test connects both to a compositor of its
+  own (`WaylandPlatform::try_new_at`). An output removed with no `leave` stops
+  holding a window three ways: the loop's live outputs, the window's entered
+  list and the display source's snapshot
+  (`wayland_scripted::an_output_removed_under_a_window_leaves_it_on_the_others`).
+  The window (`window::linux::wayland`) sizes its surface
   through `wp_viewport`, so a buffer of any size is valid during a resize and
-  each configure takes effect with a commit; its capabilities follow the
+  each configure takes effect with a commit; each time the window carries out
+  what it read, it acknowledges only the newest configure, whose size it
+  takes, so a burst costs one acknowledgement per read of the socket, not one
+  per configure (`wayland_scripted::a_configure_storm_settles_on_the_last_configure`:
+  200 sent before the loop turns, at most four acknowledged, in order); its
+  capabilities follow the
   compositor's `wm_capabilities` where it sends them (version 5); one that
   sends none (sway 1.9) is taken to offer every mode. A window tiled and in
   no mode takes the tiling's size, so `SetSize` is `NotOnThisDevice` while it
@@ -1391,6 +1421,7 @@ trait depends on `flui-platform` instead.
   opened at holds that size within the compositor's `configure_bounds`
   (version 4), each axis on its own; a size asked for or taken since is not
   held to them (`configure::Bounds`,
+  `wayland_scripted::a_window_opens_within_the_compositors_bounds`,
   `a_window_opens_within_the_compositors_bounds`). Its buffer is drawn at the
   compositor's fractional scale (`wp_fractional_scale_v1`), else the
   surface's preferred whole scale, else the largest of its outputs', and at
@@ -1406,7 +1437,14 @@ trait depends on `flui-platform` instead.
   (`decoration`). A suspended window is
   occluded: it is given no frame and gives up no frame callback until the
   compositor shows it again, when the frame asked for meanwhile is delivered
-  (`frame::Pacing`). Where the compositor offers `xdg-foreign` v2 the window is
+  (`frame::Pacing`). A window the compositor does not draw without saying so
+  answers no frame callback: each callback it gives up doubles the next one's
+  grace from `CALLBACK_GRACE` to `MAX_CALLBACK_GRACE` on the one schedule
+  of a surface that shows nothing (`flui_platform::Backoff`, ADR-0357), a
+  deadline of the loop's wait, never a poll, and the first `done` ends the
+  backoff; a `done` releases the callback out only when it answers that
+  callback or a later one, and an older one gives it the first grace
+  (`frame::Callbacks`, by ticket). Where the compositor offers `xdg-foreign` v2 the window is
   exported as it opens, and the export lives until the window closes. Its
   portal parent `wayland:<handle>` (`foreign::PortalParent`) is a
   cross-platform fact (X11 names a window `x11:<XID>`), so it reaches the
@@ -2784,9 +2822,8 @@ but the wake knocks at its pacing, whose delivery drives the owner's turn.
 
 Every other message the host posts to a window of its owner thread carries
 accepted work: a hidden or minimized window's frame request, the deliveries
-another thread raised for a window, a close (granted behind a running method,
-commanded from another thread, or asked by a wrapper dropped off its thread),
-the exit policy's request and the low-memory
+another thread raised for a window, a close the handler granted behind a
+running method, the exit policy's request and the low-memory
 report. Each goes through `OwnerQueue::post`, and names its window by identity
 in its parameters, which the procedure checks. A post to a handle that is no
 window of the owner thread is refused (`PostRefusal`). A post the thread's
@@ -2954,11 +2991,15 @@ file list, the locale), never forcing another owner's delayed rendering of
 anything else and never setting OLE's private formats again; a restore that
 fails is reported, never panicked on.
 
-### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
+### Win32 callbacks live in the window's owner-thread context
 
-Registration methods take
-`&self` on `Send + Sync` traits, so any thread can call them. ADR-0082 §4 step
-one for Win32 makes that safe without changing a signature.
+`WindowsPlatform`, `WindowsLoop` and `WindowsWindow` are neither `Send` nor
+`Sync` (ADR-0327 §5, pinned by `assert_not_impl_any!` beside each), so every
+registration, command and teardown they take runs on the thread that created
+them, and none of them carries a thread check or a cross-thread fallback of its
+own. What crosses a thread crosses by its type: the owner signal's wake and
+`OwnerPost` (behind the `Send + Sync` `DragTransport`), the frame and delivery
+posts a window makes to itself, the surface target, the pacer of a modal loop.
 
 - **Storage.** A window's handler lives in its `WindowDelivery`, an
   owner-thread slot the window shares with its `WindowContext`; it is set
@@ -2969,17 +3010,30 @@ one for Win32 makes that safe without changing a signature.
   window, shared by every window context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
   Both contexts sit behind `GWLP_USERDATA`, are reached only through the
   owner-thread gates (`with_window_context_checked`, `OwnerControl::shares`),
-  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread. A
-  platform dropped off its owner thread without running keeps the owner window,
-  so its `OwnerControlContext` and the handlers in it are leaked, never freed
-  on the wrong thread. Both are pinned `!Send + !Sync`.
-- **Refusal.** A registration from any thread but the owner, on a window that
-  is gone, or on a handle the OS recycled for another window, is refused. The
-  callback is dropped right there, on the registering thread, so it never runs
-  on the owner and is never freed by a thread that did not create it. A
-  foreign-thread refusal logs an error ("registration refused"): the caller has
-  just lost a callback. An off-owner `open_window` returns
-  `OpenWindowError::Backend`.
+  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread, where the
+  loop's `OwnerControl::close` and the last wrapper's drop destroy their
+  windows. The gates keep their thread check, because the slot is a raw pointer
+  and the handles another thread holds reach the same window handle. What the
+  window procedure records of a window (bounds, scale, visibility, focus) is a
+  `Copy` record in an `Rc<Cell<_>>` the wrappers and the context share
+  (`window/windows/record.rs`): an update takes the record and returns the next
+  one, so no read or update holds it
+  (`a_read_inside_a_record_update_sees_the_last_record_set`); the exit policy's
+  coalescing flag is a `Cell` as well. The COM apartment is an
+  `Rc<ComApartment>`, and every COM user of the thread that can outlive the
+  loop holds one: each window's wrapper and context, its drop-target
+  registration, its text services and its touchpad viewport
+  (`a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com`).
+  A drag source holds none: its `DoDragDrop` runs from the owner window, which
+  lives no longer than the loop that holds its own `Rc`.
+- **Refusal.** A registration on a window that is gone, or on a handle the OS
+  recycled for another window, is refused, and the callback is dropped right
+  there. Whether a handle still names its wrapper's window is
+  `hwnd_affinity::handle_names` (`Nothing`, `AnotherWindow`, `ItsWindow`): the
+  window's thread against the one that created it (which keeps the answer in
+  this process), its class and its slot against what the wrapper installed,
+  never the caller's thread
+  (`a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers`).
 - **Restore through the call point.** Dispatching the window-event or
   keyboard-layout handler goes through `owner::call_point::call`: it is taken
   out of its slot, run with no borrow held, and put back only if the slot is
@@ -2990,9 +3044,6 @@ one for Win32 makes that safe without changing a signature.
   the handler: it drops contained, or stays alive when the teardown runs
   during an unwind. The owner hooks the delivery holds weakly are declared
   before the teardown guard, so they outlive it.
-
-The other backends still store `Send` callbacks behind locks until their own
-steps.
 
 Tests (pull-request CI only type-checks Win32; the nightly `windows-latest` run executes them): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
@@ -3182,8 +3233,10 @@ process ends with the session, and the application was told what to save.
 
 A `WM_DESTROY` that leaves the platform tracking no top-level window does not
 ask the exit policy itself: it posts one coalesced message to the owner
-message-only window, and `request_exit_policy_reevaluation` posts the same
-message from any thread (refused once the owner window is closed). The owner
+message-only window, and `Platform::request_exit_policy_reevaluation` posts the
+same message (refused once the owner window is closed). Both run on the owner
+thread: another thread asks through `PlatformProxy`, whose request reaches the
+platform in an owner turn, so the coalescing flag is a `Cell`. The owner
 procedure then checks that no window is tracked and no quit is under way, asks
 the application's handler through the call point with no borrow held, and
 checks the window count again, since the handler may have opened a replacement
@@ -3809,7 +3862,7 @@ turns in the `OwnerTurnSlot` (`!Send`) the host's loop keeps and passes to
 is not `Send` and closing or dropping the last `Arc<OwnerSignal>` on another
 thread never drops it there. Each host clears the slot on the owner as it
 quits. Win32 keeps it in its owner control context, which `WM_NCDESTROY`
-frees, and a platform dropped off its owner leaks it with the context; AppKit
+frees on the thread the loop never leaves; AppKit
 keeps it main-thread-bound in its loop control, made on main the first time
 the owner needs it. Test, headless only:
 `an_owner_turn_callback_keeps_owner_local_state_until_the_quit`.
@@ -4290,7 +4343,8 @@ delivered in the same turn. A held key repeats on the client, by
 told its repeat and repeats at `repeat::UNTOLD`, 25 a second after 600 ms: its
 keymap, which a compositor sends first, carries the keyboard's version
 (`a_keyboard_never_told_its_repeat_still_repeats`,
-`a_keymap_of_an_old_keyboard_brings_its_repeat`).
+`a_keymap_of_an_old_keyboard_brings_its_repeat`, and against a version 3 seat
+`wayland_scripted::a_seat_too_old_to_tell_its_repeat_repeats_a_held_key`).
 
 What the translation decides is in the module docs of
 `input::linux::wayland`; the parts with a test of their own: a pointer frame
@@ -4330,7 +4384,11 @@ that divides it (`cursor::CursorBuffer::fit`,
 for each are `CursorBuffer::requests`, which the dispatch carries out one by
 one (`a_cursor_surface_is_sent_what_its_image_needs`). A window that publishes
 another scale tells the input (`WaylandInput::rescaled`), which draws a theme
-cursor over it again for that scale.
+cursor over it again for that scale
+(`wayland_scripted::a_theme_cursor_is_drawn_again_when_its_window_changes_scale`);
+a compositor that enforces the buffer-scale rule on the cursor surface keeps the
+connection open
+(`wayland_scripted::a_theme_cursor_its_scale_does_not_divide_goes_through_a_viewport`).
 
 Each seat's keyboard has its own keymap, window and repeat (`SeatKey` on
 every keyboard wire, `keyboards::Keyboards`); a key repeats only while its

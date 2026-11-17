@@ -167,8 +167,8 @@ impl KeyInterner {
         id
     }
 
-    /// Mint the next `KeyId`. Bench-only — the production interner would
-    /// either reuse `Key::new()`'s atomic counter or carry its own.
+    /// Mint the next `KeyId`. Bench-only: a production interner would mint
+    /// from an `IdMint`.
     #[expect(dead_code)] // kept on the impl surface; intern() now uses mint_impl
     fn mint(&mut self) -> KeyId {
         Self::mint_impl(&mut self.next_id)

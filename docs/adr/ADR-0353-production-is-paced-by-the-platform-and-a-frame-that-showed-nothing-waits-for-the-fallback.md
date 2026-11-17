@@ -14,6 +14,9 @@
   (the slot holds the window's `SurfaceTarget` and calls its `pre_present_notify`) and
   [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) decision 2 (where the fallback
   period comes from)
+- **Superseded-by:** [ADR-0356](ADR-0356-a-surface-its-compositor-paces-presents-without-waiting-on-the-compositor.md)
+  decision 0 only, its first sentence: a surface its compositor paces (Wayland) presents in
+  `Mailbox`, else `Immediate`; the rest of the decision stands.
 - **Related:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (the wake-deadline hook), [ADR-0045](ADR-0045-raster-lane.md)
   decision 3 (what paces production once the produce loop does not block),
   [ADR-0254](ADR-0254-window-contract.md) §5 (`SurfaceTarget`),

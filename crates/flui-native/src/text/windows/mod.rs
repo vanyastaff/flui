@@ -302,19 +302,13 @@ impl WindowMessages for Tsf {
     /// Activate TSF for the window just installed, on its owner thread, and
     /// keep the connection: from here on the window offers its text-store
     /// host. A failure leaves the window without a host, and text input takes
-    /// the `WM_CHAR` path, as it does with no apartment (the platform's is
-    /// reachable on its owner thread only, where windows are opened). A
-    /// message the activation dispatched may have closed the window; its
-    /// connection is then deactivated at once, and the open fails.
+    /// the `WM_CHAR` path. The services keep the thread's COM apartment
+    /// entered until they are retired. A message the activation dispatched
+    /// may have closed the window; its connection is then deactivated at
+    /// once, and the open fails.
     fn created(&self, window: &CreatedWindow) {
         let hwnd = window.hwnd;
-        let Some(apartment) = window.apartment.clone() else {
-            tracing::warn!(
-                ?hwnd,
-                "no COM apartment for TSF; text input falls back to WM_CHAR"
-            );
-            return;
-        };
+        let apartment = Rc::clone(&window.apartment);
         let this = window.window();
         // Kept before TSF activates: a close the activation dispatches finds
         // the window and forgets it.
@@ -323,7 +317,18 @@ impl WindowMessages for Tsf {
         if let Some(hook) = BEFORE_TSF_ACTIVATION.get() {
             hook(hwnd);
         }
-        match TextServices::activate(this, window.scale.clone(), apartment) {
+        #[cfg(test)]
+        let refused = REFUSE_TSF_ACTIVATION.get();
+        #[cfg(not(test))]
+        let refused = false;
+        let activated = if refused {
+            Err(windows_core::Error::from_hresult(
+                windows::Win32::Foundation::E_FAIL,
+            ))
+        } else {
+            TextServices::activate(this, window.scale.clone(), apartment)
+        };
+        match activated {
             Ok(services) => {
                 let kept = self
                     .windows
@@ -405,6 +410,10 @@ thread_local! {
     /// stand in for a message the activation dispatches.
     static BEFORE_TSF_ACTIVATION: std::cell::Cell<Option<fn(HWND)>> =
         const { std::cell::Cell::new(None) };
+    /// While set, a window's text services fail to activate, as TSF refuses
+    /// them on a machine without a text service.
+    pub(crate) static REFUSE_TSF_ACTIVATION: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// The hooks made on this thread, for the tests that reach a window's

@@ -80,6 +80,18 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// that reads nothing passes [`SwapChainStatistics::None`].
     fn pre_present_notify(&self, frame: Option<FrameStamp>, statistics: SwapChainStatistics);
 
+    /// Who decides when this surface's frames are shown: a fact of the host,
+    /// fixed for the life of the target, which a renderer reads once when it
+    /// makes the surface and keeps for every reconfiguration (ADR-0356).
+    ///
+    /// [`FramePacing::Compositor`] where [`pre_present_notify`](Self::pre_present_notify)
+    /// arms a frame callback and the window asks for no frame until the
+    /// compositor answers it (Wayland): such a surface presents without
+    /// waiting on the compositor itself. Every other host's surface is paced
+    /// by its display, the default.
+    fn frame_pacing(&self) -> FramePacing {
+        FramePacing::Display
+    }
     /// A raster thread that did not answer may still present over a surface
     /// made from this target, so the native window it names must outlive the
     /// close (ADR-0305 §9).
@@ -101,6 +113,19 @@ pub trait SurfaceTarget: HasWindowHandle + HasDisplayHandle + Send + Sync + 'sta
     /// native window (the web), does nothing, and says so where it implements
     /// this.
     fn keep_past_close(&self);
+}
+
+/// Who decides when a surface's frames are shown, which decides how a
+/// renderer presents on it ([`SurfaceTarget::frame_pacing`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FramePacing {
+    /// The display: a present that waits for its refresh is the pacer.
+    #[default]
+    Display,
+    /// The compositor: the host withholds the next frame until the frame
+    /// callback its present carried is answered.
+    Compositor,
 }
 
 /// The platform's connection to its window system, which the one GPU instance

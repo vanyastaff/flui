@@ -110,6 +110,7 @@
 // `wildcard_enum_match_arm` entry in the workspace `Cargo.toml`.
 #![warn(clippy::wildcard_enum_match_arm)]
 
+mod backoff;
 mod brightness;
 pub mod capability;
 mod clipboard;
@@ -158,6 +159,7 @@ mod window_handler;
 mod window_insets;
 mod window_state;
 
+pub use backoff::Backoff;
 pub use brightness::Brightness;
 pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
@@ -213,8 +215,8 @@ pub use storage::{
     Stored, StoredVersion, WriteMode,
 };
 pub use surface_target::{
-    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, RedrawRequester,
-    SurfaceTarget, SwapChainStatistics,
+    DisplayConnection, DxgiFrameStatistics, DxgiShown, DxgiStatistics, FramePacing,
+    RedrawRequester, SurfaceTarget, SwapChainStatistics,
 };
 pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use system_failure::SystemFailure;

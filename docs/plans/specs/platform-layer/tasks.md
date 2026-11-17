@@ -7329,6 +7329,103 @@ GPU-память простаивающего или невидимого окн
   каждого хоста свой (рабочая область монитора при открытии против configure Wayland), запись в
   `docs/gaps.md` и заметка строки `position-size-move-and-resize-events`.
 
+- [x] **LY150** — ветка `native/wayland-present-and-scripted-compositor`. Проверено на `main` @
+  `011f58f3b` в WSL (Ubuntu 24.04, Mesa 25.2.8, lavapipe). Блокировка present подтверждена дважды:
+  по источнику (`mesa-25.2.8 src/vulkan/wsi/wsi_common_wayland.c:3002`: без `wp_fifo_v1`
+  `vkQueuePresentKHR` в `Fifo` крутит `wl_display_dispatch_queue`, пока не придёт frame callback
+  прошлого present, без предела) и прогоном: приложение под композитором, который не отвечает на
+  frame callbacks, с `Fifo` не выполняет свой выход и убивается по бюджету. Построено:
+  `testing::wayland_compositor::ScriptedCompositor` (`flui-native`, фича `testing`, сервер на
+  чисто-Rust бэкенде `wayland-server` 0.31, уже бывшем в `Cargo.lock`) — свой сокет, свой поток,
+  глобалы и версии из `Offer` (`wl_compositor`, `xdg_wm_base`, `wl_shm`, `wp_viewporter`,
+  `wp_fractional_scale_manager_v1`, `wl_seat` любой версии, выходы), типизированные `Step`
+  (configure с границами, предпочтительный целый и дробный масштаб, вход и выход поверхности на
+  выход, снятие выхода без `leave`, указатель, клавиатура и клавиша, удержание frame callbacks,
+  разрыв), сбои `Offer::first_configure(None)` и `HangUp::{OnToplevel, OnFirstFrame}`, строгое
+  правило `wl_surface.invalid_size`; что услышал — `Heard`. `WaylandPlatform::try_new_at(socket)`;
+  источник дисплеев получает сокет от хоста (`WaylandHost::displays(socket)`,
+  `LinuxDisplays::new(Environment)`), а не читает окружение второй раз. Темп: `SurfaceTarget::frame_pacing`
+  (`FramePacing`, у Wayland — `Compositor`); движок читает его один раз при создании поверхности и
+  держит в аренде (`SurfaceLease::pacing`): такая поверхность берёт `Mailbox`, иначе `Immediate`,
+  остальные — `Fifo`; `Renderer::new` принимает `Arc<dyn SurfaceTarget>`. Решение —
+  ADR-0356 (заменяет первое предложение решения 0 ADR-0353, решение 5 ADR-0347, публичную границу
+  решения 1 ADR-0063, оговорку §5 ADR-0254 и столбец темпа
+  строки Wayland §4 ADR-0044). Тесты, в скобках результат с откатом: `wayland_scripted::`
+  `a_window_opens_within_the_compositors_bounds` (без записи `configure_bounds` — 1600×1000
+  вместо 1366×740); `a_theme_cursor_is_drawn_again_when_its_window_changes_scale` (без
+  `rescaled` — курсора масштаба 3 нет); `a_theme_cursor_its_scale_does_not_divide_goes_through_a_viewport`
+  (`fit` всегда `Scaled` — протокольная ошибка 2 на `wl_surface`); `a_seat_too_old_to_tell_its_repeat_repeats_a_held_key`
+  (без `keyboard_version` в разборе keymap — повтора нет);
+  `a_window_the_compositor_never_draws_keeps_the_loop_turning` (без отсрочки callback — 1 кадр
+  за 3,5 с); `a_window_the_compositor_never_configures_holds_nothing` (без `configured` в
+  `Pacing::due` — 50 кадров у неконфигурированного окна);
+  `a_fractional_scale_no_screen_has_leaves_the_window_at_its_scale` (без потолка `BufferScale::MAX`
+  — буфер 16000×12000); `an_output_removed_under_a_window_leaves_it_on_the_others` (падает только
+  при откате всех трёх путей: живые выходы цикла, список вошедших выходов окна, снимок источника
+  дисплеев — каждый один держат два других); `a_configure_storm_settles_on_the_last_configure`
+  (принимается первый configure хода — размер последнего не наступает);
+  `a_compositor_that_hangs_up_while_a_window_opens_fails_the_open` (ошибка roundtrip
+  проглочена — открытие удаётся); `a_compositor_that_hangs_up_on_a_frame_ends_the_loop_with_an_error`
+  (ошибки чтения, сброса и разбора в `wait` проглочены — цикл не видит разрыва).
+  `flui-engine` `surface_pacing::tests::the_pacer_chooses_the_present_mode`; `flui-app`
+  `native_linux::an_app_whose_window_is_never_drawn_still_quits` (Vulkan, `Fifo` у поверхности
+  Wayland — потомок не выходит за 45 с). Нестабильный `wayland_frame::a_press_on_the_frame_moves_and_resizes_with_its_serial`
+  сценарным композитором не воспроизвести: тест держится на интерактивном перемещении Weston и
+  вводе XTest, которых сценарный композитор не моделирует; оставлен. Долги: Wayland на запасном
+  GL (wgpu на Linux предлагает только `Fifo` и не ставит интервал обмена) — `docs/gaps.md`;
+  прогоны под mutter/KWin — заметки строк `position-size-move-and-resize-events`, `cursor-shapes`.
+
+- [x] **LY127** — ветка `native/win32-owner-thread-forms`. Находка подтверждена на `main` @
+  `fbd43ebf2` чтением и компилятором: `WindowsLoop`, `WindowsPlatform` (`assert_not_impl_any!`) и
+  `WindowsWindow` (сырой `HWND`, без `unsafe impl`; теперь тоже с `assert_not_impl_any!`) не
+  `Send`, а формы для платформы, которая могла бы им быть, жили. Снято: `ApartmentHold` с
+  `unsafe impl Send`/`Sync`, проверкой потока в `share` и `Drop` и путём утечки — теперь поле цикла
+  `apartment: Rc<ComApartment>`, окно получает `Rc` без `Option`; запись `ApartmentHold` в
+  `tools/xtask/allowlists/send-impls.toml` снята; ветка «dropped off owner; native resource
+  retained» в `OwnerControl::close`; `OwnerAffinity` цикла (`bind_current` в конструкторе и `run`,
+  `debug_assert_owner` в `quit`); рукав `ForeignThread` в `register_layout_callback`. Правило
+  `TeardownRoute` с `PostClose` заменено `hwnd_affinity::handle_names` (`Nothing`,
+  `AnotherWindow`, `ItsWindow`), которое поток не спрашивает: закрытие и последний drop обёртки
+  только уничтожают окно, поле `queue` обёртки и ошибка «show must run on the native window owner»
+  ушли; поверхность из потока рендера спрашивает то же правило. Класс (ADR-0323 §5): запись окна
+  (`WindowRecord`: границы, масштаб, видимость, фокус) из `Arc<Mutex<_>>` стала `Copy` в
+  `Rc<Cell<_>>` — чтение внутри обновления видит последнюю записанную запись, а не ждёт замка,
+  который держит его же поток; флаг слияния запроса политики выхода из `Arc<AtomicBool>` —
+  `Rc<Cell<bool>>` (оба спрашивающих, `WM_DESTROY` последнего окна и
+  `request_exit_policy_reevaluation`, на потоке владельца). Остались, с причиной у места: адрес
+  окна владельца под замком (его читает межпоточный wake сигнала), `OwnerPost` (его держит
+  `DragTransport`, `Send + Sync` в `flui-platform`), посты кадра и доставки окна себе,
+  `Win32Surface`, часы модального цикла. Журнал: `WM_SIZE` пишет `debug!`/`trace!` с полями, без
+  эмодзи; headless больше не зовёт себя mock. Документы: модульные доки `com_apartment.rs`,
+  `control.rs`, `hwnd_affinity.rs`, `proc.rs`; раздел `ARCHITECTURE.md` о колбэках Win32
+  переписан; ADR-0063 называет `handle_names`; статус ADR-0039; запись ADR-0327 §1 в
+  `docs/gaps.md` называет, что осталось у Win32 (мост UIA за `PlatformAccessibility: Send + Sync`,
+  OLE за `DragTransport`, `Arc` из общего хоста). Тесты, в скобках результат с откатом:
+  `a_read_inside_a_record_update_sees_the_last_record_set` (на `main` с `Mutex` чтение внутри
+  обновления ждёт свой же замок: `Timeout` через 10 с);
+  `a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers` (чистое правило, на
+  всех хостах); остальное держат компилятор и `send-impls` с коротким списком.
+  По независимому чтению исправлено: `handle_names` сравнивает поток окна с потоком, создавшим
+  окно обёртки (`InstalledWindow` у обёртки и у `Win32Surface`), — окно другого потока или
+  процесса с тем же классом и равным значением слота больше не `ItsWindow`; удержанное скрытым
+  после закрытия окно (#2707, слот очищен) для обёртки — `AnotherWindow`, для его же отставки
+  (контекст `0`, свой поток) — `ItsWindow`, закрытие и последний drop обёртки идут через
+  `close_on_owner`. Квартиру COM держат все её пользователи, способные пережить цикл: обёртка и
+  контекст окна, регистрация цели сброса, TSF и вьюпорт тачпада; `CreatedWindow::apartment` —
+  `Rc` без `Option`, тестовые наборы входят в квартиру сами. Запись окна — модуль
+  `window/windows/record.rs` с `Cell::update` (обновление получает и возвращает запись, доступа к
+  ячейке у него нет); `assert_not_impl_any!` на `OwnerControl` и `ComApartment`;
+  `show_owned_window` берёт `Fn() -> bool`; ADR-0082 (шаг Win32) и ARCHITECTURE.md (политика
+  выхода на потоке владельца) исправлены. Тесты: строки «другой поток», «другой процесс»,
+  «отставленное и скрытое окно» в таблице `handle_names`;
+  `a_read_inside_a_record_update_sees_the_last_record_set` — модельный тест записи;
+  `a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com` (TSF и тачпад
+  отказаны через тестовые флаги) на коде до исправления тоже зелёный: на этой машине поток
+  остаётся в квартире до закрытия окна по причине, которую установить не удалось, так что
+  сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
+  trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
+  фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не
@@ -7824,6 +7921,36 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   — изменение до первого хода, до появления хука, замена хука, паника доставки. Каждую строку валит
   своя мутация (сохранение порога ревизии, насыщение вместо отказа, слияние или вытеснение
   предпочтений в очереди, хук без восстановления после паники, зажим масштаба и т. д.).
+- [ ] **LY148** — ветка `native/occlusion-and-idle-frames`, решение — ADR-0357. Проверено на
+  `main` @ `fbd43ebf2`. Построено: `WindowCapabilities::reports_occlusion` (доходит ли перекрытие
+  другими окнами до `occluded`): AppKit — `Native`; X11 — `Native`, пока selection
+  `_NET_WM_CM_S<n>` никто не держит, иначе `NOT_ON_THIS_DEVICE`; Wayland — `Native` при
+  `xdg_toplevel` версии 6 и выше (`suspended`), иначе `NOT_ON_THIS_DEVICE`; Win32 —
+  `NOT_YET_ON_THIS_HOST`; iOS, Android, Web — `NOT_ON_THIS_PLATFORM`; headless — что задал тест;
+  запись несёт поле (протокол 0.19, аддитивно). Трекер перекрытия Win32 (обход z-order и хук
+  WinEvent на потоке владельца) построен и снят по решению координатора: ложные перекрытия (окна
+  `WS_EX_TOOLWINDOW`, прозрачные per-pixel, захват), окно, поднятое своей программой через
+  `SetWindowPos`, оставалось «перекрытым» 3 с, пробуждения от каждого show/hide любого процесса;
+  что нужно верному трекеру — в `docs/gaps.md`. Win32 говорит «не видно» только о скрытом,
+  свёрнутом, cloaked и при заблокированной сессии. Один график отступа — `flui_platform::Backoff`
+  (первое ожидание, удвоение, потолок): им отступает повтор отказанного и упавшего кадра в runtime
+  (период дисплея → `FAILURE_RETRY_CAP`, десять удвоений ADR-0258 §6) и ожидание неотвеченного
+  frame callback на Wayland (`CALLBACK_GRACE` 1 с → `MAX_CALLBACK_GRACE` 8 с; раньше раз в секунду
+  вечно); ответ сопоставлен по билету: старый `done` не освобождает новый callback, но кончает
+  отступ и возвращает ему первый грейс. Один `warn!` `surface_withholds_frames` на презентацию,
+  когда серия отказов выходит за бюджет, с `host_reports_occlusion`. Вопрос про `Occluded` при
+  acquire опровергнут как вращение (ADR-0335 §2 уже отступает). Тесты (каждый падает при откате
+  своей строки): `a_compositing_manager_takes_away_the_covering_report`,
+  `the_capabilities_follow_the_compositor`, `unanswered_callbacks_back_off_to_the_ceiling_until_one_is_answered`
+  (постоянный `grace(0)`; освобождение по любому `done`),
+  `the_record_backs_off_unanswered_callbacks_and_matches_answers_by_ticket` (шов хоста: без
+  `deliver` в `deliver_frame`, `u64::MAX` в `callback_done`),
+  `a_withholding_surface_backs_off_to_the_ceiling_and_starts_over_once_it_shows` (график без
+  удвоения), `a_surface_that_keeps_withholding_frames_is_reported_once` (отчёт на каждой попытке),
+  `an_unseen_window_with_nothing_asked_runs_no_frame` (Win32) и
+  `an_unseen_window_asks_for_no_wake_until_it_is_seen` (headless). Осталось: трекер Win32,
+  отключённая удалённая сессия, выход композитного менеджера X11, старый кадр при раскрытии
+  (`docs/gaps.md`); прогон Wayland с композитором, не отвечающим на callback, — в строке паритета.
 
 ## Чего нет в этой серии
 

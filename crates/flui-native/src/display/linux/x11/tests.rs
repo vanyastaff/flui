@@ -275,10 +275,11 @@ fn a_randr_reconfiguration_on_a_real_server_is_published() {
     // rather than resolving the list last held. No watcher runs here, as when
     // the display thread has not heard of the change. (Part of this test, not
     // a test of its own: two tests reconfiguring one server would race.)
+    use crate::display::linux::protocol::Environment;
     use crate::display::linux::source::LinuxDisplays;
     use crate::owner::notices::StaleOnWake;
 
-    let displays = LinuxDisplays::new();
+    let displays = LinuxDisplays::new(Environment::current());
     let outputs = || displays.snapshot().expect("a snapshot").displays().len();
     assert_eq!(outputs(), 1);
     configure(0, info.x, info.y, &[]);

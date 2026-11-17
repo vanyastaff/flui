@@ -25,11 +25,10 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
-use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_platform::{
     Brightness, SizeConstraints, WindowExtent, WindowGeometry, WindowId, WindowMode,
 };
-use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
     Graphics::{
@@ -53,6 +52,7 @@ use windows::Win32::{
 
 use super::frame_timing::{RefreshTiming, refresh_timing};
 use super::mode::NativeMode;
+use super::record::WindowRecord;
 use super::set::{WindowSet, checked_logical_to_device, restore_rectangle};
 use super::window::WindowsWindow;
 
@@ -75,10 +75,9 @@ use crate::window::state::{
 /// never receives `WM_PAINT`. It names the window's identity ([`FramePost`]).
 pub(crate) const REQUEST_FRAME: u32 = WM_APP + 1;
 
-/// Posted by a close the handler granted behind a running method, and by a
-/// `WindowCommand::Close` applied off the owner thread, where `DestroyWindow`
-/// is forbidden. It destroys the window it names without asking the veto: a
-/// close command is not a close request.
+/// Posted by a close the handler granted behind a running method, which the
+/// owner thread takes once the method returned. It destroys the window it
+/// names without asking the veto again: the handler already granted it.
 pub(crate) const CLOSE_WINDOW: u32 = WM_APP + 4;
 
 /// Posted when another thread raised a delivery for a window: the owner
@@ -271,7 +270,9 @@ pub(crate) struct WindowContext {
     /// What the window honours and observes, fixed when it opens: the build
     /// it runs on does not change under it.
     pub(crate) capabilities: flui_platform::WindowCapabilities,
-    pub(crate) window_state: std::sync::Weak<Mutex<WindowRecord>>,
+    /// What the window procedure records of the window, shared with its
+    /// wrappers. Weak: the context does not keep the wrappers' count up.
+    pub(crate) window_state: std::rc::Weak<Cell<WindowRecord>>,
     /// The published window state, shared with the wrapper; refreshed by
     /// [`Self::publish_window_state`].
     pub snapshot: Arc<WindowStateCell>,
@@ -327,6 +328,11 @@ pub(crate) struct WindowContext {
     /// chose it through `Win32Window::set_dark_mode` or `set_theme`, or opened
     /// with a theme of its own (`Win32WindowOptions::theme`).
     pub chrome_follows_system: std::cell::Cell<bool>,
+    /// The owner thread's COM apartment, kept entered until the context is
+    /// freed, after its window's `WM_DESTROY` ran every hook's teardown (the
+    /// drop target's revoke, the text services' retirement), even when the
+    /// last wrapper let go of the window inside that `WM_DESTROY`.
+    pub(crate) _apartment: Rc<crate::owner::windows::com_apartment::ComApartment>,
     /// Cursor selected by this exact window's presentation.
     pub cursor: std::cell::Cell<CursorIcon>,
     /// Window style bits before fullscreen (Windows-specific: WS_OVERLAPPEDWINDOW, etc.)
@@ -468,11 +474,11 @@ impl WindowContext {
         self.delivery.publish_state();
     }
 
-    /// Complete cache updates before callback-capable native/user code.
-    pub(crate) fn update_window_state(&self, update: impl FnOnce(&mut WindowRecord)) {
-        if let Some(state) = self.window_state.upgrade() {
-            update(&mut state.lock());
-        }
+    /// Record what the window procedure learned of the window, before any
+    /// native or user code that can call back runs: `change` takes the record
+    /// and returns the next one ([`record::update`](super::record::update)).
+    pub(crate) fn update_window_state(&self, change: impl FnOnce(WindowRecord) -> WindowRecord) {
+        super::record::update(&self.window_state, change);
     }
 
     /// The window's published state for a caller that reads it
@@ -489,7 +495,7 @@ impl WindowContext {
             return self.snapshot.published();
         };
         self.snapshot.read(&self.delivery, || {
-            sample_state(hwnd, &record, self.tracking(hwnd))
+            sample_state(hwnd, record.get(), self.tracking(hwnd))
         })
     }
 
@@ -505,7 +511,7 @@ impl WindowContext {
             return Publication::Unchanged;
         };
         self.snapshot.refresh(&self.delivery, || {
-            sample_state(hwnd, &record, self.tracking(hwnd))
+            sample_state(hwnd, record.get(), self.tracking(hwnd))
         })
     }
 
@@ -558,7 +564,7 @@ impl WindowContext {
             return;
         };
         self.snapshot.publish_report(&self.delivery, || {
-            sample_state(hwnd, &record, self.tracking(hwnd))
+            sample_state(hwnd, record.get(), self.tracking(hwnd))
         });
     }
 
@@ -637,8 +643,10 @@ impl Drop for ContextGuard {
 /// Returns `None` (after tracing why) whenever it is not; callers fall back
 /// to a safe default instead of touching the slot.
 ///
-/// This is the gate that discharges the HWND thread-affinity obligation on
-/// `WindowsWindow`'s `Send`/`Sync` impls: the context box is freed exactly
+/// This gate is what makes the dereference sound. The wrapper is neither
+/// `Send` nor `Sync`, but the slot is reached through a raw handle, and what
+/// another thread holds of the window (its surface target, its delivery's
+/// state publisher) reaches the same handle. The context box is freed exactly
 /// once, after the window's retirement (a granted close, or `WM_DESTROY`) on
 /// the window's owning thread, so a dereference is
 /// sound only when made **on that same thread** (where it is serialized with
@@ -665,9 +673,7 @@ pub(crate) fn with_window_context<R>(
 }
 
 /// [`with_window_context`] that reports why it refused. On refusal `f` is
-/// dropped here, on the calling thread, untouched — which is what lets a
-/// callback registration hand its callback back to the thread that offered
-/// it instead of parking it where the owner would later run or free it.
+/// dropped here, on the calling thread, untouched.
 pub(crate) fn with_window_context_checked<R>(
     hwnd: HWND,
     op: &'static str,
@@ -721,38 +727,46 @@ pub(crate) fn with_window_context_checked<R>(
     }
 }
 
-/// Routes a teardown request (`close()`, last `Drop`) for `hwnd` by thread
-/// identity — `DestroyWindow` directly on the owning thread, `PostMessageW
-/// (WM_CLOSE)` from any other ("a thread cannot use `DestroyWindow` to
-/// destroy a window created by a different thread" — MSDN), nothing for a
-/// dead handle — **and by window identity**: `expected_context` is the
-/// context pointer the calling wrapper installed at creation, compared (as
-/// a value, never dereferenced, hence safe from any thread) against the
-/// window's current class + `GWLP_USERDATA` slot, so a wrapper that
-/// outlived its native window can never destroy or close whatever
-/// unrelated window the OS recycled the handle value for. Pure rule in
-/// [`crate::owner::hwnd_affinity::route_teardown`], which also states the
+/// What `hwnd` names now for the wrapper whose window `installed` describes:
+/// its own live window, no window, or a window the OS recycled the handle
+/// value for. The window's thread is compared with the one that created the
+/// wrapper's window, and the context pointer as a value, never dereferenced,
+/// with the window's current `GWLP_USERDATA` slot, so the queries are sound
+/// from any thread: a surface target asks from the renderer's. Pure rule in
+/// [`crate::owner::hwnd_affinity::handle_names`], which also states the
 /// pointer-ABA residual; this shell only performs the OS queries.
-pub(crate) fn teardown_route(
+pub(crate) fn handle_names(
     hwnd: HWND,
-    expected_context: *const WindowContext,
-) -> crate::owner::hwnd_affinity::TeardownRoute {
+    installed: InstalledWindow,
+) -> crate::owner::hwnd_affinity::HandleNames {
     // SAFETY: see the identical queries in `with_window_context` — no
     // pointers dereferenced, no messages pumped.
-    let (owner_thread, current_thread, slot) = unsafe {
+    let (owner_thread, slot) = unsafe {
         (
             GetWindowThreadProcessId(hwnd, None),
-            GetCurrentThreadId(),
             GetWindowLongPtrW(hwnd, GWLP_USERDATA),
         )
     };
-    crate::owner::hwnd_affinity::route_teardown(
+    crate::owner::hwnd_affinity::handle_names(
         owner_thread,
-        current_thread,
+        installed.thread,
         hwnd_names_flui_class(hwnd),
         slot,
-        expected_context as isize,
+        installed.context,
     )
+}
+
+/// What a wrapper recorded of its window when it installed it: the thread
+/// that created the window and the address of the context it put in the
+/// window's `GWLP_USERDATA` slot. Plain integers, only compared, never
+/// dereferenced: what [`handle_names`] tells this window from one the OS gave
+/// its handle since, from any thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InstalledWindow {
+    /// The Win32 id of the thread that created the window.
+    pub(crate) thread: u32,
+    /// The context address installed in the window's slot.
+    pub(crate) context: isize,
 }
 
 /// Runs `handle` with the context of `hwnd`, borrowed for one message of its
@@ -1067,19 +1081,22 @@ impl WindowProc {
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
                             ctx.step(hwnd, WindowStep::Resized((width, height)));
-                            ctx.update_window_state(|state| {
-                                state.bounds.size = Size::new(
-                                    width as f64 / ctx.scale.scale(),
-                                    height as f64 / ctx.scale.scale(),
-                                );
+                            ctx.update_window_state(|record| WindowRecord {
+                                bounds: Bounds {
+                                    size: Size::new(
+                                        width as f64 / ctx.scale.scale(),
+                                        height as f64 / ctx.scale.scale(),
+                                    ),
+                                    ..record.bounds
+                                },
+                                ..record
                             });
                         }
 
                         // Handle the state transition
                         let new_mode = match size_type {
                             SIZE_MINIMIZED => {
-                                tracing::info!("📦 Window Minimized");
-                                // Validate transition
+                                tracing::debug!(?hwnd, "window minimized");
                                 // A fullscreen window that is minimized comes back
                                 // fullscreen, so it keeps what it returns to.
                                 let candidate = NativeMode::Minimized {
@@ -1098,15 +1115,15 @@ impl WindowProc {
                                     candidate
                                 } else {
                                     tracing::warn!(
-                                        "⚠️  Invalid state transition: {:?} -> Minimized (transition ignored)",
-                                        prev_mode
+                                        ?hwnd,
+                                        from = ?prev_mode,
+                                        "a minimize from this mode is not a transition; ignored"
                                     );
                                     prev_mode
                                 }
                             }
                             SIZE_MAXIMIZED => {
-                                tracing::info!("📏 Window Maximized: {}x{}", width, height);
-                                // Validate transition
+                                tracing::debug!(?hwnd, width, height, "window maximized");
                                 let candidate = NativeMode::Maximized;
                                 if prev_mode.is_fullscreen() {
                                     // A fullscreen window covers its monitor as a
@@ -1117,8 +1134,9 @@ impl WindowProc {
                                     candidate
                                 } else {
                                     tracing::warn!(
-                                        "⚠️  Invalid state transition: {:?} -> Maximized (transition ignored)",
-                                        prev_mode
+                                        ?hwnd,
+                                        from = ?prev_mode,
+                                        "a maximize from this mode is not a transition; ignored"
                                     );
                                     prev_mode
                                 }
@@ -1133,9 +1151,9 @@ impl WindowProc {
                                 // on every live-resize drag step.
                                 ctx.last_size.set(size);
                                 if prev_mode.is_minimized() || prev_mode.is_maximized() {
-                                    tracing::info!("📐 Window Restored: {}x{}", width, height);
+                                    tracing::debug!(?hwnd, width, height, "window restored");
                                 } else {
-                                    tracing::debug!("📐 Window Resized: {}x{}", width, height);
+                                    tracing::trace!(?hwnd, width, height, "window resized");
                                 }
                                 match prev_mode {
                                     // A resize does not end fullscreen.
@@ -1149,8 +1167,9 @@ impl WindowProc {
                                 }
                             }
                             _ => {
-                                // Regular resize while in current state
-                                tracing::info!("📐 Window Resized: {}x{}", width, height);
+                                // A resize that keeps the mode (`SIZE_MAXSHOW`,
+                                // `SIZE_MAXHIDE`).
+                                tracing::trace!(?hwnd, width, height, "window resized");
                                 if prev_mode.is_normal() {
                                     ctx.last_size.set(size);
                                 }
@@ -1206,7 +1225,10 @@ impl WindowProc {
                         && let Some(ctx) = ctx
                     {
                         let shown = wparam.0 != 0;
-                        ctx.update_window_state(|state| state.visible = shown);
+                        ctx.update_window_state(|record| WindowRecord {
+                            visible: shown,
+                            ..record
+                        });
                         ctx.publish_window_state(hwnd);
                     }
                     // DefWindowProc continues the ordinary show/hide
@@ -1229,11 +1251,15 @@ impl WindowProc {
                     tracing::debug!("Window Moved: ({}, {})", x, y);
 
                     if let Some(ctx) = ctx {
-                        ctx.update_window_state(|state| {
-                            state.bounds.origin = Point::new(
-                                x as f64 / ctx.scale.scale(),
-                                y as f64 / ctx.scale.scale(),
-                            );
+                        ctx.update_window_state(|record| WindowRecord {
+                            bounds: Bounds {
+                                origin: Point::new(
+                                    x as f64 / ctx.scale.scale(),
+                                    y as f64 / ctx.scale.scale(),
+                                ),
+                                ..record.bounds
+                            },
+                            ..record
                         });
                         ctx.publish_window_state(hwnd);
                     }
@@ -1478,7 +1504,10 @@ impl WindowProc {
                     tracing::debug!("Window Focused");
 
                     if let Some(ctx) = ctx {
-                        ctx.update_window_state(|state| state.focused = true);
+                        ctx.update_window_state(|record| WindowRecord {
+                            focused: true,
+                            ..record
+                        });
                         ctx.publish_window_state(hwnd);
                     }
 
@@ -1489,7 +1518,10 @@ impl WindowProc {
                     tracing::debug!("Window Unfocused");
 
                     if let Some(ctx) = ctx {
-                        ctx.update_window_state(|state| state.focused = false);
+                        ctx.update_window_state(|record| WindowRecord {
+                            focused: false,
+                            ..record
+                        });
                         ctx.step(hwnd, WindowStep::FocusLost);
                         ctx.publish_window_state(hwnd);
                     }
@@ -1589,21 +1621,6 @@ fn hiword(value: u32) -> u16 {
     ((value >> 16) & 0xFFFF) as u16
 }
 
-/// Mutable window state
-pub(crate) struct WindowRecord {
-    /// Current window bounds (logical pixels)
-    pub(crate) bounds: Bounds<f64>,
-
-    /// Current scale factor (DPI / 96)
-    pub(crate) scale_factor: DevicePixelRatio,
-
-    /// Is window visible?
-    pub(crate) visible: bool,
-
-    /// Is window focused?
-    pub(crate) focused: bool,
-}
-
 /// What the owner context knows about a window that Win32 does not say: the
 /// mode it tracks from `WM_SIZE` and its own fullscreen toggle, the style a
 /// fullscreen window returns to, the limits the app set and the display the
@@ -1697,11 +1714,7 @@ fn window_text(hwnd: HWND) -> Option<String> {
 ///
 /// Rectangles that, over the window's scale, describe no window cost the
 /// sample its geometry and nothing else.
-pub(crate) fn sample_state(
-    hwnd: HWND,
-    record: &Mutex<WindowRecord>,
-    tracking: OwnerTracking,
-) -> Sample {
+pub(crate) fn sample_state(hwnd: HWND, record: WindowRecord, tracking: OwnerTracking) -> Sample {
     let OwnerTracking {
         mode,
         restore_style,
@@ -1715,15 +1728,13 @@ pub(crate) fn sample_state(
         frame,
         interaction,
     } = tracking;
-    let (scale, visible, focused, cached) = {
-        let record = record.lock();
-        (
-            record.scale_factor.get(),
-            record.visible,
-            record.focused,
-            record.bounds.size,
-        )
-    };
+    let WindowRecord {
+        bounds: Bounds { size: cached, .. },
+        scale_factor,
+        visible,
+        focused,
+    } = record;
+    let scale = scale_factor.get();
     let mut window = RECT::default();
     let mut client = RECT::default();
     // SAFETY: both RECTs are stack locals and `&raw mut` gives each call a
@@ -2216,7 +2227,10 @@ impl WindowContext {
         // window once, at its new size.
         let hold = self.hold_publishing();
         let ratio = self.scale.ratio();
-        self.update_window_state(|state| state.scale_factor = ratio);
+        self.update_window_state(|record| WindowRecord {
+            scale_factor: ratio,
+            ..record
+        });
         self.apply_dpi_rectangle(hwnd, suggested, old_dpi, dpi.get());
         // The state callback the rectangle's `WM_SIZE` ran may have closed the
         // window: its resize and frame are then not for whatever window has
@@ -2238,11 +2252,15 @@ impl WindowContext {
                 (client.bottom - client.top).max(1),
             );
             if self.last_resize.get() != Some((size, new_scale)) {
-                self.update_window_state(|state| {
-                    state.bounds.size = Size::new(
-                        f64::from(size.width) / new_scale,
-                        f64::from(size.height) / new_scale,
-                    );
+                self.update_window_state(|record| WindowRecord {
+                    bounds: Bounds {
+                        size: Size::new(
+                            f64::from(size.width) / new_scale,
+                            f64::from(size.height) / new_scale,
+                        ),
+                        ..record.bounds
+                    },
+                    ..record
                 });
                 self.report_resize(size);
                 self.redraw_if_still_owned(hwnd);

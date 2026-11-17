@@ -245,11 +245,12 @@ trampoline cell of ADR-0083 and ADR-0097.
 **Win32, step 1.** Window callbacks live by value in the window's `WindowContext`, and the
 platform-level handlers and the owner-turn callback in the owner message window's
 `OwnerControlContext`; both sit behind `GWLP_USERDATA` and are reached and freed on the owner
-thread only (a platform dropped off its owner leaks its owner context rather than free it
-elsewhere). Every setter installs through that gate, an off-owner `open_window` is refused, and
-`WindowContext` and `OwnerControlContext` are pinned `!Send + !Sync`. The tests live in
-`crates/flui-native/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
-`platform.rs` `tests`) and `shared/owner_signal.rs`.
+thread only. Every setter installs through that gate. The loop, the platform and the window are
+neither `Send` nor `Sync` (ADR-0327 §5), so a setter, an `open_window` or a teardown can only be
+called on the thread that owns them, and none of them keeps a path for another thread. The rules of
+the gate are tested in `crates/flui-native/src/owner/hwnd_affinity.rs`, and the callbacks'
+re-entry and unwind in `crates/flui-native/tests/handler_reentry.rs` and
+`window_callback_unwind.rs`.
 
 **The input callback, every backend, steps 1 and 2 (2026-10-13).** The shared backends (winit,
 headless, AppKit, UIKit, Android, web) hold a window's input callback in an `OwnerSlot`
