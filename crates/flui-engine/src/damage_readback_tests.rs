@@ -3208,13 +3208,17 @@ fn a_backdrop_group_outside_the_damage_still_captures_at_its_first_member() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    let near = Rect::from_xywh(100.0, 4.0, 24.0, 24.0);
+    let box_under = Rect::from_xywh(100.0, 4.0, 24.0, 24.0);
+    // Over everything the second member reads and writes.
+    let box_over = Rect::from_xywh(90.0, 0.0, 38.0, 36.0);
     let far = Rect::from_xywh(50.0, 100.0, 10.0, 10.0);
-    // (case, the first member in its own boundary, one pass per rect)
-    for (case, first_alone, by_rect) in [
-        ("first member under the root", false, false),
-        ("first member in its own boundary", true, false),
-        ("one pass per rect", true, true),
+    // (case, the damaged box, the first member in its own boundary, one pass
+    // per rect)
+    for (case, near, first_alone, by_rect) in [
+        ("first member under the root", box_under, false, false),
+        ("first member in its own boundary", box_under, true, false),
+        ("one pass per rect", box_under, true, true),
+        ("damage over the whole second member", box_over, true, false),
     ] {
         let (root, background, holder) = (
             ContentToken::mint(),

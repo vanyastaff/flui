@@ -7,7 +7,9 @@
 //! filter needs. [`read_closure`] is the one answer to "what does this effect
 //! read and write"; [`close_over`] grows a damage region over every footprint
 //! it meets, to a fixed point. The scene owner, the differ and the engine's
-//! backdrop planning all call these two.
+//! backdrop planning collect a frame's effects into a [`Closures`] set with
+//! [`Closures::push_effect`], which joins a backdrop group's members, and
+//! close over it.
 
 use flui_foundation::geometry::{Matrix4, Rect};
 use flui_painting::DamageExtent;
@@ -123,7 +125,9 @@ impl Closures {
         Self::default()
     }
 
-    /// Adds a closure that joins no group.
+    /// Adds a closure that no layer gives: a chunk that reads the
+    /// destination, or a filter with no bound. An effect layer goes through
+    /// [`Closures::push_effect`], which keeps its backdrop group.
     pub fn push(&mut self, closure: Closure) {
         self.entries.push((closure, None));
     }
@@ -133,14 +137,33 @@ impl Closures {
     pub fn push_effect(&mut self, effect: &Layer, ctm: &Matrix4, content: Rect<f64>) {
         let closure = read_closure(effect, ctm, content);
         let group = match effect {
-            Layer::BackdropFilter(backdrop) => backdrop.group().map(|group| {
-                let next = u32::try_from(self.groups.len())
-                    .expect("BUG: a frame holds fewer than 2^32 backdrop groups");
-                *self.groups.entry(group.clone()).or_insert(next)
-            }),
+            Layer::BackdropFilter(backdrop) => {
+                backdrop.group().map(|group| self.group_index(group))
+            }
             _ => None,
         };
         self.entries.push((closure, group));
+    }
+
+    /// Adds the grouped closures of `other`, another frame's, each joining
+    /// the same group here: a member that joins or leaves a group between the
+    /// two frames moves the group's capture, so the damage takes the group as
+    /// either frame holds it.
+    pub fn extend_groups(&mut self, other: &Closures) {
+        let mut remap = vec![0_u32; other.groups.len()];
+        for (key, &index) in &other.groups {
+            remap[index as usize] = self.group_index(key);
+        }
+        self.entries
+            .extend(other.entries.iter().filter_map(|&(closure, group)| {
+                group.map(|group| (closure, Some(remap[group as usize])))
+            }));
+    }
+
+    fn group_index(&mut self, group: &BackdropGroupKey) -> u32 {
+        let next = u32::try_from(self.groups.len())
+            .expect("BUG: a frame holds fewer than 2^32 backdrop groups");
+        *self.groups.entry(group.clone()).or_insert(next)
     }
 
     /// Forgets every closure, keeping the storage.

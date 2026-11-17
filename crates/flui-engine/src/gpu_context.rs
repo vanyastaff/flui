@@ -912,7 +912,13 @@ impl GpuContext {
                 crate::headless::clear_to_background(domain, &view)?;
                 {
                     let mut backend = LayerDispatcher::new(&mut painter);
-                    crate::layer_walk::record_scene(scene, None, &mut backend)?;
+                    let surface = flui_foundation::geometry::Rect::from_xywh(
+                        0.0,
+                        0.0,
+                        f64::from(size.0),
+                        f64::from(size.1),
+                    );
+                    crate::layer_walk::record_scene(scene, surface, &mut backend)?;
                 }
                 #[cfg(test)]
                 assert!(!panics, "injected panic in the middle of a slot's frame");

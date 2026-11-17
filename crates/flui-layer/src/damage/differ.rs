@@ -29,10 +29,12 @@ use crate::{
 /// Content that cannot be vouched for by a token — textures (a texture layer
 /// or a picture's texture draw), platform views, live canvases, performance
 /// overlays and anything under a follower — is damaged on every frame at its
-/// old and new positions. The damage then closes over the [`read_closure`](super::closure::read_closure)
-/// of every effect in both frames with [`close_over`]: a filter whose reads
-/// or writes meet it takes both, to a fixed point, and one without a bound
-/// makes the frame `Full(Unbounded)`.
+/// old and new positions. The damage then closes over the
+/// [`read_closure`](super::closure::read_closure) of every effect of the
+/// current frame, and the backdrop groups of both, with [`close_over`]: a
+/// filter whose reads or writes meet it takes both, to a fixed point, a group
+/// takes the rect over its members, and a filter without a bound makes the
+/// frame `Full(Unbounded)`.
 ///
 /// The answer is [`DamageRegion::Full`] when the frames cannot be paired,
 /// with its [`FullReason`]: the first frame, a surface size change, a root
@@ -480,11 +482,15 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
         Ok(None) => return DamageRegion::Unchanged,
         Err(_) => return DamageRegion::Full(FullReason::NonFinite),
     };
-    // A filter reads around what it changes: damage that meets one takes
-    // all it reads and writes (ADR-0304 §6). The differ answers one rect.
+    // A filter reads around what it changes: damage that meets one takes all
+    // it reads and writes (ADR-0304 §6), and damage that meets a backdrop
+    // group as either frame holds it takes the group. The differ answers one
+    // rect.
+    let mut closures = current.closures.clone();
+    closures.extend_groups(&previous.closures);
     let rect = match close_over(
         DamageRegion::Region(Region::new(rect)),
-        &current.closures,
+        &closures,
         current.surface,
     ) {
         DamageRegion::Region(region) => region.bounds(),
