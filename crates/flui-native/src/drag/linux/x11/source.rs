@@ -535,12 +535,6 @@ impl X11Drag {
             Event::PropertyNotify(property) if property.state == Property::DELETE => {
                 self.write_chunk(property)
             }
-            // A requestor that is gone takes no more chunks. Its window's
-            // own handling, if any, hears the event too.
-            Event::DestroyNotify(destroyed) => {
-                self.requestor_gone(destroyed.window);
-                false
-            }
             // Unmapped, the window loses the grab, and the release may never
             // come to it.
             Event::UnmapNotify(unmap) if unmap.window == window => {
@@ -1335,7 +1329,7 @@ impl X11Drag {
     }
 
     /// `window` is gone: the `INCR` answers written to it are let go of.
-    fn requestor_gone(&self, window: xproto::Window) {
+    pub(super) fn requestor_gone(&self, window: xproto::Window) {
         self.session.with(|session| {
             if let Some(session) = session.as_mut() {
                 // Plain bytes, dropped in the cell.

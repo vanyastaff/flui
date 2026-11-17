@@ -302,6 +302,9 @@ pub(crate) enum PeerInterest {
     /// A transfer's `INCR` requestor, whose property deletions and end the
     /// drag hears.
     Transfer,
+    /// The source of a drag over the windows, or of a drop one of them took
+    /// and has not concluded, whose end the drag hears.
+    DropSource,
 }
 
 /// What each [`PeerInterest`] asked to hear of one peer window.
@@ -309,6 +312,7 @@ pub(crate) enum PeerInterest {
 struct PeerSelection {
     window_manager: u32,
     transfer: u32,
+    drop_source: u32,
 }
 
 impl PeerSelection {
@@ -317,6 +321,7 @@ impl PeerSelection {
         match interest {
             PeerInterest::WindowManager => &mut self.window_manager,
             PeerInterest::Transfer => &mut self.transfer,
+            PeerInterest::DropSource => &mut self.drop_source,
         }
     }
 
@@ -325,8 +330,9 @@ impl PeerSelection {
         let Self {
             window_manager,
             transfer,
+            drop_source,
         } = self;
-        window_manager | transfer
+        window_manager | transfer | drop_source
     }
 }
 
@@ -458,6 +464,14 @@ pub(crate) trait LoopDrag: DragTransport {
     /// An event the server sent; `true` when it was the drag's alone.
     fn event(&self, event: &Event) -> bool;
 
+    /// The server destroyed `window`, any client's: a drag over the windows
+    /// whose source it was ends as if it left, a dropped offer of it answers
+    /// its requests [`TransferError::SourceGone`], and the `INCR` answers
+    /// the session wrote to it are let go of.
+    ///
+    /// [`TransferError::SourceGone`]: flui_platform::data_transfer::TransferError::SourceGone
+    fn window_destroyed(&self, window: xproto::Window);
+
     /// The windows whose press a session took since the last call, which
     /// the loop has the input end: no release reaches them.
     fn pointers_taken(&self) -> Vec<xproto::Window>;
@@ -467,7 +481,8 @@ pub(crate) trait LoopDrag: DragTransport {
     fn deadline(&self) -> Option<web_time::Instant>;
 
     /// End the fetches whose time is out at `now`, or whose request was
-    /// dropped.
+    /// dropped, and stop hearing the drag sources nothing names any more.
+    /// The loop calls it at the end of every turn.
     fn expire(&self, now: web_time::Instant);
 }
 
@@ -1088,18 +1103,24 @@ impl X11Loop {
             tracing::debug!(?error, "the X server refused a request");
             return;
         }
-        // A peer's window that is gone takes what the features heard of it.
+        let mut failure = FirstPanic::new();
+        // A peer's window that is gone takes what the features heard of it,
+        // and ends what the drag held of it. A window's handler that panics
+        // as the drag tells it still leaves the event to the windows, whose
+        // own window it may be.
         if let Event::DestroyNotify(destroyed) = event {
             self.connection.peer_destroyed(destroyed.window);
+            failure.contain(|| self.drag.window_destroyed(destroyed.window));
         }
         // A drag message, or the answer to a fetch, is the drag's alone;
         // the drag contains what a window's handler raises as it hears it.
-        if self.drag.event(event) {
-            return;
-        }
         // A press a window takes for its chrome reaches neither the text
-        // input nor the input, nor does its release.
-        if self.windows.chrome_event(event) {
+        // input nor the input, nor does its release. A panic in either
+        // goes on as soon as it is caught, as the event's own failure.
+        if failure.contain(|| self.drag.event(event)) != Some(false)
+            || failure.contain(|| self.windows.chrome_event(event)) != Some(false)
+        {
+            failure.resume();
             return;
         }
         // The text input hears a focus change before the input ends the
@@ -1107,7 +1128,6 @@ impl X11Loop {
         // first. A handler's panic in what the text input or the input
         // delivered still leaves the windows the event, a focus change
         // they follow too; the first panic is raised again after.
-        let mut failure = FirstPanic::new();
         failure.contain(|| self.text.event(event));
         let input = || match heard {
             TurnEvent::Motions(run) => self.input.motions(run),
