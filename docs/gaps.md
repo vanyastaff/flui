@@ -689,7 +689,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - A window tiled by the system (Windows Snap, the macOS tiling of a top-edge drag, a GNOME half-screen) is remembered by what the host reports: Win32 reports a snapped window as `Normal` at the snapped rectangle, so it comes back at that rectangle, untiled; AppKit's stale `normal_geometry` after a tile is under [Window control has run only on Windows, an X11 test server and the AppKit conformance kit](#window-control-has-run-only-on-windows-an-x11-test-server-and-the-appkit-conformance-kit). No contract mode names a tiled state.
 - The check is the placement table of `flui-platform` with a same-key display at another scale, and a run on Windows of a snapped window closed and reopened.
 
-
 ### No widget hot reload on Android and the Web
 
 > **Environments:** Android, Web · **Who it hurts:** Developers who iterate on widget code on a phone or in a browser · **Parity:** none yet (hot reload has no row)
