@@ -4,7 +4,8 @@
 //! the buffer any size, so the buffer is drawn at the scale the compositor
 //! prefers: a fractional one where it offers `wp_fractional_scale_v1`
 //! (`preferred_scale`, as a numerator over 120), else the whole one `wl_surface`
-//! version 6 prefers, else that of the output the surface entered.
+//! version 6 prefers, else the largest of the outputs the surface is on
+//! ([`OnOutputs`]).
 //! Without the viewporter the buffer is the surface's size: scale 1, and
 //! the compositor scales it.
 //!
@@ -165,8 +166,49 @@ pub(crate) struct ScaleTold {
     pub(crate) fractional: Option<DevicePixelRatio>,
     /// `wl_surface.preferred_buffer_scale`.
     pub(crate) preferred: Option<DevicePixelRatio>,
-    /// The scale of the output the surface is on.
+    /// The scale of the densest output the surface is on
+    /// ([`OnOutputs::densest`]).
     pub(crate) output: Option<DevicePixelRatio>,
+}
+
+/// The outputs a surface is on, as its window reads them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct OnOutputs<T> {
+    /// The first it entered and has not left: the window's display, which
+    /// stays where the surface first was as it spreads to another.
+    pub(crate) first: Option<T>,
+    /// The largest scale among them: where the compositor prefers no scale
+    /// for the surface, a window across a scale-1 and a scale-2 output is
+    /// drawn for the denser one, which the compositor scales down on the
+    /// other, rather than at 1 and blurred where it is denser.
+    pub(crate) densest: Option<DevicePixelRatio>,
+}
+
+impl<T: Copy> OnOutputs<T> {
+    /// The outputs of `entered`, in the order the surface entered them and
+    /// left out where they are gone, each with its scale by `scale_of`.
+    pub(crate) fn read(
+        entered: impl IntoIterator<Item = T>,
+        scale_of: impl Fn(T) -> DevicePixelRatio,
+    ) -> Self {
+        entered.into_iter().fold(
+            Self {
+                first: None,
+                densest: None,
+            },
+            |read, output| {
+                let scale = scale_of(output);
+                Self {
+                    first: read.first.or(Some(output)),
+                    densest: Some(
+                        read.densest
+                            .filter(|densest| densest.get() >= scale.get())
+                            .unwrap_or(scale),
+                    ),
+                }
+            },
+        )
+    }
 }
 
 /// The scale a window's buffers are drawn at: the compositor's (the
@@ -304,6 +346,62 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    /// Where the compositor prefers no scale for the surface, a window across
+    /// outputs is drawn for the densest of them, from whichever side it
+    /// entered, and stays on the display of the first it entered.
+    #[test]
+    fn a_window_across_outputs_is_drawn_for_the_densest() {
+        let ratio = |scale| DevicePixelRatio::try_new(scale).expect("a ratio");
+        let entered_from_sparser: &[(u32, f64)] = &[(1, 1.0), (2, 2.0)];
+        for (case, entered, first, expected) in [
+            ("on none", &[][..], None, 1.0),
+            ("on one", &[(1, 2.0)][..], Some(1), 2.0),
+            (
+                "entered from the sparser",
+                entered_from_sparser,
+                Some(1),
+                2.0,
+            ),
+            (
+                "entered from the denser",
+                &[(2, 2.0), (1, 1.0)][..],
+                Some(2),
+                2.0,
+            ),
+            (
+                "on three",
+                &[(1, 1.25), (2, 3.0), (3, 1.5)][..],
+                Some(1),
+                3.0,
+            ),
+        ] {
+            let on = OnOutputs::read(entered.iter().copied(), |(_, scale)| ratio(scale));
+            assert_eq!(on.first.map(|(output, _)| output), first, "{case}");
+            let told = ScaleTold {
+                output: on.densest,
+                ..ScaleTold::default()
+            };
+            assert_eq!(
+                buffer_scale(true, told, Size::new(400.0, 300.0)).get(),
+                expected,
+                "{case}"
+            );
+        }
+        let on = OnOutputs::read(entered_from_sparser.iter().copied(), |(_, scale)| {
+            ratio(scale)
+        });
+        let preferred = ScaleTold {
+            preferred: Some(ratio(1.0)),
+            output: on.densest,
+            ..ScaleTold::default()
+        };
+        assert_eq!(
+            buffer_scale(true, preferred, Size::new(400.0, 300.0)).get(),
+            1.0,
+            "the scale the compositor prefers wins over every output's"
+        );
     }
 
     /// A refused scale is reported once per run of them, and a scale taken

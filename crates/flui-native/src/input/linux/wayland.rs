@@ -11,8 +11,9 @@
 //!   owned input through one [`ContactRegistry`](crate::input::assembly::ContactRegistry);
 //!   [`repeat`], the client-side key repeat a Wayland compositor leaves to
 //!   the client; [`keyboards`], each seat's keyboard apart from the others'
-//!   and the keymap's bounds; and [`cursor`], a cursor's `cursor-shape` value
-//!   and the scale and names a theme cursor is drawn by;
+//!   and the keymap's bounds; and [`cursor`], a cursor's `cursor-shape` value,
+//!   the scale and names a theme cursor is drawn by, and how its image goes
+//!   on the cursor surface;
 //! - `dispatch`, the live one: `SeatInput`, the loop's input hook
 //!   (`owner::linux::wayland::WaylandInput`), which binds the input globals
 //!   as the compositor announces them, implements the dispatch of their
@@ -59,7 +60,9 @@ pub mod repeat {
     //! The key repeat a Wayland compositor leaves to the client
     //! (`wl_keyboard.repeat_info`): a held key that repeats does so after the
     //! delay, then at the rate, until it is released, another key is
-    //! pressed, or the keyboard leaves the window.
+    //! pressed, or the keyboard leaves the window. A keyboard older than
+    //! `repeat_info` ([`TOLD_SINCE`]) is never told, and repeats at
+    //! [`UNTOLD`].
 
     #![forbid(unsafe_code)]
 
@@ -75,6 +78,41 @@ pub mod repeat {
     /// The shortest interval between two repeats, so the loop never repeats
     /// on every turn.
     pub const MIN_INTERVAL: Duration = Duration::from_millis(1);
+
+    /// The `wl_keyboard` version from which the compositor tells the repeat
+    /// (`repeat_info`).
+    pub const TOLD_SINCE: u32 = 4;
+
+    /// The repeat of a keyboard whose compositor never tells one: 25 a second
+    /// after 600 ms, the X server's rate and about its delay, which
+    /// smithay-client-toolkit takes as well.
+    pub const UNTOLD: RepeatSettings = RepeatSettings {
+        rate: 25,
+        delay: 600,
+    };
+
+    /// A keyboard's repeat as `wl_keyboard.repeat_info` carries it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RepeatSettings {
+        /// Repeats a second; zero or less turns repeat off.
+        pub rate: i32,
+        /// Milliseconds a key is held before its first repeat.
+        pub delay: i32,
+    }
+
+    impl RepeatSettings {
+        /// What a keyboard of `version` repeats at before its compositor
+        /// says: [`UNTOLD`] below [`TOLD_SINCE`], which it never says, else
+        /// nothing until its `repeat_info` comes.
+        #[must_use]
+        pub const fn before_told(version: u32) -> Option<Self> {
+            if version < TOLD_SINCE {
+                Some(UNTOLD)
+            } else {
+                None
+            }
+        }
+    }
 
     /// The interval between repeats at `rate` a second, within
     /// [`MAX_RATE`] and [`MIN_INTERVAL`].
@@ -232,7 +270,7 @@ pub mod keyboards {
 
     use web_time::Instant;
 
-    use super::repeat::KeyRepeat;
+    use super::repeat::{KeyRepeat, RepeatSettings};
     use super::wire::SeatKey;
     use crate::input::assembly::NativeSurface;
 
@@ -270,6 +308,15 @@ pub mod keyboards {
         /// `seat`'s compositor repeat settings.
         pub fn configure(&mut self, seat: SeatKey, rate: i32, delay: i32) {
             self.seat(seat).repeat.configure(rate, delay);
+        }
+
+        /// `seat`'s keyboard object was made at `version`: one too old to be
+        /// told its repeat takes [`UNTOLD`](super::repeat::UNTOLD), and a
+        /// newer one keeps what it has until its `repeat_info` comes.
+        pub fn made(&mut self, seat: SeatKey, version: u32) {
+            if let Some(settings) = RepeatSettings::before_told(version) {
+                self.configure(seat, settings.rate, settings.delay);
+            }
         }
 
         /// `seat`'s keyboard entered the window of `focus`, or left (`None`):
@@ -405,6 +452,41 @@ pub mod keyboards {
             keyboards.forget_surface(FIRST);
             assert_eq!(keyboards.due(), None, "its window closed");
         }
+
+        /// A keyboard of a seat older than `repeat_info` is never told its
+        /// repeat, and a held key still repeats, at 25 a second after 600 ms.
+        /// A newer keyboard waits for its compositor, which may turn repeat
+        /// off, and what its compositor told is not overwritten when the
+        /// keyboard object is made again.
+        #[test]
+        fn a_keyboard_never_told_its_repeat_still_repeats() {
+            let start = Instant::now();
+            let ms = Duration::from_millis;
+            let mut keyboards = Keyboards::default();
+            keyboards.made(A, 3);
+            keyboards.focus(A, Some(FIRST));
+            keyboards.press(A, 30, true, start);
+            assert_eq!(keyboards.due(), Some(start + ms(600)), "after 600 ms");
+            assert_eq!(keyboards.take_due(start + ms(600)), [(A, 30, FIRST)]);
+            assert_eq!(keyboards.due(), Some(start + ms(640)), "then 25 a second");
+
+            keyboards.made(B, 4);
+            keyboards.focus(B, Some(SECOND));
+            keyboards.press(B, 30, true, start);
+            assert_eq!(
+                keyboards.take_due(start + ms(10_000)),
+                [(A, 30, FIRST)],
+                "B's compositor has not told its repeat yet"
+            );
+            keyboards.configure(B, 40, 300);
+            keyboards.made(B, 9);
+            keyboards.press(B, 30, true, start);
+            assert_eq!(
+                keyboards.take_due(start + ms(300)),
+                [(B, 30, SECOND)],
+                "B keeps the repeat its compositor told"
+            );
+        }
     }
 }
 
@@ -439,6 +521,83 @@ pub mod cursor {
         #[expect(clippy::cast_possible_truncation, reason = "a whole number in 2..=8")]
         let whole = ceiling as i32;
         whole
+    }
+
+    /// How a theme image goes on a cursor surface. `wl_surface.attach`
+    /// refuses a buffer whose size is not a multiple of the surface's buffer
+    /// scale (`invalid_size`, which ends the connection), and a theme ships
+    /// a few sizes that need not be multiples of the scale it is drawn at
+    /// (Adwaita's 64 for a scale of 3).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[expect(
+        clippy::exhaustive_enums,
+        reason = "a surface sizes its buffer by its buffer scale or by a viewport, and by nothing else"
+    )]
+    pub enum CursorBuffer {
+        /// At this buffer scale, which divides both sides of the image.
+        Scaled(i32),
+        /// At buffer scale one, shown through a viewport at this logical
+        /// size, which no buffer size makes invalid.
+        Viewported {
+            /// The scale the image was drawn for.
+            scale: i32,
+            /// The surface's logical width.
+            width: i32,
+            /// The surface's logical height.
+            height: i32,
+        },
+    }
+
+    impl CursorBuffer {
+        /// How an image of `width` by `height` pixels drawn for `scale`
+        /// ([`theme_scale`]) goes on the cursor surface: at `scale` where it
+        /// divides both sides; else through a viewport at the image's size
+        /// over `scale` where the compositor has `wp_viewporter`
+        /// (`viewported`); else at the largest scale below it that divides
+        /// both, which shows the cursor larger than the theme meant and never
+        /// breaks the connection.
+        #[must_use]
+        pub fn fit(width: u32, height: u32, scale: i32, viewported: bool) -> Self {
+            let scale = scale.clamp(1, MAX_THEME_SCALE);
+            let divides = |by: i32| {
+                let by = by.unsigned_abs();
+                width.is_multiple_of(by) && height.is_multiple_of(by)
+            };
+            if divides(scale) {
+                return Self::Scaled(scale);
+            }
+            if viewported {
+                // Rounded to the nearest logical pixel, and one at least.
+                let logical = |pixels: u32| {
+                    let by = scale.unsigned_abs();
+                    let extent = pixels.saturating_add(by / 2) / by;
+                    i32::try_from(extent.max(1)).unwrap_or(i32::MAX)
+                };
+                return Self::Viewported {
+                    scale,
+                    width: logical(width),
+                    height: logical(height),
+                };
+            }
+            Self::Scaled((1..scale).rev().find(|by| divides(*by)).unwrap_or(1))
+        }
+
+        /// The image's pixels per logical pixel.
+        #[must_use]
+        pub const fn scale(self) -> i32 {
+            match self {
+                Self::Scaled(scale) | Self::Viewported { scale, .. } => scale,
+            }
+        }
+
+        /// The surface-local position of an image pixel: the hotspot as
+        /// `wl_pointer.set_cursor` takes it.
+        #[must_use]
+        pub fn surface_point(self, x: u32, y: u32) -> (i32, i32) {
+            let scale = self.scale().unsigned_abs();
+            let local = |at: u32| i32::try_from(at / scale).unwrap_or(i32::MAX);
+            (local(x), local(y))
+        }
     }
 
     /// The names a cursor theme may give `icon`, best first: its CSS name,
@@ -545,6 +704,63 @@ pub mod cursor {
             assert_eq!(names.first(), Some(&"pointer"));
             assert!(names.contains(&"hand2"), "{names:?}");
             assert_eq!(theme_names(CursorIcon::Default).first(), Some(&"default"));
+        }
+
+        /// A theme image goes on the cursor surface so that its buffer is
+        /// never refused: at the cursor's scale where that divides the
+        /// image, else through a viewport at the image's logical size, else
+        /// at the largest smaller scale that divides it. Adwaita has 24, 32,
+        /// 48, 64 and 96; at a scale of 3 its nearest to 72 is 64.
+        #[test]
+        fn a_theme_image_fits_its_cursor_surface() {
+            use CursorBuffer::{Scaled, Viewported};
+
+            for (case, (width, height), scale, viewported, expected) in [
+                ("one", (24, 24), 1, false, Scaled(1)),
+                ("a multiple", (48, 48), 2, false, Scaled(2)),
+                ("a multiple, viewported", (96, 96), 3, true, Scaled(3)),
+                (
+                    "64 at 3, viewported",
+                    (64, 64),
+                    3,
+                    true,
+                    Viewported {
+                        scale: 3,
+                        width: 21,
+                        height: 21,
+                    },
+                ),
+                ("64 at 3", (64, 64), 3, false, Scaled(2)),
+                ("48 at 5", (48, 48), 5, false, Scaled(4)),
+                ("an odd side", (32, 33), 2, false, Scaled(1)),
+                (
+                    "a side below the scale",
+                    (1, 1),
+                    3,
+                    true,
+                    Viewported {
+                        scale: 3,
+                        width: 1,
+                        height: 1,
+                    },
+                ),
+                ("past the largest scale", (96, 96), 12, false, Scaled(8)),
+                ("no scale", (24, 24), 0, false, Scaled(1)),
+            ] {
+                let fitted = CursorBuffer::fit(width, height, scale, viewported);
+                assert_eq!(fitted, expected, "{case}");
+                if let Scaled(by) = fitted {
+                    assert!(
+                        width % by.unsigned_abs() == 0 && height % by.unsigned_abs() == 0,
+                        "{case}: a buffer scale of {by} for {width}x{height}"
+                    );
+                }
+            }
+            assert_eq!(Scaled(2).surface_point(9, 30), (4, 15), "the hotspot");
+            assert_eq!(
+                CursorBuffer::fit(64, 64, 3, true).surface_point(7, 63),
+                (2, 21)
+            );
         }
     }
 }

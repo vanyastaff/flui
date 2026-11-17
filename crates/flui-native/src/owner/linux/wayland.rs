@@ -1043,7 +1043,8 @@ mod event_loop {
         /// The name it was found by: a `cursor-shape` value's number, or the
         /// theme cursor's name.
         pub(crate) name: String,
-        /// The buffer scale a theme cursor was drawn at; `0` for a shape.
+        /// The image pixels per logical pixel a theme cursor was drawn at;
+        /// `0` for a shape.
         pub(crate) scale: i32,
     }
 
@@ -1060,6 +1061,10 @@ mod event_loop {
         pub(crate) compositor: WlCompositor,
         /// `wl_shm`, the shared memory the theme's images are in.
         pub(crate) shm: WlShm,
+        /// `wp_viewporter`, through which an image whose size the cursor's
+        /// scale does not divide is drawn at its size; `None` where the
+        /// compositor offers none.
+        pub(crate) viewporter: Option<WpViewporter>,
     }
 
     /// What the loop and its windows ask of the seats' input: the input
@@ -2219,6 +2224,7 @@ mod event_loop {
                     queue: handle.clone(),
                     compositor: compositor.clone(),
                     shm: shm.clone(),
+                    viewporter: viewporter.clone(),
                 });
             }
             // The seats bound so far get their data devices now: the first

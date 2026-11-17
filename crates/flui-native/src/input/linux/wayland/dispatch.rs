@@ -68,6 +68,7 @@ use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_tool_v2::{
     self, ButtonState, Type as ToolType, ZwpTabletToolV2,
 };
 use wayland_protocols::wp::tablet::zv2::client::zwp_tablet_v2::{self, ZwpTabletV2};
+use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use web_time::Instant;
 
 use super::cursor;
@@ -173,6 +174,9 @@ enum Wire {
         rate: i32,
         delay: i32,
     },
+    /// A seat's keyboard object was made at `version`, which says whether
+    /// its compositor will tell its repeat.
+    KeyboardMade { seat: SeatKey, version: u32 },
 }
 
 /// Record `wire` for the next delivery. A keymap replaces one its seat's
@@ -213,7 +217,7 @@ struct PointerObjects {
     pinch: Option<ZwpPointerGesturePinchV1>,
     shape: Option<WpCursorShapeDeviceV1>,
     /// The surface a theme cursor is drawn on, made at its first.
-    cursor_surface: Option<WlSurface>,
+    cursor_surface: Option<ThemeSurface>,
     /// The window surface it is over and the serial of its enter.
     focus: Option<(NativeSurface, u32)>,
     /// That surface, as the protocol names it: what a button names on an
@@ -973,6 +977,10 @@ impl Delivering {
                 self.keyboards.configure(seat, rate, delay);
                 Vec::new()
             }
+            Wire::KeyboardMade { seat, version } => {
+                self.keyboards.made(seat, version);
+                Vec::new()
+            }
             // Assembled elsewhere, and delivered to the text inputs.
             Wire::Seat(_) | Wire::Text(_) => Vec::new(),
         }
@@ -1346,6 +1354,70 @@ impl WaylandInput for SeatInput {
 /// A pointer's theme-cursor surface.
 pub(crate) struct CursorSurface;
 
+/// The surface a pointer's theme cursor is drawn on, and its viewport, made
+/// the first time an image needs one ([`cursor::CursorBuffer::Viewported`]).
+struct ThemeSurface {
+    surface: WlSurface,
+    viewport: Option<WpViewport>,
+}
+
+impl ThemeSurface {
+    /// Put `buffer`, an image of `width` by `height` pixels, on the surface
+    /// as `fit` says, and commit it.
+    fn show(
+        &mut self,
+        source: &CursorGlobals,
+        buffer: &WlBuffer,
+        (width, height): (u32, u32),
+        fit: cursor::CursorBuffer,
+    ) {
+        let scale = match fit {
+            cursor::CursorBuffer::Scaled(scale) => {
+                if let Some(viewport) = &self.viewport {
+                    // Unset: the buffer scale sizes the surface again.
+                    viewport.set_destination(-1, -1);
+                }
+                scale
+            }
+            cursor::CursorBuffer::Viewported {
+                width: logical_width,
+                height: logical_height,
+                ..
+            } => {
+                if self.viewport.is_none() {
+                    self.viewport = source.viewporter.as_ref().map(|viewporter| {
+                        viewporter.get_viewport(&self.surface, &source.queue, ())
+                    });
+                }
+                if let Some(viewport) = &self.viewport {
+                    viewport.set_destination(logical_width, logical_height);
+                }
+                1
+            }
+        };
+        if self.surface.version() >= 3 {
+            self.surface.set_buffer_scale(scale);
+        }
+        self.surface.attach(Some(buffer), 0, 0);
+        let extent = |pixels: u32| i32::try_from(pixels).unwrap_or(i32::MAX);
+        if self.surface.version() >= 4 {
+            self.surface
+                .damage_buffer(0, 0, extent(width), extent(height));
+        } else {
+            self.surface.damage(0, 0, extent(width), extent(height));
+        }
+        self.surface.commit();
+    }
+
+    /// Destroy the viewport, then the surface.
+    fn destroy(self) {
+        if let Some(viewport) = self.viewport {
+            viewport.destroy();
+        }
+        self.surface.destroy();
+    }
+}
+
 impl Dispatch<WlSurface, CursorSurface> for WaylandState {
     fn event(
         _: &mut Self,
@@ -1601,9 +1673,11 @@ fn theme_setting() -> (String, u32) {
     (name, size)
 }
 
-/// Draw `cursor` from the theme on `pointer`'s cursor surface at the buffer
-/// scale `scale` rounds up to, and set it since the enter `serial`. What was
-/// drawn, or `None` where the theme has no image of it.
+/// Draw `cursor` from the theme on `pointer`'s cursor surface for the scale
+/// `scale` rounds up to, put on the surface so the compositor takes its
+/// buffer ([`cursor::CursorBuffer::fit`]), and set it since the enter
+/// `serial`. What was drawn and its pixels per logical pixel, or `None`
+/// where the theme has no image of it.
 fn draw_theme_cursor(
     shared: &Shared,
     source: &CursorGlobals,
@@ -1613,14 +1687,12 @@ fn draw_theme_cursor(
     scale: f64,
 ) -> Option<(&'static str, i32)> {
     let scale = cursor::theme_scale(scale);
-    let surface = pointer
-        .cursor_surface
-        .get_or_insert_with(|| {
-            source
-                .compositor
-                .create_surface(&source.queue, CursorSurface)
-        })
-        .clone();
+    let theme_surface = pointer.cursor_surface.get_or_insert_with(|| ThemeSurface {
+        surface: source
+            .compositor
+            .create_surface(&source.queue, CursorSurface),
+        viewport: None,
+    });
     let drawn = shared
         .themes
         .with(|themes| {
@@ -1642,31 +1714,22 @@ fn draw_theme_cursor(
             cursor::theme_names(cursor).into_iter().find_map(|name| {
                 let image = &theme.get_cursor(name)?[0];
                 let (width, height) = image.dimensions();
+                let fit =
+                    cursor::CursorBuffer::fit(width, height, scale, source.viewporter.is_some());
+                theme_surface.show(source, image, (width, height), fit);
                 let (x, y) = image.hotspot();
-                let buffer: &WlBuffer = image;
-                if surface.version() >= 3 {
-                    surface.set_buffer_scale(scale);
-                }
-                surface.attach(Some(buffer), 0, 0);
-                surface.damage(
-                    0,
-                    0,
-                    i32::try_from(width).unwrap_or(i32::MAX),
-                    i32::try_from(height).unwrap_or(i32::MAX),
-                );
-                surface.commit();
-                let hotspot = |at: u32| i32::try_from(at).unwrap_or(0) / scale;
+                let (x, y) = fit.surface_point(x, y);
                 pointer
                     .pointer
-                    .set_cursor(serial, Some(&surface), hotspot(x), hotspot(y));
-                Some(name)
+                    .set_cursor(serial, Some(&theme_surface.surface), x, y);
+                Some((name, fit.scale()))
             })
         })
         .flatten();
     if drawn.is_none() {
         tracing::debug!(?cursor, "the cursor theme has no image of the cursor");
     }
-    drawn.map(|name| (name, scale))
+    drawn
 }
 
 /// The tablet seat of `seat`, whose key is `key`.
@@ -1933,13 +1996,18 @@ impl Dispatch<WlSeat, SeatData> for WaylandState {
             }
             if capabilities.contains(Capability::Keyboard) {
                 if held.keyboard.is_none() {
-                    held.keyboard = Some(seat.get_keyboard(
+                    let keyboard = seat.get_keyboard(
                         queue,
                         KeyboardData {
                             shared: Arc::downgrade(&shared),
                             seat: key,
                         },
-                    ));
+                    );
+                    shared.record(Wire::KeyboardMade {
+                        seat: key,
+                        version: keyboard.version(),
+                    });
+                    held.keyboard = Some(keyboard);
                 }
             } else {
                 gone_keyboard = held.keyboard.take();
