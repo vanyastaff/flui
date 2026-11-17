@@ -23630,7 +23630,7 @@ variant flui::testing::TestError::NotFound { locator: Box<flui::testing::Locator
 variant flui::testing::TestError::NotSettled { frames: usize } // at 6
 variant flui::testing::TestError::Timeout { expected: String, locator: Box<flui::testing::Locator>, found: String, timeout: core::time::Duration, shown: String } // at 5
 variant flui::testing::TestError::Unanswered { frames: u32 } // at 7
-variant flui::testing::TestError::UnpublishedIdentifier { locator: Box<flui::testing::Locator>, shown: String } // at 1
+variant flui::testing::TestError::UnpublishedIdentifier { locator: Box<flui::testing::Locator>, identifier: String, control: Option<String>, shown: String } // at 1
 pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
