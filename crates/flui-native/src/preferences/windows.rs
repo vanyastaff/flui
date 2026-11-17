@@ -375,31 +375,23 @@ impl UiSettingsEvent {
         ui: &UISettings,
         invalidation: &Arc<Invalidation>,
     ) -> Result<Option<i64>, PlatformError> {
-        let delegate = |name: &'static str| {
-            let invalidation = Arc::clone(invalidation);
-            move || {
-                os_entry(name, (), AfterPanic::Answer(|()| Ok(())), || {
-                    invalidation.notify();
-                    Ok(())
-                })
-            }
-        };
+        let invalidation = Arc::clone(invalidation);
         let registered = match self {
-            Self::TextScale => {
-                let notify = delegate("the text-scale delegate");
-                ui.TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| notify()))
-            }
+            Self::TextScale => ui.TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {
+                notify_from_os("the text-scale delegate", &invalidation)
+            })),
             Self::Animations => {
-                let notify = delegate("the animations delegate");
-                ui.AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| notify()))
+                ui.AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| {
+                    notify_from_os("the animations delegate", &invalidation)
+                }))
             }
-            Self::Colors => {
-                let notify = delegate("the colour-values delegate");
-                ui.ColorValuesChanged(&TypedEventHandler::new(move |_, _| notify()))
-            }
+            Self::Colors => ui.ColorValuesChanged(&TypedEventHandler::new(move |_, _| {
+                notify_from_os("the colour-values delegate", &invalidation)
+            })),
             Self::AutoHideScrollBars => {
-                let notify = delegate("the scroll-bar delegate");
-                ui.AutoHideScrollBarsChanged(&TypedEventHandler::new(move |_, _| notify()))
+                ui.AutoHideScrollBarsChanged(&TypedEventHandler::new(move |_, _| {
+                    notify_from_os("the scroll-bar delegate", &invalidation)
+                }))
             }
         };
         unless_missing(registered)
@@ -557,6 +549,15 @@ fn sample(
         None => snapshot,
     };
     Ok(snapshot)
+}
+
+/// The OS's call of a `UISettings` delegate named `name`: one notification of
+/// `invalidation` inside the OS-entry boundary.
+fn notify_from_os(name: &'static str, invalidation: &Invalidation) -> windows::core::Result<()> {
+    os_entry(name, (), AfterPanic::Answer(|()| Ok(())), || {
+        invalidation.notify();
+        Ok(())
+    })
 }
 
 /// `UISettings`' accent, an 8-bit sRGB colour with its alpha.
