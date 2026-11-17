@@ -7241,17 +7241,17 @@ GPU-память простаивающего или невидимого окн
   мышь, перемещение следит за уходом из неклиентской области, `WM_NCMOUSELEAVE` кончает
   наведение, если курсор не над окном. Класс: путь указателя переводил `WM_NCPOINTER*` над
   кнопками и у окна с системной строкой заголовка — касание и перо не доходили до системных
-  кнопок. Теперь окно отдаёт все неклиентские сообщения указателя и мыши процедуре по
-  умолчанию, если регионы не отвечают на hit test (системная строка или полноэкранный режим),
-  до того как их видит ввод (`chrome::is_non_client_pointer_message`). Тесты, в скобках результат
+  кнопок. Теперь ввод спрашивает окно (`owner::windows::WindowChrome` рядом с `WindowInputs` и
+  `WindowTexts`; отвечает хук окна), отвечают ли его регионы на hit test, и при системной строке
+  или полноэкранном режиме оставляет оба пути процедуре по умолчанию; хуки по-прежнему отвечают
+  на непересекающиеся сообщения (`the_window_hooks_answer_disjoint_messages`). Тесты, в скобках результат
   с откатом: `a_rescaled_window_keeps_its_content_where_linear_scaling_drifts` (рамки — ответы
   ОС); `a_scale_change_keeps_the_contents_logical_size` в `native_window_commands` (без ответа —
   `None` вместо 818×647 при 96→120); `a_fullscreen_window_covers_its_monitor_through_a_dpi_change`
   стал точным (984×779 вместо 982×776); `the_client_reaches_the_top_and_a_maximized_one_leaves_an_auto_hide_bar_its_edge`
   (без отступа — нижний край 1080 вместо 1078); `mouse_messages_over_a_caption_button_become_the_applications`;
   `caption_buttons_take_the_legacy_mouse_messages_over_them` (без перевода — наведения нет; без
-  ворот рамки — системная кнопка отдаёт перемещение приложению);
-  `the_non_client_pointer_messages_are_known`. Должно на Windows (заметки строк
+  ворот рамки — системная кнопка отдаёт перемещение приложению). Должно на Windows (заметки строк
   `frameless-windows-custom-title-bar` и `scale-factor-and-dpi-changes`): настоящий указатель на
   кнопках, развёрнутое окно над настоящей автоскрываемой панелью, окно, перетащенное между
   мониторами разного масштаба. Прямоугольник восстановления развёрнутого окна при смене масштаба
