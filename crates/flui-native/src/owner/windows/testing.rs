@@ -24,8 +24,8 @@ use super::control::{
     OwnerWindow,
 };
 use super::{
-    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowClass, WindowHooks, WindowInputs,
-    WindowRef, WindowTexts, WindowsHost,
+    ClassWindows, CreatedWindow, HostDisplays, HostDrag, WindowChrome, WindowClass, WindowHooks,
+    WindowInputs, WindowRef, WindowTexts, WindowsHost,
 };
 use crate::error::PlatformError;
 use crate::owner::OpenWindows;
@@ -66,6 +66,7 @@ impl<C: ClassHooks> WindowsHost for QuietHost<C> {
             hooks: C::hooks(),
             input: Rc::new(NoInputs),
             text: Rc::new(NoTexts),
+            chrome: Rc::new(NoChrome),
             modal_loops: Rc::default(),
         }
     }
@@ -282,6 +283,15 @@ pub(crate) struct NoTexts;
 
 impl WindowTexts for NoTexts {
     fn store_host(&self, _window: WindowRef) -> Option<Rc<dyn TextStoreHost>> {
+        None
+    }
+}
+
+/// A window hook that holds no window.
+pub(crate) struct NoChrome;
+
+impl WindowChrome for NoChrome {
+    fn regions_answer_the_hit_test(&self, _window: WindowRef) -> Option<bool> {
         None
     }
 }

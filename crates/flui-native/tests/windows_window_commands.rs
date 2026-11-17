@@ -1320,11 +1320,320 @@ fn a_fullscreen_window_covers_its_monitor_through_a_dpi_change() {
     );
     apply(&window, WindowCommand::SetMode(WindowMode::Normal));
     let restored = rect(&window);
-    let width = restored.right - restored.left;
-    let wanted = f64::from(normal.right - normal.left) * 1.5;
+    assert_eq!(
+        (
+            restored.right - restored.left,
+            restored.bottom - restored.top
+        ),
+        outer_at(&window, 144, (960, 720)),
+        "returns with its 640×480 content at 1.5 and the frame of 144 DPI around it, \
+         not the {}-wide rectangle it left scaled linearly",
+        normal.right - normal.left
+    );
+}
+
+/// The outer size `AdjustWindowRectExForDpi` gives `window`'s style around a
+/// content of `content` device pixels at `dpi`; a window whose application
+/// draws its title bar has nothing above its content.
+fn outer_at(window: &Rc<dyn HostWindow>, dpi: u32, content: (i32, i32)) -> (i32, i32) {
+    use windows::Win32::UI::{
+        HiDpi::AdjustWindowRectExForDpi,
+        WindowsAndMessaging::{GWL_EXSTYLE, WINDOW_EX_STYLE, WINDOW_STYLE},
+    };
+
+    let mut outer = RECT {
+        left: 0,
+        top: 0,
+        right: content.0,
+        bottom: content.1,
+    };
+    // SAFETY: plain queries of the live window and an in/out stack local.
+    unsafe {
+        let ex_style = GetWindowLongPtrW(hwnd_of(window), GWL_EXSTYLE) as u32;
+        AdjustWindowRectExForDpi(
+            &raw mut outer,
+            WINDOW_STYLE(style(window)),
+            false,
+            WINDOW_EX_STYLE(ex_style),
+            dpi,
+        )
+        .expect("the frame at the DPI");
+    }
+    if !window.state().frame.has_system_title_bar() {
+        outer.top = 0;
+    }
+    (outer.right - outer.left, outer.bottom - outer.top)
+}
+
+/// What `window` answers `WM_GETDPISCALEDSIZE` for `dpi` with its pending
+/// outer size `pending`: `None` when it leaves the system its linear scaling.
+fn dpi_scaled_size(
+    window: &Rc<dyn HostWindow>,
+    dpi: u32,
+    pending: (i32, i32),
+) -> Option<(i32, i32)> {
+    use windows::Win32::{Foundation::SIZE, UI::WindowsAndMessaging::WM_GETDPISCALEDSIZE};
+
+    let mut size = SIZE {
+        cx: pending.0,
+        cy: pending.1,
+    };
+    // SAFETY: a message to the live window on its own thread; `size` outlives
+    // the synchronous send, as the system's `SIZE` outlives its own.
+    let answered = unsafe {
+        SendMessageW(
+            hwnd_of(window),
+            WM_GETDPISCALEDSIZE,
+            Some(WPARAM(dpi as usize)),
+            Some(LPARAM((&raw mut size) as isize)),
+        )
+    };
+    (answered.0 != 0).then_some((size.cx, size.cy))
+}
+
+/// Before a `WM_DPICHANGED`, the system asks the window what size it takes at
+/// the new DPI. A normal window answers the one whose content keeps its
+/// logical size under the frame of that DPI, for the system's frame and an
+/// application's title bar alike, where the system would scale the whole
+/// rectangle linearly; across a change and back it returns to the size it
+/// left. A maximized window answers none.
+fn a_scale_change_keeps_the_contents_logical_size() {
+    use flui_platform::{AppTitleBar, SystemControls};
+
+    let platform = platform();
+    for frame in [
+        WindowFrame::System,
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden)),
+    ] {
+        let window = open(&platform, hidden().frame(frame));
+        // SAFETY: a plain query of the live window.
+        let at = unsafe { GetDpiForWindow(hwnd_of(&window)) };
+        let before = rect(&window);
+        let outer = (before.right - before.left, before.bottom - before.top);
+        for (dpi, content) in [
+            (120, (800, 600)),
+            (144, (960, 720)),
+            (168, (1120, 840)),
+            (192, (1280, 960)),
+        ] {
+            assert_eq!(
+                dpi_scaled_size(&window, dpi, outer),
+                Some(outer_at(&window, dpi, content)),
+                "{frame:?} from {at} to {dpi} DPI"
+            );
+        }
+
+        let there = dpi_scaled_size(&window, 144, outer).expect("a size at 144 DPI");
+        dpi_changed(
+            &window,
+            144,
+            RECT {
+                right: before.left + there.0,
+                bottom: before.top + there.1,
+                ..before
+            },
+        );
+        let moved = rect(&window);
+        assert_eq!(
+            dpi_scaled_size(
+                &window,
+                at as u32,
+                (moved.right - moved.left, moved.bottom - moved.top)
+            ),
+            Some(outer),
+            "{frame:?}: back at {at} DPI, the size it left"
+        );
+
+        apply(&window, WindowCommand::SetMode(WindowMode::Maximized));
+        assert_eq!(
+            dpi_scaled_size(&window, 192, outer),
+            None,
+            "{frame:?}: a maximized window covers its monitor at any DPI"
+        );
+    }
+}
+
+/// Where the mouse is not a pointer, the legacy non-client mouse messages
+/// over a caption button the application draws reach its button as the
+/// client mouse messages they stand for, at the button's position, and the
+/// default procedure does not track a classic button over it; the leave of the
+/// non-client area ends the hover. Over the caption button the system draws,
+/// they stay the system's.
+fn caption_buttons_take_the_legacy_mouse_messages_over_them() {
+    use flui_foundation::geometry::Rect;
+    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    use flui_platform::pointer::PointerEvent;
+    use flui_platform::{AppTitleBar, PlatformInput, SystemControls};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTMAXBUTTON, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+    };
+
+    // The screen point of the logical point `(x, y)` of `window`'s client, as
+    // a non-client mouse message packs it.
+    let screen_point = |window: &Rc<dyn HostWindow>, x: f64, y: f64| {
+        let scale = window.state().metrics.expect("drawable").scale().get();
+        let origin = client_origin_on_screen(window);
+        let x = origin.0 + (x * scale).round() as i32;
+        let y = origin.1 + (y * scale).round() as i32;
+        ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as i32 as isize
+    };
+    let pointer_events = |window: &Opened| -> Vec<PointerEvent> {
+        window
+            .handler
+            .inputs()
+            .iter()
+            .filter_map(PlatformInput::as_pointer)
+            .cloned()
+            .collect()
+    };
+
+    let platform = platform();
+    let frame =
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
+    let window = open(&platform, hidden().frame(frame));
+    window
+        .set_input_regions(&[InputRegion::new(
+            InputRegionKind::CaptionButton(CaptionButton::Maximize),
+            Rect::from_ltrb(560.0, 0.0, 600.0, 32.0),
+        )])
+        .expect("a Win32 window honours the chrome regions");
+    window.handler.take_calls();
+    let over_maximize = screen_point(&window, 580.0, 16.0);
+
+    send(&window, WM_NCMOUSEMOVE, HTMAXBUTTON as usize, over_maximize);
+    assert!(window.state().hovered, "a move over the button hovers");
+    send(
+        &window,
+        WM_NCLBUTTONDOWN,
+        HTMAXBUTTON as usize,
+        over_maximize,
+    );
+    send(&window, WM_NCLBUTTONUP, HTMAXBUTTON as usize, over_maximize);
+    let events = pointer_events(&window);
     assert!(
-        (f64::from(width) - wanted).abs() <= 3.0,
-        "returns {width} wide, not the {wanted} the new scale makes of it"
+        events
+            .iter()
+            .any(|event| matches!(event, PointerEvent::Move(_))),
+        "the move reached the application: {events:?}"
+    );
+    let presses: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            PointerEvent::Down(press) => Some(("down", press.sample.position.get())),
+            PointerEvent::Up(release) => Some(("up", release.sample.position.get())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        presses.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+        ["down", "up"],
+        "the press and the release reached the application's button: {events:?}"
+    );
+    for (kind, at) in &presses {
+        assert!(
+            near(at.x, 580.0) && near(at.y, 16.0),
+            "the {kind} lands on the button, in client coordinates: {at:?}"
+        );
+    }
+    // A hidden window is under no cursor: the mouse left it.
+    send(&window, WM_NCMOUSELEAVE, 0, 0);
+    assert!(!window.state().hovered, "leaving the button ends the hover");
+
+    let system = open(&platform, hidden());
+    system.handler.take_calls();
+    let over_its_button = screen_point(&system, 600.0, -10.0);
+    send(
+        &system,
+        WM_NCMOUSEMOVE,
+        HTMAXBUTTON as usize,
+        over_its_button,
+    );
+    assert_eq!(
+        pointer_events(&system),
+        [],
+        "the system's own caption button keeps its messages"
+    );
+    assert!(!system.state().hovered);
+}
+
+/// The hover an application's caption button saw ends when the pointer moves
+/// on over the bar or a border, which the application hears nothing of: one
+/// leave, at the button, for the first such move, and none for the next.
+fn a_move_off_a_caption_button_ends_the_hover_it_saw() {
+    use flui_foundation::geometry::Rect;
+    use flui_platform::input_regions::{CaptionButton, InputRegion, InputRegionKind};
+    use flui_platform::pointer::PointerEvent;
+    use flui_platform::{AppTitleBar, PlatformInput, SystemControls};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        HTCAPTION, HTMINBUTTON, HTRIGHT, WM_NCMOUSEMOVE,
+    };
+
+    let platform = platform();
+    let frame =
+        WindowFrame::AppTitleBar(AppTitleBar::new().with_system_controls(SystemControls::Hidden));
+    let window = open(&platform, hidden().frame(frame));
+    window
+        .set_input_regions(&[InputRegion::new(
+            InputRegionKind::CaptionButton(CaptionButton::Minimize),
+            Rect::from_ltrb(520.0, 0.0, 560.0, 32.0),
+        )])
+        .expect("a Win32 window honours the chrome regions");
+    let scale = window.state().metrics.expect("drawable").scale().get();
+    let origin = client_origin_on_screen(&window);
+    let screen = |x: f64, y: f64| {
+        let x = origin.0 + (x * scale).round() as i32;
+        let y = origin.1 + (y * scale).round() as i32;
+        ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as i32 as isize
+    };
+    let leaves = |window: &Opened| -> Vec<(f64, f64)> {
+        window
+            .handler
+            .inputs()
+            .iter()
+            .filter_map(PlatformInput::as_pointer)
+            .filter_map(|event| match event {
+                PointerEvent::Leave(signal) => {
+                    let at = signal.position.expect("where it left").get();
+                    Some((at.x, at.y))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    window.handler.take_calls();
+    send(
+        &window,
+        WM_NCMOUSEMOVE,
+        HTMINBUTTON as usize,
+        screen(540.0, 16.0),
+    );
+    assert_eq!(leaves(&window), [], "over the button, no leave");
+    send(
+        &window,
+        WM_NCMOUSEMOVE,
+        HTCAPTION as usize,
+        screen(300.0, 16.0),
+    );
+    let left = leaves(&window);
+    assert_eq!(
+        left.len(),
+        1,
+        "one leave for the move over the bar: {left:?}"
+    );
+    assert!(
+        near(left[0].0, 540.0) && near(left[0].1, 16.0),
+        "it leaves where the button last saw it: {left:?}"
+    );
+    send(
+        &window,
+        WM_NCMOUSEMOVE,
+        HTRIGHT as usize,
+        screen(641.0, 100.0),
+    );
+    assert_eq!(
+        leaves(&window).len(),
+        1,
+        "the next move has no hover to end"
     );
 }
 
@@ -3079,6 +3388,18 @@ fn native_window_commands() {
         (
             "the_system_hit_test_answers_from_the_chrome_regions",
             the_system_hit_test_answers_from_the_chrome_regions,
+        ),
+        (
+            "caption_buttons_take_the_legacy_mouse_messages_over_them",
+            caption_buttons_take_the_legacy_mouse_messages_over_them,
+        ),
+        (
+            "a_scale_change_keeps_the_contents_logical_size",
+            a_scale_change_keeps_the_contents_logical_size,
+        ),
+        (
+            "a_move_off_a_caption_button_ends_the_hover_it_saw",
+            a_move_off_a_caption_button_ends_the_hover_it_saw,
         ),
         (
             "a_deferred_window_is_hidden_until_its_first_frame",
