@@ -98,10 +98,10 @@ mod tests {
                 else {
                     continue;
                 };
-                // rustdoc splits a fence's attributes on commas and spaces, and
-                // `ignore-<target>` skips the sample on that target
+                // rustdoc splits a fence's attributes on commas, spaces, braces and
+                // quotes, and `ignore-<target>` skips the sample on that target
                 if info
-                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .split(|c: char| matches!(c, ',' | '{' | '}' | '"') || c.is_whitespace())
                     .any(|attribute| attribute == "ignore" || attribute.starts_with("ignore-"))
                 {
                     ignored.push(format!("{chapter}:{}", index + 1));
