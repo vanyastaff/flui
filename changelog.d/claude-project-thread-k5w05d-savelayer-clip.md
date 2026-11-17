@@ -1,0 +1,4 @@
+### Fixed
+
+- A backdrop filter inside a layer whose composite a clip cuts (a `Clip::AntiAliasWithSaveLayer` clip, or a clip over an opacity, colour-filter or blend layer) read and wrote past that clip. The layer's children draw into it unclipped, while a partial frame skips the nodes the clip hides, so the filter blurred a hidden neighbour in a full frame and not in a partial one. It now reads and writes only inside the whole pixels those clips show, widened by any image filter between the clip and the backdrop filter; past that it reads transparency. A grouped filter left nothing to write there no longer captures its group's backdrop.
+- A partial frame skipped a node whose ink lay in the pixel a clip's fractional edge covers in part, which a full frame shows there. A clip above a scene node now cuts the node's footprint by the whole device pixels it touches.

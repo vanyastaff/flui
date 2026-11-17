@@ -412,6 +412,10 @@ fn scene_patch_damage() {
                 d::a_hidden_follower_hides_the_followers_of_the_leader_inside_it,
             ),
             (
+                "damage_under_a_fractional_clip_edge_takes_the_shared_pixel",
+                d::damage_under_a_fractional_clip_edge_takes_the_shared_pixel,
+            ),
+            (
                 "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",
                 d::a_filter_under_a_shrinking_ancestor_damages_its_device_kernel,
             ),
