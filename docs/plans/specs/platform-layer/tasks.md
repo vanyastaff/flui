@@ -5500,7 +5500,7 @@ GPU-память простаивающего или невидимого окн
   `a_restarted_portal_renews_the_binding_and_a_closed_session_ends_it`,
   `a_refused_binding_ends_denied_and_closes_its_session`,
   `the_launcher_entry_broadcasts_its_whole_state_under_the_applications_entry`,
-  `the_home_folder_is_the_processs`,
+  `the_home_folder_is_the_one_the_process_names`,
   `a_runtime_that_ends_closes_the_sessions_its_portal_still_holds`; ручки на двойниках
   (`tests/services.rs`, на всех ОС); экспорт против `ScriptedCompositor` (глобал
   `zxdg_exporter_v2` добавлен): `each_portal_request_exports_the_window_and_releases_the_export_as_it_ends`,

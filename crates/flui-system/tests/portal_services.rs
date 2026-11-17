@@ -491,7 +491,7 @@ fn the_launcher_entry_broadcasts_its_whole_state_under_the_applications_entry() 
 
 /// The home folder is the process's, answered off the owner thread.
 #[test]
-fn the_home_folder_is_the_processs() {
+fn the_home_folder_is_the_one_the_process_names() {
     let portal = StandIn::serve();
     let (mut host, dirs) = acquire::<UserDirCapability>(&portal.plugin());
     let dirs = dirs.expect("user folders are provided");
