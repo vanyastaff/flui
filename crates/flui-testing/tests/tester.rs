@@ -920,6 +920,25 @@ fn a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it() {
     assert_eq!(opened.borrow().lifecycle, [Hidden, Inactive, Resumed]);
 }
 
+/// Closing the application's only window retires it, as on a real host: the
+/// window detaches, and the tester keeps pumping a host with nothing left to
+/// frame.
+///
+/// Fails against a host whose loop asks the retired runtime when to wake:
+/// the close's own frame panics.
+#[test]
+fn closing_the_only_window_retires_the_application() {
+    use flui_view::AppLifecycleState::Detached;
+
+    let (view, opened) = notebook(false);
+    let mut t = Tester::mount(view);
+    assert!(t.request_close(), "nothing holds the window open");
+    assert!(t.is_closed());
+    assert_eq!(opened.borrow().lifecycle.last(), Some(&Detached));
+    t.pump();
+    t.pump_and_settle();
+}
+
 /// The capability a widget acquires.
 struct GreetingCapability;
 

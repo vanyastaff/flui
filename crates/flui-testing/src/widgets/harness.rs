@@ -153,7 +153,9 @@ impl Harness {
     }
 
     /// The primary selection this tree's widgets acquire through
-    /// `ctx.capability::<PrimarySelectionCapability>()`.
+    /// `ctx.capability::<PrimarySelectionCapability>()`, on a window whose
+    /// platform has one (Linux, through [`mount_on`]); elsewhere they are
+    /// refused it.
     pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
         self.host.ui_runtime().primary_selection()
     }

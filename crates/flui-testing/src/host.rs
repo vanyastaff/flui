@@ -1256,9 +1256,10 @@ impl HeadlessHost {
     }
 
     /// [`Self::new`], its widgets acquiring what `plugin` registers beside
-    /// the host's [`clipboard`](Self::clipboard) and
-    /// [`primary_selection`](Self::primary_selection): how a package tests its
-    /// plugin on a headless host (ADR-0152).
+    /// the host's built-ins (the [`clipboard`](Self::clipboard), and the
+    /// [`primary_selection`](Self::primary_selection) where the window's
+    /// platform has one): how a package tests its plugin on a headless host
+    /// (ADR-0152).
     ///
     /// # Panics
     ///
@@ -1274,7 +1275,8 @@ impl HeadlessHost {
 
     /// [`Self::with_plugin`] on `scenario`: the host drives the scenario's
     /// clock (frames, deadlines and scheduled changes on one timeline), and
-    /// its clipboard, primary selection and HTTP client are on it, so a
+    /// its built-ins (the clipboard, the primary selection and the HTTP
+    /// client, each where it is registered) are on it, so a
     /// plugin whose doubles are on `scenario` answers on the same timeline as
     /// everything else (ADR-0154 §10). A scenario drives one host at a time:
     /// time moves only through that host.
@@ -1479,7 +1481,10 @@ impl HeadlessHost {
     /// real host does: what the UI runtime still held to answer ended as
     /// [`OwnerRetired`](flui_platform::capability::OwnerRetired), and a
     /// [`pump`](Self::pump) moves only time, the scenario, the writes and
-    /// the background lanes.
+    /// the background lanes, as [`time_to_next_frame`](Self::time_to_next_frame)
+    /// and [`pump_until_settled`](Self::pump_until_settled) wait for. An entry
+    /// that reaches the UI runtime (input, semantics, a window's attachment)
+    /// panics on a retired host.
     #[must_use]
     pub fn is_retired(&self) -> bool {
         self.ui_runtime.is_none()
@@ -2758,7 +2763,14 @@ impl HeadlessHost {
     /// wait for input alone.
     #[must_use]
     pub fn time_to_next_frame(&self) -> Option<Duration> {
-        let runtime = self.ui_runtime();
+        let Some(runtime) = &self.ui_runtime else {
+            // A retired host frames nothing: its loop wakes for the
+            // background lanes and the scenario alone.
+            if self.background_runs_next_pump() {
+                return Some(Duration::ZERO);
+            }
+            return self.scenario_wait();
+        };
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         // A dropped frame waiting for its retry runs nothing sooner, though a
         // gesture deadline before it still wakes the loop.
@@ -2867,13 +2879,16 @@ impl HeadlessHost {
         max_frames: usize,
     ) -> Result<usize, NotSettled> {
         for frames in 0..=max_frames {
-            let runtime = self.ui_runtime();
-            if !runtime.needs_redraw()
-                && !runtime.scheduler().is_frame_scheduled()
-                && !runtime.has_pending_work()
+            // A retired host owes only its background work and the scenario.
+            let runtime_idle = self.ui_runtime.as_ref().is_none_or(|runtime| {
+                !runtime.needs_redraw()
+                    && !runtime.scheduler().is_frame_scheduled()
+                    && !runtime.has_pending_work()
+                    && runtime.next_wake().is_none()
+            });
+            if runtime_idle
                 && self.pending_background() == 0
                 && !self.observations_pending()
-                && runtime.next_wake().is_none()
                 && self.scenario_wait().is_none()
             {
                 return Ok(frames);
