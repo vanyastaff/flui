@@ -32,8 +32,9 @@ use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
     InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride, RegionalFormats,
-    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowExecutionState, WindowId, WindowInsets,
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor, SystemPreferences,
+    TextWeightPreference, Weekday, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
+    WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
@@ -241,6 +242,17 @@ fn preferences(values: SystemPreferences) -> InputRecord {
 }
 
 /// Preferences with every field observed.
+/// An accent colour and both scroll-bar observations.
+fn scroll_bar_preferences() -> SystemPreferences {
+    SystemPreferences::default()
+        .with_accent_color(SrgbColor::from_rgba8(0, 120, 215, 255))
+        .with_scroll_bars(
+            ScrollBarPreferences::default()
+                .with_visibility(ScrollBarVisibility::Always)
+                .with_track_click(ScrollTrackClick::JumpToSpot),
+        )
+}
+
 fn full_preferences() -> SystemPreferences {
     let ratio = DevicePixelRatio::try_new(1.5).expect("positive");
     SystemPreferences::default()
@@ -692,6 +704,19 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             SystemPreferences::default()
                 .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Page)),
         )),
+        ("ScrollBarVisibility", "WhenScrolling") => {
+            one(preferences(SystemPreferences::default().with_scroll_bars(
+                ScrollBarPreferences::default().with_visibility(ScrollBarVisibility::WhenScrolling),
+            )))
+        }
+        ("ScrollBarVisibility", "Always") | ("ScrollTrackClick", "JumpToSpot") => {
+            one(preferences(scroll_bar_preferences()))
+        }
+        ("ScrollTrackClick", "Page") => {
+            one(preferences(SystemPreferences::default().with_scroll_bars(
+                ScrollBarPreferences::default().with_track_click(ScrollTrackClick::Page),
+            )))
+        }
         ("Weekday", name) => {
             let day = Weekday::ALL
                 .into_iter()
@@ -913,6 +938,7 @@ fn preference_rows_keep_their_json_spelling() {
                 .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Page)),
         ),
         preferences(SystemPreferences::default()),
+        preferences(scroll_bar_preferences()),
     ];
     let mut writer =
         RecordingWriter::try_new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
@@ -944,6 +970,11 @@ fn preference_rows_keep_their_json_spelling() {
                 r#""text_weight":{"adjustment":-100},"gestures":{},"wheel_vertical":"page"}}"#,
             ),
             r#"{"preferences":{"revision":7,"gestures":{}}}"#,
+            concat!(
+                r#"{"preferences":{"revision":7,"gestures":{},"#,
+                r#""accent_color":[0.0,0.47058824,0.84313726,1.0],"#,
+                r#""scroll_bar_visibility":"always","scroll_track_click":"jump_to_spot"}}"#,
+            ),
         ]
     );
 }

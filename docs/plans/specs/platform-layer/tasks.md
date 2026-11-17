@@ -7426,6 +7426,51 @@ GPU-память простаивающего или невидимого окн
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
 
+- [x] **LY151** — ветка `platform/system-preferences-accent`, решение — ADR-0359. Находки
+  подтверждены на `main` @ `a04deac12` чтением: у `SystemPreferences` не было ни акцента, ни
+  полос прокрутки (`rg -i 'accent|scroller' crates/flui-platform crates/flui-native/src/preferences`
+  пусто), `docs/gaps.md` числил акцент в «Missing». Построено: `SrgbColor` (`try_new` отказывает
+  NaN, бесконечности и компоненты вне `0..=1` как `InvalidPreference::Color`, без зажатия;
+  `-0.0` читается как `0.0`), `SystemPreferences::accent_color`, `ScrollBarPreferences`
+  (`ScrollBarVisibility::{WhenScrolling, Always}`, `ScrollTrackClick::{Page, JumpToSpot}`),
+  поля в `PreferenceParts`, в обоих зеркалах записи и в схеме (`accent_color`,
+  `scroll_bar_visibility`, `scroll_track_click`; протокол 0.20, добавление). Источники: Windows —
+  `UISettings.GetColorValue(Accent)` и `AutoHideScrollBars`, события `ColorValuesChanged` и
+  `AutoHideScrollBarsChanged` (общий список `UiSettingsEvent` вместо двух полей токенов;
+  интерфейс, которого нет у старой Windows, — не наблюдение), приёмник широковещаний слышит ещё
+  `WM_DWMCOLORIZATIONCOLORCHANGED`; Linux — `accent-color` портала (компонент вне `0..=1` —
+  «не задан», снимает принятый акцент) и `overlay-scrolling` GNOME по тому же правилу ключей и
+  расписанию повторов, а само расписание теперь строится на `flui_platform::Backoff`
+  (`Retries`: тот же шаг, счёт попыток), второй тип графика снят; macOS —
+  `controlAccentColor` в `sRGBColorSpace`, `preferredScrollerStyle`, `AppleScrollerPagingBehavior`,
+  уведомления `NSSystemColorsDidChangeNotification` и
+  `NSPreferredScrollerStyleDidChangeNotification`; Web — вычисленный `AccentColor` при каждом
+  чтении. iOS и Android акцента не дают (решение §4 ADR-0359: у Android палитра, роли которой
+  зависят от светлой и тёмной темы). Кольцо фокуса из строки не построено: ни один виджет не
+  читает его цвет, а новое публичное поле без потребителя запрещено. Потребители:
+  `MediaQueryData::{accent_color, scroll_bars}`; `Scrollbar` без `thumb_visibility` следует
+  видимости системы, тап по дорожке переносит бегунок в точку при `JumpToSpot`; основной цвет
+  Cupertino без автора берёт акцент. Тесты, в скобках результат с откатом:
+  `an_accent_colour_enters_only_as_finite_srgb_in_range`,
+  `scroll_bar_observations_stay_apart_and_unknown_until_read`,
+  `preferences_round_trip_through_their_parts` (`flui-platform`);
+  `windows_reads_preferences_before_a_user_window_exists` (сверяет с ответом `UISettings`),
+  `a_colorization_change_wakes_the_owner_without_a_user_window` (без
+  `WM_DWMCOLORIZATIONCOLORCHANGED` в приёмнике — владелец не просыпается), Windows 11 через
+  nextest; `the_portal_accent_is_a_colour_in_range_and_unset_outside_it`,
+  `overlay_scrolling_is_scroll_bars_that_show_while_scrolling`, случаи `accent-color` и
+  `overlay-scrolling` в `linux_preferences` (с «не задан», который оставляет прежний акцент, —
+  владелец не видит снятия за 30 с), WSL со стоящим порталом;
+  `a_computed_colour_reads_back_only_in_srgb`; `preference_rows_keep_their_json_spelling`
+  (новая строка, прежние байты не тронуты),
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`;
+  `a_track_tap_jumps_to_the_spot_where_the_system_asks` и
+  `an_unset_thumb_follows_the_systems_scroll_bar_visibility` (без чтения предпочтения — падают),
+  `an_unset_primary_follows_the_system_accent` (без акцента — системный синий). Не прогнаны:
+  живая смена акцента и полос на Windows (настройки машины не меняли), GNOME или KDE, macOS
+  (только проверка типов), браузер — заметки строк «Accent colour» и «Scroll-bar behaviour»
+  в `platform-parity.toml` и `docs/gaps.md`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

@@ -1,13 +1,15 @@
 //! The web host's system preferences: what the browser's media queries,
-//! `navigator.languages` and `Intl` report, owned by the host rather than its
-//! canvas.
+//! `navigator.languages`, `Intl` and the `AccentColor` system colour report,
+//! owned by the host rather than its canvas.
 //!
 //! - `browser`: the queries and listeners, and the source the loop keeps
 //!   (`WebPreferences`);
 //! - [`media`]: which media features the host observes, and what their
-//!   matches mean.
+//!   matches mean;
+//! - [`system_color`]: the colour a computed style serializes a system colour
+//!   to.
 //!
-//! The rule module reads no browser object, so every host checks it.
+//! The rule modules read no browser object, so every host checks them.
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use browser::WebPreferences;
@@ -19,21 +21,22 @@ mod browser {
     //!
     //! Media queries report motion and contrast, `navigator.languages` the
     //! preferred locales, and `Intl` the hour cycle and first weekday the
-    //! browser formats with. Each query's `change` and the window's
-    //! `languagechange` only wake the owner, which then samples every
-    //! observation again.
+    //! browser formats with, and the computed `AccentColor` the accent. Each
+    //! query's `change` and the window's `languagechange` only wake the
+    //! owner, which then samples every observation again.
 
     use std::sync::{
         Arc, Weak,
         atomic::{AtomicBool, Ordering},
     };
 
-    use flui_platform::{HourCycle, RegionalFormats, SystemPreferences, Weekday};
+    use flui_platform::{HourCycle, RegionalFormats, SrgbColor, SystemPreferences, Weekday};
     use js_sys::{Array, Intl, Object, Reflect};
     use wasm_bindgen::{JsCast, JsValue, closure::Closure};
-    use web_sys::{Event, EventTarget, MediaQueryList, Window};
+    use web_sys::{Event, EventTarget, HtmlElement, MediaQueryList, Window};
 
     use super::media::{MediaFeature, MediaMatches};
+    use super::system_color;
     use crate::{
         PlatformError, owner::signal::OwnerSignal, owner::sources::SystemPreferenceSource,
         preferences::locales as preferred_locales, preferences::regional,
@@ -84,6 +87,9 @@ mod browser {
             if let Some(locales) = preferred_locales::from_language_tags(tags) {
                 preferences = preferences.with_locales(locales);
             }
+            if let Some(accent) = accent_color(&self.window) {
+                preferences = preferences.with_accent_color(accent);
+            }
             Ok(preferences.with_regional(regional_formats()))
         }
 
@@ -96,6 +102,36 @@ mod browser {
                 })
             }
         }
+    }
+
+    /// The colour the browser computes for the CSS system colour
+    /// `AccentColor`, which it takes from the OS where it exposes one.
+    ///
+    /// A browser that does not know the keyword refuses the declaration, so
+    /// the probe's own style stays empty: no observation, rather than the
+    /// inherited colour a computed style would report. The probe is a hidden
+    /// element that lives only for this read. The browser announces no change
+    /// of the accent, so a change shows at the next sample another preference
+    /// or the language starts.
+    fn accent_color(window: &Window) -> Option<SrgbColor> {
+        let document = window.document()?;
+        let probe: HtmlElement = document.create_element("span").ok()?.dyn_into().ok()?;
+        let style = probe.style();
+        style.set_property("color", "AccentColor").ok()?;
+        if style.get_property_value("color").ok()?.is_empty() {
+            return None;
+        }
+        style.set_property("display", "none").ok()?;
+        let parent = document.document_element()?;
+        parent.append_child(&probe).ok()?;
+        let computed = window
+            .get_computed_style(&probe)
+            .ok()
+            .flatten()
+            .and_then(|computed| computed.get_property_value("color").ok());
+        // The probe leaves whether or not the browser answered.
+        let _ = parent.remove_child(&probe);
+        system_color::from_computed(&computed?)
     }
 
     /// The hour cycle of the browser's default time format and its default
@@ -404,6 +440,89 @@ pub(crate) mod media {
                     ("each_known_value_maps_once", each_known_value_maps_once),
                 ],
             );
+        }
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[forbid(unsafe_code)]
+pub(crate) mod system_color {
+    //! The colour a browser computes for a CSS system colour, as its style
+    //! serializes it.
+
+    use flui_platform::SrgbColor;
+
+    /// The sRGB colour a computed `color` serializes to: CSSOM writes an sRGB
+    /// colour as `rgb(r, g, b)` or, with an alpha below one,
+    /// `rgba(r, g, b, a)`, each colour channel in `0..=255` and the alpha in
+    /// `0..=1`; newer engines may write the channels with a fraction. Any
+    /// other form (`color(display-p3 …)`, a keyword) or a channel out of range
+    /// is no colour.
+    pub(crate) fn from_computed(text: &str) -> Option<SrgbColor> {
+        let text = text.trim();
+        let (arguments, has_alpha) = if let Some(rest) = text.strip_prefix("rgba(") {
+            (rest, true)
+        } else {
+            (text.strip_prefix("rgb(")?, false)
+        };
+        let mut parts = arguments.strip_suffix(')')?.split(',').map(str::trim);
+        let mut channel = || -> Option<f64> {
+            let value = parts.next()?.parse::<f64>().ok()?;
+            (0.0..=255.0).contains(&value).then_some(value / 255.0)
+        };
+        let (red, green, blue) = (channel()?, channel()?, channel()?);
+        let alpha = if has_alpha {
+            parts.next()?.parse::<f64>().ok()?
+        } else {
+            1.0
+        };
+        if parts.next().is_some() {
+            return None;
+        }
+        SrgbColor::try_new(red, green, blue, alpha).ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The forms CSSOM serializes an sRGB colour in read back as that
+        /// colour; any other form, a channel out of range and a malformed
+        /// list are no colour. Red-check: accept `color(display-p3 …)` or
+        /// clamp a channel.
+        #[test]
+        fn a_computed_colour_reads_back_only_in_srgb() {
+            let opaque = SrgbColor::from_rgba8(0, 120, 215, 255);
+            for text in [
+                "rgb(0, 120, 215)",
+                " rgb(0,120,215) ",
+                "rgba(0, 120, 215, 1)",
+            ] {
+                assert_eq!(from_computed(text), Some(opaque), "{text}");
+            }
+            assert_eq!(
+                from_computed("rgba(0, 120, 215, 0.5)"),
+                Some(SrgbColor::try_new(0.0, 120.0 / 255.0, 215.0 / 255.0, 0.5).expect("in range"))
+            );
+            assert_eq!(
+                from_computed("rgb(0.5, 127.5, 255)"),
+                Some(SrgbColor::try_new(0.5 / 255.0, 0.5, 1.0, 1.0).expect("in range"))
+            );
+            for text in [
+                "",
+                "AccentColor",
+                "color(display-p3 0 0.5 1)",
+                "rgb(0, 120)",
+                "rgb(0, 120, 215, 0.5)",
+                "rgba(0, 120, 215)",
+                "rgb(0, 120, 256)",
+                "rgb(-1, 120, 215)",
+                "rgba(0, 120, 215, 1.5)",
+                "rgb(0, 120, 215",
+                "rgb(NaN, 120, 215)",
+            ] {
+                assert_eq!(from_computed(text), None, "{text:?}");
+            }
         }
     }
 }

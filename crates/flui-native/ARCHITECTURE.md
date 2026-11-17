@@ -2664,9 +2664,13 @@ unsigned `org.freedesktop.appearance/reduced-motion` values map 1 to Reduce and
 other values to NoPreference. A missing key permits the GNOME
 `org.gnome.desktop.interface/enable-animations` fallback, and with neither key
 motion is unobserved, as every other key without a value is; failed reads
-preserve the last accepted snapshot. Settings v1 uses its double-variant `Read`
-reply. The watch never polls. A refresh is retried on `READ_RETRIES`' doubling
-schedule, which runs out and which unrelated notifications cannot postpone,
+preserve the last accepted snapshot. The appearance `accent-color` is an sRGB
+`(ddd)`; a component outside `0..=1` is the portal specification's "unset", which
+clears an accepted accent rather than failing the read. GNOME's
+`overlay-scrolling` gives the scroll-bar visibility (ADR-0359). Settings v1 uses
+its double-variant `Read` reply. The watch never polls. A refresh is retried on
+`READ_RETRIES`' doubling schedule (`flui_platform::Backoff`, counted so it
+runs out), which unrelated notifications cannot postpone,
 after a read that fails in a way that passes by itself (the call timed out, no
 reply, the portal's `Failed`), and after a refresh in which the portal answered
 no setting at all: `xdg-desktop-portal` folds a backend that has not started

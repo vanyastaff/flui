@@ -172,6 +172,57 @@ fn mount_and_capture(
         .expect("build should have run and captured a primary color")
 }
 
+/// An unset primary colour follows the accent the host reports, live, and
+/// falls back to system blue without one; an authored primary keeps its own.
+/// Goes through the runtime's preference delivery, not an authored
+/// `MediaQuery`. Red-check: resolve an unset primary to system blue always.
+pub fn an_unset_primary_follows_the_system_accent() {
+    use flui_sdk::platform::{SrgbColor, SystemPreferences};
+
+    const SYSTEM_BLUE: Color = Color::rgb(0, 122, 255);
+    let accented =
+        SystemPreferences::default().with_accent_color(SrgbColor::from_rgba8(255, 45, 85, 255));
+    for (authored, with_accent) in [
+        (None, Color::rgb(255, 45, 85)),
+        (Some(Color::rgb(10, 20, 30)), Color::rgb(10, 20, 30)),
+    ] {
+        let captured: Arc<Mutex<Option<CupertinoColor>>> = Arc::new(Mutex::new(None));
+        let theme = authored.map_or_else(CupertinoThemeData::default, |color| {
+            CupertinoThemeData::default().with_primary_color(color)
+        });
+        let mut laid = lay_out(
+            CupertinoTheme::new(
+                theme,
+                PrimaryColorCapture {
+                    captured: Arc::clone(&captured),
+                },
+            ),
+            loose(100.0),
+        );
+        let primary = || captured.lock().unwrap().expect("the capture built");
+        let without_accent = authored.unwrap_or(SYSTEM_BLUE);
+        assert_eq!(
+            primary(),
+            CupertinoColor::Static(without_accent),
+            "no accent"
+        );
+        laid.set_system_preferences(accented.clone());
+        laid.pump();
+        assert_eq!(
+            primary(),
+            CupertinoColor::Static(with_accent),
+            "{authored:?}"
+        );
+        laid.set_system_preferences(SystemPreferences::default());
+        laid.pump();
+        assert_eq!(
+            primary(),
+            CupertinoColor::Static(without_accent),
+            "the accent withdrawn"
+        );
+    }
+}
+
 /// An explicit `CupertinoThemeData::brightness` takes precedence over a
 /// conflicting ambient `MediaQuery::platform_brightness` — the oracle's
 /// `brightness ?? MediaQuery...` chain short-circuits on the theme's own

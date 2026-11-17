@@ -1,13 +1,15 @@
 //! Public AppKit observations sampled on the application owner lane.
 //!
-//! Three notifications only wake the owner, which samples every value again:
+//! Five notifications only wake the owner, which samples every value again:
 //! the workspace's accessibility display options (reduce motion, increase
 //! contrast), the current locale (preferred languages and regional formats),
-//! and the application becoming active. AppKit posts nothing when the
-//! double-click interval changes. The user changes it in System Settings, another application, so
-//! the interval is read again when this one is active again; a change written
-//! while it stays active (`defaults write`) waits for the next activation. A
-//! failed read schedules one wake for its retry; nothing polls.
+//! the system colours (the accent), the preferred scroller style, and the
+//! application becoming active. AppKit posts nothing when the double-click
+//! interval or "Click in the scroll bar to" changes. The user changes them in
+//! System Settings, another application, so they are read again when this
+//! one is active again; a change written while it stays active
+//! (`defaults write`) waits for the next activation. A failed read schedules
+//! one wake for its retry; nothing polls.
 //!
 //! The native AppKit loop keeps the observers and the source together
 //! ([`AppKitPreferences`]).
@@ -20,13 +22,20 @@ use std::{
     time::Duration,
 };
 
-use flui_platform::{GesturePreferences, MotionPreference, SystemPreferences};
+use flui_platform::{
+    GesturePreferences, MotionPreference, ScrollBarPreferences, ScrollBarVisibility,
+    ScrollTrackClick, SrgbColor, SystemPreferences,
+};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSApplicationDidBecomeActiveNotification, NSEvent, NSWorkspace,
+    NSApplicationDidBecomeActiveNotification, NSColor, NSColorSpace, NSEvent,
+    NSPreferredScrollerStyleDidChangeNotification, NSScroller, NSScrollerStyle,
+    NSSystemColorsDidChangeNotification, NSWorkspace,
     NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
 };
-use objc2_foundation::{NSCurrentLocaleDidChangeNotification, NSLocale, NSNotificationCenter};
+use objc2_foundation::{
+    NSCurrentLocaleDidChangeNotification, NSLocale, NSNotificationCenter, NSUserDefaults, ns_string,
+};
 
 use crate::owner::apple::macos::observation::Observation;
 use crate::{
@@ -82,7 +91,7 @@ impl std::fmt::Debug for PreferenceSource {
 /// The notifications that invalidate a [`PreferenceSource`]. Owned on the main
 /// thread beside the source and removed when dropped.
 struct PreferenceObservers {
-    _observations: [Observation; 3],
+    _observations: [Observation; 5],
 }
 
 impl PreferenceSource {
@@ -203,7 +212,13 @@ impl PreferenceObservers {
                     NSApplicationDidBecomeActiveNotification,
                     wake(),
                 ),
-                Observation::new(center, NSCurrentLocaleDidChangeNotification, wake()),
+                Observation::new(center.clone(), NSCurrentLocaleDidChangeNotification, wake()),
+                Observation::new(center.clone(), NSSystemColorsDidChangeNotification, wake()),
+                Observation::new(
+                    center,
+                    NSPreferredScrollerStyleDidChangeNotification,
+                    wake(),
+                ),
             ]
         };
         Self {
@@ -213,11 +228,11 @@ impl PreferenceObservers {
 }
 
 fn sample() -> Result<SystemPreferences, PlatformError> {
-    if MainThreadMarker::new().is_none() {
+    let Some(main_thread) = MainThreadMarker::new() else {
         return Err(PlatformError::Preferences {
             message: "AppKit preferences require the application owner thread".into(),
         });
-    }
+    };
     let seconds = NSEvent::doubleClickInterval();
     let interval =
         Duration::try_from_secs_f64(seconds).map_err(|error| PlatformError::Preferences {
@@ -233,7 +248,12 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
     let preferences = SystemPreferences::default()
         .with_gestures(gestures)
         .with_motion(motion)
-        .with_high_contrast(workspace.accessibilityDisplayShouldIncreaseContrast());
+        .with_high_contrast(workspace.accessibilityDisplayShouldIncreaseContrast())
+        .with_scroll_bars(scroll_bars(main_thread));
+    let preferences = match accent_color()? {
+        Some(accent) => preferences.with_accent_color(accent),
+        None => preferences,
+    };
     let languages = NSLocale::preferredLanguages();
     let locales = preferred_locales::from_language_tags(
         languages.iter().map(|language| language.to_string()),
@@ -245,4 +265,50 @@ fn sample() -> Result<SystemPreferences, PlatformError> {
         Some(locales) => preferences.with_locales(locales),
         None => preferences,
     })
+}
+
+/// `controlAccentColor` in sRGB: a catalog colour, converted before its
+/// components are read. A colour AppKit cannot convert is no observation;
+/// components outside what an `SrgbColor` admits are a failed read, which
+/// keeps the accent accepted before and owes a retry.
+fn accent_color() -> Result<Option<SrgbColor>, PlatformError> {
+    let Some(accent) =
+        NSColor::controlAccentColor().colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
+    else {
+        return Ok(None);
+    };
+    SrgbColor::try_new(
+        accent.redComponent(),
+        accent.greenComponent(),
+        accent.blueComponent(),
+        accent.alphaComponent(),
+    )
+    .map(Some)
+    .map_err(|error| PlatformError::Preferences {
+        message: format!("controlAccentColor: {error}"),
+    })
+}
+
+/// "Show scroll bars" as `preferredScrollerStyle` resolves it (an overlay
+/// scroller while scrolling; a legacy scroller always, which "automatically"
+/// also gives with a mouse), and "Click in the scroll bar to": AppKit's
+/// `AppleScrollerPagingBehavior` default, absent until the user changes it
+/// from "Jump to the next page".
+fn scroll_bars(main_thread: MainThreadMarker) -> ScrollBarPreferences {
+    let visibility = if NSScroller::preferredScrollerStyle(main_thread) == NSScrollerStyle::Overlay
+    {
+        ScrollBarVisibility::WhenScrolling
+    } else {
+        ScrollBarVisibility::Always
+    };
+    let track_click = if NSUserDefaults::standardUserDefaults()
+        .boolForKey(ns_string!("AppleScrollerPagingBehavior"))
+    {
+        ScrollTrackClick::JumpToSpot
+    } else {
+        ScrollTrackClick::Page
+    };
+    ScrollBarPreferences::default()
+        .with_visibility(visibility)
+        .with_track_click(track_click)
 }

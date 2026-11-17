@@ -180,16 +180,33 @@ impl CupertinoThemeData {
     /// equivalent (every getter reads the same resolved color either way),
     /// simpler internally, at the cost of `PartialEq`-visible "was this
     /// explicitly set" round-tripping this crate has no consumer for yet.
+    ///
+    /// An unset primary colour resolves to the system's accent when the host
+    /// observes one ([`MediaQuery::accent_color_of`]: macOS's control accent,
+    /// Windows' accent, the desktop portal's), as AppKit tints its own
+    /// controls; otherwise to [`CupertinoColors::SYSTEM_BLUE`]. An unset text
+    /// theme follows that resolved primary.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
         let colors = ColorResolver::new(ctx, self.brightness);
+        let effective = Self {
+            primary_color: self
+                .primary_color
+                .or_else(|| MediaQuery::accent_color_of(ctx).map(CupertinoColor::Static)),
+            ..self.clone()
+        };
+        effective.resolve_with(&colors)
+    }
+
+    /// Every colour resolved by `colors`, the primary as it stands.
+    fn resolve_with(&self, colors: &ColorResolver<'_>) -> Self {
         Self {
             brightness: self.brightness,
             primary_color: Some(CupertinoColor::Static(colors.resolve(self.primary_color()))),
             primary_contrasting_color: Some(CupertinoColor::Static(
                 colors.resolve(self.primary_contrasting_color()),
             )),
-            text_theme: Some(self.text_theme().resolve_colors(&colors)),
+            text_theme: Some(self.text_theme().resolve_colors(colors)),
             bar_background_color: Some(CupertinoColor::Static(
                 colors.resolve(self.bar_background_color()),
             )),

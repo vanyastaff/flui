@@ -416,7 +416,7 @@ impl WheelPreferences {
 /// consuming text policy resolves it separately from authored styles.
 /// Native pointer geometry is presentation-context dependent and is not guessed
 /// from a representative window by this host-wide value. The accent colour
-/// and the scroll-bar behaviour are host-wide too (ADR-0358).
+/// and the scroll-bar behaviour are host-wide too (ADR-0359).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SystemPreferences {
     text_scale: Option<f64>,

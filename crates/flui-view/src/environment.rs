@@ -147,12 +147,12 @@ pub struct MediaQueryData {
     pub regional_formats: RegionalFormats,
 
     /// The colour the user chose to tint controls with, observed by the host
-    /// (ADR-0358). `None` when the platform has no such setting or the user
+    /// (ADR-0359). `None` when the platform has no such setting or the user
     /// set none: a design system then uses its own primary colour.
     pub accent_color: Option<Color>,
 
     /// When the system shows a scroll bar and what a click in its track does,
-    /// observed by the host (ADR-0358); each part unknown until a host reads
+    /// observed by the host (ADR-0359); each part unknown until a host reads
     /// it. A `Scrollbar` whose author chose neither follows them.
     pub scroll_bars: ScrollBarPreferences,
 }
