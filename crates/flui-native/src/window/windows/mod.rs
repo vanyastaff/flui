@@ -36,9 +36,9 @@
 pub(crate) mod backdrop;
 pub(crate) mod chrome;
 #[cfg(windows)]
-mod cursor;
-#[cfg(windows)]
 mod cloak;
+#[cfg(windows)]
+mod cursor;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]

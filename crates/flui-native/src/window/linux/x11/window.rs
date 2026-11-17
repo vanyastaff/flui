@@ -109,11 +109,11 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt as _;
 
+use super::hints::{WM_HINTS, motif_hints, size_limits};
 use super::hints::{motif_hints, resize_steps, size_limits};
 use super::mode::{
     LevelAtoms, NetWmState, NetWmStateAtoms, WmState, level_of, mode_flags, with_level, with_mode,
 };
-use super::hints::{WM_HINTS, motif_hints, size_limits};
 use super::placement::{
     FrameExtents, device_coordinate, device_extent, display_of, logical_geometry, outer_bounds,
     window_scale,
@@ -206,13 +206,7 @@ impl WindowAtoms {
     /// [`PlatformError::Init`](crate::PlatformError::Init) when the server
     /// does not answer.
     pub(crate) fn intern(connection: &X11Connection) -> Result<Self, crate::PlatformError> {
-<<<<<<< HEAD
-        const NAMES: [&[u8]; 24] = [
-||||||| 6befd2792
-        const NAMES: [&[u8]; 22] = [
-=======
-        const NAMES: [&[u8]; 23] = [
->>>>>>> origin/main
+        const NAMES: [&[u8]; 25] = [
             b"WM_PROTOCOLS",
             b"WM_DELETE_WINDOW",
             b"WM_STATE",

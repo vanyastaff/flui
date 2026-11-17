@@ -1044,17 +1044,13 @@ impl WindowProc {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
-<<<<<<< HEAD
                         // The clip is the desktop's: it must not outlive the
                         // window that holds it.
                         ctx.let_pointer_go(hwnd);
-||||||| 6befd2792
-=======
                         // A modal loop the window ran ends with it, though its
                         // end message never comes: its timer stops and the
                         // thread's code no longer asks it again.
                         ctx.modal_pacing.abandon();
->>>>>>> origin/main
                         // While the window and its callbacks still exist: what
                         // the input holds of the window ends as cancelled and
                         // its touchpad viewport is released, a drag over it
