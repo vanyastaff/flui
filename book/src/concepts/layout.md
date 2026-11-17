@@ -1,39 +1,42 @@
 # Layout: constraints down, sizes up
 
-FLUI's box layout protocol is "constraints go down, sizes go up, parent sets position":
-a parent passes its child a `BoxConstraints`, the child picks its own `Size` within those
-constraints and returns it on success, and the parent then positions the child — a child never sees its
-parent's size or position directly, and a parent never dictates an exact size without also
-allowing the child to choose within a range.
+Flutter counterpart: `BoxConstraints`, `RenderBox.performLayout`.
 
-```rust,ignore
-pub struct BoxConstraints {
-    // min_width <= width <= max_width
-    // min_height <= height <= max_height
-    // ...
-}
+FLUI's box layout protocol is "constraints go down, sizes go up, parent sets position". A parent
+passes its child a `BoxConstraints`, the child picks its own `Size` within those constraints and
+returns it, and the parent then positions the child. A child never sees its parent's size or
+position directly, and a parent never dictates an exact size without also allowing the child to
+choose within a range.
+
+A size satisfies a `BoxConstraints` if and only if `min_width <= width <= max_width` and
+`min_height <= height <= max_height`. This is what a `Padding` does with the constraints it
+receives before it hands them to its child:
+
+```rust
+use flui::geometry::{EdgeInsets, Size};
+use flui::rendering::BoxConstraints;
+
+// The window gives the root a tight 400 × 300.
+let window = BoxConstraints::tight(Size::new(400.0, 300.0));
+assert!(window.is_satisfied_by(Size::new(400.0, 300.0)));
+
+// Padding takes 16 from each side and lets its child pick any size up to the rest.
+let child = window.deflate(EdgeInsets::all(16.0)).loosen();
+assert_eq!(child.biggest(), Size::new(368.0, 268.0));
+assert_eq!(child.smallest(), Size::new(0.0, 0.0));
+
+// A child that asks for more than it may have gets the closest size that fits.
+assert_eq!(child.constrain(Size::new(500.0, 20.0)), Size::new(368.0, 20.0));
 ```
 
-*(`crates/flui-rendering/src/constraints/box_constraints.rs`)* — a size satisfies a `BoxConstraints`
-if and only if `min_width <= width <= max_width` and `min_height <= height <= max_height`.
-
-A `RenderBox` implements the protocol by overriding `perform_layout`:
-
-```rust,ignore
-fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> RenderResult<Size> {
-    // measure/lay out children against ctx's constraints, return this render object's own size
-}
-```
-
-*(`crates/flui-rendering/src/traits/render_box.rs`, doc example — the exact context type
-(`Leaf`/`Single`/`Variable`) and parent-data type vary by how many children the render object
-has.)*
-
-Layout and child measurements return typed errors. Propagate them with `?`;
-a rejected measurement supplies no size to position or paint. See
+A render object implements the protocol in `perform_layout`: it lays out each child against the
+constraints it chooses for that child, positions the children, and returns its own size. Layout
+and child measurements return typed errors; propagate them with `?`, since a rejected
+measurement supplies no size to position or paint. See
 [ADR-0181](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0181-fallible-text-and-layout-measurement.md)
-for ordinary text rejection and changed-input recovery.
+for ordinary text rejection and changed-input recovery, and
+[Extending FLUI](https://github.com/vanyastaff/flui/blob/main/docs/extending.md) for writing a
+render object of your own.
 
-For virtualized/scrollable content, `RenderSliver` implements a second, parallel protocol instead
-of the box protocol — see [View, Element, RenderObject](view-element-render.md) and
-`crates/flui-rendering/src/traits/render_sliver.rs`.
+For virtualized and scrollable content, `RenderSliver` implements a second, parallel protocol
+instead of the box protocol: see [View, Element, RenderObject](view-element-render.md).

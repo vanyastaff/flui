@@ -1,23 +1,42 @@
 # Testing
 
+Flutter counterpart: `WidgetTester`, `find`, `testWidgets`.
+
 Enable `flui`'s `testing` feature in your development dependency and write a test the way a user
 uses the screen: find what they see, act on it, expect what they should see next.
 
-```rust,ignore
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui::testing::{Tester, find};
+```rust
+use flui::prelude::*;
+use flui::testing::{Tester, find};
 
-    #[test]
-    fn counter_increments() {
-        let mut t = Tester::mount(CounterView);
-        t.expect(find::text("0")).to_exist();
-        t.tap(&find::button("Increment"));
-        t.expect(find::text("1")).to_exist();
-    }
-}
+# #[derive(Clone, StatefulView)]
+# struct CounterView;
+# struct CounterState { count: Signal<usize> }
+# impl StatefulView for CounterView {
+#     type State = CounterState;
+#     fn create_state(&self, ctx: &dyn LifecycleContext) -> CounterState {
+#         CounterState { count: ctx.signal(0) }
+#     }
+# }
+# impl ViewState<CounterView> for CounterState {
+#     fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
+#         let count = self.count;
+#         Column::new((
+#             Text::new(count.get(ctx).to_string()),
+#             RawButton::new(Text::new("Increment"))
+#                 .on_pressed(move |ctx| count.update(ctx, |n| *n += 1)),
+#         ))
+#     }
+# }
+// In an application this is the body of a `#[test] fn counter_increments()`.
+let mut t = Tester::mount(CounterView);
+t.expect(find::text("0")).to_exist();
+t.tap(&find::button("Increment"));
+t.expect(find::text("1")).to_exist();
 ```
+
+The view under test is the counter from
+[View, Element, RenderObject](../concepts/view-element-render.md); its definition is hidden here.
 
 `Tester::mount` mounts the view as `run_app` does, with the runtime's root scopes, in an 800 by
 600 window on a manual clock (`Tester::mount_in` with a `TestWindow` for another size or
