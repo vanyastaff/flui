@@ -1526,20 +1526,23 @@ fn a_frame_drawn_after_a_panicked_upload_does_not_move_the_base() {
     assert_eq!(shown, None, "the base is forgotten");
 }
 
-/// The placement switch takes `threaded` or `inline`, in any case, and keeps
-/// the executor inline for anything else.
+/// The desktop loop turns its executor on a raster thread on the Wayland and
+/// X11 hosts, and inline on the headless host (ADR-0305 §10).
 #[test]
-fn the_placement_variable_selects_the_placement() {
-    use super::placement_from;
-    for (value, placement) in [
-        (None, RasterPlacement::Inline),
-        (Some(""), RasterPlacement::Inline),
-        (Some("inline"), RasterPlacement::Inline),
-        (Some(" Threaded "), RasterPlacement::Threaded),
-        (Some("THREADED"), RasterPlacement::Threaded),
-        (Some("thread"), RasterPlacement::Inline),
-    ] {
-        assert_eq!(placement_from(value), placement, "{value:?}");
+fn the_host_places_the_desktop_executor() {
+    use flui_native::CurrentHost;
+    let mut hosts = vec![(CurrentHost::Headless, RasterPlacement::Inline)];
+    #[cfg(target_os = "linux")]
+    hosts.extend([
+        (CurrentHost::Wayland, RasterPlacement::Threaded),
+        (CurrentHost::X11, RasterPlacement::Threaded),
+    ]);
+    #[cfg(windows)]
+    hosts.push((CurrentHost::Windows, RasterPlacement::Inline));
+    #[cfg(target_os = "macos")]
+    hosts.push((CurrentHost::MacOs, RasterPlacement::Inline));
+    for (host, placement) in hosts {
+        assert_eq!(super::desktop_placement(host), placement, "{host:?}");
     }
 }
 

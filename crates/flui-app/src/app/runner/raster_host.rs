@@ -2437,52 +2437,26 @@ fn damage_mode() -> DamageMode {
     damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref())
 }
 
-/// The environment variable that turns the executor on its own raster thread
-/// (ADR-0305 §10): `FLUI_RASTER_PLACEMENT=threaded`. Read only by a debug
-/// build on Linux, and ignored by every release build and every other host:
-/// it is the switch the threaded placement is run with on devices until a run
-/// makes a platform threaded, and goes then. Windows is left out while the
-/// owner's wait for the raster thread services no sent messages, which a
-/// swap chain's thread sends it (ADR-0305 §9).
-#[cfg(any(all(debug_assertions, target_os = "linux"), test))]
-const PLACEMENT_ENV: &str = "FLUI_RASTER_PLACEMENT";
-
-/// The placement [`PLACEMENT_ENV`]'s value selects: `threaded` (any case)
-/// turns the executor on its raster thread; unset, empty or `inline` keeps it
-/// inline; anything else keeps it inline and says so.
-#[cfg(any(all(debug_assertions, target_os = "linux"), test))]
-fn placement_from(value: Option<&str>) -> RasterPlacement {
-    match value.map(str::trim) {
-        None | Some("") => RasterPlacement::Inline,
-        Some(value) if value.eq_ignore_ascii_case("threaded") => RasterPlacement::Threaded,
-        Some(value) if value.eq_ignore_ascii_case("inline") => RasterPlacement::Inline,
-        Some(value) => {
-            tracing::warn!(
-                value,
-                "{PLACEMENT_ENV} takes `inline` or `threaded`; the executor stays inline"
-            );
-            RasterPlacement::Inline
-        }
-    }
-}
-
-/// Where the desktop loop's executor turns: inline, unless a debug build on
-/// Linux is asked otherwise through `FLUI_RASTER_PLACEMENT`. Read before the
-/// loop's state is borrowed: an unknown value is logged, and a subscriber is
-/// not ours.
+/// Where the desktop loop's executor turns on `host` (ADR-0305 §10): on its
+/// raster thread on the Wayland and X11 hosts, where the two-window runs met
+/// the pacing budget, and inline on every other host until a run on it does.
+/// Windows waits too until the owner's wait for the raster thread services
+/// the sent messages a swap chain's thread sends it (ADR-0305 §9); the
+/// headless host stays inline, as ADR-0305 §10 places it.
 #[cfg_attr(
     any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
     expect(dead_code, reason = "only the desktop loop turns a raster thread")
 )]
-pub(crate) fn desktop_placement() -> RasterPlacement {
-    #[cfg(all(debug_assertions, target_os = "linux"))]
-    {
-        placement_from(std::env::var(PLACEMENT_ENV).ok().as_deref())
+pub(crate) fn desktop_placement(host: flui_native::CurrentHost) -> RasterPlacement {
+    #[cfg(target_os = "linux")]
+    if matches!(
+        host,
+        flui_native::CurrentHost::Wayland | flui_native::CurrentHost::X11
+    ) {
+        return RasterPlacement::Threaded;
     }
-    #[cfg(not(all(debug_assertions, target_os = "linux")))]
-    {
-        RasterPlacement::Inline
-    }
+    let _ = host;
+    RasterPlacement::Inline
 }
 
 /// One frame's sink: the window's size measured once at frame start, and the

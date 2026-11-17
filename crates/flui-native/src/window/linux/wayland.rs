@@ -205,6 +205,7 @@ mod toplevel {
     use crate::owner::linux::PortalSlot;
     use crate::owner::linux::wayland::SUSPENSION_VERSION;
     use crate::owner::linux::wayland::activation::ActivationToken;
+    use crate::owner::linux::wayland::wait::FrameHold;
     use crate::owner::linux::wayland::{
         DragWindow, LastInput, LiveOutputs, LoopWaker, LoopWindow, OutputFacts, OutputName,
         PresentationTime, SeatWindow, WaylandDisplays, WaylandDrag, WaylandInput, WaylandLoop,
@@ -2086,6 +2087,14 @@ mod toplevel {
                 return None;
             }
             self.pacing().gives_up_at()
+        }
+
+        fn frame_hold(&self) -> FrameHold {
+            // A closed window takes no frame; it holds the loop to nothing.
+            if self.closed.get() {
+                return FrameHold::Free;
+            }
+            self.pacing().hold()
         }
 
         fn request_frame(&self) {

@@ -19,6 +19,7 @@ use crate::app::{
     application_control::{AppHandle, AppWindowError, Ingress, contain},
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
+use flui_engine::RasterPlacement;
 use flui_native::{HostWindow, PendingWindow, PlatformProxy, WindowOpen};
 use flui_view::View;
 use std::{
@@ -833,7 +834,9 @@ where
             let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
             // Before the platform, whose registries report only to a capture already installed.
             super::begin_native_journal(host.backend());
+            let placement = super::raster_host::desktop_placement(host);
             start_host(host, app_id.as_ref(), one_instance)
+                .map(|started| started.map(|platform| (platform, placement)))
         },
         Rc::default(),
         RasterFactory::Gpu,
@@ -999,7 +1002,8 @@ impl StartedLoop {
 /// Run `application` on the platform `platform` makes, up to the point
 /// [`Platform::run`](flui_native::Platform::run) returns, writing each
 /// teardown step that ends to `teardown_log`, on unwind too. Its windows
-/// render with what `renderers` builds.
+/// render with what `renderers` builds, on an executor the owner turns
+/// inline, as in every test and on the headless host (ADR-0305 §10).
 #[cfg(any(test, feature = "testing"))]
 pub(crate) fn start_loop<V, F>(
     application: DesktopRun<V, F>,
@@ -1013,19 +1017,23 @@ where
 {
     let started = start_or_forward(
         application,
-        || platform().map(Some),
+        || platform().map(|platform| Some((platform, RasterPlacement::Inline))),
         teardown_log,
         renderers,
     )?;
     Ok(started.expect("BUG: a platform the factory made starts a loop"))
 }
 
-/// [`start_loop`] on the host `platform` starts, or `None` when the
+/// [`start_loop`] on the host `platform` starts, its executor placed as the
+/// closure says with the platform, or `None` when the
 /// application runs as one instance and another process of it took this
 /// launch: nothing started, and the services the start installed are down.
 fn start_or_forward<V, F>(
     mut application: DesktopRun<V, F>,
-    platform: impl FnOnce() -> Result<Option<Box<dyn flui_native::Platform>>, LaunchError>,
+    platform: impl FnOnce() -> Result<
+        Option<(Box<dyn flui_native::Platform>, RasterPlacement)>,
+        LaunchError,
+    >,
     teardown_log: Rc<RefCell<Vec<TeardownStep>>>,
     renderers: RasterFactory,
 ) -> Result<Option<StartedLoop>, LaunchError>
@@ -1053,7 +1061,7 @@ where
     if let Some(executors) = application.config.executors.clone() {
         APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
     }
-    let Some(platform) = platform()? else {
+    let Some((platform, placement)) = platform()? else {
         // The running instance took the launch; the guard takes the services
         // down as for a refused start.
         return Ok(None);
@@ -1099,8 +1107,6 @@ where
                 let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
                 let handle = ingress.handle();
                 install_owner_platform(owner)?;
-                // Read with the loop's state free: an unknown value is logged.
-                let placement = super::raster_host::desktop_placement();
                 APP_RUNTIME.with(|slot| {
                     let mut runtime = slot.borrow_mut();
                     runtime.main_ingress = Some(Arc::clone(&ingress));

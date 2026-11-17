@@ -325,9 +325,13 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
 - `FallbackWake`'s deadline applies only when the slot's in-flight count is zero and its last
   settlement did not present. While a frame is in flight `UiRuntime::next_wake` keeps a floor, the
   next multiple of 50 ms since the oldest pending frame was handed to its sink, which the host
-  turns into its `WaitUntil`; the host drains the raster side's settlements on every wake, whatever
-  its frame gate decides, so a lost wake costs at most one floor interval and a frame that never
-  settles wakes the owner once per interval.
+  turns into its `WaitUntil`; each window's frame wake drains the raster side's settlements,
+  whatever its frame gate decides, so a lost wake costs at most one floor interval and a frame that
+  never settles wakes the owner once per interval. A host that holds a window's frame back serves
+  the floor no sooner than it lets that frame through: the Wayland loop wakes for a wake deadline
+  only once a window can take a frame (its frame callback answered or given up, ADR-0356), as it
+  sleeps for a window drawn inline, so a window its compositor does not draw is not polled at the
+  floor's pace.
 - The raster side never asks a window for a frame; a frame is asked through the window's
   `RedrawRequester` on the owner's side (ADR-0254 decision 5).
 - **A hidden slot is not acquired.** `Configure { change: Shown(..) }` carries the window's
@@ -564,11 +568,11 @@ impl<B: RasterBackend + Send + 'static> RasterExecutor<B> {
   the thread (`ExecutorHandle::detach`) once the host's borrow is released, or at once through the
   host's link to the thread when it meets the host busy, since the window goes when the detach
   returns.
-- Until a run makes a platform threaded, a debug build on Linux places the desktop loop's
-  executor on its raster thread when started with `FLUI_RASTER_PLACEMENT=threaded`; a release
-  build and every other host ignore the variable, Windows until the owner's wait services sent
-  messages (§9). It is the switch those runs are made with, and it goes when the first
-  platform's placement is threaded by the table above.
+- The desktop loop places its executor on its raster thread on Linux, the Wayland and X11 hosts
+  alike, in every build (`desktop_placement` in `crates/flui-app/src/app/runner/raster_host.rs`),
+  by the runs the Confirmation records. Windows and macOS stay inline until a run on each meets
+  the budget, Windows also until the owner's wait services sent messages (§9); the headless host
+  and every run of `flui_app::testing` stay inline. No switch chooses the placement.
 - `render_lent` serves the hot-reload plugin's scene, lent by reference for the length of one
   call (`ScenePlugin::try_render_frame` in `crates/flui-app/src/app/hot_reload.rs`, through
   `RasterHost::render_lent` on Android).
@@ -701,7 +705,7 @@ the facade. Every production use of `with_backend` becomes:
   `a_window_wake_settles_what_the_raster_thread_finished`,
   `a_compositor_paced_window_holds_one_frame_on_a_raster_thread` (§5, with
   `crates/flui-app/tests/native_linux.rs`'s
-  `a_raster_thread_presents_one_frame_per_frame_callback` on the Wayland host),
+  `an_app_whose_window_is_never_drawn_still_quits` on the Wayland host's raster thread),
   `a_threaded_frame_that_did_not_present_counts_toward_the_first_reveal` and
   `a_wedged_raster_thread_quarantines_its_open_window` (§9), with the pacing it leaves in
   `crates/flui-app/src/app/runner/frame_pacing.rs`'s `a_held_frame_arms_no_fallback` (§10);
@@ -713,8 +717,17 @@ the facade. Every production use of `with_backend` becomes:
   `a_lost_device_waits_out_its_rebuild_backoff`,
   `a_dead_renderer_is_reported_once_and_its_frames_go_on` (§9) and
   `a_given_up_device_renders_again_when_the_application_asks`.
-- Runs: a platform's placement becomes threaded only with its row in `docs/platform-parity.md`
-  (§10).
+- Runs: a platform's placement becomes threaded only with its run recorded in
+  `docs/platform-parity.md` (§10, the row `frames-drawn-on-a-raster-thread`). Linux is threaded
+  on these runs of two windows, one occluded, on lavapipe and on no device:
+  - Wayland under Weston: threaded, a median interval of 26.6 ms (p99 29–31 ms) and none of
+    1108 intervals under 5 ms; inline, a median of 26.5 ms. The compositor runs at about 26 ms.
+  - X11 under Xvfb, which has no vsync, so its pacing is not judged: the occluded window does not
+    slow the visible one (threaded 1.13/1.43/11.0 ms median/p90/max, inline 1.71/2.08/24.1 ms).
+  - The raster share: an update frame takes about 0.3 ms on the owner's thread and 0.7–4.3 ms of
+    raster CPU (`crates/flui-app/benches/raster_share.rs`).
+- The floor of §5 on a host that holds frames back: `flui-native`'s `wayland_scripted` case
+  `a_moving_wake_deadline_polls_no_window_the_compositor_never_draws`.
 
 ## Pros and cons of the options
 
@@ -764,8 +777,8 @@ the facade. Every production use of `with_backend` becomes:
 
 ## Migration
 
-The code moves in this order, each a change of its own and the inline placement first, because it is
-the shipping one on every platform: the context and the executor inline, with the headless
+The code moves in this order, each a change of its own and the inline placement first, because it
+shipped first on every platform: the context and the executor inline, with the headless
 renderer on offscreen slots; the desktop, Android and iOS runners on slots, with `with_backend`,
 the lane's lock and the hook closure removed; the web on the inline executor, with its direct sink
 removed; the settlement path in the UI runtime; then the threaded placement on Linux and Win32, each

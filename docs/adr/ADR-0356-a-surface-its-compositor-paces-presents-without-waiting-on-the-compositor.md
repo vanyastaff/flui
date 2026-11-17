@@ -126,8 +126,9 @@ pub(crate) fn present_mode(pacing: FramePacing, offered: &[wgpu::PresentMode]) -
   pacing and each set of offered modes.
 - `flui-app`'s `native_linux::an_app_whose_window_is_never_drawn_still_quits`: an animating
   application on the native Wayland host under the scripted compositor, which answers no frame
-  callback, drawing through Mesa's lavapipe, asks to quit four seconds after it is ready; with
-  every surface in `Fifo` it is still running when its budget ends.
+  callback, drawing through Mesa's lavapipe on its raster thread, asks to quit four seconds after it
+  is ready and quits having drawn frame after frame; with
+  every surface in `Fifo` a present waits for the callback that never comes.
 - `flui-native`'s `wayland_scripted::a_window_the_compositor_never_draws_keeps_the_loop_turning`:
   the host asks a window its compositor never draws for one frame per grace, and each turn returns
   in its time.
