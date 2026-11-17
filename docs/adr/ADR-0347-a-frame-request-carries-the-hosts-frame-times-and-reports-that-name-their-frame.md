@@ -17,7 +17,7 @@
   (`SurfaceTarget::pre_present_notify`), [ADR-0249](ADR-0249-the-android-loop-blocks-until-woken.md)
   (a loop that blocks until woken), [ADR-0342](ADR-0342-a-value-added-to-a-closed-union-breaks-the-agent-protocol.md)
   (the protocol's version rule)
-- **Sources:** `flutter/flutter@3.50.0 engine/src/flutter/lib/ui/platform_dispatcher.dart:2309`
+- **Sources:** Flutter 3.50.0, `flutter/flutter@ab2912035e engine/src/flutter/lib/ui/platform_dispatcher.dart:2309`
   (`FrameTiming.frameNumber`); Rune's `Present::Landed { seq, at }` (`anomalyco/rune`, branch `dev`,
   its frame module's present-time file); Microsoft's `IDXGISwapChain::GetLastPresentCount` and
   `DXGI_FRAME_STATISTICS` reference (a present's number, which `PresentCount` names); the Wayland

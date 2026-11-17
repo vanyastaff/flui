@@ -48,7 +48,7 @@
 - **Sources:** other projects are read at pinned commits and cited as `owner/repo@sha path:line`
   where they bear on a decision: winit 0.31.0-beta.3 (`rust-windowing/winit@1893565716`), GPUI
   (`zed-industries/zed@fae8a35482`), Slint (`slint-ui/slint@277e7676ce`), SDL3
-  (`libsdl-org/SDL@d0183f0ee3`), Flutter (`flutter/flutter@6597889f57`), Masonry
+  (`libsdl-org/SDL@d0183f0ee3`), Flutter 3.50.0 (`flutter/flutter@ab2912035e`), Masonry
   (`linebender/xilem@271a27a6d4`), raw-window-handle 0.6.2
   (`rust-windowing/raw-window-handle@1b859486d7`), Tauri v2 (`tauri-apps/tauri@9318ab84b8`),
   Flutter's packages (`flutter/packages@1383427519`) and Compose Multiplatform
@@ -319,8 +319,8 @@ and the `RunEvent::{Opened, Reopen, ExitRequested}` activation events, while dia
 notifications, opener and geolocation are plugins ([tauri-apps/tauri@9318ab84b8
 crates/tauri/src/app.rs:220-295](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/src/app.rs#L220-L295), [crates/tauri/Cargo.toml:203](https://github.com/tauri-apps/tauri/blob/9318ab84b8/crates/tauri/Cargo.toml#L203)). Flutter's framework holds
 clipboard, haptic feedback, system chrome and the platform menu bar, and the rest is packages
-([flutter/flutter@6597889f57 packages/flutter/lib/src/services](https://github.com/flutter/flutter/tree/6597889f57/packages/flutter/lib/src/services) and
-[packages/flutter/lib/src/widgets](https://github.com/flutter/flutter/tree/6597889f57/packages/flutter/lib/src/widgets); [flutter/packages@1383427519 packages](https://github.com/flutter/packages/tree/1383427519/packages)). Compose keeps
+([flutter/flutter@ab2912035e packages/flutter/lib/src/services](https://github.com/flutter/flutter/tree/ab2912035e/packages/flutter/lib/src/services) and
+[packages/flutter/lib/src/widgets](https://github.com/flutter/flutter/tree/ab2912035e/packages/flutter/lib/src/widgets); [flutter/packages@1383427519 packages](https://github.com/flutter/packages/tree/1383427519/packages)). Compose keeps
 clipboard, haptic feedback and the URI handler as locals in its `ui` module
 ([JetBrains/compose-multiplatform-core@13b7599795
 compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt:74-269](https://github.com/JetBrains/compose-multiplatform-core/blob/13b7599795/compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/platform/CompositionLocals.kt#L74-L269)).
@@ -396,8 +396,8 @@ that class named once.
   entered when that evidence exists; ADR-0153 keeps the cases and the measurement). Only
   dependency-free raw-window-handle ([rust-windowing/raw-window-handle@1b859486d7 src/lib.rs:28-33](https://github.com/rust-windowing/raw-window-handle/blob/1b859486d7/src/lib.rs#L28-L33))
   and the two ABI-disciplined C APIs version apart from their implementations: Flutter's embedder
-  header writes its ABI rules down ([flutter/flutter@6597889f57
-  engine/src/flutter/shell/platform/embedder/embedder.h:12-48](https://github.com/flutter/flutter/blob/6597889f57/engine/src/flutter/shell/platform/embedder/embedder.h#L12-L48)), and SDL tags every symbol `\since`
+  header writes its ABI rules down ([flutter/flutter@ab2912035e
+  engine/src/flutter/shell/platform/embedder/embedder.h:12-48](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/shell/platform/embedder/embedder.h#L12-L48)), and SDL tags every symbol `\since`
   ([libsdl-org/SDL@d0183f0ee3 include/SDL3/SDL_version.h:139-160](https://github.com/libsdl-org/SDL/blob/d0183f0ee3/include/SDL3/SDL_version.h#L139-L160)). winit-core and its platform crates
   share one version ([rust-windowing/winit@1893565716 winit-core/Cargo.toml:13](https://github.com/rust-windowing/winit/blob/1893565716/winit-core/Cargo.toml#L13)). The contract
   depends on `flui-foundation`, which carries `links = "flui_train"`, so an independent version at

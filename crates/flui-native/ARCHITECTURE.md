@@ -2275,7 +2275,14 @@ text is below 16 CSS pixels. Every element the host focuses for editing (the
 textarea, a semantics field) has `font-size: 16px`
 (`owner::web::EDITOR_FONT_SIZE`), and every focus the text input makes
 passes `preventScroll`. The window has one hidden editor for its whole life,
-as Flutter's web engine keeps one editing element: a field change rewrites
+where Flutter 3.50's web engine, by its default strategy, makes an editing
+element for each connection and removes it when the connection ends, keeping
+only an element of an autofill form
+([`text_editing.dart:1594, 1763-1768`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/web_ui/lib/src/engine/text_editing/text_editing.dart#L1584-L1771));
+with semantics on it edits in the semantics node's own element and leaves it on
+disable
+([`semantics/text_field.dart:128, 149`](https://github.com/flutter/flutter/blob/ab2912035e/engine/src/flutter/lib/web_ui/lib/src/engine/semantics/text_field.dart#L113-L156)).
+Here a field change rewrites
 its content and hints and leaves its focus, so the keyboard stays up from one
 field to the next, and a store released with no field after it gives the
 focus back to the canvas. In the `pointerup` handler of a touch or pen tap (a

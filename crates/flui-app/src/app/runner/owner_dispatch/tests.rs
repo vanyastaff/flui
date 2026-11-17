@@ -1055,7 +1055,7 @@ fn native_keyboard_cannot_overtake_queued_window_changes_and_keys() {
             let native = host
                 .as_any()
                 .downcast_ref::<flui_native::HeadlessHostWindow>()
-                .expect("native mock");
+                .expect("the window is a headless one");
             let result = native.inject_event(PlatformInput::Keyboard(
                 KeyEventBuilder::new(Code::F5).build(),
             ));
@@ -2593,7 +2593,7 @@ fn resize_reaches_the_surface_in_the_pixels_the_platform_reported() {
 /// Installs UI runtime A under `ExitPolicy::OnLastWindowClosed` with a quit
 /// counter, and returns the parked re-evaluation handle with them.
 ///
-/// The headless mock has no event loop, so a
+/// The headless host has no event loop, so a
 /// `Platform::request_exit_policy_reevaluation` is PARKED and its
 /// owner-thread half runs only when a test calls
 /// `HeadlessExitReevaluation::drive`. A test asserting on an exit that a
@@ -2679,7 +2679,7 @@ fn install_ui_runtime_a_with_exit_policy_quit_counter_and_reevaluation() -> (
 /// request is a no-op by that seam's contract, so it is armed on every
 /// applied mutation rather than on a detected shape.
 ///
-/// The headless mock has no event loop, so the request is PARKED and its
+/// The headless host has no event loop, so the request is PARKED and its
 /// owner-thread half runs on `drive()`. This asserts both halves: that a
 /// request was made at all, and that driving it produces the quit. The
 /// first is what actually pins the fix — without the tail change nothing
