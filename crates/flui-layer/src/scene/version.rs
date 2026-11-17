@@ -472,7 +472,7 @@ impl SceneVersion {
     #[must_use]
     pub fn close_damage(&self, region: DamageRegion, surface: (u32, u32)) -> DamageRegion {
         let mut cost = super::footprint::FootprintCost::default();
-        let mut closures = Vec::new();
+        let mut closures = crate::damage::Closures::new();
         super::footprint::close_filtered(
             region,
             &[(Geometry::shown(&self.0), &self.0)],

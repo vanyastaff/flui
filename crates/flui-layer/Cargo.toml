@@ -38,6 +38,8 @@ bitflags = { workspace = true }
 parking_lot = { workspace = true }
 # A chunk names the one texture it usually draws inline (ADR-0304 §2).
 smallvec = { workspace = true }
+# The backdrop groups a frame's closures join, keyed by group identity.
+rustc-hash = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

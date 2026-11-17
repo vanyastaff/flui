@@ -10,7 +10,7 @@ use flui_painting::DamageExtent;
 use flui_painting::paint::ImageFilter;
 
 use super::DamageMode;
-use super::closure::{Closure, close_over, filter_closure, is_projective, read_closure};
+use super::closure::{Closure, Closures, close_over, filter_closure, is_projective};
 use crate::{
     ContentToken, DamageRect, DamageRegion, FullReason, Layer, LayerTree, Region, ResyncReason,
     Scene, resolve_follower_transform,
@@ -29,10 +29,12 @@ use crate::{
 /// Content that cannot be vouched for by a token — textures (a texture layer
 /// or a picture's texture draw), platform views, live canvases, performance
 /// overlays and anything under a follower — is damaged on every frame at its
-/// old and new positions. The damage then closes over the [`read_closure`]
-/// of every effect in both frames with [`close_over`]: a filter whose reads
-/// or writes meet it takes both, to a fixed point, and one without a bound
-/// makes the frame `Full(Unbounded)`.
+/// old and new positions. The damage then closes over the
+/// [`read_closure`](super::closure::read_closure) of every effect of the
+/// current frame, and the backdrop groups of both, with [`close_over`]: a
+/// filter whose reads or writes meet it takes both, to a fixed point, a group
+/// takes the rect over its members, and a filter without a bound makes the
+/// frame `Full(Unbounded)`.
 ///
 /// The answer is [`DamageRegion::Full`] when the frames cannot be paired,
 /// with its [`FullReason`]: the first frame, a surface size change, a root
@@ -127,8 +129,8 @@ struct Frame {
     boundaries: HashMap<RenderId, Record>,
     /// Content no token vouches for, in surface pixels.
     volatile: Option<Rect<f64>>,
-    /// What each filter of the frame reads and writes ([`read_closure`]).
-    closures: Vec<Closure>,
+    /// What each filter of the frame reads and writes ([`read_closure`](super::closure::read_closure)).
+    closures: Closures,
 }
 
 /// A foreground image filter the walk is inside of, accumulating its input.
@@ -199,7 +201,7 @@ impl Frame {
             effects: Vec::new(),
             boundaries: HashMap::new(),
             volatile: None,
-            closures: Vec::new(),
+            closures: Closures::new(),
         };
         let mut filters: Vec<ForegroundFilter> = Vec::new();
         // (parent link, index into `frame.effects`): a persistent list, so a
@@ -378,7 +380,7 @@ impl Frame {
                     clipped = false;
                     frame
                         .closures
-                        .push(read_closure(layer, &ctx.transform, Rect::ZERO));
+                        .push_effect(layer, &ctx.transform, Rect::ZERO);
                     Some(DamageExtent::rect(backdrop.bounds()))
                 }
                 _ => None,
@@ -480,11 +482,15 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
         Ok(None) => return DamageRegion::Unchanged,
         Err(_) => return DamageRegion::Full(FullReason::NonFinite),
     };
-    // A filter reads around what it changes: damage that meets one takes
-    // all it reads and writes (ADR-0304 §6). The differ answers one rect.
+    // A filter reads around what it changes: damage that meets one takes all
+    // it reads and writes (ADR-0304 §6), and damage that meets a backdrop
+    // group as either frame holds it takes the group. The differ answers one
+    // rect.
+    let mut closures = current.closures.clone();
+    closures.extend_groups(&previous.closures);
     let rect = match close_over(
         DamageRegion::Region(Region::new(rect)),
-        current.closures.iter().copied(),
+        &closures,
         current.surface,
     ) {
         DamageRegion::Region(region) => region.bounds(),

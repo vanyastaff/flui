@@ -1063,10 +1063,14 @@ of a region leaves each read footprint it joined inside one rect, and a
 region planned as its box is closed as the box itself, so a reader in the
 gap between the rects is redrawn whole
 (`a_backdrop_reader_in_the_gap_of_a_bounding_box_is_redrawn_whole`,
-`a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole`). A
-backdrop group shares one capture per pass, not per frame
-(`a_backdrop_group_captures_once_per_region_pass`): a later pass clears and
-redraws its rect after an earlier pass's capture. The raster executor hands each frame's region to the
+`a_backdrop_effect_in_the_gap_of_a_bounding_box_is_redrawn_whole`). Damage
+that meets one member of a backdrop group takes the rect over every member,
+so the group lies in one rect, and the one pass that redraws it captures at
+the first member that writes, as a full frame does
+(`a_backdrop_group_takes_one_rect_of_a_region_frame`,
+`a_backdrop_group_outside_the_damage_still_captures_at_its_first_member`,
+ADR-0230). Snapshots stay keyed by pass, so no pass reads a capture another
+pass took before it cleared its rect. The raster executor hands each frame's region to the
 slot's backend; a frame rejected on a stale generation or hidden, and a failed
 render, make the slot owe a full repaint, a superseded frame's region is folded into
 the frame that replaced it, and the debt is forgotten only after a present.
