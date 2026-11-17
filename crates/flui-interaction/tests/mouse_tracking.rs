@@ -8,7 +8,7 @@ use std::rc::Rc;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::events::{
-    Modifiers, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerPosition,
+    Modifiers, PointerButtons, PointerEvent, PointerKind, PointerPosition, PointerSource,
     ScrollDelta, ScrollEvent, make_move_event_for_id, pointer::ScrollUnit,
 };
 use flui_interaction::pointer::{
@@ -1550,7 +1550,7 @@ fn move_samples_are_localized() {
 
 fn scroll_delta_is_localized_as_a_vector() {
     let pixels = PointerEvent::Scroll(ScrollEvent::new(
-        PointerInfo::new(
+        PointerSource::new(
             PointerId::new(std::num::NonZeroU64::MIN),
             PointerKind::Mouse,
         ),
@@ -1602,7 +1602,7 @@ fn scroll_target_delta_is_localized_as_a_vector() {
             .expect("register scroll");
         let result = transformed_entry(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
         let event = ScrollEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::new(std::num::NonZeroU64::MIN),
                 PointerKind::Mouse,
             ),
@@ -1646,7 +1646,7 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
     let forward = Matrix4::from([
         1.0, 0.0, 0.0, -0.5, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ]);
-    let pointer = PointerInfo::new(
+    let pointer = PointerSource::new(
         PointerId::new(std::num::NonZeroU64::MIN),
         PointerKind::Mouse,
     );

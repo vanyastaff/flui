@@ -470,7 +470,7 @@ pub(crate) mod source {
     use std::num::NonZeroIsize;
 
     use flui_foundation::geometry::{Bounds, Point, Size};
-    use flui_platform::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
+    use flui_platform::{DisplayDescription, DisplayId, DisplayKey, DisplaySnapshot};
     use parking_lot::Mutex;
     use windows::Win32::{
         Devices::Display::{
@@ -608,7 +608,7 @@ pub(crate) mod source {
 
         /// Read the monitors now: their displays, and the handles that resolve
         /// them, which are committed only once the displays are published.
-        fn sample(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
+        fn sample(&self) -> (Vec<DisplayDescription>, Vec<SampledMonitor>) {
             #[cfg(test)]
             self.samples
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -617,7 +617,7 @@ pub(crate) mod source {
 
         /// Enumerate the monitors now: their displays and the handle-to-key pairs
         /// that resolve a window's nearest monitor.
-        fn read(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
+        fn read(&self) -> (Vec<DisplayDescription>, Vec<SampledMonitor>) {
             let paths = query_source_paths(display_config_flags(self.build)).unwrap_or_default();
             let colors = dxgi_outputs();
             let mut displays = Vec::new();
@@ -649,7 +649,7 @@ pub(crate) mod source {
                     refused.report();
                 }
                 let mut display =
-                    DisplayInfo::new(id, monitor.device_name.clone(), monitor.bounds, ratio)
+                    DisplayDescription::new(id, monitor.device_name.clone(), monitor.bounds, ratio)
                         .with_usable_bounds(monitor.usable_bounds)
                         .with_primary(monitor.is_primary);
                 // The monitor's interface path names this monitor on this machine

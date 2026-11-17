@@ -1,7 +1,7 @@
 use super::*;
 
 use flui_interaction::{FocusManager, FocusNode, TextInputError, TextInputHandle};
-use flui_platform::{PlatformTextInput, TextStore};
+use flui_platform::{PlatformTextInput, text_store::TextStore};
 
 fn close_frame_reports(ui_runtime: &UiRuntime) -> Arc<parking_lot::Mutex<Vec<String>>> {
     let reports = Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -520,7 +520,7 @@ impl flui_platform::PlatformWindow for OwnershipWindow {
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.delegate.text_input()
     }
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         self.delegate.haptics()
     }
     fn system_chrome(&self) -> Option<Arc<dyn flui_platform::PlatformSystemChrome>> {

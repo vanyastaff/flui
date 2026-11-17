@@ -3536,7 +3536,7 @@ impl core::fmt::Debug for flui::foundation::markers::View
 impl flui::foundation::Marker for flui::foundation::markers::View
 pub mod flui::foundation::memory
 pub trait flui::foundation::memory::ReclaimMemory
-fn flui::foundation::memory::ReclaimMemory::reclaim(&self, level: flui::platform::MemoryPressureLevel)
+fn flui::foundation::memory::ReclaimMemory::reclaim(&self, level: flui_foundation::memory::MemoryPressureLevel)
 impl<T: flui::foundation::memory::ReclaimMemory + ?Sized> flui::foundation::memory::ReclaimMemory for alloc::rcs::arc::Arc<T>
 pub mod flui::foundation::observe
 #[non_exhaustive] pub struct flui::foundation::observe::ElementMounted
@@ -6479,8 +6479,8 @@ impl Copy for flui::interaction::PanZoomEvent
 impl PartialEq for flui::interaction::PanZoomEvent
 impl core::fmt::Debug for flui::interaction::PanZoomEvent
 impl core::marker::StructuralPartialEq for flui::interaction::PanZoomEvent
-pub const fn flui::interaction::PanZoomEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, phase: flui::interaction::PanZoomPhase) -> Self
-pub const fn flui::interaction::PanZoomEvent::pointer(&self) -> &flui::interaction::PointerInfo
+pub const fn flui::interaction::PanZoomEvent::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, phase: flui::interaction::PanZoomPhase) -> Self
+pub const fn flui::interaction::PanZoomEvent::pointer(&self) -> &flui::interaction::PointerSource
 pub const fn flui::interaction::PanZoomEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
 #[non_exhaustive] pub enum flui::interaction::PanZoomPhase
 impl Clone for flui::interaction::PanZoomPhase
@@ -6598,7 +6598,7 @@ impl PartialEq for flui::interaction::PointerEvent
 impl core::fmt::Debug for flui::interaction::PointerEvent
 impl core::marker::StructuralPartialEq for flui::interaction::PointerEvent
 variant flui::interaction::PointerEvent::ButtonChange(flui::interaction::ButtonChange) // at 1
-variant flui::interaction::PointerEvent::Cancel(flui::platform::PointerCancel) // at 4
+variant flui::interaction::PointerEvent::Cancel(flui::platform::pointer::PointerCancel) // at 4
 variant flui::interaction::PointerEvent::DeviceAdded(flui::platform::pointer::PointerDeviceChange) // at 13
 variant flui::interaction::PointerEvent::DeviceRemoved(flui::platform::pointer::PointerDeviceChange) // at 14
 variant flui::interaction::PointerEvent::Down(flui::interaction::PointerPress) // at 0
@@ -6608,9 +6608,9 @@ variant flui::interaction::PointerEvent::Move(flui::interaction::PointerMove) //
 variant flui::interaction::PointerEvent::PanZoom(flui::interaction::PanZoomEvent) // at 9
 variant flui::interaction::PointerEvent::RawMotion(flui::platform::pointer::RawMotion) // at 12
 variant flui::interaction::PointerEvent::Scroll(flui::interaction::ScrollEvent) // at 7
-variant flui::interaction::PointerEvent::SmartZoom(flui::platform::SmartZoomEvent) // at 11
-variant flui::interaction::PointerEvent::TouchpadHold(flui::platform::TouchpadHoldEvent) // at 8
-variant flui::interaction::PointerEvent::TouchpadSwipe(flui::platform::TouchpadSwipeEvent) // at 10
+variant flui::interaction::PointerEvent::SmartZoom(flui::platform::pointer::SmartZoomEvent) // at 11
+variant flui::interaction::PointerEvent::TouchpadHold(flui::platform::pointer::TouchpadHoldEvent) // at 8
+variant flui::interaction::PointerEvent::TouchpadSwipe(flui::platform::pointer::TouchpadSwipeEvent) // at 10
 variant flui::interaction::PointerEvent::Up(flui::interaction::PointerRelease) // at 2
 pub trait flui::interaction::PointerEventExt: flui_interaction::events::sealed::Sealed
 fn flui::interaction::PointerEventExt::device_id(&self) -> Option<flui::interaction::DeviceId>
@@ -6636,22 +6636,6 @@ impl serde_core::ser::Serialize for flui::interaction::PointerId
 impl<'de> serde_core::de::Deserialize<'de> for flui::interaction::PointerId
 pub const fn flui::interaction::PointerId::get(self) -> core::num::nonzero::NonZeroU64
 pub const fn flui::interaction::PointerId::new(value: core::num::nonzero::NonZeroU64) -> Self
-#[non_exhaustive] pub struct flui::interaction::PointerInfo
-field flui::interaction::PointerInfo::device: Option<flui::interaction::DeviceId> // at 1
-field flui::interaction::PointerInfo::id: flui::interaction::PointerId // at 0
-field flui::interaction::PointerInfo::kind: flui::interaction::PointerKind // at 2
-field flui::interaction::PointerInfo::role: flui::interaction::PointerRole // at 3
-impl Clone for flui::interaction::PointerInfo
-impl Copy for flui::interaction::PointerInfo
-impl Eq for flui::interaction::PointerInfo
-impl PartialEq for flui::interaction::PointerInfo
-impl core::fmt::Debug for flui::interaction::PointerInfo
-impl core::hash::Hash for flui::interaction::PointerInfo
-impl core::marker::StructuralPartialEq for flui::interaction::PointerInfo
-pub const fn flui::interaction::PointerInfo::is_primary(&self) -> bool
-pub const fn flui::interaction::PointerInfo::new(id: flui::interaction::PointerId, kind: flui::interaction::PointerKind) -> Self
-pub const fn flui::interaction::PointerInfo::with_device(self, device: flui::interaction::DeviceId) -> Self
-pub const fn flui::interaction::PointerInfo::with_role(self, role: flui::interaction::PointerRole) -> Self
 #[non_exhaustive] pub enum flui::interaction::PointerKind
 impl Clone for flui::interaction::PointerKind
 impl Copy for flui::interaction::PointerKind
@@ -6703,19 +6687,19 @@ pub fn flui::interaction::PointerKindSet::set(&mut self, other: Self, value: boo
 #[non_exhaustive] pub struct flui::interaction::PointerMove { .. }
 field flui::interaction::PointerMove::buttons: flui::interaction::PointerButtons // at 1
 field flui::interaction::PointerMove::modifiers: flui::interaction::Modifiers // at 2
-field flui::interaction::PointerMove::pointer: flui::interaction::PointerInfo // at 0
+field flui::interaction::PointerMove::pointer: flui::interaction::PointerSource // at 0
 impl Clone for flui::interaction::PointerMove
 impl PartialEq for flui::interaction::PointerMove
 impl core::fmt::Debug for flui::interaction::PointerMove
 impl core::marker::StructuralPartialEq for flui::interaction::PointerMove
 pub const flui::interaction::PointerMove::COALESCED_HISTORY_LIMIT: usize = 100
 pub const fn flui::interaction::PointerMove::current(&self) -> &flui::interaction::PointerSample
-pub const fn flui::interaction::PointerMove::new(pointer: flui::interaction::PointerInfo, buttons: flui::interaction::PointerButtons, current: flui::interaction::PointerSample) -> Self
+pub const fn flui::interaction::PointerMove::new(pointer: flui::interaction::PointerSource, buttons: flui::interaction::PointerButtons, current: flui::interaction::PointerSample) -> Self
 pub fn flui::interaction::PointerMove::coalesced(&self) -> &[flui::interaction::PointerSample]
 pub fn flui::interaction::PointerMove::predicted(&self) -> &[flui::interaction::PointerSample]
 pub fn flui::interaction::PointerMove::retain_latest_coalesced(&mut self, maximum: usize)
-pub fn flui::interaction::PointerMove::try_coalesce(&mut self, older: &Self) -> Result<(), flui::platform::pointer::MismatchedPointerInfo>
-pub fn flui::interaction::PointerMove::try_coalesce_from(&mut self, older: &mut Self) -> Result<(), flui::platform::pointer::MismatchedPointerInfo>
+pub fn flui::interaction::PointerMove::try_coalesce(&mut self, older: &Self) -> Result<(), flui::platform::pointer::MismatchedPointerSource>
+pub fn flui::interaction::PointerMove::try_coalesce_from(&mut self, older: &mut Self) -> Result<(), flui::platform::pointer::MismatchedPointerSource>
 pub fn flui::interaction::PointerMove::try_map_positions<E>(&self, map: impl FnMut(flui::interaction::PointerPosition) -> Result<flui::interaction::PointerPosition, E>) -> Result<Self, E>
 pub fn flui::interaction::PointerMove::with_coalesced(self, samples: Vec<flui::interaction::PointerSample>) -> Self
 pub fn flui::interaction::PointerMove::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
@@ -6764,6 +6748,22 @@ pub const fn flui::interaction::PointerSample::with_orientation(self, orientatio
 pub const fn flui::interaction::PointerSample::with_pressure(self, pressure: flui::platform::pointer::Pressure) -> Self
 pub const fn flui::interaction::PointerSample::with_tangential_pressure(self, pressure: flui::platform::pointer::TangentialPressure) -> Self
 pub const fn flui::interaction::PointerSample::with_twist(self, twist: flui::platform::pointer::Twist) -> Self
+#[non_exhaustive] pub struct flui::interaction::PointerSource
+field flui::interaction::PointerSource::device: Option<flui::interaction::DeviceId> // at 1
+field flui::interaction::PointerSource::id: flui::interaction::PointerId // at 0
+field flui::interaction::PointerSource::kind: flui::interaction::PointerKind // at 2
+field flui::interaction::PointerSource::role: flui::interaction::PointerRole // at 3
+impl Clone for flui::interaction::PointerSource
+impl Copy for flui::interaction::PointerSource
+impl Eq for flui::interaction::PointerSource
+impl PartialEq for flui::interaction::PointerSource
+impl core::fmt::Debug for flui::interaction::PointerSource
+impl core::hash::Hash for flui::interaction::PointerSource
+impl core::marker::StructuralPartialEq for flui::interaction::PointerSource
+pub const fn flui::interaction::PointerSource::is_primary(&self) -> bool
+pub const fn flui::interaction::PointerSource::new(id: flui::interaction::PointerId, kind: flui::interaction::PointerKind) -> Self
+pub const fn flui::interaction::PointerSource::with_device(self, device: flui::interaction::DeviceId) -> Self
+pub const fn flui::interaction::PointerSource::with_role(self, role: flui::interaction::PointerRole) -> Self
 pub struct flui::interaction::PrimaryClaim { .. }
 impl Drop for flui::interaction::PrimaryClaim
 impl core::fmt::Debug for flui::interaction::PrimaryClaim
@@ -6909,7 +6909,7 @@ field flui::interaction::ScrollEvent::delta: flui::interaction::ScrollDelta // a
 field flui::interaction::ScrollEvent::inversion: flui::interaction::ScrollInversion // at 6
 field flui::interaction::ScrollEvent::modifiers: flui::interaction::Modifiers // at 7
 field flui::interaction::ScrollEvent::phase: Option<flui::interaction::ScrollPhase> // at 5
-field flui::interaction::ScrollEvent::pointer: flui::interaction::PointerInfo // at 0
+field flui::interaction::ScrollEvent::pointer: flui::interaction::PointerSource // at 0
 field flui::interaction::ScrollEvent::position: flui::interaction::PointerPosition // at 2
 field flui::interaction::ScrollEvent::precision: flui::interaction::ScrollPrecision // at 4
 field flui::interaction::ScrollEvent::time: flui::interaction::EventTime // at 1
@@ -6918,7 +6918,7 @@ impl Copy for flui::interaction::ScrollEvent
 impl PartialEq for flui::interaction::ScrollEvent
 impl core::fmt::Debug for flui::interaction::ScrollEvent
 impl core::marker::StructuralPartialEq for flui::interaction::ScrollEvent
-pub const fn flui::interaction::ScrollEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, delta: flui::interaction::ScrollDelta) -> Self
+pub const fn flui::interaction::ScrollEvent::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, delta: flui::interaction::ScrollDelta) -> Self
 pub const fn flui::interaction::ScrollEvent::with_inversion(self, inversion: flui::interaction::ScrollInversion) -> Self
 pub const fn flui::interaction::ScrollEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
 pub const fn flui::interaction::ScrollEvent::with_phase(self, phase: flui::interaction::ScrollPhase) -> Self
@@ -7114,7 +7114,7 @@ pub fn flui::interaction::TapUpDetails::with_kind(self, kind: flui::interaction:
 pub struct flui::interaction::TextInputClient { .. }
 impl Clone for flui::interaction::TextInputClient
 impl core::fmt::Debug for flui::interaction::TextInputClient
-pub fn flui::interaction::TextInputClient::new(store: alloc::rcs::rc::Rc<dyn flui::platform::TextStore>) -> Self
+pub fn flui::interaction::TextInputClient::new(store: alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStore>) -> Self
 pub fn flui::interaction::TextInputClient::on_session_start(self, f: impl Fn() + 'static) -> Self
 #[non_exhaustive] pub enum flui::interaction::TextInputError
 impl Clone for flui::interaction::TextInputError
@@ -7360,7 +7360,7 @@ pub fn flui::interaction::drag::DragStart::capture(self, capture: flui::interact
 pub fn flui::interaction::drag::DragStart::hit_test(self, hit_test: flui::interaction::HitTestHandle) -> Self
 pub fn flui::interaction::drag::DragStart::new(source: flui::foundation::PresentationId, items: Vec<flui::interaction::drag::DragItem>, allowed: flui::interaction::drag::AllowedActions) -> Self
 pub fn flui::interaction::drag::DragStart::observer(self, observer: alloc::rcs::rc::Rc<dyn flui::interaction::drag::DragObserver>) -> Self
-pub fn flui::interaction::drag::DragStart::pointer(self, pointer: flui::interaction::PointerInfo) -> Self
+pub fn flui::interaction::drag::DragStart::pointer(self, pointer: flui::interaction::PointerSource) -> Self
 pub fn flui::interaction::drag::DragStart::press(self, press: flui::foundation::PressId) -> Self
 pub fn flui::interaction::drag::DragStart::reach(self, reach: flui::interaction::drag::DragReach) -> Self
 pub fn flui::interaction::drag::DragStart::window(self, window: alloc::rcs::rc::Weak<dyn flui::platform::PlatformWindow>) -> Self
@@ -7381,7 +7381,7 @@ pub fn flui::interaction::drag::DragView::allowed(&self) -> flui::interaction::d
 pub fn flui::interaction::drag::DragView::formats(&self) -> Vec<flui::platform::data_transfer::TransferFormat> // impl<'a> flui::interaction::drag::DragView<'a>
 pub fn flui::interaction::drag::DragView::identity(&self) -> Option<flui::interaction::drag::DragIdentity> // impl<'a> flui::interaction::drag::DragView<'a>
 pub fn flui::interaction::drag::DragView::item_count(&self) -> Option<usize> // impl<'a> flui::interaction::drag::DragView<'a>
-pub fn flui::interaction::drag::DragView::offer(&self) -> Option<&'a flui::platform::DataTransferOffer> // impl<'a> flui::interaction::drag::DragView<'a>
+pub fn flui::interaction::drag::DragView::offer(&self) -> Option<&'a flui::platform::data_transfer::DataTransferOffer> // impl<'a> flui::interaction::drag::DragView<'a>
 pub fn flui::interaction::drag::DragView::pointer_kind(&self) -> flui::interaction::PointerKind // impl<'a> flui::interaction::drag::DragView<'a>
 pub fn flui::interaction::drag::DragView::request(&self, format: &flui::platform::data_transfer::TransferFormat, limits: flui::platform::data_transfer::TransferLimits) -> Option<flui::interaction::drag::DragFetch> // impl<'a> flui::interaction::drag::DragView<'a>
 pub fn flui::interaction::drag::DragView::scope(&self) -> flui::interaction::drag::DragScope // impl<'a> flui::interaction::drag::DragView<'a>
@@ -9102,7 +9102,7 @@ pub trait flui::native::HostWindow: flui_native::host_window::sealed::Sealed + f
 fn flui::native::HostWindow::accessibility(&self) -> Option<alloc::rcs::arc::Arc<dyn flui_semantics::platform::PlatformAccessibility>>
 fn flui::native::HostWindow::as_any(&self) -> &dyn core::any::Any { .. }
 fn flui::native::HostWindow::capture_text_sizing(&self, owner: flui_native::host_window::sealed::OwnerThreadToken) -> Result<crate::TextSizingCaptureState, crate::TextSizingCaptureError>
-fn flui::native::HostWindow::text_store_host(&self, owner: flui_native::host_window::sealed::OwnerThreadToken) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStoreHost>>
+fn flui::native::HostWindow::text_store_host(&self, owner: flui_native::host_window::sealed::OwnerThreadToken) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStoreHost>>
 pub struct flui::native::NativeWindow { .. }
 impl Clone for flui::native::NativeWindow
 impl core::fmt::Debug for flui::native::NativeWindow
@@ -11471,16 +11471,6 @@ pub const fn flui::platform::Availability::is_available(self) -> bool
 variant flui::platform::Availability::Emulated // at 1
 variant flui::platform::Availability::Native // at 0
 variant flui::platform::Availability::Unavailable // at 2
-pub struct flui::platform::Backoff { .. }
-impl Clone for flui::platform::Backoff
-impl Copy for flui::platform::Backoff
-impl Eq for flui::platform::Backoff
-impl PartialEq for flui::platform::Backoff
-impl core::fmt::Debug for flui::platform::Backoff
-impl core::hash::Hash for flui::platform::Backoff
-impl core::marker::StructuralPartialEq for flui::platform::Backoff
-pub const fn flui::platform::Backoff::new(first: core::time::Duration, ceiling: core::time::Duration) -> Self
-pub fn flui::platform::Backoff::delay(self, misses: u32) -> core::time::Duration
 pub enum flui::platform::Brightness
 impl Clone for flui::platform::Brightness
 impl Copy for flui::platform::Brightness
@@ -11498,8 +11488,6 @@ pub const fn flui::platform::Brightness::is_light(&self) -> bool
 pub fn flui::platform::Brightness::parse(s: &str) -> Option<Self>
 variant flui::platform::Brightness::Dark // at 1
 variant flui::platform::Brightness::Light // at 0
-reexport flui::platform::ButtonChange => flui::interaction::ButtonChange
-reexport flui::platform::CancelReason => flui::interaction::CancelReason
 pub struct flui::platform::CapabilityAbsence(_)
 impl Clone for flui::platform::CapabilityAbsence
 impl Copy for flui::platform::CapabilityAbsence
@@ -11586,17 +11574,6 @@ pub fn flui::platform::ClipboardWrite::into_text(self) -> String
 pub fn flui::platform::ClipboardWrite::is_concealed(&self) -> bool
 pub fn flui::platform::ClipboardWrite::text(text: impl Into<String>) -> Self
 pub type flui::platform::ClipboardWritten = Result<(), flui::platform::ClipboardError>
-pub enum flui::platform::CloseDecision
-impl Clone for flui::platform::CloseDecision
-impl Copy for flui::platform::CloseDecision
-impl Eq for flui::platform::CloseDecision
-impl PartialEq for flui::platform::CloseDecision
-impl core::fmt::Debug for flui::platform::CloseDecision
-impl core::hash::Hash for flui::platform::CloseDecision
-impl core::marker::StructuralPartialEq for flui::platform::CloseDecision
-variant flui::platform::CloseDecision::Close // at 0
-variant flui::platform::CloseDecision::KeepOpen // at 1
-reexport flui::platform::Code => flui::interaction::Code
 #[non_exhaustive] pub enum flui::platform::ColorGamut
 impl Clone for flui::platform::ColorGamut
 impl Copy for flui::platform::ColorGamut
@@ -11710,28 +11687,6 @@ variant flui::platform::CursorImageError::Empty { width: u16, height: u16 } // a
 variant flui::platform::CursorImageError::HotspotOutside { x: u16, y: u16 } // at 3
 variant flui::platform::CursorImageError::PixelCount { expected: usize, found: usize } // at 2
 variant flui::platform::CursorImageError::TooLarge { width: u16, height: u16 } // at 1
-pub struct flui::platform::DataTransferOffer { .. }
-impl Clone for flui::platform::DataTransferOffer
-impl core::fmt::Debug for flui::platform::DataTransferOffer
-pub fn flui::platform::DataTransferOffer::find(&self, format: &flui::platform::data_transfer::TransferFormat) -> Option<flui::platform::data_transfer::RepresentationIndex>
-pub fn flui::platform::DataTransferOffer::id(&self) -> flui::foundation::DataTransferId
-pub fn flui::platform::DataTransferOffer::new(id: flui::foundation::DataTransferId, representations: alloc::rcs::arc::Arc<[flui::platform::data_transfer::RepresentationDescriptor]>) -> Self
-pub fn flui::platform::DataTransferOffer::representations(&self) -> &[flui::platform::data_transfer::RepresentationDescriptor]
-reexport flui::platform::DeviceId => flui::interaction::DeviceId
-#[non_exhaustive] pub struct flui::platform::DispatchEventResult { .. }
-field flui::platform::DispatchEventResult::default_prevented: bool // at 1
-field flui::platform::DispatchEventResult::propagate: bool // at 0
-impl Clone for flui::platform::DispatchEventResult
-impl Copy for flui::platform::DispatchEventResult
-impl Default for flui::platform::DispatchEventResult
-impl Eq for flui::platform::DispatchEventResult
-impl PartialEq for flui::platform::DispatchEventResult
-impl core::fmt::Debug for flui::platform::DispatchEventResult
-impl core::marker::StructuralPartialEq for flui::platform::DispatchEventResult
-pub const flui::platform::DispatchEventResult::DEFERRED: Self = _
-pub const flui::platform::DispatchEventResult::DEFERRED_UNHANDLED: Self = _
-pub const fn flui::platform::DispatchEventResult::is_deferred(self) -> bool
-pub const fn flui::platform::DispatchEventResult::resolved(propagate: bool, default_prevented: bool) -> Self
 #[non_exhaustive] pub enum flui::platform::DisplayColor
 impl Clone for flui::platform::DisplayColor
 impl Copy for flui::platform::DisplayColor
@@ -11743,7 +11698,29 @@ pub const fn flui::platform::DisplayColor::color_space(self) -> flui::platform::
 pub const fn flui::platform::DisplayColor::headroom(self) -> Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>
 variant flui::platform::DisplayColor::High(flui::platform::ColorGamut, Result<flui::platform::Headroom, flui::platform::CapabilityAbsence>) // at 1
 variant flui::platform::DisplayColor::Standard(flui::platform::ColorGamut) // at 0
-pub trait flui::platform::DisplayConnection: raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
+#[non_exhaustive] pub struct flui::platform::DisplayDescription
+field flui::platform::DisplayDescription::bounds: flui::geometry::Bounds<i32> // at 2
+field flui::platform::DisplayDescription::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 8
+field flui::platform::DisplayDescription::id: flui::platform::DisplayId // at 0
+field flui::platform::DisplayDescription::is_primary: bool // at 6
+field flui::platform::DisplayDescription::name: String // at 1
+field flui::platform::DisplayDescription::persistent_key: Option<String> // at 7
+field flui::platform::DisplayDescription::refresh_period: Option<flui::platform::RefreshPeriod> // at 5
+field flui::platform::DisplayDescription::scale_factor: flui::geometry::DevicePixelRatio // at 4
+field flui::platform::DisplayDescription::usable_bounds: flui::geometry::Bounds<i32> // at 3
+impl Clone for flui::platform::DisplayDescription
+impl PartialEq for flui::platform::DisplayDescription
+impl core::fmt::Debug for flui::platform::DisplayDescription
+impl core::marker::StructuralPartialEq for flui::platform::DisplayDescription
+pub fn flui::platform::DisplayDescription::color_space(&self) -> Result<flui::platform::SurfaceColorSpace, flui::platform::Unsupported>
+pub fn flui::platform::DisplayDescription::headroom(&self) -> Result<flui::platform::Headroom, flui::platform::Unsupported>
+pub fn flui::platform::DisplayDescription::into_parts(self) -> (flui::platform::DisplayId, flui::platform::DisplayParts)
+pub fn flui::platform::DisplayDescription::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Self
+pub fn flui::platform::DisplayDescription::with_color(self, color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence>) -> Self
+pub fn flui::platform::DisplayDescription::with_persistent_key(self, key: impl Into<String>) -> Self
+pub fn flui::platform::DisplayDescription::with_primary(self, is_primary: bool) -> Self
+pub fn flui::platform::DisplayDescription::with_refresh_period(self, period: core::time::Duration) -> Self
+pub fn flui::platform::DisplayDescription::with_usable_bounds(self, usable_bounds: flui::geometry::Bounds<i32>) -> Self
 pub struct flui::platform::DisplayId { .. }
 impl Clone for flui::platform::DisplayId
 impl Copy for flui::platform::DisplayId
@@ -11753,55 +11730,6 @@ impl core::fmt::Debug for flui::platform::DisplayId
 impl core::hash::Hash for flui::platform::DisplayId
 impl core::marker::StructuralPartialEq for flui::platform::DisplayId
 pub const fn flui::platform::DisplayId::get(self) -> u64
-pub struct flui::platform::DisplayIdsExhausted;
-impl Clone for flui::platform::DisplayIdsExhausted
-impl Copy for flui::platform::DisplayIdsExhausted
-impl Eq for flui::platform::DisplayIdsExhausted
-impl PartialEq for flui::platform::DisplayIdsExhausted
-impl core::error::Error for flui::platform::DisplayIdsExhausted
-impl core::fmt::Debug for flui::platform::DisplayIdsExhausted
-impl core::fmt::Display for flui::platform::DisplayIdsExhausted
-impl core::marker::StructuralPartialEq for flui::platform::DisplayIdsExhausted
-#[non_exhaustive] pub struct flui::platform::DisplayInfo
-field flui::platform::DisplayInfo::bounds: flui::geometry::Bounds<i32> // at 2
-field flui::platform::DisplayInfo::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 8
-field flui::platform::DisplayInfo::id: flui::platform::DisplayId // at 0
-field flui::platform::DisplayInfo::is_primary: bool // at 6
-field flui::platform::DisplayInfo::name: String // at 1
-field flui::platform::DisplayInfo::persistent_key: Option<String> // at 7
-field flui::platform::DisplayInfo::refresh_period: Option<flui::platform::RefreshPeriod> // at 5
-field flui::platform::DisplayInfo::scale_factor: flui::geometry::DevicePixelRatio // at 4
-field flui::platform::DisplayInfo::usable_bounds: flui::geometry::Bounds<i32> // at 3
-impl Clone for flui::platform::DisplayInfo
-impl PartialEq for flui::platform::DisplayInfo
-impl core::fmt::Debug for flui::platform::DisplayInfo
-impl core::marker::StructuralPartialEq for flui::platform::DisplayInfo
-pub fn flui::platform::DisplayInfo::color_space(&self) -> Result<flui::platform::SurfaceColorSpace, flui::platform::Unsupported>
-pub fn flui::platform::DisplayInfo::headroom(&self) -> Result<flui::platform::Headroom, flui::platform::Unsupported>
-pub fn flui::platform::DisplayInfo::into_parts(self) -> (flui::platform::DisplayId, flui::platform::DisplayParts)
-pub fn flui::platform::DisplayInfo::new(id: flui::platform::DisplayId, name: impl Into<String>, bounds: flui::geometry::Bounds<i32>, scale_factor: flui::geometry::DevicePixelRatio) -> Self
-pub fn flui::platform::DisplayInfo::with_color(self, color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence>) -> Self
-pub fn flui::platform::DisplayInfo::with_persistent_key(self, key: impl Into<String>) -> Self
-pub fn flui::platform::DisplayInfo::with_primary(self, is_primary: bool) -> Self
-pub fn flui::platform::DisplayInfo::with_refresh_period(self, period: core::time::Duration) -> Self
-pub fn flui::platform::DisplayInfo::with_usable_bounds(self, usable_bounds: flui::geometry::Bounds<i32>) -> Self
-#[non_exhaustive] pub enum flui::platform::DisplayKey
-impl Clone for flui::platform::DisplayKey
-impl Eq for flui::platform::DisplayKey
-impl PartialEq for flui::platform::DisplayKey
-impl core::fmt::Debug for flui::platform::DisplayKey
-impl core::hash::Hash for flui::platform::DisplayKey
-impl core::marker::StructuralPartialEq for flui::platform::DisplayKey
-variant flui::platform::DisplayKey::AndroidId(i32) // at 0
-variant flui::platform::DisplayKey::Injected(u64) // at 6
-variant flui::platform::DisplayKey::IosScreen(u64) // at 1
-variant flui::platform::DisplayKey::MacosUuid([u8; 16]) // at 2
-variant flui::platform::DisplayKey::Unkeyed // at 9
-variant flui::platform::DisplayKey::WaylandOutput(String) // at 7
-variant flui::platform::DisplayKey::Web(String) // at 3
-variant flui::platform::DisplayKey::WindowsInterface(String) // at 5
-variant flui::platform::DisplayKey::WindowsTarget { adapter_luid: u64, target_id: u32 } // at 4
-variant flui::platform::DisplayKey::X11Output(u32) // at 8
 pub struct flui::platform::DisplayParts
 field flui::platform::DisplayParts::bounds: flui::geometry::Bounds<i32> // at 1
 field flui::platform::DisplayParts::color: Result<flui::platform::DisplayColor, flui::platform::CapabilityAbsence> // at 7
@@ -11815,12 +11743,7 @@ impl Clone for flui::platform::DisplayParts
 impl PartialEq for flui::platform::DisplayParts
 impl core::fmt::Debug for flui::platform::DisplayParts
 impl core::marker::StructuralPartialEq for flui::platform::DisplayParts
-pub fn flui::platform::DisplayParts::into_info(self, id: flui::platform::DisplayId) -> flui::platform::DisplayInfo
-pub struct flui::platform::DisplayRegistry { .. }
-impl Default for flui::platform::DisplayRegistry
-impl core::fmt::Debug for flui::platform::DisplayRegistry
-pub fn flui::platform::DisplayRegistry::mint(&self, key: &flui::platform::DisplayKey) -> Result<flui::platform::DisplayId, flui::platform::DisplayIdsExhausted>
-pub fn flui::platform::DisplayRegistry::new() -> Self
+pub fn flui::platform::DisplayParts::into_description(self, id: flui::platform::DisplayId) -> flui::platform::DisplayDescription
 pub struct flui::platform::DisplayRevision(_)
 impl Clone for flui::platform::DisplayRevision
 impl Copy for flui::platform::DisplayRevision
@@ -11846,12 +11769,12 @@ impl Clone for flui::platform::DisplaySnapshot
 impl PartialEq for flui::platform::DisplaySnapshot
 impl core::fmt::Debug for flui::platform::DisplaySnapshot
 impl core::marker::StructuralPartialEq for flui::platform::DisplaySnapshot
-pub fn flui::platform::DisplaySnapshot::displays(&self) -> &[flui::platform::DisplayInfo]
+pub fn flui::platform::DisplaySnapshot::displays(&self) -> &[flui::platform::DisplayDescription]
 pub fn flui::platform::DisplaySnapshot::empty() -> Self
-pub fn flui::platform::DisplaySnapshot::get(&self, id: flui::platform::DisplayId) -> Option<&flui::platform::DisplayInfo>
-pub fn flui::platform::DisplaySnapshot::primary(&self) -> Option<&flui::platform::DisplayInfo>
+pub fn flui::platform::DisplaySnapshot::get(&self, id: flui::platform::DisplayId) -> Option<&flui::platform::DisplayDescription>
+pub fn flui::platform::DisplaySnapshot::primary(&self) -> Option<&flui::platform::DisplayDescription>
 pub fn flui::platform::DisplaySnapshot::revision(&self) -> flui::platform::DisplayRevision
-pub fn flui::platform::DisplaySnapshot::successor(&self, displays: Vec<flui::platform::DisplayInfo>) -> Result<Self, flui::platform::DisplayRevisionExhausted>
+pub fn flui::platform::DisplaySnapshot::successor(&self, displays: Vec<flui::platform::DisplayDescription>) -> Result<Self, flui::platform::DisplayRevisionExhausted>
 pub fn flui::platform::DisplaySnapshot::window_display(&self, id: Option<flui::platform::DisplayId>) -> Option<flui::platform::WindowDisplay>
 pub struct flui::platform::Distance(_)
 impl Clone for flui::platform::Distance
@@ -11866,13 +11789,9 @@ pub enum flui::platform::DragDropEvent
 impl Clone for flui::platform::DragDropEvent
 impl core::fmt::Debug for flui::platform::DragDropEvent
 variant flui::platform::DragDropEvent::Dropped { id: flui::foundation::DataTransferId, action: flui::interaction::drag::TransferActions, position: Option<flui::geometry::Point<f64>> } // at 2
-variant flui::platform::DragDropEvent::Entered { offer: flui::platform::DataTransferOffer, allowed: flui::interaction::drag::TransferActions, position: Option<flui::geometry::Point<f64>> } // at 0
+variant flui::platform::DragDropEvent::Entered { offer: flui::platform::data_transfer::DataTransferOffer, allowed: flui::interaction::drag::TransferActions, position: Option<flui::geometry::Point<f64>> } // at 0
 variant flui::platform::DragDropEvent::Exited { id: flui::foundation::DataTransferId } // at 3
 variant flui::platform::DragDropEvent::Moved { id: flui::foundation::DataTransferId, allowed: flui::interaction::drag::TransferActions, position: flui::geometry::Point<f64> } // at 1
-pub trait flui::platform::DragTransport: Send + Sync
-fn flui::platform::DragTransport::conclude_drop(&self, id: flui::foundation::DataTransferId)
-fn flui::platform::DragTransport::request(&self, id: flui::foundation::DataTransferId, representation: flui::platform::data_transfer::RepresentationIndex, limits: flui::platform::data_transfer::TransferLimits) -> flui::platform::data_transfer::TransferRequest
-fn flui::platform::DragTransport::update_drop_feedback(&self, id: flui::foundation::DataTransferId, feedback: flui::platform::data_transfer::DropFeedback)
 pub struct flui::platform::DurationScale(_)
 impl Clone for flui::platform::DurationScale
 impl Copy for flui::platform::DurationScale
@@ -11946,7 +11865,6 @@ variant flui::platform::Environment::MacOS // at 1
 variant flui::platform::Environment::Web // at 5
 variant flui::platform::Environment::Windows // at 0
 variant flui::platform::Environment::iOS // at 2
-reexport flui::platform::EventTime => flui::interaction::EventTime
 pub struct flui::platform::FlingSpeeds { .. }
 impl Clone for flui::platform::FlingSpeeds
 impl Copy for flui::platform::FlingSpeeds
@@ -11956,17 +11874,6 @@ impl core::marker::StructuralPartialEq for flui::platform::FlingSpeeds
 pub const fn flui::platform::FlingSpeeds::max(self) -> f64
 pub const fn flui::platform::FlingSpeeds::min(self) -> f64
 pub fn flui::platform::FlingSpeeds::try_new(min: f64, max: f64) -> Result<Self, flui::platform::InvalidPreference>
-#[non_exhaustive] pub enum flui::platform::FrameOutcome
-impl Clone for flui::platform::FrameOutcome
-impl Copy for flui::platform::FrameOutcome
-impl Eq for flui::platform::FrameOutcome
-impl PartialEq for flui::platform::FrameOutcome
-impl core::fmt::Debug for flui::platform::FrameOutcome
-impl core::hash::Hash for flui::platform::FrameOutcome
-impl core::marker::StructuralPartialEq for flui::platform::FrameOutcome
-variant flui::platform::FrameOutcome::Declined // at 1
-variant flui::platform::FrameOutcome::Failed // at 2
-variant flui::platform::FrameOutcome::Produced // at 0
 #[non_exhaustive] pub enum flui::platform::FramePacing
 impl Clone for flui::platform::FramePacing
 impl Copy for flui::platform::FramePacing
@@ -12102,7 +12009,7 @@ pub fn flui::platform::Headroom::try_new(multiple: f32) -> Result<Self, flui::pl
 impl Clone for flui::platform::HostNotice
 impl From<flui::platform::SystemNotice> for flui::platform::HostNotice
 impl core::fmt::Debug for flui::platform::HostNotice
-variant flui::platform::HostNotice::MemoryPressure(flui::platform::MemoryPressureLevel) // at 7
+variant flui::platform::HostNotice::MemoryPressure(flui_foundation::memory::MemoryPressureLevel) // at 7
 variant flui::platform::HostNotice::SessionEndCancelled // at 1
 variant flui::platform::HostNotice::SessionEnded // at 2
 variant flui::platform::HostNotice::SessionEnding(flui::platform::SessionEndRequest) // at 0
@@ -12241,10 +12148,10 @@ impl core::error::Error for flui::platform::InvalidPreference
 impl core::fmt::Debug for flui::platform::InvalidPreference
 impl core::fmt::Display for flui::platform::InvalidPreference
 impl core::marker::StructuralPartialEq for flui::platform::InvalidPreference
+variant flui::platform::InvalidPreference::Color // at 7
 variant flui::platform::InvalidPreference::Distance // at 4
 variant flui::platform::InvalidPreference::DurationScale // at 1
 variant flui::platform::InvalidPreference::FlingRange // at 6
-variant flui::platform::InvalidPreference::Color // at 7
 variant flui::platform::InvalidPreference::GestureArea // at 3
 variant flui::platform::InvalidPreference::PixelRatio // at 2
 variant flui::platform::InvalidPreference::Speed // at 5
@@ -12280,10 +12187,6 @@ impl core::error::Error for flui::platform::InvalidWindowOption
 impl core::fmt::Debug for flui::platform::InvalidWindowOption
 impl core::fmt::Display for flui::platform::InvalidWindowOption
 impl core::marker::StructuralPartialEq for flui::platform::InvalidWindowOption
-reexport flui::platform::Key => flui::interaction::Key
-reexport flui::platform::KeyEvent => flui::interaction::KeyEvent
-reexport flui::platform::KeyPress => flui::interaction::KeyPress
-reexport flui::platform::KeyState => flui::interaction::KeyState
 pub struct flui::platform::KeyboardInset { .. }
 impl Clone for flui::platform::KeyboardInset
 impl Copy for flui::platform::KeyboardInset
@@ -12309,19 +12212,6 @@ impl core::hash::Hash for flui::platform::Launch
 impl core::marker::StructuralPartialEq for flui::platform::Launch
 variant flui::platform::Launch::Cold // at 0
 variant flui::platform::Launch::Running // at 1
-pub struct flui::platform::LaunchKey(_)
-impl Clone for flui::platform::LaunchKey
-impl Copy for flui::platform::LaunchKey
-impl Eq for flui::platform::LaunchKey
-impl PartialEq for flui::platform::LaunchKey
-impl core::fmt::Debug for flui::platform::LaunchKey
-impl core::fmt::Display for flui::platform::LaunchKey
-impl core::hash::Hash for flui::platform::LaunchKey
-impl core::marker::StructuralPartialEq for flui::platform::LaunchKey
-pub const fn flui::platform::LaunchKey::as_str(self) -> &'static str
-pub const fn flui::platform::LaunchKey::is_spelling(key: &str) -> bool
-pub const fn flui::platform::LaunchKey::try_new(key: &'static str) -> Option<Self>
-pub fn flui::platform::LaunchKey::environment_variable(self) -> String
 pub struct flui::platform::Locale(_)
 impl Clone for flui::platform::Locale
 impl Eq for flui::platform::Locale
@@ -12349,9 +12239,6 @@ pub fn flui::platform::Locale::to_language_tag(&self) -> String
 pub fn flui::platform::Locale::try_new(language: impl AsRef<str>, country: Option<impl AsRef<str>>) -> Result<Self, flui::platform::InvalidLocale>
 pub fn flui::platform::Locale::with_script(language: impl AsRef<str>, country: Option<impl AsRef<str>>, script: Option<impl AsRef<str>>) -> Result<Self, flui::platform::InvalidLocale>
 pub fn flui::platform::Locale::zh_cn() -> Self
-reexport flui::platform::Location => flui::interaction::Location
-pub const flui::platform::MAX_LAUNCH_KEY_LEN: usize = 128
-pub const flui::platform::MAX_OPENED_ITEMS: usize = 64
 pub const flui::platform::MAX_OPENED_URL_LEN: usize = 8192
 pub const flui::platform::MAX_SURFACE_EXTENT: u32
 #[non_exhaustive] pub enum flui::platform::MeasurementSystem
@@ -12368,19 +12255,6 @@ pub fn flui::platform::MeasurementSystem::from_unicode_value(value: &str) -> Opt
 variant flui::platform::MeasurementSystem::Imperial // at 2
 variant flui::platform::MeasurementSystem::Metric // at 0
 variant flui::platform::MeasurementSystem::UsCustomary // at 1
-#[non_exhaustive] pub enum flui::platform::MemoryPressureLevel
-impl Clone for flui::platform::MemoryPressureLevel
-impl Copy for flui::platform::MemoryPressureLevel
-impl Eq for flui::platform::MemoryPressureLevel
-impl Ord for flui::platform::MemoryPressureLevel
-impl PartialEq for flui::platform::MemoryPressureLevel
-impl PartialOrd for flui::platform::MemoryPressureLevel
-impl core::fmt::Debug for flui::platform::MemoryPressureLevel
-impl core::hash::Hash for flui::platform::MemoryPressureLevel
-impl core::marker::StructuralPartialEq for flui::platform::MemoryPressureLevel
-variant flui::platform::MemoryPressureLevel::Critical // at 1
-variant flui::platform::MemoryPressureLevel::Moderate // at 0
-reexport flui::platform::Modifiers => flui::interaction::Modifiers
 #[non_exhaustive] pub enum flui::platform::MotionPreference
 impl Clone for flui::platform::MotionPreference
 impl Copy for flui::platform::MotionPreference
@@ -12391,7 +12265,6 @@ pub fn flui::platform::MotionPreference::from_duration_scale(value: f64) -> Resu
 variant flui::platform::MotionPreference::NoPreference // at 0
 variant flui::platform::MotionPreference::Reduce // at 1
 variant flui::platform::MotionPreference::Scaled(flui::platform::DurationScale) // at 2
-reexport flui::platform::NamedKey => flui::interaction::NamedKey
 pub struct flui::platform::NativeMouseGeometry { .. }
 impl Clone for flui::platform::NativeMouseGeometry
 impl Copy for flui::platform::NativeMouseGeometry
@@ -12414,12 +12287,6 @@ pub const fn flui::platform::NativeTouchGeometry::min_fling(self) -> i32
 pub const fn flui::platform::NativeTouchGeometry::pixel_ratio(self) -> flui::geometry::DevicePixelRatio
 pub const fn flui::platform::NativeTouchGeometry::touch_slop(self) -> i32
 pub fn flui::platform::NativeTouchGeometry::try_new(touch_slop: i32, double_tap_slop: i32, min_fling: i32, max_fling: i32, pixel_ratio: flui::geometry::DevicePixelRatio) -> Result<Self, flui::platform::InvalidPreference>
-pub struct flui::platform::NullDragTransport;
-impl Clone for flui::platform::NullDragTransport
-impl Copy for flui::platform::NullDragTransport
-impl Default for flui::platform::NullDragTransport
-impl core::fmt::Debug for flui::platform::NullDragTransport
-impl flui::platform::DragTransport for flui::platform::NullDragTransport
 pub struct flui::platform::NumberingSystem(_)
 impl Clone for flui::platform::NumberingSystem
 impl Eq for flui::platform::NumberingSystem
@@ -12489,11 +12356,6 @@ impl core::fmt::Display for flui::platform::OsRelease
 impl core::hash::Hash for flui::platform::OsRelease
 impl core::marker::StructuralPartialEq for flui::platform::OsRelease
 pub fn flui::platform::OsRelease::from_display(release: impl core::fmt::Display) -> Self
-pub const flui::platform::PAGE_LAUNCH_GLOBAL: &str = "__FLUI_LAUNCH__"
-reexport flui::platform::PanZoomEvent => flui::interaction::PanZoomEvent
-reexport flui::platform::PanZoomPhase => flui::interaction::PanZoomPhase
-reexport flui::platform::PanZoomTransform => flui::interaction::PanZoomTransform
-reexport flui::platform::PenTool => flui::interaction::PenTool
 #[non_exhaustive] pub enum flui::platform::PlacementError
 impl Clone for flui::platform::PlacementError
 impl Copy for flui::platform::PlacementError
@@ -12518,12 +12380,6 @@ impl core::fmt::Display for flui::platform::PlatformFailure
 impl core::marker::StructuralPartialEq for flui::platform::PlatformFailure
 variant flui::platform::PlatformFailure::Failed { message: String } // at 1
 variant flui::platform::PlatformFailure::OutOfRange // at 0
-pub trait flui::platform::PlatformHaptics: Send + Sync
-fn flui::platform::PlatformHaptics::as_any(&self) -> &dyn core::any::Any
-fn flui::platform::PlatformHaptics::capabilities(&self, source: Option<flui::interaction::DeviceId>) -> flui::platform::haptics::HapticCapabilities { .. }
-fn flui::platform::PlatformHaptics::perform(&self, feedback: flui::platform::HapticFeedback)
-fn flui::platform::PlatformHaptics::perform_with(&self, feedback: flui::platform::HapticFeedback, request: &flui::platform::haptics::HapticRequest) -> flui::platform::haptics::HapticOutcome { .. }
-fn flui::platform::PlatformHaptics::play(&self, pattern: &flui::platform::haptics::HapticPattern, fallback: flui::platform::HapticFeedback, request: &flui::platform::haptics::HapticRequest) -> flui::platform::haptics::HapticOutcome { .. }
 pub enum flui::platform::PlatformInput
 impl Clone for flui::platform::PlatformInput
 impl core::fmt::Debug for flui::platform::PlatformInput
@@ -12548,7 +12404,7 @@ pub trait flui::platform::PlatformWindow
 fn flui::platform::PlatformWindow::apply(&self, command: flui::platform::AdmittedCommand) -> Result<(), flui::platform::ApplyError>
 fn flui::platform::PlatformWindow::drag_source(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::drag::PlatformDragSource>>
 fn flui::platform::PlatformWindow::gesture_geometry(&self) -> Result<Option<flui::platform::GestureGeometry>, flui::platform::PreferenceQueryError>
-fn flui::platform::PlatformWindow::haptics(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformHaptics>>
+fn flui::platform::PlatformWindow::haptics(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::haptics::PlatformHaptics>>
 fn flui::platform::PlatformWindow::id(&self) -> flui::platform::WindowId
 fn flui::platform::PlatformWindow::redraw_requester(&self) -> alloc::rcs::arc::Arc<dyn flui::platform::RedrawRequester>
 fn flui::platform::PlatformWindow::request_redraw(&self)
@@ -12562,21 +12418,6 @@ fn flui::platform::PlatformWindow::surface_target(&self) -> alloc::rcs::arc::Arc
 fn flui::platform::PlatformWindow::system_chrome(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformSystemChrome>>
 fn flui::platform::PlatformWindow::text_input(&self) -> Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformTextInput>>
 fn flui::platform::PlatformWindow::window_at(&self, position: flui::geometry::Point<f64>) -> flui::platform::WindowAt
-reexport flui::platform::PointerButton => flui::interaction::PointerButton
-reexport flui::platform::PointerButtons => flui::interaction::PointerButtons
-#[non_exhaustive] pub struct flui::platform::PointerCancel
-field flui::platform::PointerCancel::pointer: flui::interaction::PointerInfo // at 0
-field flui::platform::PointerCancel::reason: flui::interaction::CancelReason // at 2
-field flui::platform::PointerCancel::time: flui::interaction::EventTime // at 1
-impl Clone for flui::platform::PointerCancel
-impl Copy for flui::platform::PointerCancel
-impl Eq for flui::platform::PointerCancel
-impl PartialEq for flui::platform::PointerCancel
-impl core::fmt::Debug for flui::platform::PointerCancel
-impl core::hash::Hash for flui::platform::PointerCancel
-impl core::marker::StructuralPartialEq for flui::platform::PointerCancel
-pub const fn flui::platform::PointerCancel::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, reason: flui::interaction::CancelReason) -> Self
-reexport flui::platform::PointerEvent => flui::interaction::PointerEvent
 pub struct flui::platform::PointerFrame(_)
 impl Clone for flui::platform::PointerFrame
 impl core::fmt::Debug for flui::platform::PointerFrame
@@ -12585,27 +12426,18 @@ pub fn flui::platform::PointerFrame::into_events(self) -> Vec<flui::interaction:
 pub fn flui::platform::PointerFrame::len(&self) -> usize
 pub fn flui::platform::PointerFrame::single(event: flui::interaction::PointerEvent) -> Self
 pub fn flui::platform::PointerFrame::try_new(events: Vec<flui::interaction::PointerEvent>) -> Result<Self, flui::platform::EmptyPointerFrame>
-reexport flui::platform::PointerId => flui::interaction::PointerId
-reexport flui::platform::PointerInfo => flui::interaction::PointerInfo
-reexport flui::platform::PointerKind => flui::interaction::PointerKind
-reexport flui::platform::PointerMove => flui::interaction::PointerMove
-reexport flui::platform::PointerPosition => flui::interaction::PointerPosition
-reexport flui::platform::PointerPress => flui::interaction::PointerPress
-reexport flui::platform::PointerRelease => flui::interaction::PointerRelease
-reexport flui::platform::PointerRole => flui::interaction::PointerRole
-reexport flui::platform::PointerSample => flui::interaction::PointerSample
 pub struct flui::platform::PreferenceParts
+field flui::platform::PreferenceParts::accent_color: Option<flui::platform::SrgbColor> // at 9
 field flui::platform::PreferenceParts::gestures: flui::platform::GestureParts // at 7
 field flui::platform::PreferenceParts::haptics: Option<bool> // at 3
 field flui::platform::PreferenceParts::high_contrast: Option<bool> // at 2
 field flui::platform::PreferenceParts::locales: Option<alloc::rcs::arc::Arc<[flui::platform::Locale]>> // at 5
 field flui::platform::PreferenceParts::motion: Option<flui::platform::MotionPreference> // at 1
 field flui::platform::PreferenceParts::regional: flui::platform::RegionalParts // at 6
+field flui::platform::PreferenceParts::scroll_bars: flui::platform::ScrollBarParts // at 10
 field flui::platform::PreferenceParts::text_scale: Option<f64> // at 0
 field flui::platform::PreferenceParts::text_weight: Option<flui::platform::TextWeightPreference> // at 4
 field flui::platform::PreferenceParts::wheel: flui::platform::WheelParts // at 8
-field flui::platform::PreferenceParts::accent_color: Option<flui::platform::SrgbColor> // at 9
-field flui::platform::PreferenceParts::scroll_bars: flui::platform::ScrollBarParts // at 10
 impl Clone for flui::platform::PreferenceParts
 impl Default for flui::platform::PreferenceParts
 impl PartialEq for flui::platform::PreferenceParts
@@ -12710,12 +12542,6 @@ impl Clone for flui::platform::ResolvedPlacement
 impl PartialEq for flui::platform::ResolvedPlacement
 impl core::fmt::Debug for flui::platform::ResolvedPlacement
 impl core::marker::StructuralPartialEq for flui::platform::ResolvedPlacement
-reexport flui::platform::ScrollDelta => flui::interaction::ScrollDelta
-reexport flui::platform::ScrollEvent => flui::interaction::ScrollEvent
-reexport flui::platform::ScrollInversion => flui::interaction::ScrollInversion
-reexport flui::platform::ScrollPhase => flui::interaction::ScrollPhase
-reexport flui::platform::ScrollPrecision => flui::interaction::ScrollPrecision
-reexport flui::platform::ScrollUnit => flui::interaction::ScrollUnit
 pub struct flui::platform::ScrollBarParts
 field flui::platform::ScrollBarParts::track_click: Option<flui::platform::ScrollTrackClick> // at 1
 field flui::platform::ScrollBarParts::visibility: Option<flui::platform::ScrollBarVisibility> // at 0
@@ -12785,17 +12611,6 @@ impl core::fmt::Display for flui::platform::SessionEndBlockError
 impl core::marker::StructuralPartialEq for flui::platform::SessionEndBlockError
 variant flui::platform::SessionEndBlockError::Answered // at 0
 variant flui::platform::SessionEndBlockError::Exhausted // at 1
-#[non_exhaustive] pub enum flui::platform::SessionEndPhase
-impl Clone for flui::platform::SessionEndPhase
-impl Copy for flui::platform::SessionEndPhase
-impl Eq for flui::platform::SessionEndPhase
-impl PartialEq for flui::platform::SessionEndPhase
-impl core::fmt::Debug for flui::platform::SessionEndPhase
-impl core::hash::Hash for flui::platform::SessionEndPhase
-impl core::marker::StructuralPartialEq for flui::platform::SessionEndPhase
-variant flui::platform::SessionEndPhase::Cancelled // at 1
-variant flui::platform::SessionEndPhase::Ending // at 2
-variant flui::platform::SessionEndPhase::Query // at 0
 pub struct flui::platform::SessionEndRequest { .. }
 impl Clone for flui::platform::SessionEndRequest
 impl Default for flui::platform::SessionEndRequest
@@ -12806,18 +12621,6 @@ pub fn flui::platform::SessionEndRequest::is_blocked(&self) -> bool
 pub fn flui::platform::SessionEndRequest::new() -> Self
 pub fn flui::platform::SessionEndRequest::on_release(self, release: impl FnOnce() + 'static) -> Self
 pub fn flui::platform::SessionEndRequest::reasons(&self) -> Vec<String>
-#[non_exhaustive] pub enum flui::platform::SessionEndSupport
-impl Clone for flui::platform::SessionEndSupport
-impl Copy for flui::platform::SessionEndSupport
-impl Eq for flui::platform::SessionEndSupport
-impl PartialEq for flui::platform::SessionEndSupport
-impl core::fmt::Debug for flui::platform::SessionEndSupport
-impl core::hash::Hash for flui::platform::SessionEndSupport
-impl core::marker::StructuralPartialEq for flui::platform::SessionEndSupport
-variant flui::platform::SessionEndSupport::Background { window: core::time::Duration } // at 3
-variant flui::platform::SessionEndSupport::Delay { max: core::time::Duration } // at 1
-variant flui::platform::SessionEndSupport::Hold // at 0
-variant flui::platform::SessionEndSupport::NotifyOnly // at 2
 pub struct flui::platform::SizeConstraints
 field flui::platform::SizeConstraints::max: Option<flui::platform::WindowExtent> // at 1
 field flui::platform::SizeConstraints::min: Option<flui::platform::WindowExtent> // at 0
@@ -12830,22 +12633,6 @@ impl core::marker::StructuralPartialEq for flui::platform::SizeConstraints
 pub const flui::platform::SizeConstraints::NONE: Self = _
 pub const fn flui::platform::SizeConstraints::new(min: Option<flui::platform::WindowExtent>, max: Option<flui::platform::WindowExtent>) -> Self
 pub fn flui::platform::SizeConstraints::try_new(min: Option<flui::geometry::Size<f64>>, max: Option<flui::geometry::Size<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
-#[non_exhaustive] pub struct flui::platform::SmartZoomEvent { .. }
-field flui::platform::SmartZoomEvent::modifiers: flui::interaction::Modifiers // at 3
-field flui::platform::SmartZoomEvent::position: flui::interaction::PointerPosition // at 2
-field flui::platform::SmartZoomEvent::time: flui::interaction::EventTime // at 1
-impl Clone for flui::platform::SmartZoomEvent
-impl Copy for flui::platform::SmartZoomEvent
-impl PartialEq for flui::platform::SmartZoomEvent
-impl core::fmt::Debug for flui::platform::SmartZoomEvent
-impl core::marker::StructuralPartialEq for flui::platform::SmartZoomEvent
-pub const fn flui::platform::SmartZoomEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition) -> Self
-pub const fn flui::platform::SmartZoomEvent::pointer(&self) -> &flui::interaction::PointerInfo
-pub const fn flui::platform::SmartZoomEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
-pub trait flui::platform::Storage: Send + Sync + 'static
-fn flui::platform::Storage::copy_aside(&self, name: &flui::platform::StorageName) -> flui::platform::StorageFuture<flui::platform::CopiedAside>
-fn flui::platform::Storage::publish(&self, name: &flui::platform::StorageName, bytes: Vec<u8>, mode: flui::platform::WriteMode) -> flui::platform::StorageFuture<flui::platform::StoredVersion>
-fn flui::platform::Storage::read(&self, name: &flui::platform::StorageName, limit: u64) -> flui::platform::StorageFuture<flui::platform::Stored>
 pub struct flui::platform::SrgbColor { .. }
 impl Clone for flui::platform::SrgbColor
 impl Copy for flui::platform::SrgbColor
@@ -12859,6 +12646,10 @@ pub const fn flui::platform::SrgbColor::red(self) -> f32
 pub const fn flui::platform::SrgbColor::to_array(self) -> [f32; 4]
 pub fn flui::platform::SrgbColor::from_rgba8(red: u8, green: u8, blue: u8, alpha: u8) -> Self
 pub fn flui::platform::SrgbColor::try_new(red: f64, green: f64, blue: f64, alpha: f64) -> Result<Self, flui::platform::InvalidPreference>
+pub trait flui::platform::Storage: Send + Sync + 'static
+fn flui::platform::Storage::copy_aside(&self, name: &flui::platform::StorageName) -> flui::platform::StorageFuture<flui::platform::CopiedAside>
+fn flui::platform::Storage::publish(&self, name: &flui::platform::StorageName, bytes: Vec<u8>, mode: flui::platform::WriteMode) -> flui::platform::StorageFuture<flui::platform::StoredVersion>
+fn flui::platform::Storage::read(&self, name: &flui::platform::StorageName, limit: u64) -> flui::platform::StorageFuture<flui::platform::Stored>
 #[non_exhaustive] pub enum flui::platform::StorageError
 impl Clone for flui::platform::StorageError
 impl Eq for flui::platform::StorageError
@@ -12923,16 +12714,6 @@ impl core::marker::StructuralPartialEq for flui::platform::SubmitError
 pub const fn flui::platform::SubmitError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::platform::SubmitError::Admission(flui::platform::AdmissionError) // at 0
 variant flui::platform::SubmitError::Closed // at 1
-pub enum flui::platform::SurfaceChange
-impl Clone for flui::platform::SurfaceChange
-impl Copy for flui::platform::SurfaceChange
-impl Eq for flui::platform::SurfaceChange
-impl PartialEq for flui::platform::SurfaceChange
-impl core::fmt::Debug for flui::platform::SurfaceChange
-impl core::hash::Hash for flui::platform::SurfaceChange
-impl core::marker::StructuralPartialEq for flui::platform::SurfaceChange
-variant flui::platform::SurfaceChange::Rebuild // at 1
-variant flui::platform::SurfaceChange::Release // at 0
 #[non_exhaustive] pub struct flui::platform::SurfaceColorSpace
 field flui::platform::SurfaceColorSpace::dynamic_range: flui::platform::DynamicRange // at 1
 field flui::platform::SurfaceColorSpace::gamut: flui::platform::ColorGamut // at 0
@@ -12958,16 +12739,6 @@ impl core::fmt::Debug for flui::platform::SwapChainStatistics
 impl core::marker::StructuralPartialEq for flui::platform::SwapChainStatistics
 variant flui::platform::SwapChainStatistics::Dxgi(flui::platform::DxgiStatistics) // at 1
 variant flui::platform::SwapChainStatistics::None // at 0
-pub struct flui::platform::SwipeOffset(_)
-impl Clone for flui::platform::SwipeOffset
-impl Copy for flui::platform::SwipeOffset
-impl Default for flui::platform::SwipeOffset
-impl PartialEq for flui::platform::SwipeOffset
-impl core::fmt::Debug for flui::platform::SwipeOffset
-impl core::marker::StructuralPartialEq for flui::platform::SwipeOffset
-pub const flui::platform::SwipeOffset::ZERO: Self = _
-pub const fn flui::platform::SwipeOffset::get(self) -> flui::geometry::Offset<f64>
-pub fn flui::platform::SwipeOffset::try_new(offset: flui::geometry::Offset<f64>) -> Result<Self, flui::platform::pointer::InputValueError>
 #[non_exhaustive] pub enum flui::platform::SystemControls
 impl Clone for flui::platform::SystemControls
 impl Copy for flui::platform::SystemControls
@@ -13002,7 +12773,7 @@ impl PartialEq for flui::platform::SystemNotice
 impl core::fmt::Debug for flui::platform::SystemNotice
 impl core::hash::Hash for flui::platform::SystemNotice
 impl core::marker::StructuralPartialEq for flui::platform::SystemNotice
-variant flui::platform::SystemNotice::MemoryPressure(flui::platform::MemoryPressureLevel) // at 4
+variant flui::platform::SystemNotice::MemoryPressure(flui_foundation::memory::MemoryPressureLevel) // at 4
 variant flui::platform::SystemNotice::SessionLocked // at 2
 variant flui::platform::SystemNotice::SessionUnlocked // at 3
 variant flui::platform::SystemNotice::Sleep // at 0
@@ -13013,17 +12784,21 @@ impl Default for flui::platform::SystemPreferences
 impl PartialEq for flui::platform::SystemPreferences
 impl core::fmt::Debug for flui::platform::SystemPreferences
 impl core::marker::StructuralPartialEq for flui::platform::SystemPreferences
+pub const fn flui::platform::SystemPreferences::accent_color(&self) -> Option<flui::platform::SrgbColor>
 pub const fn flui::platform::SystemPreferences::gestures(&self) -> &flui::platform::GesturePreferences
 pub const fn flui::platform::SystemPreferences::haptics(&self) -> Option<bool>
 pub const fn flui::platform::SystemPreferences::high_contrast(&self) -> Option<bool>
 pub const fn flui::platform::SystemPreferences::motion(&self) -> Option<flui::platform::MotionPreference>
 pub const fn flui::platform::SystemPreferences::regional(&self) -> &flui::platform::RegionalFormats
+pub const fn flui::platform::SystemPreferences::scroll_bars(&self) -> &flui::platform::ScrollBarPreferences
 pub const fn flui::platform::SystemPreferences::text_scale(&self) -> Option<f64>
 pub const fn flui::platform::SystemPreferences::text_weight(&self) -> Option<flui::platform::TextWeightPreference>
 pub const fn flui::platform::SystemPreferences::wheel(&self) -> &flui::platform::WheelPreferences
+pub const fn flui::platform::SystemPreferences::with_accent_color(self, value: Option<flui::platform::SrgbColor>) -> Self
 pub const fn flui::platform::SystemPreferences::with_haptics(self, enabled: bool) -> Self
 pub const fn flui::platform::SystemPreferences::with_high_contrast(self, value: bool) -> Self
 pub const fn flui::platform::SystemPreferences::with_motion(self, value: flui::platform::MotionPreference) -> Self
+pub const fn flui::platform::SystemPreferences::with_scroll_bars(self, value: flui::platform::ScrollBarPreferences) -> Self
 pub const fn flui::platform::SystemPreferences::with_text_weight(self, value: flui::platform::TextWeightPreference) -> Self
 pub fn flui::platform::SystemPreferences::into_parts(self) -> flui::platform::PreferenceParts
 pub fn flui::platform::SystemPreferences::locales(&self) -> Option<&[flui::platform::Locale]>
@@ -13032,10 +12807,6 @@ pub fn flui::platform::SystemPreferences::with_locales(self, value: impl Into<al
 pub fn flui::platform::SystemPreferences::with_regional(self, value: flui::platform::RegionalFormats) -> Self
 pub fn flui::platform::SystemPreferences::with_text_scale(self, value: f64) -> Result<Self, flui::platform::InvalidPreference>
 pub fn flui::platform::SystemPreferences::with_wheel(self, value: flui::platform::WheelPreferences) -> Self
-pub const fn flui::platform::SystemPreferences::accent_color(&self) -> Option<flui::platform::SrgbColor>
-pub const fn flui::platform::SystemPreferences::scroll_bars(&self) -> &flui::platform::ScrollBarPreferences
-pub const fn flui::platform::SystemPreferences::with_accent_color(self, value: Option<flui::platform::SrgbColor>) -> Self
-pub const fn flui::platform::SystemPreferences::with_scroll_bars(self, value: flui::platform::ScrollBarPreferences) -> Self
 #[non_exhaustive] pub enum flui::platform::SystemUiOverlayStyle
 impl Clone for flui::platform::SystemUiOverlayStyle
 impl Copy for flui::platform::SystemUiOverlayStyle
@@ -13068,37 +12839,6 @@ variant flui::platform::TargetPlatform::MacOS // at 3
 variant flui::platform::TargetPlatform::Unknown // at 6
 variant flui::platform::TargetPlatform::Windows // at 4
 variant flui::platform::TargetPlatform::iOS // at 0
-pub trait flui::platform::TextStore
-fn flui::platform::TextStore::request_lock(&self, grant: flui::platform::text_store::LockGrant, timing: flui::platform::text_store::LockTiming) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStore::run_deferred_grants(&self) -> usize
-fn flui::platform::TextStore::screen_moved(&self) { .. }
-fn flui::platform::TextStore::set_commit_gate(&self, gate: flui::platform::text_store::CommitGate)
-fn flui::platform::TextStore::set_observer(&self, observer: Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStoreObserver>>)
-fn flui::platform::TextStore::status(&self) -> flui::platform::text_store::TextStoreStatus
-pub trait flui::platform::TextStoreEdit: flui::platform::TextStoreRead
-fn flui::platform::TextStoreEdit::insert_at_selection(&mut self, text: &str) -> Result<flui::platform::text_store::TextChange, flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStoreEdit::replace(&mut self, range: flui::platform::text_store::Utf16Range, text: &str) -> Result<flui::platform::text_store::TextChange, flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStoreEdit::set_composition(&mut self, composition: Option<flui::platform::text_store::Composition>) -> Result<(), flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStoreEdit::set_selection(&mut self, selection: flui::platform::text_store::Selection) -> Result<(), flui::platform::text_store::TextStoreError>
-pub trait flui::platform::TextStoreHost
-fn flui::platform::TextStoreHost::complete_composition(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>) -> Result<flui::platform::text_store::CompositionEnd, flui::platform::text_store::TextStoreHostError>
-fn flui::platform::TextStoreHost::focus_store(&self, store: Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStore>>)
-fn flui::platform::TextStoreHost::show_keyboard(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::TextStore>)
-pub trait flui::platform::TextStoreObserver
-fn flui::platform::TextStoreObserver::composition_changed(&self) { .. }
-fn flui::platform::TextStoreObserver::layout_changed(&self)
-fn flui::platform::TextStoreObserver::publish_change(&self, _change: flui::platform::text_store::TextStoreChange, publish: &mut dyn FnMut(&mut flui::platform::text_store::OwnerCalls), calls: &mut flui::platform::text_store::OwnerCalls) { .. }
-fn flui::platform::TextStoreObserver::selection_changed(&self)
-fn flui::platform::TextStoreObserver::status_changed(&self)
-fn flui::platform::TextStoreObserver::text_changed(&self, change: flui::platform::text_store::TextChange)
-pub trait flui::platform::TextStoreRead
-fn flui::platform::TextStoreRead::composition(&self) -> Option<flui::platform::text_store::Composition>
-fn flui::platform::TextStoreRead::document_bounds(&self) -> Result<flui::geometry::Bounds<f64>, flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStoreRead::document_len(&self) -> flui::platform::text_store::Utf16Offset
-fn flui::platform::TextStoreRead::index_at_point(&self, point: flui::geometry::Point<f64>, mode: flui::platform::text_store::PointMode) -> Result<flui::platform::text_store::Utf16Offset, flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStoreRead::rect_for_range(&self, range: flui::platform::text_store::Utf16Range) -> Result<flui::platform::text_store::RangeRect, flui::platform::text_store::TextStoreError>
-fn flui::platform::TextStoreRead::selection(&self) -> flui::platform::text_store::Selection
-fn flui::platform::TextStoreRead::text(&self, range: flui::platform::text_store::Utf16Range) -> Result<String, flui::platform::text_store::TextStoreError>
 #[non_exhaustive] pub enum flui::platform::TextWeightPreference
 impl Clone for flui::platform::TextWeightPreference
 impl Copy for flui::platform::TextWeightPreference
@@ -13110,54 +12850,6 @@ pub const fn flui::platform::TextWeightPreference::from_adjustment(value: i32) -
 variant flui::platform::TextWeightPreference::Adjustment(core::num::nonzero::NonZeroI32) // at 2
 variant flui::platform::TextWeightPreference::Bold // at 1
 variant flui::platform::TextWeightPreference::NoPreference // at 0
-#[non_exhaustive] pub struct flui::platform::TouchpadHoldEvent { .. }
-field flui::platform::TouchpadHoldEvent::modifiers: flui::interaction::Modifiers // at 4
-field flui::platform::TouchpadHoldEvent::phase: flui::platform::TouchpadHoldPhase // at 3
-field flui::platform::TouchpadHoldEvent::position: flui::interaction::PointerPosition // at 2
-field flui::platform::TouchpadHoldEvent::time: flui::interaction::EventTime // at 1
-impl Clone for flui::platform::TouchpadHoldEvent
-impl Copy for flui::platform::TouchpadHoldEvent
-impl PartialEq for flui::platform::TouchpadHoldEvent
-impl core::fmt::Debug for flui::platform::TouchpadHoldEvent
-impl core::marker::StructuralPartialEq for flui::platform::TouchpadHoldEvent
-pub const fn flui::platform::TouchpadHoldEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, phase: flui::platform::TouchpadHoldPhase) -> Self
-pub const fn flui::platform::TouchpadHoldEvent::pointer(&self) -> &flui::interaction::PointerInfo
-pub const fn flui::platform::TouchpadHoldEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
-pub enum flui::platform::TouchpadHoldPhase
-impl Clone for flui::platform::TouchpadHoldPhase
-impl Copy for flui::platform::TouchpadHoldPhase
-impl Eq for flui::platform::TouchpadHoldPhase
-impl PartialEq for flui::platform::TouchpadHoldPhase
-impl core::fmt::Debug for flui::platform::TouchpadHoldPhase
-impl core::hash::Hash for flui::platform::TouchpadHoldPhase
-impl core::marker::StructuralPartialEq for flui::platform::TouchpadHoldPhase
-variant flui::platform::TouchpadHoldPhase::Begin // at 0
-variant flui::platform::TouchpadHoldPhase::Cancelled // at 2
-variant flui::platform::TouchpadHoldPhase::End // at 1
-#[non_exhaustive] pub struct flui::platform::TouchpadSwipeEvent { .. }
-field flui::platform::TouchpadSwipeEvent::fingers: core::num::nonzero::NonZeroU8 // at 3
-field flui::platform::TouchpadSwipeEvent::modifiers: flui::interaction::Modifiers // at 5
-field flui::platform::TouchpadSwipeEvent::phase: flui::platform::TouchpadSwipePhase // at 4
-field flui::platform::TouchpadSwipeEvent::position: flui::interaction::PointerPosition // at 2
-field flui::platform::TouchpadSwipeEvent::time: flui::interaction::EventTime // at 1
-impl Clone for flui::platform::TouchpadSwipeEvent
-impl Copy for flui::platform::TouchpadSwipeEvent
-impl PartialEq for flui::platform::TouchpadSwipeEvent
-impl core::fmt::Debug for flui::platform::TouchpadSwipeEvent
-impl core::marker::StructuralPartialEq for flui::platform::TouchpadSwipeEvent
-pub const fn flui::platform::TouchpadSwipeEvent::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, fingers: core::num::nonzero::NonZeroU8, phase: flui::platform::TouchpadSwipePhase) -> Self
-pub const fn flui::platform::TouchpadSwipeEvent::pointer(&self) -> &flui::interaction::PointerInfo
-pub const fn flui::platform::TouchpadSwipeEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
-pub enum flui::platform::TouchpadSwipePhase
-impl Clone for flui::platform::TouchpadSwipePhase
-impl Copy for flui::platform::TouchpadSwipePhase
-impl PartialEq for flui::platform::TouchpadSwipePhase
-impl core::fmt::Debug for flui::platform::TouchpadSwipePhase
-impl core::marker::StructuralPartialEq for flui::platform::TouchpadSwipePhase
-variant flui::platform::TouchpadSwipePhase::Cancelled // at 3
-variant flui::platform::TouchpadSwipePhase::End // at 2
-variant flui::platform::TouchpadSwipePhase::Start // at 0
-variant flui::platform::TouchpadSwipePhase::Update(flui::platform::SwipeOffset) // at 1
 #[non_exhaustive] pub struct flui::platform::Unsupported { .. }
 field flui::platform::Unsupported::reason: flui::platform::UnsupportedReason // at 0
 impl Clone for flui::platform::Unsupported
@@ -13346,10 +13038,6 @@ variant flui::platform::WindowCommand::SetResizeIncrements(Option<flui::platform
 variant flui::platform::WindowCommand::SetSize(flui::geometry::Size<f64>) // at 2
 variant flui::platform::WindowCommand::SetTitle(String) // at 0
 variant flui::platform::WindowCommand::Show // at 7
-pub trait flui::platform::WindowControl
-fn flui::platform::WindowControl::request_close(&self)
-fn flui::platform::WindowControl::state(&self) -> flui::platform::WindowState
-fn flui::platform::WindowControl::submit(&self, command: flui::platform::WindowCommand) -> Result<(), flui::platform::SubmitError>
 #[non_exhaustive] pub struct flui::platform::WindowDisplay
 field flui::platform::WindowDisplay::color: Option<flui::platform::DisplayColor> // at 2
 field flui::platform::WindowDisplay::id: flui::platform::DisplayId // at 0
@@ -13430,13 +13118,6 @@ pub const fn flui::platform::WindowGeometry::size(self) -> flui::geometry::Size<
 pub const fn flui::platform::WindowGeometry::unplaced(extent: flui::platform::WindowExtent) -> Self
 pub fn flui::platform::WindowGeometry::at(self, position: Option<flui::geometry::Point<f64>>) -> Result<Self, flui::platform::InvalidGeometry>
 pub fn flui::platform::WindowGeometry::try_new(position: Option<flui::geometry::Point<f64>>, size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::InvalidGeometry>
-pub trait flui::platform::WindowHandler
-fn flui::platform::WindowHandler::close_requested(&self) -> flui::platform::CloseDecision
-fn flui::platform::WindowHandler::closed(&self)
-fn flui::platform::WindowHandler::frame_requested(&self, request: flui::platform::FrameRequest) -> flui::platform::FrameOutcome
-fn flui::platform::WindowHandler::input(&self, event: flui::platform::PlatformInput) -> flui::platform::DispatchEventResult
-fn flui::platform::WindowHandler::state_changed(&self)
-fn flui::platform::WindowHandler::surface_changed(&self, change: flui::platform::SurfaceChange)
 pub struct flui::platform::WindowId(_)
 impl Clone for flui::platform::WindowId
 impl Copy for flui::platform::WindowId
@@ -13447,11 +13128,6 @@ impl core::hash::Hash for flui::platform::WindowId
 impl core::marker::StructuralPartialEq for flui::platform::WindowId
 pub const fn flui::platform::WindowId::get(self) -> core::num::nonzero::NonZeroU64
 pub const fn flui::platform::WindowId::try_from_raw(raw: u64) -> Option<Self>
-pub struct flui::platform::WindowIdMint(_)
-impl Default for flui::platform::WindowIdMint
-impl core::fmt::Debug for flui::platform::WindowIdMint
-pub const fn flui::platform::WindowIdMint::new() -> Self
-pub fn flui::platform::WindowIdMint::next(&self) -> Result<flui::platform::WindowId, flui::foundation::IdExhausted>
 pub struct flui::platform::WindowInsets { .. }
 impl Clone for flui::platform::WindowInsets
 impl Copy for flui::platform::WindowInsets
@@ -13721,19 +13397,19 @@ impl Clone for flui::platform::capability::Activity
 impl core::fmt::Debug for flui::platform::capability::Activity
 pub fn flui::platform::capability::Activity::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey, intent: impl FnOnce(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 pub fn flui::platform::capability::Activity::reattach(&self, completions: &flui::platform::capability::CompletionSource, key: flui::platform::capability::ResultKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultData, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Result<R, flui::platform::capability::DataRefused>
+pub fn flui::platform::capability::Activity::take_data<R>(&self, data: flui::platform::capability::ResultIntent, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Result<R, flui::platform::capability::DataRefused>
 pub fn flui::platform::capability::Activity::with_java<R>(&self, f: impl FnOnce(flui::platform::capability::JniFrame) -> R) -> Option<R>
 pub trait flui::platform::capability::ActivityBridge: 'static
 fn flui::platform::capability::ActivityBridge::bind(&self, mint: flui::platform::capability::ResultMint)
 fn flui::platform::capability::ActivityBridge::launch_for_result(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey, intent: &mut dyn FnMut(flui::platform::capability::IntentFrame) -> bool) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
 fn flui::platform::capability::ActivityBridge::lend(&self, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> bool
 fn flui::platform::capability::ActivityBridge::reattach(&self, completions: &flui::platform::capability::CompletionSource, capability: &flui::platform::capability::CapabilityId, key: flui::platform::capability::RequestKey) -> Result<flui::platform::capability::ResultRequest, flui::platform::capability::ResultRefused>
-fn flui::platform::capability::ActivityBridge::take_data(&self, capability: &flui::platform::capability::CapabilityId, data: flui::platform::capability::ResultData, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> Result<(), flui::platform::capability::DataRefused>
+fn flui::platform::capability::ActivityBridge::take_data(&self, capability: &flui::platform::capability::CapabilityId, data: flui::platform::capability::ResultIntent, f: &mut dyn FnMut(flui::platform::capability::JniFrame)) -> Result<(), flui::platform::capability::DataRefused>
 pub struct flui::platform::capability::ActivityResult { .. }
 impl core::fmt::Debug for flui::platform::capability::ActivityResult
 pub fn flui::platform::capability::ActivityResult::code(&self) -> flui::platform::capability::ResultCode
 pub fn flui::platform::capability::ActivityResult::has_data(&self) -> bool
-pub fn flui::platform::capability::ActivityResult::take_data(&mut self) -> Option<flui::platform::capability::ResultData>
+pub fn flui::platform::capability::ActivityResult::take_data(&mut self) -> Option<flui::platform::capability::ResultIntent>
 pub trait flui::platform::capability::Capability: 'static
 const flui::platform::capability::Capability::NAME: &'static str
 type flui::platform::capability::Capability::Handle: Clone + 'static
@@ -13811,9 +13487,6 @@ pub const fn flui::platform::capability::JniFrame::env(&self) -> *mut core::ffi:
 pub const fn flui::platform::capability::JniFrame::new(vm: core::ptr::non_null::NonNull<core::ffi::c_void>, env: core::ptr::non_null::NonNull<core::ffi::c_void>, object: core::ptr::non_null::NonNull<core::ffi::c_void>) -> Self
 pub const fn flui::platform::capability::JniFrame::object(&self) -> *mut core::ffi::c_void
 pub const fn flui::platform::capability::JniFrame::vm(&self) -> *mut core::ffi::c_void
-pub const flui::platform::capability::MAX_OPEN_REQUESTS: usize = 16
-pub const flui::platform::capability::MAX_OPEN_REQUESTS_PER_CAPABILITY: usize
-pub const flui::platform::capability::MAX_RESULT_KEY_LEN: usize = 64
 pub struct flui::platform::capability::OwnerJob(_)
 impl core::fmt::Debug for flui::platform::capability::OwnerJob
 pub fn flui::platform::capability::OwnerJob::run(self, scope: &flui::platform::capability::OwnerScope<'_>)
@@ -13891,12 +13564,12 @@ pub const fn flui::platform::capability::ResultCode::raw(self) -> i32
 variant flui::platform::capability::ResultCode::Canceled // at 1
 variant flui::platform::capability::ResultCode::Ok // at 0
 variant flui::platform::capability::ResultCode::Other(i32) // at 2
-pub struct flui::platform::capability::ResultData(_)
-impl core::fmt::Debug for flui::platform::capability::ResultData
-pub fn flui::platform::capability::ResultData::token(&self) -> flui::platform::capability::ResultToken
-pub struct flui::platform::capability::ResultDataHold(_)
-impl core::fmt::Debug for flui::platform::capability::ResultDataHold
-pub fn flui::platform::capability::ResultDataHold::is_released(&self) -> bool
+pub struct flui::platform::capability::ResultIntent(_)
+impl core::fmt::Debug for flui::platform::capability::ResultIntent
+pub fn flui::platform::capability::ResultIntent::token(&self) -> flui::platform::capability::ResultToken
+pub struct flui::platform::capability::ResultIntentHold(_)
+impl core::fmt::Debug for flui::platform::capability::ResultIntentHold
+pub fn flui::platform::capability::ResultIntentHold::is_released(&self) -> bool
 pub struct flui::platform::capability::ResultKey(_)
 impl Clone for flui::platform::capability::ResultKey
 impl Copy for flui::platform::capability::ResultKey
@@ -13911,10 +13584,10 @@ pub const fn flui::platform::capability::ResultKey::try_new(name: &'static str) 
 pub struct flui::platform::capability::ResultMint { .. }
 impl Clone for flui::platform::capability::ResultMint
 impl core::fmt::Debug for flui::platform::capability::ResultMint
-pub fn flui::platform::capability::ResultMint::data(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultData, flui::platform::capability::ResultDataHold)
-pub fn flui::platform::capability::ResultMint::made(&self, data: &flui::platform::capability::ResultData) -> bool
+pub fn flui::platform::capability::ResultMint::data(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultIntent, flui::platform::capability::ResultIntentHold)
+pub fn flui::platform::capability::ResultMint::made(&self, data: &flui::platform::capability::ResultIntent) -> bool
 pub fn flui::platform::capability::ResultMint::request(&self, ticket: flui::platform::capability::ResultTicket, completion: flui::platform::capability::Completion<flui::platform::capability::ResultOutcome>) -> flui::platform::capability::ResultRequest
-pub fn flui::platform::capability::ResultMint::result(&self, code: flui::platform::capability::ResultCode, data: Option<flui::platform::capability::ResultData>) -> flui::platform::capability::ActivityResult
+pub fn flui::platform::capability::ResultMint::result(&self, code: flui::platform::capability::ResultCode, data: Option<flui::platform::capability::ResultIntent>) -> flui::platform::capability::ActivityResult
 pub fn flui::platform::capability::ResultMint::ticket(&self, token: flui::platform::capability::ResultToken, wake: alloc::rcs::rc::Rc<dyn Fn()>) -> (flui::platform::capability::ResultTicket, flui::platform::capability::ResultTicketHold)
 pub type flui::platform::capability::ResultOutcome = Result<flui::platform::capability::ActivityResult, flui::platform::capability::ResultRefused>
 #[non_exhaustive] pub enum flui::platform::capability::ResultRefused
@@ -13958,11 +13631,6 @@ impl core::fmt::Debug for flui::platform::capability::ResultToken
 impl core::hash::Hash for flui::platform::capability::ResultToken
 impl core::marker::StructuralPartialEq for flui::platform::capability::ResultToken
 pub const fn flui::platform::capability::ResultToken::get(self) -> u64
-pub struct flui::platform::capability::ResultTokenMint(_)
-impl Default for flui::platform::capability::ResultTokenMint
-impl core::fmt::Debug for flui::platform::capability::ResultTokenMint
-pub const fn flui::platform::capability::ResultTokenMint::new() -> Self
-pub fn flui::platform::capability::ResultTokenMint::next(&self) -> Result<flui::platform::capability::ResultToken, flui::foundation::IdExhausted>
 pub struct flui::platform::capability::RuntimeLocals { .. }
 impl Clone for flui::platform::capability::RuntimeLocals
 impl Default for flui::platform::capability::RuntimeLocals
@@ -13972,11 +13640,6 @@ pub fn flui::platform::capability::RuntimeLocals::new() -> Self
 pub fn flui::platform::capability::RuntimeLocals::retire(&self) -> Option<Box<dyn core::any::Any + Send>>
 pub struct flui::platform::capability::WindowCloseWatch(_)
 impl core::fmt::Debug for flui::platform::capability::WindowCloseWatch
-pub struct flui::platform::capability::WindowCloser(_)
-impl Drop for flui::platform::capability::WindowCloser
-impl core::fmt::Debug for flui::platform::capability::WindowCloser
-pub fn flui::platform::capability::WindowCloser::close(&self)
-pub fn flui::platform::capability::WindowCloser::new() -> (Self, flui::platform::capability::WindowLifetime)
 pub struct flui::platform::capability::WindowLifetime(_)
 impl Clone for flui::platform::capability::WindowLifetime
 impl core::fmt::Debug for flui::platform::capability::WindowLifetime
@@ -14039,8 +13702,6 @@ impl Clone for flui::platform::capability::scripted::FailureReport
 impl Default for flui::platform::capability::scripted::FailureReport
 impl core::fmt::Debug for flui::platform::capability::scripted::FailureReport
 pub fn flui::platform::capability::scripted::FailureReport::report(&self, failure: flui::platform::capability::scripted::ScenarioFailure) -> bool
-pub const flui::platform::capability::scripted::MAX_RECORDED_REQUESTS: usize = 4096
-pub const flui::platform::capability::scripted::MAX_REPORTS: usize = 256
 pub struct flui::platform::capability::scripted::RequestTicket { .. }
 impl Drop for flui::platform::capability::scripted::RequestTicket
 impl core::fmt::Debug for flui::platform::capability::scripted::RequestTicket
@@ -14144,8 +13805,17 @@ pub fn flui::platform::capability::scripted::Track::name(&self) -> &'static str 
 pub fn flui::platform::capability::scripted::Track::set(&self, value: T) // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
 pub fn flui::platform::capability::scripted::Track::set_at(&self, at: core::time::Duration, value: T) // impl<T> flui::platform::capability::scripted::Track<T> where T: Clone + PartialEq + core::fmt::Debug + 'static
 pub mod flui::platform::data_transfer
-reexport flui::platform::data_transfer::DataTransferOffer => flui::platform::DataTransferOffer
-reexport flui::platform::data_transfer::DragTransport => flui::platform::DragTransport
+pub struct flui::platform::data_transfer::DataTransferOffer { .. }
+impl Clone for flui::platform::data_transfer::DataTransferOffer
+impl core::fmt::Debug for flui::platform::data_transfer::DataTransferOffer
+pub fn flui::platform::data_transfer::DataTransferOffer::find(&self, format: &flui::platform::data_transfer::TransferFormat) -> Option<flui::platform::data_transfer::RepresentationIndex>
+pub fn flui::platform::data_transfer::DataTransferOffer::id(&self) -> flui::foundation::DataTransferId
+pub fn flui::platform::data_transfer::DataTransferOffer::new(id: flui::foundation::DataTransferId, representations: alloc::rcs::arc::Arc<[flui::platform::data_transfer::RepresentationDescriptor]>) -> Self
+pub fn flui::platform::data_transfer::DataTransferOffer::representations(&self) -> &[flui::platform::data_transfer::RepresentationDescriptor]
+pub trait flui::platform::data_transfer::DragTransport: Send + Sync
+fn flui::platform::data_transfer::DragTransport::conclude_drop(&self, id: flui::foundation::DataTransferId)
+fn flui::platform::data_transfer::DragTransport::request(&self, id: flui::foundation::DataTransferId, representation: flui::platform::data_transfer::RepresentationIndex, limits: flui::platform::data_transfer::TransferLimits) -> flui::platform::data_transfer::TransferRequest
+fn flui::platform::data_transfer::DragTransport::update_drop_feedback(&self, id: flui::foundation::DataTransferId, feedback: flui::platform::data_transfer::DropFeedback)
 pub struct flui::platform::data_transfer::DropFeedback
 field flui::platform::data_transfer::DropFeedback::accept: Option<flui::interaction::drag::TransferActions> // at 0
 impl Clone for flui::platform::data_transfer::DropFeedback
@@ -14167,7 +13837,6 @@ impl core::marker::StructuralPartialEq for flui::platform::data_transfer::Mime
 pub fn flui::platform::data_transfer::Mime::as_str(&self) -> &str
 pub fn flui::platform::data_transfer::Mime::essence(&self) -> &str
 pub fn flui::platform::data_transfer::Mime::new(s: &str) -> Self
-reexport flui::platform::data_transfer::NullDragTransport => flui::platform::NullDragTransport
 pub struct flui::platform::data_transfer::RepresentationDescriptor
 field flui::platform::data_transfer::RepresentationDescriptor::declared_len: Option<u64> // at 1
 field flui::platform::data_transfer::RepresentationDescriptor::format: flui::platform::data_transfer::TransferFormat // at 0
@@ -14181,7 +13850,6 @@ impl PartialEq for flui::platform::data_transfer::RepresentationIndex
 impl core::fmt::Debug for flui::platform::data_transfer::RepresentationIndex
 impl core::hash::Hash for flui::platform::data_transfer::RepresentationIndex
 impl core::marker::StructuralPartialEq for flui::platform::data_transfer::RepresentationIndex
-reexport flui::platform::data_transfer::TransferActions => flui::interaction::drag::TransferActions
 pub struct flui::platform::data_transfer::TransferCompleter { .. }
 impl core::fmt::Debug for flui::platform::data_transfer::TransferCompleter
 pub fn flui::platform::data_transfer::TransferCompleter::complete(self, result: Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError>)
@@ -14234,18 +13902,6 @@ impl core::future::future::Future for flui::platform::data_transfer::TransferReq
 pub fn flui::platform::data_transfer::TransferRequest::pending() -> (Self, flui::platform::data_transfer::TransferCompleter)
 pub fn flui::platform::data_transfer::TransferRequest::ready(result: Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError>) -> Self
 pub mod flui::platform::drag
-reexport flui::platform::drag::AllowedActions => flui::interaction::drag::AllowedActions
-reexport flui::platform::drag::DragError => flui::interaction::drag::DragError
-#[non_exhaustive] pub enum flui::platform::drag::DragMoment
-impl Clone for flui::platform::drag::DragMoment
-impl Copy for flui::platform::drag::DragMoment
-impl Eq for flui::platform::drag::DragMoment
-impl PartialEq for flui::platform::drag::DragMoment
-impl core::fmt::Debug for flui::platform::drag::DragMoment
-impl core::marker::StructuralPartialEq for flui::platform::drag::DragMoment
-variant flui::platform::drag::DragMoment::LeavesWindow // at 1
-variant flui::platform::drag::DragMoment::Start // at 0
-reexport flui::platform::drag::DragReach => flui::interaction::drag::DragReach
 #[non_exhaustive] pub enum flui::platform::drag::DragRequestError
 impl Clone for flui::platform::drag::DragRequestError
 impl Copy for flui::platform::drag::DragRequestError
@@ -14272,9 +13928,8 @@ pub const fn flui::platform::drag::DragSessionKey::new(nonce: flui::platform::dr
 pub const fn flui::platform::drag::DragSessionKey::nonce(&self) -> flui::platform::drag::ProcessNonce
 pub const fn flui::platform::drag::DragSessionKey::runtime(&self) -> flui::foundation::UiRuntimeId
 pub const fn flui::platform::drag::DragSessionKey::session(&self) -> flui::foundation::DragSessionId
-pub fn flui::platform::drag::DragSessionKey::from_offer(offer: &flui::platform::DataTransferOffer) -> Option<Self>
+pub fn flui::platform::drag::DragSessionKey::from_offer(offer: &flui::platform::data_transfer::DataTransferOffer) -> Option<Self>
 pub fn flui::platform::drag::DragSessionKey::representation(&self) -> flui::platform::data_transfer::RepresentationDescriptor
-pub const flui::platform::drag::IDENTITY_ESSENCE: &str = "application/x-flui-drag-session"
 pub enum flui::platform::drag::OsDragEnd
 impl Clone for flui::platform::drag::OsDragEnd
 impl Copy for flui::platform::drag::OsDragEnd
@@ -14316,24 +13971,6 @@ pub fn flui::platform::drag::OsDragTerms::indexed(&self) -> impl ExactSizeIterat
 pub fn flui::platform::drag::OsDragTerms::into_representations(self) -> Vec<flui::platform::data_transfer::RepresentationDescriptor>
 pub fn flui::platform::drag::OsDragTerms::representations(&self) -> &[flui::platform::data_transfer::RepresentationDescriptor]
 pub fn flui::platform::drag::OsDragTerms::try_new(key: flui::platform::drag::DragSessionKey, serialized: Vec<flui::platform::data_transfer::RepresentationDescriptor>, allowed: flui::interaction::drag::TransferActions) -> Result<Self, flui::platform::drag::DragRequestError>
-pub enum flui::platform::drag::OsOffer
-impl Clone for flui::platform::drag::OsOffer
-impl Copy for flui::platform::drag::OsOffer
-impl Eq for flui::platform::drag::OsOffer
-impl PartialEq for flui::platform::drag::OsOffer
-impl core::fmt::Debug for flui::platform::drag::OsOffer
-impl core::marker::StructuralPartialEq for flui::platform::drag::OsOffer
-variant flui::platform::drag::OsOffer::Full // at 0
-variant flui::platform::drag::OsOffer::IdentityOnly // at 1
-pub struct flui::platform::drag::OsSessionPlan
-field flui::platform::drag::OsSessionPlan::advertised: flui::interaction::drag::TransferActions // at 1
-field flui::platform::drag::OsSessionPlan::offer: flui::platform::drag::OsOffer // at 0
-impl Clone for flui::platform::drag::OsSessionPlan
-impl Copy for flui::platform::drag::OsSessionPlan
-impl Eq for flui::platform::drag::OsSessionPlan
-impl PartialEq for flui::platform::drag::OsSessionPlan
-impl core::fmt::Debug for flui::platform::drag::OsSessionPlan
-impl core::marker::StructuralPartialEq for flui::platform::drag::OsSessionPlan
 pub trait flui::platform::drag::PlatformDragSource: Send + Sync
 fn flui::platform::drag::PlatformDragSource::start(&self, request: flui::platform::drag::OsDragRequest) -> Result<(), flui::interaction::drag::DragError>
 fn flui::platform::drag::PlatformDragSource::start_timing(&self) -> flui::platform::drag::OsDragStart
@@ -14348,15 +13985,11 @@ impl core::marker::StructuralPartialEq for flui::platform::drag::ProcessNonce
 pub const fn flui::platform::drag::ProcessNonce::from_raw(raw: core::num::nonzero::NonZeroU64) -> Self
 pub const fn flui::platform::drag::ProcessNonce::get(self) -> u64
 pub fn flui::platform::drag::ProcessNonce::mint() -> Self
-pub const fn flui::platform::drag::plan_os_session(start: flui::platform::drag::OsDragStart, moment: flui::platform::drag::DragMoment, reach: flui::interaction::drag::DragReach, allowed: flui::interaction::drag::AllowedActions, sibling_presentation: bool, available: bool) -> Result<Option<flui::platform::drag::OsSessionPlan>, flui::interaction::drag::DragError>
-pub const fn flui::platform::drag::validate_session(allowed: flui::interaction::drag::AllowedActions, reach: flui::interaction::drag::DragReach, has_serialized: bool) -> Result<(), flui::interaction::drag::DragError>
 pub mod flui::platform::executor
-reexport flui::platform::executor::ComputeJob => flui::app::ComputeJob
 pub trait flui::platform::executor::Executor: Send + Sync + 'static
 fn flui::platform::executor::Executor::room(&self, lane: flui::platform::executor::Lane) -> flui::platform::executor::RoomFuture
 fn flui::platform::executor::Executor::spawn_compute(&self, job: flui::app::ComputeJob) -> Result<(), flui::app::SpawnError>
 fn flui::platform::executor::Executor::spawn_io(&self, future: flui::app::IoFuture) -> Result<(), flui::app::SpawnError>
-reexport flui::platform::executor::IoFuture => flui::app::IoFuture
 #[non_exhaustive] pub enum flui::platform::executor::Lane
 impl Clone for flui::platform::executor::Lane
 impl Copy for flui::platform::executor::Lane
@@ -14372,7 +14005,6 @@ impl core::fmt::Debug for flui::platform::executor::RoomFuture
 impl core::future::future::Future for flui::platform::executor::RoomFuture { type Output = Result<(), flui::app::SpawnError>; }
 pub fn flui::platform::executor::RoomFuture::new(wait: impl core::future::future::Future<Output = Result<(), flui::app::SpawnError>> + Send + 'static) -> Self
 pub fn flui::platform::executor::RoomFuture::ready(answer: Result<(), flui::app::SpawnError>) -> Self
-reexport flui::platform::executor::SpawnError => flui::app::SpawnError
 pub mod flui::platform::haptics
 pub struct flui::platform::haptics::ControlPoint
 field flui::platform::haptics::ControlPoint::intensity: flui::platform::haptics::Intensity // at 1
@@ -14523,6 +14155,12 @@ impl core::marker::StructuralPartialEq for flui::platform::haptics::PatternPlayb
 variant flui::platform::haptics::PatternPlayback::Approximated // at 1
 variant flui::platform::haptics::PatternPlayback::Exact // at 0
 variant flui::platform::haptics::PatternPlayback::FallsBack // at 2
+pub trait flui::platform::haptics::PlatformHaptics: Send + Sync
+fn flui::platform::haptics::PlatformHaptics::as_any(&self) -> &dyn core::any::Any
+fn flui::platform::haptics::PlatformHaptics::capabilities(&self, source: Option<flui::interaction::DeviceId>) -> flui::platform::haptics::HapticCapabilities { .. }
+fn flui::platform::haptics::PlatformHaptics::perform(&self, feedback: flui::platform::HapticFeedback)
+fn flui::platform::haptics::PlatformHaptics::perform_with(&self, feedback: flui::platform::HapticFeedback, request: &flui::platform::haptics::HapticRequest) -> flui::platform::haptics::HapticOutcome { .. }
+fn flui::platform::haptics::PlatformHaptics::play(&self, pattern: &flui::platform::haptics::HapticPattern, fallback: flui::platform::HapticFeedback, request: &flui::platform::haptics::HapticRequest) -> flui::platform::haptics::HapticOutcome { .. }
 pub struct flui::platform::haptics::Sharpness(_)
 impl Clone for flui::platform::haptics::Sharpness
 impl Copy for flui::platform::haptics::Sharpness
@@ -14593,9 +14231,6 @@ impl PartialEq for flui::platform::http::HttpAuthority
 impl core::fmt::Debug for flui::platform::http::HttpAuthority
 impl core::hash::Hash for flui::platform::http::HttpAuthority
 pub fn flui::platform::http::HttpAuthority::of<T: Send + Sync + 'static>(state: &alloc::rcs::arc::Arc<T>) -> Self
-#[non_exhaustive] pub enum flui::platform::http::HttpCapability
-impl core::fmt::Debug for flui::platform::http::HttpCapability
-impl flui::platform::capability::Capability for flui::platform::http::HttpCapability { type Handle = flui::platform::http::Http; }
 pub trait flui::platform::http::HttpClient: Send + Sync + 'static
 fn flui::platform::http::HttpClient::authority(&self) -> flui::platform::http::HttpAuthority
 fn flui::platform::http::HttpClient::send(&self, request: flui::platform::http::HttpRequest) -> flui::platform::http::HttpFuture<flui::platform::http::HttpResponse>
@@ -14704,18 +14339,37 @@ impl core::fmt::Debug for flui::platform::input_capabilities::InputCapabilities
 impl core::hash::Hash for flui::platform::input_capabilities::InputCapabilities
 impl core::marker::StructuralPartialEq for flui::platform::input_capabilities::InputCapabilities
 pub const flui::platform::input_capabilities::InputCapabilities::UNAVAILABLE: Self = _
-pub const fn flui::platform::input_capabilities::InputCapabilities::builder() -> flui_platform::input_capabilities::InputCapabilitiesBuilder
+pub const fn flui::platform::input_capabilities::InputCapabilities::builder() -> flui::platform::input_capabilities::InputCapabilitiesBuilder
 pub const fn flui::platform::input_capabilities::InputCapabilities::honours_input_regions(&self) -> bool
 pub const fn flui::platform::input_capabilities::InputCapabilities::input_region(&self, kind: flui::platform::input_regions::InputRegionKind) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::outgoing_drag(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::pen(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::precise_scroll(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::present(&self) -> flui::interaction::PointerKindSet
-pub const fn flui::platform::input_capabilities::InputCapabilities::to_builder(self) -> flui_platform::input_capabilities::InputCapabilitiesBuilder
+pub const fn flui::platform::input_capabilities::InputCapabilities::to_builder(self) -> flui::platform::input_capabilities::InputCapabilitiesBuilder
 pub const fn flui::platform::input_capabilities::InputCapabilities::touchpad_hold(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::touchpad_swipe(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::trackpad_gestures(&self) -> flui::platform::Availability
 pub const fn flui::platform::input_capabilities::InputCapabilities::with_present(self, present: flui::interaction::PointerKindSet) -> Self
+pub struct flui::platform::input_capabilities::InputCapabilitiesBuilder(_)
+impl Clone for flui::platform::input_capabilities::InputCapabilitiesBuilder
+impl Copy for flui::platform::input_capabilities::InputCapabilitiesBuilder
+impl Eq for flui::platform::input_capabilities::InputCapabilitiesBuilder
+impl PartialEq for flui::platform::input_capabilities::InputCapabilitiesBuilder
+impl core::fmt::Debug for flui::platform::input_capabilities::InputCapabilitiesBuilder
+impl core::marker::StructuralPartialEq for flui::platform::input_capabilities::InputCapabilitiesBuilder
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::build(self) -> flui::platform::input_capabilities::InputCapabilities
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::caption_buttons(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::outgoing_drag(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::pen(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::precise_scroll(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::present(self, present: flui::interaction::PointerKindSet) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::system_gesture_exclusion(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::touchpad_hold(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::touchpad_swipe(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::trackpad_gestures(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::window_move(self, availability: flui::platform::Availability) -> Self
+pub const fn flui::platform::input_capabilities::InputCapabilitiesBuilder::window_resize(self, availability: flui::platform::Availability) -> Self
 reexport flui::platform::input_capabilities::PointerKindSet => flui::interaction::PointerKindSet
 pub mod flui::platform::input_regions
 #[non_exhaustive] pub enum flui::platform::input_regions::CaptionButton
@@ -14731,30 +14385,6 @@ impl flui::foundation::inspect::ToValue for flui::platform::input_regions::Capti
 variant flui::platform::input_regions::CaptionButton::Close // at 2
 variant flui::platform::input_regions::CaptionButton::Maximize // at 1
 variant flui::platform::input_regions::CaptionButton::Minimize // at 0
-#[non_exhaustive] pub enum flui::platform::input_regions::ChromeHit
-impl Clone for flui::platform::input_regions::ChromeHit
-impl Copy for flui::platform::input_regions::ChromeHit
-impl Eq for flui::platform::input_regions::ChromeHit
-impl PartialEq for flui::platform::input_regions::ChromeHit
-impl core::fmt::Debug for flui::platform::input_regions::ChromeHit
-impl core::hash::Hash for flui::platform::input_regions::ChromeHit
-impl core::marker::StructuralPartialEq for flui::platform::input_regions::ChromeHit
-variant flui::platform::input_regions::ChromeHit::CaptionButton(flui::platform::input_regions::CaptionButton) // at 3
-variant flui::platform::input_regions::ChromeHit::Content // at 0
-variant flui::platform::input_regions::ChromeHit::Move // at 1
-variant flui::platform::input_regions::ChromeHit::Resize(flui::platform::input_regions::ResizeEdge) // at 2
-pub struct flui::platform::input_regions::DeviceInputRegion { .. }
-impl Clone for flui::platform::input_regions::DeviceInputRegion
-impl Copy for flui::platform::input_regions::DeviceInputRegion
-impl Eq for flui::platform::input_regions::DeviceInputRegion
-impl PartialEq for flui::platform::input_regions::DeviceInputRegion
-impl core::fmt::Debug for flui::platform::input_regions::DeviceInputRegion
-impl core::hash::Hash for flui::platform::input_regions::DeviceInputRegion
-impl core::marker::StructuralPartialEq for flui::platform::input_regions::DeviceInputRegion
-pub const fn flui::platform::input_regions::DeviceInputRegion::kind(&self) -> flui::platform::input_regions::InputRegionKind
-pub const fn flui::platform::input_regions::DeviceInputRegion::new(kind: flui::platform::input_regions::InputRegionKind, rect: flui::geometry::DeviceRect) -> Self
-pub const fn flui::platform::input_regions::DeviceInputRegion::rect(&self) -> flui::geometry::DeviceRect
-pub fn flui::platform::input_regions::DeviceInputRegion::project(region: flui::platform::input_regions::InputRegion, ratio: flui::geometry::DevicePixelRatio) -> Result<Self, flui::platform::input_regions::NotProjected>
 pub struct flui::platform::input_regions::InputRegion { .. }
 impl Clone for flui::platform::input_regions::InputRegion
 impl Copy for flui::platform::input_regions::InputRegion
@@ -14778,18 +14408,6 @@ variant flui::platform::input_regions::InputRegionKind::SystemGestureExclusion /
 variant flui::platform::input_regions::InputRegionKind::WindowContent // at 4
 variant flui::platform::input_regions::InputRegionKind::WindowMove // at 1
 variant flui::platform::input_regions::InputRegionKind::WindowResize(flui::platform::input_regions::ResizeEdge) // at 2
-#[non_exhaustive] pub enum flui::platform::input_regions::NotProjected
-impl Clone for flui::platform::input_regions::NotProjected
-impl Copy for flui::platform::input_regions::NotProjected
-impl Eq for flui::platform::input_regions::NotProjected
-impl PartialEq for flui::platform::input_regions::NotProjected
-impl core::error::Error for flui::platform::input_regions::NotProjected
-impl core::fmt::Debug for flui::platform::input_regions::NotProjected
-impl core::fmt::Display for flui::platform::input_regions::NotProjected
-impl core::marker::StructuralPartialEq for flui::platform::input_regions::NotProjected
-variant flui::platform::input_regions::NotProjected::Empty // at 0
-variant flui::platform::input_regions::NotProjected::NotFinite // at 1
-variant flui::platform::input_regions::NotProjected::OutOfRange // at 2
 #[non_exhaustive] pub enum flui::platform::input_regions::ResizeEdge
 impl Clone for flui::platform::input_regions::ResizeEdge
 impl Copy for flui::platform::input_regions::ResizeEdge
@@ -14808,9 +14426,7 @@ variant flui::platform::input_regions::ResizeEdge::Right // at 3
 variant flui::platform::input_regions::ResizeEdge::Top // at 0
 variant flui::platform::input_regions::ResizeEdge::TopLeft // at 4
 variant flui::platform::input_regions::ResizeEdge::TopRight // at 5
-pub fn flui::platform::input_regions::chrome_hit(regions: &[flui::platform::input_regions::DeviceInputRegion], point: flui::geometry::DevicePoint) -> flui::platform::input_regions::ChromeHit
 pub mod flui::platform::keyboard
-reexport flui::platform::keyboard::Code => flui::interaction::Code
 pub enum flui::platform::keyboard::ImeComposition
 impl Clone for flui::platform::keyboard::ImeComposition
 impl Copy for flui::platform::keyboard::ImeComposition
@@ -14822,10 +14438,6 @@ impl core::hash::Hash for flui::platform::keyboard::ImeComposition
 impl core::marker::StructuralPartialEq for flui::platform::keyboard::ImeComposition
 variant flui::platform::keyboard::ImeComposition::Active // at 1
 variant flui::platform::keyboard::ImeComposition::Inactive // at 0
-reexport flui::platform::keyboard::Key => flui::interaction::Key
-reexport flui::platform::keyboard::KeyEvent => flui::interaction::KeyEvent
-reexport flui::platform::keyboard::KeyPress => flui::interaction::KeyPress
-reexport flui::platform::keyboard::KeyState => flui::interaction::KeyState
 pub struct flui::platform::keyboard::KeyText(_)
 impl Clone for flui::platform::keyboard::KeyText
 impl Eq for flui::platform::keyboard::KeyText
@@ -14835,9 +14447,6 @@ impl core::fmt::Display for flui::platform::keyboard::KeyText
 impl core::hash::Hash for flui::platform::keyboard::KeyText
 impl core::marker::StructuralPartialEq for flui::platform::keyboard::KeyText
 pub fn flui::platform::keyboard::KeyText::as_str(&self) -> &str
-reexport flui::platform::keyboard::Location => flui::interaction::Location
-reexport flui::platform::keyboard::Modifiers => flui::interaction::Modifiers
-reexport flui::platform::keyboard::NamedKey => flui::interaction::NamedKey
 pub mod flui::platform::launch
 pub struct flui::platform::launch::ExternalUri { .. }
 impl Clone for flui::platform::launch::ExternalUri
@@ -14901,18 +14510,14 @@ fn flui::platform::launch::LauncherBackend::open_path(&self, path: std::path::Pa
 fn flui::platform::launch::LauncherBackend::open_uri(&self, uri: flui::platform::launch::ExternalUri, answer: flui::platform::capability::Resolver<flui::platform::launch::LaunchResult>)
 fn flui::platform::launch::LauncherBackend::reveal_path(&self, path: std::path::PathBuf, answer: flui::platform::capability::Resolver<flui::platform::launch::LaunchResult>)
 fn flui::platform::launch::LauncherBackend::trash_path(&self, path: std::path::PathBuf, answer: flui::platform::capability::Resolver<flui::platform::launch::LaunchResult>)
-pub enum flui::platform::launch::LauncherCapability
-impl core::fmt::Debug for flui::platform::launch::LauncherCapability
-impl flui::platform::capability::Capability for flui::platform::launch::LauncherCapability { type Handle = flui::platform::launch::Launcher; }
 pub const flui::platform::launch::MAX_EXTERNAL_URI_LEN: usize
 pub const flui::platform::launch::REFUSED_SCHEMES: [&str; 6]
-pub const flui::platform::launch::RUNNABLE_EXTENSIONS: [&str; 56]
 pub struct flui::platform::launch::Scheme(_)
 impl Clone for flui::platform::launch::Scheme
 impl Eq for flui::platform::launch::Scheme
 impl PartialEq for flui::platform::launch::Scheme
-impl core::hash::Hash for flui::platform::launch::Scheme
 impl core::fmt::Debug for flui::platform::launch::Scheme
+impl core::hash::Hash for flui::platform::launch::Scheme
 impl core::marker::StructuralPartialEq for flui::platform::launch::Scheme
 pub const flui::platform::launch::Scheme::HTTP: Self = _
 pub const flui::platform::launch::Scheme::HTTPS: Self = _
@@ -14920,7 +14525,6 @@ pub const flui::platform::launch::Scheme::MAILTO: Self = _
 pub const flui::platform::launch::Scheme::TEL: Self = _
 pub fn flui::platform::launch::Scheme::as_str(&self) -> &str
 pub fn flui::platform::launch::Scheme::try_new(name: impl Into<alloc::borrow::Cow<'static, str>>) -> Option<Self>
-pub fn flui::platform::launch::runs_when_opened(path: &std::path::Path) -> bool
 pub mod flui::platform::os_options
 #[non_exhaustive] pub enum flui::platform::os_options::AndroidColorMode
 impl Clone for flui::platform::os_options::AndroidColorMode
@@ -14992,10 +14596,8 @@ variant flui::platform::os_options::WindowsTheme::Dark // at 1
 variant flui::platform::os_options::WindowsTheme::Light // at 0
 variant flui::platform::os_options::WindowsTheme::System // at 2
 pub mod flui::platform::pointer
-reexport flui::platform::pointer::ButtonChange => flui::interaction::ButtonChange
 pub trait flui::platform::pointer::ButtonDirection: flui_platform::pointer::sealed::Sealed + Copy + core::fmt::Debug + PartialEq
 const flui::platform::pointer::ButtonDirection::PRESSED: bool
-reexport flui::platform::pointer::CancelReason => flui::interaction::CancelReason
 pub struct flui::platform::pointer::ContactSize(_)
 impl Clone for flui::platform::pointer::ContactSize
 impl Copy for flui::platform::pointer::ContactSize
@@ -15005,7 +14607,6 @@ impl core::fmt::Debug for flui::platform::pointer::ContactSize
 impl core::marker::StructuralPartialEq for flui::platform::pointer::ContactSize
 pub const fn flui::platform::pointer::ContactSize::get(self) -> flui::geometry::Size<f64>
 pub fn flui::platform::pointer::ContactSize::try_new(size: flui::geometry::Size<f64>) -> Result<Self, flui::platform::pointer::InputValueError>
-reexport flui::platform::pointer::DeviceId => flui::interaction::DeviceId
 pub struct flui::platform::pointer::HoverDistance(_)
 impl Clone for flui::platform::pointer::HoverDistance
 impl Copy for flui::platform::pointer::HoverDistance
@@ -15036,15 +14637,15 @@ impl core::fmt::Debug for flui::platform::pointer::InvalidButtonNumber
 impl core::fmt::Display for flui::platform::pointer::InvalidButtonNumber
 impl core::hash::Hash for flui::platform::pointer::InvalidButtonNumber
 impl core::marker::StructuralPartialEq for flui::platform::pointer::InvalidButtonNumber
-pub struct flui::platform::pointer::MismatchedPointerInfo;
-impl Clone for flui::platform::pointer::MismatchedPointerInfo
-impl Copy for flui::platform::pointer::MismatchedPointerInfo
-impl Eq for flui::platform::pointer::MismatchedPointerInfo
-impl PartialEq for flui::platform::pointer::MismatchedPointerInfo
-impl core::error::Error for flui::platform::pointer::MismatchedPointerInfo
-impl core::fmt::Debug for flui::platform::pointer::MismatchedPointerInfo
-impl core::fmt::Display for flui::platform::pointer::MismatchedPointerInfo
-impl core::marker::StructuralPartialEq for flui::platform::pointer::MismatchedPointerInfo
+pub struct flui::platform::pointer::MismatchedPointerSource;
+impl Clone for flui::platform::pointer::MismatchedPointerSource
+impl Copy for flui::platform::pointer::MismatchedPointerSource
+impl Eq for flui::platform::pointer::MismatchedPointerSource
+impl PartialEq for flui::platform::pointer::MismatchedPointerSource
+impl core::error::Error for flui::platform::pointer::MismatchedPointerSource
+impl core::fmt::Debug for flui::platform::pointer::MismatchedPointerSource
+impl core::fmt::Display for flui::platform::pointer::MismatchedPointerSource
+impl core::marker::StructuralPartialEq for flui::platform::pointer::MismatchedPointerSource
 pub enum flui::platform::pointer::MotionAcceleration
 impl Clone for flui::platform::pointer::MotionAcceleration
 impl Copy for flui::platform::pointer::MotionAcceleration
@@ -15064,9 +14665,6 @@ impl core::marker::StructuralPartialEq for flui::platform::pointer::MotionDelta
 pub const fn flui::platform::pointer::MotionDelta::x(self) -> f64
 pub const fn flui::platform::pointer::MotionDelta::y(self) -> f64
 pub fn flui::platform::pointer::MotionDelta::try_new(x: f64, y: f64) -> Result<Self, flui::platform::pointer::InputValueError>
-reexport flui::platform::pointer::PanZoomEvent => flui::interaction::PanZoomEvent
-reexport flui::platform::pointer::PanZoomPhase => flui::interaction::PanZoomPhase
-reexport flui::platform::pointer::PanZoomTransform => flui::interaction::PanZoomTransform
 pub struct flui::platform::pointer::PenOrientation { .. }
 impl Clone for flui::platform::pointer::PenOrientation
 impl Copy for flui::platform::pointer::PenOrientation
@@ -15078,27 +14676,35 @@ pub const fn flui::platform::pointer::PenOrientation::azimuth(self) -> Option<f6
 pub fn flui::platform::pointer::PenOrientation::try_altitude(altitude: f64) -> Result<Self, flui::platform::pointer::InputValueError>
 pub fn flui::platform::pointer::PenOrientation::try_azimuth(azimuth: f64) -> Result<Self, flui::platform::pointer::InputValueError>
 pub fn flui::platform::pointer::PenOrientation::try_new(altitude: f64, azimuth: f64) -> Result<Self, flui::platform::pointer::InputValueError>
-reexport flui::platform::pointer::PenTool => flui::interaction::PenTool
-reexport flui::platform::pointer::PointerButton => flui::interaction::PointerButton
 #[non_exhaustive] pub struct flui::platform::pointer::PointerButtonEvent<D: flui::platform::pointer::ButtonDirection> { .. }
 field flui::platform::pointer::PointerButtonEvent::click_count: Option<core::num::nonzero::NonZeroU8> // at 4
 field flui::platform::pointer::PointerButtonEvent::modifiers: flui::interaction::Modifiers // at 3
-field flui::platform::pointer::PointerButtonEvent::pointer: flui::interaction::PointerInfo // at 0
+field flui::platform::pointer::PointerButtonEvent::pointer: flui::interaction::PointerSource // at 0
 field flui::platform::pointer::PointerButtonEvent::sample: flui::interaction::PointerSample // at 5
 impl<D: Clone + flui::platform::pointer::ButtonDirection> Clone for flui::platform::pointer::PointerButtonEvent<D>
 impl<D: Copy + flui::platform::pointer::ButtonDirection> Copy for flui::platform::pointer::PointerButtonEvent<D>
 impl<D: PartialEq + flui::platform::pointer::ButtonDirection> PartialEq for flui::platform::pointer::PointerButtonEvent<D>
 impl<D: PartialEq + flui::platform::pointer::ButtonDirection> core::marker::StructuralPartialEq for flui::platform::pointer::PointerButtonEvent<D>
 impl<D: core::fmt::Debug + flui::platform::pointer::ButtonDirection> core::fmt::Debug for flui::platform::pointer::PointerButtonEvent<D>
-pub const fn flui::platform::pointer::PointerButtonEvent::new(pointer: flui::interaction::PointerInfo, button: flui::interaction::PointerButton, buttons: flui::interaction::PointerButtons, sample: flui::interaction::PointerSample) -> Self // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
+pub const fn flui::platform::pointer::PointerButtonEvent::new(pointer: flui::interaction::PointerSource, button: flui::interaction::PointerButton, buttons: flui::interaction::PointerButtons, sample: flui::interaction::PointerSample) -> Self // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
 pub const fn flui::platform::pointer::PointerButtonEvent::press(&self) -> Option<flui::foundation::PressId> // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
 pub const fn flui::platform::pointer::PointerButtonEvent::with_click_count(self, click_count: core::num::nonzero::NonZeroU8) -> Self // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
 pub const fn flui::platform::pointer::PointerButtonEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
 pub const fn flui::platform::pointer::PointerButtonEvent::with_press(self, press: flui::foundation::PressId) -> Self // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
 pub fn flui::platform::pointer::PointerButtonEvent::button(&self) -> flui::interaction::PointerButton // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
 pub fn flui::platform::pointer::PointerButtonEvent::buttons(&self) -> flui::interaction::PointerButtons // impl<D: flui::platform::pointer::ButtonDirection> flui::platform::pointer::PointerButtonEvent<D>
-reexport flui::platform::pointer::PointerButtons => flui::interaction::PointerButtons
-reexport flui::platform::pointer::PointerCancel => flui::platform::PointerCancel
+#[non_exhaustive] pub struct flui::platform::pointer::PointerCancel
+field flui::platform::pointer::PointerCancel::pointer: flui::interaction::PointerSource // at 0
+field flui::platform::pointer::PointerCancel::reason: flui::interaction::CancelReason // at 2
+field flui::platform::pointer::PointerCancel::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::pointer::PointerCancel
+impl Copy for flui::platform::pointer::PointerCancel
+impl Eq for flui::platform::pointer::PointerCancel
+impl PartialEq for flui::platform::pointer::PointerCancel
+impl core::fmt::Debug for flui::platform::pointer::PointerCancel
+impl core::hash::Hash for flui::platform::pointer::PointerCancel
+impl core::marker::StructuralPartialEq for flui::platform::pointer::PointerCancel
+pub const fn flui::platform::pointer::PointerCancel::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, reason: flui::interaction::CancelReason) -> Self
 #[non_exhaustive] pub struct flui::platform::pointer::PointerDeviceChange
 field flui::platform::pointer::PointerDeviceChange::device: flui::interaction::DeviceId // at 0
 field flui::platform::pointer::PointerDeviceChange::kind: flui::interaction::PointerKind // at 1
@@ -15111,18 +14717,8 @@ impl core::fmt::Debug for flui::platform::pointer::PointerDeviceChange
 impl core::hash::Hash for flui::platform::pointer::PointerDeviceChange
 impl core::marker::StructuralPartialEq for flui::platform::pointer::PointerDeviceChange
 pub const fn flui::platform::pointer::PointerDeviceChange::new(device: flui::interaction::DeviceId, kind: flui::interaction::PointerKind, time: flui::interaction::EventTime) -> Self
-reexport flui::platform::pointer::PointerEvent => flui::interaction::PointerEvent
-reexport flui::platform::pointer::PointerId => flui::interaction::PointerId
-reexport flui::platform::pointer::PointerInfo => flui::interaction::PointerInfo
-reexport flui::platform::pointer::PointerKind => flui::interaction::PointerKind
-reexport flui::platform::pointer::PointerMove => flui::interaction::PointerMove
-reexport flui::platform::pointer::PointerPosition => flui::interaction::PointerPosition
-reexport flui::platform::pointer::PointerPress => flui::interaction::PointerPress
-reexport flui::platform::pointer::PointerRelease => flui::interaction::PointerRelease
-reexport flui::platform::pointer::PointerRole => flui::interaction::PointerRole
-reexport flui::platform::pointer::PointerSample => flui::interaction::PointerSample
 #[non_exhaustive] pub struct flui::platform::pointer::PointerSignal
-field flui::platform::pointer::PointerSignal::pointer: flui::interaction::PointerInfo // at 0
+field flui::platform::pointer::PointerSignal::pointer: flui::interaction::PointerSource // at 0
 field flui::platform::pointer::PointerSignal::position: Option<flui::interaction::PointerPosition> // at 2
 field flui::platform::pointer::PointerSignal::time: flui::interaction::EventTime // at 1
 impl Clone for flui::platform::pointer::PointerSignal
@@ -15130,7 +14726,7 @@ impl Copy for flui::platform::pointer::PointerSignal
 impl PartialEq for flui::platform::pointer::PointerSignal
 impl core::fmt::Debug for flui::platform::pointer::PointerSignal
 impl core::marker::StructuralPartialEq for flui::platform::pointer::PointerSignal
-pub const fn flui::platform::pointer::PointerSignal::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime) -> Self
+pub const fn flui::platform::pointer::PointerSignal::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime) -> Self
 pub const fn flui::platform::pointer::PointerSignal::with_position(self, position: flui::interaction::PointerPosition) -> Self
 pub struct flui::platform::pointer::Press;
 impl Clone for flui::platform::pointer::Press
@@ -15142,7 +14738,6 @@ impl core::hash::Hash for flui::platform::pointer::Press
 impl core::marker::StructuralPartialEq for flui::platform::pointer::Press
 impl flui::platform::pointer::ButtonDirection for flui::platform::pointer::Press
 impl flui_platform::pointer::sealed::Sealed for flui::platform::pointer::Press
-reexport flui::platform::pointer::PressId => flui::foundation::PressId
 pub struct flui::platform::pointer::Pressure(_)
 impl Clone for flui::platform::pointer::Pressure
 impl Copy for flui::platform::pointer::Pressure
@@ -15177,14 +14772,14 @@ variant flui::platform::pointer::Quantity::Twist // at 5
 #[non_exhaustive] pub struct flui::platform::pointer::RawMotion
 field flui::platform::pointer::RawMotion::acceleration: flui::platform::pointer::MotionAcceleration // at 4
 field flui::platform::pointer::RawMotion::delta: flui::platform::pointer::MotionDelta // at 3
-field flui::platform::pointer::RawMotion::pointer: flui::interaction::PointerInfo // at 0
+field flui::platform::pointer::RawMotion::pointer: flui::interaction::PointerSource // at 0
 field flui::platform::pointer::RawMotion::position: Option<flui::interaction::PointerPosition> // at 2
 field flui::platform::pointer::RawMotion::time: flui::interaction::EventTime // at 1
 impl Clone for flui::platform::pointer::RawMotion
 impl PartialEq for flui::platform::pointer::RawMotion
 impl core::fmt::Debug for flui::platform::pointer::RawMotion
 impl core::marker::StructuralPartialEq for flui::platform::pointer::RawMotion
-pub const fn flui::platform::pointer::RawMotion::new(pointer: flui::interaction::PointerInfo, time: flui::interaction::EventTime, delta: flui::platform::pointer::MotionDelta, acceleration: flui::platform::pointer::MotionAcceleration) -> Self
+pub const fn flui::platform::pointer::RawMotion::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, delta: flui::platform::pointer::MotionDelta, acceleration: flui::platform::pointer::MotionAcceleration) -> Self
 pub const fn flui::platform::pointer::RawMotion::with_position(self, position: flui::interaction::PointerPosition) -> Self
 pub struct flui::platform::pointer::Release;
 impl Clone for flui::platform::pointer::Release
@@ -15196,14 +14791,28 @@ impl core::hash::Hash for flui::platform::pointer::Release
 impl core::marker::StructuralPartialEq for flui::platform::pointer::Release
 impl flui::platform::pointer::ButtonDirection for flui::platform::pointer::Release
 impl flui_platform::pointer::sealed::Sealed for flui::platform::pointer::Release
-reexport flui::platform::pointer::ScrollDelta => flui::interaction::ScrollDelta
-reexport flui::platform::pointer::ScrollEvent => flui::interaction::ScrollEvent
-reexport flui::platform::pointer::ScrollInversion => flui::interaction::ScrollInversion
-reexport flui::platform::pointer::ScrollPhase => flui::interaction::ScrollPhase
-reexport flui::platform::pointer::ScrollPrecision => flui::interaction::ScrollPrecision
-reexport flui::platform::pointer::ScrollUnit => flui::interaction::ScrollUnit
-reexport flui::platform::pointer::SmartZoomEvent => flui::platform::SmartZoomEvent
-reexport flui::platform::pointer::SwipeOffset => flui::platform::SwipeOffset
+#[non_exhaustive] pub struct flui::platform::pointer::SmartZoomEvent { .. }
+field flui::platform::pointer::SmartZoomEvent::modifiers: flui::interaction::Modifiers // at 3
+field flui::platform::pointer::SmartZoomEvent::position: flui::interaction::PointerPosition // at 2
+field flui::platform::pointer::SmartZoomEvent::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::pointer::SmartZoomEvent
+impl Copy for flui::platform::pointer::SmartZoomEvent
+impl PartialEq for flui::platform::pointer::SmartZoomEvent
+impl core::fmt::Debug for flui::platform::pointer::SmartZoomEvent
+impl core::marker::StructuralPartialEq for flui::platform::pointer::SmartZoomEvent
+pub const fn flui::platform::pointer::SmartZoomEvent::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition) -> Self
+pub const fn flui::platform::pointer::SmartZoomEvent::pointer(&self) -> &flui::interaction::PointerSource
+pub const fn flui::platform::pointer::SmartZoomEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
+pub struct flui::platform::pointer::SwipeOffset(_)
+impl Clone for flui::platform::pointer::SwipeOffset
+impl Copy for flui::platform::pointer::SwipeOffset
+impl Default for flui::platform::pointer::SwipeOffset
+impl PartialEq for flui::platform::pointer::SwipeOffset
+impl core::fmt::Debug for flui::platform::pointer::SwipeOffset
+impl core::marker::StructuralPartialEq for flui::platform::pointer::SwipeOffset
+pub const flui::platform::pointer::SwipeOffset::ZERO: Self = _
+pub const fn flui::platform::pointer::SwipeOffset::get(self) -> flui::geometry::Offset<f64>
+pub fn flui::platform::pointer::SwipeOffset::try_new(offset: flui::geometry::Offset<f64>) -> Result<Self, flui::platform::pointer::InputValueError>
 pub struct flui::platform::pointer::TangentialPressure(_)
 impl Clone for flui::platform::pointer::TangentialPressure
 impl Copy for flui::platform::pointer::TangentialPressure
@@ -15214,10 +14823,54 @@ impl core::marker::StructuralPartialEq for flui::platform::pointer::TangentialPr
 pub const fn flui::platform::pointer::TangentialPressure::get(self) -> f32
 pub fn flui::platform::pointer::TangentialPressure::saturating(value: f32) -> Result<Self, flui::platform::pointer::InputValueError>
 pub fn flui::platform::pointer::TangentialPressure::try_new(value: f32) -> Result<Self, flui::platform::pointer::InputValueError>
-reexport flui::platform::pointer::TouchpadHoldEvent => flui::platform::TouchpadHoldEvent
-reexport flui::platform::pointer::TouchpadHoldPhase => flui::platform::TouchpadHoldPhase
-reexport flui::platform::pointer::TouchpadSwipeEvent => flui::platform::TouchpadSwipeEvent
-reexport flui::platform::pointer::TouchpadSwipePhase => flui::platform::TouchpadSwipePhase
+#[non_exhaustive] pub struct flui::platform::pointer::TouchpadHoldEvent { .. }
+field flui::platform::pointer::TouchpadHoldEvent::modifiers: flui::interaction::Modifiers // at 4
+field flui::platform::pointer::TouchpadHoldEvent::phase: flui::platform::pointer::TouchpadHoldPhase // at 3
+field flui::platform::pointer::TouchpadHoldEvent::position: flui::interaction::PointerPosition // at 2
+field flui::platform::pointer::TouchpadHoldEvent::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::pointer::TouchpadHoldEvent
+impl Copy for flui::platform::pointer::TouchpadHoldEvent
+impl PartialEq for flui::platform::pointer::TouchpadHoldEvent
+impl core::fmt::Debug for flui::platform::pointer::TouchpadHoldEvent
+impl core::marker::StructuralPartialEq for flui::platform::pointer::TouchpadHoldEvent
+pub const fn flui::platform::pointer::TouchpadHoldEvent::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, phase: flui::platform::pointer::TouchpadHoldPhase) -> Self
+pub const fn flui::platform::pointer::TouchpadHoldEvent::pointer(&self) -> &flui::interaction::PointerSource
+pub const fn flui::platform::pointer::TouchpadHoldEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
+pub enum flui::platform::pointer::TouchpadHoldPhase
+impl Clone for flui::platform::pointer::TouchpadHoldPhase
+impl Copy for flui::platform::pointer::TouchpadHoldPhase
+impl Eq for flui::platform::pointer::TouchpadHoldPhase
+impl PartialEq for flui::platform::pointer::TouchpadHoldPhase
+impl core::fmt::Debug for flui::platform::pointer::TouchpadHoldPhase
+impl core::hash::Hash for flui::platform::pointer::TouchpadHoldPhase
+impl core::marker::StructuralPartialEq for flui::platform::pointer::TouchpadHoldPhase
+variant flui::platform::pointer::TouchpadHoldPhase::Begin // at 0
+variant flui::platform::pointer::TouchpadHoldPhase::Cancelled // at 2
+variant flui::platform::pointer::TouchpadHoldPhase::End // at 1
+#[non_exhaustive] pub struct flui::platform::pointer::TouchpadSwipeEvent { .. }
+field flui::platform::pointer::TouchpadSwipeEvent::fingers: core::num::nonzero::NonZeroU8 // at 3
+field flui::platform::pointer::TouchpadSwipeEvent::modifiers: flui::interaction::Modifiers // at 5
+field flui::platform::pointer::TouchpadSwipeEvent::phase: flui::platform::pointer::TouchpadSwipePhase // at 4
+field flui::platform::pointer::TouchpadSwipeEvent::position: flui::interaction::PointerPosition // at 2
+field flui::platform::pointer::TouchpadSwipeEvent::time: flui::interaction::EventTime // at 1
+impl Clone for flui::platform::pointer::TouchpadSwipeEvent
+impl Copy for flui::platform::pointer::TouchpadSwipeEvent
+impl PartialEq for flui::platform::pointer::TouchpadSwipeEvent
+impl core::fmt::Debug for flui::platform::pointer::TouchpadSwipeEvent
+impl core::marker::StructuralPartialEq for flui::platform::pointer::TouchpadSwipeEvent
+pub const fn flui::platform::pointer::TouchpadSwipeEvent::new(pointer: flui::interaction::PointerSource, time: flui::interaction::EventTime, position: flui::interaction::PointerPosition, fingers: core::num::nonzero::NonZeroU8, phase: flui::platform::pointer::TouchpadSwipePhase) -> Self
+pub const fn flui::platform::pointer::TouchpadSwipeEvent::pointer(&self) -> &flui::interaction::PointerSource
+pub const fn flui::platform::pointer::TouchpadSwipeEvent::with_modifiers(self, modifiers: flui::interaction::Modifiers) -> Self
+pub enum flui::platform::pointer::TouchpadSwipePhase
+impl Clone for flui::platform::pointer::TouchpadSwipePhase
+impl Copy for flui::platform::pointer::TouchpadSwipePhase
+impl PartialEq for flui::platform::pointer::TouchpadSwipePhase
+impl core::fmt::Debug for flui::platform::pointer::TouchpadSwipePhase
+impl core::marker::StructuralPartialEq for flui::platform::pointer::TouchpadSwipePhase
+variant flui::platform::pointer::TouchpadSwipePhase::Cancelled // at 3
+variant flui::platform::pointer::TouchpadSwipePhase::End // at 2
+variant flui::platform::pointer::TouchpadSwipePhase::Start // at 0
+variant flui::platform::pointer::TouchpadSwipePhase::Update(flui::platform::pointer::SwipeOffset) // at 1
 pub struct flui::platform::pointer::Twist(_)
 impl Clone for flui::platform::pointer::Twist
 impl Copy for flui::platform::pointer::Twist
@@ -15227,90 +14880,6 @@ impl core::fmt::Debug for flui::platform::pointer::Twist
 impl core::marker::StructuralPartialEq for flui::platform::pointer::Twist
 pub const fn flui::platform::pointer::Twist::radians(self) -> f64
 pub fn flui::platform::pointer::Twist::try_new(radians: f64) -> Result<Self, flui::platform::pointer::InputValueError>
-pub mod flui::platform::testing
-pub struct flui::platform::testing::FakeHaptics { .. }
-impl Default for flui::platform::testing::FakeHaptics
-impl core::fmt::Debug for flui::platform::testing::FakeHaptics
-impl flui::platform::PlatformHaptics for flui::platform::testing::FakeHaptics
-pub fn flui::platform::testing::FakeHaptics::calls(&self) -> Vec<flui::platform::testing::HapticCall>
-pub fn flui::platform::testing::FakeHaptics::clear(&self)
-pub fn flui::platform::testing::FakeHaptics::feedback(&self) -> Vec<flui::platform::HapticFeedback>
-pub fn flui::platform::testing::FakeHaptics::new() -> Self
-pub fn flui::platform::testing::FakeHaptics::with_capabilities(capabilities: flui::platform::haptics::HapticCapabilities) -> Self
-pub fn flui::platform::testing::FakeHaptics::with_device(self, device: flui::interaction::DeviceId) -> Self
-#[non_exhaustive] pub struct flui::platform::testing::HapticCall
-field flui::platform::testing::HapticCall::actuator: Option<flui::interaction::DeviceId> // at 2
-field flui::platform::testing::HapticCall::outcome: flui::platform::haptics::HapticOutcome // at 3
-field flui::platform::testing::HapticCall::play: flui::platform::testing::HapticPlay // at 0
-field flui::platform::testing::HapticCall::request: flui::platform::haptics::HapticRequest // at 1
-impl Clone for flui::platform::testing::HapticCall
-impl PartialEq for flui::platform::testing::HapticCall
-impl core::fmt::Debug for flui::platform::testing::HapticCall
-impl core::marker::StructuralPartialEq for flui::platform::testing::HapticCall
-#[non_exhaustive] pub enum flui::platform::testing::HapticPlay
-impl Clone for flui::platform::testing::HapticPlay
-impl PartialEq for flui::platform::testing::HapticPlay
-impl core::fmt::Debug for flui::platform::testing::HapticPlay
-impl core::marker::StructuralPartialEq for flui::platform::testing::HapticPlay
-variant flui::platform::testing::HapticPlay::Feedback(flui::platform::HapticFeedback) // at 0
-variant flui::platform::testing::HapticPlay::Pattern { pattern: flui::platform::haptics::HapticPattern, fallback: flui::platform::HapticFeedback } // at 1
-#[non_exhaustive] pub enum flui::platform::testing::LaunchRequest
-impl Clone for flui::platform::testing::LaunchRequest
-impl Eq for flui::platform::testing::LaunchRequest
-impl PartialEq for flui::platform::testing::LaunchRequest
-impl core::fmt::Debug for flui::platform::testing::LaunchRequest
-impl core::marker::StructuralPartialEq for flui::platform::testing::LaunchRequest
-variant flui::platform::testing::LaunchRequest::OpenPath(std::path::PathBuf) // at 1
-variant flui::platform::testing::LaunchRequest::OpenUri(flui::platform::launch::ExternalUri) // at 0
-variant flui::platform::testing::LaunchRequest::RevealPath(std::path::PathBuf) // at 2
-variant flui::platform::testing::LaunchRequest::TrashPath(std::path::PathBuf) // at 3
-pub struct flui::platform::testing::NoNativeSurface;
-impl Clone for flui::platform::testing::NoNativeSurface
-impl Copy for flui::platform::testing::NoNativeSurface
-impl Default for flui::platform::testing::NoNativeSurface
-impl Eq for flui::platform::testing::NoNativeSurface
-impl PartialEq for flui::platform::testing::NoNativeSurface
-impl core::fmt::Debug for flui::platform::testing::NoNativeSurface
-impl core::marker::StructuralPartialEq for flui::platform::testing::NoNativeSurface
-impl flui::platform::SurfaceTarget for flui::platform::testing::NoNativeSurface
-impl raw_window_handle::borrowed::HasDisplayHandle for flui::platform::testing::NoNativeSurface
-impl raw_window_handle::borrowed::HasWindowHandle for flui::platform::testing::NoNativeSurface
-pub struct flui::platform::testing::ScriptedHttp { .. }
-impl Clone for flui::platform::testing::ScriptedHttp
-impl Default for flui::platform::testing::ScriptedHttp
-impl core::fmt::Debug for flui::platform::testing::ScriptedHttp
-impl flui::platform::http::HttpClient for flui::platform::testing::ScriptedHttp
-pub fn flui::platform::testing::ScriptedHttp::abandoned(&self) -> usize
-pub fn flui::platform::testing::ScriptedHttp::handle(&self) -> flui::platform::http::Http
-pub fn flui::platform::testing::ScriptedHttp::hold(&self, url: impl Into<String>)
-pub fn flui::platform::testing::ScriptedHttp::new() -> Self
-pub fn flui::platform::testing::ScriptedHttp::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
-pub fn flui::platform::testing::ScriptedHttp::release(&self, url: &str)
-pub fn flui::platform::testing::ScriptedHttp::report_to(&self, report: flui::platform::capability::scripted::FailureReport)
-pub fn flui::platform::testing::ScriptedHttp::requests(&self) -> Vec<flui::platform::http::HttpRequest>
-pub fn flui::platform::testing::ScriptedHttp::requests_to(&self, url: &str) -> usize
-pub fn flui::platform::testing::ScriptedHttp::respond(&self, url: impl Into<String>, response: flui::platform::testing::ScriptedResponse)
-pub struct flui::platform::testing::ScriptedLauncher { .. }
-impl Clone for flui::platform::testing::ScriptedLauncher
-impl Default for flui::platform::testing::ScriptedLauncher
-impl core::fmt::Debug for flui::platform::testing::ScriptedLauncher
-impl flui::platform::launch::LauncherBackend for flui::platform::testing::ScriptedLauncher
-pub fn flui::platform::testing::ScriptedLauncher::answer_next(&self, result: flui::platform::launch::LaunchResult)
-pub fn flui::platform::testing::ScriptedLauncher::hold(&self)
-pub fn flui::platform::testing::ScriptedLauncher::new() -> Self
-pub fn flui::platform::testing::ScriptedLauncher::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
-pub fn flui::platform::testing::ScriptedLauncher::release(&self, result: flui::platform::launch::LaunchResult) -> bool
-pub fn flui::platform::testing::ScriptedLauncher::requests(&self) -> Vec<flui::platform::testing::LaunchRequest>
-pub fn flui::platform::testing::ScriptedLauncher::script(&self) -> &flui::platform::capability::scripted::Script<flui::platform::testing::LaunchRequest, flui::platform::launch::LaunchResult>
-#[non_exhaustive] pub enum flui::platform::testing::ScriptedResponse
-impl Clone for flui::platform::testing::ScriptedResponse
-impl Eq for flui::platform::testing::ScriptedResponse
-impl PartialEq for flui::platform::testing::ScriptedResponse
-impl core::fmt::Debug for flui::platform::testing::ScriptedResponse
-impl core::marker::StructuralPartialEq for flui::platform::testing::ScriptedResponse
-pub fn flui::platform::testing::ScriptedResponse::ok(body: impl Into<Vec<u8>>) -> Self
-variant flui::platform::testing::ScriptedResponse::Fail(flui::platform::http::HttpError) // at 1
-variant flui::platform::testing::ScriptedResponse::Respond { status: flui::platform::http::StatusCode, body: Vec<u8> } // at 0
 pub mod flui::platform::text_store
 #[non_exhaustive] pub enum flui::platform::text_store::Autofill
 impl Clone for flui::platform::text_store::Autofill
@@ -15352,7 +14921,7 @@ pub fn flui::platform::text_store::CommitGate::set_open(&self, open: bool)
 pub fn flui::platform::text_store::CommitGate::take_failure(&self) -> Option<Box<dyn core::any::Any + Send>>
 pub struct flui::platform::text_store::Composition
 field flui::platform::text_store::Composition::hides_caret: bool // at 1
-field flui::platform::text_store::Composition::range: flui::platform::text_store::Utf16Range // at 0
+field flui::platform::text_store::Composition::range: flui::platform::text_store::utf16::Utf16Range // at 0
 impl Clone for flui::platform::text_store::Composition
 impl Copy for flui::platform::text_store::Composition
 impl Eq for flui::platform::text_store::Composition
@@ -15380,7 +14949,6 @@ impl core::marker::StructuralPartialEq for flui::platform::text_store::Correctio
 variant flui::platform::text_store::Correction::Autocorrect // at 2
 variant flui::platform::text_store::Correction::Off // at 0
 variant flui::platform::text_store::Correction::Suggestions // at 1
-pub const flui::platform::text_store::DEFERRED_LOCK_CAPACITY: usize = 16
 #[non_exhaustive] pub enum flui::platform::text_store::EnterAction
 impl Clone for flui::platform::text_store::EnterAction
 impl Copy for flui::platform::text_store::EnterAction
@@ -15400,10 +14968,10 @@ variant flui::platform::text_store::EnterAction::SendMessage // at 6
 pub enum flui::platform::text_store::LockGrant
 impl core::fmt::Debug for flui::platform::text_store::LockGrant
 pub fn flui::platform::text_store::LockGrant::kind(&self) -> flui::platform::text_store::LockKind
-pub fn flui::platform::text_store::LockGrant::read(f: impl FnOnce(&dyn flui::platform::TextStoreRead) + 'static) -> Self
-pub fn flui::platform::text_store::LockGrant::read_write(f: impl FnOnce(&mut dyn flui::platform::TextStoreEdit) + 'static) -> Self
-variant flui::platform::text_store::LockGrant::Read(Box<dyn FnOnce(&dyn flui::platform::TextStoreRead)>) // at 0
-variant flui::platform::text_store::LockGrant::ReadWrite(Box<dyn FnOnce(&mut dyn flui::platform::TextStoreEdit)>) // at 1
+pub fn flui::platform::text_store::LockGrant::read(f: impl FnOnce(&dyn flui::platform::text_store::TextStoreRead) + 'static) -> Self
+pub fn flui::platform::text_store::LockGrant::read_write(f: impl FnOnce(&mut dyn flui::platform::text_store::TextStoreEdit) + 'static) -> Self
+variant flui::platform::text_store::LockGrant::Read(Box<dyn FnOnce(&dyn flui::platform::text_store::TextStoreRead)>) // at 0
+variant flui::platform::text_store::LockGrant::ReadWrite(Box<dyn FnOnce(&mut dyn flui::platform::text_store::TextStoreEdit)>) // at 1
 pub enum flui::platform::text_store::LockKind
 impl Clone for flui::platform::text_store::LockKind
 impl Copy for flui::platform::text_store::LockKind
@@ -15443,20 +15011,6 @@ impl core::fmt::Debug for flui::platform::text_store::NumberFormat
 impl core::hash::Hash for flui::platform::text_store::NumberFormat
 impl core::marker::StructuralPartialEq for flui::platform::text_store::NumberFormat
 pub const flui::platform::text_store::NumberFormat::WHOLE: Self = _
-#[non_exhaustive] pub enum flui::platform::text_store::OffsetError
-impl Clone for flui::platform::text_store::OffsetError
-impl Copy for flui::platform::text_store::OffsetError
-impl Eq for flui::platform::text_store::OffsetError
-impl From<flui::platform::text_store::OffsetError> for flui::platform::text_store::TextStoreError
-impl PartialEq for flui::platform::text_store::OffsetError
-impl core::error::Error for flui::platform::text_store::OffsetError
-impl core::fmt::Debug for flui::platform::text_store::OffsetError
-impl core::fmt::Display for flui::platform::text_store::OffsetError
-impl core::marker::StructuralPartialEq for flui::platform::text_store::OffsetError
-variant flui::platform::text_store::OffsetError::Inverted { start: usize, end: usize } // at 3
-variant flui::platform::text_store::OffsetError::NotCharBoundary(usize) // at 2
-variant flui::platform::text_store::OffsetError::PastEnd { offset: usize, len: usize } // at 0
-variant flui::platform::text_store::OffsetError::SplitsSurrogatePair(usize) // at 1
 pub struct flui::platform::text_store::OwnerCalls { .. }
 impl Default for flui::platform::text_store::OwnerCalls
 impl core::fmt::Debug for flui::platform::text_store::OwnerCalls
@@ -15495,8 +15049,8 @@ impl PartialEq for flui::platform::text_store::RangeRect
 impl core::fmt::Debug for flui::platform::text_store::RangeRect
 impl core::marker::StructuralPartialEq for flui::platform::text_store::RangeRect
 pub struct flui::platform::text_store::Selection
-field flui::platform::text_store::Selection::active: flui::platform::text_store::Utf16Offset // at 1
-field flui::platform::text_store::Selection::anchor: flui::platform::text_store::Utf16Offset // at 0
+field flui::platform::text_store::Selection::active: flui::platform::text_store::utf16::Utf16Offset // at 1
+field flui::platform::text_store::Selection::anchor: flui::platform::text_store::utf16::Utf16Offset // at 0
 impl Clone for flui::platform::text_store::Selection
 impl Copy for flui::platform::text_store::Selection
 impl Eq for flui::platform::text_store::Selection
@@ -15504,13 +15058,13 @@ impl PartialEq for flui::platform::text_store::Selection
 impl core::fmt::Debug for flui::platform::text_store::Selection
 impl core::hash::Hash for flui::platform::text_store::Selection
 impl core::marker::StructuralPartialEq for flui::platform::text_store::Selection
-pub const fn flui::platform::text_store::Selection::collapsed(at: flui::platform::text_store::Utf16Offset) -> Self
+pub const fn flui::platform::text_store::Selection::collapsed(at: flui::platform::text_store::utf16::Utf16Offset) -> Self
 pub const fn flui::platform::text_store::Selection::is_collapsed(self) -> bool
-pub fn flui::platform::text_store::Selection::range(self) -> flui::platform::text_store::Utf16Range
+pub fn flui::platform::text_store::Selection::range(self) -> flui::platform::text_store::utf16::Utf16Range
 pub struct flui::platform::text_store::TextChange
-field flui::platform::text_store::TextChange::new_end: flui::platform::text_store::Utf16Offset // at 2
-field flui::platform::text_store::TextChange::old_end: flui::platform::text_store::Utf16Offset // at 1
-field flui::platform::text_store::TextChange::start: flui::platform::text_store::Utf16Offset // at 0
+field flui::platform::text_store::TextChange::new_end: flui::platform::text_store::utf16::Utf16Offset // at 2
+field flui::platform::text_store::TextChange::old_end: flui::platform::text_store::utf16::Utf16Offset // at 1
+field flui::platform::text_store::TextChange::start: flui::platform::text_store::utf16::Utf16Offset // at 0
 impl Clone for flui::platform::text_store::TextChange
 impl Copy for flui::platform::text_store::TextChange
 impl Eq for flui::platform::text_store::TextChange
@@ -15552,7 +15106,13 @@ variant flui::platform::text_store::TextInputPurpose::Phone // at 3
 variant flui::platform::text_store::TextInputPurpose::Search // at 5
 variant flui::platform::text_store::TextInputPurpose::Text // at 0
 variant flui::platform::text_store::TextInputPurpose::Url // at 2
-reexport flui::platform::text_store::TextStore => flui::platform::TextStore
+pub trait flui::platform::text_store::TextStore
+fn flui::platform::text_store::TextStore::request_lock(&self, grant: flui::platform::text_store::LockGrant, timing: flui::platform::text_store::LockTiming) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStore::run_deferred_grants(&self) -> usize
+fn flui::platform::text_store::TextStore::screen_moved(&self) { .. }
+fn flui::platform::text_store::TextStore::set_commit_gate(&self, gate: flui::platform::text_store::CommitGate)
+fn flui::platform::text_store::TextStore::set_observer(&self, observer: Option<alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStoreObserver>>)
+fn flui::platform::text_store::TextStore::status(&self) -> flui::platform::text_store::TextStoreStatus
 #[non_exhaustive] pub enum flui::platform::text_store::TextStoreChange
 impl Clone for flui::platform::text_store::TextStoreChange
 impl Copy for flui::platform::text_store::TextStoreChange
@@ -15563,12 +15123,16 @@ impl core::marker::StructuralPartialEq for flui::platform::text_store::TextStore
 variant flui::platform::text_store::TextStoreChange::Composition // at 2
 variant flui::platform::text_store::TextStoreChange::Selection // at 1
 variant flui::platform::text_store::TextStoreChange::Text(flui::platform::text_store::TextChange) // at 0
-reexport flui::platform::text_store::TextStoreEdit => flui::platform::TextStoreEdit
+pub trait flui::platform::text_store::TextStoreEdit: flui::platform::text_store::TextStoreRead
+fn flui::platform::text_store::TextStoreEdit::insert_at_selection(&mut self, text: &str) -> Result<flui::platform::text_store::TextChange, flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStoreEdit::replace(&mut self, range: flui::platform::text_store::utf16::Utf16Range, text: &str) -> Result<flui::platform::text_store::TextChange, flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStoreEdit::set_composition(&mut self, composition: Option<flui::platform::text_store::Composition>) -> Result<(), flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStoreEdit::set_selection(&mut self, selection: flui::platform::text_store::Selection) -> Result<(), flui::platform::text_store::TextStoreError>
 #[non_exhaustive] pub enum flui::platform::text_store::TextStoreError
 impl Clone for flui::platform::text_store::TextStoreError
 impl Copy for flui::platform::text_store::TextStoreError
 impl Eq for flui::platform::text_store::TextStoreError
-impl From<flui::platform::text_store::OffsetError> for flui::platform::text_store::TextStoreError
+impl From<flui::platform::text_store::utf16::OffsetError> for flui::platform::text_store::TextStoreError
 impl PartialEq for flui::platform::text_store::TextStoreError
 impl core::error::Error for flui::platform::text_store::TextStoreError
 impl core::fmt::Debug for flui::platform::text_store::TextStoreError
@@ -15577,11 +15141,14 @@ impl core::marker::StructuralPartialEq for flui::platform::text_store::TextStore
 variant flui::platform::text_store::TextStoreError::DeferredQueueFull // at 1
 variant flui::platform::text_store::TextStoreError::Detached // at 6
 variant flui::platform::text_store::TextStoreError::NoLayout // at 4
-variant flui::platform::text_store::TextStoreError::Offset(flui::platform::text_store::OffsetError) // at 2
+variant flui::platform::text_store::TextStoreError::Offset(flui::platform::text_store::utf16::OffsetError) // at 2
 variant flui::platform::text_store::TextStoreError::PointOutside // at 5
 variant flui::platform::text_store::TextStoreError::Protected // at 3
 variant flui::platform::text_store::TextStoreError::SyncLockUnavailable // at 0
-reexport flui::platform::text_store::TextStoreHost => flui::platform::TextStoreHost
+pub trait flui::platform::text_store::TextStoreHost
+fn flui::platform::text_store::TextStoreHost::complete_composition(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStore>) -> Result<flui::platform::text_store::CompositionEnd, flui::platform::text_store::TextStoreHostError>
+fn flui::platform::text_store::TextStoreHost::focus_store(&self, store: Option<alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStore>>)
+fn flui::platform::text_store::TextStoreHost::show_keyboard(&self, store: &alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStore>)
 #[non_exhaustive] pub enum flui::platform::text_store::TextStoreHostError
 impl Clone for flui::platform::text_store::TextStoreHostError
 impl Copy for flui::platform::text_store::TextStoreHostError
@@ -15595,8 +15162,21 @@ impl core::marker::StructuralPartialEq for flui::platform::text_store::TextStore
 pub const fn flui::platform::text_store::TextStoreHostError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::platform::text_store::TextStoreHostError::NotFocused // at 0
 variant flui::platform::text_store::TextStoreHostError::Unsupported(flui::platform::Unsupported) // at 1
-reexport flui::platform::text_store::TextStoreObserver => flui::platform::TextStoreObserver
-reexport flui::platform::text_store::TextStoreRead => flui::platform::TextStoreRead
+pub trait flui::platform::text_store::TextStoreObserver
+fn flui::platform::text_store::TextStoreObserver::composition_changed(&self) { .. }
+fn flui::platform::text_store::TextStoreObserver::layout_changed(&self)
+fn flui::platform::text_store::TextStoreObserver::publish_change(&self, _change: flui::platform::text_store::TextStoreChange, publish: &mut dyn FnMut(&mut flui::platform::text_store::OwnerCalls), calls: &mut flui::platform::text_store::OwnerCalls) { .. }
+fn flui::platform::text_store::TextStoreObserver::selection_changed(&self)
+fn flui::platform::text_store::TextStoreObserver::status_changed(&self)
+fn flui::platform::text_store::TextStoreObserver::text_changed(&self, change: flui::platform::text_store::TextChange)
+pub trait flui::platform::text_store::TextStoreRead
+fn flui::platform::text_store::TextStoreRead::composition(&self) -> Option<flui::platform::text_store::Composition>
+fn flui::platform::text_store::TextStoreRead::document_bounds(&self) -> Result<flui::geometry::Bounds<f64>, flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStoreRead::document_len(&self) -> flui::platform::text_store::utf16::Utf16Offset
+fn flui::platform::text_store::TextStoreRead::index_at_point(&self, point: flui::geometry::Point<f64>, mode: flui::platform::text_store::PointMode) -> Result<flui::platform::text_store::utf16::Utf16Offset, flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStoreRead::rect_for_range(&self, range: flui::platform::text_store::utf16::Utf16Range) -> Result<flui::platform::text_store::RangeRect, flui::platform::text_store::TextStoreError>
+fn flui::platform::text_store::TextStoreRead::selection(&self) -> flui::platform::text_store::Selection
+fn flui::platform::text_store::TextStoreRead::text(&self, range: flui::platform::text_store::utf16::Utf16Range) -> Result<String, flui::platform::text_store::TextStoreError>
 #[non_exhaustive] pub struct flui::platform::text_store::TextStoreStatus
 field flui::platform::text_store::TextStoreStatus::protected: bool // at 0
 field flui::platform::text_store::TextStoreStatus::single_line: bool // at 1
@@ -15612,46 +15192,49 @@ pub const fn flui::platform::text_store::TextStoreStatus::holds_secret(&self) ->
 pub const fn flui::platform::text_store::TextStoreStatus::with_protected(self, protected: bool) -> Self
 pub const fn flui::platform::text_store::TextStoreStatus::with_single_line(self, single_line: bool) -> Self
 pub const fn flui::platform::text_store::TextStoreStatus::with_text_input(self, text_input: flui::platform::text_store::TextInputOptions) -> Self
-pub struct flui::platform::text_store::Utf16Offset(_)
-impl Clone for flui::platform::text_store::Utf16Offset
-impl Copy for flui::platform::text_store::Utf16Offset
-impl Default for flui::platform::text_store::Utf16Offset
-impl Eq for flui::platform::text_store::Utf16Offset
-impl Ord for flui::platform::text_store::Utf16Offset
-impl PartialEq for flui::platform::text_store::Utf16Offset
-impl PartialOrd for flui::platform::text_store::Utf16Offset
-impl core::fmt::Debug for flui::platform::text_store::Utf16Offset
-impl core::hash::Hash for flui::platform::text_store::Utf16Offset
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Utf16Offset
-pub const flui::platform::text_store::Utf16Offset::ZERO: Self = _
-pub const fn flui::platform::text_store::Utf16Offset::get(self) -> usize
-pub const fn flui::platform::text_store::Utf16Offset::new(units: usize) -> Self
-pub struct flui::platform::text_store::Utf16Range { .. }
-impl Clone for flui::platform::text_store::Utf16Range
-impl Copy for flui::platform::text_store::Utf16Range
-impl Eq for flui::platform::text_store::Utf16Range
-impl PartialEq for flui::platform::text_store::Utf16Range
-impl core::fmt::Debug for flui::platform::text_store::Utf16Range
-impl core::hash::Hash for flui::platform::text_store::Utf16Range
-impl core::marker::StructuralPartialEq for flui::platform::text_store::Utf16Range
-pub const fn flui::platform::text_store::Utf16Range::collapsed(at: flui::platform::text_store::Utf16Offset) -> Self
-pub const fn flui::platform::text_store::Utf16Range::end(self) -> flui::platform::text_store::Utf16Offset
-pub const fn flui::platform::text_store::Utf16Range::is_empty(self) -> bool
-pub const fn flui::platform::text_store::Utf16Range::len(self) -> usize
-pub const fn flui::platform::text_store::Utf16Range::start(self) -> flui::platform::text_store::Utf16Offset
-pub const fn flui::platform::text_store::Utf16Range::try_new(start: flui::platform::text_store::Utf16Offset, end: flui::platform::text_store::Utf16Offset) -> Option<Self>
-pub fn flui::platform::text_store::commit_composition_in_place(store: &dyn flui::platform::TextStore, late_refusal: impl FnOnce(flui::platform::text_store::TextStoreError) + 'static) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
-pub fn flui::platform::text_store::project_ime_event(store: &dyn flui::platform::TextStore, event: &flui::platform::ImeEvent, late_refusal: impl FnOnce(flui::platform::text_store::TextStoreError) + 'static) -> Result<flui::platform::text_store::LockOutcome, flui::platform::text_store::TextStoreError>
 pub mod flui::platform::text_store::utf16
-reexport flui::platform::text_store::utf16::OffsetError => flui::platform::text_store::OffsetError
-reexport flui::platform::text_store::utf16::Utf16Offset => flui::platform::text_store::Utf16Offset
-reexport flui::platform::text_store::utf16::Utf16Range => flui::platform::text_store::Utf16Range
-pub fn flui::platform::text_store::utf16::byte_offset(text: &str, offset: flui::platform::text_store::Utf16Offset) -> Result<usize, flui::platform::text_store::OffsetError>
-pub fn flui::platform::text_store::utf16::byte_range(text: &str, range: flui::platform::text_store::Utf16Range) -> Result<core::ops::range::Range<usize>, flui::platform::text_store::OffsetError>
-pub fn flui::platform::text_store::utf16::utf16_len(text: &str) -> flui::platform::text_store::Utf16Offset
-pub fn flui::platform::text_store::utf16::utf16_offset(text: &str, byte: usize) -> Result<flui::platform::text_store::Utf16Offset, flui::platform::text_store::OffsetError>
-pub fn flui::platform::text_store::utf16::utf16_range(text: &str, bytes: core::ops::range::Range<usize>) -> Result<flui::platform::text_store::Utf16Range, flui::platform::text_store::OffsetError>
-macro flui::platform::window_takes_no_frame_verbs!
+#[non_exhaustive] pub enum flui::platform::text_store::utf16::OffsetError
+impl Clone for flui::platform::text_store::utf16::OffsetError
+impl Copy for flui::platform::text_store::utf16::OffsetError
+impl Eq for flui::platform::text_store::utf16::OffsetError
+impl From<flui::platform::text_store::utf16::OffsetError> for flui::platform::text_store::TextStoreError
+impl PartialEq for flui::platform::text_store::utf16::OffsetError
+impl core::error::Error for flui::platform::text_store::utf16::OffsetError
+impl core::fmt::Debug for flui::platform::text_store::utf16::OffsetError
+impl core::fmt::Display for flui::platform::text_store::utf16::OffsetError
+impl core::marker::StructuralPartialEq for flui::platform::text_store::utf16::OffsetError
+variant flui::platform::text_store::utf16::OffsetError::Inverted { start: usize, end: usize } // at 3
+variant flui::platform::text_store::utf16::OffsetError::NotCharBoundary(usize) // at 2
+variant flui::platform::text_store::utf16::OffsetError::PastEnd { offset: usize, len: usize } // at 0
+variant flui::platform::text_store::utf16::OffsetError::SplitsSurrogatePair(usize) // at 1
+pub struct flui::platform::text_store::utf16::Utf16Offset(_)
+impl Clone for flui::platform::text_store::utf16::Utf16Offset
+impl Copy for flui::platform::text_store::utf16::Utf16Offset
+impl Default for flui::platform::text_store::utf16::Utf16Offset
+impl Eq for flui::platform::text_store::utf16::Utf16Offset
+impl Ord for flui::platform::text_store::utf16::Utf16Offset
+impl PartialEq for flui::platform::text_store::utf16::Utf16Offset
+impl PartialOrd for flui::platform::text_store::utf16::Utf16Offset
+impl core::fmt::Debug for flui::platform::text_store::utf16::Utf16Offset
+impl core::hash::Hash for flui::platform::text_store::utf16::Utf16Offset
+impl core::marker::StructuralPartialEq for flui::platform::text_store::utf16::Utf16Offset
+pub const flui::platform::text_store::utf16::Utf16Offset::ZERO: Self = _
+pub const fn flui::platform::text_store::utf16::Utf16Offset::get(self) -> usize
+pub const fn flui::platform::text_store::utf16::Utf16Offset::new(units: usize) -> Self
+pub struct flui::platform::text_store::utf16::Utf16Range { .. }
+impl Clone for flui::platform::text_store::utf16::Utf16Range
+impl Copy for flui::platform::text_store::utf16::Utf16Range
+impl Eq for flui::platform::text_store::utf16::Utf16Range
+impl PartialEq for flui::platform::text_store::utf16::Utf16Range
+impl core::fmt::Debug for flui::platform::text_store::utf16::Utf16Range
+impl core::hash::Hash for flui::platform::text_store::utf16::Utf16Range
+impl core::marker::StructuralPartialEq for flui::platform::text_store::utf16::Utf16Range
+pub const fn flui::platform::text_store::utf16::Utf16Range::collapsed(at: flui::platform::text_store::utf16::Utf16Offset) -> Self
+pub const fn flui::platform::text_store::utf16::Utf16Range::end(self) -> flui::platform::text_store::utf16::Utf16Offset
+pub const fn flui::platform::text_store::utf16::Utf16Range::is_empty(self) -> bool
+pub const fn flui::platform::text_store::utf16::Utf16Range::len(self) -> usize
+pub const fn flui::platform::text_store::utf16::Utf16Range::start(self) -> flui::platform::text_store::utf16::Utf16Offset
+pub const fn flui::platform::text_store::utf16::Utf16Range::try_new(start: flui::platform::text_store::utf16::Utf16Offset, end: flui::platform::text_store::utf16::Utf16Offset) -> Option<Self>
 pub mod flui::prelude
 pub struct flui::prelude::AbsorbPointer { .. }
 impl Clone for flui::prelude::AbsorbPointer
@@ -15744,8 +15327,8 @@ pub const fn flui::prelude::AppLifecycleState::should_animate(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_release_resources(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_render(self) -> bool
 pub const fn flui::prelude::AppLifecycleState::should_save_state(self) -> bool
-pub fn flui::prelude::AppLifecycleState::most_active(states: impl IntoIterator<Item = Self>) -> Self
 pub const fn flui::prelude::AppLifecycleState::try_from_u8(value: u8) -> Option<Self>
+pub fn flui::prelude::AppLifecycleState::most_active(states: impl IntoIterator<Item = Self>) -> Self
 variant flui::prelude::AppLifecycleState::Detached = 4 // at 4
 variant flui::prelude::AppLifecycleState::Hidden = 2 // at 2
 variant flui::prelude::AppLifecycleState::Inactive = 1 // at 1
@@ -17439,6 +17022,7 @@ impl Clone for flui::prelude::MediaQuery
 impl core::fmt::Debug for flui::prelude::MediaQuery
 impl flui::prelude::InheritedView for flui::prelude::MediaQuery { type Data = flui::prelude::MediaQueryData; }
 impl flui::prelude::View for flui::prelude::MediaQuery
+pub fn flui::prelude::MediaQuery::accent_color_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::Color>
 pub fn flui::prelude::MediaQuery::depend_on_fields<R>(ctx: &dyn flui::prelude::BuildContext, mask: flui::view::FieldMask<flui::prelude::MediaQueryData>, f: impl FnOnce(&flui::prelude::MediaQueryData) -> R) -> Option<R>
 pub fn flui::prelude::MediaQuery::device_pixel_ratio_of(ctx: &dyn flui::prelude::BuildContext) -> Option<f64>
 pub fn flui::prelude::MediaQuery::font_weight_adjustment_of(ctx: &dyn flui::prelude::BuildContext) -> Option<i32>
@@ -17450,13 +17034,13 @@ pub fn flui::prelude::MediaQuery::of(ctx: &dyn flui::prelude::BuildContext) -> f
 pub fn flui::prelude::MediaQuery::padding_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::EdgeInsets>
 pub fn flui::prelude::MediaQuery::platform_brightness_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::platform::Brightness>
 pub fn flui::prelude::MediaQuery::regional_formats_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::platform::RegionalFormats>
-pub fn flui::prelude::MediaQuery::accent_color_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::prelude::Color>
 pub fn flui::prelude::MediaQuery::scroll_bars_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::platform::ScrollBarPreferences>
 pub fn flui::prelude::MediaQuery::size_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::Size>
 pub fn flui::prelude::MediaQuery::system_gesture_insets_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::EdgeInsets>
 pub fn flui::prelude::MediaQuery::text_sizing_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::painting::TextSizing>
 pub fn flui::prelude::MediaQuery::view_insets_of(ctx: &dyn flui::prelude::BuildContext) -> Option<flui::geometry::EdgeInsets>
 pub struct flui::prelude::MediaQueryData
+field flui::prelude::MediaQueryData::accent_color: Option<flui::prelude::Color> // at 12
 field flui::prelude::MediaQueryData::device_pixel_ratio: f64 // at 1
 field flui::prelude::MediaQueryData::font_weight_adjustment: i32 // at 3
 field flui::prelude::MediaQueryData::high_contrast: bool // at 8
@@ -17464,7 +17048,6 @@ field flui::prelude::MediaQueryData::motion: flui::animation::MotionPolicy // at
 field flui::prelude::MediaQueryData::platform_brightness: flui::platform::Brightness // at 7
 field flui::prelude::MediaQueryData::preferred_locales: Option<alloc::rcs::arc::Arc<[flui::platform::Locale]>> // at 10
 field flui::prelude::MediaQueryData::regional_formats: flui::platform::RegionalFormats // at 11
-field flui::prelude::MediaQueryData::accent_color: Option<flui::prelude::Color> // at 12
 field flui::prelude::MediaQueryData::scroll_bars: flui::platform::ScrollBarPreferences // at 13
 field flui::prelude::MediaQueryData::size: flui::geometry::Size // at 0
 field flui::prelude::MediaQueryData::system_gesture_insets: flui::geometry::EdgeInsets // at 6
@@ -17477,6 +17060,7 @@ impl PartialEq for flui::prelude::MediaQueryData
 impl core::fmt::Debug for flui::prelude::MediaQueryData
 impl core::marker::StructuralPartialEq for flui::prelude::MediaQueryData
 impl flui::prelude::InheritedData for flui::prelude::MediaQueryData
+pub const flui::prelude::MediaQueryData::FIELD_ACCENT_COLOR: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_DEVICE_PIXEL_RATIO: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_FONT_WEIGHT_ADJUSTMENT: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_HIGH_CONTRAST: flui::view::FieldMask<Self> = _
@@ -17484,7 +17068,6 @@ pub const flui::prelude::MediaQueryData::FIELD_MOTION: flui::view::FieldMask<Sel
 pub const flui::prelude::MediaQueryData::FIELD_PLATFORM_BRIGHTNESS: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_PREFERRED_LOCALES: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_REGIONAL_FORMATS: flui::view::FieldMask<Self> = _
-pub const flui::prelude::MediaQueryData::FIELD_ACCENT_COLOR: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_SCROLL_BARS: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_SIZE: flui::view::FieldMask<Self> = _
 pub const flui::prelude::MediaQueryData::FIELD_SYSTEM_GESTURE_INSETS: flui::view::FieldMask<Self> = _
@@ -17529,9 +17112,9 @@ pub fn flui::prelude::MouseRegion::behavior(self, behavior: flui::prelude::HitTe
 pub fn flui::prelude::MouseRegion::child(self, child: impl flui::prelude::IntoView) -> Self
 pub fn flui::prelude::MouseRegion::cursor(self, cursor: cursor_icon::CursorIcon) -> Self
 pub fn flui::prelude::MouseRegion::new() -> Self
-pub fn flui::prelude::MouseRegion::on_enter<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerInfo, flui::geometry::Offset) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::MouseRegion::on_exit<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerInfo, flui::geometry::Offset) -> R + 'static, R: flui::prelude::EventOutcome
-pub fn flui::prelude::MouseRegion::on_hover<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerInfo, flui::geometry::Offset) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::MouseRegion::on_enter<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerSource, flui::geometry::Offset) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::MouseRegion::on_exit<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerSource, flui::geometry::Offset) -> R + 'static, R: flui::prelude::EventOutcome
+pub fn flui::prelude::MouseRegion::on_hover<F, R>(self, callback: F) -> Self where F: Fn(&mut flui::prelude::EventContext<'_>, flui::interaction::PointerSource, flui::geometry::Offset) -> R + 'static, R: flui::prelude::EventOutcome
 pub fn flui::prelude::MouseRegion::opaque(self, opaque: bool) -> Self
 pub trait flui::prelude::MultiChildLayoutContext
 fn flui::prelude::MultiChildLayoutContext::has_child(&self, child_id: &str) -> bool
@@ -23129,8 +22712,8 @@ impl Clone for flui::services::system::dialog::DialogError
 impl Copy for flui::services::system::dialog::DialogError
 impl Eq for flui::services::system::dialog::DialogError
 impl From<flui::platform::SystemFailure> for flui::services::system::dialog::DialogError
-impl From<flui::services::system::dialog::MalformedRequest> for flui::services::system::dialog::DialogError
 impl From<flui::platform::Unsupported> for flui::services::system::dialog::DialogError
+impl From<flui::services::system::dialog::MalformedRequest> for flui::services::system::dialog::DialogError
 impl PartialEq for flui::services::system::dialog::DialogError
 impl core::error::Error for flui::services::system::dialog::DialogError
 impl core::fmt::Debug for flui::services::system::dialog::DialogError
@@ -23273,7 +22856,16 @@ impl core::fmt::Debug for flui::services::system::testing::DialogRequest
 impl core::marker::StructuralPartialEq for flui::services::system::testing::DialogRequest
 variant flui::services::system::testing::DialogRequest::Open { window: flui::platform::WindowId, request: flui::services::system::dialog::OpenRequest } // at 0
 variant flui::services::system::testing::DialogRequest::Save { window: flui::platform::WindowId, request: flui::services::system::dialog::SaveRequest } // at 1
-reexport flui::services::system::testing::LaunchRequest => flui::platform::testing::LaunchRequest
+#[non_exhaustive] pub enum flui::services::system::testing::LaunchRequest
+impl Clone for flui::services::system::testing::LaunchRequest
+impl Eq for flui::services::system::testing::LaunchRequest
+impl PartialEq for flui::services::system::testing::LaunchRequest
+impl core::fmt::Debug for flui::services::system::testing::LaunchRequest
+impl core::marker::StructuralPartialEq for flui::services::system::testing::LaunchRequest
+variant flui::services::system::testing::LaunchRequest::OpenPath(std::path::PathBuf) // at 1
+variant flui::services::system::testing::LaunchRequest::OpenUri(flui::platform::launch::ExternalUri) // at 0
+variant flui::services::system::testing::LaunchRequest::RevealPath(std::path::PathBuf) // at 2
+variant flui::services::system::testing::LaunchRequest::TrashPath(std::path::PathBuf) // at 3
 pub struct flui::services::system::testing::PortalOnBus { .. }
 impl Clone for flui::services::system::testing::PortalOnBus
 impl core::fmt::Debug for flui::services::system::testing::PortalOnBus
@@ -23295,15 +22887,26 @@ pub fn flui::services::system::testing::ScriptedFileDialogs::release_open(&self,
 pub fn flui::services::system::testing::ScriptedFileDialogs::release_save(&self, result: flui::services::system::dialog::SaveResult) -> bool
 pub fn flui::services::system::testing::ScriptedFileDialogs::requests(&self) -> Vec<flui::services::system::testing::DialogRequest>
 pub fn flui::services::system::testing::ScriptedFileDialogs::save_script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::DialogRequest, flui::services::system::dialog::SaveResult>
-reexport flui::services::system::testing::ScriptedLauncher => flui::platform::testing::ScriptedLauncher
+pub struct flui::services::system::testing::ScriptedLauncher { .. }
+impl Clone for flui::services::system::testing::ScriptedLauncher
+impl Default for flui::services::system::testing::ScriptedLauncher
+impl core::fmt::Debug for flui::services::system::testing::ScriptedLauncher
+impl flui::platform::launch::LauncherBackend for flui::services::system::testing::ScriptedLauncher
+pub fn flui::services::system::testing::ScriptedLauncher::answer_next(&self, result: flui::platform::launch::LaunchResult)
+pub fn flui::services::system::testing::ScriptedLauncher::hold(&self)
+pub fn flui::services::system::testing::ScriptedLauncher::new() -> Self
+pub fn flui::services::system::testing::ScriptedLauncher::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
+pub fn flui::services::system::testing::ScriptedLauncher::release(&self, result: flui::platform::launch::LaunchResult) -> bool
+pub fn flui::services::system::testing::ScriptedLauncher::requests(&self) -> Vec<flui::services::system::testing::LaunchRequest>
+pub fn flui::services::system::testing::ScriptedLauncher::script(&self) -> &flui::platform::capability::scripted::Script<flui::services::system::testing::LaunchRequest, flui::platform::launch::LaunchResult>
 pub struct flui::services::system::testing::ScriptedSystem { .. }
 impl Clone for flui::services::system::testing::ScriptedSystem
 impl Default for flui::services::system::testing::ScriptedSystem
 impl core::fmt::Debug for flui::services::system::testing::ScriptedSystem
 impl flui::platform::capability::Plugin for flui::services::system::testing::ScriptedSystem
 pub fn flui::services::system::testing::ScriptedSystem::dialogs(&self) -> &flui::services::system::testing::ScriptedFileDialogs
-pub fn flui::services::system::testing::ScriptedSystem::launcher(&self) -> &flui::platform::testing::ScriptedLauncher
-pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::platform::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
+pub fn flui::services::system::testing::ScriptedSystem::launcher(&self) -> &flui::services::system::testing::ScriptedLauncher
+pub fn flui::services::system::testing::ScriptedSystem::new(launcher: flui::services::system::testing::ScriptedLauncher, dialogs: flui::services::system::testing::ScriptedFileDialogs) -> Self
 pub fn flui::services::system::testing::ScriptedSystem::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
 pub mod flui::services::system::autostart
 pub struct flui::services::system::autostart::Autostart { .. }
@@ -23960,8 +23563,8 @@ pub struct flui::testing::TestWindow { .. }
 impl Clone for flui::testing::TestWindow
 impl Default for flui::testing::TestWindow
 impl core::fmt::Debug for flui::testing::TestWindow
-pub fn flui::testing::TestWindow::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub const fn flui::testing::TestWindow::new(width: u32, height: u32) -> Self
+pub fn flui::testing::TestWindow::capability<C: flui::platform::capability::Capability>(self, provider: impl flui::platform::capability::CapabilityProvider<C>) -> Self
 pub fn flui::testing::TestWindow::platform(self, platform: flui::platform::TargetPlatform) -> Self
 pub fn flui::testing::TestWindow::plugin(self, plugin: impl flui::platform::capability::Plugin) -> Self
 pub fn flui::testing::TestWindow::storage(self, storage: flui::testing::MemoryStorage) -> Self
@@ -30111,6 +29714,18 @@ variant flui_engine::surface_color::SurfaceColor::Hdr // at 2
 variant flui_engine::surface_color::SurfaceColor::Srgb8 // at 0
 variant flui_engine::surface_color::SurfaceColor::WideGamut // at 1
 pub trait flui_foundation::arity::sealed::Sealed
+#[non_exhaustive] pub enum flui_foundation::memory::MemoryPressureLevel
+impl Clone for flui_foundation::memory::MemoryPressureLevel
+impl Copy for flui_foundation::memory::MemoryPressureLevel
+impl Eq for flui_foundation::memory::MemoryPressureLevel
+impl Ord for flui_foundation::memory::MemoryPressureLevel
+impl PartialEq for flui_foundation::memory::MemoryPressureLevel
+impl PartialOrd for flui_foundation::memory::MemoryPressureLevel
+impl core::fmt::Debug for flui_foundation::memory::MemoryPressureLevel
+impl core::hash::Hash for flui_foundation::memory::MemoryPressureLevel
+impl core::marker::StructuralPartialEq for flui_foundation::memory::MemoryPressureLevel
+variant flui_foundation::memory::MemoryPressureLevel::Critical // at 1
+variant flui_foundation::memory::MemoryPressureLevel::Moderate // at 0
 pub trait flui_foundation::sequence::sealed::Sealed
 impl flui_foundation::sequence::sealed::Sealed for core::num::nonzero::NonZeroU64
 pub trait flui_foundation::slot_table::SlotKey: Copy + Eq
@@ -30547,7 +30162,7 @@ pub fn flui_interaction::pointer::hit_test::HitTestResult::clear(&mut self)
 pub fn flui_interaction::pointer::hit_test::HitTestResult::dispatch(&self, event: &flui::interaction::PointerEvent)
 pub fn flui_interaction::pointer::hit_test::HitTestResult::dispatch_pan_zoom(&self, event: &flui::interaction::PanZoomEvent) -> bool
 pub fn flui_interaction::pointer::hit_test::HitTestResult::dispatch_scroll(&self, event: &flui::interaction::ScrollEvent) -> bool
-pub fn flui_interaction::pointer::hit_test::HitTestResult::dispatch_smart_zoom(&self, event: &flui::platform::SmartZoomEvent) -> bool
+pub fn flui_interaction::pointer::hit_test::HitTestResult::dispatch_smart_zoom(&self, event: &flui::platform::pointer::SmartZoomEvent) -> bool
 pub fn flui_interaction::pointer::hit_test::HitTestResult::entries_with_pan_zoom_targets(&self) -> impl Iterator<Item = &flui::interaction::HitTestEntry>
 pub fn flui_interaction::pointer::hit_test::HitTestResult::entries_with_scroll_targets(&self) -> impl Iterator<Item = &flui::interaction::HitTestEntry>
 pub fn flui_interaction::pointer::hit_test::HitTestResult::is_empty(&self) -> bool
@@ -30608,15 +30223,15 @@ impl core::fmt::Debug for flui_interaction::pointer::interaction_lane::ShaderMas
 impl core::hash::Hash for flui_interaction::pointer::interaction_lane::ShaderMaskTarget
 impl core::marker::StructuralPartialEq for flui_interaction::pointer::interaction_lane::ShaderMaskTarget
 #[non_exhaustive] pub struct flui_interaction::pointer::interaction_lane::SmartZoomDispatch
-field flui_interaction::pointer::interaction_lane::SmartZoomDispatch::global: flui::platform::SmartZoomEvent // at 1
-field flui_interaction::pointer::interaction_lane::SmartZoomDispatch::local: flui::platform::SmartZoomEvent // at 0
+field flui_interaction::pointer::interaction_lane::SmartZoomDispatch::global: flui::platform::pointer::SmartZoomEvent // at 1
+field flui_interaction::pointer::interaction_lane::SmartZoomDispatch::local: flui::platform::pointer::SmartZoomEvent // at 0
 impl Clone for flui_interaction::pointer::interaction_lane::SmartZoomDispatch
 impl Copy for flui_interaction::pointer::interaction_lane::SmartZoomDispatch
 impl PartialEq for flui_interaction::pointer::interaction_lane::SmartZoomDispatch
 impl core::fmt::Debug for flui_interaction::pointer::interaction_lane::SmartZoomDispatch
 impl core::marker::StructuralPartialEq for flui_interaction::pointer::interaction_lane::SmartZoomDispatch
-pub const fn flui_interaction::pointer::interaction_lane::SmartZoomDispatch::new(local: flui::platform::SmartZoomEvent, global: flui::platform::SmartZoomEvent) -> Self
-pub type flui_interaction::pointer::mouse_tracker::CursorChangeCallback = alloc::rcs::rc::Rc<dyn Fn(flui::interaction::PointerInfo, cursor_icon::CursorIcon) + 'static>
+pub const fn flui_interaction::pointer::interaction_lane::SmartZoomDispatch::new(local: flui::platform::pointer::SmartZoomEvent, global: flui::platform::pointer::SmartZoomEvent) -> Self
+pub type flui_interaction::pointer::mouse_tracker::CursorChangeCallback = alloc::rcs::rc::Rc<dyn Fn(flui::interaction::PointerSource, cursor_icon::CursorIcon) + 'static>
 pub struct flui_interaction::pointer::mouse_tracker::MouseTracker { .. }
 impl Clone for flui_interaction::pointer::mouse_tracker::MouseTracker
 impl Default for flui_interaction::pointer::mouse_tracker::MouseTracker
@@ -30632,7 +30247,7 @@ pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::new() -> Self
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::register_annotation(&self, annotation: flui::rendering::MouseTrackerAnnotation)
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::remove_device(&self, device_id: flui::interaction::DeviceId)
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::set_cursor_change_callback(&self, callback: flui_interaction::pointer::mouse_tracker::CursorChangeCallback)
-pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::source_position(&self, pointer: &flui::interaction::PointerInfo) -> Option<flui::geometry::Offset<f64>>
+pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::source_position(&self, pointer: &flui::interaction::PointerSource) -> Option<flui::geometry::Offset<f64>>
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::unregister_annotation(&self, region_id: flui::foundation::RenderId)
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::update_all_devices<F>(&self, hit_test_fn: F) where F: Fn(flui::geometry::Offset<f64>, flui::interaction::PointerKind) -> flui_interaction::pointer::hit_test::HitTestResult
 pub fn flui_interaction::pointer::mouse_tracker::MouseTracker::update_with_motion(&self, event: &flui::interaction::PointerEvent, kind: flui_interaction::pointer::mouse_tracker::PointerMotionKind, hit_test_result: &flui_interaction::pointer::hit_test::HitTestResult)
@@ -31731,7 +31346,7 @@ pub struct flui_painting::text_layout::context::TextContext { .. }
 impl core::fmt::Debug for flui_painting::text_layout::context::TextContext
 pub fn flui_painting::text_layout::context::TextContext::fonts(&self) -> &flui_painting::text_layout::context::FontCollection
 pub fn flui_painting::text_layout::context::TextContext::new(fonts: &flui_painting::text_layout::context::FontCollection) -> Self
-pub fn flui_painting::text_layout::context::TextContext::reclaim(&mut self, level: flui::platform::MemoryPressureLevel)
+pub fn flui_painting::text_layout::context::TextContext::reclaim(&mut self, level: flui_foundation::memory::MemoryPressureLevel)
 pub fn flui_painting::text_layout::context::TextContext::shape(&mut self, paragraph: &flui_painting::parley_text::shape::ParagraphSpec<'_>) -> Result<flui_painting::parley_text::shape::ParagraphLayout, flui_painting::text_layout::error::TextLayoutError>
 #[non_exhaustive] pub enum flui_painting::text_layout::error::TextLayoutError
 impl From<flui_painting::text_layout::error::TextLayoutError> for flui_painting::text_painter::sizing::TextMeasurementError
@@ -31910,25 +31525,6 @@ impl Eq for flui_painting::text_painter::sizing::TextSizingSource
 impl PartialEq for flui_painting::text_painter::sizing::TextSizingSource
 impl core::fmt::Debug for flui_painting::text_painter::sizing::TextSizingSource
 pub fn flui_painting::text_painter::sizing::TextSizingSource::policy(&self) -> flui::painting::TextSizing
-pub struct flui_platform::input_capabilities::InputCapabilitiesBuilder(_)
-impl Clone for flui_platform::input_capabilities::InputCapabilitiesBuilder
-impl Copy for flui_platform::input_capabilities::InputCapabilitiesBuilder
-impl Eq for flui_platform::input_capabilities::InputCapabilitiesBuilder
-impl PartialEq for flui_platform::input_capabilities::InputCapabilitiesBuilder
-impl core::fmt::Debug for flui_platform::input_capabilities::InputCapabilitiesBuilder
-impl core::marker::StructuralPartialEq for flui_platform::input_capabilities::InputCapabilitiesBuilder
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::build(self) -> flui::platform::input_capabilities::InputCapabilities
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::caption_buttons(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::outgoing_drag(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::pen(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::precise_scroll(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::present(self, present: flui::interaction::PointerKindSet) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::system_gesture_exclusion(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::touchpad_hold(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::touchpad_swipe(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::trackpad_gestures(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::window_move(self, availability: flui::platform::Availability) -> Self
-pub const fn flui_platform::input_capabilities::InputCapabilitiesBuilder::window_resize(self, availability: flui::platform::Availability) -> Self
 pub trait flui_platform::pointer::sealed::Sealed
 #[non_exhaustive] pub struct flui_protocol::act::ActionRequest
 field flui_protocol::act::ActionRequest::action: flui_protocol::wire::ActionName // at 1
@@ -34192,18 +33788,18 @@ impl<'de> serde_core::de::Deserialize<'de> for flui_protocol::native_recording::
 variant flui_protocol::native_recording::PreferenceRead::Failed(flui_protocol::native_recording::Failure) // at 1
 variant flui_protocol::native_recording::PreferenceRead::Observed(flui_protocol::native_recording::Preferences) // at 0
 pub struct flui_protocol::native_recording::Preferences
+field flui_protocol::native_recording::Preferences::accent_color: Option<[f32; 4]> // at 10
 field flui_protocol::native_recording::Preferences::gestures: flui_protocol::native_recording::Gestures // at 7
 field flui_protocol::native_recording::Preferences::haptics: Option<bool> // at 3
 field flui_protocol::native_recording::Preferences::high_contrast: Option<bool> // at 2
 field flui_protocol::native_recording::Preferences::locales: Option<Vec<String>> // at 5
 field flui_protocol::native_recording::Preferences::motion: Option<flui_protocol::native_recording::Motion> // at 1
 field flui_protocol::native_recording::Preferences::regional: Option<Box<flui_protocol::native_recording::Regional>> // at 6
+field flui_protocol::native_recording::Preferences::scroll_bar_visibility: Option<flui_protocol::native_recording::ScrollBarVisibility> // at 11
+field flui_protocol::native_recording::Preferences::scroll_track_click: Option<flui_protocol::native_recording::ScrollTrackClick> // at 12
 field flui_protocol::native_recording::Preferences::text_scale: Option<f64> // at 0
 field flui_protocol::native_recording::Preferences::text_weight: Option<flui_protocol::native_recording::TextWeight> // at 4
 field flui_protocol::native_recording::Preferences::wheel_horizontal_characters: Option<u32> // at 9
-field flui_protocol::native_recording::Preferences::accent_color: Option<[f32; 4]> // at 10
-field flui_protocol::native_recording::Preferences::scroll_bar_visibility: Option<flui_protocol::native_recording::ScrollBarVisibility> // at 11
-field flui_protocol::native_recording::Preferences::scroll_track_click: Option<flui_protocol::native_recording::ScrollTrackClick> // at 12
 field flui_protocol::native_recording::Preferences::wheel_vertical: Option<flui_protocol::native_recording::WheelStep> // at 8
 impl Clone for flui_protocol::native_recording::Preferences
 impl Default for flui_protocol::native_recording::Preferences
@@ -36290,7 +35886,7 @@ pub fn flui_runtime::presentation::PresentationWindow::window(&self) -> &alloc::
 pub fn flui_runtime::presentation::PresentationWindow::with_gesture_profiles(self, profiles: impl Into<flui::interaction::GestureProfiles>) -> Self
 pub fn flui_runtime::presentation::PresentationWindow::with_platform(self, platform: flui::platform::TargetPlatform) -> Self
 pub fn flui_runtime::presentation::PresentationWindow::with_pointer_resampling(self, policy: flui::app::PointerResampling) -> Self
-pub fn flui_runtime::presentation::PresentationWindow::with_text_store_host(self, text_store_host: Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStoreHost>>) -> Self
+pub fn flui_runtime::presentation::PresentationWindow::with_text_store_host(self, text_store_host: Option<alloc::rcs::rc::Rc<dyn flui::platform::text_store::TextStoreHost>>) -> Self
 pub trait flui_runtime::pump::FrameClockSource
 fn flui_runtime::pump::FrameClockSource::frame_time(&mut self) -> std::time::Instant
 fn flui_runtime::pump::FrameClockSource::idle_deadline(&mut self, frame_time: std::time::Instant) -> flui_scheduler::scheduler::IdleDeadline { .. }
@@ -36327,7 +35923,7 @@ impl core::fmt::Debug for flui_runtime::runtime_services::RuntimeHostServices<'_
 pub fn flui_runtime::runtime_services::RuntimeHostServices::new(wake: alloc::rcs::arc::Arc<dyn Fn() + Send + Sync>, needs_redraw: alloc::rcs::arc::Arc<core::sync::atomic::AtomicBool>, fonts: &'a flui_painting::text_layout::context::FontCollection, clock: flui_scheduler::frame_clock::ClockSource) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_capabilities(self, registry: flui_runtime::capability::CapabilityRegistry) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_close_vetoes(self, vetoes: &[flui::app::CloseReason]) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
-pub fn flui_runtime::runtime_services::RuntimeHostServices::with_data_transfer(self, source: alloc::rcs::arc::Arc<dyn flui::platform::DragTransport>) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
+pub fn flui_runtime::runtime_services::RuntimeHostServices::with_data_transfer(self, source: alloc::rcs::arc::Arc<dyn flui::platform::data_transfer::DragTransport>) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_flush_registry(self, registry: flui_view::flush_registry::FlushRegistry) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_preferences(self, preferences: flui_runtime::owner::preferences::SystemPreferencesSnapshot) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>
 pub fn flui_runtime::runtime_services::RuntimeHostServices::with_process_nonce(self, nonce: flui::platform::drag::ProcessNonce) -> Self // impl<'a> flui_runtime::runtime_services::RuntimeHostServices<'a>

@@ -30,7 +30,7 @@ whole implicit Down route. Pointer-router and gesture-arena lifecycle remain
 independent of this target selection.
 
 The contact owns capture state carrying its existing binding generation and
-actual `PointerInfo`. The token contains only a weak reference to that state,
+actual `PointerSource`. The token contains only a weak reference to that state,
 with the original identity, generation and claimant. It cannot keep a
 presentation alive, act on a sibling owner, or retire a new contact after native
 ID reuse. Native termination, replacement Down and owner teardown invalidate

@@ -911,7 +911,7 @@ impl PlatformWindow for AndroidWindow {
         Err(Unsupported::from(pointer_icon_absence(self.api)).into())
     }
 
-    fn haptics(&self) -> Option<Arc<dyn flui_platform::PlatformHaptics>> {
+    fn haptics(&self) -> Option<Arc<dyn flui_platform::haptics::PlatformHaptics>> {
         Some(Arc::clone(&self.facets.haptics))
     }
 

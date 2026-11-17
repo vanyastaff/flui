@@ -16,8 +16,8 @@ use flui_platform::Availability;
 use flui_platform::WindowOptions;
 use flui_platform::input_capabilities::{InputCapabilities, PointerKindSet};
 use flui_platform::pointer::{
-    PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-    PointerPosition, PointerPress, PointerSample,
+    PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerPosition,
+    PointerPress, PointerSample, PointerSource,
 };
 use flui_platform::{DispatchEventResult, PlatformInput};
 use flui_platform::{EventTime, ImeEvent};
@@ -98,7 +98,7 @@ fn heard(handler: &RecordingWindowHandler) -> Vec<Seen> {
 }
 
 fn pen_down() -> PlatformInput {
-    let pen = PointerInfo::new(PointerId::try_from(5_u64).expect("id"), PEN);
+    let pen = PointerSource::new(PointerId::try_from(5_u64).expect("id"), PEN);
     let at = PointerSample::new(
         EventTime::from_nanos(10),
         PointerPosition::try_new(Point::new(1.0, 1.0)).expect("finite"),

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
 use flui_platform::{AppTitleBar, WindowFrame, WindowOptions};
 use flui_platform::{
-    DisplayInfo, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
+    DisplayDescription, DisplayKey, DisplayRegistry, DisplaySnapshot, Storage, StorageError,
     StorageFuture, StorageName, Stored, WindowCapabilities, WindowGeometry, WindowInteraction,
     WindowMode, WindowPlacement, WindowState,
 };
@@ -27,7 +27,7 @@ const NAME: StorageName = StorageName::machine_local("window-main");
 fn displays() -> DisplaySnapshot {
     let registry = DisplayRegistry::new();
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-    let display = DisplayInfo::new(
+    let display = DisplayDescription::new(
         id,
         "main",
         Bounds::new(Point::new(0, 0), Size::new(1920, 1080)),
@@ -309,7 +309,7 @@ fn a_display_change_alone_measures_the_window_again() {
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
     let moved = DisplaySnapshot::empty()
         .successor(vec![
-            DisplayInfo::new(
+            DisplayDescription::new(
                 id,
                 "main",
                 Bounds::new(Point::new(60, 0), Size::new(1860, 1080)),
@@ -332,7 +332,7 @@ fn displays_with_left_edge(left: i32) -> DisplaySnapshot {
     let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
     DisplaySnapshot::empty()
         .successor(vec![
-            DisplayInfo::new(
+            DisplayDescription::new(
                 id,
                 "main",
                 Bounds::new(Point::new(left, 0), Size::new(1920 - left, 1080)),

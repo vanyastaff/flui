@@ -267,19 +267,19 @@ impl IntentFrame {
 }
 
 /// What a started activity answered: its code, and the `Intent` it carried,
-/// if any, as a [`ResultData`].
+/// if any, as a [`ResultIntent`].
 ///
 /// The `Intent` stays with the host, on the owner thread; the provider reads
-/// it once by handing the [`ResultData`] to [`Activity::take_data`]. Its
+/// it once by handing the [`ResultIntent`] to [`Activity::take_data`]. Its
 /// extras come from another application: the provider reads only what it
 /// asked for and checks each size before it copies. Dropping the result, or
-/// its `ResultData`, unread lets the host release the `Intent`: a result
+/// its `ResultIntent`, unread lets the host release the `Intent`: a result
 /// nobody receives (a dropped completion, a retired runtime, a provider that
 /// went) holds nothing. Only the host makes one ([`ResultMint::result`]).
 #[derive(Debug)]
 pub struct ActivityResult {
     code: ResultCode,
-    data: Option<ResultData>,
+    data: Option<ResultIntent>,
 }
 
 impl ActivityResult {
@@ -297,7 +297,7 @@ impl ActivityResult {
 
     /// The `Intent` the activity answered with, for
     /// [`Activity::take_data`]; `None` once taken.
-    pub fn take_data(&mut self) -> Option<ResultData> {
+    pub fn take_data(&mut self) -> Option<ResultIntent> {
         self.data.take()
     }
 }
@@ -375,13 +375,13 @@ impl Released {
 /// ([`ResultMint::data`]), so a provider holds only the data the host handed
 /// it.
 #[derive(Debug)]
-pub struct ResultData(Holder);
+pub struct ResultIntent(Holder);
 
-/// The host's side of a [`ResultData`]: whether the provider still holds it.
+/// The host's side of a [`ResultIntent`]: whether the provider still holds it.
 #[derive(Debug)]
-pub struct ResultDataHold(Released);
+pub struct ResultIntentHold(Released);
 
-impl ResultData {
+impl ResultIntent {
     /// The request whose answer carried it.
     #[must_use]
     pub fn token(&self) -> ResultToken {
@@ -389,8 +389,8 @@ impl ResultData {
     }
 }
 
-impl ResultDataHold {
-    /// Whether the provider let the [`ResultData`] go unread, so the host
+impl ResultIntentHold {
+    /// Whether the provider let the [`ResultIntent`] go unread, so the host
     /// releases the `Intent`.
     #[must_use]
     pub fn is_released(&self) -> bool {
@@ -432,7 +432,7 @@ impl ResultTicketHold {
 }
 
 /// What makes the values a host hands a provider: [`ResultTicket`],
-/// [`ResultData`], [`ActivityResult`] and [`ResultRequest`]. It has no
+/// [`ResultIntent`], [`ActivityResult`] and [`ResultRequest`]. It has no
 /// public constructor: a host receives one when the composition root offers
 /// its bridge ([`HostBridge::install_activity`], [`ActivityBridge::bind`]),
 /// so no provider makes the values it then hands back to the host.
@@ -462,14 +462,14 @@ impl ResultMint {
     /// The `Intent` held for the request `token`, whose drop calls `wake`,
     /// and the side the host keeps to learn when the provider lets it go.
     #[must_use]
-    pub fn data(&self, token: ResultToken, wake: Rc<dyn Fn()>) -> (ResultData, ResultDataHold) {
+    pub fn data(&self, token: ResultToken, wake: Rc<dyn Fn()>) -> (ResultIntent, ResultIntentHold) {
         let (holder, released) = Holder::new(token, self.identity.clone(), wake);
-        (ResultData(holder), ResultDataHold(released))
+        (ResultIntent(holder), ResultIntentHold(released))
     }
 
     /// The answer `code`, with the `Intent` it carried as `data`.
     #[must_use]
-    pub fn result(&self, code: ResultCode, data: Option<ResultData>) -> ActivityResult {
+    pub fn result(&self, code: ResultCode, data: Option<ResultIntent>) -> ActivityResult {
         ActivityResult { code, data }
     }
 
@@ -485,7 +485,7 @@ impl ResultMint {
     /// Whether this mint made `data`: data another Activity's host handed
     /// out names a token of that Activity, not of this one.
     #[must_use]
-    pub fn made(&self, data: &ResultData) -> bool {
+    pub fn made(&self, data: &ResultIntent) -> bool {
         self.identity.is(&data.0.mint)
     }
 }
@@ -723,7 +723,7 @@ pub trait ActivityBridge: 'static {
     fn take_data(
         &self,
         capability: &CapabilityId,
-        data: ResultData,
+        data: ResultIntent,
         f: &mut dyn FnMut(JniFrame),
     ) -> Result<(), DataRefused>;
 
@@ -813,7 +813,7 @@ impl Activity {
 
     /// `f`'s answer, with the `Intent` `data` names lent in the frame, on the
     /// owner thread; the host lets the `Intent` go after. An `Intent` counts
-    /// against the bounds until its [`ResultData`] is taken here or dropped.
+    /// against the bounds until its [`ResultIntent`] is taken here or dropped.
     ///
     /// # Errors
     ///
@@ -823,7 +823,7 @@ impl Activity {
     /// not run.
     pub fn take_data<R>(
         &self,
-        data: ResultData,
+        data: ResultIntent,
         f: impl FnOnce(JniFrame) -> R,
     ) -> Result<R, DataRefused> {
         let mut f = Some(f);
