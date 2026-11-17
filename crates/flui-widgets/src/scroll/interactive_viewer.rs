@@ -2403,9 +2403,7 @@ impl InteractiveViewerState {
                     }
                     down_core.fling.stop_friction();
                 })
-                // Fingers resting on a touchpad stop the inertia as a press
-                // does; a hold that ends or turns into a gesture leaves it
-                // stopped.
+                // Fingers resting on a touchpad stop the inertia, as a press does.
                 .on_pointer_signal({
                     let core = Rc::clone(&core);
                     move |_, dispatch| {

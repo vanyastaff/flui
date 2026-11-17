@@ -4360,7 +4360,10 @@ start becomes each update's own factor
 (`a_pinch_is_one_pan_zoom_about_the_cursor`); a swipe's steps sum into its
 travel where the cursor rests (`a_swipe_is_one_gesture_where_the_cursor_rests`);
 a hold rests until it lifts or a gesture starts
-(`a_hold_rests_until_it_lifts_or_a_gesture_starts`). The compositor's millisecond
+(`a_hold_rests_until_it_lifts_or_a_gesture_starts`); both come through the wire from
+the scripted compositor, which binds no hold below the gestures global's version 3
+(`wayland_scripted::a_touchpad_swipe_and_hold_reach_the_window_through_the_wire`,
+`wayland_scripted::a_gestures_global_without_holds_gives_the_window_none`). The compositor's millisecond
 stamp is read on `CLOCK_MONOTONIC` only within a second of the clock read
 on arrival, and the arrival stamps the event otherwise
 (`a_stamp_off_the_monotonic_clock_takes_the_arrival`): Weston's X11 backend

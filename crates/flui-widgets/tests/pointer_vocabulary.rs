@@ -701,7 +701,9 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         PointerButtons::NONE,
         sample(131, 170.0),
     )));
+    laid.pump_for(Duration::from_millis(16));
     let before = controller.value().transform_point(0.0, 0.0).0;
+    laid.pump_for(Duration::from_millis(16));
     laid.pump_for(Duration::from_millis(16));
     assert!(
         controller.value().transform_point(0.0, 0.0).0 > before,

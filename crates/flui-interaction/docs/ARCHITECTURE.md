@@ -455,10 +455,12 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `PointerEvent::TouchpadSwipe` is never a scroll: the binding's
   `TouchpadSwipes` hit-tests its `Start` once and delivers every later phase
   along that path, closes the arena keyed by the swipe's pointer after the
-  start, sweeps it after `End` and abandons it after `Cancelled` (or when it
+  start, and at `End` or `Cancelled` detaches that contest before user code
+  runs and sweeps or abandons the detached generation (as when it
   cancels the swipe itself: focus loss, its device removed, a newer start).
   A `RecognizerSet` offers the start to `GestureRecognizer::add_touchpad_swipe`
-  of recognizers that admit a trackpad, and `SwipeGestureRecognizer` follows
+  of recognizers that admit a trackpad, and a `SwipeGestureRecognizer` that may
+  start anywhere follows
   the travel as a contact's motion. A `PointerEvent::TouchpadHold` is
   delivered as a signal where the pointer rests; a scrollable stops its fling
   at its `Begin`.

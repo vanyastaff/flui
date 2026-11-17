@@ -23,6 +23,9 @@ use flui_platform::pointer::{
 
 type Log = Rc<RefCell<Vec<String>>>;
 
+/// What a listener does when it hears a swipe's end.
+type OnEnd = Box<dyn Fn(&Rc<GestureBinding>)>;
+
 const DEVICE: u64 = 5;
 
 fn pointer(id: u64) -> PointerInfo {
@@ -89,7 +92,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(panics: bool, on_end: Option<Box<dyn Fn(&Rc<GestureBinding>)>>) -> Self {
+    fn new(panics: bool, on_end: Option<OnEnd>) -> Self {
         let lane = InteractionLane::try_new().expect("lane");
         let binding = Rc::new(GestureBinding::new());
         let log = Log::default();
@@ -111,9 +114,10 @@ impl Fixture {
                             swipe.pointer().id.get(),
                             phase_name(swipe.phase)
                         ));
-                        if panics && matches!(swipe.phase, TouchpadSwipePhase::Update(_)) {
-                            panic!("a listener fails mid-swipe");
-                        }
+                        assert!(
+                            !(panics && matches!(swipe.phase, TouchpadSwipePhase::Update(_))),
+                            "a listener fails mid-swipe"
+                        );
                         if swipe.phase == TouchpadSwipePhase::End
                             && let (Some(on_end), Some(binding)) = (&on_end, owner.upgrade())
                         {
@@ -195,7 +199,7 @@ fn every_way_a_swipe_ends_ends_it_once() {
             |fixture| {
                 fixture
                     .lane
-                    .enter(|| fixture.binding.cancel_active_pointers())
+                    .enter(|| fixture.binding.cancel_active_pointers());
             },
             &["1 Start", "1 Cancelled", "lost"],
         ),
@@ -221,7 +225,7 @@ fn every_way_a_swipe_ends_ends_it_once() {
             |fixture| {
                 fixture
                     .lane
-                    .enter(|| close_gestures(&fixture.binding, CloseMode::Ordinary))
+                    .enter(|| close_gestures(&fixture.binding, CloseMode::Ordinary));
             },
             &["1 Start", "lost"],
         ),

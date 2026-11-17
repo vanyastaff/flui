@@ -7793,10 +7793,24 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   `flui-widgets` (`pointer_and_gesture_recognition`, `scroll_physics_and_activity`), `flui-native`
   (сборка, DirectManipulation, записи, parity), `flui-protocol`; WSL Ubuntu 24.04 — тесты
   `wayland::wire` и `x11::decode`, clippy `flui-native` со всеми фичами. Код macOS и Android —
-  только проверка типов CI. Долги — строки паритета `touchpad-hold-stops-a-fling` и
-  `touchpad-swipe-is-a-gesture`: тачпад на каждом хосте и проход объектов жестов Wayland по
-  протоколу (сценарный композитор работы Wayland present ещё не на `main`); строк `hold`/`swipe` в
-  таблице соответствия бэкендов нет (`docs/gaps.md`).
+  только проверка типов CI. После независимого чтения: свайп закрывает свой собственный конкурс
+  (поколение отсоединяется до пользовательского кода, `an_end_settles_its_own_contest_not_a_newer_one`),
+  каждый выход binding — строка `every_way_a_swipe_ends_ends_it_once` (потеря фокуса, удаление
+  устройства, вытеснение новым началом, отмена, закрытие binding; каждая красная без своего
+  цикла), паника слушателя посреди свайпа — `a_listener_that_fails_mid_swipe_leaves_the_swipe_open`;
+  сценарий даёт каждому удержанию и свайпу свой указатель, нечисловой ход — `ScriptError`; начало
+  поверх открытого удержания или свайпа сперва отменяет его (`a_start_over_an_open_gesture_cancels_it_first`),
+  свайп X11, кончившийся на чужом окне, отменяется на своём
+  (`a_swipe_ended_on_another_window_is_cancelled_on_its_own`); удержание останавливает и инерцию
+  `InteractiveViewer`; распознаватель `SwipeStart::FromEdge` свайпов тачпада не берёт; маска
+  событий XInput занимает второе слово для типа 32 (на CI падало переполнение сдвига,
+  `an_event_mask_takes_a_word_for_each_thirty_two_types`). Сценарный композитор (`wayland_scripted`)
+  отдаёт удержание и свайп по протоколу живому хосту, а на версии 2 глобала жестов хост не берёт
+  удержания (`a_touchpad_swipe_and_hold_reach_the_window_through_the_wire`,
+  `a_gestures_global_without_holds_gives_the_window_none`; красные без `Dispatch` свайпа и с
+  `HOLD_VERSION` 1). Долги — строки паритета `touchpad-hold-stops-a-fling` и
+  `touchpad-swipe-is-a-gesture`: тачпад на каждом хосте; строк `hold`/`swipe` в таблице
+  соответствия бэкендов нет (`docs/gaps.md`).
 
 ### Доведение до приёмки
 
