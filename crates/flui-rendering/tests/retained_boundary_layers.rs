@@ -500,3 +500,98 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
          the content change that required the repaint would be lost",
     );
 }
+
+/// What the frame owes `x` when its subtree is removed after the paint pass
+/// staged a patch and before the patch is applied.
+#[derive(Clone, Copy, Debug)]
+enum OwedBeforeRemoval {
+    /// An alpha change under `x`: its content is patched, not repainted.
+    LayerUpdate,
+    /// `x` is repainted.
+    Repaint,
+    /// Only the root repaints; `x` stays as committed.
+    Clean,
+}
+
+/// A boundary `x` holding an opacity over a nested boundary `inner`, beside
+/// a sibling boundary, under a non-boundary row at the root.
+fn mount_nested_under_opacity() -> (
+    PipelineOwner<flui_rendering::pipeline::Idle>,
+    [flui_foundation::RenderId; 3],
+) {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let (root_id, registry) = tree::mount(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).label("x").child(
+                    box_node(RenderOpacity::new(0.5)).label("opacity").child(
+                        box_node(RenderRepaintBoundary::new())
+                            .label("inner")
+                            .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+                    ),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .label("sibling")
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
+    let ids = ["x", "opacity", "inner"].map(|label| {
+        registry
+            .get(label)
+            .unwrap_or_else(|| panic!("the tree labels `{label}`"))
+    });
+    (owner, ids)
+}
+
+/// A boundary removed between the paint pass and the report of the version
+/// it produced (a lazy list evicting a child in a frame's tail) retires its
+/// own scene node and every node under it, whatever the pass staged for it.
+pub(crate) fn a_boundary_removed_before_its_patch_applies_retires_every_node_under_it() {
+    for owed in [
+        OwedBeforeRemoval::LayerUpdate,
+        OwedBeforeRemoval::Repaint,
+        OwedBeforeRemoval::Clean,
+    ] {
+        let (mut owner, [x, opacity, inner]) = mount_nested_under_opacity();
+        let mut scene = SceneHost::new();
+        scene.run_frame_in_place(&mut owner).expect("first frame");
+        let nodes = [x, inner].map(|id| {
+            owner
+                .boundary_scene_node(id)
+                .expect("a painted boundary has a scene node")
+        });
+        match owed {
+            OwedBeforeRemoval::LayerUpdate => set_opacity(&mut owner, opacity, 0.25),
+            OwedBeforeRemoval::Repaint => owner.mark_needs_paint(x),
+            OwedBeforeRemoval::Clean => {
+                let root = owner.root_id().expect("the tree has a root");
+                owner.mark_needs_paint(root);
+            }
+        }
+        let (painted, _) = scene.drive(&mut owner, |pipeline, writer| {
+            let painted = pipeline.run_frame_in_place(writer);
+            pipeline.remove_render_object(x);
+            painted
+        });
+        painted.expect("the frame before the removal");
+        for _ in 0..3 {
+            scene.run_frame_in_place(&mut owner).expect("a later frame");
+        }
+        assert_eq!(
+            owner.boundary_record_count(),
+            1,
+            "{owed:?}: only the sibling keeps a record"
+        );
+        for (label, node) in ["x", "inner"].into_iter().zip(nodes) {
+            assert!(
+                scene.version().node(node).is_none(),
+                "{owed:?}: the scene still holds the node of removed `{label}`"
+            );
+        }
+    }
+}

@@ -1207,16 +1207,15 @@ impl PipelineOwner<PaintPhase> {
 /// its node, the content it published there, and the values a walk from the
 /// root would hand it at its slot, so a boundary painted alone paints as it
 /// would under its parent.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct BoundaryRecord {
     node: SceneNodeId,
     content: Arc<BoundaryContent>,
     placed: Placed,
     /// Each node whose own effect layers this content holds, the entries of
     /// those layers, and the origin they were built at: what a
-    /// composited-layer update rebuilds; shared by the record a
-    /// composited-layer update makes, and `None` when there are none.
-    effect_slots: Option<Arc<[(RenderId, EffectSlots)]>>,
+    /// composited-layer update rebuilds; `None` when there are none.
+    effect_slots: Option<Box<[(RenderId, EffectSlots)]>>,
     /// Each follower effect in the content, with the origin its subtree paints
     /// at, for hit-testing and input regions.
     followers: SmallVec<[(RenderId, EntryIndex, Offset); 1]>,
@@ -1258,7 +1257,7 @@ pub(super) enum Refreshed {
 
 impl Refreshed {
     /// The content the pass published.
-    fn content(self) -> Arc<BoundaryContent> {
+    fn into_content(self) -> Arc<BoundaryContent> {
         match self {
             Self::Repainted(record) => record.content,
             Self::Patched { content, .. } => content,
@@ -1322,7 +1321,8 @@ impl FrameRecord {
 /// A paint pass's patch, staged until the patch it buffered is applied.
 #[derive(Debug, Default)]
 pub(super) struct StagedScene {
-    /// Records replaced (`Some`) or dropped (`None`).
+    /// What the pass made of each boundary it republished (`Some`), and the
+    /// records it dropped (`None`).
     pub(super) records: FxHashMap<RenderId, Option<Refreshed>>,
     /// New placements of records the pass kept.
     placed: FxHashMap<RenderId, Placed>,
@@ -1332,6 +1332,9 @@ pub(super) struct StagedScene {
     /// Nodes of removed boundaries still named by a parent the pass did not
     /// republish.
     orphans: Vec<SceneNodeId>,
+    /// How many entries of the owner's orphan list the pass read; a
+    /// removal after the pass adds its nodes after them.
+    orphans_read: usize,
     /// Operations the pass buffered.
     pub(super) ops: u64,
 }
@@ -1360,7 +1363,8 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             mut placed,
             mut stale,
             frame,
-            orphans,
+            mut orphans,
+            orphans_read,
             ops: _,
         } = staged;
         for (id, refreshed) in records.drain() {
@@ -1396,6 +1400,11 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             if let Some(record) = self.boundary_records.get_mut(&id) {
                 record.stale = true;
             }
+        }
+        // Boundaries removed since the pass read the owner's list left their
+        // nodes after the entries it read: they wait for a later pass.
+        if let Some(late) = self.orphaned_nodes.get(orphans_read..) {
+            orphans.extend_from_slice(late);
         }
         let previous_orphans = std::mem::replace(&mut self.orphaned_nodes, orphans);
         if let Some(scratch) = self.paint_scratch.as_mut() {
@@ -1461,7 +1470,7 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
             ..
         } = staged;
         for refreshed in records.drain().filter_map(|(_, refreshed)| refreshed) {
-            writer.discard(refreshed.content());
+            writer.discard(refreshed.into_content());
         }
         if let Some(scratch) = self.paint_scratch.as_mut() {
             scratch.recycle_staged(records, placed, stale, orphans);
@@ -1640,7 +1649,8 @@ impl BoundaryBuild {
             node,
             content: Arc::new(self.builder.finish()),
             placed,
-            effect_slots: (!self.effect_slots.is_empty()).then(|| Arc::from(self.effect_slots)),
+            effect_slots: (!self.effect_slots.is_empty())
+                .then(|| self.effect_slots.into_boxed_slice()),
             followers: self.followers,
             children: self.children,
             stale: false,
@@ -2273,6 +2283,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
             }
         }
         // Removed boundaries: retired once no unchanged parent names them.
+        self.staged.orphans_read = owner.orphaned_nodes.len();
         let mut orphans = std::mem::take(&mut self.staged.orphans);
         orphans.clear();
         orphans.extend(
