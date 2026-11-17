@@ -933,8 +933,8 @@ note = 'The mobile system edit menu is under Text input; the in-app, theme-free 
 [[group.section.row]]
 id = "dock-menu-jump-list-recent-documents"
 feature = 'Dock menu, jump list, recent documents'
-status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
-note = 'Linux: desktop actions in the `.desktop` file'
+status = { windows = "partial", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+note = "Linux: desktop actions in the `.desktop` file. Windows: `flui-system`'s `JumpList` writes the application's tasks through `ICustomDestinationList` on a thread of its own, each a shell link to the running executable with its arguments quoted as `CommandLineToArgvW` reads them back; recent documents are not built; tested with the quoting and the task links as values, never committed on a machine (owed: the tasks shown in the taskbar button's menu, and a task starting the application with its arguments)"
 
 [[group]]
 name = 'System services'
@@ -946,36 +946,37 @@ decides_readiness = true
 id = "open-a-url"
 feature = 'Open a URL'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
-note = "Every host takes a URI only as an `ExternalUri` of the schemes its caller names, refused at the seam otherwise, headless included ([ADR-0360](adr/ADR-0360-a-dialog-filter-means-one-thing-on-every-host-and-a-launch-names-the-schemes-it-allows.md)). Linux: `flui-system`'s launcher through the `OpenURI` portal, its application chooser attached to an X11 window (not on Wayland, as for the dialogs), run against a stand-in portal on a private bus, not a desktop. Windows and Web: the core `open_url`, which nothing calls and no application reaches"
+note = "Every host takes a URI only as an `ExternalUri` of the schemes its caller names, refused at the seam otherwise, headless included ([ADR-0360](adr/ADR-0360-a-dialog-filter-means-one-thing-on-every-host-and-a-launch-names-the-schemes-it-allows.md)). Linux: `flui-system`'s launcher through the `OpenURI` portal, its application chooser attached to an X11 window (not on Wayland, as for the dialogs), run against a stand-in portal on a private bus, not a desktop. Windows: `flui-system`'s launcher hands the URI to `ShellExecuteExW` with the `open` verb and the scheme as its class (`SEE_MASK_CLASSNAME`), so only that scheme's registered handler takes it, on an apartment thread of its own; tested with the shell's answers as inputs, never run against a real handler (owed: a link opened in the default browser and a `mailto:` in the mail client). Web: the core `open_url`, which nothing calls and no application reaches"
 
 [[group.section.row]]
 id = "open-a-file-reveal-it-in-the-file-manager"
 feature = 'Open a file, reveal it in the file manager'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
-note = 'Every host refuses a relative path and any Windows prefix but a drive letter, and a name of a program, script or shortcut, at the seam; the name list is a floor, and each launcher opens the file off the owner thread and judges what it opened before handing it on (ADR-0360). Linux: the file opened on the portal thread, its resolved name and an execute bit judged, then `OpenFile` and `OpenDirectory` portals with that descriptor, attached to an X11 window, run against a stand-in portal; the file manager decides whether the file is selected. Owed when built: Windows judges the opened handle with `AssocIsDangerous` on its final path, macOS with Launch Services'
+note = "Every host refuses a relative path and any Windows prefix but a drive letter, and a name of a program, script or shortcut, at the seam; the name list is a floor, and each launcher opens the file off the owner thread and judges what it opened before handing it on (ADR-0360). Linux: the file opened on the portal thread, its resolved name and an execute bit judged, then `OpenFile` and `OpenDirectory` portals with that descriptor, attached to an X11 window, run against a stand-in portal; the file manager decides whether the file is selected. Windows: the file opened off the owner thread (`CreateFileW`, held without delete sharing while it is handed on), judged by its final name (`GetFinalPathNameByHandleW`) against the floor and by `AssocIsDangerous`, then opened by that name with the `open` verb of `ShellExecuteExW`; reveal through `SHOpenFolderAndSelectItems`; tested with the shell's answers as inputs, never run against Explorer (owed: a document opened in its application, a folder shown with its file selected, a link swapped to a program refused). Owed when built: macOS judges the opened file with Launch Services' application and executable checks"
 
 [[group.section.row]]
 id = "move-to-trash"
 feature = 'Move to trash'
-status = { windows = "missing", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
-note = 'Linux: the `Trash` portal, run against a stand-in portal'
+status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "missing" }
+note = "Linux: the `Trash` portal, run against a stand-in portal. Windows: `IFileOperation` with `FOFX_RECYCLEONDELETE` and `FOF_WANTNUKEWARNING`, so an item the recycle bin cannot take asks the user, owned by the widget's window, before it is deleted for good; an operation called off answers `Denied`; tested with the shell's answers as inputs, never run (owed: a file moved to the recycle bin, and one on a drive without a recycle bin prompting first)"
 
 [[group.section.row]]
 id = "open-save-and-folder-dialogs"
 feature = 'Open, save and folder dialogs'
 status = { windows = "partial", macos = "missing", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "missing", headless = "missing" }
-note = "A filter means one thing on every host: an extension (one or more parts, `tar.gz`) matched ignoring ASCII case, or a MIME type, with names, patterns and filters bounded; a save reports the filter left selected where the system says (ADR-0360). Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters as a lower- and an upper-case glob per extension (a mixed-case name on a case-sensitive file system is not shown) with the first sent as `current_filter` and the selected one read back, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal, not a desktop's GTK or KDE chooser. Windows has no filters, title or owner window; every other host answers \"cancelled\""
+note = "A filter means one thing on every host: an extension (one or more parts, `tar.gz`) matched ignoring ASCII case, or a MIME type, with names, patterns and filters bounded; a save reports the filter left selected where the system says (ADR-0360). Linux: `flui-system`'s dialogs through the `FileChooser` portal, filters as a lower- and an upper-case glob per extension (a mixed-case name on a case-sensitive file system is not shown) with the first sent as `current_filter` and the selected one read back, title, folder and accept label, modal to an X11 window; on Wayland not modal until the host exports an `xdg-foreign` handle; run against a stand-in portal, not a desktop's GTK or KDE chooser. Windows: `flui-system`'s dialogs through `IFileOpenDialog` and `IFileSaveDialog` on an apartment thread of their own, owned by the widget's window (so modal to it while the owner thread keeps its frames), `*.ext` patterns per filter with the first selected and the selected one read back (`GetFileTypeIndex`), a typed name given the selected filter's extension, title, folder and accept label; a MIME type filter is refused with `NotOnThisPlatform`; a dropped dialog or a closed window closes it through `IFileDialog::Close` on its thread. The thread, its dismissal and the answers ran in the crate's tests with a stand-in dialog; no real dialog was shown (owed: open, multi-select, folder and save dialogs modal to a window, a dialog closed with its window). Every other host answers \"cancelled\""
 
 [[group.section.row]]
 id = "message-box"
 feature = 'Message box'
-status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
-note = 'Linux has no native one: the app draws it'
+status = { windows = "partial", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+note = "Linux has no native one: the app draws it. Windows: `flui-system`'s `MessageBoxes` through `MessageBoxW` on an apartment thread of its own, owned by the widget's window and sharing its one-dialog rule with the file dialogs; dismissed with `EndDialog` from its thread; the button mapping ran in the crate's tests, no box was shown (owed: each button set answered, a box closed with its window)"
 
 [[group.section.row]]
 id = "share"
 feature = 'Share'
-status = { windows = "missing", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+status = { windows = "partial", macos = "missing", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
+note = "Windows: `flui-system`'s `Share` through `DataTransferManager` for the widget's window (`IDataTransferManagerInterop`), on the owner thread: text, a web or application link and files, each file checked off the owner thread before the sheet shows and handed over as a `StorageFile` under the request's deferral; no sheet was shown (owed: text, a link and a file shared to a target)"
 
 [[group.section.row]]
 id = "app-folders-and-storage"
@@ -983,6 +984,12 @@ feature = 'App folders and storage'
 status = { windows = "yes", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "yes", web = "partial", headless = "yes" }
 note = "An application identifier or `AppConfig::storage_dir` gives widgets storage on every host; it ran on Windows and Android, and no Web app has run the probe. Headless keeps each application's values in memory for the platform's life, or on disk under `HeadlessPlatform::with_data_root`, never in the user's directories. Android `app_path` still reports a fixed path."
 evidence = "an application identifier or `AppConfig::storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, IndexedDB on the Web, and on headless a memory store per application that lives as long as its `HeadlessPlatform` (two platforms never share values) or, with `with_data_root`, files under the root a test names, where a write based on a version compares and replaces in one readwrite transaction, so two tabs never both succeed from one base. Runs: a probe counting its launches through the storage capability (then `LifecycleContext::storage`, now `ctx.capability::<StorageCapability>()`) read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). The Web store's own tests ran on Chromium 152 against its IndexedDB; no Web app has run the probe. Android `app_path` still reports a fixed path"
+
+[[group.section.row]]
+id = "user-folders-and-os-information"
+feature = 'User folders and OS information'
+status = { windows = "partial", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "missing", web = "na", headless = "missing" }
+note = "Windows: `flui-system`'s `Os` finds a known folder with `SHGetKnownFolderPath` on a thread of its own (Windows names no cache folder, so the cache is local application data) and names the system with `RtlGetVersion` and `GetNativeSystemInfo`; the conformance table read the system and the home folder from Windows 11 through `cargo heli nextest run`, the other folders only as mapped values. Linux's XDG folders come with its provider"
 
 [[group.section.row]]
 id = "persisted-documents-survive-a-kill-a-read-only-file-a-redirected-profile-a-second-instance-and-a-session-end"
@@ -1014,18 +1021,19 @@ note = 'Needs app identity'
 id = "taskbar-and-dock-progress-badge"
 feature = 'Taskbar and Dock progress, badge'
 status = { windows = "partial", macos = "missing", wayland = "missing", x11 = "missing", ios = "missing", android = "na", web = "missing", headless = "missing" }
-note = 'Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API'
+note = "Windows: `flui-system`'s `Taskbar` through `ITaskbarList3` on the owner thread, the badge an overlay icon drawn at the window's small-icon size (a disk with the count, `99+` above 99); each window is subclassed (`SetWindowSubclass`, found by ordinal, since `comctl32.dll` 5.82 exports it by ordinal only) to show its last progress and badge again on `TaskbarButtonCreated`, after a late button or an Explorer restart; the mapping, the badge's pixels and the re-showing ran in the crate's tests with a stand-in taskbar, never on a real taskbar (owed: progress states and a count badge on a window's button, kept across an Explorer restart). Linux `LauncherEntry`; Web Badging API"
 
 [[group.section.row]]
 id = "global-shortcuts"
 feature = 'Global shortcuts'
-status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
-note = 'Wayland only through the GlobalShortcuts portal'
+status = { windows = "partial", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+note = "Wayland only through the GlobalShortcuts portal. Windows: `flui-system`'s `GlobalShortcuts` through `RegisterHotKey` on a message-only window of the runtime's own on the owner thread, a letter, digit or punctuation key mapped by its scan code through the active layout, `MOD_NOREPEAT`, each press delivered at the owner's next turn; tested with a stand-in for the hot key calls, never registered on a desktop (owed: a chord heard while another application has the focus, one another application holds answering `Taken`)"
 
 [[group.section.row]]
 id = "launch-at-login"
 feature = 'Launch at login'
-status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+status = { windows = "partial", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "na", web = "na", headless = "missing" }
+note = "Windows: `flui-system`'s `LaunchAtLogin` writes the current user's `Run` value (the executable's stem and a hash of its path as the name, its quoted path as the command) on a thread of its own, reports the user's own choice under `StartupApproved\\Run` as `DisabledByUser` and never overwrites it, and refuses a packaged process, whose manifest owns its start-up task; tested against a registry held in memory, never on a machine (owed: an application started at the next login, and one the user turned off in Settings reported so)"
 
 [[group.section.row]]
 id = "keep-the-screen-awake"

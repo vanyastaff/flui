@@ -2,10 +2,12 @@
 //! headless host.
 
 mod capability;
+mod conformance;
 mod dialogs;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod portal;
+mod services;
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -124,6 +126,101 @@ fn acquire_twice_on<C: Capability>(host: &mut HeadlessHost) -> [Result<C::Handle
             .take()
             .expect("each widget acquired in init_state")
     })
+}
+
+/// What a [`Within`] runs in `init_state`.
+type Init = Rc<dyn Fn(&dyn LifecycleContext)>;
+
+/// A widget whose `init_state` runs its closure: several acquisitions in
+/// one widget, so in one window.
+#[derive(Clone)]
+struct Within {
+    init: Init,
+}
+
+struct WithinState {
+    init: Init,
+}
+
+impl StatefulView for Within {
+    type State = WithinState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        WithinState {
+            init: Rc::clone(&self.init),
+        }
+    }
+}
+
+impl View for Within {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
+    }
+}
+
+impl ViewState<Within> for WithinState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        (self.init)(ctx);
+    }
+
+    fn build(&self, _view: &Within, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+/// Mount a widget as the root of `window` (the primary window for `None`)
+/// whose `init_state` runs `init`, and pump once.
+fn within(
+    host: &mut HeadlessHost,
+    window: Option<HeadlessWindowId>,
+    init: impl Fn(&dyn LifecycleContext) + 'static,
+) {
+    let widget = Within {
+        init: Rc::new(init),
+    };
+    match window {
+        Some(window) => host.attach_to(window, &widget),
+        None => host.attach(&widget),
+    }
+    .expect("root attaches");
+    let _ = host.pump(Duration::ZERO);
+}
+
+/// What a widget acquires of `C` inside [`within`].
+struct CapabilitySlot<C: Capability> {
+    slot: Acquired<C>,
+    capability: PhantomData<fn() -> C>,
+}
+
+impl<C: Capability> Clone for CapabilitySlot<C> {
+    fn clone(&self) -> Self {
+        Self {
+            slot: Rc::clone(&self.slot),
+            capability: PhantomData,
+        }
+    }
+}
+
+impl<C: Capability> CapabilitySlot<C> {
+    fn new() -> Self {
+        Self {
+            slot: Rc::new(RefCell::new(None)),
+            capability: PhantomData,
+        }
+    }
+
+    /// Acquire `C` from `ctx`.
+    fn fill(&self, ctx: &dyn LifecycleContext) {
+        *self.slot.borrow_mut() = Some(ctx.capability::<C>());
+    }
+
+    /// What the widget acquired.
+    fn take(&self) -> Result<C::Handle, Unsupported> {
+        self.slot
+            .borrow_mut()
+            .take()
+            .expect("the widget acquired in init_state")
+    }
 }
 
 /// Run the owner's next turn, where completions settle.

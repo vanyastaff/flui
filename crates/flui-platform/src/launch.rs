@@ -603,7 +603,7 @@ fn admit_path(path: &Path, verb: PathVerb) -> Result<(), LaunchError> {
     if !path.is_absolute() {
         return Err(LaunchError::RelativePath);
     }
-    if !is_local(path) {
+    if !is_local_path(path) {
         return Err(LaunchError::NotLocal);
     }
     if verb == PathVerb::Open && runs_when_opened(path) {
@@ -616,7 +616,13 @@ fn admit_path(path: &Path, verb: PathVerb) -> Result<(), LaunchError> {
 /// letter, plain or verbatim, is the only prefix admitted, and every other
 /// (a share, a device, `\\?\GLOBALROOT` or a volume name) is not; on every
 /// other system an absolute path has no prefix and is local.
-fn is_local(path: &Path) -> bool {
+///
+/// Judged on the path as given, with no file system call, so a drive the
+/// user mapped stays theirs. The rule every path a capability hands the
+/// system meets (ADR-0360 §2): the launcher's verbs, and the files a share
+/// sends.
+#[must_use]
+pub fn is_local_path(path: &Path) -> bool {
     match path.components().next() {
         Some(Component::Prefix(prefix)) => {
             matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))

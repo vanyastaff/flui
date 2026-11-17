@@ -5447,28 +5447,69 @@ GPU-память простаивающего или невидимого окн
   лаунчера — тест `flui-system`. Тесты `flui-system` теперь берут абсолютные пути через
   `temp_dir`: `/srv/…` и `/home` относительны на Windows, и два теста там падали. Примитив вне
   фичи недоступен (модуль за `cfg(feature = "scripted")`). Запуски на устройствах не нужны.
-- [ ] **LY57** (не закрыта: крейт, плагин и две возможности на `main`; провайдеров Windows,
-  остальных служб и общей conformance-таблицы нет) — #2150 (`9450db8e1`), портал Linux #2158,
-  `Unsupported` в ошибках запуска и диалогов #2354, `flui add` #2273, фича фасада #2325. Крейт —
-  `crates/flui-system`, ярус `pkg`, kind `capability`.
-  `SystemPlugin` объявлен в `[package.metadata.flui.capability]`; фасад публикует крейт как
-  `flui::services::system` за фичей `system`, выключенной по умолчанию. Возможности: файловые
-  диалоги (`FileDialogCapability`, `FileDialogs`, модальны окну виджета, один на окно) и запуск
-  (`LauncherCapability`, `Launcher` в контракте, `flui_platform::launch`: URI, открыть путь,
-  reveal, trash). Двойники `ScriptedLauncher` и `ScriptedFileDialogs` (их плагин `ScriptedSystem`,
-  `ScriptedSystem::on`) построены на сценарном примитиве LY54. Вне Linux плагин
-  регистрирует отказ `NotYetOnThisHost`. Тесты (`crates/flui-system/tests/`):
-  `the_declared_plugin_is_the_crates_default_plugin`;
-  `a_widget_opens_a_uri_and_the_answer_settles_at_the_next_turn`,
-  `each_path_request_reaches_the_system_and_carries_its_answer`,
-  `the_system_plugin_provides_the_portal_on_linux_and_refuses_elsewhere` (`launcher.rs`);
-  `an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks`,
-  `a_window_shows_one_dialog_at_a_time`, `a_dialog_error_carries_its_unsupported`
-  (`dialogs.rs`). Остаётся: провайдеры Windows и прогон против реальной ОС (`prompt_for_*` и OLE
-  по-прежнему в `crates/flui-native/src/owner/windows.rs`); возможности share, message box,
-  автозапуска, глобальных сочетаний, прогресса и значка, jump list, путей и сведений об ОС;
-  conformance-таблица против симулятора. Плагин доходит до приложения, только если оно включит
-  фичу `system` и зарегистрирует его: в репозитории регистрацию показывает лишь `flui add`.
+- [x] **LY57** (закрыта веткой `system/windows-providers`: провайдеры Windows всех служб, остальные
+  службы и общая conformance-таблица; прогоны на рабочем столе — заметки строк parity) — #2150
+  (`9450db8e1`), портал Linux #2158, `Unsupported` в ошибках запуска и диалогов #2354, `flui add`
+  #2273, фича фасада #2325. Крейт — `crates/flui-system`, ярус `pkg`, kind `capability`;
+  `SystemPlugin` объявлен в `[package.metadata.flui.capability]`, фасад публикует крейт как
+  `flui::services::system` за фичей `system`. Правила крейта — его новый `ARCHITECTURE.md`.
+  Службы (маркер, handle, трейт бэкенда): запуск (`Launcher` контракта), файловые диалоги и
+  message box (`FileDialogs`, `MessageBoxes`: общая таблица «один диалог на окно», `Dialog`
+  живёт, пока его держат, ADR-0344), `Share`, `LaunchAtLogin` (`DisabledByUser` — выбор
+  пользователя, не перезаписывается), `GlobalShortcuts` (`Shortcut` требует Control, Alt или
+  Meta, кроме F13–F24 и медиаклавиш; нажатие доходит до слушателя на следующем ходу владельца,
+  после сброса `ShortcutRegistration` — ничего), `Taskbar` (`Fraction`, `TaskbarProgress`,
+  `TaskbarBadge`), `JumpList`, `Os` (папки пользователя и сведения об ОС). Правила — в handle:
+  искажённый запрос отказывается до бэкенда (`MalformedRequest::Text`/`EmptyMessage`,
+  `MalformedShare`, `MalformedTask`, `InvalidShortcut`), закрытое окно — `WindowClosed` без
+  обращения к системе, ответ вне запроса — `MalformedAnswer`. Заголовок и подпись кнопки
+  файлового диалога длиннее `MAX_TEXT_LEN` или с управляющим символом теперь отказываются на
+  всех хостах. `flui_platform::launch::is_local_path` — общее правило локальности запуска и
+  share. Двойники всех служб — `testing::ScriptedSystem::on`. Windows (`win32`): модальный
+  диалог — на своём потоке в STA, владелец — окно виджета (главный цикл владельца продолжает
+  кадры), закрытие — через окно отмены потока (`IFileDialog::Close`, `EndDialog`); фильтры —
+  `*.ext`, MIME отказывается `NotOnThisPlatform`, `SetDefaultExtension` и `GetFileTypeIndex`;
+  запуск, автозапуск, jump list и папки — поток на запрос в STA, не больше
+  `ShellThreads::MAX_IN_FLIGHT` на runtime; URI — `ShellExecuteExW` с `open` и классом схемы
+  (`SEE_MASK_CLASSNAME`); документ — `CreateFileW`, `GetFinalPathNameByHandleW`, пол
+  `runs_when_opened` и `AssocIsDangerous`, затем открытие по итоговому имени; reveal —
+  `SHOpenFolderAndSelectItems`; trash — `IFileOperation` с `FOFX_RECYCLEONDELETE` и
+  `FOF_WANTNUKEWARNING`; share, горячие клавиши (`RegisterHotKey` на своём message-only окне) и
+  панель задач (`ITaskbarList3`, сабклассинг окна ради `TaskbarButtonCreated`; `SetWindowSubclass`
+  по ординалу, так как `comctl32.dll` 5.82 экспортирует его только по ординалу: импорт по имени
+  не давал процессу без манифеста запуститься, `0xc0000139` на тестовом исполняемом файле) — на
+  потоке владельца. Linux: портал как был; новые службы — `NotYetOnThisHost` (порталы — LY59).
+  Тесты (`crates/flui-system/tests/`): таблица `every_provider_keeps_the_system_services_contract`
+  (`conformance.rs`; против двойников и против `SystemPlugin` хоста; на Windows прочитала сведения
+  об ОС и домашнюю папку с реальной системы); `services.rs`:
+  `a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons`,
+  `a_message_box_ends_with_its_window`,
+  `a_share_reaches_its_windows_sheet_and_a_malformed_one_is_refused_without_asking`,
+  `launch_at_login_answers_the_state_the_system_leaves`,
+  `a_shortcut_holds_control_alt_or_meta_unless_no_application_types_its_key`,
+  `a_registered_shortcut_runs_its_listener_at_a_turn_until_its_registration_drops`,
+  `a_taskbar_change_reaches_its_windows_button_and_stops_with_the_window`,
+  `a_jump_list_is_refused_without_asking_when_its_tasks_are_malformed`,
+  `a_folder_is_absolute_and_the_os_is_what_its_system_says`; строки текста в
+  `a_malformed_request_is_refused_without_showing_a_dialog`;
+  `the_system_plugin_provides_the_shell_on_windows_the_portal_on_linux_and_refuses_elsewhere`
+  (было `…_portal_on_linux_and_refuses_elsewhere`). Модули Windows (`win32::*::tests`):
+  `a_dialog_answers_from_its_thread_at_an_owner_turn`,
+  `a_dropped_dialog_is_closed_on_its_thread_and_frees_the_window`,
+  `a_dialog_ends_with_its_window_and_is_closed_on_its_thread`,
+  `a_dropped_hold_closes_the_dialog_on_its_thread_and_drops_its_answer`,
+  `an_open_judges_the_file_the_handle_holds_not_the_path_it_was_given`,
+  `a_uri_goes_to_its_schemes_registered_class`,
+  `enabling_writes_the_quoted_executable_and_the_users_choice_stands`,
+  `a_press_runs_the_listener_at_the_next_turn_until_the_registration_drops`,
+  `a_button_made_late_or_again_shows_what_its_window_last_asked`,
+  `an_argument_is_quoted_as_the_command_line_splitter_reads_it_back`,
+  `a_runtime_runs_a_bounded_number_of_shell_requests_and_frees_each_place` и таблицы
+  отображений. С откатами: REVERTS. Не запускалось: ни один настоящий диалог, запуск, горячая
+  клавиша, элемент автозапуска, изменение панели задач, jump list или share на рабочем столе —
+  owed в заметках строк parity (System services, Dock menu/jump list); macOS, iOS, Android, wasm
+  не компилировались здесь. Удаление `Platform::prompt_for_*`, `open_url`, `reveal_path`,
+  `open_path` из ядра — LY61 (ждёт провайдеров остальных ОС), записано в `docs/gaps.md`.
 - [ ] **LY59** (не закрыта: четыре портала на `main`; остальных порталов, `portal_parent()` в
   `WindowRef`, поправки ADR-0152 и прогона на рабочем столе нет) — #2158 (`bb618a7f7`), zbus на
   своём runtime #2155, `PortalParent` окна Wayland #1934. `crates/flui-system/src/portal/`
