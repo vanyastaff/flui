@@ -1588,7 +1588,7 @@ mod toplevel {
 
     impl flui_platform::SurfaceTarget for WaylandSurface {
         /// The compositor: the window asks for its next frame only once the
-        /// frame callback [`pre_present_notify`](Self::pre_present_notify)
+        /// frame callback [`pre_present_notify`](flui_platform::SurfaceTarget::pre_present_notify)
         /// arms is answered, or its grace runs out (`frame::CALLBACK_GRACE`),
         /// whether the window is open or retired.
         fn frame_pacing(&self) -> flui_platform::FramePacing {
