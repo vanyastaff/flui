@@ -169,10 +169,11 @@ pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError}
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
 pub use display::{
-    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
-    DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
-    DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
-    SurfaceColorSpace, WindowDisplay,
+    ColorGamut, DesktopOrigin, DisplayBounds, DisplayColor, DisplayId, DisplayIdsExhausted,
+    DisplayInfo, DisplayKey, DisplayParts, DisplayRegistry, DisplayRevision,
+    DisplayRevisionExhausted, DisplaySnapshot, DynamicRange, FrameRateHint, Headroom,
+    InvalidDisplayBounds, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod, SurfaceColorSpace,
+    WindowDisplay,
 };
 pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;
@@ -238,7 +239,9 @@ pub use window_capabilities::{
 pub use window_frame::{
     AppTitleBar, ControlsOffset, InvalidControlsOffset, SystemControls, WindowFrame,
 };
-pub use window_geometry::{InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry};
+pub use window_geometry::{
+    InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, WindowGeometry, WindowPosition,
+};
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
