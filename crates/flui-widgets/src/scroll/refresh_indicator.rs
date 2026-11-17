@@ -954,7 +954,7 @@ impl fmt::Debug for RefreshOverlay {
 }
 
 struct RefreshOverlayState {
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     subscription: Option<flui_foundation::Subscription>,
     /// The controller the live subscription listens on: a rebuild handing a
     /// different one re-subscribes.
@@ -965,9 +965,9 @@ struct RefreshOverlayState {
 impl StatefulView for RefreshOverlay {
     type State = RefreshOverlayState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         RefreshOverlayState {
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             subscription: None,
             subscribed_controller: None,
             initial: Some(self.controller.clone()),
@@ -978,9 +978,7 @@ impl StatefulView for RefreshOverlay {
 impl RefreshOverlayState {
     fn subscribe(&mut self, controller: &RefreshController) {
         self.unsubscribe();
-        let Some(rebuild) = self.rebuild.clone() else {
-            return;
-        };
+        let rebuild = self.rebuild.clone();
         let watched = controller.clone();
         let shown = Cell::new((watched.is_refreshing(), watched.pull_distance_px()));
         let subscription = controller.inner.listen(Rc::new(move || {
@@ -999,8 +997,7 @@ impl RefreshOverlayState {
 }
 
 impl ViewState<RefreshOverlay> for RefreshOverlayState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         if let Some(controller) = self.initial.take() {
             self.subscribe(&controller);
         }

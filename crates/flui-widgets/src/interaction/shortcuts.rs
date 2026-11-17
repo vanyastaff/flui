@@ -499,34 +499,28 @@ impl std::fmt::Debug for Shortcuts {
 /// Presentation-local state behind [`Shortcuts`]: the focus owner whose
 /// primary focus an intent resolves at.
 pub struct ShortcutsState {
-    focus_manager: Option<Rc<flui_interaction::FocusManager>>,
+    focus_manager: Rc<flui_interaction::FocusManager>,
 }
 
 impl std::fmt::Debug for ShortcutsState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ShortcutsState")
-            .field("initialized", &self.focus_manager.is_some())
-            .finish()
+        f.debug_struct("ShortcutsState").finish_non_exhaustive()
     }
 }
 
 impl StatefulView for Shortcuts {
     type State = ShortcutsState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         ShortcutsState {
-            focus_manager: None,
+            focus_manager: ctx.focus_manager(),
         }
     }
 }
 
 impl ViewState<Shortcuts> for ShortcutsState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.focus_manager = Some(ctx.focus_manager());
-    }
-
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.focus_manager = Some(ctx.focus_manager());
+        self.focus_manager = ctx.focus_manager();
     }
 
     /// The `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper.
@@ -535,11 +529,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
     /// none; the primary focus's chain is read at key time.
     fn build(&self, view: &Shortcuts, ctx: &dyn BuildContext) -> impl IntoView {
         let own_chain = EnclosingActions::depend_on(ctx);
-        let focus_manager = Rc::clone(
-            self.focus_manager
-                .as_ref()
-                .expect("BUG: Shortcuts built before init_state"),
-        );
+        let focus_manager = Rc::clone(&self.focus_manager);
         let shortcuts = view.bindings.clone();
         let by_convention = view.by_convention.clone();
         let mut focus = Focus::new(view.child.clone());

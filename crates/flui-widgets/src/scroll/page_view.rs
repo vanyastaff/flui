@@ -576,9 +576,8 @@ pub struct PageViewState {
     /// post-frame lane, oldest first. One entry per change, so FIFO order
     /// and multiplicity survive a frame that observes several.
     pending_pages: Rc<RefCell<VecDeque<usize>>>,
-    /// Minted in `init_state`; the listener schedules the draining rebuild
-    /// through it.
-    rebuild: Option<RebuildHandle>,
+    /// The listener schedules the draining rebuild through it.
+    rebuild: RebuildHandle,
     /// Minted in `init_state`; recorded pages are delivered through it.
     post_frame: Option<PostFrameHandle>,
     /// Owner-local delivery target. Queued post-frame callbacks hold only a
@@ -697,10 +696,7 @@ impl PageViewState {
         let last_turns = Rc::clone(&self.last_turns);
         let turns_change = self.turns_change.clone();
         let pending = Rc::clone(&self.pending_pages);
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: init_state mints the rebuild handle before registering the listener");
+        let rebuild = self.rebuild.clone();
 
         let listenable = self.controller.listenable();
         let listener_id = listenable.listen(std::rc::Rc::new(move || {
@@ -740,7 +736,7 @@ fn page_snap(controller: &PageController) -> SharedSnapPolicy {
 impl StatefulView for PageView {
     type State = PageViewState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let controller = self.controller.clone().unwrap_or_default();
         PageViewState {
             last_reported_page: Rc::new(Cell::new(controller.initial_page() as i64)),
@@ -749,7 +745,7 @@ impl StatefulView for PageView {
             on_page_changed: Rc::new(RefCell::new(self.on_page_changed.clone())),
             has_callback: Rc::new(Cell::new(self.on_page_changed.is_some())),
             pending_pages: Rc::new(RefCell::new(VecDeque::new())),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             post_frame: None,
             delivery: None,
             page_listener: None,
@@ -766,9 +762,7 @@ impl ViewState<PageView> for PageViewState {
             callback: Rc::clone(&self.on_page_changed),
             writer: ctx.writer_source(),
         }));
-        self.rebuild = Some(ctx.rebuild_handle());
         self.post_frame = ctx.post_frame_handle();
-        // Last: the listener captures the rebuild handle minted above.
         self.register_page_listener();
     }
 

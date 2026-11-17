@@ -201,7 +201,7 @@ impl Live {
 /// Lifecycle state of a mounted Slider.
 pub struct SliderState {
     live: Terminal<Rc<Live>>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
 }
 impl std::fmt::Debug for SliderState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -212,7 +212,7 @@ impl std::fmt::Debug for SliderState {
 }
 impl StatefulView for Slider {
     type State = SliderState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> SliderState {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> SliderState {
         let callback = Terminal::new(self.on_changed.as_ref().map(Rc::clone));
         SliderState {
             live: Terminal::new(Rc::new(Live {
@@ -225,13 +225,12 @@ impl StatefulView for Slider {
                 focus: Terminal::new(FocusNode::with_debug_label("Slider")),
                 writer: RefCell::new(Terminal::new(None)),
             })),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
         }
     }
 }
 impl ViewState<Slider> for SliderState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
         *self.live.writer.borrow_mut() = Terminal::new(Some(ctx.writer_source()));
     }
     fn did_update_view(&mut self, _old: &Slider, view: &Slider) {
@@ -336,11 +335,7 @@ impl ViewState<Slider> for SliderState {
         }
         let key = Terminal::new(Rc::clone(&self.live));
         let focus_live = Terminal::new(Rc::clone(&self.live));
-        let rebuild = Terminal::new(
-            self.rebuild
-                .clone()
-                .expect("BUG: Slider built before initialization"),
-        );
+        let rebuild = Terminal::new(self.rebuild.clone());
         let focus = Focus::new(layout)
             .focus_node(Rc::clone(&self.live.focus))
             .can_request_focus(self.live.usable())

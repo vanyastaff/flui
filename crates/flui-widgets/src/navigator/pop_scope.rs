@@ -250,7 +250,7 @@ impl View for PopScope {
 impl StatefulView for PopScope {
     type State = PopScopeState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         PopScopeState {
             entry: crate::navigator::lifecycle::Terminal::new(Rc::new(PopEntry {
                 can_pop: Cell::new(self.can_pop),
@@ -258,7 +258,7 @@ impl StatefulView for PopScope {
             })),
             registry: None,
             callback: self.on_pop_invoked.clone(),
-            writer: None,
+            writer: crate::navigator::lifecycle::Terminal::new(ctx.writer_source()),
         }
     }
 }
@@ -267,7 +267,7 @@ impl StatefulView for PopScope {
 /// requires it; not re-exported.
 pub struct PopScopeState {
     callback: Option<PopInvokedCallback>,
-    writer: Option<WriterSource>,
+    writer: crate::navigator::lifecycle::Terminal<WriterSource>,
     entry: crate::navigator::lifecycle::Terminal<Rc<PopEntry>>,
     registry: Option<PopEntryRegistry>,
 }
@@ -275,7 +275,7 @@ pub struct PopScopeState {
 impl Drop for PopScopeState {
     fn drop(&mut self) {
         let callback = crate::navigator::lifecycle::Terminal::new(self.callback.take());
-        let writer = crate::navigator::lifecycle::Terminal::new(self.writer.take());
+        let writer = self.writer.withdraw();
         let entry = self.entry.withdraw();
         let registry = crate::navigator::lifecycle::Terminal::new(self.registry.take());
         drop((callback, writer, entry, registry));
@@ -294,7 +294,6 @@ impl ViewState<PopScope> for PopScopeState {
     /// Registers with the route's ambient registry. A `PopScope` outside any route finds none and stays
     /// inert.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer = Some(ctx.writer_source());
         self.install_callback();
         if let Some(registry) = ctx.get::<PopEntryScope, _>(|scope| scope.registry.clone()) {
             registry.register(Rc::clone(&self.entry));
@@ -323,10 +322,7 @@ impl ViewState<PopScope> for PopScopeState {
 
 impl PopScopeState {
     fn install_callback(&self) {
-        let writer = self
-            .writer
-            .clone()
-            .expect("BUG: PopScope initialized before callback installation");
+        let writer = WriterSource::clone(&self.writer);
         let callback = self.callback.clone().map(|callback| {
             let callback = crate::navigator::lifecycle::Terminal::new(callback);
             let writer = crate::navigator::lifecycle::Terminal::new(writer);

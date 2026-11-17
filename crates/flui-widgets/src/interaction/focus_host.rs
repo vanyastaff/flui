@@ -275,7 +275,7 @@ pub(crate) struct FocusHost {
     key_handler_registration: Option<FocusNodeRegistration>,
     /// The exact presentation-local manager acquired from the mounting build
     /// owner. Listener removal must go back to this same instance.
-    focus_manager: Option<Rc<FocusManager>>,
+    focus_manager: Rc<FocusManager>,
     /// The node this one currently hangs under; `dependencies_changed`
     /// moves it when the provider changes.
     parent: Option<Rc<FocusNode>>,
@@ -288,7 +288,7 @@ pub(crate) struct FocusHost {
     /// Generation-checked ownership of that record on the current node.
     context_registration: Option<FocusNodeRegistration>,
     /// Lifecycle-acquired rebuild capability used by the node subscription.
-    rebuild_handle: Option<RebuildHandle>,
+    rebuild_handle: RebuildHandle,
     /// Listener installed on the current node. It drives both inherited
     /// dependents and the optional focus-edge callbacks.
     focus_subscription: Option<Subscription>,
@@ -303,10 +303,11 @@ pub(crate) struct FocusHost {
 }
 
 impl FocusHost {
-    /// Makes or takes the node and configures it. Nothing is acquired that
+    /// Makes or takes the node and configures it, holding the owner's focus
+    /// manager and rebuild handle from `ctx`. Nothing is acquired that
     /// [`dispose`](Self::dispose) would have to release: the node is not
     /// attached until [`init`](Self::init).
-    pub(crate) fn new(config: &FocusConfig) -> Self {
+    pub(crate) fn new(config: &FocusConfig, ctx: &dyn LifecycleContext) -> Self {
         let node = config.make_node();
         let shared = Rc::new(Shared {
             writer: OnceCell::new(),
@@ -328,12 +329,12 @@ impl FocusHost {
             owns_node: matches!(config.node_ownership, FocusNodeOwnership::Internal),
             key_handler_registration,
             traversal_registration,
-            focus_manager: None,
+            focus_manager: ctx.focus_manager(),
             parent: None,
             rect_provider_registration: None,
             action_chain: None,
             context_registration: None,
-            rebuild_handle: None,
+            rebuild_handle: ctx.rebuild_handle(),
             focus_subscription: None,
             autofocus: config.autofocus,
             did_autofocus: false,
@@ -345,20 +346,10 @@ impl FocusHost {
         &self.node
     }
 
-    fn manager(&self) -> &Rc<FocusManager> {
-        self.focus_manager
-            .as_ref()
-            .expect("BUG: a focus host was used before init installed its focus manager")
-    }
-
     /// The rebuild-on-focus-change listener: descendants that read the node's
     /// state during build stay current, and the edge callbacks fire.
     fn add_focus_listener(&self, node: &Rc<FocusNode>) -> Subscription {
-        let rebuild = self
-            .rebuild_handle
-            .as_ref()
-            .expect("BUG: a focus listener was installed before init captured the rebuild handle")
-            .clone();
+        let rebuild = self.rebuild_handle.clone();
         let shared = Rc::clone(&self.shared);
         let writer = shared
             .writer
@@ -450,7 +441,7 @@ impl FocusHost {
             return;
         }
         self.did_autofocus = true;
-        request_autofocus(self.parent.as_ref(), self.manager(), &self.node);
+        request_autofocus(self.parent.as_ref(), &self.focus_manager, &self.node);
     }
 
     /// Listen, attach, autofocus — in that order, so a focus request queued
@@ -471,8 +462,6 @@ impl FocusHost {
             .writer
             .set(ctx.writer_source())
             .expect("BUG: a focus host is initialized once");
-        self.focus_manager = Some(ctx.focus_manager());
-        self.rebuild_handle = Some(ctx.rebuild_handle());
         let parent = enclosing_focus_parent(ctx);
         self.install_focus_listener();
         let rect_provider_registration =
@@ -677,8 +666,6 @@ impl FocusHost {
             let _ = attachment.detach();
         }
         self.parent = None;
-        self.rebuild_handle = None;
-        self.focus_manager = None;
     }
 
     /// Publishes the hosted node as the parent of the focus nodes under the
