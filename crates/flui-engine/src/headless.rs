@@ -79,7 +79,10 @@ impl HeadlessRenderer {
         ))
     }
 
-    fn over(context: GpuContext) -> Self {
+    fn over(mut context: GpuContext) -> Self {
+        // Every capture draws in one format, so its pipelines can be built
+        // while the caller prepares the first tree.
+        context.warm_pipelines(CAPTURE_FORMAT);
         Self {
             capture: RefCell::new(Capture {
                 context,
