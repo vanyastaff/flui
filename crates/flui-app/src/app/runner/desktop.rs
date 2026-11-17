@@ -252,7 +252,7 @@ where
     // `open_secondary_window`'s window — see that function's own doc.
     installation.close_requests(config.close_request_handler.clone());
 
-    // 3c2. The frame-pacing fallback (ADR-0058): a non-blocking bound on
+    // 3c2. The frame-pacing fallback (ADR-0353): a non-blocking bound on
     // ticker-driven wakes that present nothing, anchored to this
     // window's own display period. Replaces the fixed 16 ms
     // `thread::sleep` on this very thread — which was the only pacer on
@@ -466,8 +466,11 @@ impl DesktopWakeDeadlines {
         presentation: flui_foundation::PresentationId,
         now: web_time::Instant,
     ) -> web_time::Instant {
-        self.fallback
-            .arm_after_no_present(now, ui_runtime.refresh_interval(presentation))
+        self.fallback.arm_after_no_present(
+            now,
+            ui_runtime.refresh_interval(presentation),
+            ui_runtime.has_pending_work(),
+        )
     }
 
     /// The earliest armed deadline: the pacing fallback and the first
@@ -668,7 +671,7 @@ impl DesktopFrameDriver {
         // a turn of the executor (`RasterSlot::pump`).
         let presented = self.raster.pump(ui_runtime, now, display_color);
 
-        // Frame-pacing fallback (ADR-0058). A frame that reached `present()`
+        // Frame-pacing fallback (ADR-0353). A frame that reached `present()`
         // needs no bound: the present blocked at vsync or the compositor is
         // pacing the redraws. A frame that did not present got neither, so
         // with a ticker still asking for frames nothing would pace the loop;

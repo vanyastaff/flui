@@ -1201,7 +1201,7 @@ impl Renderer {
     /// 2026-09-17 on the native AppKit backend, `queue.present()` returns in
     /// ~42 µs and the display cadence comes from AppKit's display-pass
     /// scheduling instead — same vsync-locked period, different mechanism
-    /// (ADR-0058's per-backend facts; Windows' native backend is unmeasured).
+    /// (ADR-0353's per-backend facts; Windows' native backend is unmeasured).
     /// Mailbox (triple
     /// buffering, uncapped present, lower latency) is a documented future
     /// opt-in for latency-sensitive apps that accept trading pacing for
@@ -1755,7 +1755,7 @@ impl Renderer {
     /// present mode it blocks until the next vsync on the Vulkan/Wayland
     /// path, while the native AppKit backend returns from it in ~42 µs and
     /// takes its cadence from AppKit's display-pass scheduling instead
-    /// (ADR-0058's per-backend facts).
+    /// (ADR-0353's per-backend facts).
     /// [`PresentDisposition::NotShown`] skips presentation without error and
     /// so carries no vsync signal: this backend owed content it could not put
     /// on screen (the surface reporting `Occluded`, released by its owner

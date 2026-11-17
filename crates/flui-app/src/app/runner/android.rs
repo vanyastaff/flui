@@ -524,7 +524,7 @@ impl AndroidFrameDriver {
                 raster_deadline,
                 // Android paces only its backgrounded pump
                 // (`BackgroundPace`): a rendering wake has no fallback
-                // deferral to consult (ADR-0058).
+                // deferral to consult (ADR-0353).
                 FallbackGate::default(),
             );
             let scheduler = ui_runtime.scheduler();
@@ -565,7 +565,7 @@ impl AndroidFrameDriver {
                 ui_runtime.pump_background();
                 // A self-re-arming task has no vsync or present to bound it
                 // here, so work that asks for another wake defers the next
-                // pump by a pace (ADR-0058). A deadline, not a sleep: the
+                // pump by a pace (ADR-0353). A deadline, not a sleep: the
                 // loop thread keeps delivering input and lifecycle events.
                 if keeps_frame_gate_open(
                     ui_runtime.needs_redraw(),

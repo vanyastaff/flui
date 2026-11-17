@@ -11,7 +11,7 @@
 // happens on
 // the frames that path never blocks: a spurious wake with nothing to do or
 // a backgrounded app (`wake_action`), and a frame that ran the pipeline but
-// never reached `present()` (`FallbackWake`, ADR-0058: a non-blocking wake
+// never reached `present()` (`FallbackWake`, ADR-0353: a non-blocking wake
 // one display period after the last present, never a sleep on the loop).
 
 /// What a platform wake should do: run the full frame pipeline, service
@@ -58,7 +58,7 @@ pub(super) fn wake_action(
     fallback: FallbackGate,
 ) -> WakeAction {
     // A requested frame alone renders — unless a fallback wake is armed
-    // and not yet due (ADR-0058): the previous pump ran the pipeline for
+    // and not yet due (ADR-0353): the previous pump ran the pipeline for
     // this request and presented nothing (no visible change in the ~0.2 ms
     // since the last present), so re-running it now would only repeat
     // that; the armed deadline brings the loop back exactly one display
@@ -128,20 +128,19 @@ pub(super) fn frame_is_dirty(
 ) -> bool {
     // A pending fallback means the last frame presented nothing: no present
     // blocked at vsync and no compositor paces the next one, so the next
-    // frame waits for the fallback, about one display period away. That
-    // holds for the ui_runtime's OWN echo (`needs_redraw`, which every pump
-    // with a running animation sets again through `wake_frame`) and for the
-    // build, layout and gesture work a frame leaves or finds dirty
-    // (`has_pending_work`): a tree that dirties itself each frame would
+    // frame waits for the fallback, about one display period away. That holds
+    // for the ui_runtime's OWN echo (`needs_redraw`, which every pump with a
+    // running animation sets again through `wake_frame`), and for the build,
+    // layout and gesture work when the frame that armed the fallback left it
+    // dirty (`holds_work`): a tree that dirties itself each frame would
     // otherwise run its frames at CPU speed into a sink that shows none of
-    // them (a dead raster executor, an occluded window). Input is still
-    // dispatched when it arrives; only the frame that would show it waits,
-    // and nothing is shown before that frame anyway. Inbox redraws and a due
-    // recovery attempt always count. The due fallback itself is the fifth
-    // term — a deadline source has to be in the dirty predicate AND
-    // self-clearing, or its wake is a no-op.
+    // them (a dead raster executor, an occluded window). Work that arrives
+    // after a frame that left none (a link opened, a state change) still runs
+    // at once, as do inbox redraws and a due recovery attempt. The due
+    // fallback itself is the fifth term — a deadline source has to be in the
+    // dirty predicate AND self-clearing, or its wake is a no-op.
     let needs_redraw = needs_redraw && !fallback.pending;
-    let has_pending_work = has_pending_work && !fallback.pending;
+    let has_pending_work = has_pending_work && !(fallback.pending && fallback.holds_work);
     inbox_redraw || needs_redraw || has_pending_work || next_attempt_at.is_some() || fallback.due
 }
 
@@ -214,7 +213,7 @@ pub(super) fn after_pump(presented: bool, holding: bool, keeps_gate_open: bool) 
 /// The pace a BACKGROUNDED pump (frames disabled) is bounded to on Android,
 /// armed as a deadline ([`BackgroundPace`]). iOS needs none: its display link
 /// runs the pump at most once per refresh and not at all while held
-/// (ADR-0268). No runner sleeps on its loop thread (ADR-0058,
+/// (ADR-0268). No runner sleeps on its loop thread (ADR-0353,
 /// [`FallbackWake`]).
 #[cfg(any(target_os = "android", test))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);
@@ -276,7 +275,7 @@ impl BackgroundPace {
 /// each frame and beat against vsync (a periodic dropped frame), and on a
 /// non-blocking stack the ~5 % surplus is simply absorbed by the
 /// swapchain. The number is a measured trade, not a constant of nature —
-/// ADR-0058 carries the captures behind it.
+/// ADR-0353 carries the captures behind it.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -301,10 +300,15 @@ pub(super) struct FallbackGate {
     /// A deadline is armed and has passed — consumed by the wake that reads
     /// it (see [`FallbackWake::gate`]).
     pub(super) due: bool,
+    /// A pending deadline was armed by a frame that left build, layout or
+    /// gesture work dirty behind it: that work waits for the deadline too,
+    /// since a tree that dirties itself every frame would otherwise run its
+    /// frames at CPU speed into a sink that shows none of them.
+    pub(super) holds_work: bool,
 }
 
 /// A window's non-blocking bound on animation-driven wakes that present
-/// nothing (ADR-0058). Replaces the fixed 16 ms `thread::sleep` on the
+/// nothing (ADR-0353). Replaces the fixed 16 ms `thread::sleep` on the
 /// event-loop thread that used to play this role: that sleep was the only
 /// pacer on any stack whose present does not block at vsync, quantized a
 /// 165 Hz panel to ~60 frames per second, and blocked input for its whole
@@ -347,6 +351,9 @@ struct FallbackState {
     /// answered `Some(now)` for it), so the wake can be given up on only once
     /// the platform has had a period to answer it.
     delivered_at: Option<web_time::Instant>,
+    /// Whether the frame that armed the deadline left work dirty behind it
+    /// ([`FallbackGate::holds_work`]).
+    holds_work: bool,
 }
 
 #[cfg(all(
@@ -368,6 +375,7 @@ impl FallbackWake {
                 last_present_at: None,
                 deadline: None,
                 delivered_at: None,
+                holds_work: false,
             }),
         }
     }
@@ -381,13 +389,16 @@ impl FallbackWake {
             Some(deadline) if now < deadline => FallbackGate {
                 pending: true,
                 due: false,
+                holds_work: state.holds_work,
             },
             Some(_) => {
                 state.deadline = None;
                 state.delivered_at = None;
+                state.holds_work = false;
                 FallbackGate {
                     pending: false,
                     due: true,
+                    holds_work: false,
                 }
             }
             None => FallbackGate::default(),
@@ -401,6 +412,7 @@ impl FallbackWake {
         state.last_present_at = Some(now);
         state.deadline = None;
         state.delivered_at = None;
+        state.holds_work = false;
     }
 
     /// A pump ran and presented nothing while a requested frame keeps the gate open:
@@ -408,11 +420,14 @@ impl FallbackWake {
     /// after the last present — or after `now`, when nothing has presented
     /// yet or the last present is already further back than that (an
     /// occluded window keeps a bounded, non-blocking cadence). Returns the
-    /// armed instant. `period` is the presentation's current refresh interval.
+    /// armed instant. `period` is the presentation's current refresh interval;
+    /// `left_work` is whether the pump left build, layout or gesture work
+    /// dirty, which then waits for the deadline too.
     pub(super) fn arm_after_no_present(
         &self,
         now: web_time::Instant,
         period: std::time::Duration,
+        left_work: bool,
     ) -> web_time::Instant {
         let mut state = self.state.lock();
         let interval = period.mul_f64(FALLBACK_PERIOD_FRACTION);
@@ -423,6 +438,7 @@ impl FallbackWake {
             .unwrap_or(now + interval);
         state.deadline = Some(anchored);
         state.delivered_at = None;
+        state.holds_work = left_work;
         anchored
     }
 
@@ -512,7 +528,7 @@ impl FallbackWake {
 /// - **A requested frame keeps the gate open**, and a pending fallback defers a
 ///   wake that carries no dirty work, but never dirty work: pinned by
 ///   `a_pending_fallback_defers_a_wake_with_no_dirty_work_but_never_dirty_work`.
-/// - **No-present fallback deadline** (ADR-0058's non-blocking deadline):
+/// - **No-present fallback deadline** (ADR-0353's non-blocking deadline):
 ///   `the_fallback_deadline_is_anchored_to_the_last_present` pins where
 ///   the deadline sits, and
 ///   `leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback`
@@ -553,7 +569,7 @@ mod desktop_pacing_tests {
 
         // The pump that presents nothing runs 1 ms after the present.
         let pump_at = present_at + Duration::from_millis(1);
-        let armed = fallback.arm_after_no_present(pump_at, period);
+        let armed = fallback.arm_after_no_present(pump_at, period, false);
 
         let from_present = armed.saturating_duration_since(present_at);
         assert!(
@@ -574,7 +590,7 @@ mod desktop_pacing_tests {
     fn an_unanswered_deadline_is_abandoned_by_the_period_in_force_when_asked() {
         let fallback = FallbackWake::new();
         let armed_at = Instant::now();
-        let deadline = fallback.arm_after_no_present(armed_at, Duration::from_millis(16));
+        let deadline = fallback.arm_after_no_present(armed_at, Duration::from_millis(16), false);
 
         assert_eq!(
             fallback.next_wake(deadline, Duration::from_millis(16)),
@@ -602,7 +618,7 @@ mod desktop_pacing_tests {
     fn a_deadline_first_read_late_is_still_reported_due() {
         let fallback = FallbackWake::new();
         let period = Duration::from_millis(7);
-        let deadline = fallback.arm_after_no_present(Instant::now(), period);
+        let deadline = fallback.arm_after_no_present(Instant::now(), period, false);
         let two_periods_late = deadline + period * 2;
 
         assert_eq!(
@@ -632,7 +648,8 @@ mod desktop_pacing_tests {
                 true,
                 FallbackGate {
                     pending: true,
-                    due: false
+                    due: false,
+                    holds_work: false,
                 }
             ),
             WakeAction::Skip,
@@ -650,7 +667,8 @@ mod desktop_pacing_tests {
                 true,
                 FallbackGate {
                     pending: true,
-                    due: false
+                    due: false,
+                    holds_work: false,
                 }
             ),
             WakeAction::Render,
@@ -688,44 +706,56 @@ mod desktop_pacing_tests {
         }
     }
 
-    /// A frame that presented nothing paces the next one at the fallback,
-    /// even when that frame left build or layout work dirty: a tree that
-    /// dirties itself every frame into a sink that shows nothing (a dead
-    /// raster executor, an occluded window) runs one frame per fallback, not
-    /// one per wake. An inbox redraw and a due raster attempt still count at
-    /// once, and the due fallback runs the frame.
+    /// A frame that presented nothing and left build or layout work dirty
+    /// paces the next one at the fallback: a tree that dirties itself every
+    /// frame into a sink that shows nothing (a dead raster executor, an
+    /// occluded window) runs one frame per fallback, not one per wake. Work
+    /// that arrives after a frame that left none runs at once, as do an inbox
+    /// redraw and a due raster attempt, and the due fallback runs the frame.
     ///
-    /// Red-check: count `has_pending_work` past a pending fallback and the
-    /// leftover work is dirty on every wake.
+    /// Red-check: count `has_pending_work` past a pending fallback that holds
+    /// work and the leftover work is dirty on every wake.
     fn leftover_work_after_a_frame_that_presented_nothing_waits_for_the_fallback() {
         use super::frame_is_dirty;
-        let pending = FallbackGate {
-            pending: true,
-            due: false,
-        };
-        let due = FallbackGate {
-            pending: false,
-            due: true,
-        };
+        let fallback = FallbackWake::new();
+        let period = Duration::from_millis(16);
+        let now = Instant::now();
+        let _armed = fallback.arm_after_no_present(now, period, true);
+        let holding = fallback.gate(now);
         assert!(
-            !frame_is_dirty(false, true, true, None, pending),
+            holding.holds_work,
+            "the arm records the work the frame left"
+        );
+        assert!(
+            !frame_is_dirty(false, true, true, None, holding),
             "the echo and the leftover work wait for the fallback"
         );
+        assert!(
+            frame_is_dirty(true, false, false, None, holding),
+            "an inbox redraw does not wait"
+        );
+        assert!(
+            frame_is_dirty(false, false, false, Some(now), holding),
+            "nor does a raster attempt that is due"
+        );
+        let due = fallback.gate(now + period);
         assert!(
             frame_is_dirty(false, false, true, None, due),
             "the due fallback runs the frame"
         );
+        let _armed = fallback.arm_after_no_present(now + period, period, false);
+        let echo_only = fallback.gate(now + period);
+        assert!(
+            frame_is_dirty(false, true, true, None, echo_only),
+            "work that arrives after a frame that left none runs at once"
+        );
+        assert!(
+            !frame_is_dirty(false, true, false, None, echo_only),
+            "while the echo alone still waits"
+        );
         assert!(
             frame_is_dirty(false, false, true, None, FallbackGate::default()),
             "with no fallback armed, pending work runs at once"
-        );
-        assert!(
-            frame_is_dirty(true, false, false, None, pending),
-            "an inbox redraw does not wait"
-        );
-        assert!(
-            frame_is_dirty(false, false, false, Some(Instant::now()), pending),
-            "nor does a raster attempt that is due"
         );
     }
     #[test]
