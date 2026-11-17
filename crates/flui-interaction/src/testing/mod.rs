@@ -10,7 +10,7 @@
 //! `Iterator<Item = PointerEvent>` that advanced no clock, so a recorded long
 //! press replayed as an instant tap. It had no consumers as a result. See
 //! `flui_testing::replay`, which scripts explicit virtual-time offsets and
-//! replays them by advancing a `HeadlessBinding`'s `ManualClock`.
+//! replays them by advancing a headless host's `ManualClock`.
 
 pub mod input;
 mod text_store;

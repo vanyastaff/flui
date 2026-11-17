@@ -3,18 +3,10 @@
 The workspace's test support, placed above the frame runtime and the widget
 catalog (tier K, `order = 6`) so its driver can run the product frame
 transaction ([ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4).
-Two drivers live here while that move is in progress: `HeadlessHost`, which
-pumps a `flui_runtime::ui_runtime::UiRuntime`, and `HeadlessBinding`, the
-substrate driver over raw owners, which the raw-owner suites still use.
+Its frame driver is `HeadlessHost`, which pumps a
+`flui_runtime::ui_runtime::UiRuntime` on a manual clock.
 
 ## Invariants
-
-- **Raw-owner animation work runs inside its scheduler frame.**
-  `HeadlessBinding::pump_frame` projects time, then ticks Vsync in the persistent
-  pipeline slot before build/layout/paint. This matches runtime sampling and
-  gives the work the owning frame's tracing extent (ADR-0202).
-  Devtools' `a_real_animation_reaches_the_profiler_with_its_work` pins actual
-  animation progress, same-frame paint and CPU phase attribution.
 
 - **Adopted widget clocks have one runtime parent.** Re-adopting the same registry
   is a no-op. A foreign, closed or otherwise refused replacement returns its typed
@@ -30,15 +22,6 @@ substrate driver over raw owners, which the raw-owner suites still use.
   policy resolver. Material's `press_highlight_lasts_its_delay_under_reduced_motion`
   and `snack_bar_keeps_its_display_duration_under_reduced_motion` drive real
   mounted timers through this entry and observe both retained duration and expiry.
-
-- **Extra presentation motion clocks remain independent.** An owning controller
-  registers through `build_on` and remains alive for the scripted run. The
-  harness has no manual controller-registration shortcut. Editing an extra
-  presentation clock stays within its borrow; a step marks that presentation's
-  demand after the borrow is released. A paused clock contributes no continuous
-  animation demand. `presentation_rates_pause_and_step_are_independent` pins
-  distinct rates, sibling progress, no paused produce and exactly one step
-  produce. The runtime and development-agent projection is still separate.
 
 - **A harness frame is `UiRuntime::pump`.** `host::HeadlessHost::pump` is the
   only way the widget harness (`widgets::lay_out`, `widgets::harness::mount`)
@@ -142,16 +125,12 @@ substrate driver over raw owners, which the raw-owner suites still use.
   queues are flushed before the helper returns, so a synthetic move is
   observable at once. IME events go the same way, into the presentation's
   own text-input owner.
-- **`HeadlessBinding` is the substrate driver until the second half of §4.**
-  It drives raw owners (`flui-view`, scheduler, animation and interaction
-  suites, the `perf` target, the facade's `tests/*.rs`) and the
-  configurations a UI runtime cannot express. Its `pump_frame`, `run_pipeline` and
-  `pump_presentation`/`pump_all` go when those suites move to the pump
-  (ADR-0083 `## Migration`, move 6b).
-  Its raw-owner frame uses the same complete frame drive (`flui_scheduler::__runtime::DriveFrame::drive_frame`, an operation off the public surface)
-  as the production runtime, preserving mid-frame task polling and post-frame
-  observation of committed layout. An admission refusal is a driver invariant
-  failure; it cannot be reported as a successful empty frame.
+- **Every frame is a UI runtime's.** `HeadlessHost::pump` is the one frame
+  driver: it advances the host's manual clock and runs `UiRuntime::pump`.
+  Presentations at independent cadences are separate hosts, each on its own
+  clock (ADR-0083 `## Migration`, move 6b);
+  `two_presentations_at_independent_scripted_cadences_tick_and_advance_independently` pins
+  that pumping one leaves the other's animation where it was.
 - **Only `log_capture` crosses the dev cycles.** `flui-widgets` and
   `flui-runtime` name this crate on dev edges while it depends on both, so
   their unit-test builds compile a second copy of themselves. Their unit
@@ -251,9 +230,7 @@ wake the runtime that replaced it.
 `starting_an_idle_bound_controller_requests_its_first_frame`,
 `adopting_a_registry_revokes_the_previous_driver_binding` and
 `widget_registry_adoption_preserves_its_driver_on_refusal` exercise public
-handles in `headless_frame_driver_matrix`. The public
-`extra_registry_drivers_request_frames_and_retire_on_replacement` row checks
-extra clock installation and replacement while preserving a sibling's driver.
+handles in `headless_frame_driver_matrix`.
 
 ### Unique accessibility queries materialize only failure diagnostics
 

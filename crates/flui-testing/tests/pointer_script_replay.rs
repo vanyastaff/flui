@@ -11,91 +11,67 @@
 //! virtual time: the verdict flips on the script's timing alone, with the same
 //! event sequence on both sides.
 
+use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::gesture::GestureSettings;
-use flui_interaction::{LongPressGestureRecognizer, PointerDispatch, RecognizerSet};
-use flui_testing::HeadlessBinding;
+use flui_painting::styling::Color;
+use flui_platform::{GesturePreferences, SystemPreferences};
 use flui_testing::replay::PointerScript;
+use flui_testing::widgets::{LaidOut, lay_out, tight};
+use flui_widgets::{ColoredBox, GestureDetector};
 
 fn at(x: f64, y: f64) -> Offset {
     Offset::new(x, y)
 }
 
-/// A long-press recognizer on `binding`'s clock-bound arena, plus the flag its
-/// callback sets.
-fn long_press_probe(
-    binding: &HeadlessBinding,
-    timeout: Duration,
-) -> (Rc<LongPressGestureRecognizer>, Arc<AtomicBool>) {
-    let fired = Arc::new(AtomicBool::new(false));
-    let in_callback = Arc::clone(&fired);
-    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
-        .settings(GestureSettings::default().with_long_press_timeout(timeout))
-        .on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst))
-        .build();
-    (recognizer, fired)
-}
-
-/// Replay the actual script events through weak recognizer attachment.
-/// Down admission keeps device kind, buttons and timestamps; terminal events
-/// finish the same contact rather than reconstructing it from hit-test geometry.
-fn replay_against(
-    binding: &mut HeadlessBinding,
-    recognizer: &Rc<LongPressGestureRecognizer>,
-    script: &PointerScript,
-) {
-    let mut recognizers = RecognizerSet::default();
-    recognizers.attach(recognizer);
-    let route: flui_interaction::pointer::GlobalPointerHandler = Rc::new(move |event| {
-        recognizers.dispatch(PointerDispatch::at_root(event));
-    });
-    binding
-        .gestures()
-        .pointer_router()
-        .add_global_handler(Rc::clone(&route));
-    binding.replay(script);
-    binding
-        .gestures()
-        .pointer_router()
-        .remove_global_handler(&route);
+/// A long-press detector filling a 100 × 100 window whose long-press timeout
+/// is `timeout`, plus the flag its callback sets.
+fn long_press_probe(timeout: Duration) -> (LaidOut, Rc<Cell<bool>>) {
+    let fired = Rc::new(Cell::new(false));
+    let in_callback = Rc::clone(&fired);
+    let mut laid = lay_out(
+        GestureDetector::new()
+            .on_long_press(move |_| in_callback.set(true))
+            .child(ColoredBox::new(Color::RED)),
+        tight(100.0, 100.0),
+    );
+    laid.set_system_preferences(
+        SystemPreferences::default()
+            .with_gestures(GesturePreferences::default().with_long_press_timeout(timeout)),
+    );
+    laid.pump();
+    (laid, fired)
 }
 
 pub(crate) fn a_long_press_script_held_past_the_deadline_fires_it() {
-    let mut binding = HeadlessBinding::new();
-    let (recognizer, fired) = long_press_probe(&binding, Duration::from_millis(500));
+    let (mut laid, fired) = long_press_probe(Duration::from_millis(500));
 
-    replay_against(
-        &mut binding,
-        &recognizer,
-        &PointerScript::long_press(at(10.0, 10.0), Duration::from_millis(600)),
-    );
+    laid.replay(&PointerScript::long_press(
+        at(10.0, 10.0),
+        Duration::from_millis(600),
+    ));
 
     assert!(
-        fired.load(Ordering::SeqCst),
+        fired.get(),
         "600ms of held virtual time must cross the 500ms deadline",
     );
 }
 
 pub(crate) fn the_same_script_released_before_the_deadline_does_not() {
-    let mut binding = HeadlessBinding::new();
-    let (recognizer, fired) = long_press_probe(&binding, Duration::from_millis(500));
+    let (mut laid, fired) = long_press_probe(Duration::from_millis(500));
 
     // Byte-for-byte the same event sequence as the test above — only the hold
     // duration differs. If `replay` stopped advancing the clock, both tests
     // would agree, and one of them would then be wrong.
-    replay_against(
-        &mut binding,
-        &recognizer,
-        &PointerScript::long_press(at(10.0, 10.0), Duration::from_millis(300)),
-    );
+    laid.replay(&PointerScript::long_press(
+        at(10.0, 10.0),
+        Duration::from_millis(300),
+    ));
 
     assert!(
-        !fired.load(Ordering::SeqCst),
+        !fired.get(),
         "300ms of held virtual time must not reach the 500ms deadline",
     );
 }

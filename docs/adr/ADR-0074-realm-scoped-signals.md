@@ -339,7 +339,7 @@ A headless test builds the model with the binding's `reactive()`, writes with
 
 ### 5.9 Testability
 
-`HeadlessBinding::reactive()` exposes the graph; a test creates signals, mounts a tree that reads
+The build owner's `signal_graph()` exposes the graph (`LaidOut::with_build_owner_mut`); a test creates signals, mounts a tree that reads
 them, writes, pumps a frame, and asserts the value seen and **which elements rebuilt**
 (`RebuildReason::SignalChange` in the build report).
 
@@ -389,7 +389,7 @@ answered by §5.3: they feed the same heap.
 ## 8. Measurement
 
 Prototype scope: `Signal`/`Reactive` in `flui-view` behind `signals`, the reader registry,
-`RebuildReason::SignalChange`, `HeadlessBinding::reactive()`, one `UiCommand::SignalWrite`. No
+`RebuildReason::SignalChange`, a test accessor for the graph, one `UiCommand::SignalWrite`. No
 catalog changes. The benchmark (`crates/flui-widgets/benches/signals_rebuilds.rs`,
 `cargo bench -p flui-widgets --bench signals_rebuilds`; the prototype ran it with
 `--features signals`, which no longer exists) runs each scenario as **A** `setState` on the owning state vs **B**

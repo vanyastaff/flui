@@ -897,8 +897,8 @@ impl_inherited_view!(ResolvedGestureArenaScope);
 /// `VsyncScope::new(binding.vsync(), child)`. Every implicitly-animated widget
 /// below (`AnimatedOpacity`, …) acquires this registry in `init_state`
 /// through [`VsyncScope::maybe_of`] and creates an owning controller in it, so
-/// the binding's `pump_frame` advances all of them on the same virtual clock —
-/// deterministically, with no `thread::sleep`.
+/// the binding's frame advances all of them on the same clock (a virtual one
+/// under a headless host, so deterministically, with no `thread::sleep`).
 ///
 /// FLUI is non-singleton, so there is no ambient ticker owner: the registry is
 /// handed down explicitly as inherited data, scoped to a subtree.

@@ -306,7 +306,7 @@ pub struct InvalidSamplingWindow;
 /// # Ownership
 ///
 /// A UI runtime owns one `GestureBinding`. Prefer accessing the binding through
-/// the active `HeadlessBinding` / `UiRuntime`; process-global gesture ownership is
+/// the active `UiRuntime`; process-global gesture ownership is
 /// intentionally not part of ADR-0027.
 ///
 /// # Event Coalescing
@@ -381,7 +381,7 @@ impl GestureBinding {
     /// Create a new GestureBinding with default settings.
     ///
     /// `GestureBinding` is owner-local; prefer using the binding owned by the
-    /// active UI runtime (`HeadlessBinding`/`UiRuntime`) over a process global.
+    /// active UI runtime over a process global.
     pub fn new() -> Self {
         Self::with_settings_and_clock(
             GestureSettings::default(),
@@ -397,7 +397,7 @@ impl GestureBinding {
     /// Create against an explicit monotonic clock.
     ///
     /// This is the canonical constructor for deterministic runtimes such as
-    /// `HeadlessBinding`: the binding, its arena, and every recognizer deadline
+    /// a headless host's UI runtime: the binding, its arena, and every recognizer deadline
     /// observe the same clock instead of a test harness owning a second arena.
     pub fn with_clock(clock: std::sync::Arc<dyn MonotonicClock>) -> Self {
         Self::with_settings_and_clock(GestureSettings::default(), clock)

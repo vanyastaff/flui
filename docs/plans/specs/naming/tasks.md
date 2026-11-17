@@ -263,7 +263,7 @@ RT…HR 9, M 10, C 2; сводные строки фасада, SDK и macros н
 | `GestureDetector`, `GestureArena`, `GestureRecognizer`, `*Details`, `*Callback` | Обычные слова |
 | `Navigator`, `Route`, `Router`, `ModalRoute`, `PageRoute`, `PopScope` | Обычные слова |
 | `AnimationController`, `Tween`, `Curve`, `CurvedAnimation`, `TickerProvider`, `Vsync` | Словарь анимации, не Dart |
-| `BuildOwner`, `PipelineOwner`, `WidgetsBinding`, `GestureBinding`, `RendererBinding`, `RenderingBinding`, `HeadlessBinding` | Семейство уйдёт или сменит смысл при переносе рантайма (ADR-0083); переименование сейчас — двойная волна. Запись allowlist `exit = "keep"` с причиной; пересмотр — в спеке переноса |
+| `BuildOwner`, `PipelineOwner`, `WidgetsBinding`, `GestureBinding`, `RendererBinding`, `RenderingBinding` | Семейство уйдёт или сменит смысл при переносе рантайма (ADR-0083); переименование сейчас — двойная волна. Запись allowlist `exit = "keep"` с причиной; пересмотр — в спеке переноса |
 | `BorderRadiusExt`, `SignalWriteExt`, `BuildContextExt`, `ViewExt`, `AssetCacheExt` | N5: расширение типа другого крейта (`Corners` из flui-foundation) или граница возможности/объектной безопасности (В2 закрывается правилом N5) |
 | `CustomPaint`, `CustomPainter`, `CustomClipper` | Обычные слова; трейт назван ролью |
 | `MaterialApp`, `CupertinoApp`, `WidgetsApp`, `WidgetsLocalizations`, префикс `Cupertino*` | Различают приложения и пакеты при общем `prelude`; `Widgets` — имя слоя |

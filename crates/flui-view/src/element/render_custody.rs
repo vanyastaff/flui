@@ -82,7 +82,9 @@ pub(crate) fn mount<V, A, R, P>(
             // one the render object sits in the render tree with no parent
             // link: present in render space, invisible to layout and paint.
             // The legal bare mount (the element-tree root) has no element
-            // parent and stays silent; `mount_bootstrap.rs` pins it.
+            // parent and stays silent; flui-testing's
+            // `the_mount_frame_installs_the_render_root_at_the_window_size_and_paints`
+            // pins it.
             tracing::error!(
                 element_id = ?core.self_id(),
                 ?element_parent,

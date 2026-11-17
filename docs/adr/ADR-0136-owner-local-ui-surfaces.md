@@ -64,8 +64,7 @@ weak-handle and thread-boundary rules in this section still apply.
 
 - **`OwnerFrame`** (`flui-scheduler`, `#[doc(hidden)]`, `!Send`, not `Clone`) holds a UI runtime's
   owner-local post-frame queue and its task store. The UI runtime (`UiRuntime`, through
-  `RuntimeServices`) and the headless binding (`HeadlessBinding`) hold the only strong
-  reference. It replaces `LocalPostFrameLane`.
+  `RuntimeServices`) holds the only strong reference. It replaces `LocalPostFrameLane`.
 - **`AsyncDriver`** — what `LifecycleContext::async_driver` hands a widget — is `!Send` and a
   `Weak` handle to that store. `BoxedTask` has no `Send` bound; `TaskToken` is `!Send`.
   Futures are created, polled and dropped on the owner thread. A handle that outlives its

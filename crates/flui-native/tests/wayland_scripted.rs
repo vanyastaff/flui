@@ -72,6 +72,10 @@ mod cases {
                 a_window_the_compositor_never_draws_keeps_the_loop_turning,
             ),
             (
+                "a_moving_wake_deadline_polls_no_window_the_compositor_never_draws",
+                a_moving_wake_deadline_polls_no_window_the_compositor_never_draws,
+            ),
+            (
                 "a_window_the_compositor_never_configures_holds_nothing",
                 a_window_the_compositor_never_configures_holds_nothing,
             ),
@@ -645,6 +649,79 @@ mod cases {
                 frames(&session) - before
             );
         }
+    }
+
+    /// A wake deadline that moves on every answer, as the runtime's in-flight
+    /// floor does while a raster thread holds a frame of the window, polls no
+    /// window the compositor never draws: the loop asks the window for its
+    /// frame, which waits for the frame callback's grace, so it wakes for
+    /// the deadline only once that grace runs out, as it would with no
+    /// deadline, and delivers it then.
+    fn a_moving_wake_deadline_polls_no_window_the_compositor_never_draws() {
+        use flui_native::testing::app::{AppCall, AppLog};
+
+        let compositor = ScriptedCompositor::start(Offer::default().withhold_frame_callbacks())
+            .expect("the compositor starts");
+        let platform = {
+            let _bound = Watchdog::arm("the host connecting to the compositor");
+            WaylandPlatform::try_new_at(compositor.socket())
+                .expect("the host connects to the compositor")
+        };
+        let log = AppLog::new();
+        // A deadline 50 ms ahead of every answer: each one is new, so the
+        // loop arms it whether or not a frame ran since the last.
+        log.answer_deadline_with(|| Some(Instant::now() + Duration::from_millis(50)));
+        let frames = Rc::new(std::cell::Cell::new(0_usize));
+        let drawn = Rc::clone(&frames);
+        log.bootstrap(move |owner| {
+            let handler = RecordingWindowHandler::new();
+            let shown: Rc<std::cell::RefCell<Option<Rc<dyn HostWindow>>>> = Rc::default();
+            let target = Rc::clone(&shown);
+            // Each frame is presented as a renderer presents it, which arms
+            // the frame callback the compositor never answers.
+            handler.react_to_frame(move |_| {
+                if let Some(window) = target.borrow().as_ref() {
+                    window
+                        .surface_target()
+                        .pre_present_notify(None, flui_platform::SwapChainStatistics::None);
+                    let _ = present(window.as_ref());
+                    drawn.set(drawn.get() + 1);
+                }
+            });
+            let window = owner
+                .open_window(
+                    WindowOptions::default().title("polled by no deadline"),
+                    Rc::clone(&handler) as _,
+                )
+                .expect("a window opens")
+                .try_ready()
+                .expect("at once");
+            shown.replace(Some(window));
+            let proxy = owner.proxy();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(3_000));
+                let _ = proxy.request_quit();
+            });
+            Ok(())
+        });
+        Box::new(platform)
+            .run(Rc::clone(&log) as _)
+            .expect("the run ends");
+        let asked = log.count(AppCall::WakeDeadline);
+        // The first frame, then one at the first callback's grace: the
+        // deadline is delivered at the grace, not lost.
+        assert!(
+            frames.get() >= 2,
+            "{} frames in three seconds: the deadline was not delivered at the grace",
+            frames.get()
+        );
+        // Polled at the deadline's pace, the loop would turn about sixty
+        // times in three seconds; at the graces it turns a few times.
+        assert!(
+            asked < 20,
+            "the loop turned {asked} times in three seconds for a window whose frame \
+             callback is withheld"
+        );
     }
 
     /// A window the compositor never configures opens and holds nothing: the

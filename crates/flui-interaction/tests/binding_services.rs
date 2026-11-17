@@ -561,3 +561,36 @@ fn a_contact_claimed_and_ended_in_a_nested_dispatch_cancels_its_rival() {
         "the claimed contact's rival heard its Cancel(Claimed) before the contact ended"
     );
 }
+
+/// A Down whose hit test panics still closes the contact's arena before the
+/// panic resumes, so a recognizer that joined the arena earlier is not left
+/// waiting on a contest nobody will close.
+#[test]
+fn a_down_whose_hit_test_panics_still_closes_the_arena() {
+    use flui_interaction::GestureRecognizer as _;
+
+    let lane = InteractionLane::try_new().expect("lane");
+    let binding = GestureBinding::new();
+    let contact = pointer(1);
+    // A tap that reports taps joins the contact's arena.
+    let recognizer = flui_interaction::TapGestureRecognizer::builder(binding.arena().clone())
+        .on_tap(|_| {})
+        .build();
+    let down =
+        make_down_event_for_id(contact, Offset::new(4.0, 7.0), PointerKind::Touch).expect("down");
+    recognizer.add_pointer(flui_interaction::pointer::PointerDispatch::at_root(&down));
+    assert!(binding.arena().is_open(contact));
+
+    let unwind = lane.enter(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            binding.handle_pointer_event(&down, |_| panic!("route panic"));
+        }))
+    });
+
+    let payload = unwind.expect_err("the hit-test panic propagates");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"route panic"));
+    assert!(
+        !binding.arena().is_open(contact),
+        "Down must close the arena before the hit-test panic resumes"
+    );
+}
