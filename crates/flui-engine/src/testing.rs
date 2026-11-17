@@ -588,17 +588,29 @@ impl flui_platform::DisplayConnection for FakeDisplay {}
 
 /// A window on [`FakeDisplay`], named by an Xlib window id: a target a
 /// [`noop_surface_factory`] makes a surface for, which no real adapter
-/// presents to.
-#[derive(Debug, Clone, Copy)]
+/// presents to. It records whether the host asked to keep it past its close
+/// ([`SurfaceTarget::keep_past_close`](flui_platform::SurfaceTarget::keep_past_close)).
+#[derive(Debug)]
 pub struct FakeWindow {
     id: std::ffi::c_ulong,
+    kept_past_close: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeWindow {
     /// A window with Xlib id `id`.
     #[must_use]
     pub fn new(id: std::ffi::c_ulong) -> Self {
-        Self { id }
+        Self {
+            id,
+            kept_past_close: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// How many times the host asked to keep this window past its close.
+    #[must_use]
+    pub fn kept_past_close(&self) -> usize {
+        self.kept_past_close
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -631,6 +643,11 @@ impl flui_platform::SurfaceTarget for FakeWindow {
         _frame: Option<flui_foundation::FrameStamp>,
         _statistics: flui_platform::SwapChainStatistics,
     ) {
+    }
+
+    fn keep_past_close(&self) {
+        self.kept_past_close
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

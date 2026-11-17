@@ -1,78 +1,49 @@
 //! # FLUI Macros
 //!
-//! Procedural macros for the FLUI framework.
+//! The procedural macros of the FLUI framework. Each is re-exported beside
+//! the trait or function it serves, so an author imports it from there and
+//! never names this crate:
 //!
-//! ## Derives
+//! | Macro | Writes | Re-exported as |
+//! |-------|--------|----------------|
+//! | [`macro@StatelessView`], [`macro@StatefulView`] | `impl View` for a type that implements the authoring trait | `flui_view::StatelessView`, `flui_view::StatefulView` |
+//! | [`macro@InheritedData`] | one field mask per field and `impl InheritedData` | `flui_view::InheritedData` |
+//! | [`macro@Inspect`] | `impl Inspect` for a struct or an enum | `flui_foundation::inspect::Inspect` |
+//! | [`macro@TwoWayConverter`] | `impl TwoWayConverter` and a fieldwise `impl Lerp` | `flui_animation::TwoWayConverter` |
+//! | [`macro@Routable`] | `impl Routable` from `#[route("…")]` patterns | `flui_widgets::router::Routable` |
+//! | [`macro@main`] | the entry every platform starts an application from | `flui::main` |
 //!
-//! - [`macro@StatelessView`] — emit `impl View` for a `StatelessView`
-//!   type. Replaces the legacy `impl_stateless_view!` declarative
-//!   macro that this crate deletes.
-//! - [`macro@StatefulView`] — emit `impl View` for a `StatefulView`
-//!   type. Replaces the legacy `impl_stateful_view!` declarative
-//!   macro (also deleted here).
+//! ## Paths in generated code
 //!
-//! - [`macro@Inspect`] — emit `impl Inspect` for a struct or an enum;
-//!   re-exported beside the trait as `flui_foundation::inspect::Inspect`.
-//! - [`macro@Routable`] — emit `impl Routable` for a route enum from its
-//!   `#[route("…")]` patterns; re-exported beside the trait by
-//!   `flui_widgets` and its prelude.
-//!
-//! The two view derives are re-exported from `flui_view::prelude` so widget
-//! authors write a single `use flui_view::prelude::*;` and pick up the
-//! derives alongside the supporting trait — no extra `use
-//! flui_macros::…` import.
-//!
-//! ## Attribute
-//!
-//! - [`macro@main`] — mark the function an application starts from, so one
-//!   entry runs on every platform; re-exported as `flui::main`.
-//!
-//! ## Why a separate crate?
-//!
-//! `proc-macro` crates must be `[lib] proc-macro = true`, which makes
-//! them leaf crates — they cannot depend on or be depended on by
-//! ordinary library crates in the usual sense (only their generated
-//! tokens reach the consuming crate). Splitting the derives into
-//! `flui-macros` keeps `flui-view` itself free of the `proc-macro`
-//! constraint while letting widget authors `#[derive(StatelessView)]`
-//! after a single `use flui_view::prelude::*;`.
-//!
-//! ## Generated-code path strategy
-//!
-//! Derives resolve the owning runtime crate from the consumer's Cargo manifest,
-//! honoring renamed dependencies. A direct runtime dependency takes precedence;
-//! otherwise the generated code uses `flui::view`, `flui::foundation`,
-//! `flui::animation` or `flui::widgets` through the facade (including a
-//! renamed facade).
-//! Framework library code and integration targets use the same absolute path.
+//! An expansion names its runtime crate through the consumer's Cargo
+//! manifest, under whatever name the manifest gives it. A derive looks for
+//! `flui-sdk` first (a package), then the crate that owns the trait (a
+//! framework crate), then the `flui` facade (an application). `#[flui::main]`
+//! looks for `flui-app`, then the facade: the SDK has no application runtime.
+//! A crate with none of them gets a compile error that says which dependency
+//! to add.
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
-// A library that prints owns a terminal it was never given; report through
-// `tracing` or a returned error instead.
+// A macro that prints writes into the compiler's output of every crate that uses it.
 #![warn(clippy::print_stdout, clippy::print_stderr)]
-#![warn(missing_debug_implementations, rust_2018_idioms)]
 
-mod derive_inherited_data;
-mod derive_inspect;
-mod derive_routable;
-mod derive_stateful;
-mod derive_stateless;
-mod derive_two_way_converter;
-mod main_attr;
+mod derive;
+mod entry;
+mod generics;
+mod hygiene;
+mod refusals;
 mod runtime_path;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
 
-/// Emit `impl View` for a `StatelessView` type.
+use derive::view::ViewKind;
+
+/// Emit `impl View` for a type that implements `StatelessView`.
 ///
-/// Generates the `create_element` boilerplate
-/// (`ElementKind::stateless(self)`) so the author only writes the struct
-/// + its `impl StatelessView for X { fn build(...) -> impl IntoView }`
-///   block.
-///
-/// # Example
+/// The author writes the struct and its `impl StatelessView`; the derive
+/// writes `View::create_element`, which mounts a stateless element.
 ///
 /// ```rust,ignore
 /// use flui_view::prelude::*;
@@ -87,17 +58,15 @@ use syn::{DeriveInput, parse_macro_input};
 /// }
 /// ```
 ///
-/// The derive forwards generic parameters and where clauses to the
-/// emitted `impl View` block verbatim, and adds a `Self:
-/// StatelessView` predicate so a missing `impl StatelessView for X`
-/// block surfaces as a clear "trait not implemented" diagnostic at
-/// the derive site rather than as a cascade of unrelated errors deep
-/// inside `StatelessBehavior`'s type machinery.
+/// The type's generic parameters and where clause carry over to the `impl`,
+/// which also requires `Self: StatelessView`: a type that derives without
+/// implementing the authoring trait is told so at the derive.
 ///
 /// # Inspection
 ///
-/// `#[view(inspect)]` fills `View::inspect` from the type's own `Inspect`, so a view that also
-/// derives `Inspect` shows its fields in the element tree's snapshot (ADR-0242 §3):
+/// `#[view(inspect)]` on the type fills `View::inspect` from the type's own
+/// `Inspect`, so a view that also derives `Inspect` shows its fields in the
+/// element tree's snapshot (ADR-0242 §3):
 ///
 /// ```rust,ignore
 /// #[derive(Clone, StatelessView, Inspect)]
@@ -105,13 +74,12 @@ use syn::{DeriveInput, parse_macro_input};
 /// struct Greeting { name: String }
 /// ```
 ///
-/// `StatefulView` takes the same attribute.
-///
 /// # Creation sites
 ///
-/// A field of type `CreationSite` marked `#[view(site)]` is the view's creation site
-/// (`View::creation_site`). Its `#[track_caller]` constructor fills it with
-/// `CreationSite::here()`, and the element copies it at mount.
+/// A field of type `CreationSite` marked `#[view(site)]` is the view's
+/// creation site (`View::creation_site`). Its `#[track_caller]` constructor
+/// fills it with `CreationSite::here()`, and the element copies it at mount.
+/// One field of a struct, named or positional, can carry the mark.
 ///
 /// ```rust,ignore
 /// #[derive(Clone, StatelessView)]
@@ -129,73 +97,47 @@ use syn::{DeriveInput, parse_macro_input};
 /// }
 /// ```
 ///
-/// # Keyed widgets
+/// # Keys
 ///
-/// The default `View::key()` returns `None`. Authors who need a
-/// keyed widget cannot stack a separate `impl View for X { fn key() }`
-/// block alongside the derive — Rust forbids two `impl View for X`
-/// blocks. The supported pattern is to drop the derive and write the
-/// `impl View` block manually:
+/// A field marked `#[view(key)]` is the view's key (`View::key`), by which
+/// the parent matches it to the element it had before. The field is a
+/// `ViewKey` (`ValueKey<T>`, `UniqueKey`, `GlobalKey<T>`, …), an `Option` of
+/// one for a view that is keyed only sometimes, or an `Rc<dyn ViewKey>` or
+/// `Box<dyn ViewKey>` for a key whose type the view does not name
+/// (`flui_foundation::key::AsViewKey` lists them). One field of a struct can
+/// carry the mark; without it the view has no key.
 ///
 /// ```rust,ignore
-/// impl View for Greeting {
-///     fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
-///         crate::element::ElementKind::stateless(self)
-///     }
-///     fn key(&self) -> Option<&dyn ViewKey> {
-///         Some(&self.key)
-///     }
+/// #[derive(Clone, StatelessView)]
+/// struct Row {
+///     #[view(key)]
+///     key: ValueKey<u64>,
+///     label: String,
 /// }
 /// ```
 ///
-/// A `#[view(key = "<expr>")]` derive attribute that auto-wires a
-/// field-named key is a deferred ergonomics improvement.
+/// # Refused attributes
+///
+/// `#[view(...)]` is a compile error wherever the derive could not act on it,
+/// and one build reports every such place:
+/// `inspect` on a field or given twice, `key` or `site` on the type, on two
+/// fields or twice on one, an empty list, any `#[view(...)]` inside an
+/// enum or a union, whose values have no field of `self` to read, and one on
+/// a generic parameter or inside a field's type. A name spelled as a raw
+/// identifier (`#[r#view(r#key)]`) is read as the name.
 #[proc_macro_derive(StatelessView, attributes(view))]
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_stateless::expand(&input)
+    derive::view::expand(&input, ViewKind::Stateless)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
 
-/// Derive [`InheritedData`] for a provider's data struct: one
-/// `pub const FIELD_<NAME>: FieldMask<Self>` per field plus `field_mask_diff`, so an
-/// `InheritedView` can report which fields changed and dependents that used
-/// `depend_on_field` rebuild only for those (issue #1090).
+/// Emit `impl View` for a type that implements `StatefulView`.
 ///
-/// Every field must be `PartialEq`; at most 64 fields.
-///
-/// ```rust,ignore
-/// #[derive(Clone, PartialEq, InheritedData)]
-/// pub struct MediaQueryData { pub size: Size, pub text_scale_factor: f32, /* … */ }
-///
-/// impl InheritedView for MediaQuery {
-///     type Data = MediaQueryData;
-///     fn changed_fields(&self, old: &Self) -> FieldMask<Self::Data> { self.data.field_mask_diff(&old.data) }
-///     /* … */
-/// }
-/// // A reader that depends on the size only:
-/// let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
-/// ```
-///
-/// [`InheritedData`]: ../flui_view/trait.InheritedData.html
-#[proc_macro_derive(InheritedData)]
-pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    derive_inherited_data::expand(&input)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
-}
-
-/// Emit `impl View` for a `StatefulView` type.
-///
-/// Generates the `create_element` boilerplate
-/// (`ElementKind::stateful(self)`). The author still writes the
-/// `impl StatefulView for X` and the corresponding
-/// `impl ViewState<X> for XState` blocks — the derive covers only the
-/// `impl View` boilerplate.
-///
-/// # Example
+/// The author writes the struct, its `impl StatefulView` and the state's
+/// `impl ViewState`; the derive writes `View::create_element`, which mounts a
+/// stateful element.
 ///
 /// ```rust,ignore
 /// use flui_view::prelude::*;
@@ -219,13 +161,44 @@ pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// See [`macro@StatelessView`] for the generated-code path strategy
-/// (Cargo-resolved runtime paths) and keyed-widget workaround
-/// notes — the same patterns apply.
+/// `#[view(inspect)]`, `#[view(key)]`, `#[view(site)]` and their refusals work
+/// as they do for [`macro@StatelessView`].
 #[proc_macro_derive(StatefulView, attributes(view))]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_stateful::expand(&input)
+    derive::view::expand(&input, ViewKind::Stateful)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Derive `InheritedData` (`flui_view`) for a provider's data struct: one
+/// `pub const FIELD_<NAME>: FieldMask<Self>` per field plus `field_mask_diff`, so an
+/// `InheritedView` can report which fields changed and dependents that used
+/// `depend_on_field` rebuild only for those (issue #1090).
+///
+/// The type is a struct with named fields and no generic parameters: a
+/// provider's data type is concrete, and the constants are named after the
+/// fields (`r#type` gives `FIELD_TYPE`). Every field must be `PartialEq`,
+/// which the generated comparison reports at the field. A struct with more
+/// than 64 fields is refused, since a mask carries 64 bits: split the
+/// provider's data.
+///
+/// ```rust,ignore
+/// #[derive(Clone, PartialEq, InheritedData)]
+/// pub struct MediaQueryData { pub size: Size, pub text_scale_factor: f32, /* … */ }
+///
+/// impl InheritedView for MediaQuery {
+///     type Data = MediaQueryData;
+///     fn changed_fields(&self, old: &Self) -> FieldMask<Self::Data> { self.data.field_mask_diff(&old.data) }
+///     /* … */
+/// }
+/// // A reader that depends on the size only:
+/// let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
+/// ```
+#[proc_macro_derive(InheritedData)]
+pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive::inherited_data::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -233,8 +206,10 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 /// Emit `impl Inspect` (`flui_foundation::inspect`) for a struct or an enum (ADR-0242 §4).
 ///
 /// Re-exported as `flui_foundation::inspect::Inspect`, beside the trait, which documents the
-/// attributes. Runtime paths resolve through `flui-sdk` first, then `flui-foundation`, then the
-/// `flui` facade, so a package that names only the SDK can derive it.
+/// field attributes. `#[inspect(...)]` describes a field: on the type, on a variant, on a generic
+/// parameter or inside a field's type, with an empty list or with one attribute given twice, it
+/// is a compile error, and one build reports every one. A name or an identifier value spelled as
+/// a raw identifier (`r#skip`, `level = r#debug`) is read as the name.
 ///
 /// A field whose type has no value mapping is a compile error naming the ways out (`skip`,
 /// `with`, `debug`, or a `ToValue` impl); a union is refused, because which of its fields is
@@ -242,7 +217,7 @@ pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Inspect, attributes(inspect))]
 pub fn derive_inspect(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_inspect::expand(&input)
+    derive::inspect::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -254,8 +229,9 @@ pub fn derive_inspect(input: TokenStream) -> TokenStream {
 ///
 /// Each field must implement `TwoWayConverter` and `Lerp`, with a concrete
 /// vector width. Nested values are flattened in declaration order, and each
-/// field retains its interpolation contract. Generic-dependent widths cannot
-/// be summed in an array length on stable Rust. The struct must be `Clone`.
+/// field retains its interpolation contract. A width that depends on a type,
+/// const or lifetime parameter cannot be summed in an array length on stable
+/// Rust, so such a type is refused. The struct must be `Clone`.
 ///
 /// # Example
 ///
@@ -272,7 +248,9 @@ pub fn derive_inspect(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(TwoWayConverter)]
 pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_two_way_converter::expand(&input).into()
+    derive::two_way_converter::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 /// Emit `impl Routable` for a route enum: `to_path` and `from_path` from one
@@ -301,12 +279,18 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 /// `T: Default` is its default without it. `to_path` prints the query
 /// fields in declaration order and leaves out `None` and an empty `Vec`.
 ///
-/// Rejected at compile time: a struct, union or generic type; a tuple
-/// variant; a variant with no `#[route]`, two, or one with anything after the
-/// pattern; a malformed pattern; a parameter that names no field, or a field
-/// no parameter names, a parameter that names a `#[query]` field, a malformed
-/// `#[query]`; and two patterns of the same shape, since the second
-/// could never be parsed.
+/// Rejected at compile time: a struct, union or generic type; a type without
+/// a variant; a tuple
+/// variant; `#[route]` on the type or on a field, `#[query]` on the type
+/// or on a variant, and either inside a field's type; a variant with no
+/// `#[route]`, two, or one with anything
+/// after the pattern; a malformed pattern; a parameter that names no field,
+/// or a field no parameter names, a parameter that names a `#[query]` field,
+/// a malformed, empty or doubled `#[query(...)]`, a key renamed twice, two
+/// fields of a variant that read one query key; and two patterns of the same
+/// shape,
+/// since the second could never be parsed. Everything the type, its variants
+/// and their fields get wrong is reported in one build.
 ///
 /// `from_path` tries the patterns from the most specific: a literal segment
 /// wins over a parameter in the same place whatever the declaration order,
@@ -317,7 +301,7 @@ pub fn derive_two_way_converter(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Routable, attributes(route, query))]
 pub fn derive_routable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    derive_routable::expand(&input)
+    derive::routable::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -354,11 +338,11 @@ pub fn derive_routable(input: TokenStream) -> TokenStream {
 ///
 /// The function takes nothing and returns `()` or `Result<(), E>` with a
 /// displayable `E`; an `async`, `unsafe`, generic or argument-taking
-/// function, or arguments on the attribute, are compile errors on every
-/// target.
+/// function is a compile error on every target, each such part of the
+/// signature reported in one build, and so are arguments on the attribute.
 #[proc_macro_attribute]
 pub fn main(args: TokenStream, item: TokenStream) -> TokenStream {
-    main_attr::expand(args.into(), item.into())
+    entry::expand(args.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

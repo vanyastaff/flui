@@ -597,6 +597,41 @@ fn a_window_registers_its_drop_target() {
     );
 }
 
+/// A window that outlives its platform revokes its drop target inside the
+/// thread's COM apartment, with neither text services nor a touchpad viewport
+/// to keep it entered: the registration, the window and its context hold the
+/// apartment themselves.
+fn a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com() {
+    // A thread of its own, so no apartment an earlier row entered on this one
+    // stands in for the window's. Its window has neither text services nor a
+    // touchpad viewport, as on a machine without them: nothing of its own
+    // keeps COM entered but what the window holds.
+    let revoked = std::thread::spawn(|| {
+        crate::text::windows::REFUSE_TSF_ACTIVATION.set(true);
+        crate::input::windows::direct_manipulation::testing::REFUSE_VIEWPORT.set(true);
+        let platform = WindowsPlatform::try_new().expect("platform");
+        let window = platform
+            .open_window(
+                WindowOptions::default()
+                    .title("flui outlives its platform")
+                    .visible(false),
+                RecordingWindowHandler::new(),
+            )
+            .expect("window");
+        drop(platform);
+        window.close_now();
+        drop(window);
+        super::testing::REVOKED_IN_APARTMENT.get()
+    })
+    .join()
+    .expect("the window's thread");
+    assert_eq!(
+        revoked,
+        Some(true),
+        "the window's drop target was revoked inside the COM apartment"
+    );
+}
+
 /// A drag over a window reaches it as an offer naming the session, the OS
 /// is answered from the feedback the window cached, and after the drop each
 /// representation is fetched from the source's data object.
@@ -1757,6 +1792,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_window_registers_its_drop_target",
                 a_window_registers_its_drop_target,
+            ),
+            (
+                "a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com",
+                a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com,
             ),
             (
                 "a_drag_over_a_window_is_offered_answered_and_fetched",

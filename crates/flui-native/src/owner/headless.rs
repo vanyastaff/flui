@@ -298,12 +298,10 @@ pub(crate) struct HeadlessState {
     /// `HeadlessDeferredWindowOpens::resolve_next` call. FIFO order: the
     /// oldest request resolves first.
     pending_opens: Vec<PendingOpen>,
-    /// Parked `Platform::request_exit_policy_reevaluation` request (any
-    /// thread may set it; coalesced). This mock has no event loop of its
-    /// own, so the embedder drives the actual owner-thread re-check via
-    /// [`HeadlessExitReevaluation::drive`] — running the
-    /// hook on the requesting thread instead would consult the WRONG
-    /// thread-local runtime state.
+    /// Parked `Platform::request_exit_policy_reevaluation` request
+    /// (coalesced). The headless host has no event loop of its own, so the
+    /// embedder drives the re-check via [`HeadlessExitReevaluation::drive`],
+    /// on a turn of its choosing rather than inside the call that asked.
     exit_reevaluation_requested: bool,
     /// What every window opened from now on offers as its text-store host
     /// ([`HeadlessPlatform::with_text_store_host`](crate::HeadlessPlatform::with_text_store_host)); `None`: push-model.
@@ -678,8 +676,8 @@ impl host::Loop for HeadlessLoop {
     }
 
     fn request_exit_policy_reevaluation(&self) {
-        // Park only (coalesced): this mock has no event loop, so the
-        // owner-thread half runs when the embedder calls
+        // Park only (coalesced): the headless host has no event loop, so the
+        // re-check runs when the embedder calls
         // `HeadlessExitReevaluation::drive` — see that method's doc.
         self.with_state(|state| state.exit_reevaluation_requested = true);
     }
@@ -912,9 +910,9 @@ impl HeadlessOwnerTurns {
 
 /// Probe/drive handle for parked
 /// `Platform::request_exit_policy_reevaluation` requests on the headless
-/// mock — obtained via [`HeadlessPlatform::exit_reevaluation`](crate::HeadlessPlatform::exit_reevaluation) BEFORE
-/// `Platform::run` consumes the platform. The mock has no event loop of
-/// its own, so the owner-thread half of a re-evaluation request (the
+/// host — obtained via [`HeadlessPlatform::exit_reevaluation`](crate::HeadlessPlatform::exit_reevaluation) BEFORE
+/// `Platform::run` consumes the platform. The headless host has no event
+/// loop of its own, so the owner-thread half of a re-evaluation request (the
 /// owner loop's control arm) is driven explicitly by the
 /// embedding test through [`drive`](Self::drive).
 pub struct HeadlessExitReevaluation {

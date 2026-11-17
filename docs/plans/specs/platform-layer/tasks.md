@@ -7329,6 +7329,57 @@ GPU-память простаивающего или невидимого окн
   каждого хоста свой (рабочая область монитора при открытии против configure Wayland), запись в
   `docs/gaps.md` и заметка строки `position-size-move-and-resize-events`.
 
+- [x] **LY127** — ветка `native/win32-owner-thread-forms`. Находка подтверждена на `main` @
+  `fbd43ebf2` чтением и компилятором: `WindowsLoop`, `WindowsPlatform` (`assert_not_impl_any!`) и
+  `WindowsWindow` (сырой `HWND`, без `unsafe impl`; теперь тоже с `assert_not_impl_any!`) не
+  `Send`, а формы для платформы, которая могла бы им быть, жили. Снято: `ApartmentHold` с
+  `unsafe impl Send`/`Sync`, проверкой потока в `share` и `Drop` и путём утечки — теперь поле цикла
+  `apartment: Rc<ComApartment>`, окно получает `Rc` без `Option`; запись `ApartmentHold` в
+  `tools/xtask/allowlists/send-impls.toml` снята; ветка «dropped off owner; native resource
+  retained» в `OwnerControl::close`; `OwnerAffinity` цикла (`bind_current` в конструкторе и `run`,
+  `debug_assert_owner` в `quit`); рукав `ForeignThread` в `register_layout_callback`. Правило
+  `TeardownRoute` с `PostClose` заменено `hwnd_affinity::handle_names` (`Nothing`,
+  `AnotherWindow`, `ItsWindow`), которое поток не спрашивает: закрытие и последний drop обёртки
+  только уничтожают окно, поле `queue` обёртки и ошибка «show must run on the native window owner»
+  ушли; поверхность из потока рендера спрашивает то же правило. Класс (ADR-0323 §5): запись окна
+  (`WindowRecord`: границы, масштаб, видимость, фокус) из `Arc<Mutex<_>>` стала `Copy` в
+  `Rc<Cell<_>>` — чтение внутри обновления видит последнюю записанную запись, а не ждёт замка,
+  который держит его же поток; флаг слияния запроса политики выхода из `Arc<AtomicBool>` —
+  `Rc<Cell<bool>>` (оба спрашивающих, `WM_DESTROY` последнего окна и
+  `request_exit_policy_reevaluation`, на потоке владельца). Остались, с причиной у места: адрес
+  окна владельца под замком (его читает межпоточный wake сигнала), `OwnerPost` (его держит
+  `DragTransport`, `Send + Sync` в `flui-platform`), посты кадра и доставки окна себе,
+  `Win32Surface`, часы модального цикла. Журнал: `WM_SIZE` пишет `debug!`/`trace!` с полями, без
+  эмодзи; headless больше не зовёт себя mock. Документы: модульные доки `com_apartment.rs`,
+  `control.rs`, `hwnd_affinity.rs`, `proc.rs`; раздел `ARCHITECTURE.md` о колбэках Win32
+  переписан; ADR-0063 называет `handle_names`; статус ADR-0039; запись ADR-0327 §1 в
+  `docs/gaps.md` называет, что осталось у Win32 (мост UIA за `PlatformAccessibility: Send + Sync`,
+  OLE за `DragTransport`, `Arc` из общего хоста). Тесты, в скобках результат с откатом:
+  `a_read_inside_a_record_update_sees_the_last_record_set` (на `main` с `Mutex` чтение внутри
+  обновления ждёт свой же замок: `Timeout` через 10 с);
+  `a_handle_names_its_wrappers_window_only_while_its_slot_is_the_wrappers` (чистое правило, на
+  всех хостах); остальное держат компилятор и `send-impls` с коротким списком.
+  По независимому чтению исправлено: `handle_names` сравнивает поток окна с потоком, создавшим
+  окно обёртки (`InstalledWindow` у обёртки и у `Win32Surface`), — окно другого потока или
+  процесса с тем же классом и равным значением слота больше не `ItsWindow`; удержанное скрытым
+  после закрытия окно (#2707, слот очищен) для обёртки — `AnotherWindow`, для его же отставки
+  (контекст `0`, свой поток) — `ItsWindow`, закрытие и последний drop обёртки идут через
+  `close_on_owner`. Квартиру COM держат все её пользователи, способные пережить цикл: обёртка и
+  контекст окна, регистрация цели сброса, TSF и вьюпорт тачпада; `CreatedWindow::apartment` —
+  `Rc` без `Option`, тестовые наборы входят в квартиру сами. Запись окна — модуль
+  `window/windows/record.rs` с `Cell::update` (обновление получает и возвращает запись, доступа к
+  ячейке у него нет); `assert_not_impl_any!` на `OwnerControl` и `ComApartment`;
+  `show_owned_window` берёт `Fn() -> bool`; ADR-0082 (шаг Win32) и ARCHITECTURE.md (политика
+  выхода на потоке владельца) исправлены. Тесты: строки «другой поток», «другой процесс»,
+  «отставленное и скрытое окно» в таблице `handle_names`;
+  `a_read_inside_a_record_update_sees_the_last_record_set` — модельный тест записи;
+  `a_window_that_outlives_its_platform_revokes_its_drop_target_inside_com` (TSF и тачпад
+  отказаны через тестовые флаги) на коде до исправления тоже зелёный: на этой машине поток
+  остаётся в квартире до закрытия окна по причине, которую установить не удалось, так что
+  сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
+  trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
+  фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

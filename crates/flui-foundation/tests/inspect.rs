@@ -1448,3 +1448,28 @@ fn scene_layer(slot: u32, generation: u32, entry: Option<u32>, scene: u64) -> Sc
         entry,
     }
 }
+
+// Functions of this file named as the derive names its own `Fields` parameter and a variant's
+// first binding: an attribute's expression that names them means these.
+fn out(level: &f64) -> Value<'_> {
+    Value::Float(*level)
+}
+
+fn field_0() -> f64 {
+    0.25
+}
+
+#[derive(Inspect)]
+enum Gauge {
+    Level(#[inspect(with = out, default = field_0())] f64),
+}
+
+#[test]
+fn an_attributes_expression_names_the_authors_items_not_the_derives_locals() {
+    let rows = collect(&Gauge::Level(0.5));
+    let (name, value, _, _, default) = rows.last().expect("the variant's one field is described");
+    assert_eq!(
+        (name.as_str(), value.as_str(), default.as_deref()),
+        ("0", "0.5", Some("0.25"))
+    );
+}

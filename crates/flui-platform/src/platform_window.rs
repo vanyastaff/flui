@@ -130,6 +130,7 @@ pub enum WindowAt {
 ///         _: SwapChainStatistics,
 ///     ) {
 ///     }
+///     fn keep_past_close(&self) {}
 /// }
 ///
 /// struct Offscreen {

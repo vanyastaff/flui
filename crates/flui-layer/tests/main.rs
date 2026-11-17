@@ -412,6 +412,42 @@ fn scene_patch_damage() {
                 d::a_hidden_follower_hides_the_followers_of_the_leader_inside_it,
             ),
             (
+                "damage_under_a_fractional_clip_edge_takes_the_shared_pixel",
+                d::damage_under_a_fractional_clip_edge_takes_the_shared_pixel,
+            ),
+            (
+                "a_clip_in_a_nodes_own_content_keeps_the_pixel_it_shares",
+                d::a_clip_in_a_nodes_own_content_keeps_the_pixel_it_shares,
+            ),
+            (
+                "a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares",
+                d::a_clip_in_a_nodes_own_content_under_a_scale_below_1_keeps_the_pixel_it_shares,
+            ),
+            (
+                "a_clip_under_a_map_out_of_the_plane_keeps_the_whole_clip",
+                d::a_clip_under_a_map_out_of_the_plane_keeps_the_whole_clip,
+            ),
+            (
+                "a_follower_over_a_content_clip_takes_the_scale_it_resolves_to",
+                d::a_follower_over_a_content_clip_takes_the_scale_it_resolves_to,
+            ),
+            (
+                "a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares",
+                d::a_child_under_a_content_clip_grows_its_parent_by_the_pixel_it_shares,
+            ),
+            (
+                "a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared",
+                d::a_moved_clip_in_a_nodes_own_content_damages_the_pixel_it_shared,
+            ),
+            (
+                "a_repaint_in_a_scrolled_viewport_damages_only_what_it_shows",
+                d::a_repaint_in_a_scrolled_viewport_damages_only_what_it_shows,
+            ),
+            (
+                "an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares",
+                d::an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares,
+            ),
+            (
                 "a_filter_under_a_shrinking_ancestor_damages_its_device_kernel",
                 d::a_filter_under_a_shrinking_ancestor_damages_its_device_kernel,
             ),

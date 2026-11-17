@@ -1,0 +1,41 @@
+error: `#[route]` gives a variant its path pattern; the type takes none
+ --> tests/routable_ui/fail/misplaced_attributes.rs:7:1
+  |
+7 | #[route("/")]
+  | ^^^^^^^^^^^^^
+
+error: `#[query]` marks a field of a variant; the type takes none
+ --> tests/routable_ui/fail/misplaced_attributes.rs:8:1
+  |
+8 | #[r#query]
+  | ^^^^^^^^^^
+
+error: `#[query]` does nothing here: the derive reads the attributes of the type, of its variants and of their fields
+  --> tests/routable_ui/fail/misplaced_attributes.rs:21:18
+   |
+21 |         then: fn(#[query] u32),
+   |                  ^^^^^^^^
+
+error: `#[query]` marks a field; the variant takes `#[route("/path")]`
+  --> tests/routable_ui/fail/misplaced_attributes.rs:11:5
+   |
+11 |     #[query(rename = "q")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: field `q` is not in the pattern `/search`: add a `:q` segment, or mark it `#[query]` to read it from the query
+  --> tests/routable_ui/fail/misplaced_attributes.rs:12:14
+   |
+12 |     Search { q: String },
+   |              ^
+
+error: `#[route]` gives a variant its path pattern; it does not go on a field
+  --> tests/routable_ui/fail/misplaced_attributes.rs:15:9
+   |
+15 |         #[route("/ignored")]
+   |         ^^^^^^^^^^^^^^^^^^^^
+
+error: the list is empty; expected `rename = "key"`, or `#[query]` without the parentheses
+  --> tests/routable_ui/fail/misplaced_attributes.rs:25:9
+   |
+25 |         #[query()]
+   |         ^^^^^^^^^^

@@ -282,10 +282,26 @@ scale has no kernel bound inside its boundary. A filter adds its own kernel to t
 children's, so kernels sum along a chain and take the maximum across siblings; inside a boundary a
 filter moves what it takes and leaves its spread to the kernel, and a clip over a scope with a kernel
 bounds it by the clip, its kernel spent. `Publish`
-recomputes both exactly from the children (O(children)); every other change grows the ancestors'
+recomputes both from the children (O(children)); every other change grows the ancestors'
 bounds by union and their kernel by maximum
 up to the root (O(depth)) and never shrinks them, so a footprint can over-report and never
-under-report. The engine culls with the same bounds. A chain, placement or
+under-report. A clip on the chain from the surface to a node cuts the node's footprint by the whole
+pixels it touches once mapped to the surface, since
+an anti-aliased clip's edge can show content in a pixel it covers in part (for a hard clip,
+which snaps, that is an over-report). A clip inside a node's own content cuts the node's stored
+bound in the node's space, where the device scale is not known: a cut that leaves something is
+exact, and rounding it once mapped matches the pixels; a clip that cuts the content away whole
+keeps the strip of itself within one device pixel of the content, a pixel the two can share. The
+strip's width is one pixel over the least scale of the maps between the clip and the surface that
+the footprint knows: the node's own content for its stored bound, which the cull and the
+footprint of a placed or slotted node read, and the whole chain for the footprint of an entry of
+the content; a follower's map counts at the scale it resolves to, and a map that moves the plane
+out of itself keeps the whole clip. A stored bound takes the chain above its node at a scale of 1
+or more ([gap](../gaps.md#a-clip-in-a-nodes-own-content-under-an-ancestors-scale-below-1)). A
+child's growth takes its own strip, which the fold of a parent's content can leave out where
+the parent's other content already meets the clip: an over-report, as any growth may be. The
+engine culls with the
+same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and
 contributes only its old footprint.
 

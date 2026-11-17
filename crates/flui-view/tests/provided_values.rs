@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use flui_foundation::{ElementId, ViewKey};
+use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
@@ -338,8 +338,9 @@ impl View for Group {
 }
 
 /// Carries its child to wherever its key is built next.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 struct Keyed {
+    #[view(key)]
     key: GlobalKey<KeyedState>,
     child: BoxedView,
 }
@@ -357,16 +358,6 @@ impl StatefulView for Keyed {
 impl ViewState<Keyed> for KeyedState {
     fn build(&self, view: &Keyed, _ctx: &dyn BuildContext) -> impl IntoView {
         view.child.clone()
-    }
-}
-
-impl View for Keyed {
-    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
     }
 }
 

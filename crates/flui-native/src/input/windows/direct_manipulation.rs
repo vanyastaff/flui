@@ -748,6 +748,17 @@ impl InputWindow {
     }
 }
 
+/// What a test sets for the viewports this thread creates.
+#[cfg(all(windows, test))]
+pub(crate) mod testing {
+    thread_local! {
+        /// While set, a window's viewport fails to initialise, as
+        /// DirectManipulation does on a machine without it.
+        pub(crate) static REFUSE_VIEWPORT: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
+    }
+}
+
 /// Create the viewport for `hwnd`; `None` (logged) when DirectManipulation
 /// is unavailable, which leaves the window without precise scrolling and
 /// trackpad gestures.
@@ -755,10 +766,20 @@ impl InputWindow {
 pub(super) fn create_host(
     hwnd: HWND,
     size: (i32, i32),
-    apartment: Option<Rc<ComApartment>>,
+    apartment: Rc<ComApartment>,
 ) -> Option<TouchpadHost> {
-    let apartment = apartment?;
-    match TouchpadHost::create(hwnd, size, apartment) {
+    #[cfg(test)]
+    let refused = testing::REFUSE_VIEWPORT.get();
+    #[cfg(not(test))]
+    let refused = false;
+    let created = if refused {
+        Err(windows_core::Error::from_hresult(
+            windows::Win32::Foundation::E_FAIL,
+        ))
+    } else {
+        TouchpadHost::create(hwnd, size, apartment)
+    };
+    match created {
         Ok(host) => Some(host),
         Err(error) => {
             tracing::warn!(
