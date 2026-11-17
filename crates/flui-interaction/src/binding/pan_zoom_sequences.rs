@@ -17,7 +17,7 @@ use flui_platform::pointer::{PanZoomEvent, PanZoomPhase};
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
 use crate::{
     containment::RoutePanic,
-    events::PointerInfo,
+    events::PointerSource,
     ids::{InputSurface, PointerId},
     pointer::{HitTestResult, PanZoomRetirement, PanZoomRoute},
 };
@@ -165,7 +165,7 @@ impl PanZoomSequences {
     pub(super) fn is_current(
         &self,
         surface: InputSurface,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         sequence: &Rc<PanZoomSequence>,
     ) -> bool {
         self.sessions
@@ -178,7 +178,7 @@ impl PanZoomSequences {
     pub(super) fn stage(
         &self,
         surface: InputSurface,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         sequence: &Rc<PanZoomSequence>,
         ticket: StagedTicket,
         preserving_failure: &Cell<bool>,
@@ -195,7 +195,7 @@ impl PanZoomSequences {
     pub(super) fn claim(
         &self,
         surface: InputSurface,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         sequence: &Rc<PanZoomSequence>,
         route: PanZoomRoute,
         preserving_failure: &Cell<bool>,

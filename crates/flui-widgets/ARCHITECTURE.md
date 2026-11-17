@@ -2522,7 +2522,7 @@ child.
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
 
-**Choice:** `EditableText` is a `flui_platform::TextStore` (ADR-0090). The
+**Choice:** `EditableText` is a `flui_platform::text_store::TextStore` (ADR-0090). The
 input method reads the text, selection, composition and geometry in UTF-16
 offsets and edits under a lock; a push `ImeEvent` is projected onto the same
 store. A read-write session is written back to the controller once, at the

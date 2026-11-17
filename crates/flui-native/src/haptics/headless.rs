@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use flui_platform::haptics::{HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest};
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
 
 use crate::host;
 

@@ -481,7 +481,7 @@ pub(crate) struct OpenSpot {
 pub(crate) fn open_spot(
     options: &WindowOptions,
     opening: &flui_platform::OpeningGeometry,
-    target: Option<&flui_platform::DisplayInfo>,
+    target: Option<&flui_platform::DisplayDescription>,
     system_scale: DevicePixelRatio,
     outer_of: impl Fn(u32, (i32, i32)) -> (i32, i32),
 ) -> OpenSpot {
@@ -581,7 +581,7 @@ pub(crate) fn outer_size(
 mod open_tests {
     use flui_foundation::geometry::{Bounds, DevicePixelRatio, Point, Size};
     use flui_platform::{
-        DisplayInfo, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
+        DisplayDescription, DisplayKey, DisplayRegistry, WindowCommand, WindowGeometry, WindowMode,
         WindowOptions,
     };
 
@@ -604,10 +604,10 @@ mod open_tests {
         DevicePixelRatio::try_new(scale).expect("a positive ratio")
     }
 
-    fn display(scale: f64, origin: (i32, i32)) -> DisplayInfo {
+    fn display(scale: f64, origin: (i32, i32)) -> DisplayDescription {
         let registry = DisplayRegistry::new();
         let id = registry.mint(&DisplayKey::Injected(1)).expect("id");
-        DisplayInfo::new(
+        DisplayDescription::new(
             id,
             "d",
             Bounds::new(Point::new(origin.0, origin.1), Size::new(3840, 2160)),

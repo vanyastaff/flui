@@ -38,7 +38,7 @@ const PERMISSION_GRANTED: i32 = 0;
 use flui_platform::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
-use flui_platform::{DeviceId, HapticFeedback, PlatformHaptics};
+use flui_platform::{HapticFeedback, haptics::PlatformHaptics, pointer::DeviceId};
 
 /// The primitives the composition plan can choose from.
 const PRIMITIVES: [AndroidPrimitive; 4] = [
@@ -94,7 +94,7 @@ fn millis(duration: Duration) -> i64 {
 impl crate::host::Haptics<crate::owner::android::ActivityRef> for AndroidHaptics {
     fn for_window(
         window: &crate::owner::android::ActivityRef,
-    ) -> Arc<dyn flui_platform::PlatformHaptics> {
+    ) -> Arc<dyn flui_platform::haptics::PlatformHaptics> {
         Arc::new(Self::new(window.app.clone(), window.api))
     }
 }

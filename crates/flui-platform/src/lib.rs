@@ -3,17 +3,17 @@
 //! This crate holds what the framework, plugins and tests program against
 //! when they talk to the platform, and nothing that implements it:
 //!
-//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`] and
+//! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`](haptics::PlatformHaptics) and
 //!   the data-transfer transport
 //!   ([`data_transfer::DragTransport`], ADR-0312);
-//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
+//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayDescription`], the opaque
 //!   [`DisplayId`] a [`DisplayRegistry`] issues, the validated
 //!   [`RefreshPeriod`] (ADR-0236), and each display's colour profile
 //!   ([`DisplayColor`]: its [`SurfaceColorSpace`] and [`Headroom`]);
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]) and
 //!   the directory an application's values live in ([`AppDataDir`]);
-//! - the text store an input method pulls from ([`TextStore`] and the rest of
+//! - the text store an input method pulls from ([`TextStore`](text_store::TextStore) and the rest of
 //!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
@@ -54,7 +54,7 @@
 //! ```
 //! use std::sync::{Arc, Mutex};
 //!
-//! use flui_platform::{PlatformHaptics, PlatformTextInput};
+//! use flui_platform::{haptics::PlatformHaptics, PlatformTextInput};
 //! use flui_platform::HapticFeedback;
 //! use flui_foundation::geometry::{Bounds, Point, Size};
 //!
@@ -170,9 +170,8 @@ pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError}
 /// The system cursor shapes a [`Cursor::Icon`] names: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
-pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
 pub use display::{
-    ColorGamut, DisplayColor, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    ColorGamut, DisplayColor, DisplayDescription, DisplayId, DisplayIdsExhausted, DisplayKey,
     DisplayParts, DisplayRegistry, DisplayRevision, DisplayRevisionExhausted, DisplaySnapshot,
     DynamicRange, FrameRateHint, Headroom, InvalidHeadroom, InvalidRefreshPeriod, RefreshPeriod,
     SurfaceColorSpace, WindowDisplay,
@@ -181,7 +180,6 @@ pub use environment::{Environment, OsRelease};
 pub use event_time::EventTime;
 pub use frame_request::{FramePresented, FrameRequest};
 pub use haptic_feedback::HapticFeedback;
-pub use haptics::PlatformHaptics;
 pub use host_notice::{
     HostNotice, MemoryPressureLevel, SessionEndAnswer, SessionEndBlock, SessionEndBlockError,
     SessionEndPhase, SessionEndRequest, SessionEndSupport, SystemNotice,
@@ -190,7 +188,6 @@ pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, EmptyPointerFrame, PlatformInput, PointerFrame,
 };
-pub use keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey};
 pub use launch_key::{LaunchKey, MAX_LAUNCH_KEY_LEN, PAGE_LAUNCH_GLOBAL};
 pub use locale::{InvalidLocale, Locale};
 pub use opened::{
@@ -198,14 +195,6 @@ pub use opened::{
 };
 pub use placement::{PlacementError, ResolvedPlacement, WindowPlacement};
 pub use platform_window::{PlatformWindow, WindowAt};
-pub use pointer::{
-    ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
-    PointerButton, PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo,
-    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
-    PointerSample, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision,
-    ScrollUnit, SmartZoomEvent, SwipeOffset, TouchpadHoldEvent, TouchpadHoldPhase,
-    TouchpadSwipeEvent, TouchpadSwipePhase,
-};
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
@@ -229,7 +218,6 @@ pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use system_failure::SystemFailure;
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
-pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
     InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,

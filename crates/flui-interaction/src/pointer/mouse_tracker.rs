@@ -2,7 +2,7 @@
 //!
 //! Hardware identity keys state when reported; otherwise the contact identity
 //! keys a separate fallback namespace. Callbacks receive the complete source
-//! [`PointerInfo`], preserving that distinction without a sentinel device.
+//! [`PointerSource`], preserving that distinction without a sentinel device.
 //!
 //! The tracker owns per-device enter/exit/cursor state, gated to
 //! `Mouse | Pen`. `MouseRegion::on_hover` is deliberately
@@ -41,7 +41,7 @@ pub use super::interaction_lane::{
 use super::{HitTestResult, OwnerLatch, active_dispatch_handle};
 use crate::containment::RoutePanic;
 use crate::{
-    events::{CursorIcon, PointerEvent, PointerInfo, PointerKind},
+    events::{CursorIcon, PointerEvent, PointerKind, PointerSource},
     ids::{InputSurface, RegionId},
     pointer::interaction_lane::MouseRegionCell,
 };
@@ -56,7 +56,7 @@ enum SourceKey {
 }
 
 impl SourceKey {
-    fn from_pointer(pointer: &PointerInfo) -> Self {
+    fn from_pointer(pointer: &PointerSource) -> Self {
         pointer
             .device
             .map_or(Self::FallbackContact(pointer.id), Self::KnownDevice)
@@ -77,7 +77,7 @@ type RegionOrder = SmallVec<[RegionId; 8]>;
 
 /// One ambient probe: the source, its metadata and position, and the
 /// observation its result may commit against.
-type Probe = (TrackedSource, PointerInfo, Offset<f64>, Rc<()>);
+type Probe = (TrackedSource, PointerSource, Offset<f64>, Rc<()>);
 
 /// Annotations a transition no longer needs, retired after its callbacks.
 type Retired = SmallVec<[ResolvedMouseTrackerAnnotation; 2]>;
@@ -194,7 +194,7 @@ struct DeviceState {
     /// Authority retained by ambient probes across their reentrant hit-test call.
     observation: Rc<()>,
     /// Latest source metadata for callbacks and the `mouse_is_connected` query.
-    pointer: PointerInfo,
+    pointer: PointerSource,
     /// Last known position.
     last_position: Offset<f64>,
     /// Hit-test order of regions currently under this device.
@@ -210,7 +210,7 @@ struct DeviceState {
 }
 
 impl DeviceState {
-    fn new(pointer: PointerInfo, position: Offset<f64>) -> Self {
+    fn new(pointer: PointerSource, position: Offset<f64>) -> Self {
         Self {
             observation: Rc::new(()),
             pointer,
@@ -246,7 +246,7 @@ impl std::fmt::Debug for MouseTracker {
 }
 
 /// Callback for cursor changes with the source's actual contact and optional hardware identity.
-pub type CursorChangeCallback = Rc<dyn Fn(PointerInfo, CursorIcon) + 'static>;
+pub type CursorChangeCallback = Rc<dyn Fn(PointerSource, CursorIcon) + 'static>;
 
 #[derive(Default)]
 struct CursorPublication {
@@ -258,7 +258,7 @@ struct CursorPublication {
 
 struct CursorFlight {
     observation: Rc<()>,
-    callback: std::rc::Weak<dyn Fn(PointerInfo, CursorIcon)>,
+    callback: std::rc::Weak<dyn Fn(PointerSource, CursorIcon)>,
     cursor: CursorIcon,
 }
 
@@ -278,8 +278,8 @@ impl CursorPublication {
 enum CursorOwner {
     #[default]
     Unobserved,
-    Physical(InputSurface, PointerInfo),
-    Removed(PointerInfo),
+    Physical(InputSurface, PointerSource),
+    Removed(PointerSource),
 }
 
 impl CursorOwner {
@@ -524,7 +524,7 @@ pub(crate) struct CursorOverride {
     /// `None` when the tracker had no token left to issue: the override
     /// shows nothing and clears nothing.
     token: Option<NonZeroU64>,
-    pointer: PointerInfo,
+    pointer: PointerSource,
 }
 
 impl CursorOverride {
@@ -565,7 +565,7 @@ impl Drop for CursorOverride {
 
 /// Publish what the window should show now, through the cursor callback, as a
 /// device's motion does.
-fn publish_shown(tracker: &Rc<RefCell<MouseTrackerInner>>, pointer: PointerInfo) {
+fn publish_shown(tracker: &Rc<RefCell<MouseTrackerInner>>, pointer: PointerSource) {
     let work = {
         let mut inner = tracker.borrow_mut();
         if inner.closed {
@@ -608,7 +608,7 @@ impl MouseTracker {
     /// A newer override replaces this one.
     pub(crate) fn override_cursor(
         &self,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         cursor: CursorIcon,
     ) -> CursorOverride {
         let token = {
@@ -692,7 +692,7 @@ impl MouseTracker {
     /// The source `pointer` left `surface`: a pen lifted out of range, a
     /// mouse's own `Leave`. It exits every region it hovered there and is
     /// forgotten; leaving the window leaves every surface embedded in it.
-    pub(crate) fn dispatch_source_left(&self, surface: InputSurface, pointer: &PointerInfo) {
+    pub(crate) fn dispatch_source_left(&self, surface: InputSurface, pointer: &PointerSource) {
         let source = SourceKey::from_pointer(pointer);
         self.remove_sources(|(on, key)| {
             *key == source && (surface == InputSurface::Window || *on == surface)
@@ -1106,7 +1106,7 @@ impl MouseTracker {
 
     /// Gets the last known window position for this hardware or fallback contact.
     #[must_use]
-    pub fn source_position(&self, pointer: &PointerInfo) -> Option<Offset<f64>> {
+    pub fn source_position(&self, pointer: &PointerSource) -> Option<Offset<f64>> {
         self.source_position_on(InputSurface::Window, pointer)
     }
 
@@ -1114,7 +1114,7 @@ impl MouseTracker {
     pub(crate) fn source_position_on(
         &self,
         surface: InputSurface,
-        pointer: &PointerInfo,
+        pointer: &PointerSource,
     ) -> Option<Offset<f64>> {
         self.inner
             .borrow()
@@ -1273,7 +1273,7 @@ fn resolve_annotation_with_handle(
 struct DeviceWork {
     /// The tracker whose cursor callback this batch snapshotted.
     tracker: Rc<RefCell<MouseTrackerInner>>,
-    pointer: PointerInfo,
+    pointer: PointerSource,
     position: Offset<f64>,
     enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]>,
     exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
@@ -1287,7 +1287,7 @@ impl DeviceWork {
     /// A batch that only publishes `shown` as the window's cursor.
     fn cursor(
         tracker: &Rc<RefCell<MouseTrackerInner>>,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         observation: Rc<()>,
         shown: CursorIcon,
     ) -> Self {
@@ -1306,7 +1306,7 @@ impl DeviceWork {
     /// A batch that only delivers a departing source's exits.
     fn exits(
         tracker: &Rc<RefCell<MouseTrackerInner>>,
-        pointer: PointerInfo,
+        pointer: PointerSource,
         position: Offset<f64>,
         exit_callbacks: SmallVec<[Latched<MouseExitCallback>; 4]>,
     ) -> Self {

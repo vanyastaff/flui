@@ -10,7 +10,7 @@ use std::cell::RefCell;
 
 use flui_platform::CursorIcon;
 use flui_platform::data_transfer::TransferActions;
-use flui_platform::pointer::PointerInfo;
+use flui_platform::pointer::PointerSource;
 
 use crate::events::PointerKind;
 use crate::pointer::mouse_tracker::{CursorOverride, WeakMouseTracker};
@@ -33,14 +33,14 @@ pub(crate) fn drag_cursor(over_receiver: bool, accepted: Option<TransferActions>
 /// One session's hold on its presentation's cursor.
 pub(crate) struct DragCursor {
     tracker: WeakMouseTracker,
-    pointer: PointerInfo,
+    pointer: PointerSource,
     shown: RefCell<Option<CursorOverride>>,
 }
 
 impl DragCursor {
     /// A hold for a drag by `pointer`; `None` for a pointer that has no cursor
     /// (a finger, a keyboard transfer).
-    pub(crate) fn for_pointer(tracker: WeakMouseTracker, pointer: PointerInfo) -> Option<Self> {
+    pub(crate) fn for_pointer(tracker: WeakMouseTracker, pointer: PointerSource) -> Option<Self> {
         matches!(pointer.kind, PointerKind::Mouse | PointerKind::Pen { .. }).then(|| Self {
             tracker,
             pointer,

@@ -125,8 +125,8 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use flui_widgets::{Center, HitTestBehavior, SizedBox};
@@ -172,7 +172,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
                 ),
             tight(200.0, 200.0),
         );
-        let source = PointerInfo::new(
+        let source = PointerSource::new(
             PointerId::try_from(500_u64).expect("nonzero native source"),
             PointerKind::Mouse,
         );
@@ -934,8 +934,8 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
-            PointerMove, PointerPosition, PointerPress, PointerRelease, PointerSample,
+            PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+            PointerPosition, PointerPress, PointerRelease, PointerSample, PointerSource,
         },
     };
 
@@ -980,7 +980,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
                     tight(150.0, 100.0),
                 );
                 let info =
-                    PointerInfo::new(PointerId::try_from(1_u64).expect("authored contact"), kind);
+                    PointerSource::new(PointerId::try_from(1_u64).expect("authored contact"), kind);
                 let sample = |millis: u64, x| {
                     PointerSample::new(
                         EventTime::from_nanos(millis * 1_000_000),
@@ -1659,8 +1659,8 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
     use flui_view::SignalWriteExt;
@@ -1698,7 +1698,7 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
     let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
     let send = |laid: &crate::common::LaidOut, phase| {
         laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
-            PointerInfo::new(
+            PointerSource::new(
                 PointerId::try_from(1_u64).expect("nonzero pointer"),
                 PointerKind::Mouse,
             ),
@@ -1743,8 +1743,8 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
 
@@ -1769,7 +1769,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
     for (session, expected) in [(1_u64, 5.0), (2, 15.899_257_985_831_98)] {
         let send = |millis, phase| {
             laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(session).expect("nonzero pointer"),
                     PointerKind::Mouse,
                 ),
@@ -1810,7 +1810,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         velocity.set(None);
         let send = |millis, phase| {
             laid.dispatch_pointer_event(&PointerEvent::PanZoom(PanZoomEvent::new(
-                PointerInfo::new(
+                PointerSource::new(
                     PointerId::try_from(session).expect("nonzero pointer"),
                     PointerKind::Mouse,
                 ),
@@ -1856,8 +1856,8 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
     use flui_platform::{
         EventTime,
         pointer::{
-            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerInfo,
-            PointerKind, PointerPosition,
+            PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerEvent, PointerId, PointerKind,
+            PointerPosition, PointerSource,
         },
     };
 
@@ -1876,7 +1876,7 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
         tight(100.0, 100.0),
     );
     let touch = PointerId::try_from(100_u64).expect("nonzero touch");
-    let native = PointerInfo::new(
+    let native = PointerSource::new(
         PointerId::try_from(200_u64).expect("nonzero native source"),
         PointerKind::Mouse,
     );
@@ -2399,14 +2399,14 @@ fn target_for_viewer() -> ColoredBox {
 /// A timed primary contact for the slot rows: Down, Moves and Up of one
 /// pointer, each sample carrying a pressure when given.
 struct TimedContact {
-    info: flui_platform::pointer::PointerInfo,
+    info: flui_platform::pointer::PointerSource,
 }
 
 impl TimedContact {
     fn new(id: u64, kind: flui_platform::pointer::PointerKind) -> Self {
-        use flui_platform::pointer::{PointerId, PointerInfo};
+        use flui_platform::pointer::{PointerId, PointerSource};
         Self {
-            info: PointerInfo::new(PointerId::try_from(id).expect("nonzero contact"), kind),
+            info: PointerSource::new(PointerId::try_from(id).expect("nonzero contact"), kind),
         }
     }
 

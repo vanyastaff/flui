@@ -33,7 +33,7 @@ use super::{
 use crate::{
     DragAxis, DragGestureRecognizer, GestureRecognizer,
     containment::RoutePanic,
-    events::{CancelReason, PointerCancel, PointerEvent, PointerInfo, PointerKind},
+    events::{CancelReason, PointerCancel, PointerEvent, PointerKind, PointerSource},
     ids::InputSurface,
     pointer::{HitTestEntry, HitTestResult, PointerTarget, active_dispatch_handle},
 };
@@ -405,7 +405,7 @@ fn open_scroll_contact(
         let candidate = PointerId::new(candidate);
         (!in_use(candidate)).then_some(candidate)
     })?;
-    let pointer = PointerInfo::new(id, PointerKind::Trackpad).with_role(PointerRole::Primary);
+    let pointer = PointerSource::new(id, PointerKind::Trackpad).with_role(PointerRole::Primary);
     let at = event.position.get();
     let contact = ScrollContact {
         surface,

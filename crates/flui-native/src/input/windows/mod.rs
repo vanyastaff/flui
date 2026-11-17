@@ -61,7 +61,7 @@ use crate::owner::windows::{
 #[cfg(windows)]
 use crate::owner::{window_delivery::WindowDelivery, windows::AppHooks};
 #[cfg(windows)]
-use flui_platform::Modifiers;
+use flui_platform::keyboard::Modifiers;
 
 #[cfg(windows)]
 use keystroke_queue::{
@@ -1423,7 +1423,8 @@ mod raw {
     use std::cell::RefCell;
 
     use flui_platform::{
-        EventTime, Modifiers as KeyboardModifiers,
+        EventTime,
+        keyboard::Modifiers as KeyboardModifiers,
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState},
         pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
     };

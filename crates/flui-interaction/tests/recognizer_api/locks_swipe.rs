@@ -164,7 +164,7 @@ fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::PanZoomDispatch;
     use flui_platform::pointer::{
-        PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
+        PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerPosition, PointerSource,
     };
     for (lock, railed) in [(AxisLock::Rails, true), (AxisLock::Free, false)] {
         let vertical = Rc::new(RefCell::new(0.0_f64));
@@ -173,7 +173,7 @@ fn rails_keep_a_near_axial_trackpad_pan_on_its_axis() {
             .axis_lock(lock)
             .on_update(move |update| *v.borrow_mut() += update.focal_point_delta.dy.abs())
             .build();
-        let info = PointerInfo::new(pointer(30), PointerKind::Trackpad);
+        let info = PointerSource::new(pointer(30), PointerKind::Trackpad);
         let deliver = |ms: u64, phase, at: Offset<f64>| {
             let event = PanZoomEvent::new(
                 info,
@@ -200,7 +200,7 @@ fn a_trackpad_rail_waits_for_the_pan_slop() {
     use flui_foundation::geometry::Point;
     use flui_interaction::pointer::PanZoomDispatch;
     use flui_platform::pointer::{
-        PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerPosition,
+        PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerPosition, PointerSource,
     };
     let published = Rc::new(RefCell::new(Offset::ZERO));
     let p = Rc::clone(&published);
@@ -208,7 +208,7 @@ fn a_trackpad_rail_waits_for_the_pan_slop() {
         .axis_lock(AxisLock::Rails)
         .on_update(move |update| *p.borrow_mut() += update.focal_point_delta)
         .build();
-    let info = PointerInfo::new(pointer(31), PointerKind::Trackpad);
+    let info = PointerSource::new(pointer(31), PointerKind::Trackpad);
     let deliver = |ms: u64, phase, at: Offset<f64>| {
         let event = PanZoomEvent::new(
             info,

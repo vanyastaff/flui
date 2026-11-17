@@ -33,7 +33,7 @@ See [ADR-0164](../../docs/adr/ADR-0164-down-route-logical-pointer-capture.md).
 
 The public wire uses `flui-platform`'s owned `PointerEvent` and `KeyEvent`
 contracts. `PointerId` names a contact, `DeviceId` names hardware, and
-`PointerInfo` carries the reported `PointerKind` and primary role. Samples use
+`PointerSource` carries the reported `PointerKind` and primary role. Samples use
 checked logical positions and monotonic `EventTime`. Missing sensors stay
 absent; a backend must not substitute pressure, orientation or device identity
 that the host did not report. Backends produce this vocabulary at the platform
@@ -52,7 +52,7 @@ use flui_platform::EventTime;
 use flui_interaction::{
     GestureBinding, HitTestEntry, HitTestResult, InteractionLane, PointerButton,
     PointerButtons, PointerEvent,
-    PointerId, PointerInfo, PointerKind, PointerPosition, PointerPress,
+    PointerId, PointerSource, PointerKind, PointerPosition, PointerPress,
     PointerRelease, PointerSample, RecognizerSet, RenderId, TapGestureRecognizer,
 };
 
@@ -66,7 +66,7 @@ let tap = TapGestureRecognizer::builder(binding.arena().clone())
 let mut recognizers = RecognizerSet::default();
 recognizers.attach(&tap); // `tap` remains the strong owner.
 let pointer = PointerId::new(std::num::NonZeroU64::MIN);
-let info = PointerInfo::new(pointer, PointerKind::Touch);
+let info = PointerSource::new(pointer, PointerKind::Touch);
 let position = PointerPosition::try_new(Point::new(12.0, 20.0))?;
 let down = PointerEvent::Down(PointerPress::new(
     info, PointerButton::PRIMARY, PointerButtons::NONE,
