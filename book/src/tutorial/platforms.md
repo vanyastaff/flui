@@ -51,7 +51,8 @@ The convention is the platform the application runs on, unless a test or a subtr
 another: a test passes `TestWindow::platform`, and a `PlatformConvention::new(platform, child)`
 above a subtree changes it for that subtree. `TargetPlatform::current()` is not a substitute: it is
 the target the code was compiled for, so it is `Unknown` in a browser whatever the visitor's
-system, and in a test it is the test machine's rather than the platform the test names.
+system, and in a test it is the target the test was compiled for rather than the platform the
+test names.
 
 That completes the notes application: a window, a laid-out screen, state, input, a list, pages,
 a theme, its tests and its platforms.

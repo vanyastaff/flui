@@ -1042,7 +1042,7 @@ jobs:
 
       - name: cargo test --doc
         # `flui/testing` compiles the book's chapters that run through Tester; the
-        # catalogs are the ones the narrowed run names (lane_args.rs FACADE_CATALOGS), so
+        # catalogs are lane_args.rs FACADE_CATALOGS, the narrowed run's (keep them in step), so
         # the theme chapter and the facade's Material-gated half compile here too (src/book.rs).
         run: cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino
 
