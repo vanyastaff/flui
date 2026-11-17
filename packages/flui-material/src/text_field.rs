@@ -336,7 +336,7 @@ impl View for TextField {
 pub struct MaterialTextFieldState {
     controller: TextEditingController,
     focus_node: Rc<FocusNode>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     controller_listener_id: Option<Subscription>,
     focus_subscription: Option<Subscription>,
 }
@@ -353,14 +353,14 @@ impl std::fmt::Debug for MaterialTextFieldState {
 impl StatefulView for TextField {
     type State = MaterialTextFieldState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         MaterialTextFieldState {
             controller: self.controller.clone(),
             focus_node: self.external_focus_node.as_ref().map_or_else(
                 || FocusNode::with_debug_label("MaterialTextField"),
                 Rc::clone,
             ),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             controller_listener_id: None,
             focus_subscription: None,
         }
@@ -369,11 +369,7 @@ impl StatefulView for TextField {
 
 impl MaterialTextFieldState {
     fn subscribe_focus(&self, node: &Rc<FocusNode>) -> Subscription {
-        let rebuild = self
-            .rebuild
-            .as_ref()
-            .expect("BUG: MaterialTextFieldState must retain its rebuild handle")
-            .clone();
+        let rebuild = self.rebuild.clone();
         node.subscribe(move || {
             rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })
@@ -381,11 +377,10 @@ impl MaterialTextFieldState {
 }
 
 impl ViewState<TextField> for MaterialTextFieldState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // ADR-0018: `rebuild_handle()` is acquired here, fired later from
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        // ADR-0018: the rebuild handle `create_state` took is fired from
         // the listeners below â€” never called from `build`.
-        let rebuild = ctx.rebuild_handle();
-        self.rebuild = Some(rebuild.clone());
+        let rebuild = self.rebuild.clone();
 
         // Rebuild on every edit â€” `is_empty` (fed to `InputDecorator`) is
         // recomputed fresh in `build`, so a text change must trigger one.
@@ -409,17 +404,16 @@ impl ViewState<TextField> for MaterialTextFieldState {
             // The subscription withdraws through its own channel.
             drop(self.controller_listener_id.take());
             self.controller = new_view.controller.clone();
-            if let Some(rebuild) = self.rebuild.clone() {
-                let rebuild_on_edit = rebuild.clone();
-                self.controller_listener_id =
-                    Some(self.controller.listen(std::rc::Rc::new(move || {
-                        rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
-                    })));
-                // `is_empty` feeds the decoration's floating label and is
-                // recomputed in `build`; the replacement has not changed since
-                // it was handed over, so nothing else would ask for that pass.
-                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-            }
+            let rebuild_on_edit = self.rebuild.clone();
+            self.controller_listener_id =
+                Some(self.controller.listen(std::rc::Rc::new(move || {
+                    rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
+                })));
+            // `is_empty` feeds the decoration's floating label and is
+            // recomputed in `build`; the replacement has not changed since
+            // it was handed over, so nothing else would ask for that pass.
+            self.rebuild
+                .schedule(flui_sdk::view::RebuildReason::StateChange);
         }
 
         let focus_node_changed = match (
@@ -449,7 +443,6 @@ impl ViewState<TextField> for MaterialTextFieldState {
     fn dispose(&mut self) {
         drop(self.controller_listener_id.take());
         drop(self.focus_subscription.take());
-        drop(self.rebuild.take());
     }
 
     fn build(&self, view: &TextField, ctx: &dyn BuildContext) -> impl IntoView {
