@@ -408,9 +408,10 @@ mod drops {
     pub(super) const ACTION_DRAG_EXITED: i32 = 6;
 
     /// At most this many URIs of drops are read at once, each on a thread of
-    /// its own; more wait their turn, as the X11 and Wayland targets' fetches
-    /// do.
-    pub(super) const MAX_READS: usize = 4;
+    /// its own: the most reads of another application's provider the host
+    /// runs at once ([`MAX_PROVIDER_READS`](crate::host::MAX_PROVIDER_READS)).
+    /// More wait their turn, as the X11 and Wayland targets' fetches do.
+    pub(super) const MAX_READS: usize = crate::host::MAX_PROVIDER_READS;
 
     /// At most this many reads of URIs wait for a place; a request past them
     /// is refused [`TransferError::Busy`]. One whose request was dropped gives

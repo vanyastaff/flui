@@ -420,11 +420,53 @@ fn a_drag_offers_no_more_types_than_every_host_reads() {
     );
 }
 
+/// `FluiView.readDropBytes` asks the size the provider states before it
+/// reads, refuses one past the request's limit with that size counted (the
+/// model reads it as `TooLarge`), and only then opens the stream, which
+/// still stops at the limit.
+fn a_dropped_uri_is_refused_on_its_stated_size_before_it_is_read() {
+    let view = crate::owner::android::java_host::java_source("dev.flui.platform.FluiView");
+    let at = |needle: &str| {
+        view.find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} in FluiView"))
+    };
+    let stated = at("long declared = file.getLength();");
+    let refused = at("if (declared > limit) {");
+    let counted = at("read[0] = declared;");
+    let opened = at("stream = file.createInputStream();");
+    let stops = at("if (read[0] > limit) {");
+    assert!(
+        stated < refused && refused < counted && counted < opened && opened < stops,
+        "in that order"
+    );
+
+    let descriptor = RepresentationDescriptor {
+        format: TransferFormat::Image {
+            mime: Mime::new("image/png"),
+        },
+        declared_len: None,
+    };
+    let limits = TransferLimits::default().with_max_bytes(10);
+    assert!(matches!(
+        delivered(
+            ClipSource::UriBytes,
+            &descriptor,
+            ViewRead::Stopped { read: 1 << 40 },
+            limits
+        ),
+        Err(TransferError::TooLarge { .. })
+    ));
+}
+
 #[test]
 fn android_drag_mapping() {
     crate::table_test::run_table(
         "android_drag_mapping",
         &[
+            (
+                "a_dropped_uri_is_refused_on_its_stated_size_before_it_is_read",
+                a_dropped_uri_is_refused_on_its_stated_size_before_it_is_read,
+            ),
             (
                 "a_drag_offers_no_more_types_than_every_host_reads",
                 a_drag_offers_no_more_types_than_every_host_reads,

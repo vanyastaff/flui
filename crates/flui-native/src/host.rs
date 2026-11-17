@@ -35,6 +35,7 @@
 
 mod clipboard;
 mod drag;
+mod provider;
 
 #[cfg(any(wayland_host, x11_host, windows, test))]
 pub(crate) use clipboard::MAX_TEXT;
@@ -63,6 +64,8 @@ pub(crate) use clipboard::{admit_text, host_text};
     test
 ))]
 pub(crate) use drag::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
+#[cfg(any(target_os = "android", test))]
+pub(crate) use provider::MAX_PROVIDER_READS;
 
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};

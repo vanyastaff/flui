@@ -1107,8 +1107,22 @@ public final class FluiView extends View {
         return a > Long.MAX_VALUE - b ? Long.MAX_VALUE : a + b;
     }
 
-    /** The UTF-8 length of {@code text}, a lone surrogate counted as U+FFFD. */
-    private static long utf8Length(CharSequence text) {
+    /**
+     * {@code text} as UTF-8, a lone surrogate as U+FFFD: the library's one
+     * copy of a clip's text, which it measures with {@link #utf8Length} first
+     * and asks for only within its limit. Any thread.
+     */
+    static byte[] utf8(CharSequence text) {
+        byte[] out = new byte[(int) Math.min(utf8Length(text), Integer.MAX_VALUE)];
+        encodeUtf8(text, out, 0);
+        return out;
+    }
+
+    /**
+     * The UTF-8 length of {@code text}, a lone surrogate counted as U+FFFD,
+     * counted without copying it. Any thread.
+     */
+    static long utf8Length(CharSequence text) {
         long length = 0;
         int count = text.length();
         for (int index = 0; index < count; index++) {

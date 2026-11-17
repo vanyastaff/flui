@@ -176,7 +176,8 @@ mod tests {
                 .accept(self, std::time::Instant::now())
                 .expect("room");
             for job in jobs {
-                openings.finish(job.ticket, open(&job.uri).ok_or(OpenRefusal::Failed));
+                let stray = openings.finish(job.ticket, open(&job.uri).ok_or(OpenRefusal::Failed));
+                assert!(stray.is_none(), "each answer finds its document");
             }
             let mut ready = openings.take_ready();
             assert_eq!(ready.len(), 1, "every document has an outcome");

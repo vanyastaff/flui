@@ -21,7 +21,7 @@ use flui_platform::ClipboardRead;
 #[cfg(target_os = "android")]
 use flui_platform::{ClipboardError, ClipboardWrite, ClipboardWritten, Concealment};
 #[cfg(target_os = "android")]
-use jni::objects::{JObject, JString};
+use jni::objects::{JByteArray, JClass, JObject};
 #[cfg(target_os = "android")]
 use jni::{JValue, jni_sig, jni_str};
 
@@ -46,24 +46,26 @@ pub(crate) trait ClipItem {
     /// URI, an intent, HTML alone). Reads nothing from another process.
     fn text(&mut self) -> Result<Option<Self::Text>, Self::Error>;
 
-    /// `CharSequence.length()`: the text's length in UTF-16 units, measured
-    /// without copying it.
-    fn units(&mut self, text: &Self::Text) -> Result<usize, Self::Error>;
+    /// `FluiView.utf8Length`: the text's length in UTF-8 bytes, the unit the
+    /// limit is stated in, counted in Java without copying it.
+    fn utf8_len(&mut self, text: &Self::Text) -> Result<usize, Self::Error>;
 
-    /// The text, copied into this process (`toString()`, then the copy into
-    /// Rust).
-    fn copy(&mut self, text: &Self::Text) -> Result<String, Self::Error>;
+    /// `FluiView.utf8`: the text encoded as UTF-8 in one Java array, then
+    /// copied into this process; the array is let go of once copied.
+    fn utf8(&mut self, text: &Self::Text) -> Result<Vec<u8>, Self::Error>;
 }
 
 /// What a read answers for `item`, the primary clip's first: its text, refused
 /// [`ClipboardError::TooLarge`](flui_platform::ClipboardError::TooLarge) on
-/// its length before either copy is made when it is past
-/// `host::MAX_TEXT` (the limit of every host's read), and
-/// again on its UTF-8 bytes; `Ok(None)` for an item that holds no text.
+/// its UTF-8 length before any copy is made when it is past
+/// `host::MAX_TEXT` (the limit of every host's read); `Ok(None)` for an item
+/// that holds no text.
 ///
-/// Besides the Java string, at most two copies of the text live in this
-/// process, and both only while the answer is made: the `String` JNI copies
-/// out, and the shared text made from it before it is dropped.
+/// The copies of the text made for the answer, besides the clip's own: the
+/// UTF-8 array Java encodes, the bytes JNI copies out of it, and the shared
+/// text made from those. At most two of them live at once, each within the
+/// limit: the array and the bytes while JNI copies, the bytes and the shared
+/// text while the answer is made.
 ///
 /// # Errors
 ///
@@ -72,10 +74,15 @@ pub(crate) fn item_text<I: ClipItem>(item: &mut I) -> Result<ClipboardRead, I::E
     let Some(text) = item.text()? else {
         return Ok(Ok(None));
     };
-    if let Err(refused) = admit_text(item.units(&text)?) {
+    if let Err(refused) = admit_text(item.utf8_len(&text)?) {
         return Ok(Err(refused));
     }
-    Ok(host_text(item.copy(&text)?))
+    Ok(match String::from_utf8(item.utf8(&text)?) {
+        Ok(text) => host_text(text),
+        // `FluiView.utf8` encodes UTF-8: anything else is a defect of one
+        // side, which no retry changes.
+        Err(_) => Err(flui_platform::ClipboardError::Unavailable),
+    })
 }
 
 /// The system clipboard of the Activity `app` runs.
@@ -100,11 +107,13 @@ impl AndroidClipboard {
     }
 }
 
-/// A clip's item, read through the JNI environment of a read.
+/// A clip's item, read through the JNI environment of a read; `view` is
+/// `FluiView`'s class, whose static methods measure and encode the text.
 #[cfg(target_os = "android")]
 struct JavaClipItem<'a, 'local> {
     env: &'a mut jni::Env<'local>,
     item: JObject<'local>,
+    view: JClass<'local>,
 }
 
 #[cfg(target_os = "android")]
@@ -125,26 +134,33 @@ impl<'local> ClipItem for JavaClipItem<'_, 'local> {
         Ok((!text.is_null()).then_some(text))
     }
 
-    fn units(&mut self, text: &JObject<'local>) -> jni::errors::Result<usize> {
-        let units = self
+    fn utf8_len(&mut self, text: &JObject<'local>) -> jni::errors::Result<usize> {
+        let len = self
             .env
-            .call_method(text, jni_str!("length"), jni_sig!("()I"), &[])?
-            .i()?;
-        Ok(usize::try_from(units).unwrap_or(0))
+            .call_static_method(
+                &self.view,
+                jni_str!("utf8Length"),
+                jni_sig!("(Ljava/lang/CharSequence;)J"),
+                &[JValue::Object(text)],
+            )?
+            .j()?;
+        Ok(usize::try_from(len).unwrap_or(usize::MAX))
     }
 
-    fn copy(&mut self, text: &JObject<'local>) -> jni::errors::Result<String> {
-        let text = self
+    fn utf8(&mut self, text: &JObject<'local>) -> jni::errors::Result<Vec<u8>> {
+        let bytes = self
             .env
-            .call_method(
-                text,
-                jni_str!("toString"),
-                jni_sig!("()Ljava/lang/String;"),
-                &[],
+            .call_static_method(
+                &self.view,
+                jni_str!("utf8"),
+                jni_sig!("(Ljava/lang/CharSequence;)[B"),
+                &[JValue::Object(text)],
             )?
             .l()?;
-        let text = self.env.cast_local::<JString<'_>>(text)?;
-        text.try_to_string(self.env)
+        let bytes = self.env.cast_local::<JByteArray<'_>>(bytes)?;
+        let copied = self.env.convert_byte_array(&bytes);
+        self.env.delete_local_ref(bytes);
+        copied
     }
 }
 
@@ -197,7 +213,8 @@ impl SyncClipboard for AndroidClipboard {
                     &[JValue::Int(0)],
                 )?
                 .l()?;
-            item_text(&mut JavaClipItem { env, item })
+            let view = crate::owner::android::java_view::view_class(env, activity)?;
+            item_text(&mut JavaClipItem { env, item, view })
         })
         .unwrap_or_else(|error| {
             tracing::warn!(
@@ -317,7 +334,7 @@ mod tests {
     struct Item {
         /// What `getText()` answers: `None` for a URI or an intent item.
         text: Option<String>,
-        /// How many characters the read copied out.
+        /// How many bytes the read copied out.
         copied: usize,
     }
 
@@ -329,13 +346,13 @@ mod tests {
             Ok(self.text.clone())
         }
 
-        fn units(&mut self, text: &String) -> Result<usize, Self::Error> {
-            Ok(text.encode_utf16().count())
+        fn utf8_len(&mut self, text: &String) -> Result<usize, Self::Error> {
+            Ok(text.len())
         }
 
-        fn copy(&mut self, text: &String) -> Result<String, Self::Error> {
+        fn utf8(&mut self, text: &String) -> Result<Vec<u8>, Self::Error> {
             self.copied += text.len();
-            Ok(text.clone())
+            Ok(text.clone().into_bytes())
         }
     }
 
@@ -349,22 +366,31 @@ mod tests {
     /// content: an item that holds none (a URI or an intent, whose text
     /// `coerceToText` would read from a content provider) answers `Ok(None)`
     /// with nothing copied, and text past the limit every host's read holds
-    /// to is refused before it is copied.
+    /// to is refused before it is copied, measured in the limit's own unit:
+    /// text whose UTF-16 units fit but whose UTF-8 bytes do not is refused
+    /// too.
     #[test]
     fn a_clipboard_read_takes_the_items_text_and_reads_no_provider() {
         assert_eq!(read(None), (Ok(None), 0));
 
-        let (text, copied) = read(Some("notes".to_owned()));
+        let (text, copied) = read(Some("notes €".to_owned()));
         assert_eq!(
             text.map(|text| text.map(|text| text.to_string())),
-            Ok(Some("notes".to_owned()))
+            Ok(Some("notes €".to_owned()))
         );
-        assert_eq!(copied, 5);
+        assert_eq!(copied, 9);
 
         assert_eq!(
             read(Some("a".repeat(MAX_TEXT + 1))),
             (Err(ClipboardError::TooLarge), 0),
             "refused on its length, before the copy"
+        );
+        let wide = "€".repeat(MAX_TEXT / 3 + 1);
+        assert!(wide.encode_utf16().count() <= MAX_TEXT, "its units fit");
+        assert_eq!(
+            read(Some(wide)),
+            (Err(ClipboardError::TooLarge), 0),
+            "refused on its bytes, before the copy"
         );
     }
 
@@ -388,8 +414,14 @@ mod tests {
             assert!(!source.contains("coerceToText("), "{class} coerces an item");
         }
         let view = java_source("dev.flui.platform.FluiView");
-        let stated = format!("static final int MAX_PASTED_BYTES = {MAX_TEXT};");
-        assert!(view.contains(&stated), "{stated:?} in FluiView");
+        for stated in [
+            format!("static final int MAX_PASTED_BYTES = {MAX_TEXT};"),
+            // What the read measures and copies through.
+            "static long utf8Length(CharSequence text)".to_owned(),
+            "static byte[] utf8(CharSequence text)".to_owned(),
+        ] {
+            assert!(view.contains(&stated), "{stated:?} in FluiView");
+        }
         for paste in [
             java_source("dev.flui.platform.FluiInputConnection"),
             java_source("dev.flui.platform.FluiContentReceiver"),

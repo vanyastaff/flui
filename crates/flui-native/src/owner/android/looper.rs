@@ -334,10 +334,18 @@ impl AndroidLoop {
         let clipboard = H::clipboard(&app, api);
         let activity_callbacks = H::activity();
         let app_delivery = Arc::new(AppDelivery::new());
+        let (documents_app, documents_signal) = (app.clone(), Arc::downgrade(&owner_signal));
+        let documents = super::documents::Documents::new(Box::new(move |opener| {
+            java_host::spawn_documents(
+                documents_app.clone(),
+                opener,
+                std::sync::Weak::clone(&documents_signal),
+            )
+        }));
         Self {
             java_view,
             host_queue,
-            documents: RefCell::default(),
+            documents: RefCell::new(documents),
             results,
             app,
             notices: H::notices(&app_delivery),
@@ -427,7 +435,7 @@ impl AndroidLoop {
         // The documents still opening are refused; nobody is left to hear
         // their intents.
         let retired = self.documents.borrow_mut().retire();
-        if let Some(signal) = retired.cancel {
+        for signal in retired.cancel {
             super::documents::CancelSignal::cancel(&*signal);
         }
         for ready in retired.ready {
@@ -503,7 +511,10 @@ impl AndroidLoop {
 
     /// Deliver what `FluiActivity` queued since the last turn, in order, on
     /// the owner thread, whether or not the Activity is resumed: a trim level
-    /// matters most in the background.
+    /// matters most in the background. An intent is accepted in its place
+    /// and heard once its documents have outcomes, after the intents before
+    /// it and after the trim levels of the same turn: a trim level never
+    /// waits for another application's provider.
     fn deliver_host_entries(&self) {
         let (entries, answers) = self.host_queue.take();
         self.results.answer(answers);
@@ -524,21 +535,13 @@ impl AndroidLoop {
     /// this thread, and it is delivered, after the intents before it, once
     /// each has an outcome ([`Self::deliver_opened`]).
     fn accept_intent(&self, opening: super::intent::Opening) {
-        let app = self.app.clone();
-        let signal = Arc::downgrade(&self.owner_signal);
-        let accepted =
-            self.documents
-                .borrow_mut()
-                .accept(opening, std::time::Instant::now(), |opener| {
-                    java_host::spawn_documents(app, opener, signal)
-                });
+        let accepted = self
+            .documents
+            .borrow_mut()
+            .accept(opening, std::time::Instant::now());
         match accepted {
             Ok(None) => {}
-            Ok(Some(error)) => tracing::warn!(
-                target: "flui_native::android",
-                %error,
-                "no thread to open an intent's documents; they are refused"
-            ),
+            Ok(Some(error)) => log_not_started(&error),
             Err(super::documents::Busy) => tracing::warn!(
                 target: "flui_native::android",
                 waiting = super::documents::MAX_WAITING_INTENTS,
@@ -552,8 +555,11 @@ impl AndroidLoop {
     /// cancel the open of a document past its deadline.
     fn deliver_opened(&self) {
         let turn = self.documents.borrow_mut().turn(std::time::Instant::now());
-        if let Some(signal) = turn.cancel {
+        for signal in turn.cancel {
             super::documents::CancelSignal::cancel(&*signal);
+        }
+        if let Some(error) = turn.not_started {
+            log_not_started(&error);
         }
         for ready in turn.ready {
             log_refusals(&ready.refused);
@@ -677,6 +683,15 @@ impl AndroidLoop {
             delivery.dispatch_input(event);
         }
     }
+}
+
+/// Log that no worker could start to open an intent's documents.
+fn log_not_started(error: &std::io::Error) {
+    tracing::warn!(
+        target: "flui_native::android",
+        %error,
+        "no thread to open an intent's documents; the ones no worker takes are refused"
+    );
 }
 
 /// Log why each document an intent named was not opened.

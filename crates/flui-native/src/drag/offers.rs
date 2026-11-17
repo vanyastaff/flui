@@ -354,14 +354,9 @@ mod uri_list {
 // Media types
 // ============================================================================
 
-#[cfg(any(
-    windows,
-    target_os = "android",
-    target_arch = "wasm32",
-    x11_host,
-    wayland_host,
-    test
-))]
+// The Wayland offers read them through `host`, which their transfer objects
+// share with the clipboard.
+#[cfg(any(windows, target_os = "android", target_arch = "wasm32", x11_host, test))]
 pub(crate) use crate::host::{MAX_OFFERED_TYPES, MAX_TYPE_LEN};
 
 /// The type names of `names`, in their order, an offer is read from: the

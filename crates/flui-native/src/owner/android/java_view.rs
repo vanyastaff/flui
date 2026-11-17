@@ -668,7 +668,7 @@ impl ViewHost for Arc<JavaView> {
 /// from the APK's dex (`FindClass` would search the system loader). The
 /// platform checked the classes' protocol before it started
 /// ([`java_host`](super::java_host)).
-fn view_class<'local>(
+pub(crate) fn view_class<'local>(
     env: &mut Env<'local>,
     activity: &JObject<'_>,
 ) -> jni::errors::Result<JClass<'local>> {

@@ -5987,29 +5987,35 @@ reads such content:
   text (`FluiView.clipText`, below API 31 and through the content receiver from it), and the
   receiver hands back what it does not take. No class calls `coerceToText`.
 - **The limit is the clipboard's.** Text read or pasted is refused whole past
-  `host::MAX_TEXT` bytes, the limit of every host's clipboard read, on its length before it is
-  copied (`FluiView.MAX_PASTED_BYTES` states the same value; a test holds them equal). A read
-  answers with at most two copies of the text live in Rust besides the Java string, and both only
-  while the answer is made.
+  `host::MAX_TEXT` bytes, the limit of every host's clipboard read, on its UTF-8 length, counted
+  in Java before anything is copied (`FluiView.utf8Length`; `FluiView.MAX_PASTED_BYTES` states the
+  same value, and a test holds them equal). A read then copies the text three times, each within
+  the limit and at most two at once: the UTF-8 array Java encodes (`FluiView.utf8`), the bytes JNI
+  copies out of it, and the shared text the answer holds.
 - **Size first, then a read that stops.** A dropped URI's bytes are read on a thread of their own
   (above); the size the provider states (`AssetFileDescriptor.getLength`, the file's size when it
   states none) is asked before anything is read and one past the request's limit is refused, and
   the read stops at the limit however much was stated. It holds one buffer of the bytes (two while
   it grows and while the answer is copied out), the Rust side one more and the payload's shared
   bytes, each made before the previous is dropped.
-- **Documents open on a worker.** An intent's `content:` documents are opened
-  (`FluiHost.openDocument`, `documentName`) on one worker thread of the loop's
-  (`owner::android::documents`): the owner accepts each intent under a ticket, at most
-  `MAX_WAITING_INTENTS` at once, each document a job with its own ticket, and delivers the intents
-  in the order they arrived, each once every document has an outcome, so a slow provider holds back
-  the later intents and never the owner's turn. Every accepted document ends with exactly one
-  outcome: the file, or an `OpenRefusal` naming why (the provider failed, the read grant ended
-  with the Activity, `SecurityException`; the intent's `OPEN_DEADLINE` passed, and the owner
-  cancels the open through its `CancellationSignal`, a one-way binder call that never waits for
-  the provider; the platform retired; no thread could start). An outcome for a document already
-  refused is dropped, which closes its descriptor. The poll wakes for the earliest deadline
-  (`LoopTurn::open_deadline`). A provider that ignores the cancellation keeps the worker, and the
-  documents behind it are refused at their own deadlines.
+- **Documents open on workers.** An intent's `content:` documents are opened
+  (`FluiHost.openDocument`, `documentName`) on worker threads of the loop's
+  (`owner::android::documents`): the owner accepts each intent, at most `MAX_WAITING_INTENTS` at
+  once, each document a job under a ticket of its own, and delivers the intents in the order they
+  arrived, each once every document has an outcome, so a slow provider holds back the later intents
+  and never the owner's turn. An outcome finds its document by its ticket alone; one for a document
+  already refused reaches no other and is dropped, which closes its descriptor. Every accepted
+  document ends with exactly one outcome: the file, or an `OpenRefusal` naming why (the provider
+  failed; the read grant ended with the Activity, `SecurityException`; the intent's
+  `OPEN_DEADLINE` passed, and the owner cancels the open through its `CancellationSignal`, a
+  one-way binder call that never waits for the provider; the platform retired; no thread could
+  start). The poll wakes for the earliest deadline (`LoopTurn::open_deadline`). One worker runs
+  while it keeps up; `ContentProvider.openFile` ignores the cancellation unless a provider
+  overrides it, so once every worker is inside an abandoned open, a job waiting starts another, up
+  to `MAX_WORKERS` (`host::MAX_PROVIDER_READS`, the bound of the drop reads too); past them the
+  jobs are refused at their own deadlines. What a worker finishes after the platform retired it
+  drops itself. An intent is heard after the trim levels `FluiHost` queued in the same turn: a
+  trim level never waits for another application's provider.
 - **A drag's types are bounded the same everywhere.** Every host's drag reads the first
   `host::MAX_OFFERED_TYPES` types its source names and none past them, and leaves out a
   type longer than `host::MAX_TYPE_LEN` bytes, which counts toward them
