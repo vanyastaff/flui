@@ -566,7 +566,8 @@ run with nothing borrowed.
 
 - **The owner's turns come from the turn deadline (ADR-0343 §1).**
   `AppRuntime::turn_deadline` answers `AppHandler::turn_deadline` with the
-  placements' next due instant and the main window's read bound; every host
+  placements' next due instant and the main window's read bound (and, on every
+  host, the next expiring clipboard entry's clear, below); every host
   gives the owner a turn at it, with or without a window open, and asks no
   window for a frame. The answer may be past: a held write's
   `last_attempt + interval` is, when the change arrives after the interval
@@ -633,6 +634,35 @@ run with nothing borrowed.
 
 `placement_recorder` (the model's table) and the runner's `placement::tests`
 hold each rule.
+
+### An expiring clipboard entry is owed one clear, served at the turn deadline
+
+The built-in clipboard provider holds the loop's `ClipboardExpiries` beside the
+host's clipboard (ADR-0362 §2): every expiring write a handle passes on
+(`ClipboardWrite::expires_after`) owes one clear at its time, counted from the
+write's request and answered through the writer's UI runtime. A host that
+answers `ExpiryClearing::Unavailable` (the web) is owed none.
+
+- **The time is a turn deadline.** The earliest owed time is part of
+  `AppRuntime::turn_deadline` on every host (the route is installed with the
+  owner on all of them), and the owner's turn (`serve_clipboard_expiries`, from
+  each runner's wake handler) asks the host for every clear due by its own
+  time; a clear asked is no longer owed, so a served time is not armed again.
+- **A clear names its own entry.** The host clears only the entry the clear
+  names while the system still shows it, so a later write that lands takes the
+  clipboard from the entry and the clear does nothing: a second expiring write
+  replaces the first's time without the first's clear touching it, and where
+  the second failed the first entry is still there for its own clear.
+- **A lock clears now.** `SystemNotice::SessionLocked` and `Sleep` ask every
+  owed clear before the application's subscribers hear the notice.
+- **The loop's end asks once.** Before the services shut down, an entry still
+  owed is cleared within the services' part of the exit deadline, at most
+  `EXIT_CLIPBOARD_BOUND`.
+- **A clear the host could not do is owed again.** `Unseen` and an unreachable
+  clipboard retry on `CLEAR_RETRY`, at most `MAX_CLEAR_RETRIES` times; at most
+  `MAX_OWED` clears are owed at once, the oldest given up past it.
+
+`clipboard_expiry`'s table holds each rule over a host the test speaks for.
 
 ### Native execution caps remain presentation-local
 

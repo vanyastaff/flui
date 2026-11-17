@@ -1,4 +1,4 @@
-//! Expiring clipboard entries (ADR-0361): when the host is asked to clear the
+//! Expiring clipboard entries (ADR-0362): when the host is asked to clear the
 //! entry of an expiring write, if the clipboard still holds it.
 //!
 //! The rule lives here, at the seam, for every host; a host knows only how to
@@ -31,6 +31,7 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_foundation::MonotonicClock;
+use flui_foundation::panic::FirstPanic;
 use flui_native::{ExpiredClear, ExpiredEntry, NativeClipboard};
 use flui_platform::capability::CompletionSource;
 use flui_platform::{Backoff, ClipboardEntryId, ClipboardWrite, ExpiryClearing};
@@ -135,23 +136,30 @@ impl ClipboardExpiries {
             *owed = later;
             due
         };
-        for owed in due {
-            self.ask(owed);
-        }
+        self.ask_each(due);
     }
 
     /// The user's session locked, or the machine is going to sleep: every
     /// owed clear is asked now, each of its own entry.
     pub(crate) fn session_locked(self: &Rc<Self>) {
         let owed = std::mem::take(&mut *self.owed.borrow_mut());
+        self.ask_each(owed);
+    }
+
+    /// Ask the host for each of `owed`, every one asked though the host
+    /// panics at one; the first panic resumes once all were asked.
+    fn ask_each(self: &Rc<Self>, owed: Vec<Owed>) {
+        let mut first = FirstPanic::new();
         for owed in owed {
-            self.ask(owed);
+            first.contain(|| self.ask(owed));
         }
+        first.resume();
     }
 
     /// The loop ends: where a clear is still owed, ask the host to clear
     /// whatever entry it still holds, waiting at most `within`. `None` when
-    /// nothing was owed.
+    /// nothing was owed. The web's page has no loop end to ask at.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn before_exit(&self, within: Duration) -> Option<ExpiredClear> {
         let owed = std::mem::take(&mut *self.owed.borrow_mut());
         if owed.is_empty() {
@@ -177,14 +185,13 @@ impl ClipboardExpiries {
         } = owed;
         let (completion, answer) = completions.pending::<ExpiredClear>();
         let expiries: Weak<Self> = Rc::downgrade(self);
-        let retry = completions.clone();
         completion.on_complete(move |answered| {
             // A UI runtime that retired took the answer with it: the host
             // still did the clear.
             let (Ok(cleared), Some(expiries)) = (answered, expiries.upgrade()) else {
                 return;
             };
-            expiries.answered(entry, misses, retry.clone(), cleared);
+            expiries.answered(entry, misses, completions.clone(), cleared);
         });
         self.native
             .clear_expired(ExpiredEntry::Entry(entry), answer);
@@ -199,19 +206,18 @@ impl ClipboardExpiries {
         cleared: ExpiredClear,
     ) {
         if !cleared.is_worth_a_retry() {
-            match cleared {
-                ExpiredClear::Cleared | ExpiredClear::NotHeld => {
-                    tracing::debug!(
-                        entry = entry.get(),
-                        ?cleared,
-                        "an expiring clipboard entry's clear"
-                    );
-                }
-                _ => tracing::warn!(
+            if matches!(cleared, ExpiredClear::Cleared | ExpiredClear::NotHeld) {
+                tracing::debug!(
+                    entry = entry.get(),
+                    ?cleared,
+                    "an expiring clipboard entry's clear"
+                );
+            } else {
+                tracing::warn!(
                     entry = entry.get(),
                     ?cleared,
                     "an expiring clipboard entry could not be cleared"
-                ),
+                );
             }
             return;
         }

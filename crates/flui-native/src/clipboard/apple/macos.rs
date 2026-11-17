@@ -52,7 +52,7 @@ pub struct MacOSClipboard {
     /// `None` = general pasteboard; `Some(name)` = named pasteboard (tests).
     pasteboard: Option<String>,
     /// The last expiring entry this clipboard landed, with the pasteboard's
-    /// `changeCount` after it (ADR-0361). Read and written only on the owner
+    /// `changeCount` after it (ADR-0362). Read and written only on the owner
     /// lane, which serializes every operation; the lock never waits.
     expiring: parking_lot::Mutex<ExpiringRecord<isize>>,
     /// Owner lane every operation is routed through.

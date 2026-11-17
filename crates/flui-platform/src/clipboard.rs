@@ -92,7 +92,7 @@ pub enum ClipboardError {
 
 /// One write to the clipboard: its text, and whether the clipboard keeps it
 /// out of the user's clipboard history and cloud sync (ADR-0152 §6), and
-/// clears it after a time (ADR-0361).
+/// clears it after a time (ADR-0362).
 ///
 /// A password manager writes a secret [`concealed`](Self::concealed): the
 /// paste still works, but the entry is not kept or shown by the system's
@@ -147,7 +147,7 @@ impl ClipboardWrite {
     /// The same write, concealed, and cleared `after` it is asked for, and
     /// when the user's session locks, if the clipboard still holds this
     /// entry then: a later copy, by this application or another one, is
-    /// never cleared (ADR-0361). What the host can do is its
+    /// never cleared (ADR-0362). What the host can do is its
     /// [`ExpiryClearing`].
     ///
     /// The write is named by a new [`ClipboardEntryId`]; a clone of it names
@@ -212,8 +212,7 @@ impl std::fmt::Debug for ClipboardWrite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClipboardWrite")
             .field("len", &self.text.len())
-            .field("concealed", &self.is_concealed())
-            .field("expiry", &self.expiry())
+            .field("kept", &self.kept)
             .finish()
     }
 }
@@ -232,7 +231,7 @@ impl ClipboardExpiry {
     /// The longest expiry: past a day the entry is a long-lived one, not a
     /// secret on the clipboard for a moment, and every clock the hosts arm
     /// it on adds a day without overflow.
-    pub const MAX: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    pub const MAX: std::time::Duration = std::time::Duration::from_hours(24);
 
     /// An expiry of `after`.
     ///
@@ -272,7 +271,7 @@ pub enum ClipboardExpiryError {
 /// The entry one expiring clipboard write makes, unique in the process and
 /// never reissued: the host records it with the operating system's token
 /// for the entry when the write lands, and clears the clipboard for it only
-/// while both still match (ADR-0361).
+/// while both still match (ADR-0362).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ClipboardEntryId(std::num::NonZeroU64);
 

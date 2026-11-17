@@ -25,14 +25,14 @@ mod wayland_clients;
 #[cfg(target_os = "linux")]
 mod cases {
     use std::sync::mpsc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
-    use flui_native::Platform as _;
     use flui_native::testing::clipboard::{
         a_concealed_write_stays_out_of_history, write_unobserved,
     };
     use flui_native::testing::wayland::selection_offers_concealed_hint;
-    use flui_platform::ClipboardWrite;
+    use flui_native::{ExpiredClear, ExpiredEntry, Platform as _};
+    use flui_platform::{ClipboardExpiry, ClipboardWrite};
     use flui_testing::window_commands::AdmitAndApply as _;
 
     use super::wayland_clients::{Client, STEP};
@@ -181,6 +181,34 @@ mod cases {
             }),
             Ok(())
         );
+        // An expiring entry is cleared by destroying its source while it is
+        // still the selection, and a second clear finds nothing of the
+        // application's (ADR-0362). The compositor stops offering that
+        // source: a compositor without a clipboard of its own then offers
+        // nothing, while Weston's clipboard module, which copied the first
+        // form the source offered, offers its copy, without the hint.
+        let write = ClipboardWrite::text("expiring by the first").expires_after(
+            ClipboardExpiry::try_new(Duration::from_secs(30)).expect("thirty seconds expire"),
+        );
+        let entry = write.entry().expect("an expiring write");
+        write_unobserved(&*clipboard, write);
+        assert_eq!(
+            first.read(|answer| clipboard.read_text(answer)).as_deref(),
+            Some("expiring by the first")
+        );
+        first.until("the compositor to offer the expiring source", || {
+            selection_offers_concealed_hint(&first.platform) == Some(true)
+        });
+        let clear = || {
+            first.answer("the clear", |answer| {
+                clipboard.clear_expired(ExpiredEntry::Entry(entry), answer);
+            })
+        };
+        assert_eq!(clear(), ExpiredClear::Cleared);
+        first.until("the compositor to stop offering the cleared source", || {
+            selection_offers_concealed_hint(&first.platform) != Some(true)
+        });
+        assert_eq!(clear(), ExpiredClear::NotHeld);
         stop.send(()).expect("the second client listens");
         second.join().expect("the second client ends");
         first.window.close_for_cleanup();

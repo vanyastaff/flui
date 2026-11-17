@@ -487,7 +487,7 @@ pub(crate) struct AppRuntime {
     /// X11 connection) would stay pinned behind this `Arc` past the event
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path. The slot holds the clipboard with the expiring entries owed a
-    /// clear on it (ADR-0361), whose times are part of [`Self::turn_deadline`].
+    /// clear on it (ADR-0362), whose times are part of [`Self::turn_deadline`].
     platform_clipboard: crate::app::capability::ClipboardSlot,
     /// The platform's primary selection, installed and cleared with the
     /// clipboard; empty where the platform has none.
@@ -1128,7 +1128,7 @@ impl AppRuntime {
     }
 
     /// When the owner needs a turn for work no frame serves: an expiring
-    /// clipboard entry's clear (ADR-0361), on every host; on the desktop, a
+    /// clipboard entry's clear (ADR-0362), on every host; on the desktop, a
     /// window placement held back by the write throttle or retrying a refused
     /// write, and a window waiting for its placement read, which opens at the
     /// read's bound. The loop gives that turn with or without a window open

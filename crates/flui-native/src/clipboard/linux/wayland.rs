@@ -210,7 +210,7 @@ impl Shared {
 struct Owned {
     text: Arc<str>,
     /// The entry the write `text` came from makes, when it expires: what a
-    /// conditional clear names (ADR-0361).
+    /// conditional clear names (ADR-0362).
     entry: Option<ClipboardEntryId>,
     source: Option<WlDataSource>,
     serial: Option<u32>,

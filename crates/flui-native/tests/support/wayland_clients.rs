@@ -115,18 +115,22 @@ impl Client {
 
     /// Start a read with `start`, turning the loop until it answers.
     pub(crate) fn read(&self, start: impl FnOnce(Resolver<ClipboardRead>)) -> Option<Arc<str>> {
-        let (mut completion, resolver): (Completion<ClipboardRead>, _) =
-            self.answers.source.pending::<ClipboardRead>();
+        self.answer("the read", start)
+            .expect("the Wayland read succeeds")
+    }
+
+    /// Start a request with `start`, turning the loop until it answers
+    /// `what`.
+    pub(crate) fn answer<T: 'static>(&self, what: &str, start: impl FnOnce(Resolver<T>)) -> T {
+        let (mut completion, resolver): (Completion<T>, _) = self.answers.source.pending::<T>();
         start(resolver);
         let deadline = Instant::now() + STEP;
         loop {
             self.turn();
             if let Some(outcome) = completion.poll() {
-                return outcome
-                    .expect("the read is answered, not abandoned")
-                    .expect("the Wayland read succeeds");
+                return outcome.unwrap_or_else(|_| panic!("{what} is answered, not abandoned"));
             }
-            assert!(Instant::now() < deadline, "timed out waiting for the read");
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
         }
     }
 

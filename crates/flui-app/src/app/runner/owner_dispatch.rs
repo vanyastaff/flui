@@ -1060,7 +1060,7 @@ pub(crate) const EXIT_BUDGET: std::time::Duration = std::time::Duration::from_se
 pub(crate) const SERVICE_SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The longest the loop's end waits for the host to clear an expiring
-/// clipboard entry still owed its clear (ADR-0361): the Win32 clipboard
+/// clipboard entry still owed its clear (ADR-0362): the Win32 clipboard
 /// thread may be waiting out another process that holds the clipboard.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const EXIT_CLIPBOARD_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
@@ -1344,7 +1344,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     log(TeardownStep::Flush);
 
     // An expiring clipboard entry still owed its clear is cleared now if the
-    // clipboard still holds it (ADR-0361): on the hosts whose clipboard
+    // clipboard still holds it (ADR-0362): on the hosts whose clipboard
     // outlives the process, within the services' part of the deadline and at
     // most `EXIT_CLIPBOARD_BOUND`.
     first_panic.contain(|| {

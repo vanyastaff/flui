@@ -1864,7 +1864,7 @@ pub(super) fn install_wake_deadline_hook() {
 
 /// Route the loop's turn deadline to this owner installation's
 /// `AppRuntime::turn_deadline`, on every host: an expiring clipboard entry's
-/// clear (ADR-0361), and on the desktop the owner turns window placements
+/// clear (ADR-0362), and on the desktop the owner turns window placements
 /// need, which no frame serves and the main window waiting for its placement
 /// read has none for. A later installation's route answers for itself.
 fn install_turn_deadline_route() {
@@ -1883,7 +1883,7 @@ fn install_turn_deadline_route() {
 }
 
 /// The owner's turn serves the expiring clipboard entries' clears due by now
-/// (ADR-0361); the host's answers settle at a later turn.
+/// (ADR-0362); the host's answers settle at a later turn.
 pub(super) fn serve_clipboard_expiries() {
     let expiries = APP_RUNTIME.with(|slot| slot.borrow().clipboard_expiries());
     if let Some(expiries) = expiries {
@@ -1892,7 +1892,7 @@ pub(super) fn serve_clipboard_expiries() {
 }
 
 /// The user's session locked, or the machine is going to sleep: every
-/// expiring clipboard entry still owed a clear is cleared now (ADR-0361).
+/// expiring clipboard entry still owed a clear is cleared now (ADR-0362).
 fn clear_clipboard_expiries_on_lock(notice: flui_platform::SystemNotice) {
     if !matches!(
         notice,

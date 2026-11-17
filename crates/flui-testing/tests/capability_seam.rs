@@ -367,7 +367,7 @@ pub(crate) fn a_concealed_write_reaches_the_host_marked() {
     assert!(!scripted.is_concealed(), "an ordinary write is unmarked");
 
     // An expiring write is a concealed one, and the handle answers what the
-    // host does with its time (ADR-0361).
+    // host does with its time (ADR-0362).
     assert_eq!(clipboard.expiry_clearing(), ExpiryClearing::AtTimeAndLock);
     scripted.answer_expiry_clearing(ExpiryClearing::Unavailable);
     assert_eq!(clipboard.expiry_clearing(), ExpiryClearing::Unavailable);

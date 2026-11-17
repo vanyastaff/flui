@@ -36,7 +36,7 @@ use crate::owner::apple::IOSLoop;
 ///
 /// An expiring write is set with `UIPasteboardOptionExpirationDate`: UIKit
 /// itself removes the item at its time, even after the process ended, and
-/// only that item, so a later copy is never taken for it (ADR-0361). The
+/// only that item, so a later copy is never taken for it (ADR-0362). The
 /// loop's own clear at the time compares the pasteboard's `changeCount` with
 /// the one recorded after the write and clears in a second call, a window a
 /// copy made between the two can still fall into; the expiration date stands
@@ -114,7 +114,7 @@ impl SyncClipboard for IOSClipboard {
         // A concealed write stays on this device: iOS keeps no clipboard
         // history, and `UIPasteboardOptionLocalOnly` keeps the item off the
         // universal clipboard of the user's other devices (ADR-0152 §6). An
-        // expiring one is removed by UIKit at its time (ADR-0361).
+        // expiring one is removed by UIKit at its time (ADR-0362).
         let kind = NSString::from_str("public.utf8-plain-text");
         let text: &AnyObject = &string;
         let item = NSDictionary::<NSString, AnyObject>::from_slices(&[&*kind], &[text]);

@@ -14,14 +14,14 @@ use flui_platform::capability::{
     Completion, CompletionSource, OwnerJob, OwnerPoster, OwnerRetired, OwnerScope,
     PendingCompletions, Resolver,
 };
-use flui_platform::{ClipboardError, ClipboardRead, ClipboardWrite};
+use flui_platform::{ClipboardError, ClipboardExpiry, ClipboardRead, ClipboardWrite};
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::rust_connection::RustConnection;
 
 use super::X11Clipboard;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE};
-use crate::host::{NativeClipboard, NativePrimarySelection};
+use crate::host::{ExpiredClear, ExpiredEntry, NativeClipboard, NativePrimarySelection};
 use crate::owner::linux::x11::LoopClipboard as _;
 use crate::testing::clipboard::{a_concealed_write_stays_out_of_history, write_unobserved};
 
@@ -1226,4 +1226,93 @@ fn a_command_dropped_untaken_answers_gone() {
     ] {
         assert_eq!(answer, Err(ClipboardError::Gone), "{what}");
     }
+    // A conditional clear dropped untaken answers `Gone` the same way.
+    let (mut cleared, answer) = owner.pending::<ExpiredClear>();
+    drop(Command::ClearExpired(
+        ExpiredEntry::Any,
+        super::selection::OwedClear::new(answer),
+    ));
+    assert_eq!(
+        owner
+            .settle_within(&mut cleared, STEP)
+            .expect("answered in time")
+            .expect("answered, not abandoned"),
+        ExpiredClear::Failed(ClipboardError::Gone)
+    );
+}
+
+/// Ask `clipboard` to clear `entry` if it still holds it, and wait for the
+/// answer.
+fn clear(answers: &Answers, clipboard: &X11Clipboard, entry: ExpiredEntry) -> ExpiredClear {
+    let (mut completion, resolver) = answers.source.pending::<ExpiredClear>();
+    clipboard.clear_expired(entry, resolver);
+    let deadline = Instant::now() + STEP;
+    loop {
+        let jobs = std::mem::take(&mut *answers.queue.lock().expect("the answers"));
+        let scope = OwnerScope::new(&answers.pending);
+        for job in jobs {
+            job.run(&scope);
+        }
+        if let Some(outcome) = completion.poll() {
+            return outcome.expect("the clear is answered, not abandoned");
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for the clear");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn expiring(text: &str) -> ClipboardWrite {
+    ClipboardWrite::text(text).expires_after(
+        ClipboardExpiry::try_new(Duration::from_secs(30)).expect("thirty seconds expire"),
+    )
+}
+
+/// An expiring entry is given up while the clipboard still holds it, and a
+/// client that reads finds nothing; a copy another client made after it is
+/// left alone; a clear asked right behind its write waits for the write to
+/// own the selection (ADR-0362).
+#[test]
+fn an_expiring_entry_is_given_up_only_while_the_clipboard_still_holds_it() {
+    let Some(_server) = server() else {
+        return;
+    };
+    let answers = Answers::new();
+    let first = clipboard();
+    let second = clipboard();
+
+    let write = expiring("secret");
+    let entry = write.entry().expect("an expiring write");
+    write_unobserved(&first, write);
+    assert_eq!(answers.read(&second).as_deref(), Some("secret"));
+    assert_eq!(
+        clear(&answers, &first, ExpiredEntry::Entry(entry)),
+        ExpiredClear::Cleared
+    );
+    assert_eq!(answers.read(&second), None, "the entry is gone");
+
+    let write = expiring("secret");
+    let entry = write.entry().expect("an expiring write");
+    write_unobserved(&first, write);
+    assert_eq!(answers.read(&second).as_deref(), Some("secret"));
+    write_unobserved(&second, ClipboardWrite::text("theirs".to_owned()));
+    assert_eq!(answers.read(&second).as_deref(), Some("theirs"));
+    assert_eq!(
+        clear(&answers, &first, ExpiredEntry::Entry(entry)),
+        ExpiredClear::NotHeld
+    );
+    assert_eq!(
+        answers.read(&first).as_deref(),
+        Some("theirs"),
+        "the later copy survives"
+    );
+
+    let write = expiring("secret");
+    let entry = write.entry().expect("an expiring write");
+    write_unobserved(&first, write);
+    assert_eq!(
+        clear(&answers, &first, ExpiredEntry::Entry(entry)),
+        ExpiredClear::Cleared,
+        "the clear waited for the write behind it"
+    );
+    assert_eq!(answers.read(&second), None);
 }

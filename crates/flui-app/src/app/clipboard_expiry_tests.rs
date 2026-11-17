@@ -32,6 +32,8 @@ struct ScriptedHost {
     asked: RefCell<Vec<ExpiredEntry>>,
     exits: Cell<u32>,
     unavailable: Cell<bool>,
+    /// The entry whose clear panics, as a host's code may.
+    panics_at: Cell<Option<ClipboardEntryId>>,
 }
 
 impl ScriptedHost {
@@ -42,6 +44,11 @@ impl ScriptedHost {
 
     fn clear(&self, entry: ExpiredEntry) -> ExpiredClear {
         self.asked.borrow_mut().push(entry);
+        if let (ExpiredEntry::Entry(entry), Some(panics)) = (entry, self.panics_at.get())
+            && entry == panics
+        {
+            panic!("the host's clear panicked");
+        }
         if let Some(refusal) = self.refusals.borrow_mut().pop_front() {
             return refusal;
         }
@@ -150,9 +157,10 @@ impl Run {
 
     /// The loop's turn at `elapsed` from the start, as its turn deadline gives.
     fn turn_at(&self, elapsed: Duration) {
-        let now = self.clock.elapsed();
-        assert!(elapsed >= now, "the clock only goes forward");
-        self.clock.advance(elapsed - now);
+        let step = elapsed
+            .checked_sub(self.clock.elapsed())
+            .expect("the clock only goes forward");
+        self.clock.advance(step);
         self.expiries.serve();
         self.owner.turn();
     }
@@ -186,7 +194,11 @@ fn a_clear_is_owed_at_its_time_and_served_once() {
     let entry = run.write(expiring(30)).expect("an expiring write");
     assert_eq!(run.due_in(), Some(secs(30)));
     run.turn_at(secs(29));
-    assert!(run.asked().is_empty(), "nothing is due before its time");
+    assert_eq!(
+        run.asked(),
+        Vec::<ExpiredEntry>::new(),
+        "nothing is due before its time"
+    );
     run.turn_at(secs(30));
     assert_eq!(run.asked(), [ExpiredEntry::Entry(entry)]);
     assert_eq!(run.host.held.get(), None, "the entry is cleared");
@@ -243,7 +255,7 @@ fn nothing_is_owed_without_an_expiry_or_a_conditional_clear() {
     run.write(expiring(30));
     assert_eq!(run.due_in(), None, "the web owes no clear it cannot make");
     run.expiries.session_locked();
-    assert!(run.asked().is_empty());
+    assert_eq!(run.asked(), Vec::<ExpiredEntry>::new());
 }
 
 /// A session lock asks every owed clear now, each of its own entry, and
@@ -262,6 +274,30 @@ fn a_session_lock_clears_now() {
     );
     assert_eq!(run.host.held.get(), None, "the entry still held is cleared");
     assert_eq!(run.due_in(), None);
+}
+
+/// A host whose clear panics at one entry still gets every other clear owed
+/// at that turn, and the panic reaches the turn once all were asked.
+#[test]
+fn a_panicking_clear_costs_no_other_clear() {
+    let run = Run::new();
+    let first = run.write(expiring(30)).expect("an expiring write");
+    let second = run.write(expiring(30)).expect("an expiring write");
+    run.host.panics_at.set(Some(first));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: the test catches the host's panic to assert what was asked"
+    )]
+    let lock = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run.expiries.session_locked();
+    }));
+    assert!(lock.is_err(), "the host's panic reaches the turn");
+    run.owner.turn();
+    assert_eq!(
+        run.asked(),
+        [ExpiredEntry::Entry(first), ExpiredEntry::Entry(second)]
+    );
+    assert_eq!(run.host.held.get(), None, "the second entry is cleared");
 }
 
 /// A clear the host could not do for now is owed again on the retry
