@@ -109,11 +109,24 @@ this one path (ADR-0151 §9).
   (`ApplyError::Platform`), a cursor (`CursorError::Platform`) and a
   preference query (`PreferenceQueryError::Platform`) the window system
   refused or failed carry a `PlatformFailure`, so a caller matches one type.
+- **A position names its display; a display's bounds are its own logical
+  pixels (ADR-0360).** A `WindowPosition` is a finite point of one display, in
+  that display's logical pixels from its corner, and is the one shape of a
+  window's place: the snapshot's outer and normal positions, `SetPosition`
+  and the options' positions. There is no global logical space. The snapshot's
+  outer position is measured on the window's `display`, which `successor`
+  sets from it. A `DisplayInfo` carries its extent and usable area in its own
+  logical pixels (`DisplayBounds`, the usable area inside the extent) and its
+  place in the window system's desktop as a `DesktopOrigin`, whose unit is
+  the window system's and which no arithmetic mixes with a logical position.
+  Commands and options carry the checked types (`WindowPosition`,
+  `WindowExtent`), so a number that is not finite cannot be asked for and
+  admission checks only an area and the limits' order.
 - **A snapshot holds no number that is not a window's.** Its rectangles are
   valid by construction, as its metrics and insets are: `WindowGeometry` is a
-  finite position and a `WindowExtent` (each side finite and not negative),
-  the content size is a `WindowExtent`, and so is each bound of
-  `SizeConstraints`. A window system's report can be numbers no window has (a
+  `WindowPosition` where the window system reports one and a `WindowExtent`
+  (each side finite and not negative), the content size is a `WindowExtent`,
+  and so is each bound of `SizeConstraints`. A window system's report can be numbers no window has (a
   size over a scale of zero, a NaN a compositor sent); a host builds the
   values with `try_new`, and a report it cannot build them from costs the
   snapshot its geometry and nothing else (`flui-native`'s window state cell

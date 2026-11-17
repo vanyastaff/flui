@@ -449,6 +449,7 @@ fn every_published_schema_is_additive_to_the_next() {
         let broke = BREAKING.iter().find(|change| change.version == *newer);
         let renamed = broke.map_or(&[][..], |change| change.renamed);
         let removed = broke.map_or(&[][..], |change| change.removed);
+        let required = broke.map_or(&[][..], |change| change.required);
         let violations = without_removed(
             additivity_violations(
                 &read_schema(older_path),
@@ -458,7 +459,14 @@ fn every_published_schema_is_additive_to_the_next() {
                 &open_unions(),
             ),
             removed,
-        );
+        )
+        .into_iter()
+        .filter(|violation| {
+            violation
+                .strip_prefix("field made required: ")
+                .is_none_or(|path| !required.contains(&path))
+        })
+        .collect::<Vec<String>>();
         assert!(
             violations.is_empty(),
             "protocol {newer} is not additive to {older}; list what it renamed or removed in \

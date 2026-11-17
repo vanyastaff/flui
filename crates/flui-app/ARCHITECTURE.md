@@ -596,6 +596,15 @@ run with nothing borrowed.
   displays, which moves a window back onto a live display) each open the
   window from its configuration. A panic is reported and its payload
   discarded.
+- **A position is placed on a display when the window opens (ADR-0360).** A
+  restored placement opens at the `WindowPosition` `resolve` gives, on the
+  display it chose; a configured `AppConfig::position` is whole logical
+  pixels of the primary display (the first where none is marked), which
+  `AppConfig::window_options_on` turns into a position against the owner's
+  display snapshot at the open site, since a conversion with no displays
+  (`From<&AppConfig> for WindowOptions`) can name none. A window remembered
+  while its position names a display the snapshot lacks keeps the placement
+  stored before.
 - **Only the user overwrites a placement the run could not read.** After a
   read that timed out, was refused or panicked, the recorder holds
   `StoredPlacement::Unknown`, which owes nothing until a change the host

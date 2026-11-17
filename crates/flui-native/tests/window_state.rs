@@ -707,11 +707,14 @@ fn a_window_tells_its_bridge_where_it_lies() {
     mock(&window).simulate_move(Point::new(30.0, 40.0));
     assert_eq!(told(), bounds(30, 40, width, height), "after a move");
 
+    // The corner is the display's origin plus the position at the display's
+    // scale, which the window's own did not change; the extent is the
+    // window's, at its new scale.
     mock(&window).simulate_scale_factor_change(2.0);
     assert_eq!(
         told(),
-        bounds(60, 80, 2 * width, 2 * height),
-        "after a change of scale, in device pixels"
+        bounds(30, 40, 2 * width, 2 * height),
+        "after a change of the window's scale, in device pixels"
     );
 }
 

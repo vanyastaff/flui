@@ -19,8 +19,9 @@
 //!   new meaning, or a variant or value added to a union whose reader has no
 //!   fallback for it and refuses it whole: a new native recording row, a new
 //!   close answer) is listed in
-//!   [`BREAKING`] with the ADR that decided it and the names it respelled or removed; the
-//!   test lets those names, and nothing else, go. A union is open to a new
+//!   [`BREAKING`] with the ADR that decided it, the names it respelled or removed and the
+//!   fields of an existing type it made required in their place; the
+//!   test lets those, and nothing else, go. A union is open to a new
 //!   value or variant exactly when its reader reads an unknown one as a
 //!   fallback (a role, an action name, an error code, above, and a tree
 //!   diagnostic), whatever the union's shape: a string `enum`, a `oneOf` of
@@ -91,9 +92,13 @@ pub struct Break {
     /// The names it respelled, old then new.
     pub renamed: &'static [(&'static str, &'static str)],
     /// The schema paths it removed, each in full (`/$defs/KeyEvent/properties/repeat`): a
-    /// property, a tagged variant or a definition, and everything under it. Nothing but these
-    /// and `renamed` may differ from the version before.
+    /// property, a tagged variant or a definition, and everything under it. Nothing but these,
+    /// `renamed` and `required` may differ from the version before.
     pub removed: &'static [&'static str],
+    /// The fields of an existing type it made required, each in full
+    /// (`/$defs/Display/required/extent`): what stands in for a field it removed, which an
+    /// older reader never wrote.
+    pub required: &'static [&'static str],
 }
 
 /// The versions that are not additive to the one before it, by their schema or by a value
@@ -110,6 +115,7 @@ pub const BREAKING: &[Break] = &[
             ("motion", "motion.set"),
         ],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 11),
@@ -119,6 +125,7 @@ pub const BREAKING: &[Break] = &[
         // is respelled, the handle has a new meaning, so an older client cannot read it.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 14),
@@ -128,6 +135,7 @@ pub const BREAKING: &[Break] = &[
         // client, which refuses the unknown row, so an app speaking 0.14 refuses older clients.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 15),
@@ -137,6 +145,7 @@ pub const BREAKING: &[Break] = &[
         // speaking 0.15 refuses older clients.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 16),
@@ -153,6 +162,7 @@ pub const BREAKING: &[Break] = &[
             "/$defs/PointerEvent/oneOf/pen_squeeze=pen_squeeze",
             "/$defs/SqueezePhase",
         ],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 21),
@@ -162,6 +172,7 @@ pub const BREAKING: &[Break] = &[
         // capabilities say whether either reaches the window.
         renamed: &[],
         removed: &["/$defs/PointerEvent/oneOf/scroll_inertia_cancel=scroll_inertia_cancel"],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 24),
@@ -171,6 +182,7 @@ pub const BREAKING: &[Break] = &[
         // an app speaking 0.24 refuses older clients.
         renamed: &[],
         removed: &[],
+        required: &[],
     },
     Break {
         version: ProtocolVersion::new(0, 25),
@@ -185,6 +197,11 @@ pub const BREAKING: &[Break] = &[
             "/$defs/Display/properties/bounds",
             "/$defs/Display/properties/usable_bounds",
             "/$defs/WindowGeometry/properties/position",
+        ],
+        required: &[
+            "/$defs/Display/required/origin",
+            "/$defs/Display/required/extent",
+            "/$defs/Display/required/usable",
         ],
     },
 ];

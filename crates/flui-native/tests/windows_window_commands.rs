@@ -349,17 +349,79 @@ fn hide_and_show_follow_the_native_window() {
     assert!(shown(&window) && window.state().visible);
 }
 
+/// A position is a point of its display, in that display's logical pixels
+/// from its corner: the window's outer corner lands on the monitor's origin
+/// plus the position at the monitor's own DPI, and the published position is
+/// on that display, measured the same way, so it reads back as the position
+/// asked for.
 fn a_position_set_on_a_normal_window_moves_it() {
     let platform = platform();
     let window = open(&platform, hidden());
-    apply(
-        &window,
-        WindowCommand::SetPosition(on_its_display(&window, 220.0, 160.0)),
-    );
+    let asked = on_its_display(&window, 220.0, 160.0);
+    apply(&window, WindowCommand::SetPosition(asked));
     let at = window.state().outer.position().expect("a position");
+    assert_eq!(at.display(), asked.display(), "on the display it named");
+    assert_eq!(window.state().display, Some(asked.display()));
     assert!(
         near(at.at().x, 220.0) && near(at.at().y, 160.0),
         "moved to {at:?}"
+    );
+    // Where Win32 put the window, through the monitor's own origin and DPI.
+    let (origin, scale) = monitor_frame(&window);
+    let corner = rect(&window);
+    assert_eq!(
+        (corner.left, corner.top),
+        (
+            origin.0 + (220.0 * scale).round() as i32,
+            origin.1 + (160.0 * scale).round() as i32
+        ),
+        "the corner is the monitor's origin plus the position at its DPI"
+    );
+}
+
+/// The origin of the monitor `window` is on, in physical pixels of the
+/// virtual screen, and its effective DPI over 96.
+fn monitor_frame(window: &Rc<dyn HostWindow>) -> ((i32, i32), f64) {
+    use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    // SAFETY: plain queries of the live window's monitor; `info` is a stack
+    // local with `cbSize` set, and the DPI out-parameters are stack locals.
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd_of(window), MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        assert!(GetMonitorInfoW(monitor, &raw mut info).as_bool());
+        let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &raw mut dpi_x, &raw mut dpi_y)
+            .expect("the monitor's DPI");
+        (
+            (info.rcMonitor.left, info.rcMonitor.top),
+            f64::from(dpi_x) / 96.0,
+        )
+    }
+}
+
+/// A position on a display the host does not hold (unplugged, or another
+/// platform's) is no place: the command is refused with the display it
+/// named, before any Win32 call, and the window stays where it was.
+fn a_position_on_a_display_the_host_does_not_hold_is_refused() {
+    let platform = platform();
+    let window = open(&platform, hidden());
+    let before = rect(&window);
+    let elsewhere = flui_platform::DisplayRegistry::new()
+        .mint(&flui_platform::DisplayKey::Injected(1))
+        .expect("an id");
+    let asked = WindowPosition::try_new(elsewhere, Point::new(10.0, 10.0)).expect("a point");
+    assert_eq!(
+        window.admit_and_apply(WindowCommand::SetPosition(asked)),
+        Err(CommandRefusal::Apply(ApplyError::DisplayGone(elsewhere)))
+    );
+    let after = rect(&window);
+    assert_eq!(
+        (after.left, after.top),
+        (before.left, before.top),
+        "the window did not move"
     );
 }
 
@@ -3539,6 +3601,10 @@ fn native_window_commands() {
         (
             "a_position_set_on_a_normal_window_moves_it",
             a_position_set_on_a_normal_window_moves_it,
+        ),
+        (
+            "a_position_on_a_display_the_host_does_not_hold_is_refused",
+            a_position_on_a_display_the_host_does_not_hold_is_refused,
         ),
         (
             "a_position_set_while_maximized_is_where_it_is_restored",
