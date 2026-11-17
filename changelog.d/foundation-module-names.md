@@ -25,3 +25,8 @@
 - `flui::foundation::EPSILON` and its `consts` module: layout's rounding tolerance is
   `flui::geometry::PRECISION_ERROR_TOLERANCE`.
 - `ValueNotifier::set_value_force`, which nothing called.
+
+### Fixed
+
+- `FrameEpoch::next` and `SurfaceGeneration::next` refuse to wrap in a release build too; a wrap
+  would make an earlier frame or surface current again.
