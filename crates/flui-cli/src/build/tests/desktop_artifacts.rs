@@ -285,7 +285,7 @@ fn a_desktop_entry_registers_what_the_built_member_opens() {
             target: Some("x86_64-unknown-linux-gnu".into()),
         })
         .profile(Profile::Debug)
-        .bundle(AppBundle::new("Notes", "com.example.notes".to_owned()))
+        .bundle(AppBundle::new("Notes", "com.example.notes".to_owned()).declared())
         .output_dir(root.join("staged"))
         .build();
     let artifacts = BuildArtifacts {
@@ -305,4 +305,41 @@ fn a_desktop_entry_registers_what_the_built_member_opens() {
         entry.contains("MimeType=x-scheme-handler/notes;\n"),
         "the built member's scheme alone: {entry}"
     );
+}
+
+/// No build compiles an application id in by itself: whichever target, and
+/// whether its bundle's identifier is declared or derived from the directory,
+/// cargo gets no `FLUI_APP_ID`, which reaches the application only from the
+/// project's cargo configuration (`flui.toml`'s `[app] id`). Two examples of
+/// one directory are therefore never compiled with one derived identity.
+#[test]
+fn a_build_compiles_no_application_id_in_by_itself() {
+    use crate::build::AppBundle;
+
+    let root = tempfile::tempdir().expect("fixture");
+    let derived = AppBundle::new("examples", "dev.flui.examples".to_owned());
+    let declared = AppBundle::new("Notes", "com.example.notes".to_owned()).declared();
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
+        "aarch64-apple-darwin",
+    ] {
+        for bundle in [&derived, &declared] {
+            let ctx = BuilderContextBuilder::new(root.path().to_path_buf())
+                .platform(Platform::Desktop {
+                    target: Some(target.into()),
+                })
+                .profile(Profile::Debug)
+                .bundle(bundle.clone())
+                .build();
+            let env = DesktopBuilder::cargo_env(&ctx, target);
+            assert!(
+                env.iter()
+                    .all(|(name, _)| *name != crate::config::APP_ID_ENV),
+                "{target} {}: {env:?}",
+                bundle.identifier
+            );
+        }
+    }
 }
