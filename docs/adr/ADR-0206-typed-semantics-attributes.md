@@ -43,7 +43,8 @@ while Slint keeps its own model and confines AccessKit to a backend.
    `SemanticsNodeSnapshot`/`SemanticsSnapshot` and `SemanticsEvent` are removed.
 2. **One role.** A node has `role: Option<SemanticsRole>`; interactive kinds are roles
    ([ADR-0203](ADR-0203-semantics-vocabulary.md)). `None` publishes static text when the node is
-   named and a generic container otherwise; the window root publishes `Window`.
+   named, a group when only an identifier names it (ADR-0240 §2), and a generic container
+   otherwise; the window root publishes `Window`.
 3. **Typed states.** Each state is `Option<T>`: absent, or declared with a value, so a declared
    `false` is distinct from unset. Tri-state values are enums (`Toggled { Off, On, Mixed }`
    serves both checked and pressed, its meaning set by the role, as in AccessKit and Chromium).

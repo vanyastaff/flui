@@ -149,7 +149,9 @@ pub enum TestError {
     #[error(
         "nothing matches {locator:?}.\nThe window shows:\n{shown}\nA widget that publishes no \
          semantics is found by an identifier: wrap it in \
-         `Semantics::new().container(true).identifier(..)` and find it with `find::id`."
+         `Semantics::new().container(true).identifier(..)` and find it with `find::id`. An \
+         identifier inside a button, checkbox, radio button, link or menu item selects nothing: \
+         give it to the control."
     )]
     NotFound {
         /// What was looked for.

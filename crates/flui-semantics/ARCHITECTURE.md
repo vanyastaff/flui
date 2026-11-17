@@ -828,19 +828,18 @@ with only an identifier contributes nothing, and one absorbed into an ancestor o
 is formed: a container `Semantics`, `MergeSemantics::identifier`, or a control whose own
 configuration is the outermost of its parts. A node named only by its identifier publishes as a
 `Group`, since every AccessKit filter drops a `GenericContainer` with its `author_id`; inside a
-control AccessKit names from its contents it stays generic, and the control publishes the
-identifier, its own or the first lifted into it (ADR-0240 §2). The role reads the ancestors and the
-control's identifier its contents, so an incremental publish re-translates the nodes a dirty one
-places (`SemanticsTree::placement_dependents`).
+control AccessKit names from its contents it stays generic, so the control keeps the name its
+labels give it, and selects nothing (ADR-0240 §2). Its role reads the ancestors it is lifted
+through, so a node whose published role changes has the containers beneath it re-translated in an
+incremental publish (`SemanticsTree::placement_dependents`).
 
 **Why.** An identifier that annotated or split nodes would change the tree, and so what a screen
 reader says, by adding a test id; one carried upward would name a node with another node's id, and
-a merged parent would collect its children's. A container lifted into a control is no node an
-automation client sees, so its identifier names the control, the node a test of it selects.
+a merged parent would collect its children's.
 
 **Test.** `the_identifier_is_exported_unannounced_unmerged_and_no_boundary` in
-`tests/identifier.rs`, `a_container_named_only_by_its_identifier_is_a_group_or_names_its_control`
-there; the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
+`tests/identifier.rs` and `a_container_named_only_by_its_identifier_is_a_group_outside_a_control`;
+the `identifier` row of `every_published_attribute_reads_through_the_consumer`.
 
 ### Siblings sharing an identifier are reported, not repaired
 
@@ -867,7 +866,7 @@ is user code, under the pipeline's borrows.
 
 **Rule.** A `Locator` resolves over the filtered tree the adapters see, reading the same wire
 `Node` as `semantics.read`, so a locator matches what the outline shows. `within` and `has` are
-scopes over that tree: an unlabelled container that is lifted away is no ancestor. A strict
+scopes over that tree: a generic container that is lifted away is no ancestor. A strict
 locator lists every match in `locate_wire`; `resolve_wire_locator` is where one element is needed
 and answers `Ambiguous` (the first ten outline lines) or `NotFound` (the ten nearest by held
 criteria, then name distance). Actionability is two calls with the caller's hit-test between them:

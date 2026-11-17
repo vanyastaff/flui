@@ -9,7 +9,7 @@
 //! # Scope
 //!
 //! `within` and `has` are evaluated over the filtered tree: an ancestor or a
-//! descendant is a node that tree shows, so an unlabelled container the
+//! descendant is a node that tree shows, so a generic container the
 //! adapters lift away is not a scope. The scoping locators' own `pick` is
 //! ignored: a scope is every element they describe.
 //!

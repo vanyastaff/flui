@@ -1449,16 +1449,15 @@ fn an_element_named_only_by_its_identifier_is_found() {
     assert_eq!((rect.width, rect.height), (24.0, 16.0));
 }
 
-/// An identifier given inside a button names the button: a container named
-/// only by its identifier around the button's label is lifted into the
-/// button, which carries the identifier and keeps the name its label gives
-/// it, as a merging `Semantics` absorbs a descendant's identifier in Flutter.
+/// An identifier given to a container inside a button selects nothing: the
+/// container is lifted into the button so the button keeps the name its
+/// label gives it, and the failure says to give the identifier to the
+/// button (ADR-0240 §2).
 ///
-/// Fails if the container is published as a generic container that keeps
-/// its identifier (every AccessKit filter drops it), or as a group, which
-/// cuts the button's name from its label.
+/// Fails if the container inside the button is published as a group, which
+/// cuts the button's name from its label and makes the identifier found.
 #[test]
-fn an_identifier_inside_a_button_names_the_button() {
+fn an_identifier_inside_a_button_leaves_the_button_its_name() {
     let mut t = Tester::mount(
         Center::new().child(
             RawButton::new(
@@ -1475,8 +1474,12 @@ fn an_identifier_inside_a_button_names_the_button() {
             .on_pressed(|_| {}),
         ),
     );
-    assert_eq!(
-        t.rect(&find::id("save").name("Save")),
-        t.rect(&find::button("Save"))
+    let _ = t.rect(&find::button("Save"));
+    let message = panic_text(|| {
+        let _ = t.rect(&find::id("save"));
+    });
+    assert!(
+        message.contains("give it to the control"),
+        "the failure names the way out: {message}"
     );
 }

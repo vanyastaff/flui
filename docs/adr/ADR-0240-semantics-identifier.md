@@ -31,11 +31,10 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
    A node named only by its identifier (no role, label or text) would publish as a
    `GenericContainer`, which every AccessKit filter drops with its `author_id`, so it publishes as
    a `Group`. Inside a control AccessKit names from its contents (a button, checkbox, radio button,
-   link or menu item, reached through generic containers) it stays generic: that name comes from
-   the labels beneath the control through generic containers only, and a `Group` would cut it.
-   There the control carries the identifier, its own or else the first of the containers lifted
-   into it, as a merging `Semantics` absorbs a descendant's identifier in Flutter; a test selects
-   the control. The OS adapters and the agent read the same tree (ADR-0095 §4).
+   link or menu item, reached through generic containers) it stays generic: the control's name
+   comes from the labels beneath it through generic containers only, and a `Group` would cut it.
+   There the identifier selects nothing, and the control takes one of its own. The OS adapters
+   and the agent read one tree (ADR-0095 §4).
 3. The wire `Node` gains `identifier` (schema `0.5`), and `Locator.identifier` matches it exactly.
    When the OS reports an `automation_id` equal to the identifier, the normalized projection
    (ADR-0095 §4) treats the two as one field.
@@ -67,8 +66,8 @@ its driver), Compose's `testTag`, Android `resource-id`, iOS `accessibilityIdent
 - an identifier reaches the AccessKit node as `author_id`;
 - it is absent from the label and from a merged parent;
 - it does not create a boundary;
-- a node named only by it is a `Group` an adapter keeps, and inside a button it names the button,
-  which keeps its name, also after an incremental publish changes the ancestor's role
-  (`a_container_named_only_by_its_identifier_is_a_group_or_names_its_control`).
+- a node named only by it is a `Group` an adapter keeps, and inside a button it is lifted so the
+  button keeps its name, also after an incremental publish changes an ancestor's role
+  (`a_container_named_only_by_its_identifier_is_a_group_outside_a_control`).
 
 On Windows the a11y scenario reads it back as `AutomationId` through UIA.

@@ -194,7 +194,7 @@ fn the_identifier_is_exported_unannounced_unmerged_and_no_boundary() {
 /// read reports the clash beside the tree, naming the parent and every
 /// sibling carrying it, and publishes the identifiers as written. The same
 /// identifier on nodes that are not siblings is no clash, siblings are the
-/// children an agent sees (a child lifted out of an unlabelled container is
+/// children an agent sees (a child lifted out of a generic container is
 /// one), and the check covers the children of a node whose children the
 /// budget leaves out.
 #[test]
@@ -351,17 +351,17 @@ fn debug_builds_queue_a_published_clash_once_per_shape() {
 }
 
 /// A container named only by its identifier is published where an automation
-/// client finds it: as a group beside other content, and inside a control
-/// that takes its name from its contents as that control's identifier, so the
-/// control keeps its name. A change of the ancestor's role republishes the
+/// client finds it, as a group, except inside a control that takes its name
+/// from its contents, where it stays generic so the control keeps the name
+/// its label gives it. A change of an ancestor's role republishes the
 /// container, which did not change itself.
 ///
-/// Fails if the container publishes as a generic container (every AccessKit
-/// filter drops it with its identifier), as a group inside the button (the
-/// button loses the name its text gives it), or if an incremental publish
-/// leaves the container as the previous role placed it.
+/// Fails if the container publishes as a generic container beside other
+/// content (every AccessKit filter drops it with its identifier), as a group
+/// inside the button (the button loses its name), or if an incremental
+/// publish leaves it as the previous role placed it.
 #[test]
-fn a_container_named_only_by_its_identifier_is_a_group_or_names_its_control() {
+fn a_container_named_only_by_its_identifier_is_a_group_outside_a_control() {
     use std::collections::BTreeMap;
 
     use accesskit_consumer::{FilterResult, common_filter};
@@ -380,14 +380,16 @@ fn a_container_named_only_by_its_identifier_is_a_group_or_names_its_control() {
     root.config_mut().set_label("Inbox");
     let root = owner.insert(root);
     let host = owner.insert(node(2));
-    let mut swatch = node(3);
+    let between = owner.insert(node(3));
+    let mut swatch = node(4);
     swatch.config_mut().set_identifier("swatch");
     let swatch = owner.insert(swatch);
-    let mut text = node(4);
+    let mut text = node(5);
     text.config_mut().set_label("Save");
     let text = owner.insert(text);
     owner.add_child(root, host);
-    owner.add_child(host, swatch);
+    owner.add_child(host, between);
+    owner.add_child(between, swatch);
     owner.add_child(swatch, text);
     owner.set_root(Some(root));
 
@@ -407,53 +409,69 @@ fn a_container_named_only_by_its_identifier_is_a_group_or_names_its_control() {
         }
         accesskit_consumer::Tree::new(full, true)
     };
-    // The nodes an adapter lists under the root, with what it reads of them.
-    let shown = |tree: &accesskit_consumer::Tree| -> Vec<(accesskit::Role, Option<String>, Option<String>)> {
+    type Shown = (accesskit::Role, Option<String>, Option<String>);
+    // The first node an adapter lists under the root, with its identifier
+    // and name, and the identifiers it can select anywhere.
+    let shown = |tree: &accesskit_consumer::Tree| -> (Shown, Vec<String>) {
         let state = tree.state();
-        let root = state.root();
-        root.filtered_children(common_filter)
-            .map(|node| {
-                assert_eq!(common_filter(&node), FilterResult::Include);
-                (node.role(), node.author_id().map(str::to_owned), node.label())
-            })
-            .collect()
+        let first = state
+            .root()
+            .filtered_children(common_filter)
+            .next()
+            .expect("the root lists a node");
+        assert_eq!(common_filter(&first), FilterResult::Include);
+        let mut identifiers = Vec::new();
+        let mut pending = vec![state.root()];
+        while let Some(node) = pending.pop() {
+            identifiers.extend(node.author_id().map(str::to_owned));
+            pending.extend(node.filtered_children(common_filter));
+        }
+        (
+            (
+                first.role(),
+                first.author_id().map(str::to_owned),
+                first.label(),
+            ),
+            identifiers,
+        )
     };
+    let set_role = |owner: &mut SemanticsOwner, id, role| {
+        owner
+            .get_mut(id)
+            .expect("the node is in the tree")
+            .config_mut()
+            .set_role(role);
+        owner.mark_dirty(id);
+    };
+    let group = (
+        (accesskit::Role::Group, Some("swatch".to_owned()), None),
+        vec!["swatch".to_owned()],
+    );
+    let named_button = (
+        (accesskit::Role::Button, None, Some("Save".to_owned())),
+        Vec::new(),
+    );
 
+    let tree = publish(&mut owner);
+    assert_eq!(shown(&tree), group, "beside other content");
+    set_role(&mut owner, host, SemanticsRole::Button);
+    let tree = publish(&mut owner);
+    assert_eq!(shown(&tree), named_button, "inside a button");
+    set_role(&mut owner, between, SemanticsRole::Group);
     let tree = publish(&mut owner);
     assert_eq!(
         shown(&tree),
-        [(accesskit::Role::Group, Some("swatch".to_owned()), None)],
-        "beside other content"
+        (
+            (accesskit::Role::Button, None, None),
+            vec!["swatch".to_owned()]
+        ),
+        "under a group inside the button"
     );
-
-    owner
-        .get_mut(host)
-        .expect("the host is in the tree")
-        .config_mut()
-        .set_role(SemanticsRole::Button);
-    owner.mark_dirty(host);
+    set_role(&mut owner, between, SemanticsRole::None);
     let tree = publish(&mut owner);
-    assert_eq!(
-        shown(&tree),
-        [(
-            accesskit::Role::Button,
-            Some("swatch".to_owned()),
-            Some("Save".to_owned())
-        )],
-        "inside a button"
-    );
-
-    owner
-        .get_mut(host)
-        .expect("the host is in the tree")
-        .config_mut()
-        .set_role(SemanticsRole::None);
-    owner.mark_dirty(host);
+    assert_eq!(shown(&tree), named_button, "the group between gone");
+    set_role(&mut owner, host, SemanticsRole::None);
     let tree = publish(&mut owner);
-    assert_eq!(
-        shown(&tree),
-        [(accesskit::Role::Group, Some("swatch".to_owned()), None)],
-        "back beside other content"
-    );
+    assert_eq!(shown(&tree), group, "back beside other content");
     let _ = text;
 }

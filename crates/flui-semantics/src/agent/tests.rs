@@ -93,7 +93,7 @@ fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
         clips_children: false,
         children: smallvec::SmallVec::new(),
         text_selection: None,
-        identifier: crate::accesskit_translation::IdentifierPlacement::Own,
+        in_named_control: false,
     })
 }
 
@@ -413,28 +413,34 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
 }
 
 /// A container named only by its identifier inside a button is lifted into
-/// it, and the button reads with that identifier and the name its text
-/// gives it, so a locator on the identifier selects the button (ADR-0240 §3).
+/// it as a generic container, so the button reads with the name its text
+/// gives it; beside other content the same container reads as a group with
+/// its identifier (ADR-0240 §2).
 #[test]
-fn a_container_named_only_by_its_identifier_names_its_button() {
+fn a_container_named_only_by_its_identifier_is_a_group_outside_a_button() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     let button = f.add(Some(root), 2, |c| c.set_role(SemanticsRole::Button));
     let swatch = f.add(Some(button), 3, |c| c.set_identifier("swatch"));
     f.add(Some(swatch), 4, |c| c.set_label("Save"));
+    let beside = f.add(Some(root), 5, |c| c.set_identifier("legend"));
+    f.add(Some(beside), 6, |c| c.set_label("Key"));
 
     let tree = f.read(&ReadQuery::new());
     assert_eq!(
         outline(&tree.roots),
         format!(
-            "- window [ref={}] [window=w1]\n  - button \"Save\" [ref={}] \
-             [identifier=\"swatch\"]\n    - label \"Save\" [ref={}]\n",
+            "- window [ref={}] [window=w1]\n  - button \"Save\" [ref={}]\n    - label \"Save\" \
+             [ref={}]\n  - group [ref={}] [identifier=\"legend\"]\n    - label \"Key\" [ref={}]\n",
             e(1),
             e(2),
-            e(4)
+            e(4),
+            e(5),
+            e(6)
         )
     );
 }
+
 /// A role ARIA forbids a name reaches an agent with its text as the
 /// description, as UI Automation reports it, rather than not at all.
 #[test]
