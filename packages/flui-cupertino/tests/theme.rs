@@ -172,6 +172,142 @@ fn mount_and_capture(
         .expect("build should have run and captured a primary color")
 }
 
+/// An unset primary colour follows the accent the host reports, live, and
+/// falls back to system blue without one; an authored primary keeps its own.
+/// Goes through the runtime's preference delivery, not an authored
+/// `MediaQuery`. Red-check: resolve an unset primary to system blue always.
+pub fn an_unset_primary_follows_the_system_accent() {
+    use flui_sdk::platform::{SrgbColor, SystemPreferences};
+
+    const SYSTEM_BLUE: Color = Color::rgb(0, 122, 255);
+    let accented = SystemPreferences::default()
+        .with_accent_color(Some(SrgbColor::from_rgba8(255, 45, 85, 255)));
+    for (authored, with_accent) in [
+        (None, Color::rgb(255, 45, 85)),
+        (Some(Color::rgb(10, 20, 30)), Color::rgb(10, 20, 30)),
+    ] {
+        let captured: Arc<Mutex<Option<CupertinoColor>>> = Arc::new(Mutex::new(None));
+        let theme = authored.map_or_else(CupertinoThemeData::default, |color| {
+            CupertinoThemeData::default().with_primary_color(color)
+        });
+        let mut laid = lay_out(
+            CupertinoTheme::new(
+                theme,
+                PrimaryColorCapture {
+                    captured: Arc::clone(&captured),
+                },
+            ),
+            loose(100.0),
+        );
+        let primary = || captured.lock().unwrap().expect("the capture built");
+        let without_accent = authored.unwrap_or(SYSTEM_BLUE);
+        assert_eq!(
+            primary(),
+            CupertinoColor::Static(without_accent),
+            "no accent"
+        );
+        laid.set_system_preferences(accented.clone());
+        laid.pump();
+        assert_eq!(
+            primary(),
+            CupertinoColor::Static(with_accent),
+            "{authored:?}"
+        );
+        laid.set_system_preferences(SystemPreferences::default());
+        laid.pump();
+        assert_eq!(
+            primary(),
+            CupertinoColor::Static(without_accent),
+            "the accent withdrawn"
+        );
+    }
+}
+
+/// Captures the whole resolved `CupertinoTheme::of(ctx)` during `build()`.
+#[derive(Clone, Debug, StatelessView)]
+struct ThemeCapture {
+    captured: std::rc::Rc<std::cell::RefCell<Option<CupertinoThemeData>>>,
+}
+
+impl StatelessView for ThemeCapture {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        *self.captured.borrow_mut() = Some(CupertinoTheme::of(ctx));
+        SizedBox::shrink()
+    }
+}
+
+/// The resolved theme of `theme` on the headless (light) platform, once the
+/// host reports `accent`.
+fn resolved_under_accent(theme: CupertinoThemeData, accent: Color) -> CupertinoThemeData {
+    use flui_sdk::platform::{SrgbColor, SystemPreferences};
+
+    let captured = std::rc::Rc::default();
+    let mut laid = lay_out(
+        CupertinoTheme::new(
+            theme,
+            ThemeCapture {
+                captured: std::rc::Rc::clone(&captured),
+            },
+        ),
+        loose(100.0),
+    );
+    let [red, green, blue, alpha] = accent.to_rgba8();
+    laid.set_system_preferences(
+        SystemPreferences::default()
+            .with_accent_color(Some(SrgbColor::from_rgba8(red, green, blue, alpha))),
+    );
+    laid.pump();
+    let resolved = captured.borrow().clone();
+    resolved.expect("the capture built")
+}
+
+/// The host reports the accent resolved for the platform's appearance, so a
+/// theme forced to the other brightness keeps system blue with its own
+/// variant; and the colour on an accent is whichever of white and black
+/// contrasts more with it. Red-check: take the accent whatever the theme's
+/// brightness, or keep white on every accent.
+pub fn a_forced_brightness_or_a_light_accent_keeps_the_theme_legible() {
+    let pink = Color::rgb(255, 45, 85);
+    let dark = resolved_under_accent(
+        CupertinoThemeData::default().with_brightness(Brightness::Dark),
+        pink,
+    );
+    assert_eq!(
+        dark.primary_color(),
+        CupertinoColor::Static(Color::rgb(10, 132, 255)),
+        "a dark theme on a light platform keeps system blue's dark variant"
+    );
+    let light = resolved_under_accent(
+        CupertinoThemeData::default().with_brightness(Brightness::Light),
+        pink,
+    );
+    assert_eq!(
+        light.primary_color(),
+        CupertinoColor::Static(pink),
+        "a theme of the platform's brightness takes the accent"
+    );
+    for (accent, contrasting) in [
+        (Color::rgb(255, 185, 0), Color::BLACK),
+        (Color::rgb(0, 0, 128), Color::WHITE),
+    ] {
+        assert_eq!(
+            resolved_under_accent(CupertinoThemeData::default(), accent)
+                .primary_contrasting_color(),
+            CupertinoColor::Static(contrasting),
+            "{accent:?}"
+        );
+    }
+    assert_eq!(
+        resolved_under_accent(
+            CupertinoThemeData::default().with_primary_contrasting_color(Color::WHITE),
+            Color::rgb(255, 185, 0),
+        )
+        .primary_contrasting_color(),
+        CupertinoColor::Static(Color::WHITE),
+        "an authored contrasting colour stays"
+    );
+}
+
 /// An explicit `CupertinoThemeData::brightness` takes precedence over a
 /// conflicting ambient `MediaQuery::platform_brightness` — the oracle's
 /// `brightness ?? MediaQuery...` chain short-circuits on the theme's own

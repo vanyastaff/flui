@@ -335,7 +335,10 @@ admission and the retained aliases, including serde when enabled.
 (ADR-0172). Text factors use the bounded accessibility range `1/64..=64`;
 motion observations distinguish
 reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
-character counts have separate representations. The `preferences_contract` table
+character counts have separate representations. The accent colour is an
+`SrgbColor`: finite sRGB components and alpha in `0..=1`, refused rather than
+clamped outside it; scroll-bar visibility and what a click in the track does
+are separate observations (ADR-0359). The `preferences_contract` table
 pins numeric admission, including adjacent rejected boundary values, subnormal
 text factors and both signs of zero. The widget contract
 `media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at

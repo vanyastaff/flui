@@ -180,16 +180,49 @@ impl CupertinoThemeData {
     /// equivalent (every getter reads the same resolved color either way),
     /// simpler internally, at the cost of `PartialEq`-visible "was this
     /// explicitly set" round-tripping this crate has no consumer for yet.
+    ///
+    /// An unset primary colour resolves to the system's accent when the host
+    /// observes one ([`MediaQuery::accent_color_of`]: macOS's control accent,
+    /// Windows' accent, the desktop portal's), as AppKit tints its own
+    /// controls, and when the theme's brightness is the platform's: the host
+    /// publishes the accent resolved for the platform's appearance, so a
+    /// theme forced to the other brightness keeps the dynamic
+    /// [`CupertinoColors::SYSTEM_BLUE`] with its dark and high-contrast
+    /// variants, as it does without an accent (ADR-0359 §6). An unset
+    /// contrasting colour on the accent is white or black, whichever
+    /// contrasts more with it. An unset text theme follows the resolved
+    /// primary.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
         let colors = ColorResolver::new(ctx, self.brightness);
+        let system_accent = self
+            .primary_color
+            .is_none()
+            .then(|| MediaQuery::accent_color_of(ctx))
+            .flatten()
+            .filter(|_| {
+                self.brightness.is_none_or(|brightness| {
+                    Some(brightness) == MediaQuery::platform_brightness_of(ctx)
+                })
+            });
+        let primary = self.primary_color.unwrap_or_else(|| {
+            system_accent.map_or(
+                CupertinoColor::Dynamic(CupertinoColors::SYSTEM_BLUE),
+                CupertinoColor::Static,
+            )
+        });
+        let contrasting = match (self.primary_contrasting_color, system_accent) {
+            (None, Some(accent)) => CupertinoColor::Static(accent.contrasting_text_color()),
+            _ => self.primary_contrasting_color(),
+        };
+        let text_theme = self.text_theme.clone().unwrap_or_else(|| {
+            CupertinoTextThemeData::default().with_primary_color(as_dynamic(primary))
+        });
         Self {
             brightness: self.brightness,
-            primary_color: Some(CupertinoColor::Static(colors.resolve(self.primary_color()))),
-            primary_contrasting_color: Some(CupertinoColor::Static(
-                colors.resolve(self.primary_contrasting_color()),
-            )),
-            text_theme: Some(self.text_theme().resolve_colors(&colors)),
+            primary_color: Some(CupertinoColor::Static(colors.resolve(primary))),
+            primary_contrasting_color: Some(CupertinoColor::Static(colors.resolve(contrasting))),
+            text_theme: Some(text_theme.resolve_colors(&colors)),
             bar_background_color: Some(CupertinoColor::Static(
                 colors.resolve(self.bar_background_color()),
             )),

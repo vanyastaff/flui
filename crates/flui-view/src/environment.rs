@@ -15,8 +15,8 @@
 //!
 //! `size`, `device_pixel_ratio`, `text_sizing`, `font_weight_adjustment`, `view_padding`,
 //! `padding`, `view_insets`, `system_gesture_insets`, `platform_brightness`, `high_contrast`,
-//! `preferred_locales`, `regional_formats`, `motion` — presentation and
-//! preference fields for layout and theming.
+//! `preferred_locales`, `regional_formats`, `motion`, `accent_color`, `scroll_bars` —
+//! presentation and preference fields for layout and theming.
 //!
 //! ## Deferred (not yet implemented)
 //!
@@ -38,7 +38,8 @@ use flui_foundation::geometry::{EdgeInsets, Edges, Size};
 use flui_interaction::gesture::{GestureArena, SweepModel};
 use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_painting::TextSizing;
-use flui_platform::{Brightness, Locale, RegionalFormats, TargetPlatform};
+use flui_painting::styling::Color;
+use flui_platform::{Brightness, Locale, RegionalFormats, ScrollBarPreferences, TargetPlatform};
 
 use crate::prelude::*;
 use crate::{FieldMask, impl_inherited_view};
@@ -73,6 +74,8 @@ use crate::{FieldMask, impl_inherited_view};
 /// - [`motion`](Self::motion)
 /// - [`preferred_locales`](Self::preferred_locales)
 /// - [`regional_formats`](Self::regional_formats)
+/// - [`accent_color`](Self::accent_color)
+/// - [`scroll_bars`](Self::scroll_bars)
 #[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
@@ -142,6 +145,16 @@ pub struct MediaQueryData {
     /// [`RegionalFormats::apply_to`]; the locale `Localizations` resolver
     /// stays without these keys, so delegates match it as declared.
     pub regional_formats: RegionalFormats,
+
+    /// The colour the user chose to tint controls with, observed by the host
+    /// (ADR-0359). `None` when the platform has no such setting or the user
+    /// set none: a design system then uses its own primary colour.
+    pub accent_color: Option<Color>,
+
+    /// When the system shows a scroll bar and what a click in its track does,
+    /// observed by the host (ADR-0359); each part unknown until a host reads
+    /// it. A `Scrollbar` whose author chose neither follows them.
+    pub scroll_bars: ScrollBarPreferences,
 }
 
 impl Default for MediaQueryData {
@@ -159,6 +172,8 @@ impl Default for MediaQueryData {
             motion: MotionPolicy::Full,
             preferred_locales: None,
             regional_formats: RegionalFormats::default(),
+            accent_color: None,
+            scroll_bars: ScrollBarPreferences::default(),
         }
     }
 }
@@ -374,6 +389,20 @@ impl MediaQuery {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_REGIONAL_FORMATS, |d| {
             d.regional_formats.clone()
         })
+    }
+
+    /// The system's accent colour, depending on `accent_color` only; `None`
+    /// without a `MediaQuery` ancestor as when the host observed no accent.
+    #[must_use]
+    pub fn accent_color_of(ctx: &dyn BuildContext) -> Option<Color> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_ACCENT_COLOR, |d| d.accent_color)
+            .flatten()
+    }
+
+    /// The system's scroll-bar preferences, depending on `scroll_bars` only.
+    #[must_use]
+    pub fn scroll_bars_of(ctx: &dyn BuildContext) -> Option<ScrollBarPreferences> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SCROLL_BARS, |d| d.scroll_bars)
     }
 }
 

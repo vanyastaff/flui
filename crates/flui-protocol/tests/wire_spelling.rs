@@ -81,10 +81,13 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
             Absence, Appearance, Autofill, Availability, Backend, CancelReason, Capitalization,
             CloseAnswer, CloseCause, Correction, CutReason, DynamicRange, EnterAction, Execution,
             FailureKind, Gamut, GestureComponent, GesturePhase, InputPurpose, MemoryPressureLevel,
-            Modifier, PointerKind, ScrollPhase, ScrollUnit, SessionEndPhase, StoreError,
-            StoreLockKind, Stream, ViewportStatus, WheelAxis, WindowMode,
+            Modifier, PointerKind, ScrollBarVisibility, ScrollPhase, ScrollTrackClick, ScrollUnit,
+            SessionEndPhase, StoreError, StoreLockKind, Stream, ViewportStatus, WheelAxis,
+            WindowMode,
         };
         spelled_as_named(Absence::ALL, Absence::name);
+        spelled_as_named(ScrollBarVisibility::ALL, ScrollBarVisibility::name);
+        spelled_as_named(ScrollTrackClick::ALL, ScrollTrackClick::name);
         spelled_as_named(CloseAnswer::ALL, CloseAnswer::name);
         spelled_as_named(CloseCause::ALL, CloseCause::name);
         spelled_as_named(CutReason::ALL, CutReason::name);
