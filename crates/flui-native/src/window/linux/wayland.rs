@@ -420,6 +420,7 @@ mod toplevel {
     };
     use crate::owner::window_delivery::{Publication, Retirement, WindowDelivery};
     use crate::text::WindowTextInput;
+    use crate::window::linux::class::AppClass;
     use crate::window::state::{
         ReportedFacts, SampledGeometry, WindowStateCell, not_carried_out, system_frame_or_none,
     };
@@ -951,6 +952,9 @@ mod toplevel {
                 .exporter
                 .as_ref()
                 .map(|exporter| exporter.export_toplevel(&surface, &queue, Arc::clone(&record)));
+            // Before the first commit, so the shell matches the window to its
+            // desktop entry from its first configure.
+            toplevel.set_app_id(windows.class.name().to_owned());
             toplevel.set_title(options.title.clone());
             let size = clamp(content.get(), constraints);
             match options.mode {
@@ -2188,6 +2192,8 @@ mod toplevel {
         positions: WindowPositions<SurfaceRef>,
         /// The fonts the windows draw their own titles with.
         title_fonts: TitleFonts,
+        /// The class every window carries as its app id.
+        class: AppClass,
     }
 
     impl std::fmt::Debug for WaylandWindows {
@@ -2198,11 +2204,12 @@ mod toplevel {
 
     impl WaylandWindows {
         /// What the Wayland host's windows open with: each hands out
-        /// `positions`.
-        pub(crate) fn new(positions: WindowPositions<SurfaceRef>) -> Self {
+        /// `positions` and carries `class` as its app id.
+        pub(crate) fn new(positions: WindowPositions<SurfaceRef>, class: AppClass) -> Self {
             Self {
                 positions,
                 title_fonts: TitleFonts::default(),
+                class,
             }
         }
     }

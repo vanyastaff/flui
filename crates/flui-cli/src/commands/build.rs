@@ -322,8 +322,9 @@ fn macos_bundle() -> CliResult<AppBundle> {
 }
 
 /// The application's identity for a Linux build, as `macos_bundle` resolves
-/// it: the name its desktop entry shows and the identifier the entry and its
-/// MIME types are installed under.
+/// it: the name its desktop entry shows and, when `flui.toml` declares it,
+/// the identifier the entry and its MIME types are installed under (without
+/// one, the executable names them: `linux_desktop`).
 fn linux_bundle() -> CliResult<AppBundle> {
     let root = std::env::current_dir().context("failed to resolve application directory")?;
     bundle_at(&root, crate::app_id::AppId::desktop_entry_id)
@@ -339,7 +340,7 @@ fn bundle_at(
     match std::fs::symlink_metadata(&manifest) {
         Ok(_) => {
             let config = crate::config::FluiConfig::load_from(&manifest)?;
-            Ok(AppBundle::new(&config.app.name, identifier(&config.app.id)))
+            Ok(AppBundle::new(&config.app.name, identifier(&config.app.id)).declared())
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let name = root

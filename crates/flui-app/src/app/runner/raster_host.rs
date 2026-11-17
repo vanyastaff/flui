@@ -118,7 +118,11 @@ impl Default for SharedRasterHost {
 struct ThreadLink {
     /// Weak: the executor the host retires stops when the host lets go of
     /// it, not when the last window lets go of the link.
-    thread: Option<(std::rc::Weak<flui_engine::ExecutorHandle>, RasterSender)>,
+    thread: Option<(
+        std::rc::Weak<flui_engine::ExecutorHandle>,
+        RasterSender,
+        Redraws,
+    )>,
     slots: rustc_hash::FxHashMap<PresentationAddress, SlotId>,
 }
 
@@ -127,11 +131,13 @@ impl ThreadLink {
     /// The wait for `address`'s slot to come down, when a raster thread
     /// holds it.
     fn detach_wait(&self, address: PresentationAddress) -> Option<DetachWait> {
-        let (handle, sender) = self.thread.as_ref()?;
+        let (handle, sender, redraws) = self.thread.as_ref()?;
         Some(DetachWait {
             handle: handle.upgrade()?,
             sender: sender.clone(),
             slot: *self.slots.get(&address)?,
+            redraws: redraws.clone(),
+            target: None,
         })
     }
 }
@@ -215,14 +221,22 @@ impl SharedRasterHost {
         let mut host = self.host.try_borrow_mut().ok()?;
         let answer = with(&mut host);
         self.run_deferred(&mut host);
-        // A raster thread's detaches are waited for with the host released.
+        // A raster thread's detaches are waited for with the host released,
+        // and so is the wake a death asks of every window; a panic either
+        // meets is held as the deferred work's is.
         #[cfg(not(target_arch = "wasm32"))]
         {
             let detaching = std::mem::take(&mut host.detaching);
+            let death_wake = host.death_wake.take();
             drop(host);
+            let mut caught = FirstPanic::new();
             for wait in detaching {
-                let _down = wait.wait();
+                let _down = wait.wait(&mut caught);
             }
+            if let Some(redraws) = death_wake {
+                let _woken = caught.contain(|| redraws.wake());
+            }
+            self.hold_deferred(caught);
         }
         Some(answer)
     }
@@ -254,11 +268,13 @@ impl SharedRasterHost {
                     // The slot it took down is not the link's any more: the
                     // host's deferred detach then expects the thread to answer
                     // it stale, and still says so of any other slot.
-                    if wait.wait()
+                    let mut caught = FirstPanic::new();
+                    if wait.wait(&mut caught)
                         && let Ok(mut link) = self.link.try_borrow_mut()
                     {
                         let _forgotten = link.slots.remove(&address);
                     }
+                    self.hold_deferred(caught);
                 }
             }
             return;
@@ -349,6 +365,11 @@ impl SharedRasterHost {
                 host.reclaim_held(level, &mut caught);
             }
         }
+        self.hold_deferred(caught);
+    }
+
+    /// Hold `caught` for [`take_deferred_panic`](Self::take_deferred_panic).
+    fn hold_deferred(&self, caught: FirstPanic) {
         if let Ok(mut held) = self.deferred.panic.try_borrow_mut() {
             held.absorb(caught);
         } else {
@@ -371,6 +392,10 @@ pub(crate) struct RasterHost {
     /// once its borrow is released.
     #[cfg(not(target_arch = "wasm32"))]
     detaching: Vec<DetachWait>,
+    /// The windows a death an attach found wakes, once the shared host's
+    /// borrow is released (ADR-0305 §9).
+    #[cfg(not(target_arch = "wasm32"))]
+    death_wake: Option<Redraws>,
     /// What a window's detach needs of the raster thread when this host is
     /// busy, shared with the [`SharedRasterHost`].
     #[cfg(not(target_arch = "wasm32"))]
@@ -384,20 +409,44 @@ struct DetachWait {
     handle: Rc<flui_engine::ExecutorHandle>,
     sender: RasterSender,
     slot: SlotId,
+    /// The windows a death this wait finds wakes, each to settle what the
+    /// executor will not and to report it dead.
+    redraws: Redraws,
+    /// What the window's surfaces were made over, for a detach the host
+    /// sent; `None` for the wait of a window that closed while the host was
+    /// busy, whose slot the host's own detach keeps.
+    target: Option<Arc<dyn SurfaceTarget>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl DetachWait {
     /// Wait until the thread took the slot down, at most
-    /// [`flui_engine::DETACH_DEADLINE`]; answers whether it did.
-    fn wait(self) -> bool {
+    /// [`flui_engine::DETACH_DEADLINE`]; answers whether it did. A thread
+    /// that does not answer dies, and every window still attached is asked
+    /// for a frame, whose wake quarantines it (ADR-0305 §9). A panic of the
+    /// log's subscriber or of a window's redraw requester is held in
+    /// `caught`.
+    fn wait(self, caught: &mut FirstPanic) -> bool {
         match self
             .handle
             .detach(&self.sender, self.slot, flui_engine::DETACH_DEADLINE)
         {
             Ok(()) => true,
             Err(failure) => {
-                tracing::error!(%failure, "raster host: the raster thread did not take a window's slot down");
+                let _logged = caught.contain(|| {
+                    tracing::error!(%failure, "raster host: the raster thread did not take a window's slot down");
+                });
+                let _woken = caught.contain(|| self.redraws.wake());
+                if let Some(target) = self.target {
+                    // The wedged thread may still present to a surface made
+                    // over the target, so the target lives until the process
+                    // exits (ADR-0305 §9).
+                    #[expect(
+                        clippy::mem_forget,
+                        reason = "ADR-0305 §9: a raster thread that did not answer may still present over this target"
+                    )]
+                    std::mem::forget(target);
+                }
                 false
             }
         }
@@ -681,6 +730,8 @@ impl RasterHost {
             #[cfg(not(target_arch = "wasm32"))]
             detaching: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            death_wake: None,
+            #[cfg(not(target_arch = "wasm32"))]
             link: Rc::default(),
         }
     }
@@ -854,7 +905,9 @@ impl RasterHost {
                 match handle.await_attach(&placed.sender, slot, flui_engine::DETACH_DEADLINE) {
                     Ok(()) => false,
                     Err(failure) => {
-                        tracing::error!(%failure, "raster host: the raster thread died or did not answer a window's attach; the window is kept and draws nothing");
+                        let _logged = caught.contain(|| {
+                            tracing::error!(%failure, "raster host: the raster thread died or did not answer a window's attach; the window is kept and draws nothing");
+                        });
                         true
                     }
                 }
@@ -917,6 +970,12 @@ impl RasterHost {
         #[cfg(not(target_arch = "wasm32"))]
         if placed.executor.inline().is_none() {
             let _replaced = self.link.borrow_mut().slots.insert(address, slot);
+        }
+        // A death the attach found wakes every window, this one included,
+        // once the host is released: each wake quarantines its window.
+        #[cfg(not(target_arch = "wasm32"))]
+        if unanswered {
+            self.death_wake = Some(placed.redraws.clone());
         }
         Ok(())
     }
@@ -989,7 +1048,7 @@ impl RasterHost {
                 .map_err(EngineError::surface_creation)?;
                 let handle = Rc::new(handle);
                 *self.link.borrow_mut() = ThreadLink {
-                    thread: Some((Rc::downgrade(&handle), sender.clone())),
+                    thread: Some((Rc::downgrade(&handle), sender.clone(), redraws.clone())),
                     slots: rustc_hash::FxHashMap::default(),
                 };
                 (Executor::Threaded(handle), sender)
@@ -1160,6 +1219,8 @@ impl RasterHost {
                 handle: Rc::clone(handle),
                 sender: placed.sender.clone(),
                 slot: slot.slot,
+                redraws: placed.redraws.clone(),
+                target: Some(Arc::clone(&slot.surface_target)),
             });
         }
         let _turned = caught.contain(|| placed.executor.turn());
@@ -1343,7 +1404,8 @@ impl RasterHost {
         DeviceHealth::Rebuilding { attempts: 0 }
     }
 
-    /// When the executor next rebuilds a lost device, for the loop's wake.
+    /// When the executor next rebuilds a lost device, for the loop's wake;
+    /// `None` once it died, since a dead executor rebuilds nothing.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(
@@ -1354,7 +1416,19 @@ impl RasterHost {
     pub(crate) fn device_retry_at(&self) -> Option<web_time::Instant> {
         self.placed
             .as_ref()
+            .filter(|_| !self.executor_died())
             .and_then(|placed| placed.sender.device_retry_at())
+    }
+
+    /// Whether the executor died (ADR-0305 §9): terminal for every window.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web has no raster thread to die")
+    )]
+    fn executor_died(&self) -> bool {
+        self.placed
+            .as_ref()
+            .is_some_and(|placed| placed.sender.health() == flui_engine::ExecutorHealth::Died)
     }
 
     /// Follow the display `address`'s window is on: a changed colour profile
@@ -1378,7 +1452,8 @@ impl RasterHost {
             return false;
         }
         // Recorded whether or not it is taken: a send is refused only for a
-        // slot that is gone, which asking again cannot change.
+        // slot that is gone or an executor that died, which asking again
+        // cannot change.
         slot.display = Some(color);
         match placed.sender.send(RasterCommand::Configure {
             slot: slot.slot,
@@ -1509,6 +1584,12 @@ impl RasterHost {
     /// Android `Resume` before its `InitWindow`) is taken as released by the
     /// platform until it reports one again.
     fn restore_surface(placed: &mut Placed, address: PresentationAddress, now: Instant) -> bool {
+        // A dead executor restores nothing, whoever asks (the restore pace, a
+        // surface the platform gives back, a lent frame): a surface made for
+        // it would only be refused and dropped again.
+        if placed.sender.health() == flui_engine::ExecutorHealth::Died {
+            return false;
+        }
         let Some(slot) = placed.slots.get_mut(&address) else {
             return false;
         };
@@ -1774,6 +1855,11 @@ impl RasterHost {
         )
     )]
     pub(crate) fn window_deadline(&self, address: PresentationAddress) -> Option<Instant> {
+        // A dead executor rebuilds nothing and restores nothing: a deadline it
+        // left in its record would wake the loop at a past instant for good.
+        if self.executor_died() {
+            return None;
+        }
         super::host::merge_wake_deadlines(
             self.device_retry_at(),
             self.surface_retry_at_for(address),
@@ -1814,6 +1900,12 @@ impl RasterHost {
             tracing::error!("BUG: raster host: a frame for a window with no executor");
             return SubmitVerdict::Failed;
         };
+        // A dead executor takes no frame (ADR-0305 §9): the frame is finished
+        // as far as the window can tell, and commits, so input and the agent
+        // keep reading the tree while the window draws nothing.
+        if placed.sender.health() == flui_engine::ExecutorHealth::Died {
+            return SubmitVerdict::NoPresent;
+        }
         let Some(generation) = Self::configure(placed, address, surface) else {
             // Past the device's limit, a retry is refused the same way.
             // Otherwise (a zero size, no surface yet) nothing is drawn until
@@ -2051,6 +2143,9 @@ impl RasterHost {
         let failure = placed
             .sender
             .drain_settlements_and_failure(id, &mut settlements);
+        // Read after the drain, which settles what the death left in the
+        // inboxes: a death the drain saw is seen here.
+        let died = placed.sender.health() == flui_engine::ExecutorHealth::Died;
         let slot = placed
             .slots
             .get_mut(&address)
@@ -2108,11 +2203,42 @@ impl RasterHost {
             if forget && let Some(slot) = placed.slots.get_mut(&address) {
                 slot.base.forget();
             }
+            // After the death no later frame shows the tree: one that will not
+            // be shown (the executor's own `Failed` at the death, a stale or
+            // withheld one) is finished with nothing to present, so it commits
+            // and its held input replays (ADR-0305 §9).
+            let shown = matches!(verdict, SubmitVerdict::Presented | SubmitVerdict::NoPresent);
+            let verdict = if died && !shown {
+                SubmitVerdict::NoPresent
+            } else {
+                verdict
+            };
             into.push(flui_runtime::sink::FrameSettlement::new(
                 address,
                 settlement.epoch,
                 verdict,
             ));
+        }
+        // A dead executor's frames still held never settle, or settle only
+        // if a wedged render returns: the window settles them now, as
+        // finished with nothing to present, so its UI runtime commits the
+        // tree they were painted from and the input held for that commit
+        // replays. The window is quarantined, not closed (ADR-0305 §9): its
+        // frames go on against the current tree while it draws nothing. A
+        // settlement the thread still sends for one of them is a frame the
+        // window no longer holds.
+        if died
+            && let Some(slot) = placed.slots.get_mut(&address)
+            && !slot.pending.is_empty()
+        {
+            slot.base.forget();
+            into.extend(slot.pending.drain(..).map(|frame| {
+                flui_runtime::sink::FrameSettlement::new(
+                    address,
+                    frame.epoch,
+                    SubmitVerdict::NoPresent,
+                )
+            }));
         }
         // After a panic the next frame the window asks for draws in full,
         // whatever settled clean in this drain.
@@ -2356,12 +2482,17 @@ impl ThreadSettled {
 
 /// One window's slot as its frame driver holds it: the host, the window's
 /// address on it, the size the platform last announced, and the device's
-/// health as the window last reported it to its UI runtime.
+/// health as the window last reported it to its UI runtime, and whether it
+/// reported the executor dead.
 pub(crate) struct RasterSlot {
     pub(crate) host: SharedRasterHost,
     pub(crate) address: PresentationAddress,
     pub(crate) size: (u32, u32),
     pub(crate) device: DeviceHealth,
+    /// Whether the window told its UI runtime that the executor died
+    /// (ADR-0305 §9): terminal, so no device health is reported after it
+    /// and no rebuild the application asks for reaches the executor.
+    pub(crate) renderer_dead: bool,
 }
 
 impl RasterSlot {
@@ -2409,7 +2540,7 @@ impl RasterSlot {
         expect(dead_code, reason = "only the desktop loop turns a raster thread")
     )]
     pub(crate) fn settle(
-        &self,
+        &mut self,
         ui_runtime: &mut crate::app::ui_runtime::UiRuntime,
     ) -> (ThreadSettled, FirstPanic) {
         let mut caught = FirstPanic::new();
@@ -2442,6 +2573,9 @@ impl RasterSlot {
             settled = settled.and(shown);
         }
         self.give_back(drained);
+        // After the settlements, which commit what a dead executor never
+        // will: the runtime learns of the death once.
+        let _dead = caught.contain(|| self.settle_death(ui_runtime));
         (settled, caught)
     }
 
@@ -2515,9 +2649,10 @@ impl RasterSlot {
     /// Whether the application asked, through `ui_runtime`, for a rebuild of
     /// the device the executor gave up on: the runtime no longer reports the
     /// abandonment this window last told it of
-    /// (`UiRuntime::retry_render_device`).
+    /// (`UiRuntime::retry_render_device`). A dead executor takes no rebuild.
     fn device_retry_asked(&self, ui_runtime: &crate::app::ui_runtime::UiRuntime) -> bool {
-        matches!(self.device, DeviceHealth::GivenUp { .. })
+        !self.renderer_dead
+            && matches!(self.device, DeviceHealth::GivenUp { .. })
             && !ui_runtime
                 .primary_device_recovery()
                 .is_some_and(flui_runtime::frame_failure::DeviceRecovery::is_abandoned)
@@ -2570,19 +2705,28 @@ impl RasterSlot {
         use flui_runtime::frame_failure::DeviceRecovery;
 
         // A host still turning up the stack leaves the device unseen, for the
-        // next settle to see.
-        let Some((health, failure)) = self.host.try_read(|host| {
+        // next settle to see. The executor's failure is the whole executor's:
+        // the first window to settle logs it.
+        let Some((health, failure, executor_failure)) = self.host.try_read(|host| {
+            let placed = host.placed.as_ref();
             (
                 host.device_health(),
-                host.placed
-                    .as_ref()
-                    .and_then(|placed| placed.sender.take_device_failure()),
+                placed.and_then(|placed| placed.sender.take_device_failure()),
+                placed.and_then(|placed| placed.sender.take_executor_failure()),
             )
         }) else {
             return false;
         };
+        // The death is told before any log line, whose subscriber is not ours.
+        let dead = self.settle_death(ui_runtime);
         if let Some(error) = failure {
             tracing::warn!(%error, "GPU device rebuild failed");
+        }
+        if let Some(error) = executor_failure {
+            tracing::error!(%error, "raster executor failed");
+        }
+        if dead {
+            return false;
         }
         if health == self.device {
             return false;
@@ -2610,6 +2754,31 @@ impl RasterSlot {
             // A health state added later reports nothing until this match names it.
             _ => false,
         }
+    }
+
+    /// Tell `ui_runtime` once that the executor died
+    /// ([`DeviceRecovery::Dead`](flui_runtime::frame_failure::DeviceRecovery::Dead),
+    /// ADR-0305 §9), and answer whether it is dead: each window learns it
+    /// from the executor's health, which stays.
+    fn settle_death(&mut self, ui_runtime: &crate::app::ui_runtime::UiRuntime) -> bool {
+        if self.renderer_dead {
+            return true;
+        }
+        let died = self
+            .host
+            .try_read(|host| {
+                host.placed.as_ref().is_some_and(|placed| {
+                    placed.sender.health() == flui_engine::ExecutorHealth::Died
+                })
+            })
+            .unwrap_or(false);
+        if died {
+            self.renderer_dead = true;
+            ui_runtime.note_primary_device_recovery(Some(
+                flui_runtime::frame_failure::DeviceRecovery::Dead,
+            ));
+        }
+        died
     }
 }
 

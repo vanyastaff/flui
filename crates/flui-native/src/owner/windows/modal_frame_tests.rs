@@ -54,12 +54,15 @@ fn a_due_deadline_gets_one_modal_frame_per_generation() {
         std::sync::Weak::new(),
     );
 
-    assert_eq!(modal.deliver(), 1, "a due deadline asks again at once");
+    assert!(
+        modal.deliver().is_some(),
+        "a due deadline is armed until it is taken"
+    );
     assert_eq!(frames_asked(), 1, "the due deadline");
     assert_eq!(
         modal.deliver(),
-        crate::owner::modal_pace::MODAL_FRAME_PACE_MS,
-        "a delivered instant no frame serviced is not waited for: the timer keeps its pace"
+        None,
+        "a delivered instant no frame serviced is not waited for"
     );
     assert_eq!(frames_asked(), 1, "the same answer, with no frame since");
     frames.counter().fetch_add(1, Ordering::Relaxed);
@@ -134,4 +137,43 @@ fn a_due_turn_deadline_wakes_the_owner_from_a_modal_loop() {
         before,
         "an instant a turn served is not delivered again"
     );
+}
+
+/// A delivery whose handler panics (the owner window's procedure contains the
+/// panic of the drag loop's delivery) leaves the pacing asking again, not
+/// stuck delivering: a request after it still sets the clock. Red-check: drop
+/// the unwind guard, and the timer stays `Delivering` after the panic.
+#[test]
+fn a_delivery_that_panics_leaves_the_pacing_asking_again() {
+    use super::modal_loop::{ModalLoops, ModalPacing};
+    use crate::owner::app_delivery::testing::{AppLog, bound};
+    use crate::owner::modal_pace::PaceTimer;
+
+    let windows = Arc::new(CountedWindows::default());
+    let app = AppLog::new();
+    app.answer_deadline_with(|| panic!("the wake deadline"));
+    let run = bound(app);
+    let pacing = ModalPacing::new(
+        ModalFrames::new(
+            Arc::clone(&run.delivery),
+            Arc::downgrade(&windows) as std::sync::Weak<dyn ClassWindows>,
+            Rc::new(FrameCount::default()),
+            std::sync::Weak::new(),
+        ),
+        Rc::new(ModalLoops::default()),
+    );
+    pacing.enter(|| None);
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pacing.tick()));
+    assert!(
+        unwound.is_err(),
+        "the handler's panic unwinds out of the delivery"
+    );
+    assert!(
+        matches!(pacing.timer(), PaceTimer::Armed { .. }),
+        "the pacing asks again: {:?}",
+        pacing.timer()
+    );
+    pacing.exit();
+    assert_eq!(pacing.timer(), PaceTimer::Stopped);
 }

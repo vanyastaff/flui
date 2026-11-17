@@ -8,7 +8,7 @@ use flui::rendering::{
     BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,
     RenderBox, RenderUpdateImpact, Single,
 };
-use flui::testing::harness::widgets::{lay_out, loose};
+use flui::testing::{Tester, find};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::sync::{
@@ -67,17 +67,12 @@ fn custom_painter_records_a_rectangle() {
     );
     assert_eq!(paint.color, Color::rgb(10, 20, 30));
 
-    let mut laid = lay_out(
+    let mut t = Tester::mount(Center::new().child(
         flui::widgets::CustomPaint::new().painter(RectanglePainter)
             .size(Size::new(24.0, 16.0)),
-        loose(100.0),
-    );
-    laid.enable_semantics();
-    laid.tick();
-    let tree = laid.a11y_tree().expect("semantics enabled");
-    let node = tree.find_by_label("painted rectangle").expect("the custom-paint region reaches the adapter tree");
-    let bounds = node.bounds().expect("laid-out region bounds");
-    assert_eq!((bounds.x1 - bounds.x0, bounds.y1 - bounds.y0), (24.0, 16.0));
+    ));
+    let bounds = t.rect(&find::text("painted rectangle"));
+    assert_eq!((bounds.width, bounds.height), (24.0, 16.0));
 }
 
 #[derive(Debug, Clone, flui::animation::TwoWayConverter)]
@@ -111,15 +106,49 @@ impl CustomPainter for MotionPainter {
     }
 }
 
+/// A card whose motion its state owns, on the frame registry of the
+/// subtree, as an application writes one: the state is born with its
+/// motion. The test drives the motion through the shared owner and counts
+/// the card's builds.
+#[derive(Clone, StatefulView)]
+struct MotionCard {
+    owner: Rc<RefCell<Option<flui::animation::AnimatedValue<CardMotion>>>>,
+    builds: Rc<std::cell::Cell<usize>>,
+}
+
+struct MotionCardState {
+    animation: flui::animation::AnimatedValueView<CardMotion>,
+}
+
+impl StatefulView for MotionCard {
+    type State = MotionCardState;
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve};
+        let vsync = flui::view::environment::VsyncScope::maybe_of(ctx);
+        let owner = AnimatedValue::try_new(
+            CardMotion(Appearance { position: Offset::ZERO, color: Color::rgb(255, 0, 0) }, 0.0),
+            MotionSpec::Curve { duration: Duration::from_secs(1), curve: SharedCurve::new(Linear) },
+            vsync.as_ref(),
+        ).expect("finite custom motion");
+        let animation = owner.animation();
+        *self.owner.borrow_mut() = Some(owner);
+        MotionCardState { animation }
+    }
+}
+
+impl ViewState<MotionCard> for MotionCardState {
+    fn build(&self, view: &MotionCard, _: &dyn BuildContext) -> impl IntoView {
+        view.builds.set(view.builds.get() + 1);
+        flui::widgets::CustomPaint::new()
+            .size(Size::new(100.0, 100.0))
+            .painter(MotionPainter(self.animation.clone()))
+    }
+}
+
 #[test]
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
-    use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve, Vsync};
-    use flui::testing::harness::widgets::{LaidOut, lay_out_animated};
-    use flui::view::environment::VsyncScope;
-    use flui::widgets::CustomPaint;
-
-    fn sample(laid: &LaidOut) -> (Rect, Color) {
-        let rectangles: Vec<_> = laid.draw_ops().into_iter().filter_map(|command| {
+    fn sample(t: &mut Tester) -> (Rect, Color) {
+        let rectangles: Vec<_> = t.draw_commands().into_iter().filter_map(|command| {
             match command.op {
                 DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
                 _ => None,
@@ -129,66 +158,56 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
         rectangles[0]
     }
 
-    fn assert_paint_only(laid: &mut LaidOut) {
-        let report = laid.with_build_owner_mut(|owner| owner.last_frame_build_report());
-        assert_eq!(report.builds_run, 0, "custom motion only invalidates paint: {report:?}");
-    }
-
-    let vsync = Vsync::new();
-    let mut owner = AnimatedValue::try_new(
-        CardMotion(Appearance { position: Offset::ZERO, color: Color::rgb(255, 0, 0) }, 0.0),
-        MotionSpec::Curve { duration: Duration::from_secs(1), curve: SharedCurve::new(Linear) },
-        Some(&vsync),
-    ).expect("finite custom motion");
-    let first = owner.animate_to(CardMotion(
-        Appearance { position: Offset::new(20.0, 40.0), color: Color::rgba(0, 0, 255, 0) },
-        1.0,
-    )).expect("first custom motion");
-    let mut laid = lay_out_animated(
-        VsyncScope::new(vsync.clone(), CustomPaint::new()
-            .size(Size::new(100.0, 100.0)).painter(MotionPainter(owner.animation()))),
-        loose(100.0),
-        vsync,
-    );
-    assert_eq!(sample(&laid), (
+    let card = MotionCard { owner: Rc::default(), builds: Rc::default() };
+    let mut t = Tester::mount(Center::new().child(card.clone()));
+    assert_eq!(sample(&mut t), (
         Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0)),
         Color::rgb(255, 0, 0),
     ));
-    // The harness adopts this external registry after its mounting frame.
-    // Anchor the admitted run before advancing the presentation's time.
-    laid.tick();
-    laid.pump_for(Duration::from_millis(500));
-    assert!(laid.did_paint_last_frame(), "motion wakes the mounted painter");
-    assert_paint_only(&mut laid);
-    let seam = sample(&laid);
+    let builds = card.builds.get();
+    let first = card.owner.borrow_mut().as_mut().expect("mounted").animate_to(CardMotion(
+        Appearance { position: Offset::new(20.0, 40.0), color: Color::rgba(0, 0, 255, 0) },
+        1.0,
+    )).expect("first custom motion");
+    // A read runs the frame the motion asked for at once, which anchors the
+    // run before the presentation's time advances.
+    let _ = sample(&mut t);
+    t.pump_for(Duration::from_millis(500));
+    assert_eq!(card.builds.get(), builds, "custom motion only invalidates paint");
+    let seam = sample(&mut t);
     assert_eq!(seam.0, Rect::from_origin_size(Point::new(10.0, 20.0), Size::new(15.0, 10.0)));
     let [red, _, blue, alpha] = seam.1.to_rgba_f32_array();
     assert!(red >= 0.999 && blue <= 0.001 && (alpha - 0.5).abs() <= 1e-6);
-    let velocity = owner.velocity();
-    let second = owner.animate_to(CardMotion(
-        Appearance { position: Offset::new(-20.0, -40.0), color: Color::rgb(0, 255, 0) },
-        2.0,
-    )).expect("interrupted custom motion");
+    let (velocity, second) = {
+        let mut owner = card.owner.borrow_mut();
+        let owner = owner.as_mut().expect("mounted");
+        let velocity = owner.velocity();
+        let second = owner.animate_to(CardMotion(
+            Appearance { position: Offset::new(-20.0, -40.0), color: Color::rgb(0, 255, 0) },
+            2.0,
+        )).expect("interrupted custom motion");
+        (velocity, second)
+    };
     assert!(first.is_canceled() && second.is_pending());
-    laid.tick();
-    assert_eq!(sample(&laid), seam, "the submitted frame keeps its seam");
-    laid.pump_for(Duration::from_micros(1));
-    assert_paint_only(&mut laid);
-    let after = sample(&laid);
+    assert_eq!(sample(&mut t), seam, "the submitted frame keeps its seam");
+    t.pump_for(Duration::from_micros(1));
+    assert_eq!(card.builds.get(), builds, "custom motion only invalidates paint");
+    let after = sample(&mut t);
     for (delta, incoming) in [
         (after.0.min.x - seam.0.min.x, velocity[0]),
         (after.0.min.y - seam.0.min.y, velocity[1]),
     ] {
         assert!((delta / 1e-6 - incoming).abs() < 0.001);
     }
-    laid.pump_for(Duration::from_secs(2));
-    assert_paint_only(&mut laid);
+    t.pump_for(Duration::from_secs(2));
+    assert_eq!(card.builds.get(), builds, "custom motion only invalidates paint");
     assert!(second.is_complete());
-    assert_eq!(sample(&laid), (
+    assert_eq!(sample(&mut t), (
         Rect::from_origin_size(Point::new(-20.0, -40.0), Size::new(30.0, 10.0)),
         Color::rgb(0, 255, 0),
     ));
 }
+
 
 #[derive(Debug, flui::Inspect)]
 struct SolidLeaf {
@@ -248,13 +267,14 @@ flui::view::impl_render_view!(LeafView);
 #[test]
 fn custom_render_view_mounts_lays_out_and_paints() {
     let paints = Arc::new(AtomicUsize::new(0));
-    let tree = lay_out(
-        LeafView {
-            paints: paints.clone(),
-        },
-        loose(100.0),
-    );
-    assert_eq!(tree.size(tree.root()), Size::new(24.0, 16.0));
+    let mut t = Tester::mount(Center::new().child(
+        flui::widgets::Semantics::new()
+            .container(true)
+            .label("leaf")
+            .child(LeafView { paints: paints.clone() }),
+    ));
+    let bounds = t.rect(&find::text("leaf"));
+    assert_eq!((bounds.width, bounds.height), (24.0, 16.0));
     assert_eq!(paints.load(Ordering::SeqCst), 1);
 }
 
@@ -284,7 +304,7 @@ fn proxy_macros_forward_live_and_dry_layout() {
             paints: Arc::new(AtomicUsize::new(0)),
         }),
     ))
-    .with_constraints(loose(100.0))
+    .with_constraints(BoxConstraints::loose(Size::new(100.0, 100.0)))
     .run_layout();
     let root = run.root();
     assert_eq!(run.box_geometry(root), Size::new(24.0, 16.0));
@@ -294,33 +314,26 @@ fn proxy_macros_forward_live_and_dry_layout() {
 
 #[test]
 fn gesture_recognizer_uses_headless_virtual_time() {
-    use flui::geometry::Offset;
-    use flui::interaction::{
-        GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerDispatch, PointerId,
-    };
-    let mut binding = flui::testing::harness::HeadlessBinding::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let callback = fired.clone();
-    let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
-        .settings(
-            GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)),
-        )
-        .on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
-            callback.fetch_add(1, Ordering::SeqCst);
-        })
-        .build();
-    let position = Offset::new(8.0, 8.0);
-    let down = flui::testing::harness::replay::ScriptedPointer::new(
-        Duration::ZERO,
-        PointerId::try_from(1_u64).expect("nonzero pointer"),
-        flui::testing::harness::replay::PointerPhase::Down,
-        position,
-    )
-    .to_event();
-    recognizer.add_pointer(PointerDispatch::at_root(&down));
-    binding.pump_frame(Duration::from_millis(300));
+    let mut t = Tester::mount(Center::new().child(
+        flui::widgets::Semantics::new()
+            .container(true)
+            .label("press")
+            .child(
+                GestureDetector::new()
+                    .on_long_press(move |_ctx| {
+                        callback.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .behavior(HitTestBehavior::Opaque)
+                    .child(SizedBox::new(40.0, 30.0)),
+            ),
+    ));
+    // The long-press deadline runs on the test's clock: a press released
+    // before 500 ms of it is no long press, one held past it is.
+    t.long_press(&find::text("press"), Duration::from_millis(300));
     assert_eq!(fired.load(Ordering::SeqCst), 0);
-    binding.pump_frame(Duration::from_millis(250));
+    t.long_press(&find::text("press"), Duration::from_millis(550));
     assert_eq!(fired.load(Ordering::SeqCst), 1);
 }
 
@@ -348,35 +361,37 @@ fn pointer_input_schedules_a_widget_rebuild() {
                 30.0,
             ))
     });
-    let mut tree = lay_out(view, loose(100.0));
+    let mut t = Tester::mount(Center::new().child(
+        flui::widgets::Semantics::new().container(true).label("target").child(view),
+    ));
     let initial_builds = builds.load(Ordering::SeqCst);
-    assert_eq!(tree.size(tree.root()).width, 40.0);
-    tree.dispatch_pointer_down(10.0, 10.0);
-    tree.dispatch_pointer_up(10.0, 10.0);
-    tree.tick();
+    assert_eq!(t.rect(&find::text("target")).width, 40.0);
+    t.tap(&find::text("target"));
     assert_eq!(value.load(Ordering::SeqCst), 1);
     assert!(builds.load(Ordering::SeqCst) > initial_builds);
-    assert_eq!(tree.size(tree.root()).width, 41.0);
+    assert_eq!(t.rect(&find::text("target")).width, 41.0);
 }
 
 #[test]
 fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let downs = Arc::new(AtomicUsize::new(0));
     let observed = downs.clone();
-    let tree = lay_out(
-        GestureDetector::new()
-            .drag(flui::widgets::DragSlot::horizontal().on_down(
-                move |_ctx, _details: flui::widgets::DragDownDetails| {
-                    observed.fetch_add(1, Ordering::SeqCst);
-                },
-            ))
-            .behavior(HitTestBehavior::Opaque)
-            .child(SizedBox::new(40.0, 30.0)),
-        loose(100.0),
-    );
-    tree.dispatch_pointer_down(10.0, 10.0);
+    let mut t = Tester::mount(Center::new().child(
+        flui::widgets::Semantics::new().container(true).label("drag").child(
+            GestureDetector::new()
+                .drag(flui::widgets::DragSlot::horizontal().on_down(
+                    move |_ctx, _details: flui::widgets::DragDownDetails| {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                    },
+                ))
+                .behavior(HitTestBehavior::Opaque)
+                .child(SizedBox::new(40.0, 30.0)),
+        ),
+    ));
+    // A press that never moves: the callback runs on the pointer's down,
+    // with no drag accepted.
+    t.tap(&find::text("drag"));
     assert_eq!(downs.load(Ordering::SeqCst), 1);
-    tree.dispatch_pointer_up(10.0, 10.0);
 }
 
 struct DistanceRecognizer {
@@ -424,67 +439,72 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
     }
 }
 
-#[test]
-fn downstream_custom_recognizer_competes_in_the_arena() {
-    use flui::geometry::Offset;
-    use flui::interaction::{
-        ArenaMembership, GestureArenaMember, GestureRecognizer, PointerId, PrimaryContact,
-    };
-    use flui::testing::harness::replay::{PointerPhase, ScriptedPointer};
-    use flui::widgets::PointerDispatch;
-    use std::rc::Rc;
+/// Two downstream recognizers, built on the presentation's arena when the
+/// state mounts and attached to one listener.
+#[derive(Clone, StatefulView)]
+struct ArenaProbe {
+    recognizers: Rc<RefCell<Vec<Rc<DistanceRecognizer>>>>,
+}
 
-    let binding = flui::testing::harness::HeadlessBinding::new();
-    let arena = binding.arena();
-    let recognizer = |threshold| {
-        Rc::new_cyclic(
-            |this: &std::rc::Weak<DistanceRecognizer>| DistanceRecognizer {
+struct ArenaProbeState;
+
+impl StatefulView for ArenaProbe {
+    type State = ArenaProbeState;
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        use flui::interaction::{ArenaMembership, PrimaryContact};
+        let arena = flui::view::environment::GestureArenaScope::of(ctx);
+        let recognizer = |threshold| {
+            Rc::new_cyclic(|this: &std::rc::Weak<DistanceRecognizer>| DistanceRecognizer {
                 contact: PrimaryContact::new(ArenaMembership::new(arena.clone(), this.clone())),
                 threshold,
                 accepted: Arc::new(AtomicUsize::new(0)),
                 rejected: Arc::new(AtomicUsize::new(0)),
-            },
-        )
-    };
-    let first = recognizer(10.0);
-    let second = recognizer(20.0);
-    let _member: Rc<dyn GestureArenaMember> = first.clone();
-    let pointer = PointerId::try_from(11_u64).expect("nonzero pointer");
-    let down =
-        ScriptedPointer::new(Duration::ZERO, pointer, PointerPhase::Down, Offset::ZERO).to_event();
-    for candidate in [&first, &second] {
-        candidate.add_pointer(PointerDispatch::at_root(&down));
-        assert!(candidate.contact.tracks(pointer));
+            })
+        };
+        // The arena's sweep on the pointer's release awards the first
+        // member, so the one that must win by distance is the second.
+        *self.recognizers.borrow_mut() = vec![recognizer(20.0), recognizer(10.0)];
+        ArenaProbeState
     }
-    arena.close(pointer);
+}
 
-    let moved = |x| {
-        ScriptedPointer::new(
-            Duration::ZERO,
-            pointer,
-            PointerPhase::Move,
-            Offset::new(x, 0.0),
+impl ViewState<ArenaProbe> for ArenaProbeState {
+    fn build(&self, view: &ArenaProbe, _: &dyn BuildContext) -> impl IntoView {
+        let recognizers = view.recognizers.borrow();
+        flui::widgets::Semantics::new().container(true).label("arena").child(
+            flui::widgets::Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .recognizer(&recognizers[0])
+                .recognizer(&recognizers[1])
+                .child(SizedBox::new(100.0, 30.0)),
         )
-        .to_event()
-    };
-    let below_threshold = moved(5.0);
-    for candidate in [&first, &second] {
-        candidate.handle_event(PointerDispatch::at_root(&below_threshold));
-        assert_eq!(candidate.accepted.load(Ordering::SeqCst), 0);
-        assert_eq!(candidate.rejected.load(Ordering::SeqCst), 0);
     }
+}
 
-    let crossed_threshold = moved(15.0);
-    first.handle_event(PointerDispatch::at_root(&crossed_threshold));
-    assert_eq!(first.accepted.load(Ordering::SeqCst), 1);
-    assert_eq!(first.rejected.load(Ordering::SeqCst), 0);
-    assert_eq!(second.accepted.load(Ordering::SeqCst), 0);
-    assert_eq!(second.rejected.load(Ordering::SeqCst), 1);
-    for candidate in [&first, &second] {
+#[test]
+fn downstream_custom_recognizer_competes_in_the_arena() {
+    use flui::interaction::GestureRecognizer;
+
+    let probe = ArenaProbe { recognizers: Rc::default() };
+    let mut t = Tester::mount(Center::new().child(probe.clone()));
+    // Past the near recognizer's threshold and short of the far one's: the
+    // near one claims the contact and the arena rejects the far one, though
+    // the far one is the member a sweep would award.
+    t.drag(&find::text("arena"), 15.0, 0.0, Duration::from_millis(100));
+    let recognizers = probe.recognizers.borrow();
+    let [far, near] = &recognizers[..] else {
+        panic!("the state built two recognizers");
+    };
+    assert_eq!(near.accepted.load(Ordering::SeqCst), 1);
+    assert_eq!(near.rejected.load(Ordering::SeqCst), 0);
+    assert_eq!(far.accepted.load(Ordering::SeqCst), 0);
+    assert_eq!(far.rejected.load(Ordering::SeqCst), 1);
+    for candidate in [far, near] {
         candidate.cancel();
         assert!(candidate.contact.current().is_none());
     }
 }
+
 
 use flui::view::{
     AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FrameId, FrameTiming, Instant,
@@ -596,8 +616,8 @@ fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
         callbacks: Rc::default(),
         shared_callback: Arc::default(),
     };
-    let mut tree = lay_out(view.clone(), loose(100.0));
-    tree.tick();
+    let mut t = Tester::mount(Center::new().child(view.clone()));
+    t.pump();
     assert_eq!(view.completed.load(Ordering::SeqCst), 1);
     assert_eq!(view.pending_polled.load(Ordering::SeqCst), 1);
     assert_eq!(view.shared_callback.load(Ordering::SeqCst), 1);
@@ -618,7 +638,7 @@ fn lifecycle_capabilities_are_named_and_run_through_the_facade() {
         0
     );
     drop(capabilities);
-    tree.tick();
+    t.pump();
     assert_eq!(view.pending_polled.load(Ordering::SeqCst), 1);
     let error: InvalidDurationConfig = FrameDuration::try_from_fps(0).expect_err("zero fps");
     assert!(matches!(error, InvalidDurationConfig::ZeroFps));
@@ -711,10 +731,10 @@ fn retained_focus_node_uses_context_capabilities_through_the_facade() {
         handles: Rc::default(),
         changes: Rc::default(),
     };
-    let mut tree = lay_out(view.clone(), loose(100.0));
+    let mut t = Tester::mount(Center::new().child(view.clone()));
     let outcome: FocusRequestOutcome = view.node.request_focus();
     assert_eq!(outcome, FocusRequestOutcome::Focused);
-    tree.tick();
+    t.pump();
     assert!(view.node.has_primary_focus());
     assert!(view.changes.borrow().contains(&true));
     let handles = view.handles.borrow();
@@ -726,51 +746,39 @@ fn retained_focus_node_uses_context_capabilities_through_the_facade() {
     // checks typed capability access, not operating-system text-input behavior.
     assert!(handles.text_input.is_some());
     view.node.unfocus();
-    tree.tick();
+    t.pump();
     assert!(!view.node.has_primary_focus());
     assert!(view.changes.borrow().contains(&false));
 }
 
 #[derive(Clone, StatefulView)]
 struct LifecycleProbe {
-    expected: bool,
-    initialized: Rc<std::cell::Cell<bool>>,
     captured: Rc<RefCell<Option<flui::view::LifecycleHandle>>>,
     events: Rc<RefCell<Vec<flui::view::AppLifecycleState>>>,
 }
+/// Born subscribed: the subscription lives as long as the state.
 struct LifecycleProbeState {
-    view: LifecycleProbe,
-    subscription: Option<flui::view::LifecycleSubscription>,
+    _subscription: flui::view::LifecycleSubscription,
 }
 impl StatefulView for LifecycleProbe {
     type State = LifecycleProbeState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        LifecycleProbeState {
-            view: self.clone(),
-            subscription: None,
-        }
-    }
-}
-impl ViewState<LifecycleProbe> for LifecycleProbeState {
-    fn init_state(&mut self, context: &dyn LifecycleContext) {
-        self.view.initialized.set(true);
-        let handle = context.lifecycle_handle();
-        assert_eq!(handle.is_some(), self.view.expected);
-        let Some(handle) = handle else {
-            return;
-        };
-        let events = self.view.events.clone();
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let handle = ctx.lifecycle_handle().expect("a mounted application has a lifecycle");
+        let events = self.events.clone();
         let (initial, subscription) = handle
             .subscribe(move |state| events.borrow_mut().push(state))
             .expect("open");
-        assert_eq!(initial, None);
+        // The window opens focused and shown.
+        assert_eq!(initial, Some(flui::view::AppLifecycleState::Resumed));
         assert!(
-            self.view.events.borrow().is_empty(),
+            self.events.borrow().is_empty(),
             "no callback before token storage"
         );
-        self.subscription = Some(subscription);
-        *self.view.captured.borrow_mut() = Some(handle);
+        *self.captured.borrow_mut() = Some(handle);
+        LifecycleProbeState { _subscription: subscription }
     }
+}
+impl ViewState<LifecycleProbe> for LifecycleProbeState {
     fn build(&self, _: &LifecycleProbe, _: &dyn BuildContext) -> impl IntoView {
         SizedBox::new(20.0, 20.0)
     }
@@ -780,27 +788,13 @@ impl ViewState<LifecycleProbe> for LifecycleProbeState {
 fn presentation_lifecycle_subscription_runs_through_the_facade() {
     use flui::view::{AppLifecycleState, LifecycleClosed};
     let view = LifecycleProbe {
-        expected: true,
-        initialized: Rc::default(),
         captured: Rc::default(),
         events: Rc::default(),
     };
-    let mut binding = flui::testing::harness::HeadlessBinding::new();
-    binding.mount_root(
-        &view,
-        flui::testing::harness::MountOwners::fresh(),
-        flui::testing::harness::MountOptions::loose(100.0),
-    );
+    let mut t = Tester::mount(Center::new().child(view.clone()));
     let handle = view.captured.borrow().as_ref().expect("captured").clone();
-    binding
-        .set_lifecycle_state(AppLifecycleState::Detached)
-        .expect("observed detached");
-    binding
-        .set_lifecycle_state(AppLifecycleState::Resumed)
-        .expect("reversible");
-    binding
-        .set_lifecycle_state(AppLifecycleState::Hidden)
-        .expect("hide");
+    t.set_window_focused(false);
+    t.set_window_visible(false);
     let extra = Rc::new(RefCell::new(Vec::new()));
     let recorded = extra.clone();
     let (snapshot, token) = handle
@@ -808,16 +802,12 @@ fn presentation_lifecycle_subscription_runs_through_the_facade() {
         .expect("second subscriber");
     assert_eq!(snapshot, Some(AppLifecycleState::Hidden));
     assert!(extra.borrow().is_empty());
-    binding
-        .set_lifecycle_state(AppLifecycleState::Inactive)
-        .expect("show unfocused");
+    t.set_window_visible(true);
     assert_eq!(handle.snapshot(), Ok(Some(AppLifecycleState::Inactive)));
     assert_eq!(*extra.borrow(), [AppLifecycleState::Inactive]);
     drop(token);
-    binding
-        .set_lifecycle_state(AppLifecycleState::Hidden)
-        .expect("hide again");
-    binding.close_lifecycle();
+    t.set_window_visible(false);
+    assert!(t.request_close(), "nothing holds the window open");
     assert_eq!(
         *extra.borrow(),
         [AppLifecycleState::Inactive],
@@ -826,35 +816,16 @@ fn presentation_lifecycle_subscription_runs_through_the_facade() {
     assert_eq!(
         *view.events.borrow(),
         [
-            AppLifecycleState::Detached,
-            AppLifecycleState::Resumed,
+            AppLifecycleState::Inactive,
             AppLifecycleState::Hidden,
             AppLifecycleState::Inactive,
             AppLifecycleState::Hidden,
+            AppLifecycleState::Paused,
             AppLifecycleState::Detached
         ]
     );
     assert_eq!(handle.snapshot(), Err(LifecycleClosed));
     assert!(handle.subscribe(|_| {}).is_err());
-}
-
-#[test]
-fn presentation_lifecycle_capability_is_absent_when_not_installed() {
-    let view = LifecycleProbe {
-        expected: false,
-        initialized: Rc::default(),
-        captured: Rc::default(),
-        events: Rc::default(),
-    };
-    let mut binding = flui::testing::harness::HeadlessBinding::new();
-    binding.mount_root(
-        &view,
-        flui::testing::harness::MountOwners::fresh(),
-        flui::testing::harness::MountOptions::loose(100.0)
-            .capabilities(flui::testing::harness::BuildCapabilities::AsyncDriverOnly),
-    );
-    assert!(view.initialized.get());
-    assert!(view.captured.borrow().is_none());
 }
 
 #[test]

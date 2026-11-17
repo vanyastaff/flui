@@ -1298,8 +1298,11 @@ mod broadcasts {
             let (signal, wakes) = counting_signal();
             let displays: Arc<dyn HostDisplays> = Arc::new(WindowsDisplays::new());
             let subscriber = Rc::new(DisplayBroadcasts::new(&displays, &signal));
-            let receiver = Receiver::try_new([Rc::clone(&subscriber) as Rc<dyn Subscriber>])
-                .expect("a receiver");
+            let receiver = Receiver::try_new(
+                [Rc::clone(&subscriber) as Rc<dyn Subscriber>],
+                Rc::default(),
+            )
+            .expect("a receiver");
             displays.snapshot().expect("the first sample");
 
             receiver.send_with_for_test(WM_DISPLAYCHANGE, 32, 0);

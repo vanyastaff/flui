@@ -13,7 +13,9 @@
 //! here as one coalesced message (sent from the owner's next turn when the
 //! queue refuses it, [`OwnerQueue`]), so the hook always runs on a fresh owner
 //! turn rather than nested inside whatever code destroyed the window.
-use super::modal_loop::ModalFrames;
+use super::modal_loop::{
+    MODAL_FRAME, ModalFrames, ModalLoops, ModalPacing, ModalWake, dispatch_posted_messages,
+};
 use super::{ClassWindows, FrameCount, WindowIdentity};
 use crate::{
     PlatformError, WakeRegistrationError,
@@ -109,9 +111,12 @@ pub(crate) struct OwnerControlContext {
     /// The features' hooks on this window (OLE drag and drop, whose sessions
     /// run from it), in the order a message reaches them.
     owner_hooks: Rc<[Arc<dyn OwnerMessages>]>,
-    /// What a modal loop run from this window (OLE's drag loop) delivers its
-    /// frames from.
-    modal_frames: Rc<ModalFrames>,
+    /// The pacing of a modal loop run from this window (OLE's drag loop),
+    /// whose clock sends this window [`MODAL_FRAME`].
+    modal_pacing: Rc<ModalPacing>,
+    /// The modal loops running on the thread, told when this window ran the
+    /// platform's code.
+    modal_loops: Rc<ModalLoops>,
 }
 
 /// One feature's part of the procedure of the owner's message-only window: the
@@ -175,8 +180,9 @@ impl OwnerPost {
 /// past the window.
 pub(crate) struct OwnerWindow {
     hwnd: HWND,
+    pacing: std::rc::Weak<ModalPacing>,
+    #[cfg(feature = "single-instance")]
     signal: Weak<OwnerSignal>,
-    frames: std::rc::Weak<ModalFrames>,
     #[cfg(feature = "single-instance")]
     app: Weak<AppDelivery>,
     #[cfg(feature = "single-instance")]
@@ -203,17 +209,10 @@ impl OwnerWindow {
         self.windows.upgrade()
     }
 
-    /// While a modal loop run from the owner window stands in for the message
-    /// loop, deliver what that loop would ([`ModalFrames::deliver`]): the
-    /// milliseconds to wait before asking again, or `None`, delivering
-    /// nothing, once the platform no longer accepts work or its owner state is
-    /// gone.
-    pub(crate) fn deliver_modal_frames(&self) -> Option<u32> {
-        let signal = self.signal.upgrade()?;
-        if !signal.accepting() {
-            return None;
-        }
-        Some(self.frames.upgrade()?.deliver())
+    /// The pacing of a modal loop run from the owner window, which a hook
+    /// enters while its loop runs; `None` once the owner's state is gone.
+    pub(crate) fn modal_pacing(&self) -> Option<Rc<ModalPacing>> {
+        self.pacing.upgrade()
     }
 }
 
@@ -248,6 +247,12 @@ pub(crate) struct OwnerShares {
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(crate) exit_policy: ExitPolicyRequest,
+    /// The modal loops running on the thread; a window's pacing joins them.
+    pub(crate) modal_loops: Rc<ModalLoops>,
+    /// The pacing of a modal loop run from the owner window, which a test
+    /// runs a drag session under.
+    #[cfg(test)]
+    pub(crate) modal_pacing: Rc<ModalPacing>,
 }
 
 /// A coalesced request, postable from any thread, that the owner consult the
@@ -328,6 +333,17 @@ pub(crate) struct OwnerSeeds<'a> {
     pub(crate) app: &'a Arc<AppDelivery>,
     /// Where the lifecycle hands system notices.
     pub(crate) notices: &'a Arc<dyn NoticeChannel>,
+    /// The door to the thread's modal loops, which the owner's queue knocks
+    /// at.
+    pub(crate) modal: &'a ModalWake,
+}
+
+impl OwnerSeeds<'_> {
+    /// The owner thread's queue, for a source that posts to a window of the
+    /// thread from another.
+    pub(crate) fn queue(&self) -> OwnerQueue {
+        OwnerQueue::new(Arc::downgrade(self.signal), self.modal.clone())
+    }
 }
 
 /// The system preference source the owner keeps for its host (ADR-0172).
@@ -419,17 +435,27 @@ impl OwnerControl {
                 message: error.to_string(),
             })?,
         );
+        let class = super::window_class::<H>().ok_or_else(|| PlatformError::Init {
+            message: "FLUI's window class: the thread's storage is torn down".into(),
+        })?;
+        let (window_hooks, modal_loops) = (class.hooks, class.modal_loops);
         let transport = Arc::clone(&wake);
+        let knock = modal_loops.wake().clone();
         let signal = OwnerSignal::new(Arc::new(move || {
             let address = target.lock();
             let raw = address.ok_or_else(|| PlatformError::EventLoop {
                 message: "owner message window is closed".into(),
             })?;
-            transport
-                .post(HWND(raw as *mut _))
-                .map_err(|error| PlatformError::EventLoop {
-                    message: error.to_string(),
-                })
+            let posted =
+                transport
+                    .post(HWND(raw as *mut _))
+                    .map_err(|error| PlatformError::EventLoop {
+                        message: error.to_string(),
+                    });
+            // The wake is handed over (posted, or set on the kernel event):
+            // a drag loop resting in OLE dispatches neither, its pacing does.
+            knock.wake();
+            posted
         }));
         let exit_policy_pending = Arc::new(AtomicBool::new(false));
         let app_hooks = Rc::new(RefCell::new(super::AppHooks::new(
@@ -440,25 +466,24 @@ impl OwnerControl {
             signal: &signal,
             app: &app,
             notices: &notices,
+            modal: modal_loops.wake(),
         };
-        let window_hooks = super::window_class::<H>()
-            .ok_or_else(|| PlatformError::Init {
-                message: "FLUI's window class: the thread's storage is torn down".into(),
-            })?
-            .hooks;
         let lifecycle = H::lifecycle(&seeds);
         let preferences = H::preferences(&seeds)?;
-        let broadcasts =
-            super::broadcast::Receiver::try_new(H::broadcast_subscribers(&OwnerObjects {
+        let broadcasts = super::broadcast::Receiver::try_new(
+            H::broadcast_subscribers(&OwnerObjects {
                 preferences: &preferences,
                 lifecycle: &lifecycle,
                 displays: &displays,
                 signal: &signal,
-            }))
-            .map_err(|error| PlatformError::Init {
-                message: format!("the broadcast receiver: {error}"),
-            })?;
+            }),
+            Rc::clone(&modal_loops),
+        )
+        .map_err(|error| PlatformError::Init {
+            message: format!("the broadcast receiver: {error}"),
+        })?;
         let owner_hooks: Rc<[Arc<dyn OwnerMessages>]> = owner_hooks.into();
+        let queue_knock = modal_loops.wake().clone();
         let frames = Rc::new(FrameCount::default());
         let context = Box::new(OwnerControlContext {
             identity,
@@ -475,12 +500,11 @@ impl OwnerControl {
             windows: windows.clone(),
             exit_policy_pending: Arc::clone(&exit_policy_pending),
             owner_hooks: Rc::clone(&owner_hooks),
-            modal_frames: Rc::new(ModalFrames::new(
-                app,
-                windows,
-                frames,
-                Arc::downgrade(&signal),
-            )),
+            modal_pacing: ModalPacing::new(
+                ModalFrames::new(app, windows, frames, Arc::downgrade(&signal)),
+                Rc::clone(&modal_loops),
+            ),
+            modal_loops,
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -517,7 +541,7 @@ impl OwnerControl {
                 address: Arc::clone(&address),
             });
         }
-        let queue = OwnerQueue::new(Arc::downgrade(&signal));
+        let queue = OwnerQueue::new(Arc::downgrade(&signal), queue_knock);
         Ok(Self {
             signal,
             wake,
@@ -646,6 +670,9 @@ impl OwnerGate {
                     notices: Arc::clone(&context.notices),
                     displays: Arc::clone(&context.displays),
                     exit_policy: self.exit_policy_request(),
+                    modal_loops: Rc::clone(&context.modal_loops),
+                    #[cfg(test)]
+                    modal_pacing: Rc::clone(&context.modal_pacing),
                 })
             }
             UserDataVerdict::Refuse(reason) => {
@@ -802,9 +829,11 @@ unsafe extern "system" fn procedure(
 const PROCEDURE: &str = "the owner's message window";
 
 /// The owner window's dispatch: a wake turn, the exit policy, its teardown,
-/// then the features' hooks in order until one answers. The hooks and the
-/// teardown's steps each run in a containment of their own, logged with
-/// their panic's text: a hook that panics answers the message 0.
+/// a drag loop's pacing, then the features' hooks in order until one answers.
+/// The hooks and the teardown's steps each run in a containment of their own,
+/// logged with their panic's text: a hook that panics answers the message 0.
+/// Every message but the pacing's own ran the platform's code, which a modal
+/// loop running on the thread asks the deadlines again after.
 ///
 /// # Safety
 ///
@@ -813,13 +842,16 @@ const PROCEDURE: &str = "the owner's message window";
 unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // SAFETY: only this class stores `OwnerControlContext` userdata, and
     // Win32 runs this procedure on the owner thread, the only thread that
-    // frees it (`WM_NCDESTROY`, below). A wake turn, the exit policy and a
-    // feature's hook clone what they use out of the context before running
-    // callbacks, so a callback that tears the window down cannot free what
-    // they still use.
+    // frees it (`WM_NCDESTROY`, below). A wake turn, the exit policy, the
+    // pacing and a feature's hook clone what they use out of the context
+    // before running callbacks, so a callback that tears the window down
+    // cannot free what they still use.
     unsafe {
         let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
-        if message == WM_NCDESTROY && !pointer.is_null() {
+        if pointer.is_null() {
+            return DefWindowProcW(hwnd, message, wparam, lparam);
+        }
+        if message == WM_NCDESTROY {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             let context = Box::from_raw(pointer);
             let hooks = Rc::clone(&context.owner_hooks);
@@ -831,17 +863,47 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
             for hook in hooks.iter() {
                 contain_os_entry(PROCEDURE, || hook.destroyed());
             }
-        } else if message == WAKE && !pointer.is_null() {
+            return DefWindowProcW(hwnd, message, wparam, lparam);
+        }
+        if message == MODAL_FRAME {
+            // The drag loop's clock fired. OLE's loop, resting, dispatches
+            // nothing another thread handed the owner, so this delivery does
+            // what the main loop would: the posted messages of FLUI's range,
+            // the owner's turn (posted or set on the fallback event), then
+            // the pacing's deadlines and paints. The pacing sets its clock
+            // again itself; more posted work than one delivery takes asks
+            // for the next at once.
+            let (signal, turn, pacing, loops) = {
+                let context = &*pointer;
+                (
+                    Arc::clone(&context.signal),
+                    Rc::clone(&context.turn),
+                    Rc::clone(&context.modal_pacing),
+                    Rc::clone(&context.modal_loops),
+                )
+            };
+            if pacing.running() {
+                let more = dispatch_posted_messages();
+                if signal.drive_in(&turn) {
+                    quit_owner_loop(&signal, &turn);
+                }
+                let _ = pacing.tick();
+                if more {
+                    loops.wake().wake();
+                }
+            }
+            return LRESULT(0);
+        }
+        let _ask_again = ModalLoops::ask_again_after(&(*pointer).modal_loops);
+        if message == WAKE {
             let signal = Arc::clone(&(*pointer).signal);
             let turn = Rc::clone(&(*pointer).turn);
             if signal.drive_in(&turn) {
                 quit_owner_loop(&signal, &turn);
             }
             return LRESULT(0);
-        } else if message == EXIT_POLICY
-            && !pointer.is_null()
-            && (*pointer).identity.halves() == (wparam.0, lparam.0)
-        {
+        }
+        if message == EXIT_POLICY && (*pointer).identity.halves() == (wparam.0, lparam.0) {
             let context = &*pointer;
             context.exit_policy_pending.store(false, Ordering::Release);
             let signal = Arc::clone(&context.signal);
@@ -852,28 +914,28 @@ unsafe fn receive(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 quit_owner_loop(&signal, &turn);
             }
             return LRESULT(0);
-        } else if !pointer.is_null() {
-            // Cloned out first: a hook runs user code (a drag session's modal
-            // loop) that may tear this window down.
-            let (hooks, owner) = {
-                let context = &*pointer;
-                let owner = OwnerWindow {
-                    hwnd,
-                    signal: Arc::downgrade(&context.signal),
-                    frames: Rc::downgrade(&context.modal_frames),
-                    #[cfg(feature = "single-instance")]
-                    app: Arc::downgrade(&context.app_hooks.borrow().app),
-                    #[cfg(feature = "single-instance")]
-                    windows: context.windows.clone(),
-                };
-                (Rc::clone(&context.owner_hooks), owner)
+        }
+        // Cloned out first: a hook runs user code (a drag session's modal
+        // loop) that may tear this window down.
+        let (hooks, owner) = {
+            let context = &*pointer;
+            let owner = OwnerWindow {
+                hwnd,
+                pacing: Rc::downgrade(&context.modal_pacing),
+                #[cfg(feature = "single-instance")]
+                signal: Arc::downgrade(&context.signal),
+                #[cfg(feature = "single-instance")]
+                app: Arc::downgrade(&context.app_hooks.borrow().app),
+                #[cfg(feature = "single-instance")]
+                windows: context.windows.clone(),
             };
-            for hook in hooks.iter() {
-                match contain_os_entry(PROCEDURE, || hook.message(&owner, message)) {
-                    Some(Some(answer)) => return answer,
-                    Some(None) => {}
-                    None => return LRESULT(0),
-                }
+            (Rc::clone(&context.owner_hooks), owner)
+        };
+        for hook in hooks.iter() {
+            match contain_os_entry(PROCEDURE, || hook.message(&owner, message)) {
+                Some(Some(answer)) => return answer,
+                Some(None) => {}
+                None => return LRESULT(0),
             }
         }
         DefWindowProcW(hwnd, message, wparam, lparam)

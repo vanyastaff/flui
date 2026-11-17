@@ -1248,7 +1248,21 @@ impl core::fmt::Display for flui::app::AppId
 impl core::hash::Hash for flui::app::AppId
 impl core::marker::StructuralPartialEq for flui::app::AppId
 pub fn flui::app::AppId::as_str(&self) -> &str
-pub fn flui::app::AppId::try_new(identifier: impl Into<String>) -> Result<Self, flui_log::identity::IdentityError>
+pub fn flui::app::AppId::try_new(identifier: impl Into<String>) -> Result<Self, flui::app::AppIdError>
+#[non_exhaustive] pub enum flui::app::AppIdError
+impl Clone for flui::app::AppIdError
+impl Eq for flui::app::AppIdError
+impl PartialEq for flui::app::AppIdError
+impl core::error::Error for flui::app::AppIdError
+impl core::fmt::Debug for flui::app::AppIdError
+impl core::fmt::Display for flui::app::AppIdError
+impl core::marker::StructuralPartialEq for flui::app::AppIdError
+variant flui::app::AppIdError::EmptyLabel { identifier: String, position: usize } // at 1
+variant flui::app::AppIdError::InvalidCharacter { identifier: String, character: char } // at 2
+variant flui::app::AppIdError::LabelStartsWithNonLetter { identifier: String, position: usize } // at 3
+variant flui::app::AppIdError::NotReverseDns(String) // at 0
+variant flui::app::AppIdError::ReservedLabel { identifier: String, label: String } // at 4
+variant flui::app::AppIdError::TooLong(String) // at 5
 pub struct flui::app::AppIdentity { .. }
 impl Clone for flui::app::AppIdentity
 impl Default for flui::app::AppIdentity
@@ -1355,6 +1369,7 @@ impl core::hash::Hash for flui::app::DeviceRecovery
 impl core::marker::StructuralPartialEq for flui::app::DeviceRecovery
 pub fn flui::app::DeviceRecovery::is_abandoned(self) -> bool
 variant flui::app::DeviceRecovery::Abandoned { attempts: u32 } // at 2
+variant flui::app::DeviceRecovery::Dead // at 3
 variant flui::app::DeviceRecovery::Failed { attempts: u32 } // at 1
 variant flui::app::DeviceRecovery::Pending // at 0
 #[non_exhaustive] pub enum flui::app::DiagnosticsProfile
@@ -1666,18 +1681,6 @@ impl core::fmt::Debug for flui::app::ServiceStartError
 impl core::fmt::Display for flui::app::ServiceStartError
 variant flui::app::ServiceStartError::FactoryPanicked // at 0
 variant flui::app::ServiceStartError::Spawn(flui::app::SpawnError) // at 1
-#[non_exhaustive] pub enum flui::app::SpawnError
-impl Clone for flui::app::SpawnError
-impl Copy for flui::app::SpawnError
-impl Eq for flui::app::SpawnError
-impl PartialEq for flui::app::SpawnError
-impl core::error::Error for flui::app::SpawnError
-impl core::fmt::Debug for flui::app::SpawnError
-impl core::fmt::Display for flui::app::SpawnError
-impl core::marker::StructuralPartialEq for flui::app::SpawnError
-variant flui::app::SpawnError::Saturated // at 0
-variant flui::app::SpawnError::ShuttingDown // at 1
-variant flui::app::SpawnError::Unavailable // at 2
 #[non_exhaustive] pub struct flui::app::ShownFrame
 field flui::app::ShownFrame::at: flui::interaction::EventTime // at 2
 field flui::app::ShownFrame::epoch: flui::foundation::FrameEpoch // at 0
@@ -1693,6 +1696,18 @@ impl core::marker::StructuralPartialEq for flui::app::ShownFrame
 pub const fn flui::app::ShownFrame::new(epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration, at: flui::interaction::EventTime) -> Self
 pub const fn flui::app::ShownFrame::refresh(self, refresh: flui::platform::RefreshPeriod) -> Self
 pub fn flui::app::ShownFrame::of_presentation(self, address: flui::foundation::PresentationAddress) -> flui::platform::FramePresented
+#[non_exhaustive] pub enum flui::app::SpawnError
+impl Clone for flui::app::SpawnError
+impl Copy for flui::app::SpawnError
+impl Eq for flui::app::SpawnError
+impl PartialEq for flui::app::SpawnError
+impl core::error::Error for flui::app::SpawnError
+impl core::fmt::Debug for flui::app::SpawnError
+impl core::fmt::Display for flui::app::SpawnError
+impl core::marker::StructuralPartialEq for flui::app::SpawnError
+variant flui::app::SpawnError::Saturated // at 0
+variant flui::app::SpawnError::ShuttingDown // at 1
+variant flui::app::SpawnError::Unavailable // at 2
 pub struct flui::app::TaskContext { .. }
 impl Clone for flui::app::TaskContext
 impl core::fmt::Debug for flui::app::TaskContext
@@ -2432,6 +2447,9 @@ impl core::fmt::Debug for flui::devtools::timeline::EventGuard
 reexport flui::devtools::timeline::Timeline => flui::devtools::prelude::Timeline
 reexport flui::devtools::timeline::TimelineEvent => flui::devtools::prelude::TimelineEvent
 pub mod flui::foundation
+pub const flui::foundation::APP_ID_MAX_LEN: usize
+reexport flui::foundation::AppId => flui::app::AppId
+reexport flui::foundation::AppIdError => flui::app::AppIdError
 pub type flui::foundation::ArgCallback<Arg> = alloc::rcs::rc::Rc<dyn Fn(&Arg) + 'static>
 pub trait flui::foundation::Arity: flui_foundation::arity::sealed::Sealed + core::fmt::Debug + Copy + Default + 'static
 const flui::foundation::Arity::DESCRIPTION: &'static str
@@ -3297,6 +3315,11 @@ fn flui::foundation::WithKey::with_view_key(self, key: impl flui::foundation::Vi
 impl<T> flui::foundation::WithKey for T
 pub mod flui::foundation::affinity
 reexport flui::foundation::affinity::OwnerAffinity => flui::foundation::OwnerAffinity
+pub mod flui::foundation::app_id
+reexport flui::foundation::app_id::APP_ID_MAX_LEN => flui::foundation::APP_ID_MAX_LEN
+reexport flui::foundation::app_id::AppId => flui::app::AppId
+reexport flui::foundation::app_id::AppIdError => flui::app::AppIdError
+reexport flui::foundation::app_id::executable_class => flui::foundation::executable_class
 pub mod flui::foundation::arena
 pub struct flui::foundation::arena::FrameArena { .. }
 impl Default for flui::foundation::arena::FrameArena
@@ -3346,6 +3369,7 @@ reexport flui::foundation::epoch::GenerationGate => flui::foundation::Generation
 reexport flui::foundation::epoch::ResourceGeneration => flui::foundation::ResourceGeneration
 reexport flui::foundation::epoch::SurfaceGeneration => flui::foundation::SurfaceGeneration
 pub fn flui::foundation::event_epoch() -> std::time::Instant
+pub fn flui::foundation::executable_class(stem: &str) -> String
 pub mod flui::foundation::frame_stamp
 reexport flui::foundation::frame_stamp::FrameStamp => flui::foundation::FrameStamp
 pub mod flui::foundation::generation
@@ -4334,9 +4358,9 @@ pub const flui::geometry::DevicePixelRatio::MAX: Self = _
 pub const flui::geometry::DevicePixelRatio::MIN: Self = _
 pub const flui::geometry::DevicePixelRatio::ONE: Self = _
 pub const fn flui::geometry::DevicePixelRatio::get(self) -> f64
+pub const fn flui::geometry::DevicePixelRatio::try_new(ratio: f64) -> Option<Self>
 pub fn flui::geometry::DevicePixelRatio::to_device(self, logical: f64) -> f64
 pub fn flui::geometry::DevicePixelRatio::to_logical(self, device: f64) -> f64
-pub const fn flui::geometry::DevicePixelRatio::try_new(ratio: f64) -> Option<Self>
 pub type flui::geometry::DevicePoint = flui::geometry::Point<i32>
 pub type flui::geometry::DeviceRect = flui::geometry::Rect<i32>
 pub type flui::geometry::DeviceSize = flui::geometry::Size<i32>
@@ -7779,8 +7803,8 @@ variant flui::interaction::drag::DragError::NoAllowedActions // at 1
 variant flui::interaction::drag::DragError::NoOutsideActions // at 2
 variant flui::interaction::drag::DragError::NoSerializedRepresentation // at 3
 variant flui::interaction::drag::DragError::SessionClosed // at 4
-variant flui::interaction::drag::DragError::Unsupported(flui::platform::Unsupported) // at 5
 variant flui::interaction::drag::DragError::Terms(flui::platform::drag::DragRequestError) // at 6
+variant flui::interaction::drag::DragError::Unsupported(flui::platform::Unsupported) // at 5
 pub struct flui::interaction::drag::DragFetch { .. }
 impl core::fmt::Debug for flui::interaction::drag::DragFetch
 impl core::future::future::Future for flui::interaction::drag::DragFetch { type Output = Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError>; }
@@ -13329,20 +13353,6 @@ impl core::marker::StructuralPartialEq for flui::platform::SystemControls
 variant flui::platform::SystemControls::Hidden // at 2
 variant flui::platform::SystemControls::Offset(flui::platform::ControlsOffset) // at 1
 variant flui::platform::SystemControls::Shown // at 0
-#[non_exhaustive] pub enum flui::platform::SystemNotice
-impl Clone for flui::platform::SystemNotice
-impl Copy for flui::platform::SystemNotice
-impl Eq for flui::platform::SystemNotice
-impl From<flui::platform::SystemNotice> for flui::platform::HostNotice
-impl PartialEq for flui::platform::SystemNotice
-impl core::fmt::Debug for flui::platform::SystemNotice
-impl core::hash::Hash for flui::platform::SystemNotice
-impl core::marker::StructuralPartialEq for flui::platform::SystemNotice
-variant flui::platform::SystemNotice::MemoryPressure(flui::platform::MemoryPressureLevel) // at 4
-variant flui::platform::SystemNotice::SessionLocked // at 2
-variant flui::platform::SystemNotice::SessionUnlocked // at 3
-variant flui::platform::SystemNotice::Sleep // at 0
-variant flui::platform::SystemNotice::Wake // at 1
 #[non_exhaustive] pub enum flui::platform::SystemFailure
 impl Clone for flui::platform::SystemFailure
 impl Copy for flui::platform::SystemFailure
@@ -13358,6 +13368,20 @@ variant flui::platform::SystemFailure::Bus // at 2
 variant flui::platform::SystemFailure::MalformedAnswer // at 3
 variant flui::platform::SystemFailure::Os(i32) // at 0
 variant flui::platform::SystemFailure::PortalResponse(u32) // at 1
+#[non_exhaustive] pub enum flui::platform::SystemNotice
+impl Clone for flui::platform::SystemNotice
+impl Copy for flui::platform::SystemNotice
+impl Eq for flui::platform::SystemNotice
+impl From<flui::platform::SystemNotice> for flui::platform::HostNotice
+impl PartialEq for flui::platform::SystemNotice
+impl core::fmt::Debug for flui::platform::SystemNotice
+impl core::hash::Hash for flui::platform::SystemNotice
+impl core::marker::StructuralPartialEq for flui::platform::SystemNotice
+variant flui::platform::SystemNotice::MemoryPressure(flui::platform::MemoryPressureLevel) // at 4
+variant flui::platform::SystemNotice::SessionLocked // at 2
+variant flui::platform::SystemNotice::SessionUnlocked // at 3
+variant flui::platform::SystemNotice::Sleep // at 0
+variant flui::platform::SystemNotice::Wake // at 1
 pub struct flui::platform::SystemPreferences { .. }
 impl Clone for flui::platform::SystemPreferences
 impl Default for flui::platform::SystemPreferences
@@ -14541,28 +14565,19 @@ impl core::marker::StructuralPartialEq for flui::platform::drag::OsDragEnd
 variant flui::platform::drag::OsDragEnd::Cancelled // at 1
 variant flui::platform::drag::OsDragEnd::Dropped(flui::interaction::drag::TransferActions) // at 0
 pub type flui::platform::drag::OsDragEndHook = Box<dyn FnOnce(flui::platform::drag::OsDragEnd)>
-pub type flui::platform::drag::OsDragProvider = Box<dyn FnMut(flui::platform::data_transfer::RepresentationIndex) -> Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError>>
 #[non_exhaustive] pub struct flui::platform::drag::OsDragParts
 field flui::platform::drag::OsDragParts::on_end: flui::platform::drag::OsDragEndHook // at 3
 field flui::platform::drag::OsDragParts::press: Option<flui::foundation::PressId> // at 1
 field flui::platform::drag::OsDragParts::provider: flui::platform::drag::OsDragProvider // at 2
 field flui::platform::drag::OsDragParts::terms: flui::platform::drag::OsDragTerms // at 0
 impl core::fmt::Debug for flui::platform::drag::OsDragParts
+pub type flui::platform::drag::OsDragProvider = Box<dyn FnMut(flui::platform::data_transfer::RepresentationIndex) -> Result<flui::platform::data_transfer::TransferPayload, flui::platform::data_transfer::TransferError>>
 pub struct flui::platform::drag::OsDragRequest { .. }
 impl core::fmt::Debug for flui::platform::drag::OsDragRequest
 pub const fn flui::platform::drag::OsDragRequest::press(&self) -> Option<flui::foundation::PressId>
 pub const fn flui::platform::drag::OsDragRequest::terms(&self) -> &flui::platform::drag::OsDragTerms
 pub fn flui::platform::drag::OsDragRequest::into_parts(self) -> flui::platform::drag::OsDragParts
 pub fn flui::platform::drag::OsDragRequest::new(terms: flui::platform::drag::OsDragTerms, press: Option<flui::foundation::PressId>, provider: flui::platform::drag::OsDragProvider, on_end: flui::platform::drag::OsDragEndHook) -> Self
-pub struct flui::platform::drag::OsDragTerms { .. }
-impl Clone for flui::platform::drag::OsDragTerms
-impl core::fmt::Debug for flui::platform::drag::OsDragTerms
-pub const fn flui::platform::drag::OsDragTerms::allowed(&self) -> flui::interaction::drag::TransferActions
-pub const fn flui::platform::drag::OsDragTerms::key(&self) -> flui::platform::drag::DragSessionKey
-pub fn flui::platform::drag::OsDragTerms::indexed(&self) -> impl ExactSizeIterator<Item = (flui::platform::data_transfer::RepresentationIndex, &flui::platform::data_transfer::RepresentationDescriptor)>
-pub fn flui::platform::drag::OsDragTerms::into_representations(self) -> Vec<flui::platform::data_transfer::RepresentationDescriptor>
-pub fn flui::platform::drag::OsDragTerms::representations(&self) -> &[flui::platform::data_transfer::RepresentationDescriptor]
-pub fn flui::platform::drag::OsDragTerms::try_new(key: flui::platform::drag::DragSessionKey, serialized: Vec<flui::platform::data_transfer::RepresentationDescriptor>, allowed: flui::interaction::drag::TransferActions) -> Result<Self, flui::platform::drag::DragRequestError>
 pub enum flui::platform::drag::OsDragStart
 impl Clone for flui::platform::drag::OsDragStart
 impl Copy for flui::platform::drag::OsDragStart
@@ -14572,6 +14587,15 @@ impl core::fmt::Debug for flui::platform::drag::OsDragStart
 impl core::marker::StructuralPartialEq for flui::platform::drag::OsDragStart
 variant flui::platform::drag::OsDragStart::AtStart { eager_data: bool } // at 1
 variant flui::platform::drag::OsDragStart::OnLeavingWindow // at 0
+pub struct flui::platform::drag::OsDragTerms { .. }
+impl Clone for flui::platform::drag::OsDragTerms
+impl core::fmt::Debug for flui::platform::drag::OsDragTerms
+pub const fn flui::platform::drag::OsDragTerms::allowed(&self) -> flui::interaction::drag::TransferActions
+pub const fn flui::platform::drag::OsDragTerms::key(&self) -> flui::platform::drag::DragSessionKey
+pub fn flui::platform::drag::OsDragTerms::indexed(&self) -> impl ExactSizeIterator<Item = (flui::platform::data_transfer::RepresentationIndex, &flui::platform::data_transfer::RepresentationDescriptor)>
+pub fn flui::platform::drag::OsDragTerms::into_representations(self) -> Vec<flui::platform::data_transfer::RepresentationDescriptor>
+pub fn flui::platform::drag::OsDragTerms::representations(&self) -> &[flui::platform::data_transfer::RepresentationDescriptor]
+pub fn flui::platform::drag::OsDragTerms::try_new(key: flui::platform::drag::DragSessionKey, serialized: Vec<flui::platform::data_transfer::RepresentationDescriptor>, allowed: flui::interaction::drag::TransferActions) -> Result<Self, flui::platform::drag::DragRequestError>
 pub enum flui::platform::drag::OsOffer
 impl Clone for flui::platform::drag::OsOffer
 impl Copy for flui::platform::drag::OsOffer
@@ -15120,6 +15144,7 @@ variant flui::platform::launch::InvalidUri::TooLong { limit: usize } // at 2
 impl Clone for flui::platform::launch::LaunchError
 impl Copy for flui::platform::launch::LaunchError
 impl Eq for flui::platform::launch::LaunchError
+impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
 impl From<flui::platform::Unsupported> for flui::platform::launch::LaunchError
 impl PartialEq for flui::platform::launch::LaunchError
 impl core::error::Error for flui::platform::launch::LaunchError
@@ -15128,7 +15153,6 @@ impl core::fmt::Display for flui::platform::launch::LaunchError
 impl core::marker::StructuralPartialEq for flui::platform::launch::LaunchError
 pub const fn flui::platform::launch::LaunchError::unsupported(&self) -> Option<flui::platform::Unsupported>
 variant flui::platform::launch::LaunchError::Denied // at 3
-impl From<flui::platform::SystemFailure> for flui::platform::launch::LaunchError
 variant flui::platform::launch::LaunchError::Failed(flui::platform::SystemFailure) // at 5
 variant flui::platform::launch::LaunchError::NoHandler // at 2
 variant flui::platform::launch::LaunchError::NotFound // at 1
@@ -23147,8 +23171,8 @@ pub fn flui::services::system::dialog::Dialog::poll(&mut self) -> Option<Result<
 impl Clone for flui::services::system::dialog::DialogError
 impl Copy for flui::services::system::dialog::DialogError
 impl Eq for flui::services::system::dialog::DialogError
-impl From<flui::platform::Unsupported> for flui::services::system::dialog::DialogError
 impl From<flui::platform::SystemFailure> for flui::services::system::dialog::DialogError
+impl From<flui::platform::Unsupported> for flui::services::system::dialog::DialogError
 impl PartialEq for flui::services::system::dialog::DialogError
 impl core::error::Error for flui::services::system::dialog::DialogError
 impl core::fmt::Debug for flui::services::system::dialog::DialogError
@@ -23646,6 +23670,7 @@ pub fn flui::testing::Tester::commit_composition(&mut self, text: &str)
 pub fn flui::testing::Tester::compose(&mut self, text: &str, caret: Option<u32>)
 pub fn flui::testing::Tester::drag(&mut self, locator: &flui::testing::Locator, dx: f64, dy: f64, duration: core::time::Duration)
 pub fn flui::testing::Tester::drag_from(&mut self, start: flui::testing::LogicalPoint, dx: f64, dy: f64, duration: core::time::Duration)
+pub fn flui::testing::Tester::draw_commands(&mut self) -> Vec<flui::painting::DrawCommandBuf>
 pub fn flui::testing::Tester::end_session(&mut self)
 pub fn flui::testing::Tester::enter_text(&mut self, locator: &flui::testing::Locator, text: &str)
 pub fn flui::testing::Tester::expect(&mut self, locator: flui::testing::Locator) -> flui::testing::Expectation<'_>
@@ -23735,663 +23760,6 @@ pub fn flui::testing::find::role(role: flui::testing::Role) -> flui::testing::Lo
 pub fn flui::testing::find::text(text: impl Into<String>) -> flui::testing::Locator
 pub fn flui::testing::find::text_containing(text: impl Into<String>) -> flui::testing::Locator
 pub fn flui::testing::find::with_state(state: flui::testing::StateFilter) -> flui::testing::Locator
-pub mod flui::testing::harness
-#[non_exhaustive] pub enum flui::testing::harness::BuildCapabilities
-impl Clone for flui::testing::harness::BuildCapabilities
-impl Copy for flui::testing::harness::BuildCapabilities
-impl Default for flui::testing::harness::BuildCapabilities
-impl Eq for flui::testing::harness::BuildCapabilities
-impl PartialEq for flui::testing::harness::BuildCapabilities
-impl core::fmt::Debug for flui::testing::harness::BuildCapabilities
-impl core::marker::StructuralPartialEq for flui::testing::harness::BuildCapabilities
-variant flui::testing::harness::BuildCapabilities::AsyncDriverOnly // at 1
-variant flui::testing::harness::BuildCapabilities::Installed // at 0
-pub struct flui::testing::harness::GestureBinding { .. }
-impl Default for flui::testing::harness::GestureBinding
-impl core::fmt::Debug for flui::testing::harness::GestureBinding
-pub fn flui::testing::harness::GestureBinding::active_pointer_count(&self) -> usize
-pub fn flui::testing::harness::GestureBinding::active_resampler_count(&self) -> usize
-pub fn flui::testing::harness::GestureBinding::arena(&self) -> &flui::interaction::GestureArena
-pub fn flui::testing::harness::GestureBinding::begin_contactless(&self, source: flui_interaction::binding::ContactlessSource) -> Result<flui_interaction::binding::ContactlessSequence, flui::foundation::IdExhausted>
-pub fn flui::testing::harness::GestureBinding::cancel_active_pointers(&self)
-pub fn flui::testing::harness::GestureBinding::cancel_all_pointer_sequences(&self)
-pub fn flui::testing::harness::GestureBinding::cancel_pointer_sequence(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui::testing::harness::GestureBinding::close_arena(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui::testing::harness::GestureBinding::default_profiles(&self) -> flui::interaction::GestureProfiles
-pub fn flui::testing::harness::GestureBinding::dispatch_contactless<R>(&self, sequence: flui::foundation::InputSequenceId, body: impl FnOnce() -> R) -> R
-pub fn flui::testing::harness::GestureBinding::dispatch_pointer_frame_on<F>(&self, surface: flui_interaction::ids::InputSurface, frame: &[flui::interaction::PointerEvent], hit_test_fn: F) -> smallvec::SmallVec<[flui_interaction::binding::DispatchOutcome; 4]> where F: FnMut(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui::testing::harness::GestureBinding::dispatch_pointer_on<F>(&self, surface: flui_interaction::ids::InputSurface, event: &flui::interaction::PointerEvent, hit_test_fn: F) -> flui_interaction::binding::DispatchOutcome where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui::testing::harness::GestureBinding::drain_deferred_arena_resolutions(&self) -> usize
-pub fn flui::testing::harness::GestureBinding::embed_surface(&self) -> Result<flui_interaction::ids::InputSurface, flui_interaction::ids::SurfaceIdsExhausted>
-pub fn flui::testing::harness::GestureBinding::flush_pending_input(&self) -> usize
-pub fn flui::testing::harness::GestureBinding::flush_pending_moves(&self) -> usize
-pub fn flui::testing::harness::GestureBinding::flush_pending_moves_at(&self, sample_time: std::time::Instant, next_sample_time: std::time::Instant) -> Result<usize, flui_interaction::binding::InvalidSamplingWindow>
-pub fn flui::testing::harness::GestureBinding::handle_lifecycle_pause(&self)
-pub fn flui::testing::harness::GestureBinding::handle_pointer_event<F>(&self, event: &flui::interaction::PointerEvent, hit_test_fn: F) where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui::testing::harness::GestureBinding::handle_pointer_event_with_result(&self, event: &flui::interaction::PointerEvent, result: &flui_interaction::pointer::hit_test::HitTestResult)
-pub fn flui::testing::harness::GestureBinding::handle_pointer_left_window(&self)
-pub fn flui::testing::harness::GestureBinding::has_hit_test(&self, pointer_id: flui::interaction::PointerId) -> bool
-pub fn flui::testing::harness::GestureBinding::has_pending_deadlines(&self) -> bool
-pub fn flui::testing::harness::GestureBinding::has_pending_motion(&self) -> bool
-pub fn flui::testing::harness::GestureBinding::has_pending_pointer_samples(&self) -> bool
-pub fn flui::testing::harness::GestureBinding::is_hover_frozen(&self) -> bool
-pub fn flui::testing::harness::GestureBinding::is_resampling_enabled(&self) -> bool
-pub fn flui::testing::harness::GestureBinding::mouse_tracker(&self) -> &flui_interaction::pointer::mouse_tracker::MouseTracker
-pub fn flui::testing::harness::GestureBinding::new() -> Self
-pub fn flui::testing::harness::GestureBinding::next_deadline(&self) -> Option<flui::interaction::EventTime>
-pub fn flui::testing::harness::GestureBinding::pending_move_count(&self) -> usize
-pub fn flui::testing::harness::GestureBinding::pointer_frame<R>(&self, body: impl FnOnce() -> R) -> R
-pub fn flui::testing::harness::GestureBinding::pointer_router(&self) -> &flui_interaction::pointer::pointer_router::PointerRouter
-pub fn flui::testing::harness::GestureBinding::replace_default_profiles(&self, profiles: impl Into<flui::interaction::GestureProfiles>) -> bool
-pub fn flui::testing::harness::GestureBinding::sampling_clock(&self) -> flui_interaction::pointer::sampling_clock::SamplingClock
-pub fn flui::testing::harness::GestureBinding::set_resampling_enabled(&self, enabled: bool) -> Result<(), flui_interaction::binding::ResamplingModeChangeError>
-pub fn flui::testing::harness::GestureBinding::set_sampling_clock(&self, clock: flui_interaction::pointer::sampling_clock::SamplingClock)
-pub fn flui::testing::harness::GestureBinding::sweep_arena(&self, pointer_id: flui::interaction::PointerId)
-pub fn flui::testing::harness::GestureBinding::tick_deadlines(&self)
-pub fn flui::testing::harness::GestureBinding::with_clock(clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
-pub fn flui::testing::harness::GestureBinding::with_sequences_after(self, last: u64) -> Self
-pub fn flui::testing::harness::GestureBinding::with_settings(settings: impl Into<flui::interaction::GestureProfiles>) -> Self
-pub fn flui::testing::harness::GestureBinding::with_settings_and_clock(settings: impl Into<flui::interaction::GestureProfiles>, clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
-pub struct flui::testing::harness::HeadlessBinding { .. }
-impl Default for flui::testing::harness::HeadlessBinding
-impl core::fmt::Debug for flui::testing::harness::HeadlessBinding
-pub fn flui::testing::harness::HeadlessBinding::a11y_tree(&self) -> Option<flui::testing::harness::a11y::A11yTree>
-pub fn flui::testing::harness::HeadlessBinding::adopt_vsync(&mut self, vsync: flui::animation::Vsync)
-pub fn flui::testing::harness::HeadlessBinding::arena(&self) -> &flui::interaction::GestureArena
-pub fn flui::testing::harness::HeadlessBinding::bind_tree(&mut self, build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui::rendering::PipelineCell)
-pub fn flui::testing::harness::HeadlessBinding::bind_tree_with_committed_layer_tree(&mut self, build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui::rendering::PipelineCell, committed_layer_tree: Option<flui_layer::tree::layer_tree::LayerTree>)
-pub fn flui::testing::harness::HeadlessBinding::build_owner_mut(&mut self) -> &mut flui::prelude::BuildOwner
-pub fn flui::testing::harness::HeadlessBinding::clock(&self) -> &flui::foundation::ManualClock
-pub fn flui::testing::harness::HeadlessBinding::close_lifecycle(&self)
-pub fn flui::testing::harness::HeadlessBinding::did_paint_last_frame(&self) -> bool
-pub fn flui::testing::harness::HeadlessBinding::dispatch_pointer(&self, event: &flui::interaction::PointerEvent, hit_test: impl FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult)
-pub fn flui::testing::harness::HeadlessBinding::enable_semantics(&mut self) -> Result<(), flui::testing::harness::a11y::NotTreeBound>
-pub fn flui::testing::harness::HeadlessBinding::enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R
-pub fn flui::testing::harness::HeadlessBinding::gestures(&self) -> &flui::testing::harness::GestureBinding
-pub fn flui::testing::harness::HeadlessBinding::hit_test(&self, position: flui::geometry::Offset<f64>, kind: flui::interaction::PointerKind) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui::testing::harness::HeadlessBinding::install_build_capabilities(&self, build_owner: &mut flui::prelude::BuildOwner)
-pub fn flui::testing::harness::HeadlessBinding::install_hit_test_capability(&self, build_owner: &mut flui::prelude::BuildOwner, pipeline_owner: &flui::rendering::PipelineCell)
-pub fn flui::testing::harness::HeadlessBinding::install_presentation_clock(&mut self, id: flui::foundation::PresentationId) -> flui::animation::Vsync
-pub fn flui::testing::harness::HeadlessBinding::interaction_dispatch_handle(&self) -> flui_interaction::pointer::interaction_lane::InteractionDispatchHandle
-pub fn flui::testing::harness::HeadlessBinding::layer_tree(&self) -> Option<&flui_layer::tree::layer_tree::LayerTree>
-pub fn flui::testing::harness::HeadlessBinding::mark_presentation_demand(&self, id: flui::foundation::PresentationId, kind: flui_scheduler::frame_clock::DemandKind)
-pub fn flui::testing::harness::HeadlessBinding::motion_clock_mut(&mut self) -> &mut flui::animation::MotionClock
-pub fn flui::testing::harness::HeadlessBinding::mount_root<V: flui::prelude::View + Clone + 'static>(&mut self, root: &V, owners: flui::testing::harness::MountOwners, options: flui::testing::harness::MountOptions) -> flui::testing::harness::Mounted
-pub fn flui::testing::harness::HeadlessBinding::mouse_tracker(&self) -> &flui_interaction::pointer::mouse_tracker::MouseTracker
-pub fn flui::testing::harness::HeadlessBinding::new() -> Self
-pub fn flui::testing::harness::HeadlessBinding::painted_frame_count(&self) -> u64
-pub fn flui::testing::harness::HeadlessBinding::perform_reassemble(&mut self)
-pub fn flui::testing::harness::HeadlessBinding::pipeline_owner(&self) -> Option<&flui::rendering::PipelineCell>
-pub fn flui::testing::harness::HeadlessBinding::presentation_produced_count(&self, id: flui::foundation::PresentationId) -> u64
-pub fn flui::testing::harness::HeadlessBinding::presentation_vsync(&self, id: flui::foundation::PresentationId) -> Option<flui::animation::Vsync>
-pub fn flui::testing::harness::HeadlessBinding::pump_all(&self, dt: core::time::Duration)
-pub fn flui::testing::harness::HeadlessBinding::pump_frame(&mut self, dt: core::time::Duration)
-pub fn flui::testing::harness::HeadlessBinding::pump_presentation(&self, id: flui::foundation::PresentationId, dt: core::time::Duration)
-pub fn flui::testing::harness::HeadlessBinding::reassemble_render_tree(&self)
-pub fn flui::testing::harness::HeadlessBinding::replay(&mut self, script: &flui::testing::harness::replay::PointerScript)
-pub fn flui::testing::harness::HeadlessBinding::replay_event(&mut self, event: flui::testing::harness::replay::ScriptedPointer)
-pub fn flui::testing::harness::HeadlessBinding::replay_with(&mut self, script: &flui::testing::harness::replay::PointerScript, hit_test: impl FnMut(&Self, flui::geometry::Offset<f64>, flui::interaction::PointerKind) -> flui_interaction::pointer::hit_test::HitTestResult)
-pub fn flui::testing::harness::HeadlessBinding::scheduler(&self) -> &flui::view::UpdateScheduler
-pub fn flui::testing::harness::HeadlessBinding::semantics_enabled(&self) -> bool
-pub fn flui::testing::harness::HeadlessBinding::set_lifecycle_state(&self, state: flui::prelude::AppLifecycleState) -> Result<(), flui::view::LifecycleClosed>
-pub fn flui::testing::harness::HeadlessBinding::set_presentation_min_produce_interval(&self, id: flui::foundation::PresentationId, interval: Option<core::time::Duration>)
-pub fn flui::testing::harness::HeadlessBinding::spawn_local(&self, future: flui::view::BoxedTask) -> flui::view::TaskToken
-pub fn flui::testing::harness::HeadlessBinding::swap_root_view(&mut self, root_id: flui::foundation::ElementId, new_root: &dyn flui::prelude::View)
-pub fn flui::testing::harness::HeadlessBinding::tree_mut(&mut self) -> &mut flui::prelude::ElementTree
-pub fn flui::testing::harness::HeadlessBinding::try_new() -> Result<Self, flui_interaction::pointer::interaction_lane::InteractionDispatchError>
-pub fn flui::testing::harness::HeadlessBinding::vsync(&self) -> &flui::animation::Vsync
-pub fn flui::testing::harness::HeadlessBinding::with_presentation_motion_clock<R>(&mut self, id: flui::foundation::PresentationId, edit: impl FnOnce(&mut flui::animation::MotionClock) -> R) -> Option<R>
-pub fn flui::testing::harness::HeadlessBinding::with_tree(build_owner: flui::prelude::BuildOwner, tree: flui::prelude::ElementTree, pipeline_owner: flui::rendering::PipelineCell) -> Self
-pub fn flui::testing::harness::HeadlessBinding::writer_source(&self) -> Option<flui::prelude::WriterSource>
-pub struct flui::testing::harness::MountOptions
-field flui::testing::harness::MountOptions::capabilities: flui::testing::harness::BuildCapabilities // at 1
-field flui::testing::harness::MountOptions::constraints: flui::prelude::BoxConstraints // at 0
-impl Clone for flui::testing::harness::MountOptions
-impl Copy for flui::testing::harness::MountOptions
-impl core::fmt::Debug for flui::testing::harness::MountOptions
-pub fn flui::testing::harness::MountOptions::capabilities(self, capabilities: flui::testing::harness::BuildCapabilities) -> Self
-pub fn flui::testing::harness::MountOptions::loose(max: f64) -> Self
-pub fn flui::testing::harness::MountOptions::new(constraints: flui::prelude::BoxConstraints) -> Self
-pub fn flui::testing::harness::MountOptions::tight(width: f64, height: f64) -> Self
-pub struct flui::testing::harness::MountOwners
-field flui::testing::harness::MountOwners::build_owner: flui::prelude::BuildOwner // at 0
-field flui::testing::harness::MountOwners::pipeline_owner: flui::rendering::PipelineCell // at 2
-field flui::testing::harness::MountOwners::tree: flui::prelude::ElementTree // at 1
-impl Default for flui::testing::harness::MountOwners
-impl core::fmt::Debug for flui::testing::harness::MountOwners
-pub fn flui::testing::harness::MountOwners::fresh() -> Self
-pub fn flui::testing::harness::MountOwners::with_pipeline_owner(pipeline_owner: flui::rendering::PipelineCell) -> Self
-pub struct flui::testing::harness::Mounted
-field flui::testing::harness::Mounted::content_element: flui::foundation::ElementId // at 1
-field flui::testing::harness::Mounted::painted: bool // at 5
-field flui::testing::harness::Mounted::render_root: flui::foundation::RenderId // at 2
-field flui::testing::harness::Mounted::render_root_children: Vec<flui::foundation::RenderId> // at 3
-field flui::testing::harness::Mounted::root_element: flui::foundation::ElementId // at 0
-field flui::testing::harness::Mounted::root_view_size: (f64, f64) // at 4
-impl Clone for flui::testing::harness::Mounted
-impl core::fmt::Debug for flui::testing::harness::Mounted
-pub fn flui::testing::harness::Mounted::logical_render_root(&self) -> flui::foundation::RenderId
-pub mod flui::testing::harness::a11y
-pub struct flui::testing::harness::a11y::A11yNode<'a> { .. }
-impl<'a> Clone for flui::testing::harness::a11y::A11yNode<'a>
-impl<'a> Copy for flui::testing::harness::a11y::A11yNode<'a>
-impl<'a> core::fmt::Debug for flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::bounds(&self) -> Option<accesskit::geometry::Rect> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::child_ids(&self) -> &'a [accesskit::NodeId] // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::column_count(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::column_index(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::column_span(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::describe(&self) -> String // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::heading_level(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::id(&self) -> accesskit::NodeId // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::is_disabled(&self) -> bool // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::is_multiselectable(&self) -> bool // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::label(&self) -> Option<&'a str> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::live(&self) -> Option<accesskit::Live> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::outline_level(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::position_in_set(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::raw(&self) -> &'a accesskit::Node // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::role(&self) -> accesskit::Role // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::row_count(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::row_index(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::row_span(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::size_of_containing_set(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::size_of_set(&self) -> Option<usize> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::sort_direction(&self) -> Option<accesskit::SortDirection> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::supports_action(&self, action: accesskit::Action) -> bool // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::toggled(&self) -> Option<accesskit::Toggled> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-pub fn flui::testing::harness::a11y::A11yNode::value(&self) -> Option<&'a str> // impl<'a> flui::testing::harness::a11y::A11yNode<'a>
-reexport flui::testing::harness::a11y::A11yPoint => accesskit::geometry::Point
-#[non_exhaustive] pub enum flui::testing::harness::a11y::A11yQuery
-impl Clone for flui::testing::harness::a11y::A11yQuery
-impl Eq for flui::testing::harness::a11y::A11yQuery
-impl PartialEq for flui::testing::harness::a11y::A11yQuery
-impl core::fmt::Debug for flui::testing::harness::a11y::A11yQuery
-impl core::fmt::Display for flui::testing::harness::a11y::A11yQuery
-impl core::marker::StructuralPartialEq for flui::testing::harness::a11y::A11yQuery
-variant flui::testing::harness::a11y::A11yQuery::Label(String) // at 1
-variant flui::testing::harness::a11y::A11yQuery::Role(accesskit::Role) // at 0
-variant flui::testing::harness::a11y::A11yQuery::RoleAndLabel(accesskit::Role, String) // at 2
-#[non_exhaustive] pub enum flui::testing::harness::a11y::A11yQueryError
-impl Clone for flui::testing::harness::a11y::A11yQueryError
-impl Eq for flui::testing::harness::a11y::A11yQueryError
-impl PartialEq for flui::testing::harness::a11y::A11yQueryError
-impl core::error::Error for flui::testing::harness::a11y::A11yQueryError
-impl core::fmt::Debug for flui::testing::harness::a11y::A11yQueryError
-impl core::fmt::Display for flui::testing::harness::a11y::A11yQueryError
-impl core::marker::StructuralPartialEq for flui::testing::harness::a11y::A11yQueryError
-variant flui::testing::harness::a11y::A11yQueryError::Ambiguous { query: flui::testing::harness::a11y::A11yQuery, matches: Vec<String> } // at 1
-variant flui::testing::harness::a11y::A11yQueryError::NotFound { query: flui::testing::harness::a11y::A11yQuery, tree: String } // at 0
-reexport flui::testing::harness::a11y::A11yRect => accesskit::geometry::Rect
-reexport flui::testing::harness::a11y::A11ySortDirection => accesskit::SortDirection
-pub struct flui::testing::harness::a11y::A11yTree { .. }
-impl Clone for flui::testing::harness::a11y::A11yTree
-impl core::fmt::Debug for flui::testing::harness::a11y::A11yTree
-pub fn flui::testing::harness::a11y::A11yTree::announcement(&self, urgency: flui::prelude::Urgency) -> Option<&str>
-pub fn flui::testing::harness::a11y::A11yTree::describe(&self) -> String
-pub fn flui::testing::harness::a11y::A11yTree::find(&self, role: accesskit::Role) -> Result<flui::testing::harness::a11y::A11yNode<'_>, flui::testing::harness::a11y::A11yQueryError>
-pub fn flui::testing::harness::a11y::A11yTree::find_all(&self, role: accesskit::Role) -> Vec<flui::testing::harness::a11y::A11yNode<'_>>
-pub fn flui::testing::harness::a11y::A11yTree::find_all_by_label(&self, label: &str) -> Vec<flui::testing::harness::a11y::A11yNode<'_>>
-pub fn flui::testing::harness::a11y::A11yTree::find_by_label(&self, label: &str) -> Result<flui::testing::harness::a11y::A11yNode<'_>, flui::testing::harness::a11y::A11yQueryError>
-pub fn flui::testing::harness::a11y::A11yTree::find_by_role_and_label(&self, role: accesskit::Role, label: &str) -> Result<flui::testing::harness::a11y::A11yNode<'_>, flui::testing::harness::a11y::A11yQueryError>
-pub fn flui::testing::harness::a11y::A11yTree::focus(&self) -> Option<flui::testing::harness::a11y::A11yNode<'_>>
-pub fn flui::testing::harness::a11y::A11yTree::is_empty(&self) -> bool
-pub fn flui::testing::harness::a11y::A11yTree::len(&self) -> usize
-pub fn flui::testing::harness::a11y::A11yTree::new(update: accesskit::TreeUpdate) -> Self
-pub fn flui::testing::harness::a11y::A11yTree::nodes(&self) -> impl Iterator<Item = flui::testing::harness::a11y::A11yNode<'_>> + '_
-pub fn flui::testing::harness::a11y::A11yTree::raw(&self) -> &accesskit::TreeUpdate
-pub fn flui::testing::harness::a11y::A11yTree::unreachable_count(&self) -> usize
-pub fn flui::testing::harness::a11y::A11yTree::window_bounds(&self, node: &flui::testing::harness::a11y::A11yNode<'_>) -> Option<accesskit::geometry::Rect>
-reexport flui::testing::harness::a11y::Action => accesskit::Action
-reexport flui::testing::harness::a11y::ActionData => accesskit::ActionData
-reexport flui::testing::harness::a11y::ActionRequest => accesskit::ActionRequest
-#[non_exhaustive] pub enum flui::testing::harness::a11y::InvokeActionError
-impl From<flui_semantics::action::ActionDecodeError> for flui::testing::harness::a11y::InvokeActionError
-impl From<flui_semantics::owner::SemanticsActionError> for flui::testing::harness::a11y::InvokeActionError
-impl core::error::Error for flui::testing::harness::a11y::InvokeActionError
-impl core::fmt::Debug for flui::testing::harness::a11y::InvokeActionError
-impl core::fmt::Display for flui::testing::harness::a11y::InvokeActionError
-variant flui::testing::harness::a11y::InvokeActionError::Decode(flui_semantics::action::ActionDecodeError) // at 0
-variant flui::testing::harness::a11y::InvokeActionError::Resolution(flui_semantics::owner::SemanticsActionError) // at 1
-reexport flui::testing::harness::a11y::Live => accesskit::Live
-reexport flui::testing::harness::a11y::NodeId => accesskit::NodeId
-pub struct flui::testing::harness::a11y::NotTreeBound;
-impl Clone for flui::testing::harness::a11y::NotTreeBound
-impl Copy for flui::testing::harness::a11y::NotTreeBound
-impl Eq for flui::testing::harness::a11y::NotTreeBound
-impl PartialEq for flui::testing::harness::a11y::NotTreeBound
-impl core::error::Error for flui::testing::harness::a11y::NotTreeBound
-impl core::fmt::Debug for flui::testing::harness::a11y::NotTreeBound
-impl core::fmt::Display for flui::testing::harness::a11y::NotTreeBound
-impl core::marker::StructuralPartialEq for flui::testing::harness::a11y::NotTreeBound
-reexport flui::testing::harness::a11y::Role => accesskit::Role
-reexport flui::testing::harness::a11y::ScrollUnit => accesskit::ScrollUnit
-reexport flui::testing::harness::a11y::Toggled => accesskit::Toggled
-reexport flui::testing::harness::a11y::TreeId => accesskit::TreeId
-pub fn flui::testing::harness::render_snapshot<P: flui_rendering::pipeline::phase::PipelinePhase>(owner: &flui::rendering::PipelineOwner<P>) -> flui::foundation::inspect::SnapshotNode
-pub mod flui::testing::harness::replay
-pub struct flui::testing::harness::replay::MouseScript { .. }
-impl Clone for flui::testing::harness::replay::MouseScript
-impl TryFrom<flui::testing::harness::replay::MouseScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl core::fmt::Debug for flui::testing::harness::replay::MouseScript
-pub fn flui::testing::harness::replay::MouseScript::build(self) -> Result<flui::testing::harness::replay::PointerScript, flui::testing::harness::replay::ScriptError>
-pub fn flui::testing::harness::replay::MouseScript::click(self, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::MouseScript::frame(self) -> Self
-pub fn flui::testing::harness::replay::MouseScript::move_to(self, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::MouseScript::new(name: impl Into<String>) -> Self
-pub fn flui::testing::harness::replay::MouseScript::press(self, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::MouseScript::press_button(self, at: flui::geometry::Offset<f64>, button: flui::interaction::PointerButton) -> Self
-pub fn flui::testing::harness::replay::MouseScript::release(self) -> Self
-pub fn flui::testing::harness::replay::MouseScript::wait(self, duration: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::MouseScript::wheel(self, lines: f64) -> Self
-pub struct flui::testing::harness::replay::PenScript { .. }
-impl Clone for flui::testing::harness::replay::PenScript
-impl TryFrom<flui::testing::harness::replay::PenScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl core::fmt::Debug for flui::testing::harness::replay::PenScript
-pub fn flui::testing::harness::replay::PenScript::build(self) -> Result<flui::testing::harness::replay::PointerScript, flui::testing::harness::replay::ScriptError>
-pub fn flui::testing::harness::replay::PenScript::down(self, at: flui::geometry::Offset<f64>, pressure: f32) -> Self
-pub fn flui::testing::harness::replay::PenScript::eraser(self) -> Self
-pub fn flui::testing::harness::replay::PenScript::frame(self) -> Self
-pub fn flui::testing::harness::replay::PenScript::hover(self, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::PenScript::move_to(self, at: flui::geometry::Offset<f64>, pressure: f32) -> Self
-pub fn flui::testing::harness::replay::PenScript::new(name: impl Into<String>) -> Self
-pub fn flui::testing::harness::replay::PenScript::up(self) -> Self
-pub fn flui::testing::harness::replay::PenScript::wait(self, duration: core::time::Duration) -> Self
-pub enum flui::testing::harness::replay::PinchPhase
-impl Clone for flui::testing::harness::replay::PinchPhase
-impl Copy for flui::testing::harness::replay::PinchPhase
-impl PartialEq for flui::testing::harness::replay::PinchPhase
-impl core::fmt::Debug for flui::testing::harness::replay::PinchPhase
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::PinchPhase
-variant flui::testing::harness::replay::PinchPhase::End // at 2
-variant flui::testing::harness::replay::PinchPhase::Start // at 0
-variant flui::testing::harness::replay::PinchPhase::Update { scale: f64, rotation: f64 } // at 1
-#[non_exhaustive] pub enum flui::testing::harness::replay::PointerPhase
-impl Clone for flui::testing::harness::replay::PointerPhase
-impl Copy for flui::testing::harness::replay::PointerPhase
-impl Eq for flui::testing::harness::replay::PointerPhase
-impl PartialEq for flui::testing::harness::replay::PointerPhase
-impl core::fmt::Debug for flui::testing::harness::replay::PointerPhase
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::PointerPhase
-variant flui::testing::harness::replay::PointerPhase::Cancel // at 3
-variant flui::testing::harness::replay::PointerPhase::Down // at 0
-variant flui::testing::harness::replay::PointerPhase::Hover // at 4
-variant flui::testing::harness::replay::PointerPhase::Move // at 1
-variant flui::testing::harness::replay::PointerPhase::Up // at 2
-pub struct flui::testing::harness::replay::PointerScript { .. }
-impl Clone for flui::testing::harness::replay::PointerScript
-impl Default for flui::testing::harness::replay::PointerScript
-impl PartialEq for flui::testing::harness::replay::PointerScript
-impl TryFrom<flui::testing::harness::replay::MouseScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl TryFrom<flui::testing::harness::replay::PenScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl TryFrom<flui::testing::harness::replay::TouchScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl TryFrom<flui::testing::harness::replay::TrackpadScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl TryFrom<flui::testing::harness::replay::VirtualScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl core::fmt::Debug for flui::testing::harness::replay::PointerScript
-impl core::fmt::Display for flui::testing::harness::replay::PointerScript
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::PointerScript
-pub fn flui::testing::harness::replay::PointerScript::double_tap(position: flui::geometry::Offset<f64>, gap: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::PointerScript::drag(start: flui::geometry::Offset<f64>, end: flui::geometry::Offset<f64>, steps: usize, sample: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::PointerScript::duration(&self) -> core::time::Duration
-pub fn flui::testing::harness::replay::PointerScript::fling(start: flui::geometry::Offset<f64>, end: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::PointerScript::inputs(&self) -> Vec<flui::app::HostInput>
-pub fn flui::testing::harness::replay::PointerScript::inputs_from(&self, base: flui::interaction::EventTime) -> Vec<flui::app::HostInput>
-pub fn flui::testing::harness::replay::PointerScript::is_empty(&self) -> bool
-pub fn flui::testing::harness::replay::PointerScript::len(&self) -> usize
-pub fn flui::testing::harness::replay::PointerScript::long_press(position: flui::geometry::Offset<f64>, hold: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::PointerScript::name(&self) -> &str
-pub fn flui::testing::harness::replay::PointerScript::pinch(center: flui::geometry::Offset<f64>, start_distance: f64, end_distance: f64, steps: usize) -> Self
-pub fn flui::testing::harness::replay::PointerScript::pointer_events(&self) -> Vec<flui::testing::harness::replay::ScriptedPointer>
-pub fn flui::testing::harness::replay::PointerScript::steps(&self) -> &[flui::testing::harness::replay::ScriptStep]
-pub fn flui::testing::harness::replay::PointerScript::swipe(start: flui::geometry::Offset<f64>, end: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::PointerScript::tap(position: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::PointerScript::write_recording<W: core::io::write::Write>(&self, out: W, window: flui::platform::WindowId) -> Result<W, flui_testing::recording::format::RecordingError>
-#[non_exhaustive] pub enum flui::testing::harness::replay::ScriptError
-impl Clone for flui::testing::harness::replay::ScriptError
-impl Copy for flui::testing::harness::replay::ScriptError
-impl Eq for flui::testing::harness::replay::ScriptError
-impl PartialEq for flui::testing::harness::replay::ScriptError
-impl core::error::Error for flui::testing::harness::replay::ScriptError
-impl core::fmt::Debug for flui::testing::harness::replay::ScriptError
-impl core::fmt::Display for flui::testing::harness::replay::ScriptError
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::ScriptError
-variant flui::testing::harness::replay::ScriptError::AlreadyDown { pointer: flui::interaction::PointerId } // at 2
-variant flui::testing::harness::replay::ScriptError::NotDown { pointer: flui::interaction::PointerId } // at 1
-variant flui::testing::harness::replay::ScriptError::UnpairedDown { pointer: flui::interaction::PointerId } // at 0
-variant flui::testing::harness::replay::ScriptError::UnpairedPinch // at 3
-#[non_exhaustive] pub enum flui::testing::harness::replay::ScriptStep
-impl Clone for flui::testing::harness::replay::ScriptStep
-impl Copy for flui::testing::harness::replay::ScriptStep
-impl PartialEq for flui::testing::harness::replay::ScriptStep
-impl core::fmt::Debug for flui::testing::harness::replay::ScriptStep
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::ScriptStep
-pub fn flui::testing::harness::replay::ScriptStep::at(&self) -> core::time::Duration
-pub fn flui::testing::harness::replay::ScriptStep::to_input(&self, base: flui::interaction::EventTime) -> flui::app::HostInput
-variant flui::testing::harness::replay::ScriptStep::Frame { at: core::time::Duration } // at 5
-variant flui::testing::harness::replay::ScriptStep::InertiaCancel(flui::testing::harness::replay::ScriptedTrackpadAction) // at 4
-variant flui::testing::harness::replay::ScriptStep::PanZoom(flui::testing::harness::replay::ScriptedPanZoom) // at 2
-variant flui::testing::harness::replay::ScriptStep::Pointer(flui::testing::harness::replay::ScriptedPointer) // at 0
-variant flui::testing::harness::replay::ScriptStep::Scroll(flui::testing::harness::replay::ScriptedScroll) // at 1
-variant flui::testing::harness::replay::ScriptStep::SmartZoom(flui::testing::harness::replay::ScriptedTrackpadAction) // at 3
-pub struct flui::testing::harness::replay::ScriptedPanZoom
-field flui::testing::harness::replay::ScriptedPanZoom::at: core::time::Duration // at 0
-field flui::testing::harness::replay::ScriptedPanZoom::phase: flui::testing::harness::replay::PinchPhase // at 3
-field flui::testing::harness::replay::ScriptedPanZoom::pointer: flui::interaction::PointerId // at 1
-field flui::testing::harness::replay::ScriptedPanZoom::position: flui::geometry::Offset<f64> // at 2
-impl Clone for flui::testing::harness::replay::ScriptedPanZoom
-impl Copy for flui::testing::harness::replay::ScriptedPanZoom
-impl PartialEq for flui::testing::harness::replay::ScriptedPanZoom
-impl core::fmt::Debug for flui::testing::harness::replay::ScriptedPanZoom
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::ScriptedPanZoom
-pub struct flui::testing::harness::replay::ScriptedPointer
-field flui::testing::harness::replay::ScriptedPointer::at: core::time::Duration // at 0
-field flui::testing::harness::replay::ScriptedPointer::button: flui::interaction::PointerButton // at 5
-field flui::testing::harness::replay::ScriptedPointer::device: flui::interaction::PointerKind // at 4
-field flui::testing::harness::replay::ScriptedPointer::hardware: Option<flui::interaction::DeviceId> // at 7
-field flui::testing::harness::replay::ScriptedPointer::phase: flui::testing::harness::replay::PointerPhase // at 2
-field flui::testing::harness::replay::ScriptedPointer::pointer: flui::interaction::PointerId // at 1
-field flui::testing::harness::replay::ScriptedPointer::position: flui::geometry::Offset<f64> // at 3
-field flui::testing::harness::replay::ScriptedPointer::pressure: Option<f32> // at 6
-impl Clone for flui::testing::harness::replay::ScriptedPointer
-impl Copy for flui::testing::harness::replay::ScriptedPointer
-impl PartialEq for flui::testing::harness::replay::ScriptedPointer
-impl core::fmt::Debug for flui::testing::harness::replay::ScriptedPointer
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::ScriptedPointer
-pub fn flui::testing::harness::replay::ScriptedPointer::new(at: core::time::Duration, pointer: flui::interaction::PointerId, phase: flui::testing::harness::replay::PointerPhase, position: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::ScriptedPointer::to_event(self) -> flui::interaction::PointerEvent
-pub fn flui::testing::harness::replay::ScriptedPointer::to_event_at(self, base: flui::interaction::EventTime) -> flui::interaction::PointerEvent
-pub fn flui::testing::harness::replay::ScriptedPointer::with_device(self, device: flui::interaction::PointerKind) -> Self
-pub struct flui::testing::harness::replay::ScriptedScroll
-field flui::testing::harness::replay::ScriptedScroll::at: core::time::Duration // at 0
-field flui::testing::harness::replay::ScriptedScroll::delta: flui::geometry::Offset<f64> // at 4
-field flui::testing::harness::replay::ScriptedScroll::device: flui::interaction::PointerKind // at 2
-field flui::testing::harness::replay::ScriptedScroll::phase: Option<flui::interaction::ScrollPhase> // at 7
-field flui::testing::harness::replay::ScriptedScroll::pointer: flui::interaction::PointerId // at 1
-field flui::testing::harness::replay::ScriptedScroll::position: flui::geometry::Offset<f64> // at 3
-field flui::testing::harness::replay::ScriptedScroll::precision: flui::interaction::ScrollPrecision // at 6
-field flui::testing::harness::replay::ScriptedScroll::unit: flui::interaction::ScrollUnit // at 5
-impl Clone for flui::testing::harness::replay::ScriptedScroll
-impl Copy for flui::testing::harness::replay::ScriptedScroll
-impl PartialEq for flui::testing::harness::replay::ScriptedScroll
-impl core::fmt::Debug for flui::testing::harness::replay::ScriptedScroll
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::ScriptedScroll
-pub struct flui::testing::harness::replay::ScriptedTrackpadAction
-field flui::testing::harness::replay::ScriptedTrackpadAction::at: core::time::Duration // at 0
-field flui::testing::harness::replay::ScriptedTrackpadAction::pointer: flui::interaction::PointerId // at 1
-field flui::testing::harness::replay::ScriptedTrackpadAction::position: flui::geometry::Offset<f64> // at 2
-impl Clone for flui::testing::harness::replay::ScriptedTrackpadAction
-impl Copy for flui::testing::harness::replay::ScriptedTrackpadAction
-impl PartialEq for flui::testing::harness::replay::ScriptedTrackpadAction
-impl core::fmt::Debug for flui::testing::harness::replay::ScriptedTrackpadAction
-impl core::marker::StructuralPartialEq for flui::testing::harness::replay::ScriptedTrackpadAction
-pub struct flui::testing::harness::replay::TouchScript { .. }
-impl Clone for flui::testing::harness::replay::TouchScript
-impl TryFrom<flui::testing::harness::replay::TouchScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl core::fmt::Debug for flui::testing::harness::replay::TouchScript
-pub fn flui::testing::harness::replay::TouchScript::build(self) -> Result<flui::testing::harness::replay::PointerScript, flui::testing::harness::replay::ScriptError>
-pub fn flui::testing::harness::replay::TouchScript::cancel(self, finger: u64) -> Self
-pub fn flui::testing::harness::replay::TouchScript::down(self, finger: u64, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::TouchScript::frame(self) -> Self
-pub fn flui::testing::harness::replay::TouchScript::move_to(self, finger: u64, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::TouchScript::new(name: impl Into<String>) -> Self
-pub fn flui::testing::harness::replay::TouchScript::up(self, finger: u64) -> Self
-pub fn flui::testing::harness::replay::TouchScript::wait(self, duration: core::time::Duration) -> Self
-pub struct flui::testing::harness::replay::TrackpadScript { .. }
-impl Clone for flui::testing::harness::replay::TrackpadScript
-impl TryFrom<flui::testing::harness::replay::TrackpadScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl core::fmt::Debug for flui::testing::harness::replay::TrackpadScript
-pub fn flui::testing::harness::replay::TrackpadScript::build(self) -> Result<flui::testing::harness::replay::PointerScript, flui::testing::harness::replay::ScriptError>
-pub fn flui::testing::harness::replay::TrackpadScript::frame(self) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::momentum(self, delta: flui::geometry::Offset<f64>, steps: u32, sample: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::new(name: impl Into<String>, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::pan(self, delta: flui::geometry::Offset<f64>, steps: u32, sample: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::pinch_end(self) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::pinch_start(self) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::pinch_to(self, scale: f64, rotation: f64) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::rest(self) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::smart_zoom(self) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::unended_pan(self, delta: flui::geometry::Offset<f64>, steps: u32, sample: core::time::Duration) -> Self
-pub fn flui::testing::harness::replay::TrackpadScript::wait(self, duration: core::time::Duration) -> Self
-pub struct flui::testing::harness::replay::VirtualScript { .. }
-impl Clone for flui::testing::harness::replay::VirtualScript
-impl TryFrom<flui::testing::harness::replay::VirtualScript> for flui::testing::harness::replay::PointerScript { type Error = flui::testing::harness::replay::ScriptError; }
-impl core::fmt::Debug for flui::testing::harness::replay::VirtualScript
-pub fn flui::testing::harness::replay::VirtualScript::build(self) -> Result<flui::testing::harness::replay::PointerScript, flui::testing::harness::replay::ScriptError>
-pub fn flui::testing::harness::replay::VirtualScript::device(&self) -> Option<flui::interaction::DeviceId>
-pub fn flui::testing::harness::replay::VirtualScript::frame(self) -> Self
-pub fn flui::testing::harness::replay::VirtualScript::move_to(self, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::VirtualScript::new(name: impl Into<String>, device: flui::interaction::DeviceId) -> Self
-pub fn flui::testing::harness::replay::VirtualScript::press(self, at: flui::geometry::Offset<f64>) -> Self
-pub fn flui::testing::harness::replay::VirtualScript::press_button(self, at: flui::geometry::Offset<f64>, button: flui::interaction::PointerButton) -> Self
-pub fn flui::testing::harness::replay::VirtualScript::release(self) -> Self
-pub fn flui::testing::harness::replay::VirtualScript::wait(self, duration: core::time::Duration) -> Self
-pub mod flui::testing::harness::storage
-reexport flui::testing::harness::storage::CommitBarrier => flui::testing::CommitBarrier
-reexport flui::testing::harness::storage::CopyHold => flui::testing::CopyHold
-reexport flui::testing::harness::storage::MemoryStorage => flui::testing::MemoryStorage
-reexport flui::testing::harness::storage::ReadHold => flui::testing::ReadHold
-reexport flui::testing::harness::storage::WriteHold => flui::testing::WriteHold
-pub mod flui::testing::harness::widgets
-pub struct flui::testing::harness::widgets::LaidOut { .. }
-impl core::fmt::Debug for flui::testing::harness::widgets::LaidOut
-pub fn flui::testing::harness::widgets::LaidOut::a11y_nodes_named_by(&self, anchor: &flui::prelude::SemanticsAnchor) -> Vec<accesskit::NodeId>
-pub fn flui::testing::harness::widgets::LaidOut::a11y_tree(&self) -> Option<flui::testing::harness::a11y::A11yTree>
-pub fn flui::testing::harness::widgets::LaidOut::absolute_offset(&self, id: flui::foundation::RenderId) -> flui::geometry::Offset
-pub fn flui::testing::harness::widgets::LaidOut::accessibility_action_listener(&self) -> Option<flui_semantics::platform::AccessibilityActionListener>
-pub fn flui::testing::harness::widgets::LaidOut::adopt_vsync(&mut self, vsync: flui::animation::Vsync) -> Result<(), flui::animation::VsyncRegistrationError>
-pub fn flui::testing::harness::widgets::LaidOut::binding_scheduler(&self) -> flui::view::UpdateScheduler
-pub fn flui::testing::harness::widgets::LaidOut::child(&self, id: flui::foundation::RenderId, index: usize) -> flui::foundation::RenderId
-pub fn flui::testing::harness::widgets::LaidOut::children(&self, id: flui::foundation::RenderId) -> Vec<flui::foundation::RenderId>
-pub fn flui::testing::harness::widgets::LaidOut::clip_behavior(&self, id: flui::foundation::RenderId) -> flui::prelude::Clip
-pub fn flui::testing::harness::widgets::LaidOut::clip_rrect_border_radius(&self, id: flui::foundation::RenderId) -> flui::painting::styling::BorderRadius
-pub fn flui::testing::harness::widgets::LaidOut::clip_rrect_layers(&self) -> Vec<flui::geometry::RRect>
-pub fn flui::testing::harness::widgets::LaidOut::clipboard(&self) -> flui_testing::clipboard::ScriptedClipboard
-pub fn flui::testing::harness::widgets::LaidOut::container_inner_size(&self, id: flui::foundation::RenderId) -> flui::geometry::Size
-pub fn flui::testing::harness::widgets::LaidOut::container_transform(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Matrix4>
-pub fn flui::testing::harness::widgets::LaidOut::count_elements_by_view_type<V: flui::prelude::View>(&mut self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::current_root(&self) -> flui::foundation::RenderId
-pub fn flui::testing::harness::widgets::LaidOut::cursor(&self) -> cursor_icon::CursorIcon
-pub fn flui::testing::harness::widgets::LaidOut::did_paint_last_frame(&self) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_ime(&self, event: flui::platform::ImeEvent)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_key(&self, event: flui::interaction::KeyEvent)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_cancel(&self)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_down(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_down_with_kind(&self, x: f64, y: f64, kind: flui::interaction::PointerKind)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_event(&self, event: &flui::interaction::PointerEvent)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_hover(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_hover_with_kind(&self, x: f64, y: f64, kind: flui::interaction::PointerKind)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_move(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_move_after(&self, x: f64, y: f64, dt: core::time::Duration)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_pointer_up(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_scroll(&self, x: f64, y: f64, dx: f64, dy: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_scroll_with_modifiers(&self, x: f64, y: f64, dx: f64, dy: f64, modifiers: flui::interaction::Modifiers)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_down(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_secondary_up(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::LaidOut::dispatch_window_hover_left(&self)
-pub fn flui::testing::harness::widgets::LaidOut::draw_ops(&self) -> Vec<flui::painting::DrawCommandBuf>
-pub fn flui::testing::harness::widgets::LaidOut::element_node_count(&mut self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::enable_semantics(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::end_session(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R
-pub fn flui::testing::harness::widgets::LaidOut::find_all_by_render_type(&self, render_type_name: &str) -> Vec<flui::foundation::RenderId>
-pub fn flui::testing::harness::widgets::LaidOut::find_all_text(&self, text: &str) -> Vec<flui::foundation::RenderId>
-pub fn flui::testing::harness::widgets::LaidOut::find_by_render_type(&self, render_type_name: &str) -> flui::foundation::RenderId
-pub fn flui::testing::harness::widgets::LaidOut::find_semantics_wrappers(&self) -> Vec<flui::foundation::RenderId>
-pub fn flui::testing::harness::widgets::LaidOut::find_text(&self, text: &str) -> Option<flui::foundation::RenderId>
-pub fn flui::testing::harness::widgets::LaidOut::fitted_box_transform(&self, id: flui::foundation::RenderId) -> flui::geometry::Matrix4
-pub fn flui::testing::harness::widgets::LaidOut::focus_manager(&self) -> alloc::rcs::rc::Rc<flui::interaction::FocusManager>
-pub fn flui::testing::harness::widgets::LaidOut::has_visual_overflow(&self, id: flui::foundation::RenderId) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::hit_test_pointer(&self, position: flui::geometry::Offset, kind: flui::interaction::PointerKind) -> flui_interaction::pointer::hit_test::HitTestResult
-pub fn flui::testing::harness::widgets::LaidOut::hold_background(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::image_has_image(&self, id: flui::foundation::RenderId) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::image_paint_rect(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Rect>
-pub fn flui::testing::harness::widgets::LaidOut::image_width(&self, id: flui::foundation::RenderId) -> Option<f64>
-pub fn flui::testing::harness::widgets::LaidOut::inherited_dependent_count<V: flui::prelude::InheritedView>(&mut self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::inspect_elements(&self, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
-pub fn flui::testing::harness::widgets::LaidOut::inspect_layers(&self, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
-pub fn flui::testing::harness::widgets::LaidOut::inspect_render(&self, query: flui::foundation::inspect::SnapshotQuery) -> Result<flui::foundation::inspect::SnapshotNode, flui::foundation::inspect::SnapshotError>
-pub fn flui::testing::harness::widgets::LaidOut::intrinsic_dimension(&self, id: flui::foundation::RenderId, dimension: flui_rendering::storage::state::layout_cache::IntrinsicDimension, extent: f64) -> f64
-pub fn flui::testing::harness::widgets::LaidOut::invoke_semantics_action(&self, request: accesskit::ActionRequest) -> Result<(), flui::testing::harness::a11y::InvokeActionError>
-pub fn flui::testing::harness::widgets::LaidOut::is_closed(&self) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::layer_kinds(&self) -> Vec<&'static str>
-pub fn flui::testing::harness::widgets::LaidOut::layer_tree(&self) -> Option<&flui_layer::tree::layer_tree::LayerTree>
-pub fn flui::testing::harness::widgets::LaidOut::move_assistive_focus(&mut self, node: Option<accesskit::NodeId>)
-pub fn flui::testing::harness::widgets::LaidOut::move_to_display(&mut self, display: Option<flui::platform::DisplayId>)
-pub fn flui::testing::harness::widgets::LaidOut::offset(&self, id: flui::foundation::RenderId) -> flui::geometry::Offset
-pub fn flui::testing::harness::widgets::LaidOut::only_child(&self, id: flui::foundation::RenderId) -> flui::foundation::RenderId
-pub fn flui::testing::harness::widgets::LaidOut::opacity(&self, id: flui::foundation::RenderId) -> f64
-pub fn flui::testing::harness::widgets::LaidOut::opacity_paint_alpha(&self, id: flui::foundation::RenderId) -> Option<f64>
-pub fn flui::testing::harness::widgets::LaidOut::opacity_skip_paint(&self, id: flui::foundation::RenderId) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::painted_frame_count(&self) -> u64
-pub fn flui::testing::harness::widgets::LaidOut::paragraph_first_line_left(&self, id: flui::foundation::RenderId) -> f64
-pub fn flui::testing::harness::widgets::LaidOut::pending_background(&self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::perform_reassemble(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::pipeline_owner(&self) -> flui::rendering::PipelineCell
-pub fn flui::testing::harness::widgets::LaidOut::post_frame_handle(&mut self) -> flui::view::PostFrameHandle
-pub fn flui::testing::harness::widgets::LaidOut::primary_selection(&self) -> flui_testing::primary_selection::ScriptedPrimarySelection
-pub fn flui::testing::harness::widgets::LaidOut::pump(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::pump_for(&mut self, dt: core::time::Duration)
-pub fn flui::testing::harness::widgets::LaidOut::pump_report(&mut self, dt: core::time::Duration) -> flui_testing::FrameReport
-pub fn flui::testing::harness::widgets::LaidOut::pump_widget(&mut self, new_root: impl flui::prelude::View)
-pub fn flui::testing::harness::widgets::LaidOut::reassemble_render_tree(&self)
-pub fn flui::testing::harness::widgets::LaidOut::release_background(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::render_debug_field(&self, id: flui::foundation::RenderId, name: &str) -> Option<String>
-pub fn flui::testing::harness::widgets::LaidOut::render_node(&self, id: flui::foundation::RenderId) -> flui::foundation::inspect::SnapshotNode
-pub fn flui::testing::harness::widgets::LaidOut::render_node_count(&self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::replay(&mut self, script: &flui::testing::harness::replay::PointerScript)
-pub fn flui::testing::harness::widgets::LaidOut::replay_with(&mut self, script: &flui::testing::harness::replay::PointerScript, after_step: impl FnMut(&mut Self, usize))
-pub fn flui::testing::harness::widgets::LaidOut::request_close(&self, reason: flui::app::CloseReason) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::root(&self) -> flui::foundation::RenderId
-pub fn flui::testing::harness::widgets::LaidOut::run_background(&mut self) -> usize
-pub fn flui::testing::harness::widgets::LaidOut::scheduler(&self) -> flui::view::UpdateScheduler
-pub fn flui::testing::harness::widgets::LaidOut::set_motion_override(&self, preference: flui::animation::MotionOverride)
-pub fn flui::testing::harness::widgets::LaidOut::set_scale_factor(&mut self, scale_factor: flui::geometry::DevicePixelRatio)
-pub fn flui::testing::harness::widgets::LaidOut::set_system_preferences(&self, values: flui::platform::SystemPreferences)
-pub fn flui::testing::harness::widgets::LaidOut::set_window_focused(&self, focused: bool)
-pub fn flui::testing::harness::widgets::LaidOut::set_window_visible(&self, visible: bool)
-pub fn flui::testing::harness::widgets::LaidOut::size(&self, id: flui::foundation::RenderId) -> flui::geometry::Size
-pub fn flui::testing::harness::widgets::LaidOut::sliver_geometry(&self, id: flui::foundation::RenderId) -> flui::rendering::SliverGeometry
-pub fn flui::testing::harness::widgets::LaidOut::sliver_opacity_paint_alpha(&self, id: flui::foundation::RenderId) -> Option<f64>
-pub fn flui::testing::harness::widgets::LaidOut::sliver_opacity_skip_paint(&self, id: flui::foundation::RenderId) -> bool
-pub fn flui::testing::harness::widgets::LaidOut::text_baseline(&self, id: flui::foundation::RenderId) -> f64
-pub fn flui::testing::harness::widgets::LaidOut::tick(&mut self)
-pub fn flui::testing::harness::widgets::LaidOut::transform_layer_matrices(&self) -> Vec<flui::geometry::Matrix4>
-pub fn flui::testing::harness::widgets::LaidOut::try_find_by_render_type(&self, render_type_name: &str) -> Option<flui::foundation::RenderId>
-pub fn flui::testing::harness::widgets::LaidOut::try_set_scale_factor(&mut self, scale_factor: f64) -> Result<(), flui::geometry::InvalidMetrics>
-pub fn flui::testing::harness::widgets::LaidOut::try_size(&self, id: flui::foundation::RenderId) -> Option<flui::geometry::Size>
-pub fn flui::testing::harness::widgets::LaidOut::window(&self) -> &flui_testing::host::HeadlessWindow
-pub fn flui::testing::harness::widgets::LaidOut::with_build_owner_mut<R>(&mut self, f: impl FnOnce(&mut flui::prelude::BuildOwner) -> R) -> R
-pub const flui::testing::harness::widgets::POINTER_SAMPLE_INTERVAL: core::time::Duration
-pub struct flui::testing::harness::widgets::PointerContacts { .. }
-impl Default for flui::testing::harness::widgets::PointerContacts
-impl core::fmt::Debug for flui::testing::harness::widgets::PointerContacts
-pub fn flui::testing::harness::widgets::PointerContacts::begin(&self) -> flui::interaction::PointerId
-pub fn flui::testing::harness::widgets::PointerContacts::current(&self) -> flui::interaction::PointerId
-pub fn flui::testing::harness::widgets::PointerContacts::end(&self)
-pub fn flui::testing::harness::widgets::PointerContacts::new() -> Self
-pub struct flui::testing::harness::widgets::ProbeRoot { .. }
-impl Clone for flui::testing::harness::widgets::ProbeRoot
-impl core::fmt::Debug for flui::testing::harness::widgets::ProbeRoot
-impl flui::prelude::StatefulView for flui::testing::harness::widgets::ProbeRoot { type State = flui::testing::harness::widgets::ProbeRootState; }
-impl flui::prelude::View for flui::testing::harness::widgets::ProbeRoot where Self: flui::prelude::StatefulView
-impl flui::prelude::ViewState<flui::testing::harness::widgets::ProbeRoot> for flui::testing::harness::widgets::ProbeRootState
-pub struct flui::testing::harness::widgets::ProbeRootState { .. }
-impl core::fmt::Debug for flui::testing::harness::widgets::ProbeRootState
-impl flui::prelude::ViewState<flui::testing::harness::widgets::ProbeRoot> for flui::testing::harness::widgets::ProbeRootState
-pub struct flui::testing::harness::widgets::ProbeSignals
-field flui::testing::harness::widgets::ProbeSignals::count: flui::prelude::Signal<u32> // at 0
-field flui::testing::harness::widgets::ProbeSignals::released: flui::prelude::Signal<u32> // at 1
-impl Clone for flui::testing::harness::widgets::ProbeSignals
-impl Copy for flui::testing::harness::widgets::ProbeSignals
-impl core::fmt::Debug for flui::testing::harness::widgets::ProbeSignals
-pub struct flui::testing::harness::widgets::SharedSignal<T: 'static> { .. }
-impl<T: 'static> Clone for flui::testing::harness::widgets::SharedSignal<T>
-impl<T: core::fmt::Debug + 'static> core::fmt::Debug for flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::bind(&self, ctx: &dyn flui::prelude::LifecycleContext) // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::get(&self, ctx: &dyn flui::prelude::BuildContext) -> T // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::new(initial: T) -> Self // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::peek<R>(&self, f: impl FnMut(&T) -> R) -> R // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::set(&self, value: T) // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::set_in(&self, ctx: &mut flui::prelude::EventContext<'_>, value: T) -> Result<(), flui::view::SignalError> // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::signal(&self) -> flui::prelude::Signal<T> // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::update<R>(&self, f: impl FnMut(&mut T) -> R) -> R // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::update_in<R>(&self, ctx: &mut flui::prelude::EventContext<'_>, f: impl FnMut(&mut T) -> R) -> Result<R, flui::view::SignalError> // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::value(&self) -> T // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub fn flui::testing::harness::widgets::SharedSignal::with<R>(&self, ctx: &dyn flui::prelude::BuildContext, f: impl FnMut(&T) -> R) -> R // impl<T: Clone + 'static> flui::testing::harness::widgets::SharedSignal<T>
-pub struct flui::testing::harness::widgets::SignalProbe { .. }
-impl Clone for flui::testing::harness::widgets::SignalProbe
-impl core::fmt::Debug for flui::testing::harness::widgets::SignalProbe
-pub fn flui::testing::harness::widgets::SignalProbe::new<V, B>(builder: B) -> Self where V: flui::prelude::IntoView, B: Fn(flui::testing::harness::widgets::ProbeSignals) -> V + 'static
-pub fn flui::testing::harness::widgets::SignalProbe::reads(&self) -> Vec<u32>
-pub fn flui::testing::harness::widgets::SignalProbe::value(&self) -> Result<u32, flui::view::SignalError>
-pub fn flui::testing::harness::widgets::SignalProbe::view(&self) -> flui::testing::harness::widgets::ProbeRoot
-pub fn flui::testing::harness::widgets::SignalProbe::write<R>(&self, f: impl FnOnce(&mut flui::prelude::EventContext<'_>) -> R) -> R
-pub struct flui::testing::harness::widgets::StateCreations { .. }
-impl Clone for flui::testing::harness::widgets::StateCreations
-impl Default for flui::testing::harness::widgets::StateCreations
-impl core::fmt::Debug for flui::testing::harness::widgets::StateCreations
-impl flui::prelude::StatefulView for flui::testing::harness::widgets::StateCreations { type State = flui::testing::harness::widgets::StateCreationsState; }
-impl flui::prelude::View for flui::testing::harness::widgets::StateCreations
-impl flui::prelude::ViewState<flui::testing::harness::widgets::StateCreations> for flui::testing::harness::widgets::StateCreationsState
-pub fn flui::testing::harness::widgets::StateCreations::count(&self) -> usize
-pub fn flui::testing::harness::widgets::StateCreations::counting(creations: &alloc::rcs::arc::Arc<core::sync::atomic::AtomicUsize>) -> Self
-pub struct flui::testing::harness::widgets::StateCreationsState;
-impl core::fmt::Debug for flui::testing::harness::widgets::StateCreationsState
-impl flui::prelude::ViewState<flui::testing::harness::widgets::StateCreations> for flui::testing::harness::widgets::StateCreationsState
-pub mod flui::testing::harness::widgets::harness
-pub struct flui::testing::harness::widgets::harness::Harness { .. }
-impl core::fmt::Debug for flui::testing::harness::widgets::harness::Harness
-pub fn flui::testing::harness::widgets::harness::Harness::a11y_tree(&self) -> Option<flui::testing::harness::a11y::A11yTree>
-pub fn flui::testing::harness::widgets::harness::Harness::active_ime_clients(&self) -> usize
-pub fn flui::testing::harness::widgets::harness::Harness::active_text_store(&self) -> Option<alloc::rcs::rc::Rc<dyn flui::platform::TextStore>>
-pub fn flui::testing::harness::widgets::harness::Harness::children_of(&mut self, parent: flui::foundation::ElementId) -> Vec<flui::foundation::ElementId>
-pub fn flui::testing::harness::widgets::harness::Harness::clipboard(&self) -> flui_testing::clipboard::ScriptedClipboard
-pub fn flui::testing::harness::widgets::harness::Harness::cursor_area_calls(&self) -> Vec<flui::geometry::Bounds<f64>>
-pub fn flui::testing::harness::widgets::harness::Harness::dispatch_ime(&self, event: &flui::platform::ImeEvent)
-pub fn flui::testing::harness::widgets::harness::Harness::dispatch_pointer_cancel(&self)
-pub fn flui::testing::harness::widgets::harness::Harness::dispatch_pointer_down(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::harness::Harness::dispatch_pointer_down_with_button(&self, x: f64, y: f64, button: flui::interaction::PointerButton)
-pub fn flui::testing::harness::widgets::harness::Harness::dispatch_pointer_move(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::harness::Harness::dispatch_pointer_up(&self, x: f64, y: f64)
-pub fn flui::testing::harness::widgets::harness::Harness::elements_of_type(&mut self, ty: core::any::TypeId) -> Vec<flui::foundation::ElementId>
-pub fn flui::testing::harness::widgets::harness::Harness::enable_semantics(&mut self)
-pub fn flui::testing::harness::widgets::harness::Harness::enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R
-pub fn flui::testing::harness::widgets::harness::Harness::field_status_calls(&self) -> Vec<flui::platform::text_store::TextStoreStatus>
-pub fn flui::testing::harness::widgets::harness::Harness::focus_manager(&self) -> alloc::rcs::rc::Rc<flui::interaction::FocusManager>
-pub fn flui::testing::harness::widgets::harness::Harness::ime_allowed_calls(&self) -> Vec<bool>
-pub fn flui::testing::harness::widgets::harness::Harness::invoke_semantics_action(&self, request: accesskit::ActionRequest) -> Result<(), flui::testing::harness::a11y::InvokeActionError>
-pub fn flui::testing::harness::widgets::harness::Harness::only_child(&mut self, parent: flui::foundation::ElementId) -> flui::foundation::ElementId
-pub fn flui::testing::harness::widgets::harness::Harness::parent_of(&mut self, id: flui::foundation::ElementId) -> Option<flui::foundation::ElementId>
-pub fn flui::testing::harness::widgets::harness::Harness::pipeline_owner(&self) -> flui::rendering::PipelineCell
-pub fn flui::testing::harness::widgets::harness::Harness::post_frame_handle(&mut self) -> flui::view::PostFrameHandle
-pub fn flui::testing::harness::widgets::harness::Harness::primary_selection(&self) -> flui_testing::primary_selection::ScriptedPrimarySelection
-pub fn flui::testing::harness::widgets::harness::Harness::pump_for(&mut self, dt: core::time::Duration)
-pub fn flui::testing::harness::widgets::harness::Harness::render_debug_names(&self) -> Vec<&'static str>
-pub fn flui::testing::harness::widgets::harness::Harness::root(&mut self) -> flui::foundation::ElementId
-pub fn flui::testing::harness::widgets::harness::Harness::scheduler(&self) -> &flui::view::UpdateScheduler
-pub fn flui::testing::harness::widgets::harness::Harness::set_system_preferences(&self, values: flui::platform::SystemPreferences)
-pub fn flui::testing::harness::widgets::harness::Harness::set_window_focused(&self, focused: bool)
-pub fn flui::testing::harness::widgets::harness::Harness::set_window_visible(&self, visible: bool)
-pub fn flui::testing::harness::widgets::harness::Harness::store_host_calls(&self) -> Vec<flui_testing::text_store_host::StoreHostCall>
-pub fn flui::testing::harness::widgets::harness::Harness::swap_root(&mut self, new_root: impl flui::prelude::View)
-pub fn flui::testing::harness::widgets::harness::Harness::tick(&mut self)
-pub fn flui::testing::harness::widgets::harness::Harness::view_type_of(&mut self, id: flui::foundation::ElementId) -> core::any::TypeId
-pub fn flui::testing::harness::widgets::harness::Harness::window(&self) -> &flui_testing::host::HeadlessWindow
-pub fn flui::testing::harness::widgets::harness::Harness::with_build_owner_mut<R>(&mut self, f: impl FnOnce(&mut flui::prelude::BuildOwner) -> R) -> R
-pub fn flui::testing::harness::widgets::harness::mount(root: impl flui::prelude::View) -> flui::testing::harness::widgets::harness::Harness
-pub fn flui::testing::harness::widgets::harness::mount_on(root: impl flui::prelude::View, platform: flui::platform::TargetPlatform) -> flui::testing::harness::widgets::harness::Harness
-pub fn flui::testing::harness::widgets::harness::mount_with_ime(root: impl flui::prelude::View) -> flui::testing::harness::widgets::harness::Harness
-pub fn flui::testing::harness::widgets::harness::mount_with_push_ime(root: impl flui::prelude::View) -> flui::testing::harness::widgets::harness::Harness
-pub fn flui::testing::harness::widgets::lay_out(root: impl flui::prelude::View, constraints: flui::prelude::BoxConstraints) -> flui::testing::harness::widgets::LaidOut
-pub fn flui::testing::harness::widgets::lay_out_animated(root: impl flui::prelude::View, constraints: flui::prelude::BoxConstraints, vsync: flui::animation::Vsync) -> flui::testing::harness::widgets::LaidOut
-pub fn flui::testing::harness::widgets::lay_out_with_provided_storage(root: impl flui::prelude::View, constraints: flui::prelude::BoxConstraints, host: impl flui::platform::Storage, provided: impl flui::platform::Storage) -> flui::testing::harness::widgets::LaidOut
-pub fn flui::testing::harness::widgets::lay_out_with_storage(root: impl flui::prelude::View, constraints: flui::prelude::BoxConstraints, storage: impl flui::platform::Storage) -> flui::testing::harness::widgets::LaidOut
-pub fn flui::testing::harness::widgets::loose(max: f64) -> flui::prelude::BoxConstraints
-pub fn flui::testing::harness::widgets::offset(dx: f64, dy: f64) -> flui::geometry::Offset
-pub fn flui::testing::harness::widgets::rgba(color: flui::prelude::Color) -> flui::foundation::inspect::Rgba
-pub fn flui::testing::harness::widgets::settle_lazy(laid: &mut flui::testing::harness::widgets::LaidOut)
-pub fn flui::testing::harness::widgets::size(width: f64, height: f64) -> flui::geometry::Size
-pub fn flui::testing::harness::widgets::tight(width: f64, height: f64) -> flui::prelude::BoxConstraints
 pub mod flui::testing::rendering
 pub trait flui::testing::rendering::BoxQueryRun
 fn flui::testing::rendering::BoxQueryRun::dry_baseline(&mut self, id: flui::foundation::RenderId, constraints: flui::prelude::BoxConstraints, baseline: flui::painting::TextBaseline) -> Option<f64> { .. }
@@ -30414,6 +29782,52 @@ impl PartialEq for flui_interaction::binding::DispatchOutcome
 impl core::fmt::Debug for flui_interaction::binding::DispatchOutcome
 impl core::marker::StructuralPartialEq for flui_interaction::binding::DispatchOutcome
 pub const fn flui_interaction::binding::DispatchOutcome::sequence(&self) -> Option<flui::foundation::InputSequenceId>
+pub struct flui_interaction::binding::GestureBinding { .. }
+impl Default for flui_interaction::binding::GestureBinding
+impl core::fmt::Debug for flui_interaction::binding::GestureBinding
+pub fn flui_interaction::binding::GestureBinding::active_pointer_count(&self) -> usize
+pub fn flui_interaction::binding::GestureBinding::active_resampler_count(&self) -> usize
+pub fn flui_interaction::binding::GestureBinding::arena(&self) -> &flui::interaction::GestureArena
+pub fn flui_interaction::binding::GestureBinding::begin_contactless(&self, source: flui_interaction::binding::ContactlessSource) -> Result<flui_interaction::binding::ContactlessSequence, flui::foundation::IdExhausted>
+pub fn flui_interaction::binding::GestureBinding::cancel_active_pointers(&self)
+pub fn flui_interaction::binding::GestureBinding::cancel_all_pointer_sequences(&self)
+pub fn flui_interaction::binding::GestureBinding::cancel_pointer_sequence(&self, pointer_id: flui::interaction::PointerId)
+pub fn flui_interaction::binding::GestureBinding::close_arena(&self, pointer_id: flui::interaction::PointerId)
+pub fn flui_interaction::binding::GestureBinding::default_profiles(&self) -> flui::interaction::GestureProfiles
+pub fn flui_interaction::binding::GestureBinding::dispatch_contactless<R>(&self, sequence: flui::foundation::InputSequenceId, body: impl FnOnce() -> R) -> R
+pub fn flui_interaction::binding::GestureBinding::dispatch_pointer_frame_on<F>(&self, surface: flui_interaction::ids::InputSurface, frame: &[flui::interaction::PointerEvent], hit_test_fn: F) -> smallvec::SmallVec<[flui_interaction::binding::DispatchOutcome; 4]> where F: FnMut(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
+pub fn flui_interaction::binding::GestureBinding::dispatch_pointer_on<F>(&self, surface: flui_interaction::ids::InputSurface, event: &flui::interaction::PointerEvent, hit_test_fn: F) -> flui_interaction::binding::DispatchOutcome where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
+pub fn flui_interaction::binding::GestureBinding::drain_deferred_arena_resolutions(&self) -> usize
+pub fn flui_interaction::binding::GestureBinding::embed_surface(&self) -> Result<flui_interaction::ids::InputSurface, flui_interaction::ids::SurfaceIdsExhausted>
+pub fn flui_interaction::binding::GestureBinding::flush_pending_input(&self) -> usize
+pub fn flui_interaction::binding::GestureBinding::flush_pending_moves(&self) -> usize
+pub fn flui_interaction::binding::GestureBinding::flush_pending_moves_at(&self, sample_time: std::time::Instant, next_sample_time: std::time::Instant) -> Result<usize, flui_interaction::binding::InvalidSamplingWindow>
+pub fn flui_interaction::binding::GestureBinding::handle_lifecycle_pause(&self)
+pub fn flui_interaction::binding::GestureBinding::handle_pointer_event<F>(&self, event: &flui::interaction::PointerEvent, hit_test_fn: F) where F: FnOnce(flui::geometry::Offset<f64>) -> flui_interaction::pointer::hit_test::HitTestResult
+pub fn flui_interaction::binding::GestureBinding::handle_pointer_event_with_result(&self, event: &flui::interaction::PointerEvent, result: &flui_interaction::pointer::hit_test::HitTestResult)
+pub fn flui_interaction::binding::GestureBinding::handle_pointer_left_window(&self)
+pub fn flui_interaction::binding::GestureBinding::has_hit_test(&self, pointer_id: flui::interaction::PointerId) -> bool
+pub fn flui_interaction::binding::GestureBinding::has_pending_deadlines(&self) -> bool
+pub fn flui_interaction::binding::GestureBinding::has_pending_motion(&self) -> bool
+pub fn flui_interaction::binding::GestureBinding::has_pending_pointer_samples(&self) -> bool
+pub fn flui_interaction::binding::GestureBinding::is_hover_frozen(&self) -> bool
+pub fn flui_interaction::binding::GestureBinding::is_resampling_enabled(&self) -> bool
+pub fn flui_interaction::binding::GestureBinding::mouse_tracker(&self) -> &flui_interaction::pointer::mouse_tracker::MouseTracker
+pub fn flui_interaction::binding::GestureBinding::new() -> Self
+pub fn flui_interaction::binding::GestureBinding::next_deadline(&self) -> Option<flui::interaction::EventTime>
+pub fn flui_interaction::binding::GestureBinding::pending_move_count(&self) -> usize
+pub fn flui_interaction::binding::GestureBinding::pointer_frame<R>(&self, body: impl FnOnce() -> R) -> R
+pub fn flui_interaction::binding::GestureBinding::pointer_router(&self) -> &flui_interaction::pointer::pointer_router::PointerRouter
+pub fn flui_interaction::binding::GestureBinding::replace_default_profiles(&self, profiles: impl Into<flui::interaction::GestureProfiles>) -> bool
+pub fn flui_interaction::binding::GestureBinding::sampling_clock(&self) -> flui_interaction::pointer::sampling_clock::SamplingClock
+pub fn flui_interaction::binding::GestureBinding::set_resampling_enabled(&self, enabled: bool) -> Result<(), flui_interaction::binding::ResamplingModeChangeError>
+pub fn flui_interaction::binding::GestureBinding::set_sampling_clock(&self, clock: flui_interaction::pointer::sampling_clock::SamplingClock)
+pub fn flui_interaction::binding::GestureBinding::sweep_arena(&self, pointer_id: flui::interaction::PointerId)
+pub fn flui_interaction::binding::GestureBinding::tick_deadlines(&self)
+pub fn flui_interaction::binding::GestureBinding::with_clock(clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
+pub fn flui_interaction::binding::GestureBinding::with_sequences_after(self, last: u64) -> Self
+pub fn flui_interaction::binding::GestureBinding::with_settings(settings: impl Into<flui::interaction::GestureProfiles>) -> Self
+pub fn flui_interaction::binding::GestureBinding::with_settings_and_clock(settings: impl Into<flui::interaction::GestureProfiles>, clock: alloc::rcs::arc::Arc<dyn flui::foundation::MonotonicClock>) -> Self
 pub struct flui_interaction::binding::InvalidSamplingWindow;
 impl Clone for flui_interaction::binding::InvalidSamplingWindow
 impl Copy for flui_interaction::binding::InvalidSamplingWindow
@@ -31708,14 +31122,8 @@ impl core::error::Error for flui_log::identity::IdentityError
 impl core::fmt::Debug for flui_log::identity::IdentityError
 impl core::fmt::Display for flui_log::identity::IdentityError
 impl core::marker::StructuralPartialEq for flui_log::identity::IdentityError
-variant flui_log::identity::IdentityError::DisplayNameHasNul(String) // at 7
-variant flui_log::identity::IdentityError::EmptyDisplayName // at 6
-variant flui_log::identity::IdentityError::EmptyLabel { identifier: String, position: usize } // at 1
-variant flui_log::identity::IdentityError::InvalidCharacter { identifier: String, character: char } // at 2
-variant flui_log::identity::IdentityError::LabelStartsWithNonLetter { identifier: String, position: usize } // at 3
-variant flui_log::identity::IdentityError::NotReverseDns(String) // at 0
-variant flui_log::identity::IdentityError::ReservedLabel { identifier: String, label: String } // at 4
-variant flui_log::identity::IdentityError::TooLong(String) // at 5
+variant flui_log::identity::IdentityError::DisplayNameHasNul(String) // at 1
+variant flui_log::identity::IdentityError::EmptyDisplayName // at 0
 pub struct flui_native::host_window::sealed::OwnerThreadToken(_)
 impl core::fmt::Debug for flui_native::host_window::sealed::OwnerThreadToken
 pub trait flui_native::host_window::sealed::Sealed
@@ -32820,8 +32228,8 @@ variant flui_protocol::input_recording::Execution::Running // at 0
 variant flui_protocol::input_recording::Execution::Suspended // at 1
 pub struct flui_protocol::input_recording::FramePresented
 field flui_protocol::input_recording::FramePresented::at: u64 // at 0
-field flui_protocol::input_recording::FramePresented::refresh: Option<u64> // at 1
 field flui_protocol::input_recording::FramePresented::frame: Option<flui_protocol::input_recording::ShownFrameId> // at 2
+field flui_protocol::input_recording::FramePresented::refresh: Option<u64> // at 1
 impl Clone for flui_protocol::input_recording::FramePresented
 impl Copy for flui_protocol::input_recording::FramePresented
 impl Eq for flui_protocol::input_recording::FramePresented
@@ -36378,7 +35786,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::for_test() -> Self
 pub fn flui_runtime::ui_runtime::UiRuntime::for_test_with_text_input(platform_text_input: Option<alloc::rcs::arc::Arc<dyn flui::platform::PlatformTextInput>>) -> Self
 pub fn flui_runtime::ui_runtime::UiRuntime::for_test_with_window(window: alloc::rcs::rc::Rc<dyn flui::platform::PlatformWindow>) -> Self
 pub fn flui_runtime::ui_runtime::UiRuntime::frame_failure_detail_for_test(&self) -> flui::app::FrameFailureDetail
-pub fn flui_runtime::ui_runtime::UiRuntime::gestures(&self) -> &flui::testing::harness::GestureBinding
+pub fn flui_runtime::ui_runtime::UiRuntime::gestures(&self) -> &flui_interaction::binding::GestureBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_input_addressed(&self, presentation_id: flui::foundation::PresentationId, input: flui::platform::PlatformInput) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_input_on(&self, presentation_id: flui::foundation::PresentationId, surface: flui_interaction::ids::InputSurface, input: flui::platform::PlatformInput) -> bool
 pub fn flui_runtime::ui_runtime::UiRuntime::handle_window_hover_addressed(&self, presentation_id: flui::foundation::PresentationId, inside: bool)
@@ -36404,7 +35812,7 @@ pub fn flui_runtime::ui_runtime::UiRuntime::presentation_collects_semantics_for_
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_count(&self) -> usize
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_device_pixel_ratio_for_test(&self, id: flui::foundation::PresentationId) -> Option<f64>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_factory(&self) -> flui_runtime::ui_runtime::presentation_factory::PresentationFactory
-pub fn flui_runtime::ui_runtime::UiRuntime::presentation_gestures_for_test(&self, id: flui::foundation::PresentationId) -> &flui::testing::harness::GestureBinding
+pub fn flui_runtime::ui_runtime::UiRuntime::presentation_gestures_for_test(&self, id: flui::foundation::PresentationId) -> &flui_interaction::binding::GestureBinding
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_hidden_for_test(&self, id: flui::foundation::PresentationId) -> Option<bool>
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_id(&self) -> flui::foundation::PresentationId
 pub fn flui_runtime::ui_runtime::UiRuntime::presentation_scene_totals_for_test(&self, id: flui::foundation::PresentationId) -> Option<flui_runtime::testing::SceneTotals>
@@ -36658,71 +36066,6 @@ impl core::fmt::Debug for flui_scheduler::frame_clock::ClockSource
 impl flui::foundation::MonotonicClock for flui_scheduler::frame_clock::ClockSource
 variant flui_scheduler::frame_clock::ClockSource::Manual(flui::foundation::ManualClock) // at 1
 variant flui_scheduler::frame_clock::ClockSource::Platform // at 0
-#[non_exhaustive] pub enum flui_scheduler::frame_clock::DemandKind
-impl Clone for flui_scheduler::frame_clock::DemandKind
-impl Copy for flui_scheduler::frame_clock::DemandKind
-impl Eq for flui_scheduler::frame_clock::DemandKind
-impl From<flui_scheduler::frame_clock::DemandKind> for flui_scheduler::frame_clock::DemandMask
-impl PartialEq for flui_scheduler::frame_clock::DemandKind
-impl core::fmt::Debug for flui_scheduler::frame_clock::DemandKind
-impl core::marker::StructuralPartialEq for flui_scheduler::frame_clock::DemandKind
-variant flui_scheduler::frame_clock::DemandKind::Animation // at 1
-variant flui_scheduler::frame_clock::DemandKind::Completion // at 3
-variant flui_scheduler::frame_clock::DemandKind::Dirty // at 0
-variant flui_scheduler::frame_clock::DemandKind::Host // at 2
-pub struct flui_scheduler::frame_clock::DemandMask(_)
-impl Clone for flui_scheduler::frame_clock::DemandMask
-impl Copy for flui_scheduler::frame_clock::DemandMask
-impl Default for flui_scheduler::frame_clock::DemandMask
-impl Eq for flui_scheduler::frame_clock::DemandMask
-impl Extend<flui_scheduler::frame_clock::DemandMask> for flui_scheduler::frame_clock::DemandMask
-impl From<flui_scheduler::frame_clock::DemandKind> for flui_scheduler::frame_clock::DemandMask
-impl IntoIterator for flui_scheduler::frame_clock::DemandMask { type IntoIter = bitflags::iter::Iter<flui_scheduler::frame_clock::DemandMask>; type Item = flui_scheduler::frame_clock::DemandMask; }
-impl PartialEq for flui_scheduler::frame_clock::DemandMask
-impl bitflags::traits::Flags for flui_scheduler::frame_clock::DemandMask { type Bits = u8; }
-impl bitflags::traits::PublicFlags for flui_scheduler::frame_clock::DemandMask { type Internal = InternalBitFlags; type Primitive = u8; }
-impl core::fmt::Binary for flui_scheduler::frame_clock::DemandMask
-impl core::fmt::Debug for flui_scheduler::frame_clock::DemandMask
-impl core::fmt::LowerHex for flui_scheduler::frame_clock::DemandMask
-impl core::fmt::Octal for flui_scheduler::frame_clock::DemandMask
-impl core::fmt::UpperHex for flui_scheduler::frame_clock::DemandMask
-impl core::iter::traits::collect::FromIterator<flui_scheduler::frame_clock::DemandMask> for flui_scheduler::frame_clock::DemandMask
-impl core::marker::StructuralPartialEq for flui_scheduler::frame_clock::DemandMask
-impl core::ops::arith::Sub for flui_scheduler::frame_clock::DemandMask { type Output = flui_scheduler::frame_clock::DemandMask; }
-impl core::ops::arith::SubAssign for flui_scheduler::frame_clock::DemandMask
-impl core::ops::bit::BitAnd for flui_scheduler::frame_clock::DemandMask { type Output = flui_scheduler::frame_clock::DemandMask; }
-impl core::ops::bit::BitAndAssign for flui_scheduler::frame_clock::DemandMask
-impl core::ops::bit::BitOr for flui_scheduler::frame_clock::DemandMask { type Output = flui_scheduler::frame_clock::DemandMask; }
-impl core::ops::bit::BitOrAssign for flui_scheduler::frame_clock::DemandMask
-impl core::ops::bit::BitXor for flui_scheduler::frame_clock::DemandMask { type Output = flui_scheduler::frame_clock::DemandMask; }
-impl core::ops::bit::BitXorAssign for flui_scheduler::frame_clock::DemandMask
-impl core::ops::bit::Not for flui_scheduler::frame_clock::DemandMask { type Output = flui_scheduler::frame_clock::DemandMask; }
-pub const flui_scheduler::frame_clock::DemandMask::ANIMATION: Self = _
-pub const flui_scheduler::frame_clock::DemandMask::COMPLETION: Self = _
-pub const flui_scheduler::frame_clock::DemandMask::DIRTY: Self = _
-pub const flui_scheduler::frame_clock::DemandMask::HOST: Self = _
-pub const fn flui_scheduler::frame_clock::DemandMask::all() -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::bits(&self) -> u8
-pub const fn flui_scheduler::frame_clock::DemandMask::complement(self) -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::contains(&self, other: Self) -> bool
-pub const fn flui_scheduler::frame_clock::DemandMask::difference(self, other: Self) -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::empty() -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::from_bits(bits: u8) -> Option<Self>
-pub const fn flui_scheduler::frame_clock::DemandMask::from_bits_retain(bits: u8) -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::from_bits_truncate(bits: u8) -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::intersection(self, other: Self) -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::intersects(&self, other: Self) -> bool
-pub const fn flui_scheduler::frame_clock::DemandMask::is_all(&self) -> bool
-pub const fn flui_scheduler::frame_clock::DemandMask::is_empty(&self) -> bool
-pub const fn flui_scheduler::frame_clock::DemandMask::iter(&self) -> bitflags::iter::Iter<flui_scheduler::frame_clock::DemandMask>
-pub const fn flui_scheduler::frame_clock::DemandMask::iter_names(&self) -> bitflags::iter::IterNames<flui_scheduler::frame_clock::DemandMask>
-pub const fn flui_scheduler::frame_clock::DemandMask::symmetric_difference(self, other: Self) -> Self
-pub const fn flui_scheduler::frame_clock::DemandMask::union(self, other: Self) -> Self
-pub fn flui_scheduler::frame_clock::DemandMask::from_name(name: &str) -> Option<Self>
-pub fn flui_scheduler::frame_clock::DemandMask::insert(&mut self, other: Self)
-pub fn flui_scheduler::frame_clock::DemandMask::remove(&mut self, other: Self)
-pub fn flui_scheduler::frame_clock::DemandMask::set(&mut self, other: Self, value: bool)
-pub fn flui_scheduler::frame_clock::DemandMask::toggle(&mut self, other: Self)
 #[non_exhaustive] pub struct flui_scheduler::frame_telemetry::FramePhaseDurations
 field flui_scheduler::frame_telemetry::FramePhaseDurations::build: core::time::Duration // at 0
 field flui_scheduler::frame_telemetry::FramePhaseDurations::layout: core::time::Duration // at 1
@@ -37272,154 +36615,6 @@ pub fn flui_semantics::tree::SemanticsTree::root(&self) -> Option<flui::foundati
 pub fn flui_semantics::tree::SemanticsTree::semantics_ids(&self) -> impl Iterator<Item = flui::foundation::SemanticsId> + '_
 pub fn flui_semantics::tree::SemanticsTree::set_root(&mut self, root: Option<flui::foundation::SemanticsId>)
 pub fn flui_semantics::tree::SemanticsTree::with_capacity(capacity: usize) -> Self
-#[non_exhaustive] pub struct flui_testing::FrameReport
-field flui_testing::FrameReport::build: flui::view::FrameBuildReport // at 0
-field flui_testing::FrameReport::pipeline: flui_rendering::pipeline::owner::counters::PipelineCounters // at 1
-field flui_testing::FrameReport::scene: flui_testing::SceneReport // at 2
-impl Clone for flui_testing::FrameReport
-impl Default for flui_testing::FrameReport
-impl Eq for flui_testing::FrameReport
-impl PartialEq for flui_testing::FrameReport
-impl core::fmt::Debug for flui_testing::FrameReport
-impl core::marker::StructuralPartialEq for flui_testing::FrameReport
-impl core::ops::arith::AddAssign<&flui_testing::FrameReport> for flui_testing::FrameReport
-pub fn flui_testing::FrameReport::counters(&self) -> [(&'static str, u64); 15]
-#[non_exhaustive] pub struct flui_testing::SceneReport
-field flui_testing::SceneReport::damage_full: u64 // at 1
-field flui_testing::SceneReport::damage_rects: u64 // at 0
-field flui_testing::SceneReport::scene_depth_updates: u64 // at 3
-field flui_testing::SceneReport::scene_nodes_visited: u64 // at 2
-impl Clone for flui_testing::SceneReport
-impl Copy for flui_testing::SceneReport
-impl Default for flui_testing::SceneReport
-impl Eq for flui_testing::SceneReport
-impl PartialEq for flui_testing::SceneReport
-impl core::fmt::Debug for flui_testing::SceneReport
-impl core::marker::StructuralPartialEq for flui_testing::SceneReport
-impl core::ops::arith::AddAssign for flui_testing::SceneReport
-#[non_exhaustive] pub enum flui_testing::clipboard::ClipboardRequest
-impl Clone for flui_testing::clipboard::ClipboardRequest
-impl Copy for flui_testing::clipboard::ClipboardRequest
-impl Eq for flui_testing::clipboard::ClipboardRequest
-impl PartialEq for flui_testing::clipboard::ClipboardRequest
-impl core::fmt::Debug for flui_testing::clipboard::ClipboardRequest
-impl core::marker::StructuralPartialEq for flui_testing::clipboard::ClipboardRequest
-variant flui_testing::clipboard::ClipboardRequest::ReadText // at 0
-pub struct flui_testing::clipboard::ClipboardWriteHold { .. }
-impl Drop for flui_testing::clipboard::ClipboardWriteHold
-impl core::fmt::Debug for flui_testing::clipboard::ClipboardWriteHold
-pub fn flui_testing::clipboard::ClipboardWriteHold::held(&self) -> usize
-pub struct flui_testing::clipboard::ScriptedClipboard { .. }
-impl Clone for flui_testing::clipboard::ScriptedClipboard
-impl Default for flui_testing::clipboard::ScriptedClipboard
-impl core::fmt::Debug for flui_testing::clipboard::ScriptedClipboard
-impl flui::platform::capability::CapabilityProvider<flui::interaction::ClipboardCapability> for flui_testing::clipboard::ScriptedClipboard
-pub fn flui_testing::clipboard::ScriptedClipboard::answer_concealment(&self, concealment: flui::platform::Concealment)
-pub fn flui_testing::clipboard::ScriptedClipboard::answer_held_reads(&self) -> usize
-pub fn flui_testing::clipboard::ScriptedClipboard::drop_held_reads(&self) -> usize
-pub fn flui_testing::clipboard::ScriptedClipboard::fail_reads_with(&self, error: flui::platform::ClipboardError)
-pub fn flui_testing::clipboard::ScriptedClipboard::fail_writes_with(&self, error: flui::platform::ClipboardError)
-pub fn flui_testing::clipboard::ScriptedClipboard::hold_reads(&self)
-pub fn flui_testing::clipboard::ScriptedClipboard::hold_writes(&self) -> flui_testing::clipboard::ClipboardWriteHold
-pub fn flui_testing::clipboard::ScriptedClipboard::is_concealed(&self) -> bool
-pub fn flui_testing::clipboard::ScriptedClipboard::live_handles(&self) -> usize
-pub fn flui_testing::clipboard::ScriptedClipboard::new() -> Self
-pub fn flui_testing::clipboard::ScriptedClipboard::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
-pub fn flui_testing::clipboard::ScriptedClipboard::reads(&self) -> &flui::platform::capability::scripted::Script<flui_testing::clipboard::ClipboardRequest, flui::platform::ClipboardRead>
-pub fn flui_testing::clipboard::ScriptedClipboard::reads_asked(&self) -> usize
-pub fn flui_testing::clipboard::ScriptedClipboard::refuse(&self, refusal: flui::platform::Unsupported)
-pub fn flui_testing::clipboard::ScriptedClipboard::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
-pub fn flui_testing::clipboard::ScriptedClipboard::service(&self) -> &flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
-pub fn flui_testing::clipboard::ScriptedClipboard::set_text(&self, text: impl Into<String>)
-pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_reads(&self)
-pub fn flui_testing::clipboard::ScriptedClipboard::stop_failing_writes(&self)
-pub fn flui_testing::clipboard::ScriptedClipboard::text(&self) -> Option<String>
-pub fn flui_testing::clipboard::ScriptedClipboard::writes(&self) -> &flui::platform::capability::scripted::Script<flui_testing::clipboard::WriteRequest, flui::platform::ClipboardWritten>
-#[non_exhaustive] pub struct flui_testing::clipboard::WriteRequest
-field flui_testing::clipboard::WriteRequest::number: u64 // at 0
-field flui_testing::clipboard::WriteRequest::write: flui::platform::ClipboardWrite // at 1
-impl Clone for flui_testing::clipboard::WriteRequest
-impl Eq for flui_testing::clipboard::WriteRequest
-impl PartialEq for flui_testing::clipboard::WriteRequest
-impl core::fmt::Debug for flui_testing::clipboard::WriteRequest
-impl core::marker::StructuralPartialEq for flui_testing::clipboard::WriteRequest
-pub struct flui_testing::host::HeadlessOsDrags { .. }
-impl Default for flui_testing::host::HeadlessOsDrags
-impl core::fmt::Debug for flui_testing::host::HeadlessOsDrags
-impl flui::platform::drag::PlatformDragSource for flui_testing::host::HeadlessOsDrags
-pub fn flui_testing::host::HeadlessOsDrags::end_with(&self, end: flui::platform::drag::OsDragEnd)
-pub fn flui_testing::host::HeadlessOsDrags::started(&self) -> Vec<flui_testing::host::StartedOsDrag>
-pub struct flui_testing::host::HeadlessWindow { .. }
-impl core::fmt::Debug for flui_testing::host::HeadlessWindow
-impl flui::platform::PlatformWindow for flui_testing::host::HeadlessWindow
-pub fn flui_testing::host::HeadlessWindow::close_requests(&self) -> usize
-pub fn flui_testing::host::HeadlessWindow::cursor(&self) -> cursor_icon::CursorIcon
-pub fn flui_testing::host::HeadlessWindow::haptic_actuator(&self) -> &flui::platform::testing::FakeHaptics
-pub fn flui_testing::host::HeadlessWindow::ime_allowed_calls(&self) -> Option<Vec<bool>>
-pub fn flui_testing::host::HeadlessWindow::ime_cursor_areas(&self) -> Option<Vec<flui::geometry::Bounds<f64>>>
-pub fn flui_testing::host::HeadlessWindow::ime_field_statuses(&self) -> Option<Vec<flui::platform::text_store::TextStoreStatus>>
-pub fn flui_testing::host::HeadlessWindow::input_region_updates(&self) -> Vec<Vec<flui::platform::input_regions::DeviceInputRegion>>
-pub fn flui_testing::host::HeadlessWindow::new(width: u32, height: u32) -> Self
-pub fn flui_testing::host::HeadlessWindow::os_drags(&self) -> &flui_testing::host::HeadlessOsDrags
-pub fn flui_testing::host::HeadlessWindow::with_gesture_preset(self, preset: impl Into<flui::interaction::GestureProfiles>) -> Self
-pub fn flui_testing::host::HeadlessWindow::with_platform(self, platform: flui::platform::TargetPlatform) -> Self
-pub fn flui_testing::host::HeadlessWindow::with_presentation_reports(self) -> Self
-pub fn flui_testing::host::HeadlessWindow::with_text_input(self) -> Self
-pub fn flui_testing::host::HeadlessWindow::with_text_store_host(self) -> Self
-#[non_exhaustive] pub struct flui_testing::host::StartedOsDrag
-field flui_testing::host::StartedOsDrag::allowed: flui::interaction::drag::TransferActions // at 1
-field flui_testing::host::StartedOsDrag::representations: Vec<flui::platform::data_transfer::RepresentationDescriptor> // at 0
-impl Clone for flui_testing::host::StartedOsDrag
-impl core::fmt::Debug for flui_testing::host::StartedOsDrag
-#[non_exhaustive] pub enum flui_testing::primary_selection::PrimarySelectionRequest
-impl Clone for flui_testing::primary_selection::PrimarySelectionRequest
-impl Copy for flui_testing::primary_selection::PrimarySelectionRequest
-impl Eq for flui_testing::primary_selection::PrimarySelectionRequest
-impl PartialEq for flui_testing::primary_selection::PrimarySelectionRequest
-impl core::fmt::Debug for flui_testing::primary_selection::PrimarySelectionRequest
-impl core::marker::StructuralPartialEq for flui_testing::primary_selection::PrimarySelectionRequest
-variant flui_testing::primary_selection::PrimarySelectionRequest::ReadText // at 0
-pub struct flui_testing::primary_selection::ScriptedPrimarySelection { .. }
-impl Clone for flui_testing::primary_selection::ScriptedPrimarySelection
-impl Default for flui_testing::primary_selection::ScriptedPrimarySelection
-impl core::fmt::Debug for flui_testing::primary_selection::ScriptedPrimarySelection
-impl flui::platform::capability::CapabilityProvider<flui::interaction::PrimarySelectionCapability> for flui_testing::primary_selection::ScriptedPrimarySelection
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::answer_held_reads(&self) -> usize
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::fail_releases(&self)
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::hold_reads(&self)
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::is_claimed(&self) -> bool
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::live_handles(&self) -> usize
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::new() -> Self
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::on(scenario: &flui::platform::capability::scripted::Scenario) -> Self
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::reads(&self) -> &flui::platform::capability::scripted::Script<flui_testing::primary_selection::PrimarySelectionRequest, flui::platform::ClipboardRead>
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::refuse(&self, refusal: flui::platform::Unsupported)
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::register(&self, registrar: &mut flui::platform::capability::CapabilityRegistrar)
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::select(&self, text: impl Into<String>)
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::service(&self) -> &flui::platform::capability::scripted::Track<flui::platform::capability::scripted::ServiceState>
-pub fn flui_testing::primary_selection::ScriptedPrimarySelection::text(&self) -> Option<String>
-#[non_exhaustive] pub enum flui_testing::recording::format::RecordingError
-impl From<core::io::error::Error> for flui_testing::recording::format::RecordingError
-impl core::error::Error for flui_testing::recording::format::RecordingError
-impl core::fmt::Debug for flui_testing::recording::format::RecordingError
-impl core::fmt::Display for flui_testing::recording::format::RecordingError
-variant flui_testing::recording::format::RecordingError::Incomplete { lost_rows: u64 } // at 5
-variant flui_testing::recording::format::RecordingError::Io(core::io::error::Error) // at 0
-variant flui_testing::recording::format::RecordingError::Json { line: u64, source: serde_json::error::Error } // at 1
-variant flui_testing::recording::format::RecordingError::NonReplayable { line: u64 } // at 4
-variant flui_testing::recording::format::RecordingError::UnknownVariant { line: u64, tag: String } // at 3
-variant flui_testing::recording::format::RecordingError::Unmirrored { line: u64, what: &'static str } // at 6
-variant flui_testing::recording::format::RecordingError::Version { found: u32, supported: u32 } // at 2
-#[non_exhaustive] pub enum flui_testing::text_store_host::StoreHostCall
-impl Clone for flui_testing::text_store_host::StoreHostCall
-impl Copy for flui_testing::text_store_host::StoreHostCall
-impl Eq for flui_testing::text_store_host::StoreHostCall
-impl PartialEq for flui_testing::text_store_host::StoreHostCall
-impl core::fmt::Debug for flui_testing::text_store_host::StoreHostCall
-impl core::marker::StructuralPartialEq for flui_testing::text_store_host::StoreHostCall
-variant flui_testing::text_store_host::StoreHostCall::CompleteComposition // at 2
-variant flui_testing::text_store_host::StoreHostCall::Focus // at 0
-variant flui_testing::text_store_host::StoreHostCall::ShowKeyboard // at 3
-variant flui_testing::text_store_host::StoreHostCall::Unfocus // at 1
 pub struct flui_view::context::build_context::sealed::CrateToken(_)
 impl Clone for flui_view::context::build_context::sealed::CrateToken
 impl Copy for flui_view::context::build_context::sealed::CrateToken

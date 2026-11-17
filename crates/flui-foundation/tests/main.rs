@@ -7,6 +7,9 @@
 #[path = "notifier.rs"]
 mod notifier;
 
+#[path = "app_id.rs"]
+mod app_id;
+
 #[path = "claim_slot.rs"]
 mod claim_slot;
 
