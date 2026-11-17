@@ -469,7 +469,7 @@ pub(crate) mod events {
         NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface, PenAngles,
         RawSensors, ReadingAction, ReadingTime, decode,
     };
-    use crate::owner::web::event::{answer, client_position, pointer_position};
+    use crate::owner::web::event::{answer, client_position, holds_pointer_lock, pointer_position};
     use flui_platform::DispatchEventResult;
     use icu_normalizer::{
         ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed,
@@ -781,8 +781,7 @@ pub(crate) mod events {
                     let contextual = opens_menu(pe.button(), pe.ctrl_key());
                     // While the canvas holds the pointer lock the mouse rests
                     // where it was locked, and its motion is its movement.
-                    let locked = pe.pointer_type() == "mouse"
-                        && crate::window::web::holds_pointer_lock(&locking);
+                    let locked = pe.pointer_type() == "mouse" && holds_pointer_lock(&locking);
                     if !accepting.get() {
                         return;
                     }

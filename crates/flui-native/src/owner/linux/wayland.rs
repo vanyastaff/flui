@@ -52,6 +52,22 @@ pub(crate) use event_loop::{
     WaylandInput, WaylandLoop, WaylandState, WindowSeed, WindowTable, bindable,
 };
 
+/// What the compositor offers a window's pointer, as the seats' input bound
+/// it (`WaylandInput::pointer_offer`):
+/// shared memory for a cursor image's buffer, and the pointer constraints and
+/// relative motion a grab is made of. The window's capabilities follow it
+/// (`window::linux::wayland::configure::pointer_reported`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PointerOffer {
+    /// `wl_shm`, which a cursor image is a buffer of.
+    pub(crate) shared_memory: bool,
+    /// `zwp_pointer_constraints_v1`, which confines and locks a pointer.
+    pub(crate) constraints: bool,
+    /// `zwp_relative_pointer_manager_v1`, which reports a locked pointer's
+    /// motion.
+    pub(crate) relative_motion: bool,
+}
+
 pub(crate) mod user_input {
     //! What the seats' input keeps of the user inputs a later request names
     //! ([`Inputs`]): the last one, which an activation token names, and each
@@ -760,6 +776,7 @@ mod event_loop {
     use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
     use web_time::Instant;
 
+    use super::PointerOffer;
     use super::activation::{ActivationToken, LAUNCH_TOKEN_VARIABLE, launch_token};
     use super::user_input::{Inputs, UserInput};
     use super::wait::{BeforePoll, Flush, LoopTurn, before_poll, poll_timeout};
@@ -780,7 +797,6 @@ mod event_loop {
     use crate::owner::{DirectOwnerHooks, OpenWindowError, OwnerHooks, OwnerPlatform};
     use crate::platform::{AppHandler, ExitAnswer, Platform};
     use crate::transfer::linux::wayland::DataDevices;
-    use crate::window::linux::wayland::configure::PointerOffer;
 
     /// The newest `wl_compositor` the loop understands: version 6 gives a
     /// surface its preferred buffer scale.

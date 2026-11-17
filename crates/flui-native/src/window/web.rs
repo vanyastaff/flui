@@ -40,6 +40,7 @@ use flui_platform::{
     WindowState,
 };
 
+use crate::owner::web::event::holds_pointer_lock;
 use crate::owner::web::listener::CanvasListener;
 use crate::owner::web::{
     Accepting, CanvasEditor, CanvasFocus, CanvasRef, CanvasRegistration, CanvasTimer, HostDisplays,
@@ -1662,16 +1663,6 @@ fn image_cursor(image: &CursorImage) -> Result<String, CursorError> {
     let url = canvas.to_data_url().map_err(failed)?;
     let (x, y) = image.hotspot();
     Ok(format!("url(\"{url}\") {x} {y}, auto"))
-}
-
-/// Whether the page's pointer lock is `canvas`'s: the browser grants it to
-/// one element at a time and names it on the document.
-pub(crate) fn holds_pointer_lock(canvas: &web_sys::HtmlCanvasElement) -> bool {
-    let canvas: &web_sys::Element = canvas.as_ref();
-    canvas
-        .owner_document()
-        .and_then(|document| document.pointer_lock_element())
-        .is_some_and(|locked| locked == *canvas)
 }
 
 /// Let the page's pointer lock go when `canvas` holds it; a lock another
