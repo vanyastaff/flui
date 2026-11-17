@@ -475,6 +475,14 @@ fn the_capitalization_and_correction_a_field_asks_for_are_its_hints() {
         hint(asked, true),
         ContentType::HINT_HIDDEN_TEXT | ContentType::HINT_SENSITIVE_DATA
     );
+    // Nor is a one-time code shown in clear, which is sensitive data.
+    assert_eq!(
+        hint(
+            asked.autofill(flui_platform::text_store::Autofill::OneTimeCode),
+            false
+        ),
+        ContentType::HINT_SENSITIVE_DATA
+    );
 }
 
 #[test]

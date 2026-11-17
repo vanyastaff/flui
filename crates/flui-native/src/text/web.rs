@@ -91,20 +91,22 @@ pub(crate) mod ime {
     }
 
     /// The `enterkeyhint` a field of `status` labels the virtual keyboard's
-    /// Enter key with: the action it names, else a new line for a field of
-    /// many lines; `None` leaves the browser's own.
+    /// Enter key with: the action it names, else `enter` (the keyboard's own
+    /// Return, a line break in a field of many lines). A hint is always
+    /// stated: with none, Chrome for Android may label the key Next for a
+    /// field another form control follows and move the page's focus itself,
+    /// so no Enter reaches the field; `enter` is an Enter press everywhere.
     #[must_use]
-    pub(crate) const fn enter_key_hint(status: &TextStoreStatus) -> Option<&'static str> {
+    pub(crate) const fn enter_key_hint(status: &TextStoreStatus) -> &'static str {
         match status.text_input.enter_action {
-            EnterAction::Done => Some("done"),
-            EnterAction::Go => Some("go"),
-            EnterAction::Next => Some("next"),
-            EnterAction::Previous => Some("previous"),
-            EnterAction::Search => Some("search"),
-            EnterAction::Send => Some("send"),
+            EnterAction::Done => "done",
+            EnterAction::Go => "go",
+            EnterAction::Next => "next",
+            EnterAction::Previous => "previous",
+            EnterAction::Search => "search",
+            EnterAction::SendMessage => "send",
             // The keyboard's own, and any action added later.
-            _ if !status.single_line => Some("enter"),
-            _ => None,
+            _ => "enter",
         }
     }
 
@@ -113,7 +115,7 @@ pub(crate) mod ime {
     #[must_use]
     pub(crate) const fn autocapitalize(status: &TextStoreStatus) -> &'static str {
         match status.text_input.capitalization {
-            _ if status.protected => "off",
+            _ if status.holds_secret() => "off",
             Capitalization::Sentences => "sentences",
             Capitalization::Words => "words",
             Capitalization::Characters => "characters",
@@ -129,7 +131,7 @@ pub(crate) mod ime {
     #[must_use]
     pub(crate) const fn correction(status: &TextStoreStatus) -> (&'static str, &'static str) {
         match status.text_input.correction {
-            _ if status.protected => ("off", "false"),
+            _ if status.holds_secret() => ("off", "false"),
             Correction::Autocorrect => ("on", "true"),
             Correction::Suggestions => ("off", "true"),
             // Off, and any correction added later.
@@ -2177,22 +2179,15 @@ mod input {
 
     /// The hints the canvas gives the browser's keyboard for the field its
     /// `EditContext` serves ([`CANVAS_HINTS`]): the keyboard its purpose asks
-    /// for and the label of its Enter key, or the canvas's own label where
-    /// the field names none. The browser reads them from the element, not
-    /// from the context; an `EditContext` has no capitalization, correction
-    /// or autofill to read.
+    /// for and the label of its Enter key ([`enter_key_hint`]). The browser
+    /// reads them from the element, not from the context; an `EditContext` has
+    /// no capitalization, correction or autofill to read.
     fn set_canvas_hints(
         canvas: &crate::owner::web::CanvasWrites,
         status: &TextStoreStatus,
     ) -> Result<(), JsValue> {
         canvas.set("inputmode", input_mode(status.text_input.purpose))?;
-        match enter_key_hint(status) {
-            Some(hint) => canvas.set("enterkeyhint", hint),
-            None => {
-                canvas.restore("enterkeyhint");
-                Ok(())
-            }
-        }
+        canvas.set("enterkeyhint", enter_key_hint(status))
     }
 
     /// The hints an editor gives the browser for the field's status
@@ -2211,10 +2206,7 @@ mod input {
         element.set_attribute("autocapitalize", autocapitalize(status))?;
         element.set_attribute("autocorrect", autocorrect)?;
         element.set_attribute("spellcheck", spellcheck)?;
-        match enter_key_hint(status) {
-            Some(hint) => element.set_attribute("enterkeyhint", hint),
-            None => element.remove_attribute("enterkeyhint"),
-        }
+        element.set_attribute("enterkeyhint", enter_key_hint(status))
     }
 }
 

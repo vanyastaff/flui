@@ -3353,7 +3353,7 @@ pub(crate) fn a_push_platform_is_told_the_focused_fields_status() {
         "and so does the purpose"
     );
 
-    let send = url.enter_action(EnterAction::Send);
+    let send = url.enter_action(EnterAction::SendMessage);
     harness.swap_root(field(send, true));
     harness.tick();
     assert_eq!(
@@ -3365,11 +3365,17 @@ pub(crate) fn a_push_platform_is_told_the_focused_fields_status() {
 
 /// Enter on a field whose Enter key says Next moves the focus to the next
 /// field, after the submit callback; Previous moves it back; a field whose
-/// key names neither keeps the focus. Every host delivers the on-screen
-/// keyboard's action key as Enter, so the label acts the same everywhere.
+/// key names neither keeps the focus. A Next field moves on without a
+/// callback, a callback that moved the focus itself keeps it where it put
+/// it, and a held Enter's repeats move nothing. Every host delivers the
+/// on-screen keyboard's action key as Enter, so the label acts the same
+/// everywhere.
 ///
-/// Red-check: drop the focus move from the Enter arm — the focus stays on
-/// the first field.
+/// Red-checks, each failing its row: drop the focus move from the Enter arm
+/// (`Next then Previous`); claim Enter only when a callback is set (`Next
+/// without a callback`); move without asking whether the field still has the
+/// focus (`a callback that moves the focus`); act on a repeat (`a held
+/// Enter`).
 pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
     use std::cell::RefCell;
     use std::time::Duration;
@@ -3381,51 +3387,117 @@ pub(crate) fn enter_moves_the_focus_as_the_fields_enter_key_says() {
     use flui_view::ViewExt;
     use flui_widgets::{Column, SizedBox};
 
-    let enter = |host: &mut HeadlessHost| {
+    /// What the fields do on submit.
+    #[derive(Clone, Copy, Debug)]
+    enum Submit {
+        /// No callback.
+        Nothing,
+        /// Record the text.
+        Record,
+        /// Record the text and move the focus to the field at this index.
+        RecordAndFocus(usize),
+    }
+
+    let enter = |host: &mut HeadlessHost, press: KeyPress| {
         host.dispatch(PlatformInput::Keyboard(KeyEvent::new(
-            KeyState::Down(KeyPress::First),
+            KeyState::Down(press),
             Key::Named(NamedKey::Enter),
             Code::Enter,
             EventTime::from_nanos(1),
         )));
         let _ = host.pump(Duration::ZERO);
     };
-    for (first_action, second_action, focus_after, submitted_texts) in [
-        // Next moves the focus on, then Previous moves it back.
+    let (next, previous, done) = (EnterAction::Next, EnterAction::Previous, EnterAction::Done);
+    // (case, each field's Enter label, what submit does, the presses, the
+    // field focused after each, the texts submitted)
+    type Row = (
+        &'static str,
+        [EnterAction; 3],
+        Submit,
+        &'static [KeyPress],
+        &'static [usize],
+        &'static [&'static str],
+    );
+    let rows: [Row; 5] = [
         (
-            EnterAction::Next,
-            EnterAction::Previous,
-            [1, 0],
-            ["one", "two"],
+            "Next then Previous",
+            [next, previous, done],
+            Submit::Record,
+            &[KeyPress::First, KeyPress::First],
+            &[1, 0],
+            &["one", "two"],
         ),
-        // A label that names no move keeps the focus where it is.
-        (EnterAction::Done, EnterAction::Done, [0, 0], ["one", "one"]),
-    ] {
-        let nodes = [FocusNode::new(), FocusNode::new()];
+        (
+            "Done",
+            [done, done, done],
+            Submit::Record,
+            &[KeyPress::First, KeyPress::First],
+            &[0, 0],
+            &["one", "one"],
+        ),
+        (
+            "Next without a callback",
+            [next, done, done],
+            Submit::Nothing,
+            &[KeyPress::First],
+            &[1],
+            &[],
+        ),
+        (
+            "a callback that moves the focus",
+            [next, done, done],
+            Submit::RecordAndFocus(2),
+            &[KeyPress::First],
+            &[2],
+            &["one"],
+        ),
+        (
+            "a held Enter",
+            [next, next, done],
+            Submit::Nothing,
+            &[KeyPress::First, KeyPress::AutoRepeat],
+            &[1, 1],
+            &[],
+        ),
+    ];
+    for (case, actions, submit, presses, focus_after, submitted_texts) in rows {
+        let nodes = [FocusNode::new(), FocusNode::new(), FocusNode::new()];
         let submitted = Rc::new(RefCell::new(Vec::<String>::new()));
-        let field = |node: &Rc<FocusNode>, text: &str, action| {
-            let submitted = Rc::clone(&submitted);
-            SizedBox::new(60.0, 30.0).child(
-                EditableText::new(TextEditingController::with_text(text), Rc::clone(node))
-                    .text_input(TextInputOptions::TEXT.enter_action(action))
-                    .on_submitted(move |_ctx, text| submitted.borrow_mut().push(text.to_owned())),
+        let field = |index: usize, text: &str| {
+            let mut editable = EditableText::new(
+                TextEditingController::with_text(text),
+                Rc::clone(&nodes[index]),
             )
+            .text_input(TextInputOptions::TEXT.enter_action(actions[index]));
+            let submitted = Rc::clone(&submitted);
+            match submit {
+                Submit::Nothing => {}
+                Submit::Record => {
+                    editable = editable.on_submitted(move |_ctx, text| {
+                        submitted.borrow_mut().push(text.to_owned());
+                    });
+                }
+                Submit::RecordAndFocus(target) => {
+                    let target = Rc::clone(&nodes[target]);
+                    editable = editable.on_submitted(move |_ctx, text| {
+                        submitted.borrow_mut().push(text.to_owned());
+                        let _ = target.request_focus();
+                    });
+                }
+            }
+            SizedBox::new(60.0, 30.0).child(editable).boxed()
         };
-        let form = Column::new(vec![
-            field(&nodes[0], "one", first_action).boxed(),
-            field(&nodes[1], "two", second_action).boxed(),
-        ]);
+        let form = Column::new(vec![field(0, "one"), field(1, "two"), field(2, "three")]);
         let mut host = HeadlessHost::new(HeadlessWindow::new(400, 200));
         host.attach(&form).expect("fresh host");
         let _ = host.pump(Duration::ZERO);
         let _ = nodes[0].request_focus();
         let _ = host.pump(Duration::ZERO);
-        let case = format!("{first_action:?} then {second_action:?}");
-        for (press, focused) in focus_after.into_iter().enumerate() {
-            enter(&mut host);
+        for (index, (&press, &focused)) in presses.iter().zip(focus_after).enumerate() {
+            enter(&mut host, press);
             assert!(
                 nodes[focused].has_primary_focus(),
-                "{case}: after press {press} the focus is on field {focused}"
+                "{case}: after press {index} the focus is on field {focused}"
             );
         }
         assert_eq!(

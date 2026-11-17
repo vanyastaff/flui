@@ -3,7 +3,7 @@
 
 use flui_foundation::geometry::{Bounds, Point};
 
-use super::input_options::TextInputOptions;
+use super::input_options::{Autofill, TextInputOptions};
 use super::lock::TextStoreError;
 use super::utf16::{Utf16Offset, Utf16Range};
 
@@ -127,7 +127,8 @@ pub struct TextStoreStatus {
     /// The text must not be read out (a password field). Text reads return
     /// [`TextStoreError::Protected`]; edits, selection and geometry still
     /// work. Protection wins over [`Self::text_input`]: a protected field is
-    /// never suggested, corrected or learnt from, whatever it asks.
+    /// never suggested, corrected or learnt from, whatever it asks
+    /// ([`Self::holds_secret`]).
     pub protected: bool,
     /// The field holds one line: Enter does not break it.
     pub single_line: bool,
@@ -162,6 +163,23 @@ impl TextStoreStatus {
     #[must_use]
     pub const fn with_text_input(self, text_input: TextInputOptions) -> Self {
         Self { text_input, ..self }
+    }
+
+    /// Whether the field holds a secret: it is protected, or it asks to be
+    /// filled with a password or a one-time code, whose text shows on screen
+    /// yet must reach no dictionary, suggestion strip or recording.
+    ///
+    /// The one test every host and the journal make before they let an input
+    /// method suggest, correct or learn, or record what was typed;
+    /// [`Self::protected`] alone decides only what hides the text (secure
+    /// entry, a password keyboard, `Protected` text reads).
+    #[must_use]
+    pub const fn holds_secret(&self) -> bool {
+        self.protected
+            || matches!(
+                self.text_input.autofill,
+                Some(Autofill::CurrentPassword | Autofill::NewPassword | Autofill::OneTimeCode)
+            )
     }
 }
 

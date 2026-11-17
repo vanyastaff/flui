@@ -1680,7 +1680,7 @@ fn a_tap_focuses_an_editor_the_field_attached_after_it_takes_over() {
     assert_eq!((state.value.as_str(), state.focused), ("ab", true));
     assert_eq!(
         editor_hints(),
-        r#"["text","off",null]"#,
+        r#"["text","off","enter"]"#,
         "the field's hints"
     );
     assert_eq!(editor_aria_hidden(), None);
@@ -1820,7 +1820,7 @@ fn the_hidden_editor_s_attributes_follow_its_state() {
     let password = InMemoryTextStore::new("");
     password.set_protected(true);
     canvas.host.focus_store(Some(as_store(&password)));
-    assert_eq!(editor_hints(), r#"["text","new-password",null]"#);
+    assert_eq!(editor_hints(), r#"["text","new-password","enter"]"#);
     assert_eq!(editor_aria_hidden(), None);
     insert_into_editor("secret");
     assert_eq!(password.text(), "secret", "typed through the browser");
@@ -2024,8 +2024,8 @@ fn a_hidden_keyboard_opens_again_on_a_tap_on_the_field_alone() {
 /// and protection, which keyboard to show (`inputmode`), what it may fill the
 /// field with (`autocomplete`: nothing beside the canvas, `new-password` for a
 /// protected field), how to label Return (`enterkeyhint`: the action the
-/// field names, else a search for a query, a new line for a field of many
-/// lines, else the browser's own) and how to capitalize and correct.
+/// field names, else a search for a query, else `enter`, never left to the
+/// browser) and how to capitalize and correct.
 #[wasm_bindgen_test]
 fn the_hidden_editor_states_each_purpose_and_enter_action() {
     use flui_platform::text_store::TextInputPurpose::{Email, Phone, Search, Text, Url};
@@ -2043,18 +2043,18 @@ fn the_hidden_editor_states_each_purpose_and_enter_action() {
     });
     // (purpose, single line, protected, [inputmode, autocomplete, enterkeyhint])
     let cases = [
-        (Text, true, false, r#"["text","off",null]"#),
+        (Text, true, false, r#"["text","off","enter"]"#),
         (Text, false, false, r#"["text","off","enter"]"#),
-        (Email, true, false, r#"["email","off",null]"#),
+        (Email, true, false, r#"["email","off","enter"]"#),
         (Email, false, false, r#"["email","off","enter"]"#),
-        (Url, true, false, r#"["url","off",null]"#),
-        (Phone, true, false, r#"["tel","off",null]"#),
-        (number, true, false, r#"["numeric","off",null]"#),
-        (decimal, true, false, r#"["decimal","off",null]"#),
+        (Url, true, false, r#"["url","off","enter"]"#),
+        (Phone, true, false, r#"["tel","off","enter"]"#),
+        (number, true, false, r#"["numeric","off","enter"]"#),
+        (decimal, true, false, r#"["decimal","off","enter"]"#),
         (Search, true, false, r#"["search","off","search"]"#),
         (Search, false, false, r#"["search","off","search"]"#),
-        (Text, true, true, r#"["text","new-password",null]"#),
-        (number, true, true, r#"["numeric","new-password",null]"#),
+        (Text, true, true, r#"["text","new-password","enter"]"#),
+        (number, true, true, r#"["numeric","new-password","enter"]"#),
     ];
     for (purpose, single_line, protected, expected) in cases {
         let store = InMemoryTextStore::new("ab");
@@ -2078,7 +2078,7 @@ fn the_hidden_editor_states_each_purpose_and_enter_action() {
     assert_eq!(editor_hints(), r#"["search","off","search"]"#, "refreshed");
     store.set_text_input(
         TextInputOptions::TEXT
-            .enter_action(EnterAction::Send)
+            .enter_action(EnterAction::SendMessage)
             .capitalization(Capitalization::Sentences)
             .correction(Correction::Suggestions),
     );

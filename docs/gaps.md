@@ -291,6 +291,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 > **Environments:** all · **Who it hurts:** Writing apps; sign-in forms; tablet users · **Parity:** [Text input](platform-parity.md#text-input)
 
 - No spell check, system edit menu or handwriting. Autofill reaches iOS (`textContentType`) and the Web's semantics field (`autocomplete`), never run with a password manager; Android needs an autofill structure of virtual views, which `FluiView` does not build ([parity](platform-parity.md#text-input)).
+- A change of protection or purpose while an input method composes restarts it on Windows (TSF reopens the document, which reads the input scope only at open) and on Wayland (a field turned protected is enabled afresh), ending the composition; Android and iOS hold such a change until the composition ends (`TextStoreObserver::status_changed`). Holding it on these two needs a composition-end hook in the TSF document and the `text-input-v3` client.
 - Handwriting, dictation and reconversion also need the text-input client queries and the session that survives a window move, resize, DPI change and focus loss; those rows sit under [Text input](platform-parity.md#text-input) and are tracked with [No text input on mobile and the Web](#no-text-input-on-mobile-and-the-web).
 
 ### No native views inside the UI (web view, map, video)

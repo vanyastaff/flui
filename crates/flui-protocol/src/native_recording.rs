@@ -1807,7 +1807,7 @@ vocabulary! {
         /// Search.
         Search => "search",
         /// Send.
-        Send => "send",
+        SendMessage => "send_message",
     }
 }
 

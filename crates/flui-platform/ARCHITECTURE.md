@@ -522,11 +522,19 @@ platform has) and autofill beyond the purpose (`Autofill`). `TextInputOptions::n
 takes the purpose and picks the rest's defaults from it (a search's Enter says
 Search; prose is corrected, an address or a number is not), so the purpose has no
 builder whose order would matter. Each host passes on what its platform has a
-word for and states the rest in `platform-parity.toml`; protection wins over
-every option. The Enter key's label changes only the label: every host delivers
-the key as Enter, and the field acts on its own label (`EditableText` moves the
-focus on Next and Previous), so a hardware Enter and every platform's action key
-behave alike.
+word for and states the rest in `platform-parity.toml`. A secret wins over every
+option: `TextStoreStatus::holds_secret` (protected, or asking for a password or a
+one-time code) is the one test before an input method may suggest, correct or
+learn and before the journal records content; `protected` alone decides what
+hides the text. A host acts on `status_changed` only where what it passes on
+differs from what it last told the platform, restarts an input method only
+outside a composition, and never shows a keyboard for it. The Enter key's label
+changes only the label: every host delivers the key as Enter (the Web always
+states an `enterkeyhint` so the browser picks none of its own), and the field
+acts on its own label (`EditableText` moves the focus on Next and Previous), so a
+hardware Enter and every platform's action key behave alike. The Send action is
+`EnterAction::SendMessage`: a variant named `Send` would make rustc print the
+marker trait in full (`std::marker::Send`) in every user's diagnostics.
 
 **Tests:** the `text_store` module's unit tests; the store tests that need a
 store are `flui-interaction`'s (`queued_text_store_grants_respect_gate_changes`,

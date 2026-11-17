@@ -92,36 +92,36 @@ fn the_status_picks_what_the_browser_fills_in() {
     }
 }
 
-/// The Enter key says the action the field names; with none, a query's
-/// searches (the default its purpose picks), a field of many lines' breaks
-/// the line, and any other single-line field keeps the browser's own label.
+/// The Enter key says the action the field names; a query's searches (the
+/// default its purpose picks), and any other field states `enter`, so the
+/// browser never picks a label (and a focus move) of its own.
 #[test]
 fn the_status_labels_the_enter_key() {
     let single = TextStoreStatus::EDITABLE_SINGLE_LINE;
-    assert_eq!(enter_key_hint(&single), None);
+    assert_eq!(enter_key_hint(&single), "enter");
     assert_eq!(
         enter_key_hint(&single.with_text_input(TextInputOptions::new(TextInputPurpose::Search))),
-        Some("search")
+        "search"
     );
     let multi = single.with_single_line(false);
-    assert_eq!(enter_key_hint(&multi), Some("enter"));
+    assert_eq!(enter_key_hint(&multi), "enter");
     for (action, expected) in [
         (EnterAction::Done, "done"),
         (EnterAction::Go, "go"),
         (EnterAction::Next, "next"),
         (EnterAction::Previous, "previous"),
         (EnterAction::Search, "search"),
-        (EnterAction::Send, "send"),
+        (EnterAction::SendMessage, "send"),
     ] {
         let options = TextInputOptions::TEXT.enter_action(action);
         assert_eq!(
             enter_key_hint(&single.with_text_input(options)),
-            Some(expected),
+            expected,
             "{action:?}"
         );
         assert_eq!(
             enter_key_hint(&multi.with_text_input(options)),
-            Some(expected),
+            expected,
             "{action:?} on many lines"
         );
     }
@@ -167,6 +167,12 @@ fn the_status_picks_capitalization_and_correction() {
         assert_eq!(
             correction(&status(text.correction(corrects), true)),
             ("off", "false")
+        );
+        let code = text.correction(corrects).autofill(Autofill::OneTimeCode);
+        assert_eq!(
+            correction(&status(code, false)),
+            ("off", "false"),
+            "a one-time code shown in clear is not corrected"
         );
     }
 }

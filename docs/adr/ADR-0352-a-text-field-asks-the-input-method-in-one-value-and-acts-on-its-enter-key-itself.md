@@ -68,7 +68,7 @@ pub struct TextStoreStatus { pub protected: bool, pub single_line: bool, pub tex
 #[non_exhaustive]
 pub struct TextInputOptions {
     pub purpose: TextInputPurpose,          // Number(NumberFormat { signed, decimal })
-    pub enter_action: EnterAction,          // Default, Done, Go, Next, Previous, Search, Send
+    pub enter_action: EnterAction,          // Default, Done, Go, Next, Previous, Search, SendMessage
     pub capitalization: Capitalization,     // None, Sentences, Words, Characters
     pub correction: Correction,             // Off, Suggestions, Autocorrect
     pub autofill: Option<Autofill>,         // Username, CurrentPassword, NewPassword, OneTimeCode
@@ -81,28 +81,43 @@ TextInputOptions::new(purpose).enter_action(EnterAction::Next).correction(Correc
   The purpose has no builder, so no default depends on the order the methods were called in.
 - `Correction` is three states, not two booleans: a correction without suggestions exists on no
   platform.
-- Protection wins over every option: a protected field is never shifted, corrected or learnt
-  from, whatever it asks.
+- A secret wins over every option. `TextStoreStatus::holds_secret()` is true for a protected
+  field and for one that asks to be filled with a password or a one-time code, shown in clear or
+  not: every host keeps such a field from suggestions, corrections and the input method's
+  learning, and the journal records it as it records a protected field, without its content.
+  `protected` alone decides what hides the text (secure entry, a password keyboard, a number pad
+  that hides its digits).
 - Each host passes on what its platform has a word for, and `platform-parity.toml` states the
   rest: UIKit has no Previous key and no suggestions without corrections; an `EditContext` reads
   no capitalization or correction; `text-input-v3`, IBus and Fcitx5 have no Enter key label; TSF
   reads the purpose alone; Android's per-field autofill is not built.
+- A host compares what it passes on of a new status with what it last told the platform and acts
+  only on a difference; a difference that restarts the input method waits until no composition is
+  in progress, and no status change shows a keyboard (`TextStoreObserver::status_changed`).
+  Android compares the `EditorInfo` its input method was started with, in the view's mirror; iOS
+  reloads its traits once the marked text ends.
 - `EditableText::text_input(TextInputOptions)` sets it, and each field above it (`TextField`,
   `RawTextFormField`, the Material fields) forwards it whole.
+- The Send action is the variant `SendMessage`: a variant named `Send` anywhere in the graph makes
+  rustc print the marker trait as `std::marker::Send` in every diagnostic that names it.
 
 ### §2. The Enter key's label labels; the field acts on it
 
 Every host delivers the on-screen keyboard's action key as the Enter key, whatever its label:
-Android's `performEditorAction` included, for every action. `EditableText` answers Enter by its
-own `enter_action`: after the submit callback, `Next` moves the focus to the next field and
-`Previous` to the one before, unless the callback already moved it or let the field go. A
-hardware Enter does the same.
+Android's `performEditorAction` included, for every action, and the browser because the Web host
+always states an `enterkeyhint` (`enter` for the keyboard's own label), so Chrome for Android
+never labels the key Next for a field another form control follows and moves the page's focus on
+its own. `EditableText` answers Enter by its own `enter_action`: after the submit callback,
+`Next` moves the focus to the next field and `Previous` to the one before, unless the callback
+already moved it or let the field go; a held Enter's repeats move nothing. A hardware Enter does
+the same.
 
 ### §3. A push preedit's cursor is the target clause
 
 `project_ime_event` selects a preedit's cursor range inside the composition (anchor at its
 start, the caret at its end), each end clamped forward to a `char` boundary and to the preedit's
-end, as the pull paths do.
+end, as the pull paths do. A redacted recording keeps no clause: its preedit's cursor is a caret
+after the replacement text.
 
 ### Consequences
 
@@ -115,8 +130,9 @@ end, as the pull paths do.
   `TYPE_TEXT_FLAG_AUTO_CORRECT`) and on the Web's hidden editor, and iOS fields no longer shift
   sentences unless they ask: a visible change in existing applications, recorded in the
   changelog.
-- Neutral, because the recording gains optional fields: an Enter action or a correction left
-  out reads as the purpose's default, so an older recording reads as it was taken.
+- Neutral, because the recording gains fields that every new recording writes in full, so what
+  it means never depends on a later build's defaults; an older recording, which has none, reads
+  as the hosts behaved when it was taken (pinned in the reader).
 
 ### Confirmation
 
@@ -131,9 +147,14 @@ end, as the pull paths do.
   in `the_hidden_editor_states_each_purpose_and_enter_action`.
 - §1 through the field: `flui-widgets`' `the_store_reports_the_text_input_the_field_was_built_with`
   and `a_push_platform_is_told_the_focused_fields_status`; the recording:
-  `a_store_focus_keeps_every_field_of_its_status`.
-- §2: `enter_moves_the_focus_as_the_fields_enter_key_says`.
-- §3: `ime_events_project_onto_the_store_as_the_text_input_contract_says`.
+  `a_store_focus_keeps_every_field_of_its_status`; a secret kept out of the journal:
+  `a_protected_store_journals_nothing_of_its_content` (a one-time code shown in clear among
+  its rows); a status change on Android:
+  `a_status_change_restarts_only_for_what_android_reads_and_never_mid_composition`; iOS's
+  composing state: `the_client_knows_while_the_keyboard_composes`.
+- §2: `enter_moves_the_focus_as_the_fields_enter_key_says`, one row per branch.
+- §3: `ime_events_project_onto_the_store_as_the_text_input_contract_says`; the redacted
+  preedit in `captured_streams_replay_to_what_the_session_delivered`.
 - Runs owed on devices are rows of `docs/platform-parity.md` ("Input purpose and hints").
 
 ## Pros and cons of the options

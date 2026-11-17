@@ -111,7 +111,9 @@ impl ContentType {
     /// [`Correction::Autocorrect`] and corrections alone for
     /// [`Correction::Suggestions`], and a field of many lines. A protected
     /// field is a password whose text the input method neither shows, shifts,
-    /// corrects nor learns, whatever it asks. The protocol has no Enter key
+    /// corrects nor learns, whatever it asks; a password or a one-time code
+    /// shown in clear ([`TextStoreStatus::holds_secret`]) is sensitive data,
+    /// neither shifted nor corrected. The protocol has no Enter key
     /// label: the input method draws none.
     pub(crate) fn of(status: TextStoreStatus) -> Self {
         let mut hint = if status.single_line {
@@ -127,19 +129,25 @@ impl ContentType {
                 purpose: Self::PASSWORD,
             };
         }
-        hint |= match text_input.capitalization {
-            Capitalization::Sentences => Self::HINT_AUTO_CAPITALIZATION,
-            Capitalization::Words => Self::HINT_TITLECASE,
-            Capitalization::Characters => Self::HINT_UPPERCASE,
-            // None, and a capitalization added after this table.
-            _ => 0,
-        };
-        hint |= match text_input.correction {
-            Correction::Autocorrect => Self::HINT_COMPLETION | Self::HINT_SPELLCHECK,
-            Correction::Suggestions => Self::HINT_SPELLCHECK,
-            // Off, and a correction added after this table.
-            _ => 0,
-        };
+        if status.holds_secret() {
+            // A secret shown in clear (a one-time code): kept from the input
+            // method's learning, neither shifted nor corrected.
+            hint |= Self::HINT_SENSITIVE_DATA;
+        } else {
+            hint |= match text_input.capitalization {
+                Capitalization::Sentences => Self::HINT_AUTO_CAPITALIZATION,
+                Capitalization::Words => Self::HINT_TITLECASE,
+                Capitalization::Characters => Self::HINT_UPPERCASE,
+                // None, and a capitalization added after this table.
+                _ => 0,
+            };
+            hint |= match text_input.correction {
+                Correction::Autocorrect => Self::HINT_COMPLETION | Self::HINT_SPELLCHECK,
+                Correction::Suggestions => Self::HINT_SPELLCHECK,
+                // Off, and a correction added after this table.
+                _ => 0,
+            };
+        }
         let purpose = match text_input.purpose {
             TextInputPurpose::Email => Self::EMAIL,
             TextInputPurpose::Url => Self::URL,

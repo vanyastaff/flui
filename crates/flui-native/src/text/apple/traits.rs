@@ -132,7 +132,7 @@ pub(crate) const fn keyboard_traits(status: TextStoreStatus) -> KeyboardTraits {
         EnterAction::Go => return_key::GO,
         EnterAction::Next => return_key::NEXT,
         EnterAction::Search => return_key::SEARCH,
-        EnterAction::Send => return_key::SEND,
+        EnterAction::SendMessage => return_key::SEND,
         // The keyboard's own, Previous (no such key) and any added later.
         _ => return_key::DEFAULT,
     };
@@ -144,7 +144,7 @@ pub(crate) const fn keyboard_traits(status: TextStoreStatus) -> KeyboardTraits {
         _ => capitalization::NONE,
     };
     let (autocorrection, spell_checking) = match options.correction {
-        _ if status.protected => (checking::NO, checking::NO),
+        _ if status.holds_secret() => (checking::NO, checking::NO),
         Correction::Autocorrect => (checking::DEFAULT, checking::DEFAULT),
         Correction::Suggestions => (checking::NO, checking::DEFAULT),
         // Off, and any added later.
@@ -231,7 +231,7 @@ mod tests {
             (EnterAction::Next, return_key::NEXT),
             (EnterAction::Previous, return_key::DEFAULT),
             (EnterAction::Search, return_key::SEARCH),
-            (EnterAction::Send, return_key::SEND),
+            (EnterAction::SendMessage, return_key::SEND),
         ] {
             assert_eq!(
                 traits(text.enter_action(action)).return_key,
@@ -295,5 +295,18 @@ mod tests {
             (checking::NO, checking::NO)
         );
         assert_eq!(traits.content, Some(Autofill::NewPassword));
+
+        // A one-time code shown in clear is not secure entry, but no
+        // dictionary sees it either.
+        let code = keyboard_traits(
+            TextStoreStatus::EDITABLE_SINGLE_LINE
+                .with_text_input(TextInputOptions::TEXT.autofill(Autofill::OneTimeCode)),
+        );
+        assert!(!code.secure);
+        assert_eq!(
+            (code.autocorrection, code.spell_checking),
+            (checking::NO, checking::NO)
+        );
+        assert_eq!(code.content, Some(Autofill::OneTimeCode));
     }
 }

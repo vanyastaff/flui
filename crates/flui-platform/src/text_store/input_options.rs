@@ -182,8 +182,9 @@ pub enum EnterAction {
     Previous,
     /// Search: run the query.
     Search,
-    /// Send: send the message.
-    Send,
+    /// Send: send the message. (Not `Send`, which would shadow the marker
+    /// trait's short name in the compiler's messages.)
+    SendMessage,
 }
 
 /// Which letters the on-screen keyboard shifts on its own.

@@ -270,8 +270,8 @@ pub fn error_kind(error: &TextStoreError) -> Option<StoreError> {
 }
 
 /// `status` as the schema spells it: every field of the status and of its
-/// [`TextInputOptions`], the Enter action and the correction left out where
-/// they are the defaults the purpose picks.
+/// [`TextInputOptions`], each written as it is, so what a recording means
+/// never depends on the defaults a later build picks.
 ///
 /// # Errors
 ///
@@ -287,16 +287,14 @@ fn status_to_wire(status: TextStoreStatus) -> DtoResult<wire::StoreStatus> {
         TextInputPurpose::Search => (wire::InputPurpose::Search, NumberFormat::WHOLE),
         _ => return Err(DtoError::Unmirrored("TextInputPurpose")),
     };
-    let defaults = TextInputOptions::new(options.purpose);
     let enter_action = match options.enter_action {
-        action if action == defaults.enter_action => None,
         EnterAction::Default => Some(wire::EnterAction::Default),
         EnterAction::Done => Some(wire::EnterAction::Done),
         EnterAction::Go => Some(wire::EnterAction::Go),
         EnterAction::Next => Some(wire::EnterAction::Next),
         EnterAction::Previous => Some(wire::EnterAction::Previous),
         EnterAction::Search => Some(wire::EnterAction::Search),
-        EnterAction::Send => Some(wire::EnterAction::Send),
+        EnterAction::SendMessage => Some(wire::EnterAction::SendMessage),
         _ => return Err(DtoError::Unmirrored("EnterAction")),
     };
     let capitalization = match options.capitalization {
@@ -307,7 +305,6 @@ fn status_to_wire(status: TextStoreStatus) -> DtoResult<wire::StoreStatus> {
         _ => return Err(DtoError::Unmirrored("Capitalization")),
     };
     let correction = match options.correction {
-        correction if correction == defaults.correction => None,
         Correction::Off => Some(wire::Correction::Off),
         Correction::Suggestions => Some(wire::Correction::Suggestions),
         Correction::Autocorrect => Some(wire::Correction::Autocorrect),
@@ -334,8 +331,9 @@ fn status_to_wire(status: TextStoreStatus) -> DtoResult<wire::StoreStatus> {
     })
 }
 
-/// The status a recording holds: the inverse of [`status_to_wire`], an absent
-/// Enter action or correction read as the default the purpose picks.
+/// The status a recording holds: the inverse of [`status_to_wire`]. A
+/// recording taken before the options existed has no Enter action or
+/// correction: it reads as what the hosts did then, pinned here.
 ///
 /// # Errors
 ///
@@ -360,7 +358,19 @@ fn status_from_wire(status: wire::StoreStatus) -> DtoResult<TextStoreStatus> {
         wire::InputPurpose::Search => TextInputPurpose::Search,
         other => return Err(unread(other.name())),
     };
-    let mut options = TextInputOptions::new(purpose);
+    // A recording older than the options: what the hosts then did, pinned
+    // here rather than read from today's defaults (a query's Enter searched,
+    // prose was corrected, an address or a number was not).
+    let mut options = TextInputOptions::new(purpose)
+        .enter_action(if purpose == TextInputPurpose::Search {
+            EnterAction::Search
+        } else {
+            EnterAction::Default
+        })
+        .correction(match purpose {
+            TextInputPurpose::Text | TextInputPurpose::Search => Correction::Autocorrect,
+            _ => Correction::Off,
+        });
     if let Some(action) = status.enter_action {
         options = options.enter_action(match action {
             wire::EnterAction::Default => EnterAction::Default,
@@ -369,7 +379,7 @@ fn status_from_wire(status: wire::StoreStatus) -> DtoResult<TextStoreStatus> {
             wire::EnterAction::Next => EnterAction::Next,
             wire::EnterAction::Previous => EnterAction::Previous,
             wire::EnterAction::Search => EnterAction::Search,
-            wire::EnterAction::Send => EnterAction::Send,
+            wire::EnterAction::SendMessage => EnterAction::SendMessage,
             other => return Err(unread(other.name())),
         });
     }

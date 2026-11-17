@@ -130,6 +130,9 @@ pub(super) struct ResponderIvars {
     delivery: Weak<WindowDelivery>,
     /// What the keyboard is told of the focused field.
     traits: Cell<KeyboardTraits>,
+    /// The traits changed while the keyboard composed: reloaded once its
+    /// marked text ends, never under it.
+    reload_owed: Cell<bool>,
     tokenizer: OnceCell<Retained<UITextInputStringTokenizer>>,
     input_delegate: RefCell<Option<ObjcWeak<ProtocolObject<dyn UITextInputDelegate>>>>,
 }
@@ -259,7 +262,9 @@ define_class!(
         #[unsafe(method(insertText:))]
         fn insert_text(&self, text: &NSString) {
             os_entry("FluiTextInputView insertText:", (), AfterPanic::Answer(|()| ()), || {
-                if self.client().type_text(text.to_string()) == Typed::Return {
+                let typed = self.client().type_text(text.to_string());
+                self.reload_if_owed();
+                if typed == Typed::Return {
                     self.press(NamedKey::Enter, Code::Enter);
                 }
             });
@@ -338,6 +343,7 @@ define_class!(
                 let selected = Utf16Range::try_new(Utf16Offset::new(selected.location), Utf16Offset::new(end))
                     .expect("BUG: a saturating end is never before its start");
                 self.client().set_marked_text(text, selected, None);
+                self.reload_if_owed();
             });
         }
 
@@ -345,6 +351,7 @@ define_class!(
         fn unmark_text(&self) {
             os_entry("FluiTextInputView unmarkText", (), AfterPanic::Answer(|()| ()), || {
                 self.client().unmark_text();
+                self.reload_if_owed();
             });
         }
 
@@ -534,6 +541,7 @@ impl TextInputView {
             client: Rc::clone(&client),
             delivery,
             traits: Cell::new(KeyboardTraits::DEFAULT),
+            reload_owed: Cell::new(false),
             tokenizer: OnceCell::new(),
             input_delegate: RefCell::new(None),
         }));
@@ -630,6 +638,21 @@ impl TextInputView {
         if !self.isFirstResponder() {
             self.becomeFirstResponder();
         } else if changed {
+            // A reload under marked text would end the composition: it waits
+            // for the composition to end ([`Self::reload_if_owed`]).
+            if self.client().composes() {
+                self.ivars().reload_owed.set(true);
+            } else {
+                self.ivars().reload_owed.set(false);
+                self.reloadInputViews();
+            }
+        }
+    }
+
+    /// Reload the keyboard for traits that changed while it composed, once
+    /// its marked text has ended.
+    fn reload_if_owed(&self) {
+        if !self.client().composes() && self.ivars().reload_owed.replace(false) {
             self.reloadInputViews();
         }
     }
