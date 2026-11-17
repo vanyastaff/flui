@@ -249,7 +249,8 @@ pub fn client_frame_report(window: &dyn HostWindow) -> Option<ClientFrameReport>
 pub struct CursorReport {
     /// A `cursor-shape` value's number, or the theme cursor's name.
     pub name: String,
-    /// The buffer scale a theme cursor was drawn at; `0` for a shape.
+    /// The image pixels per logical pixel a theme cursor was drawn at; `0`
+    /// for a shape.
     pub scale: i32,
 }
 

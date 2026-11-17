@@ -7222,6 +7222,58 @@ GPU-память простаивающего или невидимого окн
   (следующему отказано). Windows (источник OLE, упавший при наведении) не прогонялся: запись в
   `docs/gaps.md` («No native drag and drop») и заметка строки `drop-into-the-app`.
 
+- [x] **LY132** — ветка `native/wayland-sizing-and-scale`. Проверено на `main` @ `912c78143` в WSL.
+  Курсор: арифметика подтверждена (Adwaita даёт 24/32/48/64/96, при масштабе 3 ближайшая к 72 —
+  64, `set_buffer_scale(3)` нарушает правило `wl_surface.attach`), но ни Weston 13 (прогон
+  `wayland_input` на выходе масштаба 3: 64×64 при масштабе 3 без ошибки), ни wlroots это правило на
+  поверхностях курсора не проверяют; проверял KWin. Границы: ни один установленный композитор их
+  не шлёт (sway 1.9 даёт `xdg_wm_base` версии 2, Weston 13 — версии 5 без `configure_bounds`), так
+  что прогон sway из строки невозможен. Построено: `cursor::CursorBuffer::fit` — картинка идёт
+  на поверхность в масштабе, если он делит обе стороны, иначе через `wp_viewport` с назначением
+  «картинка / масштаб» и масштабом буфера 1, иначе (без viewporter) в наибольшем меньшем делителе;
+  горячая точка — по тому же масштабу; поверхность курсора с её viewport — `ThemeSurface`,
+  уничтожаются вместе; `CursorGlobals` несёт viewporter цикла. `configure::Bounds`: последнее
+  `configure_bounds` записывается и фиксируется в configure; пока размер окна — открытый (нет
+  configure в нормальном режиме и нет запроса), configure, оставляющий оси окну, держит его в
+  границах (по каждой оси, пересчитанных на содержимое за вычетом своей рамки, пределы окна
+  сильнее); запрошенный позже размер не ограничивается. `scale::OnOutputs`: запасной масштаб —
+  наибольший среди живых выходов поверхности, дисплей — первый вошедший. `Keyboards::made` по
+  `Wire::KeyboardMade`: клавиатура seat ниже версии 4 получает `repeat::UNTOLD` (25 в секунду
+  после 600 мс), новая ждёт `repeat_info` и не теряет сказанного. Тесты, в скобках результат с
+  откатом: `a_theme_image_fits_its_cursor_surface` (`Scaled(3)` вместо `Viewported` 21×21);
+  `a_window_opens_within_the_compositors_bounds` (1600×1000 вместо 1366×740);
+  `a_window_across_outputs_is_drawn_for_the_densest` (1.0 вместо 2.0);
+  `a_keyboard_never_told_its_repeat_still_repeats` (повтора нет). Живой прогон с исправлением
+  (не в наборе): `wayland_input` на Weston масштаба 3 — `get_viewport`, `set_destination(21, 21)`,
+  `set_buffer_scale(1)`, курсор показан. Долги — заметки строк `cursor-shapes` (композитор,
+  проверяющий правило на курсоре), `position-size-move-and-resize-events` (композитор с
+  `configure_bounds`: mutter, KWin) и `keyboard-keys-modifiers-repeat-dead-keys` (seat версии 3
+  не предлагает ни один); в `docs/gaps.md` — окно больше рабочей области на Win32 и X11.
+  Доведение после чтения (PR #2701): каждое исправление проверено там, где оно входит в хост.
+  Версия клавиатуры едет в `Wire::Keymap` (композитор шлёт keymap первым), `Keyboards::keyboard_version`
+  вызывается в разборе keymap; `RepeatSettings` (частота `Option<NonZeroU32>`, задержка
+  `Duration`) — один тип для `repeat_info`, `Keyboards::configure` и `KeyRepeat::configure`.
+  Запросы поверхности курсора — `CursorBuffer::requests`, диспетчер исполняет их по одному;
+  масштаб курсора — `NonZeroU32`. `OnOutputs` конкретен и живёт в `owner::linux::wayland::outputs`
+  с `OutputFacts`; `WaylandDisplays::on_outputs` читает один снимок за вызов; первым берётся
+  первый живой выход, и выход, которого нет в снимке, оставляет окно без дисплея, а не на
+  следующем; `ScaleTold` несёт `OnOutputs`. Перевод размера и границ из геометрии окна в
+  содержимое — `Sizing::configure_geometry`. Окно, опубликовавшее другой масштаб, говорит вводу
+  (`WaylandInput::rescaled`), и курсор темы перерисовывается. Масштаб окна — его собственный
+  факт (доки `WindowState::metrics`, `ARCHITECTURE.md`). Тесты, в скобках результат с откатом
+  строки: `a_keymap_of_an_old_keyboard_brings_its_repeat` (без вызова в разборе keymap — повтора
+  нет); `a_cursor_surface_is_sent_what_its_image_needs` (без `BufferScale(1)` и дальше — список
+  обрывается); `a_window_opens_within_the_compositors_bounds` (границы без вычета заголовка —
+  740 вместо 703); `a_buffer_is_drawn_at_the_scale_the_compositor_prefers` (масштаб первого
+  выхода вместо наибольшего — 1.0 вместо 3.0); `a_window_is_on_its_first_output_and_drawn_for_the_densest`
+  (свёртка без максимума — 1.0 вместо 2.0; первый из выходов со сведениями — дисплей выхода 2
+  вместо `None`). Не проверены тестом: ветка `ConfigureBounds` диспетчера и перерисовка курсора
+  при смене масштаба (нет композитора, который шлёт границы или меняет масштаб на ходу при
+  курсоре темы) — `docs/gaps.md`, до сценарного композитора LY150. Ограничение размера при
+  открытии по рабочей области на швах Win32, X11 и headless не построено: источник границы у
+  каждого хоста свой (рабочая область монитора при открытии против configure Wayland), запись в
+  `docs/gaps.md` и заметка строки `position-size-move-and-resize-events`.
+
 ## Отступление от порядка, решённое владельцем
 
 - 2026-10-21: LY22 ждёт свои зависимости (LY24, LY9, text-ime, teardown), хотя ни одна ветка не

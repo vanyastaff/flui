@@ -1387,10 +1387,15 @@ trait depends on `flui-platform` instead.
   compositor's `wm_capabilities` where it sends them (version 5); one that
   sends none (sway 1.9) is taken to offer every mode. A window tiled and in
   no mode takes the tiling's size, so `SetSize` is `NotOnThisDevice` while it
-  is. Its buffer is drawn at the compositor's fractional scale
-  (`wp_fractional_scale_v1`), else the surface's preferred whole scale, else
-  its output's, and at scale 1 without a viewport: `scale::buffer_scale` is
-  the one place that decides. Its frame is the compositor's answer through
+  is. A configure that leaves the size to a window still at the size it
+  opened at holds that size within the compositor's `configure_bounds`
+  (version 4), each axis on its own; a size asked for or taken since is not
+  held to them (`configure::Bounds`,
+  `a_window_opens_within_the_compositors_bounds`). Its buffer is drawn at the
+  compositor's fractional scale (`wp_fractional_scale_v1`), else the
+  surface's preferred whole scale, else the largest of its outputs', and at
+  scale 1 without a viewport: `scale::buffer_scale` is the one place that
+  decides. Its frame is the compositor's answer through
   `xdg-decoration`, never the request; a configure after a request that names
   no mode answers it with the mode unchanged (wlroots sends no mode twice).
   Where the compositor offers none, or leaves the frame to the client, a
@@ -4281,7 +4286,11 @@ handler that opens or closes a window, sets a cursor or quits finds the
 input as it was; events a handler's roundtrip records meanwhile are
 delivered in the same turn. A held key repeats on the client, by
 `wl_keyboard.repeat_info`, and the loop's wait is bounded by the next repeat
-(`LoopTurn::input_due`).
+(`LoopTurn::input_due`). A keyboard of a seat bound below version 4 is never
+told its repeat and repeats at `repeat::UNTOLD`, 25 a second after 600 ms: its
+keymap, which a compositor sends first, carries the keyboard's version
+(`a_keyboard_never_told_its_repeat_still_repeats`,
+`a_keymap_of_an_old_keyboard_brings_its_repeat`).
 
 What the translation decides is in the module docs of
 `input::linux::wayland`; the parts with a test of their own: a pointer frame
@@ -4308,8 +4317,20 @@ replays to exactly what the window heard and is checked in as
 source in a headless compositor: their translation is held by the wire
 tests alone. A compositor without `cursor-shape` (Weston 13) gets the
 cursor theme's image (`wayland-cursor`, `XCURSOR_THEME` and `XCURSOR_SIZE`)
-on a surface of the pointer's own, drawn at the window's scale rounded up;
-`wayland_input` sees Weston 13 show the theme's pointer.
+on a surface of the pointer's own, drawn for the window's scale rounded up;
+`wayland_input` sees Weston 13 show the theme's pointer. A theme ships a few
+sizes, and the nearest to the asked one need not be a multiple of that scale
+(Adwaita's 64 at 3), while `wl_surface.attach` refuses a buffer whose size is
+not a multiple of the surface's buffer scale with a protocol error that ends
+the connection. So the image is put on the surface at the scale only where it
+divides both sides, else through a `wp_viewport` at the image's logical size
+with buffer scale 1, else, with no viewporter, at the largest smaller scale
+that divides it (`cursor::CursorBuffer::fit`,
+`a_theme_image_fits_its_cursor_surface`); the requests the surface is sent
+for each are `CursorBuffer::requests`, which the dispatch carries out one by
+one (`a_cursor_surface_is_sent_what_its_image_needs`). A window that publishes
+another scale tells the input (`WaylandInput::rescaled`), which draws a theme
+cursor over it again for that scale.
 
 Each seat's keyboard has its own keymap, window and repeat (`SeatKey` on
 every keyboard wire, `keyboards::Keyboards`); a key repeats only while its
@@ -4797,7 +4818,16 @@ names a window's output by number; the X11 host does not.
 
 **What reaches the window.** A Wayland window is on the first output its surface
 entered that it has not left, so a window the compositor moves to another output
-names that output's display, whatever its scale. A change of the monitor list
+names that output's display, whatever its scale. Where the compositor prefers no
+scale for the surface (no `wp_fractional_scale_v1`, `wl_surface` before version
+6), the buffer is drawn at the largest scale of the outputs the surface is on,
+so a window across a scale-1 and a scale-2 output is sharp on the denser one
+whichever it entered first, while it still names the display of the first: a
+window's scale is its own fact, not its display's. Both are read from one
+snapshot (`WaylandDisplays::on_outputs`, `owner::linux::wayland::outputs::OnOutputs`);
+an output the surface entered first that the snapshot does not hold yet leaves
+the window on no display rather than on the next one
+(`a_window_is_on_its_first_output_and_drawn_for_the_densest`). A change of the monitor list
 needs no event of its own: the thread wakes the owner and the host derives every
 window's display from the new snapshot.
 
