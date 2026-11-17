@@ -6,7 +6,8 @@
 // decisions each platform's frame callback makes each wake are unit
 // testable without a live event loop. See the frame-pacing ADR for the
 // full design: a PRESENTED frame is paced at display cadence by the
-// backend's own present path (the blocking Fifo present on Vulkan/Wayland,
+// backend's own pacing signal (the blocking Fifo present on X11 and Win32,
+// the compositor's frame callback on Wayland,
 // the display-pass cadence on native AppKit); these functions cover what
 // happens on
 // the frames that path never blocks: a spurious wake with nothing to do or

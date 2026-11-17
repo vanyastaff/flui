@@ -55,6 +55,17 @@ impl Environment {
         }
     }
 
+    /// A session whose one display server is the Wayland compositor at
+    /// `socket`, as `WAYLAND_DISPLAY` names one by its path; a path that is
+    /// not UTF-8 names none, as that variable could not.
+    #[cfg(wayland_host)]
+    pub(crate) fn wayland_at(socket: &std::path::Path) -> Self {
+        Self {
+            wayland_display: socket.to_str().map(str::to_owned),
+            ..Self::default()
+        }
+    }
+
     /// The path of the Wayland socket named by `WAYLAND_DISPLAY`: the value
     /// itself when it is absolute, otherwise a name inside `XDG_RUNTIME_DIR`.
     ///

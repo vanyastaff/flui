@@ -433,7 +433,7 @@ impl GpuContext {
     async fn answer(
         attempt: Attempt,
         display: &Arc<dyn DisplayConnection>,
-        first: Option<&Arc<dyn crate::WindowTarget>>,
+        first: Option<&Arc<dyn crate::window_target::WindowTarget>>,
     ) -> EngineResult<Answered> {
         #[cfg(test)]
         INSTANCES_CREATED.with(|created| created.set(created.get() + 1));

@@ -77,10 +77,11 @@ impl std::fmt::Debug for WaylandDisplaySource {
 }
 
 impl WaylandDisplaySource {
-    /// The source, which reads the compositor on first use.
-    pub(crate) fn new() -> Self {
+    /// The source of the compositor at `socket`, which it reads on first
+    /// use.
+    pub(crate) fn at(socket: &std::path::Path) -> Self {
         Self {
-            native: LinuxDisplays::new(),
+            native: LinuxDisplays::new(Environment::wayland_at(socket)),
         }
     }
 }
