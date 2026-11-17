@@ -125,7 +125,7 @@ A version 4 recording may hold a `scroll_inertia_cancel` row, which no reader ha
 format's version moves and the older one is refused by its version (`RecordingError::Version`), never
 read halfway. The two capabilities default to `unavailable` when a writer leaves them out only
 because the protocol refuses a field made required (ADR-0342); no older recording reaches that
-default. The native recording's reading action gains `hold` and `swipe`. Protocol 0.20
+default. The native recording's reading action gains `hold` and `swipe`. Protocol 0.21
 is a break (ADR-0342 §1 for the added variants) and lists `scroll_inertia_cancel` in `BREAKING`'s
 `removed`.
 
@@ -135,7 +135,7 @@ is a break (ADR-0342 §1 for the added variants) and lists `scroll_inertia_cance
   resting fingers, and the end of a hold is said.
 - Good, because a swipe competes for its consumer in the arena, so a horizontal and a vertical
   swipe recognizer nested in one another split swipes by axis, and a scrollable never moves.
-- Bad, because a 0.19 agent client is refused by a 0.20 application, and version 4 recordings no
+- Bad, because a 0.20 agent client is refused by a 0.21 application, and version 4 recordings no
   longer read.
 - Neutral, because no host's swipe or hold has run on a touchpad; each is held at its seam
   (`crates/flui-native/platform-parity.toml`).

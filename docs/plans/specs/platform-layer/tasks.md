@@ -7777,7 +7777,7 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   (потребитель — распознаватель свайпа). Хосты: Wayland — `zwp_pointer_gestures_v1` версии 3
   (`hold`, `swipe`), X11 — свайп XI 2.4, Win32 — удержание из окна DirectManipulation, macOS —
   удержание; отсутствие типизировано `InputCapabilities::touchpad_hold`/`touchpad_swipe` для
-  каждого хоста. Формат записи — 5, протокол — 0.20 (разрыв, `scroll_inertia_cancel` в `removed`).
+  каждого хоста. Формат записи — 5, протокол — 0.21 (разрыв, `scroll_inertia_cancel` в `removed`).
   Тесты, каждый показан красным с убранной строкой проводки: `a_touchpad_swipe_is_a_gesture_and_no_scroll`
   (flui-widgets, через binding; без ветки `add_touchpad_swipe` в `RecognizerSet` свайп не
   доходит), `resting_fingers_catch_a_fling_and_leave_wheel_easing` (без `on_pointer_signal`

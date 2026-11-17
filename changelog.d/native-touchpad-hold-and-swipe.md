@@ -7,7 +7,7 @@
 
 ### Changed
 
-- Input recordings are format version 5 (`touchpad_hold` and `touchpad_swipe` rows); version 4 recordings are refused. The agent protocol is 0.20, which a 0.19 client cannot speak to.
+- Input recordings are format version 5 (`touchpad_hold` and `touchpad_swipe` rows); version 4 recordings are refused. The agent protocol is 0.21, which a 0.20 client cannot speak to.
 
 ### Removed
 
