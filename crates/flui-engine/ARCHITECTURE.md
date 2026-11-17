@@ -59,7 +59,7 @@ oversized radii against the same public path commands without a shape hint.
 | Entry points | `renderer.rs`, `gpu_context.rs`, `surface_factory.rs`, `window_slot.rs`, `surface_present.rs`, `headless.rs` | `Renderer` (a window's device, queue, surface, recovery); `GpuContext` (one instance, device and painter shared by every slot, ADR-0305 §1; each slot's external textures kept apart, since each presentation mints its own `TextureId`s, uploaded only when the slot draws (a frame that wrote and submitted nothing flushes the writes, since `write_texture` holds staging memory until a submission), lent to the painter for the slot's frame and uploaded again on a rebuilt device; `bootstrap` probes the backends over the host's `DisplayConnection` and the first window, and the raster executor's backend); `SurfaceFactory` (the owner thread's `!Send` maker of `UnconfiguredSurface`s on the context's instance, which refuses a target on another display before wgpu sees it, §2); `WindowSlot` (a window's surface, configuration, frame protocol and recovery inside the context; it attaches unconfigured and its first size configures it, and a surface still lost after a reconfigure is dropped for the owner to replace through the factory and `Restore`, never made again by the executor); the acquire and present path a `Renderer` and a window slot share; `HeadlessRenderer` (a context with one offscreen slot, rasterising a tree to RGBA8 bytes) |
 | Window ownership | `window_target.rs`, `surface_lease.rs`, `adapter.rs` | The owned `'static` handle source a surface is created over; the lease that pins surface-before-target drop order; adapter/device acquisition policy |
 | Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs`, `layer_offscreen.rs`, `layer_compositor.rs` | Iterative layer traversal; per-variant lowering of `Layer`; `DrawCommand` → painter routing; offscreen layer rendering and compositing; save/restore layer state |
-| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks |
+| Recording | `painter/`, `batches/`, `command_ir.rs`, `state_stack.rs`, `recording_cache.rs` | `WgpuPainter` (per-frame coordinator), `DrawBatcher` (per-primitive record methods), the Command IR they write, the transform/clip stacks, the recordings of unchanged chunks kept across frames |
 | Replay | `replay/`, `pipeline_cache.rs`, `pipeline_set.rs`, `instancing.rs`, `vertex.rs`, `shaders/` | Command IR → wgpu encoding; pipeline caching keyed by blend/coverage state; instance layouts; WGSL |
 | Offscreen effects | `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Ordered shader masks and backdrop filters, colour filters, dst-read blends and supersampled path AA over pooled textures |
 | Presentation blit | `offscreen/` | Cached intermediate-to-surface copy, independent of layer effects |
@@ -180,6 +180,25 @@ It excludes allocator slack, `DrawItem` container metadata, Lyon output, caches,
 image decoding and separate painters. `DeviceDomain` separately admits the
 listed prepared GPU payloads and retains submission charges until callbacks.
 Neither quota is a whole-process memory or physical VRAM limit.
+
+`RecordingCache` (`recording_cache.rs`, ADR-0304 §9) keeps the recording of a
+chunk that stayed one fragment of the open segment: no external texture, no
+draw item, layer or clip of its own, recorded Ok under a finite affine
+transform whose translation is below 2^23. `RecordingKey` holds the chunk's
+`ContentVersion`, the transform's bits (`RasterKey`), the scissor relative to
+the whole-pixel translation or `Covers`, the inherited opacity (`AmbientKey`)
+and the painter's `ResourceEpoch`. A recording holds no clip chain, scissor or
+absolute offset: the splice gives it the entry's clip and scissor, rebases
+every arena offset onto the segment as it stands, runs the merge rules on its
+first element only, and charges the frame's `RecordingBudget`. Whatever moves
+texels a recording names (a glyph slot evicted or dropped, a glyph-atlas reset,
+a font-source switch, an image evicted, the image atlas reset, a reclaim, a
+retarget) advances the epoch, which drops every entry; a hit marks its glyphs
+used for the frame (`GlyphAtlas::retain`), and a glyph gone since is a miss.
+A recording is kept only after it ended Ok, the entries over 64 MiB are evicted
+least recently rastered first at frame end, and a `Full(DamageOff)` frame does
+not read the cache. The key holds the whole translation, so a moved chunk
+records again.
 
 The Scene IR remains GPU-free and names logical `TextureId`s. At engine lowering,
 an external draw captures an immutable allocation lease: view, validated
