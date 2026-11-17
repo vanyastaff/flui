@@ -5769,14 +5769,22 @@ calls `post`), which runs it inside `os_entry` and reports each exit but success
 panic-boundary` refuses the identifier `run_on_java_main_thread` anywhere else in a build, the
 tokens of macro calls and `macro_rules!` bodies included. android-activity would only log a posted
 closure's panic and lose what it owed; under `post`, a work's report settles it (the insets query
-answers none, `FluiView`'s installation finishes as `Failed` unless the view got into the window,
-and the owner hears `Installed` either way). Every native method of `FluiView` is one call of
-`java_view`'s `jni_native`: Java receives the method's answer, or its "nothing" (`false`, `0`,
+answers none), and every capture of the work, the report's included, is destroyed inside the
+boundary on every exit, since the last reference to a host object may be one of them
+(`every_capture_of_posted_work_is_destroyed_inside_the_boundary`). `FluiView`'s installation is
+`owner::android::view_install::ViewInstall` over the JNI calls it makes: the handle the view names
+its bridge by is freed only once no view in the window names it, so an installation that Java
+refused, or that stopped short after Java took the handle, asks the window for the view naming it
+(`FluiView.handle()`), detaches it and frees the handle, and keeps the handle when the window cannot
+be read; a `detach` that fails keeps it too
+(`every_exit_of_the_installation_frees_only_handles_no_view_names`). Every native method of
+FluiView's classes is one call of `owner::android::native_call::jni_native`, which `cargo xtask
+panic-boundary` holds them to: Java receives the method's answer, or its "nothing" (`false`, `0`,
 `null`, no value) after a failed JNI call or a panic, and never a pending exception, which
-`owner::android::pending_exception::ClearsPending` describes to the log and clears on every exit
-(`a_native_method_leaves_no_exception_pending_on_any_exit`): each caller is a framework callback
-on the main thread that catches nothing, where an exception would end the process. A contained
-failure costs the one call; the Activity goes on. android-activity keeps work it cannot deliver
+`ClearsPending` describes to the log and clears on every exit
+(`a_native_method_answers_and_leaves_no_exception_pending_on_any_exit`): each caller is a
+framework callback on the main thread that catches nothing, where an exception would end the
+process. A contained failure costs the one call; the Activity goes on. android-activity keeps work it cannot deliver
 rather than dropping it, so the dropped-unrun report may never come on Android: a launch reports
 `taken` from its body, and one the Java main thread has not taken within `HAND_OFF_LIMIT` ends as
 `HandOffFailed` at that deadline, which the loop's poll waits for (`LoopTurn::hand_off_deadline`);

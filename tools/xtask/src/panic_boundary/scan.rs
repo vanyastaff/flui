@@ -40,6 +40,21 @@ pub(super) const IVARS: &str = "ContainedIvars";
 /// `self`, `super` and the module that holds it.
 const LEADS: [&str; 4] = ["crate", "self", "super", "owner"];
 
+/// The module path of the adapter every JNI native method goes through.
+pub(super) const JNI_MODULE: [&str; 3] = ["owner", "android", "native_call"];
+
+/// That adapter: besides containing the body's panic, it clears the Java
+/// exception the body leaves pending, which Java would throw from the
+/// framework callback that called the method.
+pub(super) const JNI_ADAPTER: &str = "jni_native";
+
+/// The path segments that may lead to [`JNI_MODULE`]'s last segment.
+const JNI_LEADS: [&str; 5] = ["crate", "self", "super", "owner", "android"];
+
+/// The types a JNI native method's first parameter, its environment, is
+/// written as, by their last segment.
+const JNI_ENVS: [&str; 2] = ["EnvUnowned", "JNIEnv"];
+
 /// The crates that bind the operating system. A function or constructor
 /// reached through one of them (by its path, or by a name imported from it)
 /// that is handed a closure literal hands that closure to the OS: it is an
@@ -110,7 +125,8 @@ const GCD_METHODS: [&str; 6] = [
 /// (`ThreadLooper` and `ForeignLooper::add_fd_with_callback`). A method's
 /// receiver has a type the gate cannot read, so they are matched by name, as
 /// GCD's are; unlike a GCD work item, a looper calls its closure again and
-/// again, so its captures cannot move into the boundary's body.
+/// again, so its captures cannot move into the boundary's body. The crate
+/// hands a looper no closure today; the name is listed so the first is read.
 const LOOPER_METHODS: [&str; 1] = ["add_fd_with_callback"];
 
 /// android-activity's method that runs a closure on Android's Java main
@@ -198,6 +214,9 @@ pub(super) struct Entry {
     /// The self type of the impl around the entry, which `Self::` names.
     impl_type: Option<String>,
     body: Body,
+    /// Whether it is a JNI native method, which goes through
+    /// [`JNI_ADAPTER`] alone.
+    jni: bool,
 }
 
 /// How an entry reaches the boundary.
@@ -227,6 +246,8 @@ struct Imports {
     boundary: bool,
     /// Whether a `use` binds the bare name of the boundary's ivars to them.
     ivars: bool,
+    /// Whether a `use` binds the bare name of the JNI adapter to it.
+    jni: bool,
 }
 
 /// What one file holds.
@@ -242,6 +263,11 @@ pub(super) struct FileScan {
     is_boundary: bool,
     /// Whether it defines the boundary at its top level.
     pub(super) defines_boundary: bool,
+    /// Whether the file is the JNI adapter's module.
+    is_jni_module: bool,
+    /// The JNI adapter's line and body, where this file, its module, defines
+    /// it at its top level.
+    jni_adapter: Option<(usize, Block)>,
     /// Where it defines the boundary's ivars at its top level.
     defines_ivars: Option<usize>,
     /// The classes its `define_class!` invocations declare, by name.
@@ -256,12 +282,84 @@ impl FileScan {
     /// Every entry with its verdict.
     pub(super) fn judged(&self) -> impl Iterator<Item = (&Entry, Verdict)> {
         self.entries.iter().map(|entry| {
+            if entry.jni {
+                return (entry, self.jni_verdict(&entry.body));
+            }
             let moves = matches!(entry.body, Body::Closure { moves: true, .. });
             (
                 entry,
                 self.verdict(&entry.body, entry.impl_type.as_deref(), true, moves),
             )
         })
+    }
+
+    /// A JNI native method's verdict: its body is one call of the JNI
+    /// adapter, whose arguments run no code; the boundary called directly or
+    /// through another adapter leaves the exception pending.
+    fn jni_verdict(&self, body: &Body) -> Verdict {
+        let refused = || {
+            Verdict::Unguarded(format!(
+                "is a JNI native method, which is one call of `{}::{JNI_ADAPTER}`: Java calls it \
+                 from a framework callback that catches nothing, and only that adapter clears \
+                 the exception its body leaves pending",
+                JNI_MODULE.join("::")
+            ))
+        };
+        let Body::Block(block) = body else {
+            return refused();
+        };
+        let Some(Expr::Call(call)) = sole(block).map(strip) else {
+            return refused();
+        };
+        let Expr::Path(path) = strip(&call.func) else {
+            return refused();
+        };
+        let callee = segments(&path.path);
+        if path.qself.is_some() || !self.is_jni_adapter_call(&callee) {
+            return refused();
+        }
+        if let Some(index) = call.args.iter().position(|arg| !inert(arg)) {
+            return Verdict::Argument(format!(
+                "passes argument {} of `{JNI_ADAPTER}` an expression that runs before the \
+                 boundary; bind nothing outside it",
+                index + 1
+            ));
+        }
+        Verdict::Adapter(JNI_ADAPTER.to_owned())
+    }
+
+    /// Whether `path` names the JNI adapter.
+    fn is_jni_adapter_call(&self, path: &[String]) -> bool {
+        is_jni_adapter_path(path)
+            || (path.len() == 1
+                && path[0] == JNI_ADAPTER
+                && (self.imports.jni || self.is_jni_module))
+    }
+
+    /// What is wrong with the JNI adapter, when this file is its module: it
+    /// is missing, or its body is not the boundary's call.
+    pub(super) fn jni_adapter_problem(&self) -> Option<(usize, String)> {
+        if !self.is_jni_module {
+            return None;
+        }
+        let Some((at, block)) = &self.jni_adapter else {
+            return Some((
+                1,
+                format!(
+                    "the JNI adapter's module does not define `{JNI_ADAPTER}` at its top level"
+                ),
+            ));
+        };
+        match self.verdict(&Body::Block(block.clone()), None, false, false) {
+            Verdict::Boundary => None,
+            Verdict::Unguarded(why) | Verdict::Argument(why) => {
+                Some((*at, format!("`{JNI_ADAPTER}`'s own body {why}")))
+            }
+            Verdict::Adapter(_) | Verdict::Constant => Some((
+                *at,
+                format!("`{JNI_ADAPTER}` does not call the boundary itself"),
+            )),
+        }
     }
 
     /// `body`'s verdict. `impl_type` is what `Self` names; `adapters` is
@@ -479,6 +577,40 @@ fn leads_in_crate(lead: &[String]) -> bool {
     lead.iter().all(|segment| LEADS.contains(&segment.as_str()))
 }
 
+/// `…native_call::jni_native`, led only by [`JNI_LEADS`].
+fn is_jni_adapter_path(path: &[String]) -> bool {
+    match path {
+        [module @ .., name] => name == JNI_ADAPTER && is_jni_module_path(module),
+        [] => false,
+    }
+}
+
+/// `…native_call`, led only by [`JNI_LEADS`].
+fn is_jni_module_path(path: &[String]) -> bool {
+    match path {
+        [lead @ .., module] => {
+            module == JNI_MODULE[JNI_MODULE.len() - 1]
+                && lead
+                    .iter()
+                    .all(|segment| JNI_LEADS.contains(&segment.as_str()))
+        }
+        [] => false,
+    }
+}
+
+/// Whether a foreign function with `sig` is a JNI native method: its first
+/// parameter is the environment, by value or behind a pointer.
+fn takes_jni_env(sig: &syn::Signature) -> bool {
+    let Some(syn::FnArg::Typed(first)) = sig.inputs.first() else {
+        return false;
+    };
+    let mut ty = &*first.ty;
+    while let Type::Ptr(pointer) = ty {
+        ty = &pointer.elem;
+    }
+    type_name(ty).is_some_and(|name| JNI_ENVS.contains(&name.as_str()))
+}
+
 /// Whether `name` is an OS crate's.
 fn os_crate(name: &str) -> bool {
     OS_CRATES.contains(&name) || name.starts_with("objc2_")
@@ -560,7 +692,7 @@ fn built(attrs: &[Attribute]) -> bool {
 }
 
 /// The entries, functions, imports and identity findings of `file`.
-pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
+pub(super) fn scan_file(file: &Parsed, is_boundary: bool, is_jni_module: bool) -> FileScan {
     let mut uses = UseScan {
         rel: &file.rel,
         imports: Imports::default(),
@@ -577,6 +709,7 @@ pub(super) fn scan_file(file: &Parsed, is_boundary: bool) -> FileScan {
             imports: uses.imports,
             findings: uses.findings,
             is_boundary,
+            is_jni_module,
             ..FileScan::default()
         },
     };
@@ -707,22 +840,25 @@ impl UseScan<'_> {
                 ok
             }
             MODULE => is_boundary_module_path(&path),
+            JNI_ADAPTER => {
+                let ok = is_jni_adapter_path(&path);
+                self.imports.jni |= ok;
+                ok
+            }
             _ => return,
         };
         if !ok {
+            let meant = match bound_name.as_str() {
+                MODULE => BOUNDARY_MODULE.join("::"),
+                JNI_ADAPTER => format!("{}::{JNI_ADAPTER}", JNI_MODULE.join("::")),
+                _ => format!("{}::{bound_name}", BOUNDARY_MODULE.join("::")),
+            };
             self.findings.push(Finding {
                 file: self.rel.to_owned(),
                 line: line(bound.span()),
                 what: format!("use {}", path.join("::")),
                 kind: Problem::Identity,
-                detail: format!(
-                    "binds `{bound_name}` to something other than `{}`",
-                    if bound_name == MODULE {
-                        BOUNDARY_MODULE.join("::")
-                    } else {
-                        format!("{}::{bound_name}", BOUNDARY_MODULE.join("::"))
-                    }
-                ),
+                detail: format!("binds `{bound_name}` to something other than `{meant}`"),
             });
         }
     }
@@ -740,6 +876,9 @@ impl UseScan<'_> {
                 if is_boundary_module_path(prefix) {
                     self.imports.boundary = true;
                     self.imports.ivars = true;
+                }
+                if is_jni_module_path(prefix) {
+                    self.imports.jni = true;
                 }
             }
             UseTree::Group(group) => {
@@ -808,7 +947,49 @@ impl Collector<'_> {
             line,
             impl_type,
             body,
+            jni: false,
         });
+    }
+
+    /// A foreign function's entry, a JNI native method when its first
+    /// parameter is the environment.
+    fn extern_entry(&mut self, sig: &syn::Signature, block: Block) {
+        self.entry(
+            Kind::ExternFn,
+            sig.ident.unraw().to_string(),
+            line(sig.ident.span()),
+            Body::Block(block),
+        );
+        if let Some(entry) = self.out.entries.last_mut() {
+            entry.jni = takes_jni_env(sig);
+        }
+    }
+
+    /// An item named like the JNI adapter: the adapter itself, at its
+    /// module's top level, or a second one.
+    fn jni_adapter_named(&mut self, function: &syn::ItemFn) {
+        if function.sig.ident.unraw() != JNI_ADAPTER {
+            return;
+        }
+        if self.out.is_jni_module && self.nesting == 0 && self.out.jni_adapter.is_none() {
+            self.out.jni_adapter =
+                Some((line(function.sig.ident.span()), (*function.block).clone()));
+        } else {
+            self.jni_impostor(&function.sig.ident);
+        }
+    }
+
+    /// A function under the JNI adapter's name that is not the adapter.
+    fn jni_impostor(&mut self, ident: &syn::Ident) {
+        self.finding(
+            line(ident.span()),
+            format!("fn {JNI_ADAPTER}"),
+            Problem::Identity,
+            format!(
+                "only `{}::{JNI_ADAPTER}` may have this name",
+                JNI_MODULE.join("::")
+            ),
+        );
     }
 
     /// An item under the boundary's name, other than the boundary itself.
@@ -888,6 +1069,7 @@ impl Collector<'_> {
                     line: at,
                     impl_type: Some(ty),
                     body: Body::Block(body),
+                    jni: false,
                 });
             }
         }
@@ -1153,20 +1335,16 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 self.named(&function.sig.ident, "fn");
             }
         }
+        self.jni_adapter_named(function);
         if self.nesting == 0 {
             self.out
                 .free_fns
-                .entry(name.clone())
+                .entry(name)
                 .or_default()
                 .push((*function.block).clone());
         }
         if foreign(function.sig.abi.as_ref()) {
-            self.entry(
-                Kind::ExternFn,
-                name,
-                line(function.sig.ident.span()),
-                Body::Block((*function.block).clone()),
-            );
+            self.extern_entry(&function.sig, (*function.block).clone());
         }
         self.nesting += 1;
         visit::visit_item_fn(self, function);
@@ -1205,6 +1383,9 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         if name == BOUNDARY {
             self.named(&function.sig.ident, "fn");
         }
+        if name == JNI_ADAPTER {
+            self.jni_impostor(&function.sig.ident);
+        }
         if let Some(ty) = &self.impl_type {
             self.out
                 .methods
@@ -1228,6 +1409,11 @@ impl<'ast> Visit<'ast> for Collector<'_> {
                 line(function.sig.ident.span()),
                 Body::Block(function.block.clone()),
             );
+            if kind == Kind::ExternFn
+                && let Some(entry) = self.out.entries.last_mut()
+            {
+                entry.jni = takes_jni_env(&function.sig);
+            }
         }
         // what a method's body holds belongs to no impl
         let outer_kind = self.impl_kind.take();
@@ -1253,15 +1439,13 @@ impl<'ast> Visit<'ast> for Collector<'_> {
         if function.sig.ident.unraw() == BOUNDARY {
             self.named(&function.sig.ident, "fn");
         }
+        if function.sig.ident.unraw() == JNI_ADAPTER {
+            self.jni_impostor(&function.sig.ident);
+        }
         if let Some(block) = &function.default
             && foreign(function.sig.abi.as_ref())
         {
-            self.entry(
-                Kind::ExternFn,
-                function.sig.ident.unraw().to_string(),
-                line(function.sig.ident.span()),
-                Body::Block(block.clone()),
-            );
+            self.extern_entry(&function.sig, block.clone());
         }
         visit::visit_trait_item_fn(self, function);
     }

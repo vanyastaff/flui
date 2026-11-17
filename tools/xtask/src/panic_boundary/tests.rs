@@ -67,7 +67,7 @@ fn the_fixture_counts_every_kind() {
     };
     assert_eq!(
         Kind::ALL.map(count),
-        [16, 4, 6, 4, 1, 10],
+        [20, 4, 6, 4, 1, 10],
         "extern fns, Objective-C methods and destructors, COM methods, handlers, callbacks"
     );
     assert_eq!(
@@ -332,6 +332,78 @@ fn the_ivars_type_destroys_its_value_inside_the_boundary() {
     );
 }
 
+/// The findings of a crate whose JNI adapter's module holds `adapter` and
+/// whose `feature.rs` holds `feature`.
+fn findings_with_jni_adapter(adapter: &str, feature: &str) -> Vec<(String, Problem)> {
+    let source = memory(&[
+        ("c/src/lib.rs", "mod feature;\nmod owner;\n"),
+        (
+            "c/src/owner.rs",
+            "pub(crate) mod android;\npub(crate) mod panic_boundary;\n",
+        ),
+        ("c/src/owner/android.rs", "pub(crate) mod native_call;\n"),
+        ("c/src/owner/android/native_call.rs", adapter),
+        ("c/src/owner/panic_boundary.rs", BOUNDARY),
+        ("c/src/feature.rs", feature),
+    ]);
+    check(&source, "c/src/lib.rs")
+        .expect("the crate resolves and parses")
+        .findings
+        .into_iter()
+        .map(|finding| (finding.what, finding.kind))
+        .collect()
+}
+
+const A_JNI_NATIVE: &str = r#"
+use crate::owner::android::native_call::jni_native;
+extern "system" fn native(mut env: EnvUnowned<'_>, _class: JClass<'_>) -> i64 {
+    jni_native("native", &mut env, |()| 0, |_| Ok(1))
+}
+"#;
+
+fn the_jni_adapter_is_the_boundarys_call() {
+    let guarded = r"
+use crate::owner::panic_boundary::{AfterPanic, os_entry};
+pub(crate) fn jni_native<T>(method: &'static str, nothing: fn(()) -> T, body: impl FnOnce() -> T) -> T {
+    os_entry(method, (), AfterPanic::Answer(nothing), body)
+}
+";
+    assert!(
+        findings_with_jni_adapter(guarded, A_JNI_NATIVE).is_empty(),
+        "an adapter that calls the boundary"
+    );
+    let bare = r"
+pub(crate) fn jni_native<T>(method: &'static str, body: impl FnOnce() -> T) -> T {
+    body()
+}
+";
+    assert_eq!(
+        findings_with_jni_adapter(bare, A_JNI_NATIVE),
+        [("fn jni_native".to_owned(), Problem::Identity)],
+        "an adapter that does not call the boundary"
+    );
+    assert_eq!(
+        findings_with_jni_adapter("", A_JNI_NATIVE),
+        [("fn jni_native".to_owned(), Problem::Identity)],
+        "a module without the adapter"
+    );
+    let source = crate_with(A_JNI_NATIVE);
+    let missing: Vec<_> = check(&source, "c/src/lib.rs")
+        .expect("the crate resolves and parses")
+        .findings
+        .into_iter()
+        .map(|finding| (finding.what, finding.kind))
+        .collect();
+    assert_eq!(
+        missing,
+        [(
+            "mod owner::android::native_call".to_owned(),
+            Problem::Identity
+        )],
+        "natives through an adapter the crate does not have"
+    );
+}
+
 #[test]
 fn panic_boundary_contract() {
     crate::table_test::run_table(
@@ -400,6 +472,10 @@ fn panic_boundary_contract() {
             (
                 "the_ivars_type_destroys_its_value_inside_the_boundary",
                 the_ivars_type_destroys_its_value_inside_the_boundary,
+            ),
+            (
+                "the_jni_adapter_is_the_boundarys_call",
+                the_jni_adapter_is_the_boundarys_call,
             ),
         ],
     );

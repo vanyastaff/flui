@@ -40,8 +40,8 @@ use parking_lot::Mutex;
 use super::EditorState;
 use super::bridge_slot::BridgeSlot;
 use super::main_thread;
-use super::pending_exception::{ClearsPending, EnvSlot};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use super::native_call::jni_native;
+use super::view_install::{Installed, Released, ViewHost, ViewInstall};
 use crate::owner::signal::OwnerSignal;
 use crate::version::gate::android::AndroidApi;
 
@@ -262,26 +262,12 @@ pub(crate) struct InputMethodReply {
     pub(crate) work: WindowWork,
 }
 
-/// Where the view is in its life.
-enum Install {
-    /// Posted to the Java main thread, not run yet.
-    Pending,
-    /// The view is in the window.
-    Ready(Arc<Global<JObject<'static>>>),
-    /// It could not be installed; the backend runs without it.
-    Failed,
-    /// The platform ended and the view left the window.
-    Detached,
-}
+/// A reference to the installed view.
+type InstalledView = Arc<Global<JObject<'static>>>;
 
-struct State {
-    install: Install,
-    /// What the view reported, oldest first.
-    events: VecDeque<ViewEvent>,
-    /// The `Box<Weak<JavaView>>` the view holds as its handle, freed on the
-    /// Java main thread once the view no longer names it.
-    handle: Option<usize>,
-}
+/// The `Box<Weak<JavaView>>` the view holds as its handle, as its address:
+/// freed on the Java main thread once no view names it ([`ViewInstall`]).
+type ViewHandle = usize;
 
 /// The bridge between the owner thread and `FluiView` (see the module doc).
 pub(crate) struct JavaView {
@@ -293,7 +279,9 @@ pub(crate) struct JavaView {
     /// What answers TalkBack's calls through the view's node provider: the
     /// bridge of the window over the view, while it lives.
     accessibility: BridgeSlot<dyn ViewAccessibility>,
-    state: Mutex<State>,
+    installation: ViewInstall<InstalledView, ViewHandle>,
+    /// What the view reported, oldest first.
+    events: Mutex<VecDeque<ViewEvent>>,
     /// Whether the input method composes, as the view last reported.
     composing: AtomicBool,
     /// The window's scale factor, as the owner last read it, for the view's
@@ -323,11 +311,8 @@ impl JavaView {
             transfer: transfer(this.clone()),
             input_method,
             accessibility: BridgeSlot::default(),
-            state: Mutex::new(State {
-                install: Install::Pending,
-                events: VecDeque::new(),
-                handle: None,
-            }),
+            installation: ViewInstall::new(),
+            events: Mutex::new(VecDeque::new()),
             composing: AtomicBool::new(false),
             scale: Mutex::new(DevicePixelRatio::ONE),
         });
@@ -339,29 +324,47 @@ impl JavaView {
                 installing.install();
                 Ok(())
             },
-            // An installation that panicked or never ran still finishes, as
-            // a failure unless the view got into the window first, so the
-            // window's capabilities say what the view can do.
-            move |failure: main_thread::PostFailure| unsettled.installation_failed(&failure),
+            // An installation that stopped short takes out what Java put in
+            // the window, and the owner hears that it finished.
+            move |failure: main_thread::PostFailure| unsettled.installation_stopped(&failure),
         );
         view
     }
 
-    /// The installation stopped short: `Pending` becomes `Failed`, a view
-    /// already in the window stays, and the owner hears that it finished;
-    /// all of it before the log, whose subscriber is user code.
-    fn installation_failed(&self, failure: &main_thread::PostFailure) {
-        {
-            let mut state = self.state.lock();
-            if matches!(state.install, Install::Pending) {
-                state.install = Install::Failed;
+    /// Install the view, then tell the owner, then log: the state is
+    /// committed before anything runs that is not this crate's (a
+    /// subscriber is user code). Java main thread only.
+    fn install(self: &Arc<Self>) {
+        let installed = self.installation.install(self);
+        self.push_event(ViewEvent::Installed);
+        match installed {
+            Installed::Ready => {
+                tracing::info!(target: "flui_native::android", "FluiView is installed");
             }
+            Installed::Refused { error, handle_kept } => tracing::warn!(
+                target: "flui_native::android",
+                %error,
+                handle_kept,
+                "FluiView was not installed"
+            ),
+            Installed::Detached => {}
         }
+    }
+
+    /// The installation stopped short (a panic, or its work dropped): what
+    /// Java put in the window is taken out, and the owner hears that it
+    /// finished. An installation that had finished, or never began, leaves
+    /// nothing to report.
+    fn installation_stopped(self: &Arc<Self>, failure: &main_thread::PostFailure) {
+        let Some(released) = self.installation.stopped_short(self) else {
+            return;
+        };
         self.push_event(ViewEvent::Installed);
         tracing::warn!(
             target: "flui_native::android",
             ?failure,
-            "FluiView installation did not finish"
+            handle_kept = released == Released::Kept,
+            "FluiView's installation stopped short; the view was taken out"
         );
     }
 
@@ -372,7 +375,7 @@ impl JavaView {
 
     /// Whether the view is in the window.
     pub(crate) fn is_ready(&self) -> bool {
-        matches!(self.state.lock().install, Install::Ready(_))
+        self.installation.view().is_some()
     }
 
     pub(super) fn composing(&self) -> bool {
@@ -395,12 +398,12 @@ impl JavaView {
 
     /// Everything the view reported since the last call, oldest first.
     pub(super) fn take_events(&self) -> VecDeque<ViewEvent> {
-        std::mem::take(&mut self.state.lock().events)
+        std::mem::take(&mut *self.events.lock())
     }
 
     /// Queue `event` for the owner and wake it.
     pub(crate) fn push_event(&self, event: ViewEvent) {
-        self.state.lock().events.push_back(event);
+        self.events.lock().push_back(event);
         if let Some(signal) = self.signal.upgrade() {
             let _ = signal.wake();
         }
@@ -515,11 +518,8 @@ impl JavaView {
     }
 
     /// The installed view, cloned out of the lock so no JNI call runs under it.
-    pub(crate) fn view(&self) -> Option<Arc<Global<JObject<'static>>>> {
-        match &self.state.lock().install {
-            Install::Ready(view) => Some(Arc::clone(view)),
-            _ => None,
-        }
+    pub(crate) fn view(&self) -> Option<InstalledView> {
+        self.installation.view()
     }
 
     /// Run `f` attached to the VM, clearing any exception it leaves.
@@ -541,100 +541,124 @@ impl JavaView {
         })
     }
 
-    /// Load the view class from the APK, bind the native methods and lay the
-    /// view over the Activity's content, then tell the owner, before any log
-    /// (a subscriber is user code). Java main thread only.
-    fn install(self: Arc<Self>) {
-        let handle = Box::into_raw(Box::new(Arc::downgrade(&self)));
-        let installed = with_activity(&self.app, |env, activity| {
-            install_view(env, activity, handle as jlong)
-        });
-        let refused = match installed {
-            Ok(view) => {
-                let mut state = self.state.lock();
-                if matches!(state.install, Install::Detached) {
-                    drop(state);
-                    // The platform ended first: take the view straight out.
-                    let _ = self.attached(|env| {
-                        env.call_method(&view, jni_str!("detach"), jni_sig!("()V"), &[])
-                            .map(drop)
-                    });
-                    free_handle(handle);
-                } else {
-                    state.install = Install::Ready(Arc::new(view));
-                    state.handle = Some(handle as usize);
-                }
-                None
-            }
-            Err(error) => {
-                free_handle(handle);
-                let mut state = self.state.lock();
-                if !matches!(state.install, Install::Detached) {
-                    state.install = Install::Failed;
-                }
-                Some(error)
-            }
-        };
-        self.push_event(ViewEvent::Installed);
-        match refused {
-            None => tracing::info!(
-                target: "flui_native::android",
-                ready = self.is_ready(),
-                "FluiView installation finished"
-            ),
-            Some(error) => {
-                tracing::warn!(target: "flui_native::android", %error, "FluiView was not installed");
-            }
-        }
-    }
-
     /// The platform ended: the view leaves the window, stops calling native
-    /// code, and its handle is freed after that, on the Java main thread.
+    /// code, and its handle is freed after that, on the Java main thread; a
+    /// view that may still name it keeps it.
     pub(super) fn detach(self: &Arc<Self>) {
         let this = Arc::clone(self);
         main_thread::run(&self.app, "FluiView.detach", move || {
-            let (view, handle) = {
-                let mut state = this.state.lock();
-                let previous = std::mem::replace(&mut state.install, Install::Detached);
-                let view = match previous {
-                    Install::Ready(view) => Some(view),
-                    _ => None,
-                };
-                (view, state.handle.take())
-            };
-            if let Some(view) = view {
-                let _ = this.attached(|env| {
-                    env.call_method(view.as_ref(), jni_str!("detach"), jni_sig!("()V"), &[])
-                        .map(drop)
-                });
-            }
-            if let Some(handle) = handle {
-                free_handle(handle as *mut Weak<JavaView>);
+            if this.installation.detach(&this) == Some(Released::Kept) {
+                tracing::warn!(
+                    target: "flui_native::android",
+                    "FluiView did not detach; its handle is kept"
+                );
             }
         });
     }
 }
 
-/// Free a handle the view no longer names.
-#[expect(unsafe_code, reason = "the handle is a Box this module leaked")]
-fn free_handle(handle: *mut Weak<JavaView>) {
-    // SAFETY: `handle` came from `Box::into_raw` in `JavaView::install`, and
-    // is freed exactly once: either there, when the view never received it,
-    // or by `detach` after `FluiView.detach()` cleared the view's copy on this
-    // same (Java main) thread, which is the only thread that calls the view's
-    // native methods.
-    drop(unsafe { Box::from_raw(handle) });
+/// The installation's JNI calls (see [`ViewInstall`]), on the Java main
+/// thread.
+impl ViewHost for Arc<JavaView> {
+    type View = InstalledView;
+    type Handle = ViewHandle;
+    type Error = String;
+
+    fn mint(&self) -> ViewHandle {
+        Box::into_raw(Box::new(Arc::downgrade(self))) as ViewHandle
+    }
+
+    #[expect(unsafe_code, reason = "the handle is a Box this module leaked")]
+    fn free(&self, handle: ViewHandle) {
+        // SAFETY: `handle` came from `mint`, and `ViewInstall` frees it once,
+        // when no view names it: Java never got it, or the view that named it
+        // detached (which clears the view's copy) on this same thread, the
+        // only one that calls the view's native methods.
+        drop(unsafe { Box::from_raw(handle as *mut Weak<JavaView>) });
+    }
+
+    fn install(&self, handle: ViewHandle) -> Result<InstalledView, String> {
+        with_activity(&self.app, |env, activity| {
+            let class = view_class(env, activity)?;
+            register_natives(env, &class)?;
+            let view = env
+                .call_static_method(
+                    &class,
+                    jni_str!("install"),
+                    jni_sig!("(Landroid/app/Activity;J)Ldev/flui/platform/FluiView;"),
+                    &[JValue::Object(activity), JValue::Long(handle as jlong)],
+                )?
+                .l()?;
+            env.new_global_ref(&view)
+        })
+        .map(Arc::new)
+        .map_err(|error| error.to_string())
+    }
+
+    fn detach(&self, view: &InstalledView) -> Result<(), String> {
+        self.attached(|env| {
+            env.call_method(view.as_ref(), jni_str!("detach"), jni_sig!("()V"), &[])
+                .map(drop)
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    fn withdraw(&self, handle: ViewHandle) -> Result<bool, String> {
+        with_activity(&self.app, |env, activity| {
+            let class = view_class(env, activity)?;
+            let window = env
+                .call_method(
+                    activity,
+                    jni_str!("getWindow"),
+                    jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            let decor = env
+                .call_method(
+                    &window,
+                    jni_str!("getDecorView"),
+                    jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            let children = env
+                .call_method(&decor, jni_str!("getChildCount"), jni_sig!("()I"), &[])?
+                .i()?;
+            for index in 0..children {
+                let child = env
+                    .call_method(
+                        &decor,
+                        jni_str!("getChildAt"),
+                        jni_sig!("(I)Landroid/view/View;"),
+                        &[JValue::Int(index)],
+                    )?
+                    .l()?;
+                if !env.is_instance_of(&child, &class)? {
+                    continue;
+                }
+                let named = env
+                    .call_method(&child, jni_str!("handle"), jni_sig!("()J"), &[])?
+                    .j()?;
+                if named == handle as jlong {
+                    env.call_method(&child, jni_str!("detach"), jni_sig!("()V"), &[])?;
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .map_err(|error| error.to_string())
+    }
 }
 
-/// Load the view class through the Activity's class loader, which reads it
-/// from the APK's dex, bind its native methods and install the view. The
+/// `FluiView`, loaded through the Activity's class loader, which reads it
+/// from the APK's dex (`FindClass` would search the system loader). The
 /// platform checked the classes' protocol before it started
 /// ([`java_host`](super::java_host)).
-fn install_view(
-    env: &mut Env<'_>,
+fn view_class<'local>(
+    env: &mut Env<'local>,
     activity: &JObject<'_>,
-    handle: jlong,
-) -> jni::errors::Result<Global<JObject<'static>>> {
+) -> jni::errors::Result<JClass<'local>> {
     let loader = env
         .call_method(
             activity,
@@ -652,27 +676,7 @@ fn install_view(
             &[JValue::Object(&name)],
         )?
         .l()?;
-    let class = env.cast_local::<JClass<'_>>(class)?;
-    register_natives(env, &class)?;
-    let view = env
-        .call_static_method(
-            &class,
-            jni_str!("install"),
-            jni_sig!("(Landroid/app/Activity;J)Ldev/flui/platform/FluiView;"),
-            &[JValue::Object(activity), JValue::Long(handle)],
-        )?
-        .l()?;
-    match env.new_global_ref(&view) {
-        Ok(view) => Ok(view),
-        Err(error) => {
-            // The view is in the window and names `handle`, which the caller
-            // frees on this error: take it out first, so it calls nothing.
-            env.exception_clear();
-            let _ = env.call_method(&view, jni_str!("detach"), jni_sig!("()V"), &[]);
-            env.exception_clear();
-            Err(error)
-        }
-    }
+    env.cast_local::<JClass<'_>>(class)
 }
 
 #[expect(unsafe_code, reason = "RegisterNatives takes function pointers")]
@@ -764,57 +768,12 @@ fn bridge(handle: jlong) -> Option<Arc<JavaView>> {
     if handle == 0 {
         return None;
     }
-    // SAFETY: a non-zero handle is a `Box<Weak<JavaView>>` from
-    // `JavaView::install`. The view passes it only from its own methods on the
-    // Java main thread, and `free_handle` frees it on that thread only after
-    // `FluiView.detach()` set the view's copy to zero, so it is live here.
+    // SAFETY: a non-zero handle is a `Box<Weak<JavaView>>` from the
+    // installation's `mint`. The view passes it only from its own methods on
+    // the Java main thread, and `ViewInstall` frees it on that thread only
+    // once no view names it, so it is live here.
     let weak = unsafe { &*(handle as *const Weak<JavaView>) };
     weak.upgrade()
-}
-
-/// Run a native method's body inside the boundary, with the method's own
-/// environment.
-///
-/// Java receives the body's answer, or `nothing` (the method's `false`, `0`,
-/// `null` or no value) when the body's JNI call failed or the body panicked,
-/// and in every case no exception pending: what the body's calls left is
-/// described to the log and cleared on the way out
-/// ([`pending_exception`](super::pending_exception)).
-/// A contained failure costs the one call; the Activity goes on.
-#[expect(unsafe_code, reason = "the guard holds the call's raw environment")]
-fn jni_native<'local, T>(
-    method: &'static str,
-    env: &mut EnvUnowned<'local>,
-    nothing: fn(()) -> T,
-    body: impl FnOnce(&mut Env<'local>) -> jni::errors::Result<T>,
-) -> T {
-    os_entry(method, (), AfterPanic::Answer(nothing), || {
-        // The boundary is the one catcher: `with_env_no_catch` lets the
-        // body's panic unwind to it, through the guard.
-        let outcome = env
-            .with_env_no_catch(|env| {
-                // SAFETY: the environment of this native method, on its
-                // thread; the guard drops before the method returns.
-                let _clears = ClearsPending::new(unsafe { EnvSlot::new(env.get_raw()) });
-                body(env)
-            })
-            .into_outcome();
-        match outcome {
-            jni::Outcome::Ok(answer) => answer,
-            jni::Outcome::Err(error) => {
-                tracing::warn!(
-                    target: "flui_native::android",
-                    method,
-                    %error,
-                    "a FluiView native call failed"
-                );
-                nothing(())
-            }
-            // `with_env_no_catch` holds no panic; were it to, it goes on to
-            // the boundary.
-            jni::Outcome::Panic(payload) => std::panic::resume_unwind(payload),
-        }
-    })
 }
 
 /// The bridge of the window over the view a handle names, while both live.

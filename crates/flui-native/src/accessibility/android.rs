@@ -55,7 +55,7 @@ use parking_lot::Mutex;
 use crate::accessibility::bridge::{Action, Activation, BridgeShared};
 use crate::owner::android::ActivityRef;
 use crate::owner::android::java_view::{JavaView, ViewAccessibility};
-use crate::owner::android::pending_exception::{ClearsPending, EnvSlot};
+use crate::owner::android::native_call::{ClearsPending, EnvSlot};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
     RouteChange, RouteChangeSupport,

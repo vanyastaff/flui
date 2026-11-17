@@ -50,14 +50,17 @@ mod looper;
 // its tests, on every native host; wasm32 has none.
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
 pub(crate) mod main_thread;
-pub(crate) mod ndk;
-// The guard a native method clears Java's pending exception with; its test
-// runs it inside the panic boundary, which wasm32 does not have.
+// The one way a native method answers Java, and the view's installation, as
+// state machines over their JNI calls; their tests run them inside the panic
+// boundary, which wasm32 does not have.
 #[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
-pub(crate) mod pending_exception;
+pub(crate) mod native_call;
+pub(crate) mod ndk;
 pub(crate) mod poll;
 #[cfg(target_os = "android")]
 pub(crate) mod result_bridge;
+#[cfg(any(target_os = "android", all(test, not(target_arch = "wasm32"))))]
+pub(crate) mod view_install;
 // The decision `FluiActivity` applies, as data; its test holds the Java side
 // to it.
 #[cfg(test)]
