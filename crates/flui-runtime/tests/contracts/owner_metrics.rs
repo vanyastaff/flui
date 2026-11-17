@@ -2309,10 +2309,7 @@ impl flui_platform::PlatformWindow for GeometryWindow {
     fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
         self.inner.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
     fn set_frame_rate_hint(
@@ -2416,10 +2413,7 @@ impl flui_platform::PlatformWindow for RegionWindow {
     fn surface_target(&self) -> std::sync::Arc<dyn flui_platform::SurfaceTarget> {
         self.inner.surface_target()
     }
-    fn set_cursor(
-        &self,
-        cursor: flui_platform::CursorIcon,
-    ) -> Result<(), flui_platform::CursorError> {
+    fn set_cursor(&self, cursor: &flui_platform::Cursor) -> Result<(), flui_platform::CursorError> {
         self.inner.set_cursor(cursor)
     }
     fn state(&self) -> flui_platform::WindowState {

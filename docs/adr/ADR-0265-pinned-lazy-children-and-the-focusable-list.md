@@ -167,7 +167,7 @@ The focus state lives in the row markers and a controller the list provides; it 
 ## More information
 
 Flutter keeps a focused row alive through `AutomaticKeepAlive` and drops it from layout and
-semantics outside the cache (`flutter/flutter@97cd226ec5ee4c4075b8516ea294152dba1fbfcc`
+semantics outside the cache (Flutter 3.50.0, `flutter/flutter@ab2912035e`
 `packages/flutter/lib/src/rendering/sliver_multi_box_adaptor.dart`, `_keepAliveBucket`), so a
 screen reader loses the focused row there too. Revisit if a list ever needs more than one pinned
 row per focus owner, which would change the build bound in §3.

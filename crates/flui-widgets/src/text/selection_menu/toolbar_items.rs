@@ -202,14 +202,14 @@ impl View for ToolbarItems {
 impl StatefulView for ToolbarItems {
     type State = ToolbarItemsState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         // `init_state` is not handed the view, so the controller it listens
         // to is copied here.
         ToolbarItemsState {
             own: ToolbarItemsController::new(),
             given: self.controller.clone(),
             listening: None,
-            handle: None,
+            handle: ctx.rebuild_handle(),
         }
     }
 }
@@ -220,7 +220,7 @@ pub struct ToolbarItemsState {
     own: ToolbarItemsController,
     given: Option<ToolbarItemsController>,
     listening: Option<flui_foundation::Subscription>,
-    handle: Option<RebuildHandle>,
+    handle: RebuildHandle,
 }
 
 impl fmt::Debug for ToolbarItemsState {
@@ -254,10 +254,8 @@ impl ToolbarItemsState {
 }
 
 impl ViewState<ToolbarItems> for ToolbarItemsState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let handle = ctx.rebuild_handle();
-        self.handle = Some(handle.clone());
-        self.listen(handle);
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.listen(self.handle.clone());
     }
 
     fn build(&self, view: &ToolbarItems, ctx: &dyn BuildContext) -> impl IntoView {
@@ -290,9 +288,7 @@ impl ViewState<ToolbarItems> for ToolbarItemsState {
         };
         if !same {
             self.given.clone_from(&new_view.controller);
-            if let Some(handle) = self.handle.clone() {
-                self.listen(handle);
-            }
+            self.listen(self.handle.clone());
         }
     }
 

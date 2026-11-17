@@ -644,6 +644,10 @@ pub(crate) enum WindowStep {
     /// The user's session locked (`true`) or unlocked: a locked session
     /// hides every window, whatever its surface.
     SessionLocked(bool),
+    /// It holds the pointer in place (`true`), registered for the mouse's raw
+    /// input, or let it go: its input reads `WM_INPUT` as the locked
+    /// pointer's motion while it holds it, and delivers no mouse moves.
+    PointerLocked(bool),
     /// It is being destroyed and its close callbacks ran, so the presentation
     /// that showed it is closed; its handle is still valid.
     Closed,
@@ -1302,7 +1306,7 @@ impl WindowsLoop {
                 }
             }
 
-            tracing::info!("Message loop exited with code: {}", msg.wParam.0);
+            tracing::info!(code = msg.wParam.0, "the message loop exited");
         }
         Ok(())
     }

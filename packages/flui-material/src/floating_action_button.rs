@@ -268,7 +268,7 @@ pub struct FloatingActionButtonState {
     states: WidgetStatesController,
     states_listener: Option<Subscription>,
     initially_enabled: bool,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
 }
 
 impl std::fmt::Debug for FloatingActionButtonState {
@@ -283,29 +283,25 @@ impl std::fmt::Debug for FloatingActionButtonState {
 impl StatefulView for FloatingActionButton {
     type State = FloatingActionButtonState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         FloatingActionButtonState {
             states: WidgetStatesController::default(),
             states_listener: None,
             initially_enabled: self.is_interactive(),
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
         }
     }
 }
 
 impl ViewState<FloatingActionButton> for FloatingActionButtonState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let rebuild = ctx.rebuild_handle();
-
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.states
             .update(WidgetState::Disabled, !self.initially_enabled);
 
-        let rebuild_for_listener = rebuild.clone();
+        let rebuild_for_listener = self.rebuild.clone();
         self.states_listener = Some(self.states.listen(std::rc::Rc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
-
-        self.rebuild = Some(rebuild);
     }
 
     /// Re-syncs `WidgetState::Disabled` when `on_pressed` presence changes

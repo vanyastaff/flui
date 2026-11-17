@@ -21,20 +21,22 @@ use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtons, PointerCancel,
-    PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
-    Pressure, ScrollDelta, ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit,
-    SmartZoomEvent, SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase,
-    TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
+    MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
+    PointerButton, PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId,
+    PointerInfo, PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease,
+    PointerRole, PointerSample, PointerSignal, Pressure, RawMotion, ScrollDelta, ScrollEvent,
+    ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset,
+    TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
+    TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GesturePreferences, HourCycle, ImeEvent, InsetCurve,
     InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, RegionOverride, RegionalFormats,
-    SystemPreferences, TextWeightPreference, Weekday, WheelPreferences, WheelStep,
-    WindowExecutionState, WindowId, WindowInsets,
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, SrgbColor, SystemPreferences,
+    TextWeightPreference, Weekday, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
+    WindowInsets,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
@@ -303,6 +305,12 @@ fn full_preferences() -> SystemPreferences {
                 .with_vertical(WheelStep::Lines(3))
                 .with_horizontal_characters(2),
         )
+        .with_accent_color(Some(SrgbColor::from_rgba8(0, 120, 215, 255)))
+        .with_scroll_bars(
+            ScrollBarPreferences::default()
+                .with_visibility(ScrollBarVisibility::Always)
+                .with_track_click(ScrollTrackClick::JumpToSpot),
+        )
 }
 
 fn action(action: accesskit::Action, data: Option<accesskit::ActionData>) -> InputRecord {
@@ -524,6 +532,25 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
         ("PointerEvent", "SmartZoom") => one(pointer_event(PointerEvent::SmartZoom(
             SmartZoomEvent::new(touch(), at(16), position(9.0, 10.0)),
         ))),
+        ("PointerEvent", "RawMotion") | ("MotionAcceleration", "None") => {
+            one(pointer_event(PointerEvent::RawMotion(
+                RawMotion::new(
+                    info(PointerKind::Mouse, PointerRole::Primary),
+                    at(17),
+                    MotionDelta::try_new(-4.0, 2.5).expect("finite"),
+                    MotionAcceleration::None,
+                )
+                .with_position(position(11.0, 12.0)),
+            )))
+        }
+        ("MotionAcceleration", "System") => {
+            one(pointer_event(PointerEvent::RawMotion(RawMotion::new(
+                info(PointerKind::Mouse, PointerRole::Primary),
+                at(18),
+                MotionDelta::try_new(0.5, 0.0).expect("finite"),
+                MotionAcceleration::System,
+            ))))
+        }
         ("PointerEvent", "DeviceAdded") => one(pointer_event(PointerEvent::DeviceAdded(
             PointerDeviceChange::new(
                 DeviceId::try_from(9_u64).expect("nonzero"),
@@ -723,6 +750,19 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             SystemPreferences::default()
                 .with_wheel(WheelPreferences::default().with_vertical(WheelStep::Page)),
         )),
+        ("ScrollBarVisibility", "WhenScrolling") => {
+            one(preferences(SystemPreferences::default().with_scroll_bars(
+                ScrollBarPreferences::default().with_visibility(ScrollBarVisibility::WhenScrolling),
+            )))
+        }
+        ("ScrollBarVisibility", "Always") | ("ScrollTrackClick", "JumpToSpot") => {
+            one(preferences(full_preferences()))
+        }
+        ("ScrollTrackClick", "Page") => {
+            one(preferences(SystemPreferences::default().with_scroll_bars(
+                ScrollBarPreferences::default().with_track_click(ScrollTrackClick::Page),
+            )))
+        }
         ("Weekday", name) => {
             let day = Weekday::ALL
                 .into_iter()
@@ -968,7 +1008,9 @@ fn preference_rows_keep_their_json_spelling() {
                 r#""native_mouse_geometry":{"double_click_area":[4,4],"drag_tolerance":[2,3],"#,
                 r#""pixel_ratio":1.5},"native_touch_geometry":{"touch_slop":8,"#,
                 r#""double_tap_slop":100,"min_fling":50,"max_fling":8000,"pixel_ratio":1.5}},"#,
-                r#""wheel_vertical":{"lines":3},"wheel_horizontal_characters":2}}"#,
+                r#""wheel_vertical":{"lines":3},"wheel_horizontal_characters":2,"#,
+                r#""accent_color":[0.0,0.47058824,0.84313726,1.0],"#,
+                r#""scroll_bar_visibility":"always","scroll_track_click":"jump_to_spot"}}"#,
             ),
             concat!(
                 r#"{"preferences":{"revision":7,"motion":{"scaled":0.5},"#,

@@ -171,7 +171,8 @@ impl StoredPlacement {
 
 /// Who changed a window between two of its reports. A change is the user's
 /// only when the report that carries it says so
-/// ([`WindowInteraction::UserPlacing`]); nothing is inferred from what did not
+/// ([`WindowInteraction::is_user`]: placing or resizing it); nothing is
+/// inferred from what did not
 /// change, nor from the report before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeOrigin {
@@ -188,7 +189,7 @@ impl ChangeOrigin {
     /// Who changed a window whose new report says `now`, with `changed`
     /// whether that report changed its placement.
     fn of(now: WindowInteraction, changed: bool) -> Self {
-        if changed && now == WindowInteraction::UserPlacing {
+        if changed && now.is_user() {
             Self::User
         } else {
             Self::Other

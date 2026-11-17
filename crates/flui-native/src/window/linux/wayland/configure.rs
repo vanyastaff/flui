@@ -5,8 +5,11 @@
 #![forbid(unsafe_code)]
 
 use flui_foundation::geometry::Size;
-use flui_platform::{CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability};
+use flui_platform::{
+    Availability, CapabilityAbsence, SizeConstraints, WindowCapabilities, WindowCapability,
+};
 
+use crate::owner::linux::wayland::PointerOffer;
 use crate::window::state::ModeFlags;
 
 /// `xdg_toplevel.state` values.
@@ -235,6 +238,38 @@ pub(crate) fn capabilities(
     capabilities.enters_fullscreen = offered(|announced| announced.fullscreen);
     capabilities.reports_occlusion = if tells_suspension {
         Native
+    } else {
+        on_this_device
+    };
+    // xdg-shell has no levels, resize steps or proportion, so those stay
+    // the platform's absence. The cursor image and the grabs are the
+    // compositor's to offer (`pointer_reported`).
+    capabilities.into_capabilities()
+}
+
+/// `capabilities` with what the compositor offers the pointer (`offer`):
+/// a cursor image where it has shared memory, a confined pointer where
+/// it has pointer constraints, and a locked one where it also reports
+/// relative motion. A compositor without them lacks what the platform
+/// has.
+pub(crate) const fn pointer_reported(
+    capabilities: WindowCapabilities,
+    offer: PointerOffer,
+) -> WindowCapabilities {
+    let on_this_device = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+    let mut capabilities = capabilities.into_parts();
+    capabilities.cursor_image = if offer.shared_memory {
+        Availability::Native
+    } else {
+        Availability::Unavailable
+    };
+    capabilities.confines_cursor = if offer.constraints {
+        WindowCapability::Native
+    } else {
+        on_this_device
+    };
+    capabilities.locks_cursor = if offer.constraints && offer.relative_motion {
+        WindowCapability::Native
     } else {
         on_this_device
     };
@@ -717,7 +752,8 @@ mod tests {
     /// everything, named: a capability the contract gains does not
     /// compile here until this host says whether its window has it, and
     /// none is had for not being taken away. The presentation report is
-    /// the compositor's (`presented::reported`).
+    /// the compositor's (`presented::reported`), and so are the cursor
+    /// image and the grabs (`pointer_reported`).
     #[test]
     fn a_wayland_window_has_the_capabilities_it_names() {
         use WindowCapability::{Emulated, Native};
@@ -755,6 +791,12 @@ mod tests {
                 activates: Emulated,
                 closes: Native,
                 material: WindowCapability::NOT_ON_THIS_PLATFORM,
+                confines_cursor: WindowCapability::NOT_ON_THIS_PLATFORM,
+                locks_cursor: WindowCapability::NOT_ON_THIS_PLATFORM,
+                keeps_on_top: WindowCapability::NOT_ON_THIS_PLATFORM,
+                keeps_on_bottom: WindowCapability::NOT_ON_THIS_PLATFORM,
+                sets_resize_increments: WindowCapability::NOT_ON_THIS_PLATFORM,
+                sets_aspect_ratio: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
@@ -763,8 +805,71 @@ mod tests {
                 observes_minimized: Availability::Unavailable,
                 places_at_open: Availability::Unavailable,
                 frame_rate_hint: Availability::Unavailable,
+                cursor_image: Availability::Unavailable,
             }
         );
+    }
+
+    /// A window's cursor image and grabs are what its compositor offers
+    /// the pointer: an image where it has shared memory, a confined
+    /// pointer where it has pointer constraints, a locked one where it
+    /// also reports relative motion.
+    #[test]
+    fn the_pointer_has_what_the_compositor_offers() {
+        use WindowCapability::Native;
+        use flui_platform::Availability;
+
+        let absent = WindowCapability::Absent(CapabilityAbsence::NOT_ON_THIS_DEVICE);
+        let offer = |shared_memory, constraints, relative_motion| PointerOffer {
+            shared_memory,
+            constraints,
+            relative_motion,
+        };
+        // (case, offer, cursor image, confines, locks)
+        let table = [
+            (
+                "everything",
+                offer(true, true, true),
+                Availability::Native,
+                Native,
+                Native,
+            ),
+            (
+                "constraints without relative motion",
+                offer(true, true, false),
+                Availability::Native,
+                Native,
+                absent,
+            ),
+            (
+                "relative motion without constraints",
+                offer(true, false, true),
+                Availability::Native,
+                absent,
+                absent,
+            ),
+            (
+                "nothing",
+                offer(false, false, false),
+                Availability::Unavailable,
+                absent,
+                absent,
+            ),
+        ];
+        let base = capabilities(
+            None,
+            None,
+            None,
+            ToplevelStates::default(),
+            Activation::Offered,
+            true,
+        );
+        for (case, offer, image, confines, locks) in table {
+            let reported = pointer_reported(base, offer).into_parts();
+            assert_eq!(reported.cursor_image, image, "{case}: cursor image");
+            assert_eq!(reported.confines_cursor, confines, "{case}: confines");
+            assert_eq!(reported.locks_cursor, locks, "{case}: locks");
+        }
     }
 
     /// The capabilities follow what the compositor announces, and a

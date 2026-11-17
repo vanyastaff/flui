@@ -11,7 +11,15 @@
 //! the fade, so a scroll frame repaints the bar and rebuilds nothing. Where
 //! the painter reports the thumb or the track, the bar takes the contact,
 //! from any device: dragging the thumb moves the position, and a tap on the
-//! track pages by most of a viewport.
+//! track pages by most of a viewport. Where the system asks for it (macOS's
+//! "Click in the scroll bar to: Jump to the spot that's clicked") a press on
+//! the track moves the thumb under the pointer at once, and moving on drags
+//! it from there.
+//!
+//! A bar whose author did not set [`thumb_visibility`](Scrollbar::thumb_visibility)
+//! follows the system's scroll-bar visibility (`MediaQuery::scroll_bars_of`,
+//! ADR-0359): always shown where the user asked for scroll bars that always
+//! show, else shown while the position scrolls.
 //!
 //! Colours and a hover policy belong to the design systems over it; the bar
 //! holds the geometry Flutter's raw bar holds.
@@ -31,8 +39,10 @@ use flui_interaction::pointer::EventPropagation;
 use flui_interaction::{PointerEvent, PointerEventExt as _, PointerKindSet};
 use flui_painting::typography::TextDirection;
 use flui_painting::{Canvas, Paint, styling::Color};
-use flui_platform::WheelPreferences;
 use flui_platform::pointer::ScrollEvent;
+use flui_platform::{
+    ScrollBarPreferences, ScrollBarVisibility, ScrollTrackClick, WheelPreferences,
+};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::delegates::CustomPainter;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -91,7 +101,8 @@ impl ScrollbarOrientation {
 /// The geometry, visibility and input knobs of a bar, read by its painter.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Knobs {
-    thumb_visibility: bool,
+    /// `None` follows the system's scroll-bar visibility.
+    thumb_visibility: Option<bool>,
     track_visibility: bool,
     interactive: bool,
     thickness: f64,
@@ -109,7 +120,7 @@ struct Knobs {
 impl Default for Knobs {
     fn default() -> Self {
         Self {
-            thumb_visibility: false,
+            thumb_visibility: None,
             track_visibility: false,
             interactive: true,
             thickness: Scrollbar::DEFAULT_THICKNESS,
@@ -201,12 +212,14 @@ impl Scrollbar {
         self
     }
 
-    /// Show the thumb at all times instead of only while scrolling (default
-    /// `false`). Debug builds panic when such a bar paints with no scroll
-    /// view to follow.
+    /// Show the thumb at all times (`true`) or only while scrolling
+    /// (`false`). Unset, the bar follows the system: at all times where the
+    /// user asked for scroll bars that always show, else while scrolling.
+    /// Debug builds panic when a bar set to `true` paints with no scroll view
+    /// to follow.
     #[must_use]
     pub fn thumb_visibility(mut self, visible: bool) -> Self {
-        self.knobs.thumb_visibility = visible;
+        self.knobs.thumb_visibility = Some(visible);
         self
     }
 
@@ -438,6 +451,8 @@ struct Bar {
     /// The scroll view the bar shows: the named one, else the observed one.
     shown: RefCell<Option<ObservedScroll>>,
     text_direction: Cell<TextDirection>,
+    /// The system's scroll-bar preferences, from the nearest `MediaQuery`.
+    system: Cell<ScrollBarPreferences>,
     /// The size of the bar's box at the last paint.
     size: Cell<Size>,
     fade: AnimationController,
@@ -486,8 +501,17 @@ impl Bar {
         )
     }
 
+    /// Whether the thumb shows while the position rests: as its author set
+    /// it, else as the system asks.
+    fn thumb_always_shown(&self) -> bool {
+        self.knobs
+            .get()
+            .thumb_visibility
+            .unwrap_or_else(|| self.system.get().visibility() == Some(ScrollBarVisibility::Always))
+    }
+
     fn opacity(&self) -> f64 {
-        if self.knobs.get().thumb_visibility || self.dragging.get() {
+        if self.thumb_always_shown() || self.dragging.get() {
             1.0
         } else {
             self.fade.value()
@@ -583,7 +607,7 @@ impl Bar {
             && self
                 .shown()
                 .is_some_and(|shown| !shown.controller.position().is_scrolling());
-        if jumped && quiet && !self.knobs.get().thumb_visibility {
+        if jumped && quiet && !self.thumb_always_shown() {
             if let Err(error) = self.fade.set_value(1.0) {
                 tracing::error!(%error, "Scrollbar could not show its thumb");
             }
@@ -703,8 +727,9 @@ impl Bar {
         EventPropagation::Stop
     }
 
-    /// Page toward `local`, a tap on the track off the thumb.
-    fn page_toward(&self, local: Offset) {
+    /// A tap on the track at `local`, off the thumb: page toward it, or move
+    /// the thumb there where the system asks for that.
+    fn track_tapped(&self, local: Offset) {
         let Some(shown) = self.shown() else { return };
         let Some(geometry) = self.geometry() else {
             return;
@@ -720,6 +745,10 @@ impl Bar {
         } else {
             return;
         };
+        if self.jumps_to_spot() {
+            // The press already moved the thumb (`press`).
+            return;
+        }
         let forward = toward_end != shown.axis_direction.is_reversed();
         let position = shown.controller.position();
         let page = position.viewport_dimension() * TRACK_PAGE;
@@ -736,6 +765,62 @@ impl Bar {
                 flui_animation::SharedCurve::new(curves::EASE_IN_OUT),
             );
         }
+    }
+
+    /// Move the position so the thumb's middle lands on `at`, along the
+    /// track in the bar's box, as far as the thumb can travel.
+    fn jump_to_spot(shown: &ObservedScroll, geometry: &BarGeometry, at: f64) {
+        let (track_start, track, thumb) = match shown.axis_direction.axis() {
+            Axis::Vertical => (
+                geometry.track.top(),
+                geometry.track.height(),
+                geometry.thumb.height(),
+            ),
+            Axis::Horizontal => (
+                geometry.track.left(),
+                geometry.track.width(),
+                geometry.thumb.width(),
+            ),
+        };
+        let travel = track - thumb;
+        if travel <= 0.0 || !at.is_finite() {
+            return;
+        }
+        let mut along = ((at - track_start - thumb / 2.0) / travel).clamp(0.0, 1.0);
+        if shown.axis_direction.is_reversed() {
+            along = 1.0 - along;
+        }
+        let position = shown.controller.position();
+        let (min, max) = (position.min_scroll_extent(), position.max_scroll_extent());
+        let target = min + along * (max - min);
+        if target.is_finite() {
+            // A jump, as the system's own scroll bars move.
+            let _ = shown.controller.jump_to(target);
+        }
+    }
+
+    /// Whether the system asks a press on the track to move the thumb there.
+    fn jumps_to_spot(&self) -> bool {
+        self.system.get().track_click() == Some(ScrollTrackClick::JumpToSpot)
+    }
+
+    /// Where a press at `local` lands, after moving the thumb under it when
+    /// it lands on the track and the system asks for that: then it lands on
+    /// the thumb, so moving on drags the thumb from there, as AppKit's
+    /// scroller does.
+    fn press(&self, local: Offset) -> Option<Landing> {
+        let landing = self.takes(local)?;
+        if landing == Landing::Track && self.jumps_to_spot() {
+            let shown = self.shown()?;
+            let geometry = self.geometry()?;
+            let at = match shown.axis_direction.axis() {
+                Axis::Vertical => local.dy,
+                Axis::Horizontal => local.dx,
+            };
+            Self::jump_to_spot(&shown, &geometry, at);
+            return Some(Landing::Thumb);
+        }
+        Some(landing)
     }
 }
 
@@ -766,7 +851,7 @@ impl CustomPainter for ScrollbarPainter {
         let bar = &self.bar;
         bar.size.set(size);
         let knobs = bar.knobs.get();
-        if knobs.thumb_visibility {
+        if knobs.thumb_visibility == Some(true) {
             debug_assert!(
                 bar.shown.borrow().is_some(),
                 "a Scrollbar with thumb_visibility found no scroll view: put a Scrollable \
@@ -858,6 +943,7 @@ impl StatefulView for Scrollbar {
             followed: RefCell::new(self.followed.clone()),
             shown: RefCell::new(None),
             text_direction: Cell::new(TextDirection::Ltr),
+            system: Cell::new(ScrollBarPreferences::default()),
             size: Cell::new(Size::ZERO),
             fade: fade.controller().clone(),
             fade_bound: Cell::new(false),
@@ -921,6 +1007,10 @@ impl ViewState<Scrollbar> for ScrollbarState {
         self.bar
             .reduced_motion
             .set(MediaQuery::motion_of(ctx) == Some(MotionPolicy::Reduce));
+        let system = MediaQuery::scroll_bars_of(ctx).unwrap_or_default();
+        if self.bar.system.replace(system) != system {
+            self.bar.repaint.notify_listeners();
+        }
         self.bind_vsync(ctx);
     }
 
@@ -947,7 +1037,7 @@ impl ViewState<Scrollbar> for ScrollbarState {
             // The contact the drag follows: a second finger that lands
             // elsewhere does not change where this one went down.
             .on_down(move |_ctx, details| {
-                pressed.pressed.set(pressed.takes(details.local_position));
+                pressed.pressed.set(pressed.press(details.local_position));
             })
             .on_start(move |_ctx, _details| {
                 if started.pressed.get() == Some(Landing::Thumb) {
@@ -986,7 +1076,7 @@ impl ViewState<Scrollbar> for ScrollbarState {
                 }))
                 .behavior(HitTestBehavior::DeferToChild)
                 .drag(slot)
-                .on_tap_up(move |_ctx, details| tapped.page_toward(details.local_position))
+                .on_tap_up(move |_ctx, details| tapped.track_tapped(details.local_position))
                 .child(CustomPaint::new().foreground_painter(painter).child(
                     ScrollObserverScope::new(
                         ctx,

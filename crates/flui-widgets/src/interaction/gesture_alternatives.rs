@@ -1559,8 +1559,8 @@ struct MenuControl {
 }
 
 struct FocusDecorationsState {
-    focus_manager: Option<Rc<FocusManager>>,
-    rebuild: Option<RebuildHandle>,
+    focus_manager: Rc<FocusManager>,
+    rebuild: RebuildHandle,
     /// Set by a press on the revealed control, read by the row's listener
     /// the same press reaches next.
     control_pressed: Rc<Cell<bool>>,
@@ -1569,23 +1569,18 @@ struct FocusDecorationsState {
 impl StatefulView for FocusDecorations {
     type State = FocusDecorationsState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         FocusDecorationsState {
-            focus_manager: None,
-            rebuild: None,
+            focus_manager: ctx.focus_manager(),
+            rebuild: ctx.rebuild_handle(),
             control_pressed: Rc::new(Cell::new(false)),
         }
     }
 }
 
 impl ViewState<FocusDecorations> for FocusDecorationsState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.focus_manager = Some(ctx.focus_manager());
-        self.rebuild = Some(ctx.rebuild_handle());
-    }
-
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.focus_manager = Some(ctx.focus_manager());
+        self.focus_manager = ctx.focus_manager();
     }
 
     /// The row's `Focus` rebuilds this when focus enters or leaves the row
@@ -1596,8 +1591,7 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
         let visible_in_row = focus_in_row
             && self
                 .focus_manager
-                .as_ref()
-                .and_then(|manager| manager.primary_focus())
+                .primary_focus()
                 .is_some_and(|primary| primary.has_visible_focus());
         // Every layer keeps its place, so the control is never rebuilt under
         // the press that ends the visible focus: the ring's slot is always
@@ -1639,10 +1633,7 @@ impl ViewState<FocusDecorations> for FocusDecorationsState {
         // A press anywhere in the row but on the control hides it: the
         // control's own listener has heard the press first if it was on it.
         let (revealed, pressed) = (Rc::clone(revealed), Rc::clone(&self.control_pressed));
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: focus decorations built before init_state captured their rebuild handle");
+        let rebuild = self.rebuild.clone();
         Listener::new()
             .on_pointer_down(move |_ctx, _dispatch| {
                 if !pressed.replace(false) && revealed.replace(false) {

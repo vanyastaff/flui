@@ -200,6 +200,24 @@ this one path (ADR-0151 §9).
   every command absent as `CapabilityAbsence::WITHDRAWN`, reports kept, nothing
   admitted, and so in every later snapshot) while the window's other
   facts publish on.
+- **The cursor is a value of the region that asked for it; a grab lasts while the focus does
+  (ADR-0354).** `set_cursor` takes a `Cursor` (`Icon`, `Image`, `Hidden`): hidden is a cursor,
+  shown over that window until the next one, never a window-wide switch beside it, so nothing
+  must remember to show it again. A `CursorImage` is checked where it is built (each side
+  `1..=CursorImage::MAX_SIDE`, sides before pixels, four bytes per pixel, the hotspot a pixel)
+  and shares its pixels, so a host keeps the last native cursor it made and compares with `==`;
+  `cursor_image` is a verb's `Availability`, answered as the frame-rate hint is
+  (`a_cursor_image_holds_only_what_a_window_system_shows`). `SetCursorGrab(Confined | Locked)`
+  is admitted against `confines_cursor`/`locks_cursor`, `SetCursorGrab(None)` and
+  `SetLevel(Normal)` against nothing, as the normal mode; `WindowState::cursor_grab` is
+  `None` for every window without the keyboard focus, which `successor` holds
+  (`a_grab_is_published_only_for_a_focused_window`) and every host's window system holds too
+  (the conformance check `a_grab_ends_with_the_focus`). A locked pointer's motion is
+  `PointerEvent::RawMotion` instead of moves. The level is a snapshot fact (`WindowLevel`); the
+  resize steps and the proportion (`AspectRatio`, lowest terms) are requests the window system
+  holds during the user's resize, not facts, as the material. A live resize is
+  `WindowInteraction::UserResizing`, and `WindowInteraction::is_user` is the one reading of "the
+  user changed it".
 - **A window is opened with its handler (ADR-0254 §4).** `WindowHandler` has
   one required method per obligation (`input`, `state_changed`,
   `frame_requested`, `close_requested`, `closed`, `surface_changed`) and no
@@ -335,7 +353,10 @@ admission and the retained aliases, including serde when enabled.
 (ADR-0172). Text factors use the bounded accessibility range `1/64..=64`;
 motion observations distinguish
 reduced motion from duration scaling. Vertical wheel lines/pages and horizontal
-character counts have separate representations. The `preferences_contract` table
+character counts have separate representations. The accent colour is an
+`SrgbColor`: finite sRGB components and alpha in `0..=1`, refused rather than
+clamped outside it; scroll-bar visibility and what a click in the track does
+are separate observations (ADR-0359). The `preferences_contract` table
 pins numeric admission, including adjacent rejected boundary values, subnormal
 text factors and both signs of zero. The widget contract
 `media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at

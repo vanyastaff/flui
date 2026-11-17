@@ -128,12 +128,12 @@ impl<T> std::fmt::Debug for ValueListenableBuilder<T> {
 impl<T: 'static> StatefulView for ValueListenableBuilder<T> {
     type State = ValueListenableBuilderState<T>;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         // `ViewState::init_state` is handed a `BuildContext` but NOT the view,
         // so the listenable the first subscription needs is copied here.
         ValueListenableBuilderState {
             value_listenable: Arc::clone(&self.value_listenable),
-            handle: None,
+            handle: ctx.rebuild_handle(),
             subscription: None,
         }
     }
@@ -158,8 +158,8 @@ pub struct ValueListenableBuilderState<T> {
     /// remove the listener from the correct (old) instance — `init_state`
     /// and `did_update_view` receive no live `view` to re-read it from.
     value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
-    /// Captured in `init_state`, the only lifecycle hook handed a `BuildContext`.
-    handle: Option<RebuildHandle>,
+    /// Schedules this element's rebuild when the listenable notifies.
+    handle: RebuildHandle,
     /// The listener registered against `value_listenable`, if any: detaching
     /// is cancel-on-drop.
     subscription: Option<flui_foundation::Subscription>,
@@ -176,18 +176,8 @@ impl<T> std::fmt::Debug for ValueListenableBuilderState<T> {
 impl<T: 'static> ValueListenableBuilderState<T> {
     /// Subscribe to `self.value_listenable`, scheduling a rebuild through
     /// `self.handle` on every notification.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called before `init_state` has populated `self.handle` — the
-    /// only two call sites (`init_state` and `did_update_view`) both run
-    /// after that population, so this is an internal invariant, not a
-    /// reachable runtime condition.
     fn subscribe(&mut self) {
-        let handle = self
-            .handle
-            .clone()
-            .expect("BUG: subscribe() called before init_state populated handle");
+        let handle = self.handle.clone();
         let subscription = self.value_listenable.listen(std::rc::Rc::new(move || {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }));
@@ -197,8 +187,7 @@ impl<T: 'static> ValueListenableBuilderState<T> {
 
 impl<T: 'static> ViewState<ValueListenableBuilder<T>> for ValueListenableBuilderState<T> {
     /// `_ValueListenableBuilderState.initState`: subscribe to the listenable.
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.handle = Some(ctx.rebuild_handle());
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.subscribe();
     }
 

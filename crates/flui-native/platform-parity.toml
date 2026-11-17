@@ -586,7 +586,19 @@ evidence = 'No gamepad vocabulary in the contract and no source on any host. And
 id = "cursor-shapes"
 feature = 'Cursor shapes'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
-note = "No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move. Wayland without `cursor-shape` draws the cursor theme's image, through a viewport where the window's scale does not divide the image's size; that ran on Weston 13 at scale 3 (2026-11-16), and against the test's own compositor, which enforces the buffer-scale rule on cursor surfaces and changes the window's scale while it runs (`wayland_scripted`); a run under KWin before `cursor-shape` is owed"
+note = "No iPad pointer styles or Android `PointerIcon`. A cursor image of the application (`Cursor::Image`) and no cursor (`Cursor::Hidden`) are built on Windows, macOS, Wayland, X11 and the Web and reach no widget yet ([gaps](gaps.md#a-widget-cannot-ask-for-a-cursor-image-or-none-and-the-pointer-grabs-have-run-on-no-device)); none has run on a device but the headless host. Wayland without `cursor-shape` draws the cursor theme's image, through a viewport where the window's scale does not divide the image's size; that ran on Weston 13 at scale 3 (2026-11-16), and against the test's own compositor, which enforces the buffer-scale rule on cursor surfaces and changes the window's scale while it runs (`wayland_scripted`); a run under KWin before `cursor-shape` is owed"
+
+[[group.section.row]]
+id = "pointer-grab-confined-and-locked"
+feature = 'Pointer grab: confined and locked, with raw motion'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "partial", headless = "yes" }
+note = 'A grab holds only while the window has the keyboard focus and ends with it (ADR-0354 §2). Windows confines and locks with its cursor clip and raw input (`a_grab_is_held_while_focused_and_let_go_with_the_focus`, which takes the foreground itself, a lock following the client area through a move and a resize, and the conformance check `a_grab_ends_with_the_focus` reading the cursor clip), never with a physical mouse or a remote session; macOS and the Web lock only (no confine API), type-checked, never run (Quartz does not say whether the mouse is detached, so the AppKit fixture reads no grab of its own: owed on a Mac); X11 confines and locks with a pointer grab and XInput 2 raw motion, run on Xvfb under openbox, where XTest motion is not held to the grab and the conformance check reads the grab of the server from a second connection; Wayland confines and locks through `zwp_pointer_constraints_v1` and `zwp_relative_pointer_manager_v1` where the compositor offers them, run on Weston only, where the conformance fixture reads no grab of its own (no compositor tells another client of a constraint); iOS (`prefersPointerLocked`) and Android (`requestPointerCapture`) are not built'
+
+[[group.section.row]]
+id = "window-level-resize-steps-and-proportion"
+feature = 'Window level, resize steps and proportion'
+status = { windows = "partial", macos = "partial", wayland = "na", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+note = 'Windows keeps a window on top with `WS_EX_TOPMOST` (granted to a window of the foreground) and below by the host, and holds the steps and the proportion in `WM_SIZING` (`a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`), never with a user drag; macOS uses `NSWindow.level`, `contentResizeIncrements` and `contentAspectRatio` (AppKit holds one of the two at a time), type-checked only; X11 writes `_NET_WM_STATE_ABOVE`/`BELOW` and `WM_NORMAL_HINTS`, run on Xvfb; xdg-shell, UIKit, Android and the browser have no levels, steps or proportion'
 
 [[group.section.row]]
 id = "system-back-and-history"
@@ -782,8 +794,16 @@ evidence = "Every window seeds `MediaQueryData::platform_brightness` and follows
 [[group.section.row]]
 id = "accent-colour"
 feature = 'Accent colour'
-status = { windows = "missing", macos = "missing", wayland = "missing", x11 = "missing", ios = "na", android = "missing", web = "na", headless = "missing" }
-note = 'Not in the contract'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "missing", web = "missing", headless = "yes" }
+note = "`SystemPreferences::accent_color`, a checked sRGB colour resolved for the appearance published beside it ([ADR-0359](adr/ADR-0359-system-preferences-carry-the-accent-colour-and-the-scroll-bar-behaviour.md)); an unset Cupertino primary of the platform's brightness follows it. Windows read it on Windows 11 and heard the colorization broadcast, no live change of the accent was run; Linux ran against a stand-in portal; macOS is type-checked. iOS gives each application its own tint. Android's dynamic colour is a palette whose roles differ in light and dark, so it reports none until a dynamic colour scheme reads the palette. The Web reports none: a browser resisting fingerprinting resolves `AccentColor` to a fixed colour; owed: a run in Chrome, Firefox and Safari that shows which resolve it to the user's accent ([gaps](gaps.md#system-preferences-missing-or-never-run))."
+evidence = "Windows reads `UISettings.GetColorValue(Accent)` and follows `ColorValuesChanged` and `WM_DWMCOLORIZATIONCOLORCHANGED`: on Windows 11 (2026-11-17) `windows_reads_preferences_before_a_user_window_exists` compared the snapshot's accent with `UISettings`' own answer and `a_colorization_change_wakes_the_owner_without_a_user_window` woke the owner from the broadcast sent to its receiver, while no run changed the accent in Personalization. Linux reads the Settings portal's `accent-color` (components outside `0..=1` are no accent) and follows `SettingChanged`: the `accent-color` case of `linux_preferences` read an accent before any window and saw it cleared live, against a stand-in portal in WSL, not in a GNOME or KDE session. macOS reads `NSColor.controlAccentColor` under the application's effective appearance, converted to sRGB, and follows `NSSystemColorsDidChangeNotification` and the distributed `AppleInterfaceThemeChangedNotification` (type-checked only). A portal that changes hands to a backend without the key withdraws the accent (`accent-withdrawn`). The Web reads none. Headless takes what a test sets (`an_unset_primary_follows_the_system_accent`)."
+
+[[group.section.row]]
+id = "scroll-bar-behaviour"
+feature = 'Scroll-bar behaviour'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "na", android = "na", web = "na", headless = "yes" }
+note = "`SystemPreferences::scroll_bars`: whether scroll bars always show and what a click in the track does ([ADR-0359](adr/ADR-0359-system-preferences-carry-the-accent-colour-and-the-scroll-bar-behaviour.md)); a `Scrollbar` whose author chose neither follows them. Windows read it on Windows 11, no live change was run; Linux ran against a stand-in portal; macOS is type-checked. iOS and Android have no such setting and the browser exposes none."
+evidence = "Windows reads \"Always show scrollbars\" (`UISettings.AutoHideScrollBars`) and follows `AutoHideScrollBarsChanged`; it has no track-click setting. On Windows 11 (2026-11-17) `windows_reads_preferences_before_a_user_window_exists` compared the snapshot with `UISettings`' own answer; no run toggled the setting. Linux reads GNOME's `overlay-scrolling` through the Settings portal (the `overlay-scrolling` case of `linux_preferences`, a live change against a stand-in portal in WSL); GTK's track-click setting is an XSETTING the portal does not carry. macOS reads `NSScroller.preferredScrollerStyle`, following `NSPreferredScrollerStyleDidChangeNotification`, and the `AppleScrollerPagingBehavior` default when the application is active again (type-checked only). Headless takes what a test sets (`an_unset_thumb_follows_the_systems_scroll_bar_visibility`, `a_track_tap_jumps_to_the_spot_where_the_system_asks`)."
 
 [[group.section.row]]
 id = "text-scale"
@@ -880,7 +900,7 @@ evidence = 'Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (
 id = "orientation-lock"
 feature = 'Orientation lock'
 status = { windows = "na", macos = "na", wayland = "na", x11 = "na", ios = "missing", android = "missing", web = "missing", headless = "missing" }
-note = 'Android 16 ignores it on large screens'
+note = 'Android 16 ignores it on displays whose smallest width is at least 600 dp for an app targeting API 36, as a FLUI app does (it declares no `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` opt-out, which API 37 drops) ([Android 16 behavior changes](https://developer.android.com/about/versions/16/behavior-changes-16#ignore-orientation))'
 
 [[group.section.row]]
 id = "haptics"

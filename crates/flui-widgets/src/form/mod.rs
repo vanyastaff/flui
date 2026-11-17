@@ -171,10 +171,13 @@ impl FormHandle {
             .then_some(FormHandleAlreadyAttached)
     }
 
-    fn try_attach(&self) -> Option<FormAttachment> {
+    /// Attach the handle to the form whose writes `writer` opens; the writer
+    /// stays on the handle until the attachment drops.
+    fn try_attach(&self, writer: &WriterSource) -> Option<FormAttachment> {
         if self.inner.active_attachment.get().is_some() {
             return None;
         }
+        *self.inner.writer.borrow_mut() = Some(writer.clone());
         let generation = self
             .inner
             .next_attachment
@@ -470,6 +473,8 @@ pub struct FormState {
     /// after an external duplicate is refused.
     bound_external: Option<FormHandle>,
     attachment: Option<FormAttachment>,
+    /// The writer every handle this form attaches carries.
+    writer: WriterSource,
 }
 
 impl std::fmt::Debug for FormState {
@@ -491,13 +496,14 @@ impl FormState {
             .clone_from(&view.on_changed);
     }
 
-    fn attach(view: &Form) -> Self {
+    fn attach(view: &Form, writer: WriterSource) -> Self {
         let requested = view.handle.clone().unwrap_or_default();
-        if let Some(attachment) = requested.try_attach() {
+        if let Some(attachment) = requested.try_attach(&writer) {
             let state = Self {
                 handle: requested,
                 bound_external: view.handle.clone(),
                 attachment: Some(attachment),
+                writer,
             };
             state.configure(view);
             return state;
@@ -510,12 +516,13 @@ impl FormState {
         requested.inner.attachment_error_pending.set(true);
         let handle = FormHandle::new();
         let attachment = handle
-            .try_attach()
+            .try_attach(&writer)
             .expect("BUG: a fresh FormHandle has no existing attachment");
         let state = Self {
             handle,
             bound_external: None,
             attachment: Some(attachment),
+            writer,
         };
         state.configure(view);
         state
@@ -534,7 +541,7 @@ impl FormState {
             return;
         }
         let requested = view.handle.clone().unwrap_or_default();
-        let Some(attachment) = requested.try_attach() else {
+        let Some(attachment) = requested.try_attach(&self.writer) else {
             tracing::error!(
                 "FormHandle is already attached to a mounted Form; retaining the current \
                  attachment until a later update can acquire the requested handle"
@@ -542,8 +549,6 @@ impl FormState {
             requested.inner.attachment_error_pending.set(true);
             return;
         };
-        let writer = self.handle.inner.writer.borrow().clone();
-        *requested.inner.writer.borrow_mut() = writer;
         let old_attachment = self.attachment.replace(attachment);
         self.handle = requested;
         self.bound_external.clone_from(&view.handle);
@@ -554,16 +559,12 @@ impl FormState {
 impl StatefulView for Form {
     type State = FormState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> FormState {
-        FormState::attach(self)
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> FormState {
+        FormState::attach(self, ctx.writer_source())
     }
 }
 
 impl ViewState<Form> for FormState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.handle.inner.writer.borrow_mut() = Some(ctx.writer_source());
-    }
-
     fn did_update_view(&mut self, _old_view: &Form, new_view: &Form) {
         // Acquire before releasing: a busy replacement cannot detach the
         // form from the handle that still owns its fields and writer.

@@ -7074,6 +7074,57 @@ GPU-память простаивающего или невидимого окн
   устройствах не нужно: поведение хостов не меняется, кроме момента, когда Win32 и X11
   рассогласованы, — он теперь публикуется `Focused`, как и раньше по полю `focused`.
 
+- [ ] **LY121** — ветка `platform/cursor-and-window-commands`, решение — ADR-0354 (заменяет в
+  ADR-0343 решение 2 только набор взаимодействий и правило, по которому потребитель считает
+  изменение пользовательским). Отсутствие всего перечисленного подтверждено на `main` @
+  `6befd2792` чтением кода. Курсор — значение области: `set_cursor(&Cursor)`, где `Cursor` —
+  `Icon`, `Image(CursorImage)` или `Hidden`; видимость не отдельная команда, а курсор области
+  (иначе два источника одного факта и счётчик процесса на AppKit и Win32 — решение и причина в
+  ADR-0354 §1). `CursorImage` проверяется при сборке (сторона `1..=MAX_SIDE`, стороны до
+  пикселей, четыре байта на пиксель, hotspot внутри) и делит пиксели, хост держит последний
+  нативный курсор и сравнивает `==`; способность — `Availability` `cursor_image`. Захват —
+  `SetCursorGrab(CursorGrab::{None, Confined, Locked})` со слотами `confines_cursor`/`locks_cursor`,
+  `None` без слота; факт `WindowState::cursor_grab`, который `successor` сбрасывает у окна без
+  фокуса клавиатуры; каждый хост отпускает захват системы окон при потере фокуса, скрытии и
+  закрытии; при `Locked` курсор скрыт, перемещения отброшены, движение — `PointerEvent::RawMotion`
+  (`MotionDelta`, `MotionAcceleration`), собранное одной функцией `ContactRegistry::raw_motion`.
+  Уровень — `SetLevel(WindowLevel)` со слотами `keeps_on_top`/`keeps_on_bottom` и факт снимка
+  `level`; шаг и пропорция — `SetResizeIncrements(Option<WindowExtent>)` и
+  `SetAspectRatio(Option<AspectRatio>)` (два `NonZeroU32` в несократимом виде), запросы, а не
+  факты. Живой resize — `WindowInteraction::UserResizing` (не отдельный `resizing: bool`: две
+  формы одного факта), `is_user` читает оба взаимодействия; регистратор размещения считает по
+  `is_user` (иначе Win32 перестал бы запоминать размер, изменённый рамкой). Хосты: Win32 — образ
+  (`CreateIconIndirect`), скрытие, `ClipCursor` + raw input (`WM_INPUT`), `WS_EX_TOPMOST` и
+  удержание снизу в `WM_WINDOWPOSCHANGING`, шаг и пропорция в `WM_SIZING` (чистая половина
+  `window/windows/sizing.rs` с таблицей), `UserResizing` с первого `WM_SIZING`; X11 — Render-курсор,
+  `GrabPointer`, `XI_RawMotion`, `_NET_WM_STATE_ABOVE`/`BELOW`, `WM_NORMAL_HINTS`; Wayland — буфер
+  `wl_shm`, `zwp_pointer_constraints_v1` и `zwp_relative_pointer_manager_v1` там, где композитор их
+  даёт (иначе `NOT_ON_THIS_DEVICE`), `resizing` из configure, уровней/шага/пропорции нет
+  (`NOT_ON_THIS_PLATFORM`); AppKit — `NSCursor` из образа, прозрачный курсор, lock через
+  `CGAssociateMouseAndMouseCursorPosition`, `NSWindow.level`, `contentResizeIncrements`,
+  `contentAspectRatio`, live resize из делегата; веб — CSS `url(data:…)`, `cursor: none`, pointer
+  lock с `movementX/Y`; iOS и Android — lock `NOT_YET_ON_THIS_HOST`, остальное
+  `NOT_ON_THIS_PLATFORM`; headless моделирует всё. Запись: протокол 0.24 (разрыв ADR-0342: новый
+  вариант `raw_motion`), формат записи ввода 6, нативная запись несёт новые способности,
+  `cursor_grab`, `level`, `user_resizing`. Тесты (каждый падает при откате): таблица
+  `window_command_validate` — `admit_refuses_exactly_when_the_capability_is_unavailable` (восемь
+  новых строк), `restoring_normal_needs_no_capability`, `a_grab_is_published_only_for_a_focused_window`
+  (без сброса в `successor` падает), `a_cursor_image_holds_only_what_a_window_system_shows`,
+  `an_aspect_ratio_is_held_in_lowest_terms`, `a_resize_step_must_enclose_an_area`; conformance —
+  проверка `a_grab_ends_with_the_focus` и неисправность `KeepsTheGrabWithoutFocus`, которую она
+  ловит (`a_grab_kept_after_the_focus_went_is_caught`), `a_headless_grab_ends_with_the_focus`;
+  Win32 — `a_resize_by_the_frame_is_a_live_resize_until_the_loop_ends` (без ветки `UserResizing`
+  падает), `a_grab_is_held_while_focused_and_let_go_with_the_focus`,
+  `a_frame_drag_keeps_the_steps_and_the_proportion`, `a_level_is_what_win32_holds`;
+  `an_unread_placement_is_overwritten_only_by_the_user` (строка «a resize by the frame»; без
+  `is_user` падает); X11 и Wayland — живые случаи в `x11_input` и `wayland_input` (образ, скрытие,
+  Confined → Locked → None, уровни). Строимое осталось: lock на iOS (`prefersPointerLocked`) и
+  Android (`requestPointerCapture`), просьба виджета об образе и скрытом курсоре (`CursorRequest`
+  несёт только иконку) — запись `docs/gaps.md` «A widget cannot ask for a cursor image or none…».
+  Прогоны на устройствах — заметки строк `cursor-shapes`, `pointer-grab-confined-and-locked`,
+  `window-level-resize-steps-and-proportion` в `platform-parity.toml`. macOS, Android и wasm32
+  проверены `cargo +nightly check` в WSL; iOS не собирался.
+
 - [x] **LY125** — ветка `native/win32-idle-and-reentry`. Все три находки подтверждены на `main`
   @ `9e309039d` тестами, падающими на старом коде. Модальный цикл: без срока таймер ставился
   каждые 16 мс, и цикл перемещения, простоявший полсекунды, спрашивал обработчик 18 раз; так же
@@ -7425,6 +7476,176 @@ GPU-память простаивающего или невидимого окн
   сценарий отзыва после `OleUninitialize` здесь не воспроизведён, удержание — по типам. Ожидание
   trybuild `owner_platform_is_not_send` не устарело: локально у тулчейна нет `rust-src`, и
   фрагменты из `$RUST/core` выпадают из вывода; на CI (с `rust-src`) оно верно.
+- [ ] **LY145** — ветка `testing/headless-fidelity`. Проверено на `main` @ `817b30989`.
+  Закрытие: `HeadlessHost` больше не держит основное окно отдельно — открытые окна одним списком,
+  основное читается и после закрытия; окно, которое переживает другое, закрывается через
+  `close_presentation_entered` (снимается, фокус ОС переходит к выжившему), последнее
+  останавливает представление и роняет `UiRuntime`, как владелец отставляет runtime без
+  представлений, так что удержанные ответы кончаются `OwnerRetired`, их замыкания не исполняются
+  (`is_retired`; накачка отставленного хоста двигает только время, сценарий, записи и фоновые
+  дорожки). Тем же путём закрывает и `LaidOut::request_close` (теперь `&mut self`; старый путь
+  «только остановить» был второй его формой); `UiRuntime::stop_presentation_for_test` удалён.
+  Встроенные возможности — как у runner: primary selection только на Linux (по платформе
+  основного окна), сценарный HTTP только с фичей `http` у `flui-testing`, которую фасадный `http`
+  включает вместе с `flui-app/http`; возможность нативного окна принадлежит `flui-app` и выше
+  этого крейта — тест виджета с `flui::native` идёт на `flui_app::testing` (записано в
+  `ARCHITECTURE.md`). Плагины и override: `TestWindow::plugin`, `TestWindow::capability` (в
+  ярусах runner, перезапуск регистрирует заново). Жизненный цикл: `set_window_execution`,
+  `notify` (сон, пробуждение, блокировка, давление памяти), `leave_unshown` с `UnshownFrame`
+  (не готова, снята, потеряна, устройство потеряно, сбой, отказ) вместо `defer_presents`;
+  `end_session(Ending)` доставляет уведомление о конце сеанса до записи, как runner;
+  `Tester::background`/`foreground` в порядке Android и UIKit, окно остаётся открытым
+  (ADR-0350 §2); доки `set_window_visible` больше не обещают фон телефона. Сервисы:
+  `ServiceContext::lifecycle` — `LifecycleWatch` (наиболее активное состояние живых runtime,
+  `Detached` без них, `current`/`changed`), его кормит runner там, где строит каждый runtime;
+  давление памяти сервис уже получает через `AppConfig::memory_reclaim` — эта половина находки
+  опровергнута. Нативный headless-хост (`flui-native`) уже доставляет исполнение, поверхность и
+  уведомления (`simulate_execution_state`, `simulate_surface_change`,
+  `HeadlessHostEvents::notice`) — для него находка устарела. Тесты, в скобках результат с
+  откатом: `closing_the_focused_window_moves_the_focus_to_a_survivor` (TAB уходит в закрытое
+  окно); строка последнего окна в `a_read_pending_when_its_runtime_drops_ends_as_owner_retired`
+  (замыкание исполняется); `a_dialog_of_the_last_window_ends_with_its_runtime` (заменил
+  `a_dialog_ends_when_its_window_begins_to_close`, который проверял остановку без отставки);
+  строки платформ в `a_runtime_without_a_primary_selection_answers_not_registered` и строка
+  Windows в `a_middle_press_pastes_the_primary_selection_where_it_lands` (вставка проходит под
+  Windows); `a_plugin_the_test_registers_answers_and_an_override_replaces_it` (`NotRegistered`);
+  `a_trip_to_the_background_pauses_the_application_and_its_return_resumes_it` (лестница
+  останавливается на `Hidden`, уведомления нет); `an_unshown_frame_is_recovered_as_its_reason_says`
+  (кадр засчитан показанным); `a_system_notice_reaches_the_subscribers`;
+  `a_service_watches_the_application_pause_and_resume` (`Detached` всё время). Тесты выделения и
+  средней кнопки называют `TargetPlatform::Linux` (`lay_out_on`, `harness::mount_with_ime_on`).
+  По независимому чтению: закрытие, которого просит виджет (`WindowHandle::request_close`), идёт
+  в очередь и исполняется на следующем ходе после вопроса стражу, как в очереди окна runner
+  (`a_close_a_widget_asks_for_is_carried_out_at_the_next_turn`); каждое созревшее закрытие
+  исполняется в сдерживании, первая паника — после всех
+  (`every_due_close_is_carried_out_past_one_that_panics`); созревшее закрытие `Program` — согласие
+  на выход, само ничего не закрывает
+  (`a_held_program_close_is_consent_to_a_quit_and_closes_nothing`); выход `request_quit` опрашивает
+  все окна, откладывается на записанном отказе и отменяется оставленным окном
+  (`a_quit_nothing_holds_closes_every_window`, `a_quit_a_hold_refuses_waits_for_its_release`,
+  `a_quit_a_window_stays_open_for_is_cancelled`); конец сеанса следует платформе окна: десктоп
+  закрывает и отставляет, телефон оставляет окна и отвечает `Block`, пока записи в полёте
+  (`a_session_end_follows_the_platform_the_window_names`,
+  `a_trip_to_the_background_with_a_write_in_flight_holds_the_process`); поездка в фон — только на
+  телефоне и одна до возврата (`a_window_that_names_no_phone_has_no_trip_to_the_background`);
+  закрытое окно не слышит ввода и фактов, команды его ручки отвечают `Closed`;
+  `close_delivery_is_idempotent` теперь действительно пробует повторное закрытие из наблюдателя;
+  `LifecycleWatch` кончается с циклом, следующий запуск получает свежий
+  (`a_service_watches_the_application_pause_and_resume`); ранг состояний —
+  `AppLifecycleState::most_active`, общий с агрегатом runtime. Строка не отмечена: headless-хост
+  зеркалит ход владельца runner, а не вызывает его (`flui-testing` ниже `flui-app`), и остаётся
+  без обработчика закрытия приложения, уведомления `SessionEnding`, возможности нативного окна и
+  моста хоста — запись `docs/gaps.md` «The headless host mirrors the runner's owner turn».
+- [x] **LY154** — ветка `docs/platform-citations`. Цитаты Flutter читаются по коммиту тега 3.50.0,
+  `flutter/flutter@ab2912035e` (правило `owner/repo@sha` в ADR-0151, 0152, 0154, 0254, 0255 стоит;
+  рядом для читателя «3.50.0»); исходники читались через `gh` и неглубокий клон в `.flutter/`.
+  Ссылки на коммиты master (`6597889f57` в ADR-0151, 0152, 0154, 0254, 0255; `97cd226ec5` в
+  ADR-0261, 0262, 0265; `d8bd864cdb` в ADR-0345) переведены на этот коммит, и каждая перенесённая
+  ссылка прочитана построчно на теге, а не только сверена по SHA блоба: совпадение блоба с master
+  показало, что две ссылки были неверны и до переноса — `FlutterTextInputPlugin.mm:140-141`
+  (раскладка клавиатуры для URL; отдельный ответчик — `FlutterTextInputView`, `:793-815`, его
+  `becomeFirstResponder` `:1360`) и `history.dart:17-25,124` (строка 124 —
+  `MultiEntriesBrowserHistory`; `SingleEntryBrowserHistory` — `:234-250`, его запись-приманка
+  `:368-373`); строки `semantics/text_field.dart` сдвинулись (`:17-48`), `semantics_helper.dart`
+  238 → 234 (поведение master с `retirePlaceholders` ADR-0255 не использует); пояснение источника
+  ADR-0262 («по идентичности виджета») исправлено на «по restoration id». Остальные (`embedder.h`
+  12-48 и 1098-1148, `FlutterActivity.java:728-737`, `FlutterSceneDelegate.mm:32-101`,
+  `dom_manager.dart:16-46`, шаблон манифеста `:12`, `flutter_plugins.dart:1950-1993`,
+  `binding.dart:296-342`, `_keepAliveBucket`) говорят то, что им приписано. `f60eef8885` в
+  ADR-0340 — коммита нет во `flutter/flutter` (`gh` отвечает 422): источники переписаны на
+  `3.50.0` с номерами строк, утверждения (шаблон с `adjustResize`, `ImeSyncDeferringInsetsCallback`
+  с API 30) проверены. ADR-0332: правило `isCompatibleWith` пересказано по 3.50.0 (тристабильные
+  флаги, `isAccessibilityFocusBlocked`, `_traversalChildIdentifier`); ADR-0288: 3.50 отказывает в
+  `route` и точке входа только в release и только непроверенному отправителю
+  (`IntentUtils.java:29-96`), правило FLUI строже; ADR-0028: заморозка 3.44, `material_ui` и
+  `cupertino_ui` в 3.47, устаревание в 3.50; ADR-0037, 0076, 0048: ссылки на строки 3.50.0, каждое
+  утверждение о `focus_manager.dart`, `text_input.dart`, `overlay.dart` и `framework.dart` верно на
+  теге; ADR-0333: ссылка 3.27.0 вела в `flutter/flutter`, где движка в 3.27.0 не было, а «память
+  переиспользуется при сбросе билдера» на 3.50.0 неверно (`Build` отдаёт буфер списку) — фраза
+  заменена тем, что видно в `dl_storage.h`, `dl_builder.cc`, `dl_op_records.h`; ADR-0348: ссылки на
+  строки. Неверное о FLUI: «как веб-движок Flutter держит один элемент редактирования» в
+  `text/web.rs` и `ARCHITECTURE.md` — стратегия Flutter 3.50 по умолчанию создаёт элемент на
+  каждое соединение и убирает его (`text_editing.dart:1594`, `:1768`; элемент формы автозаполнения
+  остаётся, `:1763`), с семантикой правка идёт в собственном элементе узла
+  (`semantics/text_field.dart:128`, `:149`); FLUI держит один редактор, исправлено; ADR-0049 описывал backend winit
+  и «headless mock» — переписано по `Platform::request_exit_policy_reevaluation`. `docs/gaps.md`:
+  100 мс Windows-эмбеддера — `kWindowResizeTimeout` по тегу; записи о GPU-памяти простаивающего
+  окна и о живом resize на Windows уже на `main` и сверены с кодом (`RasterHost::reclaim` только
+  от давления памяти; `modal_loop`, `WM_GETDPISCALEDSIZE`, `UserPlacing`). Строка паритета
+  «Orientation lock»: Android 16 игнорирует фиксацию на дисплеях с наименьшей шириной от 600 dp у
+  приложения с API 36 без `PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY` (FLUI его не объявляет).
+  Журнал: эмодзи в сообщениях хостов не осталось; у событий окна Win32 и AppKit одно сообщение и
+  один набор полей, хэндл — поле `handle` (`a window opened`, `window moved`, `window resized`,
+  `window scale changed`); уровни: resize Android `info` → `debug`, «a window is opening» Win32,
+  Web и headless `info` → `debug`, resize AppKit `debug` → `trace`; заголовок окна не пишется ни в
+  строках открытия окна, ни в стартовых строках `flui-app`, путь из списка URI drag не пишется,
+  относительный путь single-instance Linux — только расширением; форматные сообщения цикла Android,
+  потока clipboard X11 и direct-режима — полями. headless больше не зовёт себя mock (док крейта
+  переписан по тому, что хост делает; `app_path` возвращает исполняемый файл процесса вместо
+  `/mock/app/path`). Тест: `a_headless_platform_names_the_executable_it_runs_in` — путь абсолютный
+  и указывает на файл (с откатом: `/mock/app/path` не абсолютен на Windows и не файл). Не тронуто: штампы «oracle tag `3.44.0`» в `flui-material`,
+  `flui-cupertino`, `flui-widgets`, ADR-0062, 0069, 0079 и `crates/flui-engine/CONTRIBUTING.md` —
+  слой виджетов, не платформы; перевод на 3.50 требует сверки каждого значения с `material_ui`.
+
+- [x] **LY151** — ветка `platform/system-preferences-accent`, решение — ADR-0359. Находки
+  подтверждены на `main` @ `a04deac12` чтением: у `SystemPreferences` не было ни акцента, ни
+  полос прокрутки (`rg -i 'accent|scroller' crates/flui-platform crates/flui-native/src/preferences`
+  пусто), `docs/gaps.md` числил акцент в «Missing». Построено: `SrgbColor` (`try_new` отказывает
+  NaN, бесконечности и компоненты вне `0..=1` как `InvalidPreference::Color`, без зажатия;
+  `-0.0` читается как `0.0`), `SystemPreferences::accent_color`, `ScrollBarPreferences`
+  (`ScrollBarVisibility::{WhenScrolling, Always}`, `ScrollTrackClick::{Page, JumpToSpot}`),
+  поля в `PreferenceParts`, в обоих зеркалах записи и в схеме (`accent_color`,
+  `scroll_bar_visibility`, `scroll_track_click`; протокол 0.23, добавление). Источники: Windows —
+  `UISettings.GetColorValue(Accent)` и `AutoHideScrollBars`, события `ColorValuesChanged` и
+  `AutoHideScrollBarsChanged` (общий список `UiSettingsEvent` вместо двух полей токенов;
+  интерфейс, которого нет у старой Windows, — не наблюдение), приёмник широковещаний слышит ещё
+  `WM_DWMCOLORIZATIONCOLORCHANGED`; Linux — `accent-color` портала (компонент вне `0..=1` —
+  «не задан», снимает принятый акцент) и `overlay-scrolling` GNOME по тому же правилу ключей и
+  расписанию повторов, а само расписание теперь строится на `flui_platform::Backoff`
+  (`Retries`: тот же шаг, счёт попыток), второй тип графика снят; macOS —
+  `controlAccentColor` в `sRGBColorSpace`, `preferredScrollerStyle`, `AppleScrollerPagingBehavior`,
+  уведомления `NSSystemColorsDidChangeNotification` и
+  `NSPreferredScrollerStyleDidChangeNotification`, распределённое
+  `AppleInterfaceThemeChangedNotification`, акцент разрешён во внешнем виде приложения; iOS, Android и Web акцента не дают (решение §4 ADR-0359: у Android палитра, роли которой
+  зависят от светлой и тёмной темы; Web — `AccentColor` у браузера против отпечатков фиксирован, прогон в браузерах в долгах). Кольцо фокуса из строки не построено: ни один виджет не
+  читает его цвет, а новое публичное поле без потребителя запрещено. Потребители:
+  `MediaQueryData::{accent_color, scroll_bars}`; `Scrollbar` без `thumb_visibility` следует
+  видимости системы, тап по дорожке переносит бегунок в точку при `JumpToSpot`; основной цвет
+  Cupertino без автора берёт акцент. Тесты, в скобках результат с откатом:
+  `an_accent_colour_enters_only_as_finite_srgb_in_range`,
+  `scroll_bar_observations_stay_apart_and_unknown_until_read`,
+  `preferences_round_trip_through_their_parts` (`flui-platform`);
+  `windows_reads_preferences_before_a_user_window_exists` (сверяет с ответом `UISettings`),
+  `a_colorization_change_wakes_the_owner_without_a_user_window` (без
+  `WM_DWMCOLORIZATIONCOLORCHANGED` в приёмнике — владелец не просыпается), Windows 11 через
+  nextest; `the_portal_accent_is_a_colour_in_range_and_unset_outside_it`,
+  `overlay_scrolling_is_scroll_bars_that_show_while_scrolling`, случаи `accent-color` и
+  `overlay-scrolling` в `linux_preferences` (с «не задан», который оставляет прежний акцент, —
+  владелец не видит снятия за 30 с), WSL со стоящим порталом;
+  `preference_rows_keep_their_json_spelling`
+  (новая строка, прежние байты не тронуты),
+  `every_vocabulary_variant_round_trips_through_the_recording_dto`;
+  `a_track_tap_jumps_to_the_spot_where_the_system_asks` и
+  `an_unset_thumb_follows_the_systems_scroll_bar_visibility` (без чтения предпочтения — падают),
+  `an_unset_primary_follows_the_system_accent` (без акцента — системный синий). Не прогнаны:
+  живая смена акцента и полос на Windows (настройки машины не меняли), GNOME или KDE, macOS
+  (только проверка типов), браузер — заметки строк «Accent colour» и «Scroll-bar behaviour»
+  в `platform-parity.toml` и `docs/gaps.md`. После независимого чтения: каждое значение
+  снимка Windows читается отдельно (упавший геттер оставляет прежнее значение и требует
+  повтора), повторы — `Retries` над `flui_platform::Backoff` (0,1–3,2 с, шесть; Linux 1–16 с,
+  пять) вместо 100 мс без конца; macOS читает каждое значение отдельно; ключ, которого нет у
+  портала, снимает значение после смены владельца портала (`MissingKey::Withdraws`); бегунок
+  переносится по нажатию и тащится дальше; Cupertino берёт акцент только при яркости платформы,
+  цвет на акценте — белый или чёрный по контрасту. Тесты (в скобках — с откатом):
+  `failed_reads_retry_on_a_doubling_schedule_and_stop` (фиксированные 100 мс — паузы не
+  удваиваются), `an_unreadable_value_keeps_the_others_and_owes_a_retry` (неполное чтение без
+  повтора), `every_settings_event_is_observed`,
+  `a_missing_key_withdraws_its_field_only_after_the_portal_changed_hands`, случай
+  `accent-withdrawn` (с `Keeps` после смены владельца — снятия нет за 30 с),
+  `platform_recordings_replay_on_the_headless_host` и `native_recordings_write_back_byte_for_byte`
+  (перепутанные `Always`/`WhenScrolling` в разборе — падают),
+  `a_forced_brightness_or_a_light_accent_keeps_the_theme_legible` (акцент при любой яркости —
+  падает). Android всё ещё роняет всё чтение целиком — `docs/gaps.md`.
 
 ## Отступление от порядка, решённое владельцем
 
@@ -8227,6 +8448,7 @@ LY104–LY113 и задачи второго прохода LY114–LY154 сво
 | `submit_reports_a_refusal_and_a_closed_window` | LY42 | под этим именем не был; `a_refused_command_is_never_queued`, `a_closed_window_answers_closed` (`crates/flui-app/src/app/window_control_tests.rs`) |
 | `a_window_step_and_its_destruction_reach_every_hook_in_order` | LY29 | снят самой LY29, как запись и говорит |
 | `a_state_change_survives_a_failed_callback` | LY41 | снят в #1915 вместе с `owner::handlers`; паника при доставке фактов окна — `a_panicking_delivery_keeps_the_later_facts` (`flui-app`, `owner_dispatch/state_follow_tests.rs`) |
+| `a_dialog_ends_when_its_window_begins_to_close` | LY143 | снят в LY145: последнее окно отставляет runtime; правило держат `a_dialog_ends_with_its_window` и `a_dialog_of_the_last_window_ends_with_its_runtime` (`crates/flui-system/tests/dialogs.rs`) |
 | `KeyboardSource` | LY83 | под этим именем в коде не был; источник раскладки — `KeymapSource` (`input/linux/xkb.rs`) |
 | `owner/handlers.rs` | LY26 | удалён в #2650; точка вызова — `owner/call_point.rs`, доставка окна — `owner/window_delivery.rs` |
 | `window_placement.rs` | LY27 | с #1864 — `window/windows/` (`window.rs`, `set.rs`, `proc.rs`) |

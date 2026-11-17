@@ -41,6 +41,8 @@ pub(crate) mod read;
     test
 ))]
 pub(crate) mod regional;
+#[cfg(any(windows, linux_host, test))]
+pub(crate) mod retries;
 
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android;

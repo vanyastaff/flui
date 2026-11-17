@@ -37,20 +37,21 @@ use flui_platform::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyPress, KeyState, Location, Modifiers, NamedKey,
 };
 use flui_platform::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, PanZoomEvent, PanZoomPhase,
-    PanZoomTransform, PenOrientation, PenTool, PointerButton, PointerButtonEvent, PointerButtons,
-    PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind,
-    PointerMove, PointerPosition, PointerRole, PointerSample, PointerSignal, Pressure, ScrollDelta,
-    ScrollEvent, ScrollInversion, ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent,
-    SwipeOffset, TangentialPressure, TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent,
-    TouchpadSwipePhase, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, HoverDistance, MotionAcceleration,
+    MotionDelta, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenOrientation, PenTool,
+    PointerButton, PointerButtonEvent, PointerButtons, PointerCancel, PointerDeviceChange,
+    PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove, PointerPosition, PointerRole,
+    PointerSample, PointerSignal, Pressure, RawMotion, ScrollDelta, ScrollEvent, ScrollInversion,
+    ScrollPhase, ScrollPrecision, ScrollUnit, SmartZoomEvent, SwipeOffset, TangentialPressure,
+    TouchpadHoldEvent, TouchpadHoldPhase, TouchpadSwipeEvent, TouchpadSwipePhase, Twist,
 };
 use flui_platform::{
     Brightness, DragDropEvent, EventTime, GestureParts, HourCycle, ImeEvent, InsetCurve,
     InsetMotion, KeyboardInset, Locale, MeasurementSystem, MotionPreference, NativeMouseGeometry,
     NativeTouchGeometry, NumberingSystem, PlatformInput, PreferenceParts, RefreshPeriod,
-    RegionOverride, RegionalParts, SystemPreferences, TextWeightPreference, Weekday, WheelParts,
-    WheelStep, WindowExecutionState, WindowInsets,
+    RegionOverride, RegionalParts, ScrollBarParts, ScrollBarVisibility, ScrollTrackClick,
+    SrgbColor, SystemPreferences, TextWeightPreference, Weekday, WheelParts, WheelStep,
+    WindowExecutionState, WindowInsets,
 };
 use flui_protocol::input_recording as rec;
 use flui_protocol::native_recording as wire;
@@ -846,6 +847,20 @@ impl TryConvert<&PointerEvent> for rec::PointerEvent {
                     modifiers: modifiers_dto(zoom.modifiers),
                 })
             }
+            PointerEvent::RawMotion(motion) => Self::RawMotion(rec::RawMotion {
+                pointer: (&motion.pointer).try_convert_into()?,
+                t: motion.time.as_nanos(),
+                at: motion.position.map(|at| {
+                    let point = at.get();
+                    [point.x, point.y]
+                }),
+                dx: motion.delta.x(),
+                dy: motion.delta.y(),
+                unaccelerated: match motion.acceleration {
+                    MotionAcceleration::None => true,
+                    MotionAcceleration::System => false,
+                },
+            }),
             PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)?),
             PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)?),
             _ => return Err(unmirrored("PointerEvent")),
@@ -990,6 +1005,22 @@ impl TryConvert<rec::PointerEvent> for PointerEvent {
                 )
                 .with_modifiers(modifiers(&zoom.modifiers)?),
             ),
+            rec::PointerEvent::RawMotion(motion) => {
+                let event = RawMotion::new(
+                    motion.pointer.try_convert_into()?,
+                    EventTime::from_nanos(motion.t),
+                    MotionDelta::try_new(motion.dx, motion.dy).map_err(invalid)?,
+                    if motion.unaccelerated {
+                        MotionAcceleration::None
+                    } else {
+                        MotionAcceleration::System
+                    },
+                );
+                Self::RawMotion(match motion.at {
+                    Some([x, y]) => event.with_position(position(x, y)?),
+                    None => event,
+                })
+            }
             rec::PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change(change)?),
             rec::PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change(change)?),
         })
@@ -1673,8 +1704,32 @@ fn preferences_wire(values: SystemPreferences) -> Result<wire::Preferences> {
             vertical,
             horizontal_characters,
         },
+        accent_color,
+        scroll_bars: ScrollBarParts {
+            visibility,
+            track_click,
+        },
     } = values.into_parts();
     Ok(wire::Preferences {
+        accent_color: accent_color.map(SrgbColor::to_array),
+        scroll_bar_visibility: visibility
+            .map(|visibility| {
+                Ok(match visibility {
+                    ScrollBarVisibility::WhenScrolling => wire::ScrollBarVisibility::WhenScrolling,
+                    ScrollBarVisibility::Always => wire::ScrollBarVisibility::Always,
+                    _ => return Err(unmirrored("ScrollBarVisibility")),
+                })
+            })
+            .transpose()?,
+        scroll_track_click: track_click
+            .map(|click| {
+                Ok(match click {
+                    ScrollTrackClick::Page => wire::ScrollTrackClick::Page,
+                    ScrollTrackClick::JumpToSpot => wire::ScrollTrackClick::JumpToSpot,
+                    _ => return Err(unmirrored("ScrollTrackClick")),
+                })
+            })
+            .transpose()?,
         text_scale,
         motion: motion
             .map(|motion| {
@@ -1816,9 +1871,45 @@ fn preferences_from_wire(wire: wire::Preferences) -> Result<SystemPreferences> {
         gestures,
         wheel_vertical,
         wheel_horizontal_characters,
+        accent_color,
+        scroll_bar_visibility,
+        scroll_track_click,
     } = wire;
     let duration = std::time::Duration::from_nanos;
     PreferenceParts {
+        accent_color: accent_color
+            .map(|[red, green, blue, alpha]| {
+                SrgbColor::try_new(
+                    f64::from(red),
+                    f64::from(green),
+                    f64::from(blue),
+                    f64::from(alpha),
+                )
+                .map_err(invalid)
+            })
+            .transpose()?,
+        scroll_bars: ScrollBarParts {
+            visibility: scroll_bar_visibility
+                .map(|visibility| {
+                    Ok(match visibility {
+                        wire::ScrollBarVisibility::WhenScrolling => {
+                            ScrollBarVisibility::WhenScrolling
+                        }
+                        wire::ScrollBarVisibility::Always => ScrollBarVisibility::Always,
+                        _ => return Err(unmirrored("native_recording::ScrollBarVisibility")),
+                    })
+                })
+                .transpose()?,
+            track_click: scroll_track_click
+                .map(|click| {
+                    Ok(match click {
+                        wire::ScrollTrackClick::Page => ScrollTrackClick::Page,
+                        wire::ScrollTrackClick::JumpToSpot => ScrollTrackClick::JumpToSpot,
+                        _ => return Err(unmirrored("native_recording::ScrollTrackClick")),
+                    })
+                })
+                .transpose()?,
+        },
         text_scale,
         motion: motion
             .map(|motion| {

@@ -152,6 +152,11 @@ const RECORDED: &[Recorded] = &[
         "PanZoomPhase",
     ),
     repo(
+        "MotionAcceleration",
+        "crates/flui-platform/src/pointer/raw_motion.rs",
+        "MotionAcceleration",
+    ),
+    repo(
         "TouchpadHoldPhase",
         "crates/flui-platform/src/pointer/touchpad.rs",
         "TouchpadHoldPhase",
@@ -217,6 +222,16 @@ const RECORDED: &[Recorded] = &[
         "WheelStep",
         "crates/flui-platform/src/preferences.rs",
         "WheelStep",
+    ),
+    repo(
+        "ScrollBarVisibility",
+        "crates/flui-platform/src/preferences.rs",
+        "ScrollBarVisibility",
+    ),
+    repo(
+        "ScrollTrackClick",
+        "crates/flui-platform/src/preferences.rs",
+        "ScrollTrackClick",
     ),
     repo("Weekday", "crates/flui-platform/src/regional.rs", "Weekday"),
     repo(

@@ -21,7 +21,7 @@
 //! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`],
-//!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
+//!   [`WindowExecutionState`], the [`Cursor`] it shows and the errors window
 //!   operations return);
 //! - the window state contract: the [`WindowState`] snapshot a window
 //!   publishes, the [`WindowCommand`]s it takes and the
@@ -114,6 +114,7 @@ mod backoff;
 mod brightness;
 pub mod capability;
 mod clipboard;
+mod cursor;
 pub mod data_transfer;
 mod display;
 pub mod drag;
@@ -162,7 +163,8 @@ mod window_state;
 pub use backoff::Backoff;
 pub use brightness::Brightness;
 pub use clipboard::{ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment};
-/// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
+pub use cursor::{Cursor, CursorError, CursorGrab, CursorImage, CursorImageError};
+/// The system cursor shapes a [`Cursor::Icon`] names: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DragTransport, NullDragTransport};
@@ -204,8 +206,9 @@ pub use pointer::{
 pub use preferences::{
     Distance, DurationScale, FlingSpeeds, GestureGeometry, GestureParts, GesturePreferences,
     InvalidPreference, MotionPreference, NativeMouseGeometry, NativeTouchGeometry, PreferenceParts,
-    PreferenceQueryError, SystemPreferences, TextWeightPreference, WheelParts, WheelPreferences,
-    WheelStep,
+    PreferenceQueryError, ScrollBarParts, ScrollBarPreferences, ScrollBarVisibility,
+    ScrollTrackClick, SrgbColor, SystemPreferences, TextWeightPreference, WheelParts,
+    WheelPreferences, WheelStep,
 };
 pub use regional::{
     HourCycle, InvalidRegionalFormat, MeasurementSystem, NumberingSystem, RegionOverride,
@@ -226,8 +229,8 @@ pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};
 pub use unsupported::{Availability, CapabilityAbsence, Unsupported, UnsupportedReason};
 pub use window::{
-    CursorError, InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState,
-    WindowId, WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
+    InputLatency, InvalidWindowOption, OpeningGeometry, WindowExecutionState, WindowId,
+    WindowIdMint, WindowMaterial, WindowOption, WindowOptions, WindowReveal,
 };
 pub use window_capabilities::{
     CapabilityParts, PublicationMint, WindowCapabilities, WindowCapability,
@@ -239,7 +242,8 @@ pub use window_geometry::{InvalidGeometry, MAX_SURFACE_EXTENT, WindowExtent, Win
 pub use window_handler::{CloseDecision, FrameOutcome, SurfaceChange, WindowHandler};
 pub use window_insets::{InsetCurve, InsetMotion, InvalidInsets, KeyboardInset, WindowInsets};
 pub use window_state::{
-    AdmissionError, AdmittedCommand, ApplyError, CommandRefusal, PlatformFailure, SizeConstraints,
-    SubmitError, WindowCommand, WindowControl, WindowFocus, WindowInteraction, WindowMode,
-    WindowRevision, WindowRevisionExhausted, WindowState, WindowStateParts,
+    AdmissionError, AdmittedCommand, ApplyError, AspectRatio, CommandRefusal, PlatformFailure,
+    SizeConstraints, SubmitError, WindowCommand, WindowControl, WindowFocus, WindowInteraction,
+    WindowLevel, WindowMode, WindowRevision, WindowRevisionExhausted, WindowState,
+    WindowStateParts,
 };

@@ -160,6 +160,49 @@ fn get_or_create_delegate_class() -> &'static Class {
                     if let Some(window) = unsafe { get_window_from_delegate(this) } {
                         window.record_normal();
                         window.handle_transition_started();
+                        // A window in the Dock holds no pointer, and its
+                        // snapshot says so.
+                        if window.let_pointer_go() {
+                            window.publish_state();
+                        }
+                    }
+                },
+            );
+        }
+
+        // windowWillStartLiveResize: and windowDidEndLiveResize: bracket the
+        // user's resize by the frame.
+        extern "C-unwind" fn window_will_start_live_resize(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowWillStartLiveResize:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_live_resize(true);
+                    }
+                },
+            );
+        }
+
+        extern "C-unwind" fn window_did_end_live_resize(
+            this: &Object,
+            _sel: Sel,
+            _notification: ObjcId,
+        ) {
+            os_entry(
+                "windowDidEndLiveResize:",
+                (),
+                AfterPanic::Answer(|()| ()),
+                || {
+                    // SAFETY: see the shared invariant above.
+                    if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                        window.handle_live_resize(false);
                     }
                 },
             );
@@ -180,6 +223,9 @@ fn get_or_create_delegate_class() -> &'static Class {
                     // SAFETY: see the shared invariant above.
                     if let Some(window) = unsafe { get_window_from_delegate(this) } {
                         window.record_normal_entering_fullscreen();
+                        // Full screen wins over a level while it lasts; the
+                        // level comes back when the window leaves it.
+                        window.apply_level(true);
                         window.handle_transition_started();
                     }
                 },
@@ -403,6 +449,14 @@ fn get_or_create_delegate_class() -> &'static Class {
                 window_will_miniaturize as extern "C-unwind" fn(_, _, _),
             );
             decl.add_method(
+                sel!(windowWillStartLiveResize:),
+                window_will_start_live_resize as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
+                sel!(windowDidEndLiveResize:),
+                window_did_end_live_resize as extern "C-unwind" fn(_, _, _),
+            );
+            decl.add_method(
                 sel!(windowWillEnterFullScreen:),
                 window_will_enter_fullscreen as extern "C-unwind" fn(_, _, _),
             );
@@ -506,6 +560,12 @@ impl MacOSWindow {
     /// dropped before that turn has no mode left to take.
     fn handle_transition_ended(self: &Rc<Self>) {
         self.state.lock().sequence.step_ended();
+        // A window that left full screen, or failed to enter it, stands at
+        // its own level again; one still full screen stays at the normal one.
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, on the
+        // main thread AppKit sends its notifications on.
+        let fullscreen = unsafe { self.read_flags() }.fullscreen;
+        self.apply_level(fullscreen);
         self.publish_state();
         let window = crate::owner::slot::OwnerWeak::new(self);
         crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
@@ -558,9 +618,16 @@ impl MacOSWindow {
             if moved_controls {
                 self.place_system_controls();
             }
+            // A locked pointer rests over the content wherever it went.
+            self.keep_lock_point();
             self.publish_state();
 
-            tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
+            tracing::trace!(
+                handle = ?self.ns_window,
+                width = %new_size.width,
+                height = %new_size.height,
+                "window resized"
+            );
         }
     }
 
@@ -578,9 +645,16 @@ impl MacOSWindow {
                 state.bounds.origin = new_origin;
             }
 
+            // A locked pointer rests over the content wherever it went.
+            self.keep_lock_point();
             self.publish_state();
 
-            tracing::debug!("Window moved to ({}, {})", new_origin.x, new_origin.y);
+            tracing::debug!(
+                handle = ?self.ns_window,
+                x = %new_origin.x,
+                y = %new_origin.y,
+                "window moved"
+            );
         }
     }
 
@@ -597,6 +671,8 @@ impl MacOSWindow {
     /// Handle focus lost event
     fn handle_focus_lost(&self) {
         self.text_key_window_changed();
+        // A grab ends with the focus, before the snapshot says so.
+        self.let_pointer_go();
         self.publish_state();
         self.facets.accessibility.focus_changed(false);
         tracing::debug!("Window lost focus");
@@ -677,6 +753,9 @@ impl MacOSWindow {
         // close once begun always finishes here. The first panic resumes at
         // the end.
         let mut failure = flui_foundation::panic::FirstPanic::new();
+        // A closed window holds no pointer: the mouse is attached again
+        // before anyone hears of the close.
+        failure.contain(|| self.let_pointer_go());
 
         // Untrack from the platform's window map here, on the owner thread the
         // delegate notification runs on: the map holds the window strongly, so
@@ -750,7 +829,9 @@ impl MacOSWindow {
                 refused.report();
             }
             if changed {
-                tracing::info!("Window scale factor changed to {}", new_scale.get());
+                tracing::info!(handle = ?self.ns_window, scale = new_scale.get(), "window scale changed");
+                // An image cursor is measured in points at the scale.
+                self.rescale_cursor();
             }
 
             // Re-read the display in the same pass: this handler is reached on
@@ -770,6 +851,8 @@ impl MacOSWindow {
             // After the invalidation, so the snapshot read is the one with the
             // display the window moved to.
             self.sync_layer_refresh();
+            // On another screen a locked pointer is put back over the content.
+            self.keep_lock_point();
             self.publish_state();
         }
     }
@@ -782,7 +865,7 @@ impl MacOSWindow {
             let screen: ObjcId = msg_send![self.ns_window, screen];
             if screen != NIL {
                 let scale: f64 = msg_send![screen, backingScaleFactor];
-                tracing::debug!("Window moved to screen with scale factor {}", scale);
+                tracing::debug!(handle = ?self.ns_window, scale, "window moved to another screen");
 
                 // Update scale factor (will trigger backing properties changed)
                 self.handle_backing_properties_changed();

@@ -79,6 +79,11 @@ pub(crate) trait ViewInput {
         regions: &[flui_platform::input_regions::InputRegion],
         scale: flui_foundation::geometry::DevicePixelRatio,
     );
+
+    /// The window holds the pointer locked (`CursorGrab::Locked`), or no
+    /// longer does: while it does, the mouse's motion is raw motion, and no
+    /// move is delivered.
+    fn set_pointer_locked(&self, locked: bool);
 }
 
 /// The text input's part of one content view: the document AppKit's input
@@ -259,6 +264,17 @@ pub(crate) fn set_input_regions(
     let _taken = unsafe {
         with_content_view(std::ptr::from_ref(view).cast_mut(), |view| {
             view.input().set_input_regions(regions, scale);
+        })
+    };
+}
+
+/// Tell the input of `view`, a FLUIContentView, whether its window holds the
+/// pointer locked. A view this class did not build takes nothing.
+pub(crate) fn set_pointer_locked(view: &AnyObject, locked: bool) {
+    // SAFETY: `view` is a live NSView the caller holds, on the main thread.
+    let _taken = unsafe {
+        with_content_view(std::ptr::from_ref(view).cast_mut(), |view| {
+            view.input().set_pointer_locked(locked);
         })
     };
 }

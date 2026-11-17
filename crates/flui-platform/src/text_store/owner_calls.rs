@@ -90,8 +90,8 @@
 //!   its destructor is kept behind the first failure (ADR-0281). One that
 //!   panics while the thread is already unwinding aborts, as in std.
 
+use flui_foundation::panic::FirstPanic;
 use std::any::Any;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use super::lock::{CommitGate, Parked};
 
@@ -105,7 +105,7 @@ use super::lock::{CommitGate, Parked};
 #[derive(Default)]
 #[must_use = "a scope holds the first failure until it is resumed or handed on"]
 pub struct OwnerCalls {
-    first: Option<Box<dyn Any + Send>>,
+    first: FirstPanic,
     failed: bool,
     /// Where a failure goes the moment it is caught, for a scope whose
     /// failures belong to a gate's owner (a store's settle).
@@ -125,7 +125,7 @@ impl OwnerCalls {
     /// A scope that has caught nothing.
     pub const fn new() -> Self {
         Self {
-            first: None,
+            first: FirstPanic::new(),
             failed: false,
             parks_in: None,
         }
@@ -137,7 +137,7 @@ impl OwnerCalls {
     /// ordinary scope.
     pub fn parking_in(gate: Option<CommitGate>) -> Self {
         Self {
-            first: None,
+            first: FirstPanic::new(),
             failed: false,
             parks_in: gate,
         }
@@ -164,10 +164,8 @@ impl OwnerCalls {
         self.failed = true;
         if let Some(gate) = &self.parks_in {
             gate.defer_failure(payload);
-        } else if self.first.is_none() {
-            self.first = Some(payload);
         } else {
-            flui_foundation::panic::discard_payload(payload);
+            self.first.record(payload);
         }
     }
 
@@ -181,11 +179,7 @@ impl OwnerCalls {
 
     /// Run `call`, owner code, contained; `None` when it panicked.
     pub fn run<R>(&mut self, call: impl FnOnce() -> R) -> Option<R> {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: owner code runs contained; its panic is kept for the owner turn"
-        )]
-        match catch_unwind(AssertUnwindSafe(call)) {
+        match caught(call) {
             Ok(value) => Some(value),
             Err(payload) => {
                 self.keep(payload);
@@ -202,11 +196,7 @@ impl OwnerCalls {
     pub fn run_parking<R>(&mut self, gate: &CommitGate, call: impl FnOnce() -> R) -> Option<R> {
         let held = gate.holds_failure();
         let unwinding = std::thread::panicking();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: owner code runs contained; its panic is kept behind parked work"
-        )]
-        match catch_unwind(AssertUnwindSafe(call)) {
+        match caught(call) {
             Ok(value) => {
                 if !held {
                     self.take_parked(gate);
@@ -264,11 +254,7 @@ impl OwnerCalls {
         call: impl FnOnce() -> R,
     ) -> Option<R> {
         let unwinding = std::thread::panicking();
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: owner code runs contained; its panic is kept and parked work stays"
-        )]
-        match catch_unwind(AssertUnwindSafe(call)) {
+        match caught(call) {
             Ok(value) => Some(value),
             Err(payload) => {
                 let parked = gate.and_then(CommitGate::take_parked);
@@ -282,11 +268,7 @@ impl OwnerCalls {
     /// run owner code: dropped, contained, after a failure too. A panic from
     /// its destructor is kept behind any earlier failure (ADR-0281).
     pub fn retire<T>(&mut self, value: T) {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a retired value's drop runs contained behind any earlier failure"
-        )]
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(move || drop(value))) {
+        if let Err(payload) = caught(move || drop(value)) {
             self.keep(payload);
         }
     }
@@ -300,22 +282,26 @@ impl OwnerCalls {
 
     /// The first failure, for a caller that parks or wraps it.
     #[must_use]
-    pub fn into_failure(mut self) -> Option<Box<dyn Any + Send>> {
-        self.first.take()
+    pub fn into_failure(self) -> Option<Box<dyn Any + Send>> {
+        self.first.into_payload()
     }
 
-    /// Resume the first failure, if any.
+    /// Resume the first failure, if any. Called while the thread is already
+    /// unwinding, the unwinding failure is the first one and this one is
+    /// discarded instead of raised ([`FirstPanic::resume`], ADR-0281 §4).
     pub fn resume(self) {
-        if let Some(payload) = self.into_failure() {
-            resume_unwind(payload);
-        }
+        self.first.resume();
     }
 }
 
-impl Drop for OwnerCalls {
-    fn drop(&mut self) {
-        if let Some(payload) = self.first.take() {
-            flui_foundation::panic::discard_payload(payload);
-        }
+/// Run `call` contained and hand its panic back, for a scope that decides
+/// where the panic goes (kept, parked in a gate, or ordered behind one).
+fn caught<R>(call: impl FnOnce() -> R) -> Result<R, Box<dyn Any + Send>> {
+    let mut containment = FirstPanic::new();
+    match containment.contain(call) {
+        Some(value) => Ok(value),
+        None => Err(containment
+            .into_payload()
+            .expect("BUG: a contained call that returned nothing panicked")),
     }
 }

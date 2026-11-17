@@ -182,7 +182,7 @@ count = 1
 
 [[allow]]
 path = "packages/flui-material/src/tabs.rs"
-count = 4
+count = 3
 
 [[allow]]
 path = "packages/flui-material/src/theme.rs"

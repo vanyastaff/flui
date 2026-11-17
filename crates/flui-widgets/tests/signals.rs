@@ -96,26 +96,22 @@ struct WriterInBuild {
 
 struct WriterInBuildState {
     view: WriterInBuild,
-    writer: Option<flui_view::WriterSource>,
+    writer: flui_view::WriterSource,
 }
 
 impl StatefulView for WriterInBuild {
     type State = WriterInBuildState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         WriterInBuildState {
             view: self.clone(),
-            writer: None,
+            writer: ctx.writer_source(),
         }
     }
 }
 
 impl ViewState<WriterInBuild> for WriterInBuildState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer = Some(ctx.writer_source());
-    }
-
     fn build(&self, _view: &WriterInBuild, _ctx: &dyn BuildContext) -> impl IntoView {
-        let writer = self.writer.as_ref().expect("init_state ran");
+        let writer = &self.writer;
         // This test proves the run-time refusal of a write in build: a widget
         // holding a writer source can still open one there.
         let sig = self.view.sig;

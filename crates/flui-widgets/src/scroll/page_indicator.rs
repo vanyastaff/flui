@@ -284,7 +284,7 @@ pub struct PageIndicatorState {
     /// The channel the listener subscribed on, for the painter's repaint
     /// trigger: a fresh subscription means a fresh source.
     repaint_source: Option<Rc<dyn Listenable>>,
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
 }
 
 impl std::fmt::Debug for PageIndicatorState {
@@ -298,7 +298,7 @@ impl std::fmt::Debug for PageIndicatorState {
 impl StatefulView for PageIndicator {
     type State = PageIndicatorState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let initial = match &self.source {
             Source::Controlled(controller) => controller.initial_page() as f64,
             Source::Observed(_) => 0.0,
@@ -314,7 +314,7 @@ impl StatefulView for PageIndicator {
             live,
             listener: None,
             repaint_source: None,
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
         }
     }
 }
@@ -322,10 +322,7 @@ impl StatefulView for PageIndicator {
 impl PageIndicatorState {
     fn subscribe(&mut self) {
         self.unsubscribe();
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: init_state mints the rebuild handle before subscribing");
+        let rebuild = self.rebuild.clone();
         let live = Rc::downgrade(&self.live);
         let listenable = self.live.source.borrow().listenable();
         let subscription = listenable.listen(Rc::new(move || {
@@ -346,8 +343,7 @@ impl PageIndicatorState {
 }
 
 impl ViewState<PageIndicator> for PageIndicatorState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.subscribe();
     }
 

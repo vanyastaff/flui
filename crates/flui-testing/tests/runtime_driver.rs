@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use flui_foundation::geometry::Size;
 use flui_interaction::focus::FocusNode;
 use flui_painting::styling::Color;
+use flui_platform::Cursor;
 use flui_platform::text_store::{
     LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,
 };
@@ -464,11 +465,11 @@ fn mouse_region_cursor_reaches_the_window_through_the_ui_runtime() {
             .child(SizedBox::new(40.0, 40.0)),
         tight(100.0, 100.0),
     );
-    assert_eq!(laid.cursor(), CursorIcon::Default);
+    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Default));
 
     laid.dispatch_pointer_hover(20.0, 20.0);
 
-    assert_eq!(laid.cursor(), CursorIcon::Pointer);
+    assert_eq!(laid.cursor(), Cursor::Icon(CursorIcon::Pointer));
 }
 
 #[derive(Clone, StatefulView)]

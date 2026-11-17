@@ -408,6 +408,8 @@ pub(super) fn build_lending_ui_runtime(
     let native = Rc::clone(window.window());
     let ui_runtime = crate::app::ui_runtime::UiRuntime::try_new(window, scale_factor, host)?;
     attach_window_control(&ui_runtime, &native);
+    #[cfg(not(target_arch = "wasm32"))]
+    feed_service_lifecycle(&ui_runtime);
     // Before its first presentation can hear an opened URL, and before its
     // root mounts, so a link that launched the application opens its first
     // Router on the link. The links are on loan to the installation, which
@@ -417,6 +419,36 @@ pub(super) fn build_lending_ui_runtime(
         routing.open_held_in(&ui_runtime, native.as_ref(), is_main_window)
     });
     Ok((ui_runtime, loan))
+}
+
+/// Feed the lifecycle the application's services watch from `ui_runtime`'s
+/// scheduler: its state now, each change it commits, and its retirement,
+/// when the scheduler drops the listener with the runtime.
+#[cfg(not(target_arch = "wasm32"))]
+fn feed_service_lifecycle(ui_runtime: &crate::app::ui_runtime::UiRuntime) {
+    /// Takes the runtime out of the services' lifecycle as the scheduler
+    /// drops it with the runtime's listeners.
+    struct Fed {
+        lifecycle: Rc<crate::app::lifecycle::ServiceLifecycle>,
+        runtime: flui_foundation::UiRuntimeId,
+    }
+
+    impl Drop for Fed {
+        fn drop(&mut self) {
+            self.lifecycle.forget(self.runtime);
+        }
+    }
+
+    let lifecycle = APP_RUNTIME.with(|slot| slot.borrow().service_lifecycle());
+    let scheduler = ui_runtime.scheduler();
+    lifecycle.note(ui_runtime.id(), scheduler.lifecycle_state());
+    let fed = Fed {
+        lifecycle,
+        runtime: ui_runtime.id(),
+    };
+    let _listener = scheduler.add_lifecycle_state_listener(Rc::new(move |state| {
+        fed.lifecycle.note(fed.runtime, state);
+    }));
 }
 
 /// [`build_lending_ui_runtime`] for a test that installs no window: a loan it
@@ -630,6 +662,15 @@ fn end_session_now() -> flui_platform::SessionEndAnswer {
     }
 }
 
+/// The web's `pagehide`: the browser grants no synchronous budget and the
+/// page may come back from its cache, so the notice is delivered and the
+/// flush registry keeps writing on its own; nothing waits, closes or quits.
+#[cfg(target_arch = "wasm32")]
+fn end_session_now() -> flui_platform::SessionEndAnswer {
+    deliver_contained(&flui_platform::HostNotice::SessionEnded);
+    flui_platform::SessionEndAnswer::Proceed
+}
+
 /// Hold a phone's process in the background for `writes`, the flush's writes
 /// still in flight: a thread waits for them until `until`, reports by name
 /// what is still not stored then, and asks the owner for the turn that
@@ -715,15 +756,6 @@ pub(super) fn release_finished_background_writes() {
     if finished {
         let _ = session_end_platform(flui_native::OwnerPlatform::release_session_end);
     }
-}
-
-/// The web's `pagehide`: the browser grants no synchronous budget and the
-/// page may come back from its cache, so the notice is delivered and the
-/// flush registry keeps writing on its own; nothing waits, closes or quits.
-#[cfg(target_arch = "wasm32")]
-fn end_session_now() -> flui_platform::SessionEndAnswer {
-    deliver_contained(&flui_platform::HostNotice::SessionEnded);
-    flui_platform::SessionEndAnswer::Proceed
 }
 
 /// Deliver the session's end to every UI runtime in its slot while the

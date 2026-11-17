@@ -190,6 +190,8 @@ objc2-foundation = { workspace = true, features = [
     "NSNotification",
     "NSDistributedNotificationCenter",
     "NSLocale",
+    # The scroller paging behaviour (`preferences::apple::macos`).
+    "NSUserDefaults",
     # The regional formats (`preferences::apple::regional`).
     "NSCalendar",
     "NSDateFormatter",
@@ -222,6 +224,11 @@ objc2-app-kit = { workspace = true, features = [
     "NSVisualEffectView",
     "NSWindowScripting",
     "NSAppearance",
+    # The accent colour and the preferred scroller style (ADR-0359).
+    "NSColor",
+    "NSColorSpace",
+    "NSControl",
+    "NSScroller",
     # `NSHapticFeedbackManager`, the window's haptic actuator (ADR-0210).
     "NSHapticFeedback",
 ] }
@@ -363,6 +370,8 @@ web-sys = { version = "0.3", features = [
     "Blob",
     # Rendering
     "CanvasRenderingContext2d",
+    # An image cursor's pixels, drawn into a canvas to encode them
+    "ImageData",
     "DomRect",
     "DomRectList",
     # Display

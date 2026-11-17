@@ -160,26 +160,24 @@ impl flui_view::View for MediaQueryRoot {
 pub(crate) struct MediaQueryRootState {
     source: Rc<MediaQuerySource>,
     registration: Option<MediaQueryRegistration>,
-    handle: Option<RebuildHandle>,
+    handle: RebuildHandle,
 }
 
 impl flui_view::StatefulView for MediaQueryRoot {
     type State = MediaQueryRootState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         MediaQueryRootState {
             source: Rc::clone(&self.source),
             registration: None,
-            handle: None,
+            handle: ctx.rebuild_handle(),
         }
     }
 }
 
 impl flui_view::ViewState<MediaQueryRoot> for MediaQueryRootState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let handle = ctx.rebuild_handle();
-        self.registration = Some(self.source.install_rebuild_handle(handle.clone()));
-        self.handle = Some(handle);
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        self.registration = Some(self.source.install_rebuild_handle(self.handle.clone()));
     }
 
     fn did_update_view(&mut self, _old_view: &MediaQueryRoot, new_view: &MediaQueryRoot) {
@@ -194,15 +192,12 @@ impl flui_view::ViewState<MediaQueryRoot> for MediaQueryRootState {
             // the ui_runtime's root wrapper.
             self.registration.take();
             self.source = Rc::clone(&new_view.source);
-            if let Some(handle) = self.handle.clone() {
-                self.registration = Some(self.source.install_rebuild_handle(handle));
-            }
+            self.registration = Some(self.source.install_rebuild_handle(self.handle.clone()));
         }
     }
 
     fn dispose(&mut self) {
         self.registration.take();
-        self.handle.take();
     }
 
     fn build(&self, view: &MediaQueryRoot, _ctx: &dyn BuildContext) -> impl IntoView {

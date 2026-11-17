@@ -167,11 +167,7 @@ mod uri_list {
             let mut list = String::new();
             for uri in uris {
                 let Some(uri) = uri.to_uri(style) else {
-                    tracing::debug!(
-                        ?uri,
-                        ?style,
-                        "a path with no file URI is left out of the list"
-                    );
+                    tracing::debug!(?style, "a path with no file URI is left out of the list");
                     continue;
                 };
                 list.push_str(&uri);

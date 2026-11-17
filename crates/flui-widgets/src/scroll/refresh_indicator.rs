@@ -446,7 +446,7 @@ struct Refresher {
     /// The gesture's command, resolved by the latest build below the
     /// indicator's action.
     command: RefCell<Option<CommandHandle>>,
-    writer: RefCell<Option<WriterSource>>,
+    writer: WriterSource,
     post_frame: RefCell<Option<PostFrameHandle>>,
     driver: RefCell<Option<AsyncDriver>>,
     /// The refresh in flight; dropping it cancels the future.
@@ -459,7 +459,7 @@ struct Refresher {
 }
 
 impl Refresher {
-    fn new(view: &RefreshIndicator, settle: AnimationController) -> Rc<Self> {
+    fn new(view: &RefreshIndicator, settle: AnimationController, writer: WriterSource) -> Rc<Self> {
         Rc::new_cyclic(|this| Self {
             this: this.clone(),
             controller: RefCell::new(view.controller.clone().unwrap_or_default()),
@@ -470,7 +470,7 @@ impl Refresher {
             pulling: Cell::new(None),
             travel: Cell::new(0.0),
             command: RefCell::new(None),
-            writer: RefCell::new(None),
+            writer,
             post_frame: RefCell::new(None),
             driver: RefCell::new(None),
             task: RefCell::new(None),
@@ -591,9 +591,8 @@ impl Refresher {
             return;
         }
         let command = self.command.borrow().clone();
-        let writer = self.writer.borrow().clone();
-        if let (Some(command), Some(writer)) = (command, writer) {
-            writer.write(|ctx| command.perform(ctx));
+        if let Some(command) = command {
+            self.writer.write(|ctx| command.perform(ctx));
         }
     }
 
@@ -764,11 +763,11 @@ impl fmt::Debug for RefreshIndicatorState {
 impl StatefulView for RefreshIndicator {
     type State = RefreshIndicatorState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let settle = AnimationController::builder(SETTLE)
             .debug_label("RefreshIndicator.settle")
             .build_on(None);
-        let refresher = Refresher::new(self, settle.controller().clone());
+        let refresher = Refresher::new(self, settle.controller().clone(), ctx.writer_source());
         let connection: Rc<dyn NestedScrollConnection> = refresher.clone();
         RefreshIndicatorState {
             refresher,
@@ -811,7 +810,6 @@ impl RefreshIndicatorState {
 
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.refresher.writer.borrow_mut() = Some(ctx.writer_source());
         self.refresher.mounted.set(true);
         let settle = self.settle.controller().clone();
         let weak = Rc::downgrade(&self.refresher);
@@ -954,7 +952,7 @@ impl fmt::Debug for RefreshOverlay {
 }
 
 struct RefreshOverlayState {
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
     subscription: Option<flui_foundation::Subscription>,
     /// The controller the live subscription listens on: a rebuild handing a
     /// different one re-subscribes.
@@ -965,9 +963,9 @@ struct RefreshOverlayState {
 impl StatefulView for RefreshOverlay {
     type State = RefreshOverlayState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         RefreshOverlayState {
-            rebuild: None,
+            rebuild: ctx.rebuild_handle(),
             subscription: None,
             subscribed_controller: None,
             initial: Some(self.controller.clone()),
@@ -978,9 +976,7 @@ impl StatefulView for RefreshOverlay {
 impl RefreshOverlayState {
     fn subscribe(&mut self, controller: &RefreshController) {
         self.unsubscribe();
-        let Some(rebuild) = self.rebuild.clone() else {
-            return;
-        };
+        let rebuild = self.rebuild.clone();
         let watched = controller.clone();
         let shown = Cell::new((watched.is_refreshing(), watched.pull_distance_px()));
         let subscription = controller.inner.listen(Rc::new(move || {
@@ -999,8 +995,7 @@ impl RefreshOverlayState {
 }
 
 impl ViewState<RefreshOverlay> for RefreshOverlayState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         if let Some(controller) = self.initial.take() {
             self.subscribe(&controller);
         }

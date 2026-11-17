@@ -22,12 +22,13 @@ use std::time::Duration;
 use flui_foundation::geometry::{DevicePixelRatio, Size};
 use flui_platform::{
     GesturePreferences, MotionPreference, NativeMouseGeometry, PreferenceQueryError,
-    SystemPreferences, WheelPreferences, WheelStep,
+    ScrollBarPreferences, ScrollBarVisibility, SrgbColor, SystemPreferences, WheelPreferences,
+    WheelStep,
 };
 use windows::Foundation::TypedEventHandler;
-use windows::UI::ViewManagement::{AccessibilitySettings, UISettings};
+use windows::UI::ViewManagement::{AccessibilitySettings, UIColorType, UISettings};
 use windows::Win32::Foundation::{
-    GetLastError, HWND, LPARAM, LRESULT, SetLastError, WIN32_ERROR, WPARAM,
+    E_NOINTERFACE, GetLastError, HWND, LPARAM, LRESULT, SetLastError, WIN32_ERROR, WPARAM,
 };
 use windows::Win32::System::WinRT::{
     RO_INIT_SINGLETHREADED, RoActivateInstance, RoInitialize, RoUninitialize,
@@ -37,7 +38,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK, SM_CYDRAG, SPI_GETWHEELSCROLLCHARS,
     SPI_GETWHEELSCROLLLINES, SYSTEM_METRICS_INDEX, SYSTEM_PARAMETERS_INFO_ACTION,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_SETTINGCHANGE,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW, WM_DWMCOLORIZATIONCOLORCHANGED,
+    WM_SETTINGCHANGE,
 };
 use windows::core::{Interface, RuntimeName};
 
@@ -47,6 +49,7 @@ use crate::owner::signal::OwnerSignal;
 use crate::owner::sources::SystemPreferenceSource;
 use crate::owner::windows::broadcast::Subscriber;
 use crate::owner::windows::control::OwnerPreferences;
+use crate::preferences::retries::Retries;
 
 mod languages;
 mod regional;
@@ -56,6 +59,10 @@ mod retry_tests;
 mod tests;
 
 const RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The retries of a read that failed or left a value unread: 0.1 to 3.2 s
+/// apart, then none until the system next reports a setting change.
+const READ_RETRIES: Retries = Retries::new(RETRY_INTERVAL, 6);
 
 struct Invalidation {
     accepting: AtomicBool,
@@ -91,7 +98,11 @@ impl Subscriber for PreferenceBroadcasts {
         _wparam: WPARAM,
         _lparam: LPARAM,
     ) -> Option<LRESULT> {
-        if message == WM_SETTINGCHANGE {
+        // A setting change, or a change of the colour DWM tints frames with,
+        // which follows the accent; `UISettings.ColorValuesChanged` reports
+        // the same change, and whichever arrives first marks the snapshot
+        // stale.
+        if message == WM_SETTINGCHANGE || message == WM_DWMCOLORIZATIONCOLORCHANGED {
             self.0.notify();
         }
         None
@@ -106,8 +117,8 @@ pub(crate) struct PreferenceSource {
     invalidation: Arc<Invalidation>,
     ui: UISettings,
     accessibility: AccessibilitySettings,
-    text_token: Option<i64>,
-    motion_token: Option<i64>,
+    /// Each `UISettings` change event the source registered, with its token.
+    observers: Vec<(UiSettingsEvent, i64)>,
     cache: SampleCache,
     _entry: WinRtEntry,
 }
@@ -120,7 +131,8 @@ impl std::fmt::Debug for PreferenceSource {
 
 impl SystemPreferenceSource for PreferenceSource {
     fn sample(&self) -> Result<SystemPreferences, PlatformError> {
-        self.sample_with(|| sample(&self.ui, &self.accessibility))
+        let previous = self.cache.value.borrow().clone();
+        self.sample_with(|| Ok(sample(&self.ui, &self.accessibility, previous.as_ref())))
     }
 }
 
@@ -215,45 +227,17 @@ impl PreferenceSource {
             invalidation,
             ui,
             accessibility,
-            text_token: None,
-            motion_token: None,
+            observers: Vec::with_capacity(UiSettingsEvent::ALL.len()),
             cache: SampleCache::default(),
             _entry: entry,
         };
-        let text = Arc::clone(&source.invalidation);
-        source.text_token = Some(
-            source
-                .ui
-                .TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {
-                    os_entry(
-                        "the text-scale delegate",
-                        (),
-                        AfterPanic::Answer(|()| Ok(())),
-                        || {
-                            text.notify();
-                            Ok(())
-                        },
-                    )
-                }))
-                .map_err(native_error)?,
-        );
-        let motion = Arc::clone(&source.invalidation);
-        source.motion_token = Some(
-            source
-                .ui
-                .AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| {
-                    os_entry(
-                        "the animations delegate",
-                        (),
-                        AfterPanic::Answer(|()| Ok(())),
-                        || {
-                            motion.notify();
-                            Ok(())
-                        },
-                    )
-                }))
-                .map_err(native_error)?,
-        );
+        // Each registration is owned as soon as it succeeds: a later failure
+        // drops the source, which revokes the earlier ones.
+        for event in UiSettingsEvent::ALL {
+            if let Some(token) = event.observe(&source.ui, &source.invalidation)? {
+                source.observers.push((event, token));
+            }
+        }
         Ok(source)
     }
 
@@ -264,11 +248,28 @@ impl PreferenceSource {
 
     /// One read through the source's cache, with `read` standing for the
     /// system's answer.
-    pub(crate) fn sample_with(
+    pub(crate) fn sample_with<R: Into<Sample>>(
         &self,
-        read: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
+        read: impl FnOnce() -> Result<R, PlatformError>,
     ) -> Result<SystemPreferences, PlatformError> {
         self.cache.read(&self.invalidation.pending, read)
+    }
+}
+
+/// One native read: the values Windows answered and, for each getter that
+/// failed, the value accepted before it (none on a cold source).
+pub(crate) struct Sample {
+    values: SystemPreferences,
+    /// Every getter answered; otherwise the read owes a retry.
+    complete: bool,
+}
+
+impl From<SystemPreferences> for Sample {
+    fn from(values: SystemPreferences) -> Self {
+        Self {
+            values,
+            complete: true,
+        }
     }
 }
 
@@ -284,26 +285,48 @@ struct Retry {
     // Reposting a wake must not push the permitted read into the future.
     read_after: web_time::Instant,
     wake_at: web_time::Instant,
+    /// The retries of `READ_RETRIES` spent on reads that failed in a row;
+    /// `None` for a read again that a change during the last read owes.
+    spent: Option<u32>,
 }
 
 struct SampleAttempt<'a> {
     reading: &'a Cell<bool>,
     pending: &'a AtomicBool,
     committed: bool,
+    /// The committed read left a getter unanswered.
+    incomplete: bool,
     retry: &'a Cell<Option<Retry>>,
+    /// The failure retries spent before this attempt.
+    spent: Option<u32>,
     started: web_time::Instant,
 }
 
 impl Drop for SampleAttempt<'_> {
     fn drop(&mut self) {
-        if !self.committed {
-            self.pending.store(true, Ordering::Release);
-        }
-        if self.pending.load(Ordering::Acquire) {
-            let next = self.started + RETRY_INTERVAL;
+        let failed = !self.committed || self.incomplete;
+        if failed {
+            let spent = self.spent.map_or(0, |spent| spent.saturating_add(1));
+            match READ_RETRIES.pause(spent) {
+                Some(pause) => {
+                    self.pending.store(true, Ordering::Release);
+                    let next = self.started + pause;
+                    self.retry.set(Some(Retry {
+                        read_after: next,
+                        wake_at: next,
+                        spent: Some(spent),
+                    }));
+                }
+                // Every retry spent: nothing is read again until the system
+                // reports a change, which marks the source pending.
+                None => self.retry.set(None),
+            }
+        } else if self.pending.load(Ordering::Acquire) {
+            // A change arrived during the read: read again at once.
             self.retry.set(Some(Retry {
-                read_after: if self.committed { self.started } else { next },
-                wake_at: next,
+                read_after: self.started,
+                wake_at: self.started + RETRY_INTERVAL,
+                spent: None,
             }));
         } else {
             self.retry.set(None);
@@ -313,19 +336,19 @@ impl Drop for SampleAttempt<'_> {
 }
 
 impl SampleCache {
-    fn read(
+    fn read<R: Into<Sample>>(
         &self,
         pending: &AtomicBool,
-        read: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
+        read: impl FnOnce() -> Result<R, PlatformError>,
     ) -> Result<SystemPreferences, PlatformError> {
         self.read_at(pending, web_time::Instant::now(), read)
     }
 
-    fn read_at(
+    fn read_at<R: Into<Sample>>(
         &self,
         pending: &AtomicBool,
         now: web_time::Instant,
-        read: impl FnOnce() -> Result<SystemPreferences, PlatformError>,
+        read: impl FnOnce() -> Result<R, PlatformError>,
     ) -> Result<SystemPreferences, PlatformError> {
         // Native getters can pump messages. Refuse even a cached nested read:
         // publishing it could overtake the outer observation being assembled.
@@ -342,16 +365,19 @@ impl SampleCache {
             reading: &self.reading,
             pending,
             committed: false,
+            incomplete: false,
             retry: &self.retry,
+            spent: self.retry.get().and_then(|retry| retry.spent),
             started: now,
         };
         // Consume only the old obligation. A notification during the getter
         // must remain pending after this observation has been committed.
         pending.store(false, Ordering::Release);
-        let value = read()?;
-        self.value.replace(Some(value.clone()));
+        let Sample { values, complete } = read()?.into();
+        self.value.replace(Some(values.clone()));
         reading.committed = true;
-        Ok(value)
+        reading.incomplete = !complete;
+        Ok(values)
     }
 }
 
@@ -360,22 +386,71 @@ impl Drop for PreferenceSource {
         self.invalidation.accepting.store(false, Ordering::Release);
         // A failed revocation can retain the delegate. Its only capture is
         // ref-counted invalidation state, now inert; it never owns UI state.
-        for result in [
-            self.text_token
-                .take()
-                .map(|token| self.ui.RemoveTextScaleFactorChanged(token)),
-            self.motion_token
-                .take()
-                .map(|token| self.ui.RemoveAnimationsEnabledChanged(token)),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Err(error) = result {
+        for (event, token) in self.observers.drain(..) {
+            if let Err(error) = event.revoke(&self.ui, token) {
                 contain_owner_callback(
-                    || tracing::warn!(%error, "preference observer revocation failed"),
+                    || tracing::warn!(%error, ?event, "preference observer revocation failed"),
                 );
             }
+        }
+    }
+}
+
+/// A `UISettings` change event the source observes: each only marks the
+/// snapshot stale and wakes the owner, which reads every value again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UiSettingsEvent {
+    TextScale,
+    Animations,
+    /// The accent and the other UI colours.
+    Colors,
+    /// "Always show scrollbars" (Windows 10 1809).
+    AutoHideScrollBars,
+}
+
+impl UiSettingsEvent {
+    const ALL: [Self; 4] = [
+        Self::TextScale,
+        Self::Animations,
+        Self::Colors,
+        Self::AutoHideScrollBars,
+    ];
+
+    /// Register this event's delegate, which notifies `invalidation`; its
+    /// token, or `None` where this Windows has no such event.
+    fn observe(
+        self,
+        ui: &UISettings,
+        invalidation: &Arc<Invalidation>,
+    ) -> Result<Option<i64>, PlatformError> {
+        let invalidation = Arc::clone(invalidation);
+        let registered = match self {
+            Self::TextScale => ui.TextScaleFactorChanged(&TypedEventHandler::new(move |_, _| {
+                notify_from_os("the text-scale delegate", &invalidation)
+            })),
+            Self::Animations => {
+                ui.AnimationsEnabledChanged(&TypedEventHandler::new(move |_, _| {
+                    notify_from_os("the animations delegate", &invalidation)
+                }))
+            }
+            Self::Colors => ui.ColorValuesChanged(&TypedEventHandler::new(move |_, _| {
+                notify_from_os("the colour-values delegate", &invalidation)
+            })),
+            Self::AutoHideScrollBars => {
+                ui.AutoHideScrollBarsChanged(&TypedEventHandler::new(move |_, _| {
+                    notify_from_os("the scroll-bar delegate", &invalidation)
+                }))
+            }
+        };
+        unless_missing(registered)
+    }
+
+    fn revoke(self, ui: &UISettings, token: i64) -> windows::core::Result<()> {
+        match self {
+            Self::TextScale => ui.RemoveTextScaleFactorChanged(token),
+            Self::Animations => ui.RemoveAnimationsEnabledChanged(token),
+            Self::Colors => ui.RemoveColorValuesChanged(token),
+            Self::AutoHideScrollBars => ui.RemoveAutoHideScrollBarsChanged(token),
         }
     }
 }
@@ -481,37 +556,124 @@ fn mouse_geometry(dpi: u32) -> Result<NativeMouseGeometry, PreferenceQueryError>
     Ok(NativeMouseGeometry::try_new(double_click, drag, ratio)?)
 }
 
+/// One read of every value, each getter on its own: a getter that fails
+/// leaves its value as `previous` accepted it (none on a cold source) and
+/// marks the read incomplete, so the cache retries it while the others
+/// stand.
 fn sample(
     ui: &UISettings,
     accessibility: &AccessibilitySettings,
-) -> Result<SystemPreferences, PlatformError> {
-    let text_scale = ui.TextScaleFactor().map_err(native_error)?;
-    let motion = if ui.AnimationsEnabled().map_err(native_error)? {
-        MotionPreference::NoPreference
-    } else {
-        MotionPreference::Reduce
+    previous: Option<&SystemPreferences>,
+) -> Sample {
+    let mut sample = Sample {
+        values: previous.cloned().unwrap_or_default(),
+        complete: true,
     };
-    let high_contrast = accessibility.HighContrast().map_err(native_error)?;
-    let locales = languages::sample()?;
-    let snapshot = SystemPreferences::default()
-        .with_text_scale(text_scale)
-        .map_err(|error| PlatformError::Preferences {
+    sample.take(
+        ui.TextScaleFactor().map_err(native_error),
+        |values, scale| values.with_text_scale(scale).map_err(refused),
+    );
+    sample.take(
+        ui.AnimationsEnabled().map_err(native_error),
+        |values, enabled| {
+            Ok(values.with_motion(if enabled {
+                MotionPreference::NoPreference
+            } else {
+                MotionPreference::Reduce
+            }))
+        },
+    );
+    sample.take(
+        accessibility.HighContrast().map_err(native_error),
+        |values, high| Ok(values.with_high_contrast(high)),
+    );
+    sample.take(languages::sample(), |values, locales| {
+        Ok(values
+            .with_regional(regional::sample(locales.first()))
+            .with_locales(locales))
+    });
+    // This window-independent reading detects changes. Exact presentation
+    // metrics are queried separately at its actual DPI.
+    sample.take(
+        mouse_gestures(96).map_err(|error| PlatformError::Preferences {
             message: error.to_string(),
-        })?
-        .with_motion(motion)
-        .with_high_contrast(high_contrast)
-        .with_regional(regional::sample(locales.first()))
-        .with_locales(locales)
-        // This window-independent reading detects changes. Exact
-        // presentation metrics are queried separately at its actual DPI.
-        .with_gestures(
-            mouse_gestures(96).map_err(|error| PlatformError::Preferences {
-                message: error.to_string(),
-            })?,
-        )
-        .with_wheel(wheel_preferences(
-            wheel_count(SPI_GETWHEELSCROLLLINES)?,
-            wheel_count(SPI_GETWHEELSCROLLCHARS)?,
-        ));
-    Ok(snapshot)
+        }),
+        |values, gestures| Ok(values.with_gestures(gestures)),
+    );
+    sample.take(
+        wheel_count(SPI_GETWHEELSCROLLLINES)
+            .and_then(|lines| Ok((lines, wheel_count(SPI_GETWHEELSCROLLCHARS)?))),
+        |values, (lines, characters)| Ok(values.with_wheel(wheel_preferences(lines, characters))),
+    );
+    sample.take(
+        unless_missing(ui.GetColorValue(UIColorType::Accent)),
+        |values, accent| Ok(values.with_accent_color(accent.map(accent_color))),
+    );
+    sample.take(
+        unless_missing(ui.AutoHideScrollBars()),
+        |values, auto_hide| {
+            Ok(values.with_scroll_bars(
+                auto_hide.map_or_else(ScrollBarPreferences::default, scroll_bars),
+            ))
+        },
+    );
+    sample
+}
+
+impl Sample {
+    /// Record one getter's answer through `apply`; a getter that failed, or
+    /// an answer the snapshot refuses, keeps the value already held and makes
+    /// the read incomplete.
+    fn take<T>(
+        &mut self,
+        read: Result<T, PlatformError>,
+        apply: impl FnOnce(SystemPreferences, T) -> Result<SystemPreferences, PlatformError>,
+    ) {
+        match read.and_then(|answer| apply(self.values.clone(), answer)) {
+            Ok(values) => self.values = values,
+            Err(_) => self.complete = false,
+        }
+    }
+}
+
+fn refused(error: flui_platform::InvalidPreference) -> PlatformError {
+    PlatformError::Preferences {
+        message: error.to_string(),
+    }
+}
+
+/// The OS's call of a `UISettings` delegate named `name`: one notification of
+/// `invalidation` inside the OS-entry boundary.
+fn notify_from_os(name: &'static str, invalidation: &Invalidation) -> windows::core::Result<()> {
+    os_entry(name, (), AfterPanic::Answer(|()| Ok(())), || {
+        invalidation.notify();
+        Ok(())
+    })
+}
+
+/// `UISettings`' accent, an 8-bit sRGB colour with its alpha.
+fn accent_color(color: windows::UI::Color) -> SrgbColor {
+    SrgbColor::from_rgba8(color.R, color.G, color.B, color.A)
+}
+
+/// "Always show scrollbars" off lets scroll bars collapse while the content
+/// rests; on keeps them shown. Windows has no setting for a click in the
+/// track, which pages (Shift-click jumps), so that stays unobserved.
+fn scroll_bars(auto_hide: bool) -> ScrollBarPreferences {
+    ScrollBarPreferences::default().with_visibility(if auto_hide {
+        ScrollBarVisibility::WhenScrolling
+    } else {
+        ScrollBarVisibility::Always
+    })
+}
+
+/// A getter's value, or `None` where this Windows lacks the interface that
+/// carries it (an older `IUISettings` revision): no observation, not a
+/// failed read.
+fn unless_missing<T>(read: windows::core::Result<T>) -> Result<Option<T>, PlatformError> {
+    match read {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code() == E_NOINTERFACE => Ok(None),
+        Err(error) => Err(native_error(error)),
+    }
 }

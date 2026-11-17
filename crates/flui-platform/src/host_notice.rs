@@ -9,8 +9,8 @@
 //! host turns both into [`HostNotice`]s for the application and answers
 //! [`SessionEndAnswer::Block`] while any subscriber holds a [`SessionEndBlock`].
 
+use flui_foundation::panic::{FirstPanic, discard_payload};
 use std::cell::{Cell, RefCell};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 pub use flui_foundation::memory::MemoryPressureLevel;
@@ -219,8 +219,9 @@ impl SessionEndRequest {
 
     /// Run `release` once, when the last held block is released, so the host
     /// can tell the platform the application is done and the session may go
-    /// on. A panic in `release` is contained and dropped: releasing a block
-    /// never panics.
+    /// on. A panic in `release` reaches whoever released the last block, with
+    /// the block already gone; during an unwind it is discarded behind the
+    /// panic unwinding (ADR-0281).
     #[must_use]
     pub fn on_release(self, release: impl FnOnce() + 'static) -> Self {
         *self.holds.on_release.borrow_mut() = Some(Box::new(release));
@@ -322,15 +323,20 @@ impl Drop for SessionEndBlock {
         }
         let release = self.holds.on_release.borrow_mut().take();
         if let Some(release) = release {
-            // A hook that panics must not turn a release (possibly during
-            // unwinding) into an abort; its payload is left alone rather
-            // than dropped, which could panic in turn.
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "ADR-0287: a release hook's panic must not abort a release during unwinding"
-            )]
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(release)) {
-                flui_foundation::panic::discard_payload(payload);
+            if std::thread::panicking() {
+                // A second panic out of a destructor that runs during an
+                // unwind aborts; the hook's own is discarded behind the panic
+                // already unwinding (ADR-0281).
+                let mut contained = FirstPanic::new();
+                contained.contain(release);
+                if let Some(payload) = contained.into_payload() {
+                    discard_payload(payload);
+                }
+            } else {
+                // The hold is already gone from the set, so a hook that
+                // panics leaves nothing half-released, and its failure
+                // reaches whoever released the block.
+                release();
             }
         }
     }

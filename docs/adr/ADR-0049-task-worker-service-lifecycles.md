@@ -84,9 +84,10 @@ service's exit (observed on whatever worker thread ran it, after its completion 
 registry's exit notifier, which the bootstrap wires to
 `PlatformProxy::request_exit_policy_reevaluation` — an any-thread, coalesced request the owner's
 next turn settles by asking the platform's exit policy again (ADR-0327 §2). The
-winit backend carries it on the control lane's non-starvable flag (the `request_quit` twin) and,
-in its owner-thread drain, re-consults the hook exactly as the `CloseRequested` arm does — only
-when its own window map is empty — exiting if the hook now allows. The headless mock parks the
+Win32, AppKit, X11 and Wayland hosts wake their owner loop, which re-consults the hook exactly as
+the window-close path does (only when its window bookkeeping is empty) and exits if the hook now
+allows; Android, the Web and iOS have no exit policy to ask again
+(`Platform::request_exit_policy_reevaluation` in `flui-native`). The headless host parks the
 request (running the hook on the requesting thread would consult the wrong thread-local runtime
 state) and the embedding test drives the owner-thread half via
 `HeadlessExitReevaluation::drive`. Spurious requests are harmless by contract; an explicit

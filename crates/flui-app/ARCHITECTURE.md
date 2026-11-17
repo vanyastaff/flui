@@ -600,7 +600,9 @@ run with nothing borrowed.
   read that timed out, was refused or panicked, the recorder holds
   `StoredPlacement::Unknown`, which owes nothing until a change the host
   states was the user's (`ChangeOrigin::User`): the report that carries the
-  change says `WindowState::interaction` is `UserPlacing` (ADR-0343 §2).
+  change says `WindowState::interaction` is the user's
+  (`WindowInteraction::is_user`: `UserPlacing` or `UserResizing`; ADR-0343
+  §2, ADR-0354 §4).
   Nothing is inferred from what did not change nor from the report before:
   where the window opened, a display or scale change, a window manager's
   adjustment, an application's command and a change after the user's
@@ -758,6 +760,18 @@ Discarded lifecycle panic payloads are destroyed under containment, as is a futu
 whose poll panicked (ADR-0281 §2, §3); healthy completion and cancellation drop the future
 normally. A compute panic is reported as complete before its diagnostics run.
 Pinned by `service_lifecycle_matrix`.
+
+### A service watches the application's lifecycle, not a window's
+
+`ServiceContext::lifecycle` is a latest-wins watch of one owner-side fold
+(`ServiceLifecycle`): the state each live UI runtime's scheduler last
+committed, folded into the most active one, `Detached` while none is live.
+The runner feeds it where it builds every UI runtime: it notes the scheduler's
+state, adds a lifecycle listener, and the listener's capture forgets the
+runtime when the scheduler drops it with the runtime. The fold publishes only
+a change, and its table's borrow ends before a reader's waker runs. Memory
+pressure reaches a service through `AppConfig::memory_reclaim`, the route that
+already exists. Pinned by `a_service_watches_the_application_pause_and_resume`.
 
 ### The owner's teardown raises its failure from functions, never from `Drop`
 

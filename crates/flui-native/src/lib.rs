@@ -41,15 +41,18 @@
 //!
 //! ## Platform Trait
 //!
-//! The [`Platform`] trait is the central abstraction that all platform
-//! implementations must provide. It covers:
+//! The [`Platform`] trait is what every host offers, through its one
+//! implementation [`HostPlatform`] over the host's table. It covers:
 //!
-//! - **Lifecycle**: Event loop, quit
-//! - **Windows**: Creation, management, events
-//! - **Displays**: Monitor enumeration and information
-//! - **Executor**: Thread-safe background task execution
-//! - **Clipboard**: Read/write operations
-//! - **Callbacks**: Event handler registration
+//! - **Lifecycle**: `run` with the application's [`AppHandler`], `quit`, the
+//!   exit policy and the session's end
+//! - **Windows**: opening one, the window capabilities and frame insets
+//! - **Displays and preferences**: the display snapshot and the system
+//!   preferences
+//! - **Data transfer**: the clipboard, the primary selection where the system
+//!   has one, drag and drop
+//! - **Services**: opening a URL or a path, file prompts, the executable's
+//!   path, the launch values and the application's data store
 //!
 //! ## Platform Selection
 //!
@@ -64,10 +67,12 @@
 //! platform.run(Rc::new(App::default()))?;
 //! ```
 //!
-//! ## Testing with Headless Mode
+//! ## The headless host
 //!
-//! The [`HeadlessPlatform`] provides a mock implementation perfect for
-//! CI/testing without requiring a display server, GPU, or OS windowing system.
+//! The [`HeadlessPlatform`] is a host whose every position is simulated in
+//! memory: no display server, GPU or windowing system, for unit tests, CI and
+//! benchmarks that do not render. It has no event loop of its own: `run`
+//! runs the bootstrap and returns, and the test drives what follows.
 //!
 //! ### Direct Usage
 //!
@@ -101,16 +106,15 @@
 //! assert_eq!(platform.name(), "Headless");
 //! ```
 //!
-//! ### What Headless Mode Provides
+//! ### What the headless host simulates
 //!
-//! - **Headless windows**: `open_window()` returns [`HeadlessHostWindow`]s (no OS windows
-//!   created)
-//! - **In-Memory Clipboard**: a clipboard that reads back what the application wrote
-//! - **Mock Displays**: Single virtual display at 1920x1080
-//! - **Background Executor**: Async task execution with tokio runtime
-//! - **Fast Tests**: <100ms overhead, suitable for rapid test iteration
-//! - **Parallel Safe**: Thread-safe, no race conditions in parallel test
-//!   execution
+//! - **Windows**: `open_window()` returns [`HeadlessHostWindow`]s, with no OS
+//!   window behind them
+//! - **Clipboard**: in memory; it reads back what the application wrote
+//! - **Displays**: one display, 1920 by 1080 at scale 1, unless the platform
+//!   is built `with_displays`
+//! - **The owner thread**: like every host it is neither `Send` nor `Sync`, so
+//!   each test builds its own platform on its own thread
 //!
 //! ### Example Test
 //!
@@ -134,7 +138,7 @@
 //!         .expect("Failed to create window");
 //!     // The handler's first input is the window's capability snapshot.
 //!     assert!(!handler.inputs().is_empty());
-//!     // Window is a mock, no actual OS resources allocated
+//!     // No OS window stands behind it.
 //! }
 //! ```
 //!

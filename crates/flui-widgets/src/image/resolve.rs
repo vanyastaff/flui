@@ -95,10 +95,11 @@ pub(super) struct ImageResolver {
     /// `ViewState::build` takes `&self`, and the task writes from the frame's
     /// async step.
     published: Arc<Mutex<Published>>,
-    /// Captured in `init_state` — the only lifecycle hook handed a
-    /// `BuildContext`. `did_update_view` and `dispose` receive none.
-    handle: Option<RebuildHandle>,
-    /// The binding's async driver, likewise captured in `init_state`.
+    /// Schedules the owning element's rebuild when a load completes.
+    /// `did_update_view` and `dispose` receive no context, which is why the
+    /// resolver owns it.
+    handle: RebuildHandle,
+    /// The binding's async driver, captured in `init_state`.
     driver: Option<AsyncDriver>,
     /// The UI runtime's background lanes and the host's HTTP client, likewise
     /// captured in `init_state`; without lanes, decode jobs run on this thread.
@@ -135,13 +136,16 @@ impl std::fmt::Debug for ImageResolver {
 }
 
 impl ImageResolver {
-    /// Creates a resolver for `provider`. Nothing is resolved until
-    /// [`init`](Self::init) runs — the capabilities a load needs are only
-    /// reachable from `init_state`.
-    pub(super) fn new(provider: Rc<dyn ImageProvider>, gapless_playback: bool) -> Self {
+    /// Creates a resolver for `provider` that schedules rebuilds through
+    /// `handle`. Nothing is resolved until [`init`](Self::init) runs.
+    pub(super) fn new(
+        provider: Rc<dyn ImageProvider>,
+        gapless_playback: bool,
+        handle: RebuildHandle,
+    ) -> Self {
         Self {
             published: Arc::new(Mutex::new(Published::default())),
-            handle: None,
+            handle,
             driver: None,
             services: ImageServices::new(),
             token: None,
@@ -153,7 +157,6 @@ impl ImageResolver {
 
     /// Capture the lifecycle capabilities, then start the first resolve.
     pub(super) fn init(&mut self, ctx: &dyn LifecycleContext) {
-        self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
         let mut services = ImageServices::new();
         match ctx.capability::<BackgroundCapability>() {
@@ -246,14 +249,7 @@ impl ImageResolver {
             );
             return;
         };
-        // `start` runs only from `init` (which populates this immediately
-        // above its own call) and from `did_update` (which runs strictly
-        // after `init_state`), so an absent handle is an internal invariant
-        // violation, not a reachable state.
-        let handle = self
-            .handle
-            .clone()
-            .expect("BUG: image resolve started before init_state captured the rebuild handle");
+        let handle = self.handle.clone();
 
         // A decode job runs on the background lanes (or, without them, on
         // this thread); any other provider loads through its own future.

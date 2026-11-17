@@ -91,8 +91,12 @@ pub mod platform {
     pub use flui_platform::NumberingSystem;
     pub use flui_platform::RegionOverride;
     pub use flui_platform::RegionalFormats;
+    pub use flui_platform::ScrollBarPreferences;
+    pub use flui_platform::ScrollBarVisibility;
+    pub use flui_platform::ScrollTrackClick;
     pub use flui_platform::SessionEndBlock;
     pub use flui_platform::SessionEndRequest;
+    pub use flui_platform::SrgbColor;
     pub use flui_platform::SubmitError;
     pub use flui_platform::SystemPreferences;
     pub use flui_platform::TargetPlatform;

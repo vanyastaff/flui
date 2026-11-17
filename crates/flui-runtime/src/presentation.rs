@@ -22,7 +22,7 @@ use flui_layer::{PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceS
 #[cfg(any(test, feature = "testing"))]
 use flui_platform::PlatformTextInput;
 use flui_platform::TextStoreHost;
-use flui_platform::{CursorError, CursorIcon, PlatformWindow};
+use flui_platform::{Cursor, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
@@ -802,7 +802,7 @@ impl PresentationState {
                     );
                     return;
                 };
-                if let Err(error) = window.set_cursor(cursor) {
+                if let Err(error) = window.set_cursor(&Cursor::Icon(cursor)) {
                     match error {
                         CursorError::Unsupported(unsupported) => {
                             tracing::trace!(
@@ -2574,7 +2574,7 @@ impl PresentationState {
         }
         if let Some(window) = &window {
             failure.invoke(|| {
-                let _ = window.set_cursor(CursorIcon::Default);
+                let _ = window.set_cursor(&Cursor::Icon(CursorIcon::Default));
             });
         }
 

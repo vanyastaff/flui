@@ -456,8 +456,9 @@ pub(crate) mod events {
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers, NamedKey},
         pointer::{
-            ButtonChange, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId,
-            PointerInfo, PointerKind, PointerPosition, PointerRole, ScrollEvent, ScrollInversion,
+            ButtonChange, MotionAcceleration, MotionDelta, PenTool, PointerButton, PointerButtons,
+            PointerEvent, PointerId, PointerInfo, PointerKind, PointerPosition, PointerRole,
+            ScrollEvent, ScrollInversion,
         },
     };
 
@@ -468,7 +469,7 @@ pub(crate) mod events {
         NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface, PenAngles,
         RawSensors, ReadingAction, ReadingTime, decode,
     };
-    use crate::owner::web::event::{answer, client_position, pointer_position};
+    use crate::owner::web::event::{answer, client_position, holds_pointer_lock, pointer_position};
     use flui_platform::DispatchEventResult;
     use icu_normalizer::{
         ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed,
@@ -766,6 +767,7 @@ pub(crate) mod events {
             let pinch = Rc::clone(pinch);
             let accepting = registration.accepting();
             let menu = Rc::clone(menu);
+            let locking = canvas.clone();
             registration.listen(
                 canvas.as_ref(),
                 move_event(input_latency),
@@ -777,14 +779,22 @@ pub(crate) mod events {
                     }
                     let buttons = pe.buttons();
                     let contextual = opens_menu(pe.button(), pe.ctrl_key());
+                    // While the canvas holds the pointer lock the mouse rests
+                    // where it was locked, and its motion is its movement.
+                    let locked = pe.pointer_type() == "mouse" && holds_pointer_lock(&locking);
                     if !accepting.get() {
                         return;
                     }
                     if let Some(held) = active.borrow_mut().get_mut(&id) {
                         *held = buttons;
                     }
+                    let inputs = if locked {
+                        convert_locked_motion(&pe, &contacts)
+                    } else {
+                        convert_pointer_move(&pe, &contacts)
+                    };
                     // A chorded press opens the menu as a first one does.
-                    let pressed = dispatch(&pinch, &pe, convert_pointer_move(&pe, &contacts));
+                    let pressed = dispatch(&pinch, &pe, inputs);
                     menu.record(contextual, pressed);
                 }),
             )?;
@@ -1450,6 +1460,12 @@ pub(crate) mod events {
         fn coalesced_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
         #[wasm_bindgen(method, catch, js_name = getPredictedEvents)]
         fn predicted_events(this: &ExtendedPointerEvent) -> Result<js_sys::Array, JsValue>;
+        // Pointer Lock 2 allows fractional movement; web-sys reads it as an
+        // integer.
+        #[wasm_bindgen(method, getter, js_name = movementX)]
+        fn movement_x_f64(this: &ExtendedPointerEvent) -> f64;
+        #[wasm_bindgen(method, getter, js_name = movementY)]
+        fn movement_y_f64(this: &ExtendedPointerEvent) -> f64;
     }
 
     /// MouseEvent implementations can round wheel offsets even when the canvas
@@ -1708,17 +1724,8 @@ pub(crate) mod events {
         pe: &web_sys::PointerEvent,
         contacts: &RefCell<ContactRegistry>,
     ) -> Assembled {
-        let reported = buttons_from_mask(pe.buttons());
-        let held = contacts.borrow().buttons(SURFACE, None, pointer_label(pe));
-        if let (Some(held), Some(button)) = (held, map_button(pe.button()))
-            && held.contains(button) != reported.contains(button)
-        {
-            let action = if reported.contains(button) {
-                ReadingAction::Press(button)
-            } else {
-                ReadingAction::Release(button)
-            };
-            return assemble(contacts, &pointer_reading(pe, action));
+        if let Some(change) = chorded_change(pe, contacts) {
+            return change;
         }
         let extended: &ExtendedPointerEvent = pe.unchecked_ref();
         let mut batch = MoveBatch::new();
@@ -1734,6 +1741,64 @@ pub(crate) mod events {
                 &pointer_reading(pe, ReadingAction::Move),
             )
             .unwrap_or_else(DecodeError::into_inputs)
+    }
+
+    /// The press or release a `pointermove` carries when `pe.button()` names
+    /// a button whose held state differs from the contact's: a chorded button
+    /// change; `None` for a plain move.
+    fn chorded_change(
+        pe: &web_sys::PointerEvent,
+        contacts: &RefCell<ContactRegistry>,
+    ) -> Option<Assembled> {
+        let reported = buttons_from_mask(pe.buttons());
+        let held = contacts
+            .borrow()
+            .buttons(SURFACE, None, pointer_label(pe))?;
+        let button = map_button(pe.button())?;
+        if held.contains(button) == reported.contains(button) {
+            return None;
+        }
+        let action = if reported.contains(button) {
+            ReadingAction::Press(button)
+        } else {
+            ReadingAction::Release(button)
+        };
+        Some(assemble(contacts, &pointer_reading(pe, action)))
+    }
+
+    /// A locked mouse's `pointermove`: its chorded button change, or its
+    /// `movementX`/`movementY` as the locked pointer's motion, which the
+    /// browser reports after the system's pointer acceleration (no lock this
+    /// host asks for is unadjusted). No position move is delivered: the
+    /// pointer rests where it was locked. A motion of nothing delivers
+    /// nothing.
+    fn convert_locked_motion(
+        pe: &web_sys::PointerEvent,
+        contacts: &RefCell<ContactRegistry>,
+    ) -> Assembled {
+        if let Some(change) = chorded_change(pe, contacts) {
+            return change;
+        }
+        let extended: &ExtendedPointerEvent = pe.unchecked_ref();
+        let (dx, dy) = (extended.movement_x_f64(), extended.movement_y_f64());
+        if dx == 0.0 && dy == 0.0 {
+            return Assembled::new();
+        }
+        let Ok(delta) = MotionDelta::try_new(dx, dy) else {
+            return Assembled::new();
+        };
+        contacts
+            .borrow()
+            .raw_motion(
+                SURFACE,
+                None,
+                MOUSE_CONTACT,
+                ReadingTime::epoch(event_time(pe.time_stamp())),
+                delta,
+                MotionAcceleration::System,
+            )
+            .into_iter()
+            .collect()
     }
 
     /// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.

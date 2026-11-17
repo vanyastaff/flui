@@ -563,7 +563,7 @@ impl View for InteractiveViewer {
 impl StatefulView for InteractiveViewer {
     type State = InteractiveViewerState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let controller = AnimationController::builder(Duration::from_millis(1))
             .debug_label("InteractiveViewer.fling")
             .behavior(flui_animation::AnimationBehavior::Preserve)
@@ -599,7 +599,7 @@ impl StatefulView for InteractiveViewer {
             keys,
             _key_cancel: key_cancel,
             post_frame: None,
-            writer: None,
+            writer: ctx.writer_source(),
             controller,
             clock: None,
             wheel_preferences: None,
@@ -1936,7 +1936,7 @@ pub struct InteractiveViewerState {
     /// Ends the keyboard sequence a held arrow began when the key is
     /// cancelled instead of released here.
     _key_cancel: FocusNodeRegistration,
-    writer: Option<WriterSource>,
+    writer: WriterSource,
     post_frame: Option<PostFrameHandle>,
     controller: DrivenController,
     /// Identity only: the driven controller owns the registry seat.
@@ -1970,7 +1970,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         }
         *self.core.pipeline.borrow_mut() = incoming;
         self.post_frame = ctx.post_frame_handle();
-        self.writer = Some(ctx.writer_source());
+        self.writer = ctx.writer_source();
         let leaf = &self.core.leaf;
         *leaf.parent.borrow_mut() = NestedScrollScope::parent_of(ctx);
         leaf.plane.set_pipeline(
@@ -2070,10 +2070,7 @@ impl InteractiveViewerState {
     fn content(&self, view: &InteractiveViewer) -> BoxedView {
         let core = Rc::clone(&self.core);
         let post_frame = self.post_frame.clone();
-        let writer = self
-            .writer
-            .clone()
-            .expect("BUG: InteractiveViewer initialized before build");
+        let writer = self.writer.clone();
         let wheel_preferences = self.wheel_preferences.clone();
         let clip_behavior = view.clip_behavior;
         let alignment = view.alignment;
