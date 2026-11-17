@@ -46,9 +46,7 @@ use crate::{
     version::gate::android::WindowColorMode,
     window::state::{ReportedFacts, Sample, SampledGeometry, WindowStateCell},
 };
-use flui_platform::{
-    Cursor, CursorError, PlatformWindow, WindowExecutionState, WindowId, WindowInsets,
-};
+use flui_platform::{Cursor, CursorError, PlatformWindow, WindowId, WindowInsets};
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
 ///
@@ -459,10 +457,7 @@ impl ActivityWindow for AndroidWindow {
 
     /// Consume a redraw only when the same loop turn can deliver its frame.
     fn take_deliverable_redraw_request(&self) -> bool {
-        take_deliverable_redraw_request(
-            &self.redraw_requested,
-            self.activity.resumed.load(Ordering::SeqCst),
-        )
+        take_deliverable_redraw_request(&self.redraw_requested, self.activity.standing().runs())
     }
 }
 
@@ -536,7 +531,7 @@ fn sample_state(
         scale.to_logical(f64::from(width)),
         scale.to_logical(f64::from(height)),
     );
-    let focused = activity.focused.load(Ordering::SeqCst);
+    let standing = activity.standing();
     let geometry = flui_platform::WindowExtent::try_new(size).map(|extent| SampledGeometry {
         outer: WindowGeometry::unplaced(extent),
         content: extent,
@@ -559,11 +554,12 @@ fn sample_state(
             .ok(),
             brightness: kept.appearance,
             insets: kept.insets,
-            execution: execution_of(activity),
-            occluded: !activity.visible.load(Ordering::SeqCst),
+            // Running while on screen, paused or not, and focused while in
+            // the foreground with the input focus (ADR-0364).
+            execution: standing.execution(),
+            occluded: !standing.visible,
             hovered: kept.hovered,
-            // An Activity has no activation apart from its window's focus.
-            focus: flui_platform::WindowFocus::reported(focused, focused),
+            focus: standing.focus(),
             capabilities: activity_capabilities(activity_facts(api, displays)),
             // The user can resize a freeform or split-screen window, which
             // this host does not read: it cannot tell.
@@ -586,16 +582,6 @@ fn activity_facts(
         api,
         frame_rate_hint: displays.frame_rate_hint(),
         cross_window_blur: displays.cross_window_blur(),
-    }
-}
-
-/// Running while the Activity is resumed, independent of focus and of the
-/// native window (ADR-0035).
-fn execution_of(activity: &ActivityFlags) -> WindowExecutionState {
-    if activity.resumed.load(Ordering::SeqCst) {
-        WindowExecutionState::Running
-    } else {
-        WindowExecutionState::Suspended
     }
 }
 

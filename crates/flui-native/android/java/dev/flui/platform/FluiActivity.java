@@ -15,7 +15,8 @@ import android.view.Window;
  * the manifest, with {@code android:hasCode="true"}, puts FLUI's classes in
  * the APK, where the Activity's class loader finds them, and gives FLUI the
  * callbacks only an Activity subclass receives, which it forwards to the
- * queue in {@link FluiHost}.
+ * queue in {@link FluiHost}. A process runs one: an instance created while
+ * another runs FLUI hands its intent to that one and finishes (ADR-0364).
  *
  * <p>The request codes {@link FluiHost#FIRST_HOST_CODE} to
  * {@link FluiHost#LAST_HOST_CODE} are the host's: capability providers start
@@ -52,7 +53,25 @@ public class FluiActivity extends NativeActivity {
         if (savedInstanceState != null) {
             FluiHost.restore(savedInstanceState);
         }
+        // Before `NativeActivity.onCreate` starts `android_main`, whose
+        // platform starts only over the Activity that owns the host's queues:
+        // a process runs one FLUI platform (ADR-0364).
+        boolean owner = FluiHost.created(this);
         super.onCreate(savedInstanceState);
+        if (!owner) {
+            // Another instance runs FLUI: what this one was opened with
+            // reaches it as an intent to the running Activity, its task comes
+            // to the front, and this one leaves.
+            Intent intent = getIntent();
+            if (savedInstanceState == null
+                    && intent != null
+                    && (intent.getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0) {
+                FluiHost.opened(intent, false);
+            }
+            FluiHost.showOwner(this);
+            finish();
+            return;
+        }
         // `NativeActivity.onCreate` has just set this same mode
         // (`SOFT_INPUT_STATE_UNSPECIFIED | SOFT_INPUT_ADJUST_RESIZE`). It is
         // set again here, beside the edge-to-edge setup that relies on it, so

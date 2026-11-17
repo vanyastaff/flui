@@ -7,7 +7,7 @@
 //! ([`ActivityCallbacks`]; the lifecycle feature implements it), and delivers
 //! the [`Reaction`] to the window and the application ([`ActivityTarget`]).
 
-use flui_platform::{MemoryPressureLevel, WindowExecutionState};
+use flui_platform::MemoryPressureLevel;
 
 /// The Activity callbacks that matter for the lifecycle: the ones
 /// `android-activity` hands over, without the payloads
@@ -55,11 +55,16 @@ pub(crate) trait ActivityCallbacks: Send + Sync {
     fn react(&self, event: ActivityEvent) -> Reaction;
 }
 
-/// The one thing an Activity callback tells the window.
+/// The one fact an Activity callback tells the window. What the window
+/// reports follows from the three together (`lifecycle::android`'s
+/// `ActivityStanding`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivitySignal {
+    /// `onStart` (`true`) and `onStop` (`false`).
     Visibility(bool),
-    Execution(WindowExecutionState),
+    /// `onResume` (`true`) and `onPause` (`false`).
+    Foreground(bool),
+    /// `onWindowFocusChanged`.
     Focus(bool),
 }
 
@@ -76,9 +81,8 @@ pub(crate) struct Reaction {
 
 /// Where a [`Reaction`] ends up: the backend's window and host callbacks.
 pub(crate) trait ActivityTarget {
-    fn visibility_changed(&self, visible: bool);
-    fn execution_changed(&self, state: WindowExecutionState);
-    fn focus_changed(&self, focused: bool);
+    /// One of the Activity's three facts changed.
+    fn fact_changed(&self, signal: ActivitySignal);
     /// The process may be killed now; see [`Reaction::session_end`].
     fn session_ended(&self);
     fn memory_pressure_raised(&self, level: MemoryPressureLevel);
@@ -87,11 +91,7 @@ pub(crate) trait ActivityTarget {
 impl ActivitySignal {
     /// Hand this signal to `target`.
     pub(crate) fn deliver(self, target: &impl ActivityTarget) {
-        match self {
-            Self::Visibility(visible) => target.visibility_changed(visible),
-            Self::Execution(state) => target.execution_changed(state),
-            Self::Focus(focused) => target.focus_changed(focused),
-        }
+        target.fact_changed(self);
     }
 }
 

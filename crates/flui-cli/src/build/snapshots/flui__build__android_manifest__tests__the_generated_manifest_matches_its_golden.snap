@@ -1,5 +1,6 @@
 ---
 source: crates/flui-cli/src/build/android_manifest.rs
+assertion_line: 345
 expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
 ---
 <?xml version="1.0" encoding="UTF-8"?>
@@ -12,8 +13,10 @@ expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
     <!-- No resources: the platform's default launcher icon applies.
          `hasCode`: the APK carries FLUI's Java classes, the dex of the crates
          the app links, which the Activity below is one of (ADR-0255).
-         `enableOnBackInvokedCallback`: back arrives as predictive back, which
-         FLUI handles only while it can pop. -->
+         `enableOnBackInvokedCallback`: from Android 13, back is predictive
+         back and reaches no key handler, as targetSdk 36 makes it anyway. FLUI
+         registers no back callback yet, so the system takes every back: it
+         finishes the Activity with its back-to-home animation. -->
     <application
         android:label="R&amp;D &lt;Notes&gt;"
         android:hasCode="true"
@@ -26,8 +29,9 @@ expression: "render(&FACTS, &framework_declarations(&[\"http\"]))"
              A language change still recreates it: the host does not follow
              the locale yet. `fontWeightAdjustment` needs an API 31 or later
              platform to link. `singleTop`: a new intent reaches the running
-             Activity instead of starting a second one with a second Rust
-             runtime. -->
+             Activity at the top of its task; one that starts the Activity in
+             another task hands its intent to the running one, since a process
+             runs one FLUI platform. -->
         <activity
             android:name="dev.flui.platform.FluiActivity"
             android:exported="true"

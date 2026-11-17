@@ -11,8 +11,9 @@
 //! android_main(AndroidApp)
 //!   -> flui_native::android_platform(app)
 //!   -> Platform::run()  [poll_events loop]
-//!     -> MainEvent::Start / Stop     -> visibility
-//!     -> MainEvent::Resume / Pause   -> execution state (frame gate)
+//!     -> MainEvent::Start / Stop     -> visibility: the execution state and the
+//!                                       frame, input and surface gate
+//!     -> MainEvent::Resume / Pause   -> foreground: the window's focus
 //!     -> MainEvent::Gained/LostFocus -> focus, nothing else
 //!     -> MainEvent::InitWindow       -> on_ready(), create surface
 //!     -> MainEvent::TerminateWindow  -> surface released
@@ -29,22 +30,23 @@
 //! The native window (ANativeWindow) is valid between `InitWindow` and
 //! `TerminateWindow`, and nowhere else: `AppCmd::InitWindow` is applied before
 //! its callback runs, `AppCmd::TermWindow` is applied after its callback
-//! returns, and `MainEvent::Pause` does not touch the window at all. A wgpu
-//! surface built from a handle into that window therefore has to be gone
-//! before the handle is, which is what the `false` edge of
-//! [`WindowHandler::surface_changed`] asks the presentation to do.
+//! returns, and neither `MainEvent::Pause` nor `MainEvent::Stop` touches the
+//! window at all. A wgpu surface built from a handle into that window
+//! therefore has to be gone before the handle is, which is what the `false`
+//! edge of [`WindowHandler::surface_changed`] asks the presentation to do.
 //!
-//! Both ends of the pair carry the signal: `Pause` and `TerminateWindow` emit
-//! `false`, `Resume` and `InitWindow` emit `true`. `Pause` alone would be the
+//! Both ends of the pair carry the signal: `Stop` and `TerminateWindow` emit
+//! `false`, `Start` and `InitWindow` emit `true`. `Stop` alone would be the
 //! wrong place to stop, because the handle it would protect outlives it;
 //! `TerminateWindow` is the event that actually ends the handle's life, so
 //! dropping the surface inside that callback is the first moment the
-//! surface's lifetime has a defined end at all. Emitting on `Pause` as well
+//! surface's lifetime has a defined end at all. Emitting on `Stop` as well
 //! moves the drop off it in the ordinary cycle, where the release is then an
-//! idempotent no-op at `TerminateWindow`.
+//! idempotent no-op at `TerminateWindow`. `Pause` keeps the surface: a paused
+//! Activity that stays on screen keeps drawing (ADR-0364).
 //!
 //! The initial `on_ready` waits for the first `InitWindow`, not the first
-//! `Resume`: `native_window()` is `None` until then, so a bootstrap that
+//! `Start`: `native_window()` is `None` until then, so a bootstrap that
 //! needs a window has nothing to build a surface from before it.
 
 use std::{
@@ -53,13 +55,15 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
     },
     time::Duration,
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
-use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice, WindowExecutionState};
+use flui_platform::{MemoryPressureLevel, SessionEndPhase, SystemNotice};
+
+use crate::lifecycle::android::rule::ActivityStanding;
 
 use crate::host;
 use crate::owner::android::{
@@ -76,6 +80,7 @@ use crate::{
     owner::OwnerPlatform,
     owner::android::activity_callbacks::ActivityCallbacks,
     owner::android::activity_callbacks::ActivityEvent,
+    owner::android::activity_callbacks::ActivitySignal,
     owner::android::activity_callbacks::ActivityTarget,
     owner::android::activity_callbacks::Reaction,
     owner::android::frame_clock::{FrameClock, FrameStamp},
@@ -115,8 +120,8 @@ use crate::{
 /// surface-restore paces do this: an attempt moves the deadline on), or
 /// the CALLER stops treating "due" as "act now" once acting is impossible
 /// (`run`'s loop does this by gating this answer's effect on `should_render`
-/// on `resumed` — see that call site's own comment for the busy-spin this
-/// prevents while backgrounded). Read this function's own `true` as "the
+/// on the Activity running — see that call site's own comment for the
+/// busy-spin this prevents while backgrounded). Read this function's own `true` as "the
 /// deadline has passed", never as "and therefore something happened".
 fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) -> bool {
     deadline.is_some_and(|deadline| now >= deadline)
@@ -126,14 +131,34 @@ fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) 
 /// platform's event loop and the window it opened.
 ///
 /// Three independent facts (see `lifecycle::android`): the Activity is on
-/// screen (`onStart` to `onStop`), it may run (`onResume` to `onPause`), and its
-/// window has input focus. None implies another: a dialog takes focus from a
-/// running, visible Activity. All three are false until their first callback.
+/// screen (`onStart` to `onStop`), it is in the foreground (`onResume` to
+/// `onPause`), and its window has input focus. None implies another: a dialog
+/// takes focus from a running, visible Activity. All three are false until
+/// their first callback, and are held in one byte, so the window never reads
+/// half of a change.
 #[derive(Debug, Default)]
 pub(crate) struct ActivityFlags {
-    pub(crate) visible: AtomicBool,
-    pub(crate) resumed: AtomicBool,
-    pub(crate) focused: AtomicBool,
+    standing: AtomicU8,
+}
+
+impl ActivityFlags {
+    /// The facts as last recorded.
+    pub(crate) fn standing(&self) -> ActivityStanding {
+        ActivityStanding::from_bits(self.standing.load(Ordering::SeqCst))
+    }
+
+    /// Record the fact `signal` reports. The loop's thread is the only one
+    /// that writes, so reading and storing apart loses no other write.
+    fn record(&self, signal: ActivitySignal) {
+        self.standing
+            .store(self.standing().with(signal).to_bits(), Ordering::SeqCst);
+    }
+
+    /// The loop ends: nothing it delivers runs any more.
+    fn retire(&self) {
+        self.standing
+            .store(ActivityStanding::RETIRED.to_bits(), Ordering::SeqCst);
+    }
 }
 
 /// One window of the Activity as its window-level positions are made for it
@@ -369,8 +394,8 @@ impl AndroidLoop {
 
     /// Record one fact of the Activity's lifecycle and tell the window: its
     /// state is published first, so an observer reads the new value.
-    fn publish_activity_fact(&self, record: impl FnOnce(&ActivityFlags)) {
-        record(&self.activity);
+    fn publish_activity_fact(&self, signal: ActivitySignal) {
+        self.activity.record(signal);
         let window = self.window.borrow().clone();
         if let Some(window) = window {
             window.publish_state();
@@ -510,7 +535,7 @@ impl AndroidLoop {
     }
 
     /// Deliver what `FluiActivity` queued since the last turn, in order, on
-    /// the owner thread, whether or not the Activity is resumed: a trim level
+    /// the owner thread, whether or not the Activity runs: a trim level
     /// matters most in the background. An intent is accepted in its place
     /// and heard once its documents have outcomes, after the intents before
     /// it and after the trim levels of the same turn: a trim level never
@@ -602,19 +627,20 @@ impl AndroidLoop {
     ///
     /// Drains all buffered input events via `input_events_iter()`, has the
     /// input the table made ([`AndroidHost::input`]) read each, and
-    /// dispatches what it means through the window's callbacks.
-    fn process_input_events(&self) {
-        let window_guard = self.window.borrow();
-        let Some(window) = window_guard.as_ref().cloned() else {
-            // No window yet — still drain events to prevent ANR
-            drop(window_guard);
+    /// dispatches what it means through the window's callbacks. Every event
+    /// is answered: with no window, or while the Activity is off screen
+    /// (`running` false), each is drained as unhandled, so the system hears
+    /// back about the cancel it sends for a window it took away instead of
+    /// reporting the application not responding; the contacts were ended at
+    /// `Pause`.
+    fn process_input_events(&self, running: bool) {
+        let window = self.window.borrow().clone();
+        let Some(window) = window.filter(|_| running) else {
             if let Ok(mut iter) = self.app.input_events_iter() {
                 while iter.next(|_event| InputStatus::Unhandled) {}
             }
             return;
         };
-
-        drop(window_guard);
 
         let scale_factor = window.scale();
         let delivery = window.delivery();
@@ -706,20 +732,8 @@ fn log_refusals(refused: &[super::documents::OpenRefusal]) {
 }
 
 impl ActivityTarget for AndroidLoop {
-    fn visibility_changed(&self, visible: bool) {
-        self.publish_activity_fact(|flags| flags.visible.store(visible, Ordering::SeqCst));
-    }
-
-    fn execution_changed(&self, state: WindowExecutionState) {
-        self.publish_activity_fact(|flags| {
-            flags
-                .resumed
-                .store(state == WindowExecutionState::Running, Ordering::SeqCst);
-        });
-    }
-
-    fn focus_changed(&self, focused: bool) {
-        self.publish_activity_fact(|flags| flags.focused.store(focused, Ordering::SeqCst));
+    fn fact_changed(&self, signal: ActivitySignal) {
+        self.publish_activity_fact(signal);
     }
 
     /// [`SessionEndPhase::Ending`] only, with no query. An answer of
@@ -781,7 +795,6 @@ impl host::Loop for AndroidLoop {
             Arc::clone(&self.owner_signal),
             Rc::clone(&self.turn),
         ));
-        self.activity.resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
         // other return path back to `run`'s caller. Stopping `running` and
@@ -800,18 +813,16 @@ impl host::Loop for AndroidLoop {
 
             // `FluiView` reports setting and inset changes, and configuration
             // changes arrive as `ConfigChanged`; each reads them again. A
-            // resumed Activity reads them once more on its first turn and on
-            // `Resume`. Until the view is in the window, or if it never gets
-            // there, a 500ms cadence while resumed stands in, so no change is
-            // lost; a paused Activity reads them again on `Resume`.
+            // running Activity reads them once more on its first turn and on
+            // `Start`. Until the view is in the window, or if it never gets
+            // there, a 500ms cadence while running stands in, so no change is
+            // lost; a stopped Activity reads them again on `Start`.
             let now = web_time::Instant::now();
             let window = self.window.borrow().clone();
             if let Some(window) = window.as_ref() {
                 window.settle_insets();
             }
-            if self.activity.resumed.load(Ordering::SeqCst)
-                && self.sample_due(next_preference_sample, now)
-            {
+            if self.activity.standing().runs() && self.sample_due(next_preference_sample, now) {
                 // Taken before the read: a view that becomes ready during it
                 // reports once it observes, and only a view that was ready
                 // already ends the cadence.
@@ -867,20 +878,20 @@ impl host::Loop for AndroidLoop {
             }
 
             // Check if we should render before polling. Pending sources are
-            // gated on `resumed`, and so is a deadline that is already behind
-            // (`poll_timeout`): the backgrounded app cannot consume it, and
-            // either would turn the poll into a 0ms busy loop. The redraw is
-            // observed without consumption because `poll_events` may suspend
-            // execution before the callback can be delivered.
+            // gated on the Activity running, and so is a deadline that is
+            // already behind (`poll_timeout`): the backgrounded app cannot
+            // consume it, and either would turn the poll into a 0ms busy loop.
+            // The redraw is observed without consumption because `poll_events`
+            // may suspend execution before the callback can be delivered.
             let redraw_requested = self
                 .window
                 .borrow()
                 .as_ref()
                 .is_some_and(|w| w.has_redraw_request());
-            let resumed = self.activity.resumed.load(Ordering::SeqCst);
+            let running = self.activity.standing().runs();
             let mut should_call_ready = false;
             let ((), redraw_after_poll) =
-                RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
+                RedrawPoll::new(deadline_due, redraw_requested).poll(running, |should_render| {
                     // Where the choreographer paces the frames, the frame waits
                     // for its next one, whose callback wakes the poll.
                     let awaiting_vsync = match frame_clock.as_ref() {
@@ -894,7 +905,7 @@ impl host::Loop for AndroidLoop {
                         LoopTurn {
                             should_render: should_render && !awaiting_vsync,
                             awaiting_vsync,
-                            resumed,
+                            running,
                             wake_deadline: [wake_deadline, turn_wait].into_iter().flatten().min(),
                             next_preference_sample: self.next_sample(next_preference_sample),
                             hand_off_deadline: self.results.next_deadline(),
@@ -914,27 +925,28 @@ impl host::Loop for AndroidLoop {
                             self.activity_callbacks.react(event)
                         });
                     match main_event {
-                        // Visibility, focus gained and the end of the session
-                        // have nothing to do besides delivering their signal.
-                        MainEvent::Start
-                        | MainEvent::Stop
+                        // The foreground, focus gained and the end of the
+                        // session have nothing to do besides delivering their
+                        // signal: a paused Activity stays on screen, drawing,
+                        // until `Stop` (ADR-0364).
+                        MainEvent::Resume { .. }
                         | MainEvent::GainedFocus
                         | MainEvent::SaveState { .. } => {
                             tracing::debug!(event = ?main_event, "Android: lifecycle callback");
                         }
-                        MainEvent::Resume { .. } => {
+                        MainEvent::Start => {
                             tracing::info!(
-                                "Android: Resumed — lifecycle transition, native window untouched"
+                                "Android: Started — on screen, native window untouched"
                             );
                             // The Activity may have come back on another display.
                             self.displays.invalidate();
-                            // Nothing was sampled while paused: read the
+                            // Nothing was sampled while stopped: read the
                             // preferences and insets again on the next turn.
                             next_preference_sample = Some(web_time::Instant::now());
 
                             // The execution state first, then the surface: a
                             // presentation rebuilt on `true` below already runs.
-                            // The surface signal rides along: a `Resume` with
+                            // The surface signal rides along: a `Start` with
                             // no window yet (the startup order) or with the
                             // previous surface still released asks for one, and
                             // a `true` that finds a live surface simply
@@ -953,20 +965,27 @@ impl host::Loop for AndroidLoop {
                             }
                         }
                         MainEvent::Pause => {
+                            tracing::debug!(
+                                "Android: Paused — still on screen until Stop; the surface stays"
+                            );
+                            // The contacts of the foreground end with it; the
+                            // focus the window reports goes with the signal.
+                            self.end_input_contacts(self.input.focus_lost());
+                        }
+                        MainEvent::Stop => {
                             tracing::info!(
-                                "Android: Paused — releasing the surface; the native window \
+                                "Android: Stopped — releasing the surface; the native window \
                                  outlives this"
                             );
-                            // Publish suspension before invoking embedder callbacks: a nested
-                            // continuation request must not acknowledge a redraw opportunity
-                            // that this loop will refuse to dispatch.
-                            self.activity.resumed.store(false, Ordering::SeqCst);
-                            self.end_input_contacts(self.input.focus_lost());
-
-                            // Release BEFORE suspending: the drop is the one
-                            // step here with a validity window behind it, and
-                            // the execution observer runs arbitrary embedder
-                            // code.
+                            // Record the suspension before any embedder
+                            // callback runs: a nested continuation request must
+                            // not acknowledge a redraw this loop will refuse to
+                            // dispatch. Then release BEFORE telling the window:
+                            // the drop is the one step here with a validity
+                            // window behind it, and the execution observer
+                            // runs arbitrary embedder code.
+                            self.activity.record(ActivitySignal::Visibility(false));
+                            self.end_input_contacts(self.input.capture_lost());
                             let window = self.window.borrow().clone();
                             if let Some(w) = window {
                                 w.delivery().dispatch_surface_change(flui_platform::SurfaceChange::Release);
@@ -1033,7 +1052,7 @@ impl host::Loop for AndroidLoop {
                         MainEvent::Destroy => {
                             self.end_input_contacts(self.input.focus_lost());
                             tracing::info!("Android: Destroy — shutting down");
-                            self.activity.resumed.store(false, Ordering::SeqCst);
+                            self.activity.retire();
 
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
@@ -1147,14 +1166,12 @@ impl host::Loop for AndroidLoop {
             }
             self.deliver_view_events();
             self.deliver_host_entries();
-            let resumed = self.activity.resumed.load(Ordering::SeqCst);
-            if resumed {
-                self.process_input_events();
-            }
+            let running = self.activity.standing().runs();
+            self.process_input_events(running);
 
             // Consume the redraw only after polling confirms this turn can
-            // deliver it. A queued Pause therefore preserves the request for
-            // Resume rather than stranding an acknowledged continuation. The
+            // deliver it. A queued Stop therefore preserves the request for
+            // Start rather than stranding an acknowledged continuation. The
             // window is cloned out of its cell: the frame runs embedder code
             // that may call back into the platform.
             // Where the choreographer paces the frames, only the turn whose
@@ -1168,13 +1185,13 @@ impl host::Loop for AndroidLoop {
             if let Some(ref w) = window
                 && let Some(stamp) = stamp
                 && redraw_after_poll
-                    .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
+                    .take_if_deliverable(running, || w.take_deliverable_redraw_request())
             {
                 w.delivery().dispatch_frame(stamp.request());
             }
         }
 
-        self.activity.resumed.store(false, Ordering::SeqCst);
+        self.activity.retire();
         // Unregister the choreographer callback on the thread it was registered
         // on, before its data can be freed with the loop.
         drop(refresh_rate);
@@ -1252,7 +1269,7 @@ impl host::Loop for AndroidLoop {
             // on the app owner when its loop exits.
             window.fence_text_sizing();
         }
-        self.activity.resumed.store(false, Ordering::SeqCst);
+        self.activity.retire();
         self.running.set(false);
         let _ = self.owner_signal.request_quit();
     }

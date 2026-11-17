@@ -184,7 +184,9 @@ generated-file header is refused untouched rather than overwritten
 (`the_manifest_is_rewritten_only_when_flui_wrote_it`).
 
 The base names `FluiActivity` with `hasCode`, `singleTop` and the back flag
-(`the_base_names_flui_activity_with_the_code_it_needs`); its class comes from the dex
+(`the_base_names_flui_activity_with_the_code_it_needs`), whose comment says what the host does: it
+registers no back callback, so every back from Android 13 is the system's; a launch in another
+task hands its intent to the running Activity (ADR-0364). Its class comes from the dex
 `flui-native` declares (`android.dex`, schema 2), which the packager without Gradle stores in the
 APK as `classes.dex` (then `classes2.dex`, … for further crates), and Gradle compiles the declared
 sources (`android.java`) from `-Pflui.javaSources`, refusing a build script that does not read it

@@ -8500,6 +8500,58 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   во всех именах XML (`is_xml_name_text`); `setsockopt` записи — только когда остаток сократился
   на `WRITE_TIMEOUT_SLACK`.
 
+- [x] **LY137** — ветка `native/android-visible-paused`, решение — ADR-0364 (заменяет
+  Android-предложение ADR-0345 §1, затвор решений 2 и 3 ADR-0249 и довод строки `launchMode`
+  решения 6 ADR-0255). Проверено на `main` @ `620f5e43c` чтением. Подтвердились все три: `Pause`
+  отпускал поверхность и снимал `resumed`, на котором стояли кадры, ввод, опрос настроек и
+  `poll_timeout`, а окно сообщало `Suspended`, так что видимая приостановленная Activity застывала
+  и не обслуживала задания владельца (их ходы ведёт перерисовка окна); `FluiHost.bind` перезаписывал
+  единственный `wakeHandle`, `unbind` второй платформы обнулял его для обеих, а между `onCreate`
+  нового экземпляра и его `bind` пробуждение уходило старой платформе, которая забирала intent
+  нового (`android-activity` запускает свой `android_main` на каждый экземпляр); `singleTop` не
+  мешает второму экземпляру в задаче вызывающего; комментарий манифеста обещал, что FLUI
+  обрабатывает back, а ни один класс не регистрирует `OnBackInvokedCallback`, и запись gaps
+  связывала потерю `KEYCODE_BACK` с targetSdk 36. Построено: `lifecycle::android::rule::ActivityStanding`
+  держит три факта (`visible`, `foreground`, `focused`; сигнал `ActivitySignal::Foreground` вместо
+  `Execution`) и отвечает, что сообщает окно: работает, пока на экране (`runs`, `execution`),
+  сфокусировано, пока в фокусе и на переднем плане (`focus`, правило LifecycleChannel Flutter);
+  цикл и окно делят его одним атомарным байтом (`ActivityFlags`). Кадры, ввод, частота опроса
+  настроек и `poll_timeout` (`LoopTurn::running`) — по `runs()`; поверхность отпускает `Stop`
+  (после записи приостановки, до сигнала окну) и просит `Start`; `Pause` только завершает
+  касания. Пока Activity остановлена, цикл отвечает на каждое событие ввода как необработанное,
+  так что касание, удержанное через Home, больше не ведёт к ANR (запись gaps снята, прогон должен
+  на устройстве). Задания приложения при остановленной Activity ждут `Start`, как фоновая
+  прокачка iOS (ADR-0268); запись gaps «A paused Android Activity runs no owner jobs» снята: видимая
+  приостановленная Activity их обслуживает, правило для остановленной записано в ADR-0364 §1.
+  Процесс держит одну платформу: `FluiHost.created` в `onCreate` до старта библиотеки делает
+  Activity владельцем очередей, если живой владелец не завершается; только владелец привязывает
+  handle (`bind(Activity, long)` отвечает `false`) и читает очереди (`peekEntries`, `peekOpened`,
+  `peekAnswers` берут Activity), новый владелец забывает старый handle, уничтоженный отдаёт
+  очереди; второй экземпляр отдаёт intent владельцу как intent работающей Activity, поднимает его
+  задачу (`AppTask.moveToFront`) и завершается, а его платформа отказана
+  `PlatformError::SecondActivity` с записью в журнал. `singleTask` отвергнут: запуск из лаунчера
+  уничтожает активности над корнем, то есть выбор файла. `PROTOCOL` 6 → 7, dex пересобран здесь
+  теми же инструментами, что в записи (javac 21.0.12.1, build-tools 35.0.0, android-35).
+  Back: комментарий манифеста и `docs/gaps.md` («No system back») говорят, что делает хост —
+  обратного вызова нет, каждый back с Android 13 системный и завершает Activity; ниже 13 клавиша
+  приходит приложению как `GoBack`. Регистрация по ADR-0255 решению 3 ждёт производителя «можно
+  вернуться» (строка «System back and history»). Тесты, в скобках результат с откатом:
+  `a_paused_activity_that_stays_visible_keeps_running` (`runs` по `foreground` — «paused under a
+  translucent Activity» даёт `Suspended`; фокус без переднего плана — «paused before its focus
+  report comes» даёт `Focused`); `the_platform_starts_only_over_its_own_java_classes` (без
+  проверки `owns_queues` второй экземпляр стартует); `the_base_names_flui_activity_with_the_code_it_needs`
+  (прежний комментарий манифеста — падает); `only_the_activity_that_owns_the_queues_binds_and_reads_them`
+  и `no_java_class_takes_the_back_from_the_system` держат Java к решению;
+  `a_stopped_loop_blocks_until_it_is_woken` и
+  `a_stop_during_poll_preserves_redraw_until_a_running_iteration` — прежние таблицы под новым
+  затвором. Прогнано: на Windows clippy `--all-targets -D warnings` `flui-native` и `flui-cli`,
+  `cargo heli nextest` по затронутым модулям; в WSL `cargo +nightly check --target
+  aarch64-linux-android -p flui-native` (у `flui-app` под Android нет `clang` для `psm`). Должно
+  на устройстве (строки `platform-parity.toml` «Suspend, resume, GPU-surface loss», «Deep links»,
+  «Activity results for capability providers»): кадры в split screen ниже API 29, в PiP и под
+  полупрозрачной Activity, касание через Home без ANR, share из чужого приложения при работающем
+  FLUI; у закреплённого toolchain 1.100.0 нет цели Android, а `rustup` не запускается.
+
 ## Чего нет в этой серии
 
 Часть функций из закрытого списка ядра (R1.4) на части ОС ещё отсутствует. Каждая — отдельная
