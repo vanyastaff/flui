@@ -844,38 +844,33 @@ impl<'v> Geometry<'v> {
     ) -> Scope {
         let content = self.record(key).content();
         let entries = content.entries();
-        // Each structural entry's inside, an effect's position among the
-        // content's effects (those of the scope are consecutive), and the
-        // least the space holding the entry grows a length on its way to the
-        // surface, and the space under the entry's own map: a parent precedes
-        // its entries.
+        // Each structural entry's inside, and the least the space under the
+        // entry's own map grows a length on its way to the surface: a parent
+        // precedes its entries.
         let mut inside: SmallVec<[Scope; 16]> = SmallVec::with_capacity(structural.len());
-        let mut positions: SmallVec<[usize; 16]> = SmallVec::with_capacity(structural.len());
-        let mut held_at: SmallVec<[f64; 16]> = SmallVec::with_capacity(structural.len());
         let mut under: SmallVec<[f64; 16]> = SmallVec::with_capacity(structural.len());
         // Each follower's resolved map, by its offset in `structural`.
         let mut followers: SmallVec<[(usize, Result<Matrix4, Unresolved>); 2]> = SmallVec::new();
+        // The offset in `structural` of the parent effect an entry joins, or
+        // `None` where it joins `whole`.
+        let parent_of = |offset: usize| match entries[structural[offset].get()].parent() {
+            Some(parent) if parent.get() >= floor => Some(
+                structural[..offset]
+                    .binary_search(&parent)
+                    .expect("BUG: an entry's parent effect precedes it in its scope"),
+            ),
+            _ => None,
+        };
         let mut next_effect = first_effect;
         for (offset, &index) in structural.iter().enumerate() {
-            let entry = &entries[index.get()];
-            let held = match entry.parent() {
-                Some(parent) if parent.get() >= floor => {
-                    let at = structural[..offset]
-                        .binary_search(&parent)
-                        .expect("BUG: an entry's parent effect precedes it in its scope");
-                    under[at]
-                }
-                _ => outer,
-            };
-            held_at.push(held);
-            match entry {
+            let held = parent_of(offset).map_or(outer, |at| under[at]);
+            match &entries[index.get()] {
                 Entry::Effect { .. } => {
                     inside.push(Scope {
                         local: content.effect_scope(next_effect).chunks,
                         kernel: 0.0,
                     });
-                    let layer = &content.layers()[next_effect];
-                    let scale = match layer {
+                    let scale = match &content.layers()[next_effect] {
                         Layer::Transform(transform) => least_scale(transform.transform()),
                         // Resolved once here, for its scale and its links.
                         Layer::Follower(_) => {
@@ -893,23 +888,25 @@ impl<'v> Geometry<'v> {
                         _ => 1.0,
                     };
                     under.push(held * scale);
-                    positions.push(next_effect);
                     next_effect += 1;
                 }
                 Entry::Slot { .. } | Entry::Chunk { .. } => {
                     inside.push(Scope::EMPTY);
                     under.push(held);
-                    positions.push(usize::MAX);
                 }
             }
         }
+        // The effects of the scope are consecutive among the content's, so
+        // walking back counts their positions down from the last.
+        let mut effect = next_effect;
         for (offset, &index) in structural.iter().enumerate().rev() {
-            let entry = &entries[index.get()];
-            let scope = match entry {
+            let parent = parent_of(offset);
+            let scope = match &entries[index.get()] {
                 Entry::Slot { node, .. } => self.slot_scope(node.key()),
                 Entry::Effect { .. } => {
+                    effect -= 1;
                     let held = inside[offset];
-                    let layer = &content.layers()[positions[offset]];
+                    let layer = &content.layers()[effect];
                     let mut links = Links::new();
                     let at = Address {
                         node: key,
@@ -925,19 +922,14 @@ impl<'v> Geometry<'v> {
                     {
                         filters.push((at.entry, held));
                     }
-                    held.through(&links, held_at[offset])
+                    held.through(&links, parent.map_or(outer, |at| under[at]))
                 }
                 // The structural entries hold no chunk.
                 Entry::Chunk { .. } => continue,
             };
-            match entry.parent() {
-                Some(parent) if parent.get() >= floor => {
-                    let at = structural[..offset]
-                        .binary_search(&parent)
-                        .expect("BUG: an entry's parent effect precedes it in its scope");
-                    inside[at] = inside[at].join(scope);
-                }
-                _ => whole = whole.join(scope),
+            match parent {
+                Some(at) => inside[at] = inside[at].join(scope),
+                None => whole = whole.join(scope),
             }
         }
         whole
