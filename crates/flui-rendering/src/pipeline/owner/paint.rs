@@ -61,8 +61,8 @@ impl PipelineOwner<PaintPhase> {
     /// the node that asked rebuilt — see `layer_patches_for`. The caller
     /// applies the patch and reports the version with
     /// [`scene_applied`](PipelineOwner::scene_applied); a patch never
-    /// reported, a renewed lineage or a new pixel ratio makes the next pass
-    /// repaint from the root.
+    /// reported, a renewed lineage, a new pixel ratio or a pass with no root
+    /// to walk makes the next pass with a root repaint from it.
     ///
     /// # Errors
     ///

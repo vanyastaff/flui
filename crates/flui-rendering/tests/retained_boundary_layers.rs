@@ -666,6 +666,8 @@ enum OwedWithoutRoot {
     UnappliedPatch,
     /// A paint mark made after the root was removed, nothing staged.
     QueuedPaint,
+    /// A paint mark made while the root names a node no longer in the tree.
+    StaleRoot,
 }
 
 /// A frame with no root paints nothing, keeps nothing staged for a later
@@ -674,9 +676,9 @@ enum OwedWithoutRoot {
 /// the change made while it was gone, and the scene holds the nodes a fresh
 /// owner's would.
 pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
-    use OwedWithoutRoot::{QueuedPaint, UnappliedPatch};
-    for owed in [UnappliedPatch, QueuedPaint] {
-        let (mut owner, [_, _, opacity, ..]) = mount_nested_under_opacity();
+    use OwedWithoutRoot::{QueuedPaint, StaleRoot, UnappliedPatch};
+    for owed in [UnappliedPatch, QueuedPaint, StaleRoot] {
+        let (mut owner, [_, _, opacity, column, _]) = mount_nested_under_opacity();
         let root = owner.root_id().expect("the tree has a root");
         let mut scene = SceneHost::new();
         scene
@@ -709,18 +711,28 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
                 owner.set_root_id(None);
                 set_opacity(&mut owner, opacity, 0.25);
             }
+            StaleRoot => {
+                let stale = owner
+                    .insert_child_render_object(column, Box::new(RenderColoredBox::red(5.0, 5.0)))
+                    .expect("the column takes a child");
+                owner.remove_render_object(stale);
+                owner.set_root_id(Some(stale));
+                set_opacity(&mut owner, opacity, 0.25);
+            }
         }
-        let rootless = scene
-            .run_frame_in_place(&mut owner)
-            .expect("a frame with no root");
-        assert!(
-            rootless.is_none(),
-            "{owed:?}: a frame with no root paints nothing"
-        );
-        assert!(
-            !owner.scene_staged(),
-            "{owed:?}: nothing stays staged for a later report to commit"
-        );
+        {
+            // A raw writer: `SceneHost` would apply whatever stays staged
+            // and hide it.
+            let mut writer = scene.owner_mut().writer();
+            let painted = owner
+                .run_frame_in_place(&mut writer)
+                .expect("a frame with no root");
+            assert!(!painted, "{owed:?}: a frame with no root paints nothing");
+            assert!(
+                !owner.scene_staged(),
+                "{owed:?}: nothing stays staged for a later report to commit"
+            );
+        }
 
         owner.set_root_id(Some(root));
         let tree = scene
