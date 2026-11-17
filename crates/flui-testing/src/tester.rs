@@ -8,7 +8,9 @@
 //! `element.actionability`, and delivers input with `input.inject` through
 //! the window's input lease, the synthetic path a driver takes. Nothing here
 //! hit-tests, walks a tree or reads a render object itself, so what a test
-//! proves is what assistive technology, the driver and an agent see.
+//! proves is what assistive technology, the driver and an agent see. The one
+//! exception is [`Tester::draw_commands`], which reads the scene the host
+//! received: the agent's protocol carries no drawing.
 //!
 //! # Time
 //!
@@ -616,24 +618,61 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
-    /// Every draw command of the window's last submitted scene, in layer
-    /// order, each with the canvas transform it was recorded under: what a
-    /// paint test samples at a virtual time. The frames due now run first, as
-    /// for every read; a scene that painted nothing new keeps the last one.
+    /// Every draw command of the window's last submitted scene, in paint
+    /// order: what a paint test samples at a virtual time. Each command's
+    /// `transform` places it in the window, its canvas transform composed
+    /// with every offset and transform of the layers above it; a command
+    /// under a follower its leader does not place is left out, as it is not
+    /// painted. The frames due now run first, as for every read; a scene that
+    /// painted nothing new keeps the last one.
     ///
-    /// The commands are the whole scene's: a scene does not record which
-    /// node painted which command ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
+    /// This is the one read that does not go through the window's agent: the
+    /// agent's protocol carries no drawing, so the tester reads the scene the
+    /// headless host received. The commands are the whole scene's
+    /// ([gaps](https://github.com/vanyastaff/flui/blob/main/docs/gaps.md#a-tester-reads-the-whole-scenes-drawing-not-one-elements)).
     #[must_use]
     pub fn draw_commands(&mut self) -> Vec<flui_painting::DrawCommandBuf> {
-        self.run_due_now();
-        let Some(tree) = self.host.sink().layer_tree() else {
-            return Vec::new();
-        };
-        let mut commands = Vec::new();
-        for (_, node) in tree.iter() {
-            if let flui_rendering::layer::Layer::Picture(picture) = node.layer() {
-                commands.extend(picture.picture().iter().map(|command| command.to_buf()));
+        use flui_foundation::geometry::Matrix4;
+        use flui_rendering::layer::{Layer, LayerId, LayerTree, resolve_follower_transform};
+
+        /// Pre-order is paint order: a parent's children are kept in the
+        /// order they paint, a repaint boundary's content under its slot.
+        fn walk(
+            tree: &LayerTree,
+            id: LayerId,
+            above: Matrix4,
+            commands: &mut Vec<flui_painting::DrawCommandBuf>,
+        ) {
+            let Some(node) = tree.get(id) else { return };
+            let local = match node.layer() {
+                Layer::Picture(picture) => {
+                    commands.extend(picture.picture().iter().map(|command| {
+                        let mut command = command.to_buf();
+                        command.transform = above * command.transform;
+                        command
+                    }));
+                    Matrix4::IDENTITY
+                }
+                Layer::Transform(layer) => *layer.transform(),
+                Layer::Follower(_) => match resolve_follower_transform(tree, id) {
+                    Some(transform) => transform,
+                    None => return,
+                },
+                layer => {
+                    let offset = layer.local_translation();
+                    Matrix4::translation(offset.dx, offset.dy, 0.0)
+                }
+            };
+            let placed = above * local;
+            for &child in node.children() {
+                walk(tree, child, placed, commands);
             }
+        }
+
+        self.run_due_now();
+        let mut commands = Vec::new();
+        if let Some(tree) = self.host.sink().layer_tree() {
+            walk(tree, tree.root(), Matrix4::IDENTITY, &mut commands);
         }
         commands
     }

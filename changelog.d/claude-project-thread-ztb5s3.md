@@ -23,6 +23,8 @@
   `render_snapshot` are no longer reachable through the facade. Use `Tester`,
   `flui::testing::find`, `Tester::inspect_render` and `Tester::draw_commands`; render objects keep
   `flui::testing::rendering`.
+- `flui_testing::BuildCapabilities` and `MountOptions::capabilities`: a headless bootstrap always
+  installs every build capability.
 
 ### Fixed
 

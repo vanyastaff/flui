@@ -107,8 +107,9 @@ impl CustomPainter for MotionPainter {
 }
 
 /// A card whose motion its state owns, on the frame registry of the
-/// subtree, as an application writes one; the test drives the motion
-/// through the shared owner and counts the card's builds.
+/// subtree, as an application writes one: the state is born with its
+/// motion. The test drives the motion through the shared owner and counts
+/// the card's builds.
 #[derive(Clone, StatefulView)]
 struct MotionCard {
     owner: Rc<RefCell<Option<flui::animation::AnimatedValue<CardMotion>>>>,
@@ -116,19 +117,12 @@ struct MotionCard {
 }
 
 struct MotionCardState {
-    view: MotionCard,
-    animation: Option<flui::animation::AnimatedValueView<CardMotion>>,
+    animation: flui::animation::AnimatedValueView<CardMotion>,
 }
 
 impl StatefulView for MotionCard {
     type State = MotionCardState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        MotionCardState { view: self.clone(), animation: None }
-    }
-}
-
-impl ViewState<MotionCard> for MotionCardState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         use flui::animation::{AnimatedValue, Linear, MotionSpec, SharedCurve};
         let vsync = flui::view::environment::VsyncScope::maybe_of(ctx);
         let owner = AnimatedValue::try_new(
@@ -136,14 +130,18 @@ impl ViewState<MotionCard> for MotionCardState {
             MotionSpec::Curve { duration: Duration::from_secs(1), curve: SharedCurve::new(Linear) },
             vsync.as_ref(),
         ).expect("finite custom motion");
-        self.animation = Some(owner.animation());
-        *self.view.owner.borrow_mut() = Some(owner);
+        let animation = owner.animation();
+        *self.owner.borrow_mut() = Some(owner);
+        MotionCardState { animation }
     }
+}
+
+impl ViewState<MotionCard> for MotionCardState {
     fn build(&self, view: &MotionCard, _: &dyn BuildContext) -> impl IntoView {
         view.builds.set(view.builds.get() + 1);
         flui::widgets::CustomPaint::new()
             .size(Size::new(100.0, 100.0))
-            .painter(MotionPainter(self.animation.clone().expect("init_state ran")))
+            .painter(MotionPainter(self.animation.clone()))
     }
 }
 
@@ -193,6 +191,7 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     assert!(first.is_canceled() && second.is_pending());
     assert_eq!(sample(&mut t), seam, "the submitted frame keeps its seam");
     t.pump_for(Duration::from_micros(1));
+    assert_eq!(card.builds.get(), builds, "custom motion only invalidates paint");
     let after = sample(&mut t);
     for (delta, incoming) in [
         (after.0.min.x - seam.0.min.x, velocity[0]),
@@ -389,7 +388,9 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
                 .child(SizedBox::new(40.0, 30.0)),
         ),
     ));
-    t.drag(&find::text("drag"), 20.0, 0.0, Duration::from_millis(100));
+    // A press that never moves: the callback runs on the pointer's down,
+    // with no drag accepted.
+    t.tap(&find::text("drag"));
     assert_eq!(downs.load(Ordering::SeqCst), 1);
 }
 
@@ -445,17 +446,11 @@ struct ArenaProbe {
     recognizers: Rc<RefCell<Vec<Rc<DistanceRecognizer>>>>,
 }
 
-struct ArenaProbeState(ArenaProbe);
+struct ArenaProbeState;
 
 impl StatefulView for ArenaProbe {
     type State = ArenaProbeState;
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        ArenaProbeState(self.clone())
-    }
-}
-
-impl ViewState<ArenaProbe> for ArenaProbeState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         use flui::interaction::{ArenaMembership, PrimaryContact};
         let arena = flui::view::environment::GestureArenaScope::of(ctx);
         let recognizer = |threshold| {
@@ -466,8 +461,14 @@ impl ViewState<ArenaProbe> for ArenaProbeState {
                 rejected: Arc::new(AtomicUsize::new(0)),
             })
         };
-        *self.0.recognizers.borrow_mut() = vec![recognizer(10.0), recognizer(20.0)];
+        // The arena's sweep on the pointer's release awards the first
+        // member, so the one that must win by distance is the second.
+        *self.recognizers.borrow_mut() = vec![recognizer(20.0), recognizer(10.0)];
+        ArenaProbeState
     }
+}
+
+impl ViewState<ArenaProbe> for ArenaProbeState {
     fn build(&self, view: &ArenaProbe, _: &dyn BuildContext) -> impl IntoView {
         let recognizers = view.recognizers.borrow();
         flui::widgets::Semantics::new().container(true).label("arena").child(
@@ -486,18 +487,19 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
 
     let probe = ArenaProbe { recognizers: Rc::default() };
     let mut t = Tester::mount(Center::new().child(probe.clone()));
-    // Past the first recognizer's threshold and short of the second's: the
-    // first claims the contact and the arena rejects the second.
+    // Past the near recognizer's threshold and short of the far one's: the
+    // near one claims the contact and the arena rejects the far one, though
+    // the far one is the member a sweep would award.
     t.drag(&find::text("arena"), 15.0, 0.0, Duration::from_millis(100));
     let recognizers = probe.recognizers.borrow();
-    let [first, second] = &recognizers[..] else {
+    let [far, near] = &recognizers[..] else {
         panic!("the state built two recognizers");
     };
-    assert_eq!(first.accepted.load(Ordering::SeqCst), 1);
-    assert_eq!(first.rejected.load(Ordering::SeqCst), 0);
-    assert_eq!(second.accepted.load(Ordering::SeqCst), 0);
-    assert_eq!(second.rejected.load(Ordering::SeqCst), 1);
-    for candidate in [first, second] {
+    assert_eq!(near.accepted.load(Ordering::SeqCst), 1);
+    assert_eq!(near.rejected.load(Ordering::SeqCst), 0);
+    assert_eq!(far.accepted.load(Ordering::SeqCst), 0);
+    assert_eq!(far.rejected.load(Ordering::SeqCst), 1);
+    for candidate in [far, near] {
         candidate.cancel();
         assert!(candidate.contact.current().is_none());
     }

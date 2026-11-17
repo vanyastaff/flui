@@ -1332,3 +1332,60 @@ fn draw_commands_read_the_last_submitted_scene() {
     changed.notify_listeners();
     assert_eq!(rectangles(&mut t), [(swatch, Color::rgb(100, 0, 0))]);
 }
+
+/// `draw_commands` lists the commands in paint order and places each in the
+/// window, across repaint boundaries: a row of a boundary, a plain painter
+/// and a boundary reads left to right, each swatch at its slot in the row.
+///
+/// Fails if the read walks the scene's layers in insertion order, where a
+/// boundary's content comes after its parent's and sibling boundaries come
+/// reversed, or leaves out the offsets of the layers above a command.
+#[test]
+fn draw_commands_follow_paint_order_across_repaint_boundaries() {
+    use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
+    use flui_painting::styling::Color;
+
+    let swatch = |shade: u8| {
+        flui_widgets::CustomPaint::new()
+            .size(Size::new(10.0, 10.0))
+            .painter(SwatchPainter(Color::rgb(shade, 0, 0)))
+    };
+    let mut t = Tester::mount(Center::new().child(flui_widgets::Row::new(vec![
+        flui_widgets::RepaintBoundary::new().child(swatch(1)).into_view().boxed(),
+        swatch(2).into_view().boxed(),
+        flui_widgets::RepaintBoundary::new().child(swatch(3)).into_view().boxed(),
+    ])));
+    let painted: Vec<(Rect, Color, Matrix4)> = t
+        .draw_commands()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            flui_painting::DrawOp::Rect { rect, paint } => {
+                Some((rect, paint.color, command.transform))
+            }
+            _ => None,
+        })
+        .collect();
+    let local = Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0));
+    // The row fills the window's width and centres its 10 px height.
+    let top = (600.0 - 10.0) / 2.0;
+    assert_eq!(
+        painted,
+        [
+            (
+                local,
+                Color::rgb(1, 0, 0),
+                Matrix4::translation(0.0, top, 0.0)
+            ),
+            (
+                local,
+                Color::rgb(2, 0, 0),
+                Matrix4::translation(10.0, top, 0.0)
+            ),
+            (
+                local,
+                Color::rgb(3, 0, 0),
+                Matrix4::translation(20.0, top, 0.0)
+            ),
+        ]
+    );
+}
