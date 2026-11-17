@@ -223,7 +223,7 @@ bundles do: `CFBundleVersion` and `CFBundleShortVersionString` are its `major.mi
 `FLUIVersion` the version as written; a bundle named from its directory takes the version of the
 package the build compiled (`AppBundle::version_of`,
 `the_macos_info_plist_states_the_application_version`). A library build for iOS is always
-delivered as an XCFramework, whatever Xcode project `platforms/ios` holds
+delivered as an XCFramework, whatever Xcode project the project's iOS directory holds
 (`a_library_build_beside_an_xcode_project_is_delivered_as_a_framework`). `[app] name` is a
 `ProjectName`, checked when `flui.toml` loads, and the file is refused past `MAX_CONFIG_BYTES`
 before it is decoded (`a_project_file_is_checked_when_it_loads`), so no generated Kotlin, XML,
