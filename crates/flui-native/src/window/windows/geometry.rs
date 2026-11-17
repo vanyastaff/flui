@@ -1,4 +1,4 @@
-//! Where a Win32 window is (ADR-0363): the display a sample of it is measured
+//! Where a Win32 window is (ADR-0364): the display a sample of it is measured
 //! on, and the geometry its sampled rectangles publish, converted through
 //! each display's own origin and scale ([`DisplayFrame`]). Pure apart from
 //! the monitor reads it is handed, so `geometry_tests` checks it on desktops

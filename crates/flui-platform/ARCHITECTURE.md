@@ -110,7 +110,7 @@ this one path (ADR-0151 §9).
   preference query (`PreferenceQueryError::Platform`) the window system
   refused or failed carry a `PlatformFailure`, so a caller matches one type.
 - **A position names its display; a display's bounds are its own logical
-  pixels (ADR-0363).** A `WindowPosition` is a finite point of one display, in
+  pixels (ADR-0364).** A `WindowPosition` is a finite point of one display, in
   that display's logical pixels from its corner, and is the one shape of a
   window's place: the snapshot's outer and normal positions, `SetPosition`
   and the options' positions. There is no global logical space. The snapshot's

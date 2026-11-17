@@ -16,7 +16,7 @@
 //!
 //! A position is always measured on one display, named by its
 //! [`DisplayId`], in that display's logical pixels, from that display's
-//! top-left corner ([`WindowPosition`], ADR-0363). There is no global logical
+//! top-left corner ([`WindowPosition`], ADR-0364). There is no global logical
 //! space: on a desktop of mixed scales, logical pixels of one display are not
 //! logical pixels of another, so a position that names no display has no
 //! fixed meaning.
