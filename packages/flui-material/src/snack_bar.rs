@@ -212,12 +212,10 @@ impl std::fmt::Debug for SnackBarAction {
 
 /// Retains the one-shot claim across rebuilds. The installed press closure
 /// shares the latch so another activation before the next build is ignored.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SnackBarActionState {
     triggered: Rc<Cell<bool>>,
-    /// Made in `create_state`. `None` only in a state built through the
-    /// public `Default` impl, which the framework never mounts.
-    rebuild: Option<RebuildHandle>,
+    rebuild: RebuildHandle,
 }
 
 impl StatefulView for SnackBarAction {
@@ -226,7 +224,7 @@ impl StatefulView for SnackBarAction {
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         SnackBarActionState {
             triggered: Rc::new(Cell::new(false)),
-            rebuild: Some(ctx.rebuild_handle()),
+            rebuild: ctx.rebuild_handle(),
         }
     }
 }
@@ -252,10 +250,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
             let messenger = ScaffoldMessengerScope::maybe_of(ctx);
             let on_pressed = view.on_pressed.clone();
             let triggered = Rc::clone(&self.triggered);
-            let rebuild = self
-                .rebuild
-                .clone()
-                .expect("BUG: a mounted SnackBarAction state comes from create_state");
+            let rebuild = self.rebuild.clone();
             button = button.on_pressed(move |ctx| {
                 if triggered.replace(true) {
                     return;
