@@ -3,6 +3,7 @@
 
 use flui_foundation::geometry::{Bounds, Point};
 
+use super::input_options::{Autofill, TextInputOptions};
 use super::lock::TextStoreError;
 use super::utf16::{Utf16Offset, Utf16Range};
 
@@ -116,18 +117,23 @@ impl PointMode {
     };
 }
 
-/// The store's standing properties, TSF's `TS_STATUS`.
+/// The store's standing properties, TSF's `TS_STATUS`, and what the field
+/// asks of the input method.
+///
+/// A host re-reads it on [`TextStoreObserver::status_changed`](super::TextStoreObserver::status_changed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TextStoreStatus {
     /// The text must not be read out (a password field). Text reads return
-    /// [`TextStoreError::Protected`]; edits, selection and geometry still work.
+    /// [`TextStoreError::Protected`]; edits, selection and geometry still
+    /// work. Protection wins over [`Self::text_input`]: a protected field is
+    /// never suggested, corrected or learnt from, whatever it asks
+    /// ([`Self::holds_secret`]).
     pub protected: bool,
-    /// The field holds one line.
+    /// The field holds one line: Enter does not break it.
     pub single_line: bool,
-    /// What the field is for, which input methods and on-screen keyboards
-    /// shape their layout and suggestions by.
-    pub purpose: TextInputPurpose,
+    /// What the field asks of the input method and the on-screen keyboard.
+    pub text_input: TextInputOptions,
 }
 
 impl TextStoreStatus {
@@ -135,7 +141,7 @@ impl TextStoreStatus {
     pub const EDITABLE_SINGLE_LINE: Self = Self {
         protected: false,
         single_line: true,
-        purpose: TextInputPurpose::Text,
+        text_input: TextInputOptions::TEXT,
     };
 
     /// This status with `protected` set.
@@ -144,35 +150,37 @@ impl TextStoreStatus {
         Self { protected, ..self }
     }
 
-    /// This status with `purpose` set.
+    /// This status with `single_line` set.
     #[must_use]
-    pub const fn with_purpose(self, purpose: TextInputPurpose) -> Self {
-        Self { purpose, ..self }
+    pub const fn with_single_line(self, single_line: bool) -> Self {
+        Self {
+            single_line,
+            ..self
+        }
     }
-}
 
-/// What a text field is for.
-///
-/// Independent of [`TextStoreStatus::protected`]: a protected field hides
-/// its text and tells input methods not to learn from it, whatever its
-/// purpose. A purpose only shapes the layout and suggestions an input
-/// method offers; it never filters what the field accepts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum TextInputPurpose {
-    /// Free text.
-    #[default]
-    Text,
-    /// An email address.
-    Email,
-    /// A web address.
-    Url,
-    /// A telephone number.
-    Phone,
-    /// A whole number.
-    Number,
-    /// A search query.
-    Search,
+    /// This status asking the input method for `text_input`.
+    #[must_use]
+    pub const fn with_text_input(self, text_input: TextInputOptions) -> Self {
+        Self { text_input, ..self }
+    }
+
+    /// Whether the field holds a secret: it is protected, or it asks to be
+    /// filled with a password or a one-time code, whose text shows on screen
+    /// yet must reach no dictionary, suggestion strip or recording.
+    ///
+    /// The one test every host and the journal make before they let an input
+    /// method suggest, correct or learn, or record what was typed;
+    /// [`Self::protected`] alone decides only what hides the text (secure
+    /// entry, a password keyboard, `Protected` text reads).
+    #[must_use]
+    pub const fn holds_secret(&self) -> bool {
+        self.protected
+            || matches!(
+                self.text_input.autofill,
+                Some(Autofill::CurrentPassword | Autofill::NewPassword | Autofill::OneTimeCode)
+            )
+    }
 }
 
 /// The reads a platform makes under any lock.

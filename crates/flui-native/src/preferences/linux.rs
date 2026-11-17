@@ -29,9 +29,75 @@ use crate::{
 const APPEARANCE: &str = "org.freedesktop.appearance";
 const GNOME: &str = "org.gnome.desktop.interface";
 const GNOME_A11Y: &str = "org.gnome.desktop.a11y.interface";
-const RETRY: Duration = Duration::from_secs(1);
 const READ_TIMEOUT: Duration = Duration::from_millis(200);
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The retries of a refresh whose read failed in a way that passes by itself
+/// (`heals_by_itself`), or that the portal answered with no value at all:
+/// 1, 2, 4, 8 and 16 s after each, then none until the portal next signals a
+/// change or changes hands.
+const READ_RETRIES: Backoff = Backoff::new(Duration::from_secs(1), 5);
+
+/// The retries of a session bus that does not answer, or of a connection that
+/// ended before the portal answered on it: 1 to 32 s apart, the last a minute
+/// after the first attempt, then the watch ends. A connection on which the
+/// portal answered starts the schedule over when it ends.
+const CONNECT_RETRIES: Backoff = Backoff::new(Duration::from_secs(1), 6);
+
+/// The pauses before the retries of something that failed: doubling from
+/// the first, a fixed number of them, then none, so a failure that never
+/// heals costs a bounded number of attempts and never a poll.
+#[derive(Debug, Clone, Copy)]
+struct Backoff {
+    next: Duration,
+    left: u32,
+}
+
+impl Backoff {
+    const fn new(first: Duration, retries: u32) -> Self {
+        Self {
+            next: first,
+            left: retries,
+        }
+    }
+
+    /// The pause before the next retry; `None` once every retry is spent.
+    fn next_pause(&mut self) -> Option<Duration> {
+        self.left = self.left.checked_sub(1)?;
+        let pause = self.next;
+        self.next = self.next.saturating_mul(2);
+        Some(pause)
+    }
+}
+
+/// When the watch connects again: on its schedule after a connection that
+/// failed or ended with the portal never answering on it, and on a fresh
+/// schedule after one on which the portal answered. A bus that accepts a
+/// client and drops it costs the schedule's attempts, not a reconnection a
+/// second for good.
+#[derive(Debug, Clone, Copy)]
+struct ConnectRetry {
+    schedule: Backoff,
+    left: Backoff,
+}
+
+impl ConnectRetry {
+    const fn new(schedule: Backoff) -> Self {
+        Self {
+            schedule,
+            left: schedule,
+        }
+    }
+
+    /// The pause before the next connection, after one on which the portal
+    /// answered a read (`answered`) or not; `None` once the schedule is spent.
+    fn pause_after(&mut self, answered: bool) -> Option<Duration> {
+        if answered {
+            self.left = self.schedule;
+        }
+        self.left.next_pause()
+    }
+}
 
 struct Observation {
     active: bool,
@@ -152,35 +218,79 @@ fn accept_text_scale(observation: &Mutex<Observation>, signal: &Weak<OwnerSignal
     }
 }
 
+/// Keep the observation for as long as a session bus answers: connect, and
+/// connect again on [`CONNECT_RETRIES`]' schedule when the bus does not
+/// answer or a connection ends. With no bus for that long the watch ends:
+/// the observation stays what the environment and any earlier read gave.
 async fn observe(
     observation: Arc<Mutex<Observation>>,
     signal: Weak<OwnerSignal>,
-    mut ready: Option<mpsc::SyncSender<()>>,
+    ready: Option<mpsc::SyncSender<()>>,
 ) {
+    observe_through(
+        &observation,
+        &signal,
+        ready,
+        session_connection,
+        CONNECT_RETRIES,
+    )
+    .await;
+}
+
+/// [`observe`] over the connections `connect` makes, retried on `schedule`.
+async fn observe_through<F>(
+    observation: &Mutex<Observation>,
+    signal: &Weak<OwnerSignal>,
+    mut ready: Option<mpsc::SyncSender<()>>,
+    mut connect: impl FnMut() -> F,
+    schedule: Backoff,
+) where
+    F: Future<Output = zbus::Result<zbus::Connection>>,
+{
+    let mut retries = ConnectRetry::new(schedule);
     loop {
-        let _ = observe_connection(&observation, &signal, &mut ready).await;
+        let mut answered = false;
+        if let Ok(connection) = connect().await {
+            // A connection that cannot subscribe is a failed attempt like one
+            // that does not connect.
+            let _: zbus::Result<()> =
+                observe_connection(&connection, observation, signal, &mut ready, &mut answered)
+                    .await;
+        }
         if let Some(ready) = ready.take() {
             let _ = ready.send(());
         }
-        tokio::time::sleep(RETRY).await;
+        let Some(pause) = retries.pause_after(answered) else {
+            return;
+        };
+        tokio::time::sleep(pause).await;
     }
 }
 
-async fn observe_connection(
-    observation: &Mutex<Observation>,
-    signal: &Weak<OwnerSignal>,
-    ready: &mut Option<mpsc::SyncSender<()>>,
-) -> zbus::Result<()> {
-    let connection = tokio::time::timeout(BOOTSTRAP_TIMEOUT, async {
+/// A connection to the session bus, or why there is none within
+/// [`BOOTSTRAP_TIMEOUT`].
+async fn session_connection() -> zbus::Result<zbus::Connection> {
+    tokio::time::timeout(BOOTSTRAP_TIMEOUT, async {
         zbus::connection::Builder::session()
             .method_timeout(READ_TIMEOUT)
             .build()
             .await
     })
     .await
-    .map_err(|_| zbus::Error::Failure("session bus connection timed out".into()))??;
+    .map_err(|_| zbus::Error::Failure("session bus connection timed out".into()))?
+}
+
+/// Watch the portal over `connection` until it ends (`Ok`), or fail to
+/// subscribe to it (`Err`); `answered` is set once a refresh read a value.
+async fn observe_connection(
+    connection: &zbus::Connection,
+    observation: &Mutex<Observation>,
+    signal: &Weak<OwnerSignal>,
+    ready: &mut Option<mpsc::SyncSender<()>>,
+    answered: &mut bool,
+) -> zbus::Result<()> {
     let proxy = Proxy::new(
-        &connection,
+        connection,
         "org.freedesktop.portal.Desktop",
         "/org/freedesktop/portal/desktop",
         "org.freedesktop.portal.Settings",
@@ -190,13 +300,19 @@ async fn observe_connection(
     // service during bootstrap remains queued for another observation.
     let mut changes = proxy.receive_signal("SettingChanged").await?;
     let mut owners = proxy.receive_owner_changed().await?;
-    let mut retry = refresh(&proxy, observation, signal).await.is_err();
+    let mut retry = ReadRetry::new();
+    let mut refreshed = |refresh: Refreshed| {
+        *answered |= refresh.answered;
+        refresh
+    };
+    retry.settle(refreshed(refresh(&proxy, observation, signal).await));
     if let Some(ready) = ready.take() {
         let _ = ready.send(());
     }
-    let mut retries = tokio::time::interval_at(tokio::time::Instant::now() + RETRY, RETRY);
-    retries.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        // A portal without the Settings interface, without a key or with no
+        // owner at all is not read again until it signals or changes hands.
+        let due = retry.due;
         tokio::select! {
             message = changes.next() => {
                 let Some(message) = message else { return Ok(()); };
@@ -210,17 +326,123 @@ async fn observe_connection(
                         | (GNOME, "enable-animations" | "text-scaling-factor" | "clock-format")
                         | (GNOME_A11Y, "high-contrast")
                 ) {
-                    retry = refresh(&proxy, observation, signal).await.is_err();
+                    retry = ReadRetry::new();
+                    retry.settle(refreshed(refresh(&proxy, observation, signal).await));
                 }
             }
             owner = owners.next() => {
                 if owner.is_none() { return Ok(()); }
-                retry = refresh(&proxy, observation, signal).await.is_err();
+                retry = ReadRetry::new();
+                retry.settle(refreshed(refresh(&proxy, observation, signal).await));
             }
-            _ = retries.tick(), if retry => {
-                retry = refresh(&proxy, observation, signal).await.is_err();
+            () = sleep_until(due) => {
+                retry.settle(refreshed(refresh(&proxy, observation, signal).await));
             }
         }
+    }
+}
+
+/// Sleep until `due`; never, for `None`: no read is due.
+async fn sleep_until(due: Option<tokio::time::Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// When the watch reads the portal again after a refresh: only after one
+/// that leaves a read to retry ([`NextRead::Retry`]), on [`READ_RETRIES`]'
+/// schedule, which a signal or a change of owner starts over.
+#[derive(Debug)]
+struct ReadRetry {
+    backoff: Backoff,
+    due: Option<tokio::time::Instant>,
+}
+
+impl ReadRetry {
+    const fn new() -> Self {
+        Self {
+            backoff: READ_RETRIES,
+            due: None,
+        }
+    }
+
+    /// Schedule the next read from the refresh that just ran.
+    fn settle(&mut self, refreshed: Refreshed) {
+        self.due = match refreshed.next {
+            NextRead::Settled => None,
+            NextRead::Retry => self
+                .backoff
+                .next_pause()
+                .map(|pause| tokio::time::Instant::now() + pause),
+        };
+    }
+}
+
+/// What a refresh found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Refreshed {
+    /// The portal answered at least one setting with a value.
+    answered: bool,
+    next: NextRead,
+}
+
+/// Whether a refresh leaves a read to retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NextRead {
+    /// Every read answered, or failed in a way only the portal's next signal
+    /// or owner can change: a key missing beside others that answer, a portal
+    /// without the Settings interface, no portal on the bus.
+    Settled,
+    /// A read failed in a way that passes by itself, or the portal answered
+    /// no setting at all. The portal folds a backend that has not started or
+    /// has gone into `NotFound` for every key, and its return changes no
+    /// owner on the bus and sends no signal, so only a read again finds it.
+    Retry,
+}
+
+impl Refreshed {
+    /// What a refresh whose reads failed with `errors` found, where the
+    /// portal answered at least one setting with a value (`answered`) or
+    /// none.
+    fn of<'a>(errors: impl IntoIterator<Item = Option<&'a zbus::Error>>, answered: bool) -> Self {
+        let mut failed = false;
+        for error in errors.into_iter().flatten() {
+            if heals_by_itself(error) {
+                return Self {
+                    answered,
+                    next: NextRead::Retry,
+                };
+            }
+            failed = true;
+        }
+        let next = if answered || failed {
+            NextRead::Settled
+        } else {
+            NextRead::Retry
+        };
+        Self { answered, next }
+    }
+}
+
+/// Whether a failed read can succeed on its own if asked again: the portal or
+/// its backend took too long or failed for a moment. A service that is not
+/// on the bus is waited for through `NameOwnerChanged`, and a method or key
+/// the portal lacks stays lacking.
+fn heals_by_itself(error: &zbus::Error) -> bool {
+    match error {
+        // `method_timeout` elapsed.
+        zbus::Error::InputOutput(error) => error.kind() == std::io::ErrorKind::TimedOut,
+        zbus::Error::FDO(error) => matches!(
+            **error,
+            zbus::fdo::Error::NoReply(_)
+                | zbus::fdo::Error::Timeout(_)
+                | zbus::fdo::Error::TimedOut(_)
+        ),
+        zbus::Error::MethodError(name, _, _) => {
+            name.as_str() == "org.freedesktop.portal.Error.Failed"
+        }
+        _ => false,
     }
 }
 
@@ -230,9 +452,9 @@ async fn refresh(
     proxy: &Proxy<'_>,
     observation: &Mutex<Observation>,
     signal: &Weak<OwnerSignal>,
-) -> zbus::Result<()> {
+) -> Refreshed {
     let motion = read_motion(proxy).await;
-    if let Ok(motion) = motion {
+    if let Ok(Some(motion)) = motion {
         publish(observation, signal, |observation| {
             let changed = observation.accepted.motion() != Some(motion);
             if changed {
@@ -242,7 +464,9 @@ async fn refresh(
         });
     }
     let appearance = read_appearance(proxy).await;
-    if let Ok(appearance) = appearance {
+    if let Ok(scheme) = appearance {
+        // A portal without the key prefers neither: light.
+        let appearance = scheme.unwrap_or(Brightness::Light);
         publish(observation, signal, |observation| {
             std::mem::replace(&mut observation.appearance, appearance) != appearance
         });
@@ -279,12 +503,21 @@ async fn refresh(
             changed
         });
     }
-    motion
-        .and(appearance)
-        .and(contrast)
-        .and(text_scale)
-        .and(clock)
-        .map(|_| ())
+    let answered = matches!(motion, Ok(Some(_)))
+        || matches!(appearance, Ok(Some(_)))
+        || matches!(contrast, Ok(Some(_)))
+        || matches!(text_scale, Ok(Some(_)))
+        || matches!(clock, Ok(Some(_)));
+    Refreshed::of(
+        [
+            motion.as_ref().err(),
+            appearance.as_ref().err(),
+            contrast.as_ref().err(),
+            text_scale.as_ref().err(),
+            clock.as_ref().err(),
+        ],
+        answered,
+    )
 }
 
 /// GNOME's `clock-format`; a desktop without the key, or with a value it
@@ -298,8 +531,7 @@ async fn read_clock_format(proxy: &Proxy<'_>) -> zbus::Result<Option<HourCycle>>
 }
 
 /// `contrast`: 1 asks for higher contrast, 0 has no preference. Without that
-/// key GNOME's `high-contrast` answers; with neither there is no observation,
-/// and nothing to retry.
+/// key GNOME's `high-contrast` answers; with neither there is no observation.
 async fn read_contrast(proxy: &Proxy<'_>) -> zbus::Result<Option<bool>> {
     match read(proxy, APPEARANCE, "contrast").await {
         Ok(value) => Ok(Some(u32::try_from(value)? == 1)),
@@ -323,37 +555,40 @@ async fn read_text_scale(proxy: &Proxy<'_>) -> zbus::Result<Option<f64>> {
 }
 
 /// `color-scheme`: 1 prefers dark; 0 (no preference) and 2 (prefers light)
-/// are light, as is a portal without the key.
-async fn read_appearance(proxy: &Proxy<'_>) -> zbus::Result<Brightness> {
+/// are light; a portal without the key has no observation.
+async fn read_appearance(proxy: &Proxy<'_>) -> zbus::Result<Option<Brightness>> {
     match read(proxy, APPEARANCE, "color-scheme").await {
-        Ok(value) => Ok(if u32::try_from(value)? == 1 {
+        Ok(value) => Ok(Some(if u32::try_from(value)? == 1 {
             Brightness::Dark
         } else {
             Brightness::Light
-        }),
-        Err(error) if missing_key(&error) => Ok(Brightness::Light),
+        })),
+        Err(error) if missing_key(&error) => Ok(None),
         Err(error) => Err(error),
     }
 }
 
-async fn read_motion(proxy: &Proxy<'_>) -> zbus::Result<MotionPreference> {
-    let motion = match read(proxy, APPEARANCE, "reduced-motion").await {
-        Ok(value) => match u32::try_from(value)? {
+/// `reduced-motion`: 1 asks for reduced motion, anything else has no
+/// preference. Without that key GNOME's `enable-animations` answers; with
+/// neither there is no observation. A read that fails
+/// otherwise keeps what was accepted before.
+async fn read_motion(proxy: &Proxy<'_>) -> zbus::Result<Option<MotionPreference>> {
+    match read(proxy, APPEARANCE, "reduced-motion").await {
+        Ok(value) => Ok(Some(match u32::try_from(value)? {
             1 => MotionPreference::Reduce,
             _ => MotionPreference::NoPreference,
-        },
-        // An unavailable key permits the GNOME fallback. A transient read
-        // failure must preserve the accepted primary observation instead.
-        Err(error) if missing_key(&error) => {
-            if bool::try_from(read(proxy, GNOME, "enable-animations").await?)? {
+        })),
+        Err(error) if missing_key(&error) => match read(proxy, GNOME, "enable-animations").await {
+            Ok(value) => Ok(Some(if bool::try_from(value)? {
                 MotionPreference::NoPreference
             } else {
                 MotionPreference::Reduce
-            }
-        }
-        Err(error) => return Err(error),
-    };
-    Ok(motion)
+            })),
+            Err(error) if missing_key(&error) => Ok(None),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    }
 }
 
 /// Whether the portal has no value for the key. The portal's own `NotFound`
@@ -414,6 +649,148 @@ mod tests {
         }
         fn enter(&self, _: &tracing::span::Id) {}
         fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    /// Each schedule doubles its pause and runs out: a failure that never
+    /// heals costs a bounded number of attempts.
+    #[test]
+    fn a_backoff_doubles_and_runs_out() {
+        let pauses = |mut backoff: Backoff| {
+            std::iter::from_fn(move || backoff.next_pause())
+                .map(|pause| pause.as_secs())
+                .collect::<Vec<u64>>()
+        };
+        assert_eq!(pauses(READ_RETRIES), [1, 2, 4, 8, 16]);
+        assert_eq!(pauses(CONNECT_RETRIES), [1, 2, 4, 8, 16, 32]);
+        assert_eq!(pauses(Backoff::new(Duration::MAX, 2)), [u64::MAX, u64::MAX]);
+    }
+
+    /// A session bus that never answers is asked once and then once per
+    /// retry of its schedule, and the watch ends; the host's start hears of
+    /// the first failure at once. Red-check: sleep a fixed pause and loop.
+    #[test]
+    fn a_bus_that_never_answers_is_asked_a_bounded_number_of_times() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("a test runtime");
+        let observation = Mutex::new(Observation {
+            active: true,
+            accepted: SystemPreferences::default(),
+            appearance: Brightness::Light,
+        });
+        let attempts = AtomicUsize::new(0);
+        let (ready, started) = mpsc::sync_channel(1);
+        let signal = Weak::new();
+        let watch = observe_through(
+            &observation,
+            &signal,
+            Some(ready),
+            || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                std::future::ready(Err(zbus::Error::Failure("no session bus".into())))
+            },
+            Backoff::new(Duration::from_millis(1), 6),
+        );
+        let ended =
+            runtime.block_on(async { tokio::time::timeout(Duration::from_secs(5), watch).await });
+        assert!(ended.is_ok(), "the watch ends once its retries are spent");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            7,
+            "one attempt and six retries"
+        );
+        assert_eq!(started.try_recv(), Ok(()), "the start heard of the failure");
+    }
+
+    /// Only a failure that can pass by itself is retried: a missing service
+    /// waits for its owner, a missing method stays missing.
+    #[test]
+    fn only_a_failure_that_passes_by_itself_is_retried() {
+        use zbus::fdo::Error as Fdo;
+        let fdo = |error: Fdo| zbus::Error::FDO(Box::new(error));
+        let cases = [
+            (
+                zbus::Error::InputOutput(Arc::new(std::io::ErrorKind::TimedOut.into())),
+                true,
+            ),
+            (fdo(Fdo::NoReply(String::new())), true),
+            (fdo(Fdo::Timeout(String::new())), true),
+            (fdo(Fdo::TimedOut(String::new())), true),
+            (fdo(Fdo::ServiceUnknown(String::new())), false),
+            (fdo(Fdo::NameHasNoOwner(String::new())), false),
+            (fdo(Fdo::UnknownMethod(String::new())), false),
+            (fdo(Fdo::UnknownInterface(String::new())), false),
+            (
+                zbus::Error::InputOutput(Arc::new(std::io::ErrorKind::BrokenPipe.into())),
+                false,
+            ),
+            (zbus::Error::IncorrectType, false),
+        ];
+        for (error, retried) in cases {
+            assert_eq!(heals_by_itself(&error), retried, "{error}");
+            let expected = if retried {
+                NextRead::Retry
+            } else {
+                NextRead::Settled
+            };
+            for answered in [false, true] {
+                assert_eq!(
+                    Refreshed::of([None, Some(&error), None], answered).next,
+                    expected,
+                    "{error}, answered: {answered}"
+                );
+            }
+        }
+    }
+
+    /// A portal that answers no setting at all is read again, since the
+    /// portal answers `NotFound` for every key while its backend is not up;
+    /// one that answers some settings and lacks the others is settled.
+    #[test]
+    fn a_portal_that_answers_nothing_is_read_again() {
+        assert_eq!(Refreshed::of([None, None], false).next, NextRead::Retry);
+        assert_eq!(Refreshed::of([None, None], true).next, NextRead::Settled);
+        let missing = zbus::Error::FDO(Box::new(zbus::fdo::Error::ServiceUnknown(String::new())));
+        assert_eq!(
+            Refreshed::of([Some(&missing), None], false).next,
+            NextRead::Settled,
+            "a portal not on the bus is waited for through its owner"
+        );
+        let mut retry = ReadRetry::new();
+        let nothing = Refreshed::of([None], false);
+        let reads = std::iter::from_fn(|| {
+            retry.settle(nothing);
+            retry.due
+        })
+        .take(10)
+        .count();
+        assert_eq!(reads, 5, "each read again is one of the schedule's retries");
+    }
+
+    /// A connection that ends before the portal answered on it costs one of
+    /// the schedule's retries, so a bus that accepts a client and drops it is
+    /// not reconnected a second for good; one on which the portal answered
+    /// starts the schedule over. Red-check: start over after every ended
+    /// connection.
+    #[test]
+    fn only_a_connection_the_portal_answered_on_starts_the_schedule_over() {
+        let mut retries = ConnectRetry::new(Backoff::new(Duration::from_secs(1), 3));
+        let pauses = |retries: &mut ConnectRetry, answered: &[bool]| {
+            answered
+                .iter()
+                .map(|&answered| retries.pause_after(answered).map(|pause| pause.as_secs()))
+                .collect::<Vec<Option<u64>>>()
+        };
+        assert_eq!(
+            pauses(&mut retries, &[false, false, false, false]),
+            [Some(1), Some(2), Some(4), None]
+        );
+        assert_eq!(
+            pauses(&mut retries, &[true, false]),
+            [Some(1), Some(2)],
+            "a connection the portal answered on starts the schedule over"
+        );
     }
 
     /// A text scale the snapshot refuses is reported with the observation

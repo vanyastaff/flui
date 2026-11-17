@@ -132,6 +132,9 @@ impl crate::host::WindowAccessibility for IosAccessibility {
 
     /// UIKit follows the key window itself.
     fn focus_changed(&self, _focused: bool) {}
+
+    /// UIKit places the nodes from the view's own position.
+    fn bounds_changed(&self, _: crate::host::ScreenBounds) {}
 }
 
 impl PlatformAccessibility for IosAccessibility {

@@ -320,7 +320,9 @@ struct LockTap {
 impl LockTap {
     /// The journal of a lock of `kind` granted now, or `None` when the lock
     /// runs untouched: no sink wants store rows now (the recording's copy of
-    /// the document goes stale), or the store is protected. A protected
+    /// the document goes stale), or the store holds a secret
+    /// ([`TextStoreStatus::holds_secret`]: protected, or a password or a
+    /// one-time code shown in clear). Such a
     /// store's locks are recorded once, as a lock on a protected store and
     /// nothing derived from the field's content (no text, range, offset or
     /// length), until a lock finds it unprotected again: how many locks it was
@@ -333,11 +335,11 @@ impl LockTap {
             self.forget_document();
             return None;
         }
-        let protected = self
+        let secret = self
             .store
             .upgrade()
-            .is_some_and(|store| store.status().protected);
-        if protected {
+            .is_some_and(|store| store.status().holds_secret());
+        if secret {
             self.forget_document();
             if !self.protected_noted.replace(true) {
                 let lock = StoreLock {

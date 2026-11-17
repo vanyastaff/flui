@@ -1012,7 +1012,9 @@ fn served_form(
 #[wasm_bindgen_test]
 fn a_focused_text_field_is_edited_through_its_element() {
     let store = flui_testing::text_store_kit::InMemoryTextStore::new("ab");
-    store.set_purpose(flui_platform::text_store::TextInputPurpose::Email);
+    store.set_text_input(flui_platform::text_store::TextInputOptions::new(
+        flui_platform::text_store::TextInputPurpose::Email,
+    ));
     let (canvas, accessibility) = served_form(&store);
     let state = field("name").expect("the field's element");
     assert_eq!(state.tag, "input");

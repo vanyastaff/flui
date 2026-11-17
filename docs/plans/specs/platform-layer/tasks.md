@@ -7127,6 +7127,55 @@ GPU-память простаивающего или невидимого окн
   `overlapping_activations_on_two_threads_keep_each_others_marks` (один общий слот — публикация
   второй активации доходит до адаптера).
 
+- [x] **LY119** — ветка `platform/text-field-status`, решение — ADR-0352 (заменяет в ADR-0348 §3
+  клавиши действия редактора). Обе находки подтверждены на `main` @ `9e309039d`: статус — только
+  `protected`, `single_line`, `purpose`, хосты угадывали метку Enter по назначению, многострочный
+  статус строился правкой `pub`-поля; проекция `project_ime_event` оставляла конец курсора
+  предредактирования (новый тест на `main` падает: выделение `6..6` вместо `4..6`). Построено:
+  `TextStoreStatus::text_input: TextInputOptions` — назначение (`Number(NumberFormat { signed,
+  decimal })`), `EnterAction`, `Capitalization`, `Correction::{Off, Suggestions, Autocorrect}`
+  (три состояния вместо двух флагов), `Autofill`; `TextInputOptions::new(purpose)` выбирает
+  умолчания по назначению, у назначения нет строителя; `with_single_line` и `with_text_input` у
+  статуса. Каждый хост передаёт то, для чего у платформы есть слово: iOS (`returnKeyType`,
+  `autocapitalizationType`, `textContentType`, клавиатуры decimal и numbers-and-punctuation),
+  Android (`IME_ACTION_*`, `TYPE_TEXT_FLAG_CAP_*`, `AUTO_CORRECT`, `NO_SUGGESTIONS`, флаги знака и
+  дроби), Web (`enterkeyhint` и на холсте `EditContext`, `autocapitalize`, `autocorrect`,
+  `spellcheck`, `autocomplete` автозаполнения), Wayland, IBus и Fcitx5 (подсказки капитализации,
+  дополнения и проверки, `digits` для целого), TSF (`IS_NUMBER` для числа со знаком или дробью).
+  Метка Enter только метка: каждый хост, Android тоже (было Tab и Shift+Tab), доставляет Enter, а
+  `EditableText` после `on_submitted` переводит фокус на Next и Previous. Проекция выделяет
+  целевой отрезок внутри композиции. Журнал записывает все поля статуса (протокол 0.18, поля
+  необязательны, старая запись читается как была). Виджеты: `text_input(TextInputOptions)` вместо
+  `input_purpose` во всех слоях полей. Тесты, в скобках результат с откатом:
+  `ime_events_project_onto_the_store_as_the_text_input_contract_says` (выделение схлопнуто в
+  конец отрезка); `enter_moves_the_focus_as_the_fields_enter_key_says` (фокус остаётся на первом
+  поле); `the_store_reports_the_text_input_the_field_was_built_with` (без записи нового значения
+  в ячейку в `did_update_view` хранилище сообщает первое);
+  `a_push_platform_is_told_the_focused_fields_status` (при сравнении одного назначения платформе
+  не сообщают новую метку Enter); `a_store_focus_keeps_every_field_of_its_status` (без метки и
+  исправления в записи строка читается назад не той, что записана); таблицы хостов `a_fields_options_pick_its_return_key_capitalization_correction_and_content`,
+  `the_text_input_options_reach_the_editor_info`,
+  `the_capitalization_and_correction_a_field_asks_for_are_its_hints`,
+  `a_fields_capitalization_and_correction_reach_each_protocol`,
+  `the_status_picks_capitalization_and_correction`, `the_status_labels_the_enter_key`,
+  `a_field_gets_the_scope_its_status_asks_for`. Прогоны на устройствах (метки Enter, капитализация
+  и автоисправление на Android и iOS, `textContentType`, Enter вместо Tab у Next на Android) —
+  в строках «Input purpose and hints» и «Autofill» `platform-parity.toml`; автозаполнение Android
+  (структура виртуальных view) не строится в этой серии и записано там же и в `docs/gaps.md`.
+  После независимого чтения: хост реагирует на смену статуса только при разнице в том, что он
+  передаёт, и перезапускает метод ввода только вне композиции — зеркало Android сравнивает
+  `EditorInfo`, с которым запущен метод ввода, и откладывает смену до конца композиции, не
+  показывая клавиатуру (`a_status_change_restarts_only_for_what_android_reads_and_never_mid_composition`),
+  iOS перечитывает признаки после конца marked text (`the_client_knows_while_the_keyboard_composes`);
+  `TextStoreStatus::holds_secret` (защищённое поле, пароль или одноразовый код) — единая проверка
+  перед подсказками, исправлением, обучением и записью журнала (строка одноразового кода в
+  `a_protected_store_journals_nothing_of_its_content`); Web всегда пишет `enterkeyhint`; вариант
+  `Send` переименован в `SendMessage` (имя `Send` заставляло rustc печатать `std::marker::Send`
+  во всех диагностиках — падали trybuild core и facade); журнал пишет статус целиком, старые
+  записи читаются по закреплённым тогдашним умолчаниям; у каждой ветви Enter своя строка теста,
+  каждая падает при откате своей ветви. Не построено и записано в `docs/gaps.md`: ожидание конца
+  композиции для смены статуса на Windows (TSF переоткрывает документ) и Wayland.
+
 - [x] **LY130** — ветка `native/xdnd-source-watch`. Находка подтверждена на `main` @ `cd0c88cd0`
   прогоном в WSL под Xvfb: источник, чьё соединение закрыто посреди наведения, оставлял окно в
   `Entered` с живым предложением до следующего drag, а запрос принятого drop от ушедшего
@@ -7473,6 +7522,49 @@ LY21 читать их как `crates/flui-native/…` и `crates/flui-platform/
   с `--all-features`. Не запущено и записано в строке паритета
   `app-identity-aumid-bundle-id-desktop-file`: сопоставление окна с установленной записью в сессиях
   GNOME и KDE; AppUserModelID на Windows не ставится (`docs/gaps.md`).
+- [x] **LY129** — ветка `native/linux-portal-and-atspi`. Обе находки подтверждены на `main` @
+  `0edacad77` прогоном: при откате исправления случай `quiet-without-keys` (портал отвечает
+  `NotFound` на всё) насчитал 21 вызов Settings за 3 с после первого чтения, `quiet-without-portal`
+  (портала на шине нет) — 15; узел X11-окна, сдвинутого в (200, 150), читался клиентом AT-SPI в
+  (10, 20) вместо (210, 170). Портал: `read_motion` без обоих ключей даёт «нет наблюдения»
+  (`Ok(None)`), как прочие ключи; повтор по удваивающемуся расписанию `READ_RETRIES` (1–16 с, пять
+  раз), которое сигнал или смена владельца начинают заново, — у ошибок, проходящих сами
+  (`heals_by_itself`: истёк `method_timeout`, `NoReply`, `Timeout`/`TimedOut`, портальный
+  `Failed`), и у обновления, где портал не ответил ни на один ключ: `xdg-desktop-portal`
+  (`desktop-portal/settings.c`, `settings_handle_read_one`) сводит любую ошибку бэкенда к
+  `NotFound`, а возвращение бэкенда не меняет владельца имени и не шлёт сигнала. Ключ, которого нет
+  рядом с отвечающими, `ServiceUnknown`, нет метода — ждут `SettingChanged` или
+  `NameOwnerChanged`; шина, которая не отвечает или закрылась прежде, чем портал на ней ответил, —
+  `CONNECT_RETRIES` (1–32 с, шесть раз; заново только после соединения, где портал ответил), затем
+  наблюдение кончается. Правило записано в `crates/flui-native/ARCHITECTURE.md`. AT-SPI:
+  `WindowAccessibility::bounds_changed(ScreenBounds)` на шве — обязательный метод каждого моста
+  (Win32, AppKit, UIKit, Android и Web ничего не делают: их адаптер берёт положение у окна или вида
+  сам); `ScreenBounds::try_new` отказывает отрицательному размеру и содержимому вне окна; мост
+  Linux зовёт `Adapter::set_root_window_bounds`. Окно X11 передаёт внешний прямоугольник рамки и
+  прямоугольник содержимого на корне при каждом чтении сервера, где они изменились (чтение идёт по
+  `ConfigureNotify`, `ReparentNotify`, `_NET_FRAME_EXTENTS`, фокусу; менеджер, двигающий рамку без
+  синтетического `ConfigureNotify` ICCCM 4.1.5, оставляет старое место до следующего такого
+  события — записано в `docs/gaps.md`); окно Wayland — себя в начале координат и содержимое под
+  своей полосой заголовка (`scale::unplaced_bounds`); безголовое окно — свой смоделированный
+  прямоугольник (`HeadlessWindowSystem::accessibility_bounds`). Тесты, каждый падает при откате:
+  `quiet-without-keys` (портал отвечает только `color-scheme`) и `quiet-without-portal` в
+  `linux_preferences` (монитор шины считает вызовы), `late-backend` (портал отвечает `NotFound`
+  на всё, затем без сигнала — reduced motion; при «нет ответа — улажено» владелец не слышит его
+  30 с), `a_bus_that_never_answers_is_asked_a_bounded_number_of_times` (при бесконечном повторе
+  наблюдение не кончается за 5 с), `a_node_is_placed_where_its_window_moved_on_the_screen` (под
+  openbox, окно в рамке, два сдвига; клиент AT-SPI читает `GetExtents(Screen)`, при откате (10, 20)
+  вместо (211, 190)) и продолжение `a_wayland_window_reads_back_its_tree` (Weston на масштабе 2:
+  при откате (20, 20, 200, 60) вместо (20, 94, 200, 60)) в `linux_atspi`,
+  `a_window_tells_its_bridge_where_it_lies` в `window_state`; таблицы
+  `only_a_failure_that_passes_by_itself_is_retried`, `a_portal_that_answers_nothing_is_read_again`,
+  `only_a_connection_the_portal_answered_on_starts_the_schedule_over`,
+  `a_backoff_doubles_and_runs_out`, `screen_bounds_hold_their_content_within_the_window`,
+  `the_bridge_tells_the_adapter_where_the_window_is`,
+  `an_unplaced_window_has_its_content_below_its_own_title_bar`. Прогоны 2026-11-16 (WSL Ubuntu
+  24.04): весь `linux_preferences` (20 случаев), весь `linux_atspi` (7), набор `flui-native` как в
+  CI под `xvfb-run` (976 тестов), `wayland_window` под Weston (падает лишь
+  `optional::a_window_moved_to_another_output_names_its_display`, как и на `main`). Не запущено:
+  обзор мышью Orca и лупа в настоящей сессии (строка паритета `tree-and-actions`).
 
 ### Доведение до приёмки
 

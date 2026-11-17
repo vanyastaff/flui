@@ -598,6 +598,14 @@ impl TextClient {
         !self.marked.get()
     }
 
+    /// Whether the input method holds marked text it set through this client:
+    /// a change of the field's traits waits until it ends rather than reload
+    /// the keyboard under it.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn composes(&self) -> bool {
+        self.marked.get()
+    }
+
     /// `insertText:replacementRange:` — `text` replaces `replacement`, else
     /// the composition, else the selection, and the composition ends.
     pub(crate) fn insert_text(&self, text: String, replacement: Option<Utf16Range>) {

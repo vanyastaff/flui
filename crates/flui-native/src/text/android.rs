@@ -65,10 +65,9 @@ pub(crate) mod ime {
 
     use flui_foundation::IdMint;
     use flui_foundation::geometry::{Bounds, Point};
-    use flui_platform::keyboard::NamedKey;
     use flui_platform::text_store::{
-        Composition, Selection, TextInputPurpose, TextStoreEdit, TextStoreError, TextStoreRead,
-        TextStoreStatus, Utf16Offset, Utf16Range,
+        Capitalization, Composition, Correction, EnterAction, Selection, TextInputPurpose,
+        TextStoreEdit, TextStoreError, TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range,
     };
 
     use crate::text::ime::{diff, document_text};
@@ -107,9 +106,14 @@ pub(crate) mod ime {
     /// takes the snapshot ([`Mirror::install`]).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Change {
-        /// A field took focus, or its status changed: the view becomes its
-        /// editor and the input method starts on it.
+        /// A field took focus: the view becomes its editor, the input method
+        /// starts on it and the keyboard shows.
         Focus,
+        /// The focused field's status changed: the view takes its new
+        /// [`EditorInfo`], restarting the input method only when it differs
+        /// from what the input method was started with and never under a
+        /// composition, and shows no keyboard ([`Mirror::decide`]).
+        Status,
         /// The view no longer mirrors the store (the store refused a step):
         /// the input method starts over on the store's text.
         Resync,
@@ -124,7 +128,29 @@ pub(crate) mod ime {
         /// Whether the snapshot replaces the text the input method edits, so
         /// an edit made before it was made on text the store no longer holds.
         const fn replaces_text(self) -> bool {
-            !matches!(self, Self::Selection)
+            !matches!(self, Self::Selection | Self::Status)
+        }
+    }
+
+    /// The `EditorInfo` input type and options the input method is started
+    /// with ([`editor_info`]).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct EditorInfo {
+        /// `EditorInfo.inputType`.
+        pub input_type: i32,
+        /// `EditorInfo.imeOptions`.
+        pub options: i32,
+    }
+
+    impl EditorInfo {
+        /// What a field of `status` asks for.
+        #[must_use]
+        pub const fn of(status: TextStoreStatus) -> Self {
+            let (input_type, options) = editor_info(status);
+            Self {
+                input_type,
+                options,
+            }
         }
     }
 
@@ -145,6 +171,8 @@ pub(crate) mod ime {
         pub selection: Selection,
         /// The store's composition.
         pub composition: Option<Utf16Range>,
+        /// What the field asked of the input method when it was read.
+        pub editor: EditorInfo,
     }
 
     impl Snapshot {
@@ -266,7 +294,12 @@ pub(crate) mod ime {
         /// method. The store is read before the ledger counts the
         /// publication, so a read that panics leaves the ledger as it was.
         #[must_use]
-        pub fn publish(&self, session: &dyn TextStoreRead, change: Change) -> Snapshot {
+        pub fn publish(
+            &self,
+            session: &dyn TextStoreRead,
+            change: Change,
+            editor: EditorInfo,
+        ) -> Snapshot {
             let text = document_text(session);
             let selection = session.selection();
             let composition = session.composition().map(|composition| composition.range);
@@ -291,6 +324,7 @@ pub(crate) mod ime {
                 text,
                 selection,
                 composition,
+                editor,
             }
         }
 
@@ -342,6 +376,14 @@ pub(crate) mod ime {
         /// took a snapshot's text: a snapshot that has not seen it raced it.
         /// Reports made before that are on text the view no longer holds.
         unconfirmed: Option<ReportId>,
+        /// What the input method was last started with; `None` before the
+        /// first focus.
+        editor: Option<EditorInfo>,
+        /// A publication brought an [`EditorInfo`] the view could not start
+        /// the input method with yet (it composed, or had reports the
+        /// publication had not seen): the owner publishes the status again
+        /// once the composition ends ([`Self::status_owed`]).
+        editor_owed: bool,
     }
 
     impl Mirror {
@@ -350,12 +392,23 @@ pub(crate) mod ime {
         /// the input method did since its last report, an open batch edit
         /// included, before it asks. Changes nothing; [`Self::take`] does,
         /// once the view's own editor holds what the answer says.
+        ///
+        /// A status change restarts the input method on the new
+        /// [`EditorInfo`] only when it differs from what the input method was
+        /// started with, and never under a composition or past an edit the
+        /// owner has not seen: then the view keeps everything and the change
+        /// waits for the composition to end.
         #[must_use]
         pub fn decide(&self, snapshot: &Snapshot) -> Install {
             let raced = self.unconfirmed > snapshot.seen;
+            let status_waits =
+                raced || self.composition.is_some() || self.editor == Some(snapshot.editor);
             match snapshot.change {
-                Change::Focus | Change::Resync => Install::Replace { restart: true },
+                Change::Status if status_waits => Install::Keep,
                 Change::Selection if raced => Install::Keep,
+                Change::Focus | Change::Resync | Change::Status => {
+                    Install::Replace { restart: true }
+                }
                 Change::Text if raced => Install::Replace { restart: true },
                 Change::Text | Change::Selection => Install::Replace {
                     restart: self.composition_touched(snapshot),
@@ -363,8 +416,19 @@ pub(crate) mod ime {
             }
         }
 
+        /// Whether the view, taking `snapshot` as `install` says, starts the
+        /// input method on an [`EditorInfo`] other than the one it runs with
+        /// (a focus starts it on its own).
+        #[must_use]
+        pub fn reconfigures(&self, snapshot: &Snapshot, install: Install) -> bool {
+            snapshot.change != Change::Focus
+                && install == Install::Replace { restart: true }
+                && self.editor != Some(snapshot.editor)
+        }
+
         /// The view took `snapshot` as `install` says: the reports that
-        /// follow are diffed against what it holds now.
+        /// follow are diffed against what it holds now, and a restart started
+        /// the input method on the snapshot's [`EditorInfo`].
         pub fn take(&mut self, snapshot: &Snapshot, install: Install) {
             self.publication = Some(snapshot.publication);
             if matches!(install, Install::Replace { .. }) {
@@ -372,6 +436,23 @@ pub(crate) mod ime {
                 self.composition = snapshot.composition;
                 self.unconfirmed = None;
             }
+            if install == (Install::Replace { restart: true }) {
+                self.editor = Some(snapshot.editor);
+                self.editor_owed = false;
+            } else if self.editor != Some(snapshot.editor) {
+                self.editor_owed = true;
+            }
+        }
+
+        /// Whether a status change the view could not take waits and nothing
+        /// holds it back any more (no composition): the owner publishes the
+        /// status again ([`Change::Status`]). Answers so once.
+        pub fn status_owed(&mut self) -> bool {
+            let owed = self.editor_owed && self.composition.is_none();
+            if owed {
+                self.editor_owed = false;
+            }
+            owed
         }
 
         /// [`Self::decide`], then [`Self::take`]: a view whose editor always
@@ -488,55 +569,112 @@ pub(crate) mod ime {
 
     /// `EditorInfo.TYPE_CLASS_NUMBER`.
     pub const TYPE_CLASS_NUMBER: i32 = 0x2;
+    /// `EditorInfo.TYPE_NUMBER_FLAG_SIGNED`.
+    pub const TYPE_NUMBER_FLAG_SIGNED: i32 = 0x1000;
+    /// `EditorInfo.TYPE_NUMBER_FLAG_DECIMAL`.
+    pub const TYPE_NUMBER_FLAG_DECIMAL: i32 = 0x2000;
+    /// `EditorInfo.TYPE_NUMBER_VARIATION_PASSWORD`: a number pad that hides what is typed.
+    pub const TYPE_NUMBER_VARIATION_PASSWORD: i32 = 0x10;
     /// `EditorInfo.TYPE_CLASS_PHONE`.
     pub const TYPE_CLASS_PHONE: i32 = 0x3;
     /// `EditorInfo.TYPE_TEXT_VARIATION_URI`.
     pub const TYPE_TEXT_VARIATION_URI: i32 = 0x10;
     /// `EditorInfo.TYPE_TEXT_VARIATION_EMAIL_ADDRESS`.
     pub const TYPE_TEXT_VARIATION_EMAIL_ADDRESS: i32 = 0x20;
+    /// `EditorInfo.TYPE_TEXT_FLAG_CAP_CHARACTERS`.
+    pub const TYPE_TEXT_FLAG_CAP_CHARACTERS: i32 = 0x1000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_CAP_WORDS`.
+    pub const TYPE_TEXT_FLAG_CAP_WORDS: i32 = 0x2000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_CAP_SENTENCES`.
+    pub const TYPE_TEXT_FLAG_CAP_SENTENCES: i32 = 0x4000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_AUTO_CORRECT`.
+    pub const TYPE_TEXT_FLAG_AUTO_CORRECT: i32 = 0x8000;
+    /// `EditorInfo.TYPE_TEXT_FLAG_NO_SUGGESTIONS`.
+    pub const TYPE_TEXT_FLAG_NO_SUGGESTIONS: i32 = 0x8_0000;
+    /// `EditorInfo.IME_ACTION_GO`.
+    pub const IME_ACTION_GO: i32 = 2;
     /// `EditorInfo.IME_ACTION_SEARCH`.
     pub const IME_ACTION_SEARCH: i32 = 3;
+    /// `EditorInfo.IME_ACTION_SEND`.
+    pub const IME_ACTION_SEND: i32 = 4;
 
-    /// The `EditorInfo` input type and options a field of `status` asks for: the
-    /// keyboard its purpose names (email, web address, number, phone, search), a
-    /// password variation that the keyboard does not learn from for a protected
-    /// field (which wins over the purpose), a multi-line field whose Enter breaks
-    /// lines, and Done otherwise.
+    /// The `EditorInfo` input type and options a field of `status` asks for:
+    ///
+    /// - the keyboard its purpose names (email, web address, phone, search, a
+    ///   number with the sign and decimal flags its format allows);
+    /// - for text, the capitalization it asks for, auto-correction for
+    ///   [`Correction::Autocorrect`] and no suggestion strip for
+    ///   [`Correction::Off`];
+    /// - the action its Enter key names, Done for the keyboard's own; a
+    ///   multi-line field keeps an action it names, and breaks lines on Enter
+    ///   otherwise;
+    /// - a protected field is a password (a number keeps its pad, hidden), and a
+    ///   field that holds a secret ([`TextStoreStatus::holds_secret`]: a
+    ///   password or a one-time code shown in clear too) is neither suggested,
+    ///   corrected nor learnt from, whatever its options.
     #[must_use]
     pub const fn editor_info(status: TextStoreStatus) -> (i32, i32) {
-        let mut input_type = TYPE_CLASS_TEXT;
-        let mut options = IME_ACTION_DONE;
-        match status.purpose {
-            TextInputPurpose::Email => input_type |= TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
-            TextInputPurpose::Url => input_type |= TYPE_TEXT_VARIATION_URI,
-            TextInputPurpose::Number => input_type = TYPE_CLASS_NUMBER,
-            TextInputPurpose::Phone => input_type = TYPE_CLASS_PHONE,
-            TextInputPurpose::Search => options = IME_ACTION_SEARCH,
-            // Free text, and any purpose added later that has no keyboard here.
-            _ => {}
-        }
+        let text_input = status.text_input;
+        let mut input_type = match text_input.purpose {
+            TextInputPurpose::Email => TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            TextInputPurpose::Url => TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_URI,
+            TextInputPurpose::Number(format) => {
+                let mut number = TYPE_CLASS_NUMBER;
+                if format.signed {
+                    number |= TYPE_NUMBER_FLAG_SIGNED;
+                }
+                if format.decimal {
+                    number |= TYPE_NUMBER_FLAG_DECIMAL;
+                }
+                number
+            }
+            TextInputPurpose::Phone => TYPE_CLASS_PHONE,
+            // Free text, a search, and any purpose added later that has no
+            // keyboard here.
+            _ => TYPE_CLASS_TEXT,
+        };
+        let mut options = match text_input.enter_action {
+            EnterAction::Go => IME_ACTION_GO,
+            EnterAction::Next => IME_ACTION_NEXT,
+            EnterAction::Previous => IME_ACTION_PREVIOUS,
+            EnterAction::Search => IME_ACTION_SEARCH,
+            EnterAction::SendMessage => IME_ACTION_SEND,
+            // Done, the keyboard's own, and any action added later.
+            _ => IME_ACTION_DONE,
+        };
         if status.protected {
-            input_type = TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD;
+            // A number keeps its pad, hidden; anything else is a password.
+            input_type = if input_type & 0xf == TYPE_CLASS_NUMBER {
+                input_type | TYPE_NUMBER_VARIATION_PASSWORD
+            } else {
+                TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD
+            };
+        }
+        if status.holds_secret() {
             options |= IME_FLAG_NO_PERSONALIZED_LEARNING;
+            if input_type & 0xf == TYPE_CLASS_TEXT && !status.protected {
+                input_type |= TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+            }
+        } else if input_type & 0xf == TYPE_CLASS_TEXT {
+            input_type |= match text_input.capitalization {
+                Capitalization::Sentences => TYPE_TEXT_FLAG_CAP_SENTENCES,
+                Capitalization::Words => TYPE_TEXT_FLAG_CAP_WORDS,
+                Capitalization::Characters => TYPE_TEXT_FLAG_CAP_CHARACTERS,
+                _ => 0,
+            };
+            input_type |= match text_input.correction {
+                Correction::Autocorrect => TYPE_TEXT_FLAG_AUTO_CORRECT,
+                Correction::Suggestions => 0,
+                _ => TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+            };
         }
         if !status.single_line && input_type & 0xf == TYPE_CLASS_TEXT {
             input_type |= TYPE_TEXT_FLAG_MULTI_LINE;
-            options |= IME_FLAG_NO_ENTER_ACTION;
+            if matches!(text_input.enter_action, EnterAction::Default) {
+                options |= IME_FLAG_NO_ENTER_ACTION;
+            }
         }
         (input_type, options)
-    }
-
-    /// The key an editor action (`performEditorAction`) arrives as, and whether
-    /// Shift is held: Next is Tab, Previous is Shift+Tab, and every other action
-    /// (Done, Go, Search, Send) is Enter, which a field answers as it answers a
-    /// keyboard's.
-    #[must_use]
-    pub const fn editor_action_key(action: i32) -> (NamedKey, bool) {
-        match action {
-            IME_ACTION_NEXT => (NamedKey::Tab, false),
-            IME_ACTION_PREVIOUS => (NamedKey::Tab, true),
-            _ => (NamedKey::Enter, false),
-        }
     }
 
     /// Where the caret and the field are for `CursorAnchorInfo`, in the view's
@@ -733,9 +871,8 @@ mod input {
     use jni::{JValue, jni_sig, jni_str};
 
     use super::ime::{
-        Change, CharacterBounds, EditorReport, ImeEdit, Install, Ledger, Mirror, Replayed,
-        Snapshot, character_bounds, cursor_anchor, editor_action_key, editor_info,
-        starts_handwriting,
+        Change, CharacterBounds, EditorInfo, EditorReport, ImeEdit, Install, Ledger, Mirror,
+        Replayed, Snapshot, character_bounds, cursor_anchor, starts_handwriting,
     };
     use crate::owner::android::EditorState;
     use crate::owner::panic_boundary::contain_owner_callback;
@@ -750,29 +887,24 @@ mod input {
     use crate::owner::android::java_view::{InputMethod, InputMethodReply, JavaView, ViewEvent};
     use crate::owner::android::{ActivityRef, ActivityWindow, ActivityWindowId};
 
-    /// The key presses an input method's editor action arrives as: `key`
-    /// pressed and released at `uptime_ms`, with Shift when `shift`.
-    fn editor_action_keys(
-        key: flui_platform::keyboard::NamedKey,
-        shift: bool,
-        uptime_ms: i64,
-    ) -> [flui_platform::PlatformInput; 2] {
-        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers};
+    /// The key presses an input method's editor action arrives as: Enter
+    /// pressed and released at `uptime_ms`, whatever the action. The field
+    /// acts on Enter by the action its status names (a Next field moves the
+    /// focus on), as it does on every host.
+    fn editor_action_keys(uptime_ms: i64) -> [flui_platform::PlatformInput; 2] {
+        use flui_platform::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
         let time = flui_platform::EventTime::from_nanos(
             u64::try_from(uptime_ms)
                 .unwrap_or(0)
                 .saturating_mul(1_000_000),
         );
-        let modifiers = if shift {
-            Modifiers::SHIFT
-        } else {
-            Modifiers::NONE
-        };
         [KeyState::Down(KeyPress::First), KeyState::Up].map(|state| {
-            flui_platform::PlatformInput::Keyboard(
-                KeyEvent::new(state, Key::Named(key), Code::Unidentified, time)
-                    .with_modifiers(modifiers),
-            )
+            flui_platform::PlatformInput::Keyboard(KeyEvent::new(
+                state,
+                Key::Named(NamedKey::Enter),
+                Code::Unidentified,
+                time,
+            ))
         })
     }
 
@@ -871,19 +1003,28 @@ mod input {
                 composition_start,
                 composition_end,
             };
-            let edit = self.mirror.lock().report(&report)?;
+            let (edit, status_owed) = {
+                let mut mirror = self.mirror.lock();
+                let edit = mirror.report(&report)?;
+                (edit, mirror.status_owed())
+            };
             let fields = Arc::clone(&self.fields);
             Some(InputMethodReply {
                 composing: Some(edit.composes()),
                 work: Box::new(move |window: &dyn ActivityWindow| {
                     if let Some(input) = fields.of(window.activity_id()) {
                         input.apply(edit);
+                        // A status change waited for the composition this
+                        // edit ended: the view takes it now.
+                        if status_owed {
+                            input.publish_now(Change::Status);
+                        }
                     }
                 }),
             })
         }
 
-        fn editor_action(&self, action: i32, uptime_ms: i64) -> InputMethodReply {
+        fn editor_action(&self, _action: i32, uptime_ms: i64) -> InputMethodReply {
             let fields = Arc::clone(&self.fields);
             InputMethodReply {
                 composing: None,
@@ -891,10 +1032,9 @@ mod input {
                     if let Some(input) = fields.of(window.activity_id()) {
                         input.editor_action();
                     }
-                    // The action arrives as the key it stands for, which a field
-                    // answers as it answers a keyboard's.
-                    let (key, shift) = editor_action_key(action);
-                    for key_input in editor_action_keys(key, shift, uptime_ms) {
+                    // The action arrives as Enter, which a field answers as it
+                    // answers a keyboard's.
+                    for key_input in editor_action_keys(uptime_ms) {
                         window.delivery().dispatch_input(key_input);
                     }
                 }),
@@ -1089,7 +1229,12 @@ mod input {
         /// than it, and dropped: the window's field publishes the store once
         /// more as a resynchronisation, whose own failure is only logged.
         fn publish(&self, session: &dyn TextStoreRead, change: Change, status: (i32, i32, bool)) {
-            let snapshot = self.ledger.publish(session, change);
+            let (input_type, options, _) = status;
+            let editor = EditorInfo {
+                input_type,
+                options,
+            };
+            let snapshot = self.ledger.publish(session, change, editor);
             let mirror = Arc::clone(&self.mirror);
             let bridge = Arc::clone(&self.view);
             let fields = self.fields.clone();
@@ -1161,6 +1306,21 @@ mod input {
                 ],
             )?;
         } else {
+            if mirror.lock().reconfigures(snapshot, install) {
+                // The restart below starts the input method on it; no
+                // keyboard is shown for a status change.
+                let (input_type, options, stylus) = status;
+                env.call_method(
+                    view,
+                    jni_str!("reconfigureEditor"),
+                    jni_sig!("(IIZ)V"),
+                    &[
+                        JValue::Int(input_type),
+                        JValue::Int(options),
+                        JValue::Bool(stylus),
+                    ],
+                )?;
+            }
             env.call_method(
                 view,
                 jni_str!("pushState"),
@@ -1222,7 +1382,10 @@ mod input {
         }
 
         fn status(&self, store: &dyn TextStore) -> (i32, i32, bool) {
-            let (input_type, options) = editor_info(store.status());
+            let EditorInfo {
+                input_type,
+                options,
+            } = EditorInfo::of(store.status());
             let stylus = self.handwriting.is_some();
             (input_type, options, stylus)
         }
@@ -1583,7 +1746,7 @@ mod input {
 
         fn status_changed(&self) {
             if let Some(input) = self.input.upgrade() {
-                input.publish_now(Change::Focus);
+                input.publish_now(Change::Status);
             }
         }
     }
