@@ -100,6 +100,7 @@ use crate::{
 use broadcast::Subscriber;
 use com_apartment::ComApartment;
 use flui_platform::{DisplayId, DisplaySnapshot};
+pub(crate) use modal_loop::ModalLoops;
 pub(crate) use window_table::{WindowDpi, WindowScale, WindowTable};
 
 /// The name of FLUI's window class, which every window the host opens has.
@@ -144,6 +145,10 @@ pub(crate) struct WindowClass {
     pub(crate) input: Rc<dyn WindowInputs>,
     /// The text input those hooks keep, as the window hands it out.
     pub(crate) text: Rc<dyn WindowTexts>,
+    /// The modal loops running on the thread, which the class's procedure
+    /// tells after each message ([`ModalLoops::ran`]); the host's table starts
+    /// it empty.
+    pub(crate) modal_loops: Rc<ModalLoops>,
 }
 
 thread_local! {
@@ -194,6 +199,13 @@ fn registered_class() -> Option<WindowClass> {
         })
         .ok()
         .flatten()
+}
+
+/// The modal loops running on this thread, as FLUI's window class on it keeps
+/// them for the host the process registered the class for; `None` on a thread
+/// no owner of that host opened on.
+pub(crate) fn thread_modal_loops() -> Option<Rc<ModalLoops>> {
+    registered_class().map(|class| class.modal_loops)
 }
 
 /// What the input of FLUI's window class on this thread tells the other
@@ -663,12 +675,12 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // A clone of the hooks: a hook's message may open or close windows, and
+    // A clone of the class: a hook's message may open or close windows, and
     // nothing of the thread's class stays borrowed while it runs.
-    let hooks = window_class::<H>().map(|class| class.hooks);
-    let answered = hooks
+    let class = window_class::<H>();
+    let answered = class
         .iter()
-        .flat_map(|hooks| hooks.iter())
+        .flat_map(|class| class.hooks.iter())
         .find_map(|hook| {
             // SAFETY: the arguments as Win32 delivered them, per this function's
             // `# Safety` contract.
@@ -680,7 +692,13 @@ unsafe fn dispatch_window_message<H: WindowsHost>(
             answer
         });
     // SAFETY: forwards the message verbatim, as Win32 delivered it.
-    answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) })
+    let answer = answered.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) });
+    // The message may have run the platform's code, which a modal loop
+    // running on the thread asks the deadlines again after.
+    if let Some(class) = &class {
+        class.modal_loops.after_window_message(msg, wparam);
+    }
+    answer
 }
 
 /// Load a cursor by style

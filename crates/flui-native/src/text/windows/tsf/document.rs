@@ -48,7 +48,7 @@ use windows_core::{BOOL, GUID, HRESULT, IUnknown, Interface, PCWSTR, PWSTR, Ref}
 
 use super::{TextServices, input_scope};
 use crate::owner::panic_boundary::{AfterPanic, os_entry};
-use crate::owner::windows::WindowRef;
+use crate::owner::windows::{ModalLoops, WindowRef};
 use crate::text::windows::acp::{
     self, AcpChange, AcpSelection, Hresult, SelectionInsert, Session, SessionSlot, acp, store_error,
 };
@@ -318,7 +318,13 @@ impl TsfStore {
             method,
             (),
             AfterPanic::Answer(|()| Err(E_UNEXPECTED.into())),
-            move || self.run_document_method(method, body),
+            move || {
+                // TSF calls the store directly, outside FLUI's procedures: an
+                // edit reaches the application, which may move a deadline a
+                // modal loop of the thread then asks for again.
+                let _ask_again = ModalLoops::ask_again_on_this_thread();
+                self.run_document_method(method, body)
+            },
         )
     }
 
