@@ -745,7 +745,7 @@ impl Bar {
             return;
         };
         if self.system.get().track_click() == Some(ScrollTrackClick::JumpToSpot) {
-            self.jump_to_spot(&shown, &geometry, at);
+            Self::jump_to_spot(&shown, &geometry, at);
             return;
         }
         let forward = toward_end != shown.axis_direction.is_reversed();
@@ -768,7 +768,7 @@ impl Bar {
 
     /// Move the position so the thumb's middle lands on `at`, along the
     /// track in the bar's box, as far as the thumb can travel.
-    fn jump_to_spot(&self, shown: &ObservedScroll, geometry: &BarGeometry, at: f64) {
+    fn jump_to_spot(shown: &ObservedScroll, geometry: &BarGeometry, at: f64) {
         let (track_start, track, thumb) = match shown.axis_direction.axis() {
             Axis::Vertical => (
                 geometry.track.top(),
