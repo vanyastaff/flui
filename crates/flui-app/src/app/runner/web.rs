@@ -304,7 +304,7 @@ impl WebFrameDriver {
                 // No deferral on web: this callback is driven by the
                 // browser's own `requestAnimationFrame` loop, which
                 // already paces at the display's rate — the exact job
-                // ADR-0058's deadline does for the native backends.
+                // ADR-0353's deadline does for the native backends.
                 FallbackGate::default(),
             )
         });

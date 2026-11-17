@@ -1235,15 +1235,16 @@ pub(crate) fn a_resize_that_keeps_panicking_is_not_retried_forever() {
     started.renderer.panic_in_next_resizes(PANICS);
     started.window.simulate_resize(700.0, 500.0);
     started.run.run_owner_turn();
-    // The loop as a desktop runs it, until it has nothing to wake for. A
-    // wake of the window for its own reasons may try the size again; a
-    // retry on every display period would report a panic on each.
+    // The loop as a desktop runs it, until it has nothing to wake for: a
+    // wake deadline brings the frame it was asked for (`wake_at`), as a
+    // desktop loop's does. A wake of the window for its own reasons may try
+    // the size again; a retry on every display period would report a panic
+    // on each.
     for _ in 0..2 * PANICS {
         let Some(deadline) = started.run.wake_deadline() else {
             break;
         };
-        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-        started.run.run_owner_turn();
+        wake_at(&started, deadline);
     }
     assert_eq!(
         started.run.wake_deadline(),
