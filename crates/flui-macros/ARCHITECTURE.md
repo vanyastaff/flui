@@ -140,7 +140,7 @@ One test per macro counts the refusals of an input that earns several:
 `every_refusal_of_a_route_type_is_reported_in_one_build`,
 `every_refusal_of_a_converted_type_is_reported_in_one_build`,
 `every_refusal_of_a_providers_data_is_reported_in_one_build`,
-`every_refusal_of_an_entrys_signature_is_reported_in_one_build`.
+`every_refusal_of_an_entry_signature_is_reported_in_one_build`.
 
 Because the refusals precede the manifest lookup they are unit tests of `expand`
 in this crate (`a_misplaced_view_attribute_is_refused_with_its_place`,

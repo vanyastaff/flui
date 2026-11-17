@@ -118,7 +118,7 @@ mod tests {
     use crate::refusals::assert_refused;
 
     #[test]
-    fn every_refusal_of_an_entrys_signature_is_reported_in_one_build() {
+    fn every_refusal_of_an_entry_signature_is_reported_in_one_build() {
         let plain: ItemFn = parse_quote! {
             pub fn run() -> Result<(), flui::LaunchError> { Ok(()) }
         };
