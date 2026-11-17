@@ -1320,7 +1320,8 @@ clip, or any clip above an opacity, colour-filter or blend layer), the layer's
 children draw unclipped and the clip cuts the composite once; the scene's cull
 skips a node that clip hides. So a backdrop filter there reads and writes only
 inside the whole pixels those composite clips show (`LayerCompositor::composite_clip_bounds`,
-each layer's clip rounded out before the next meets it, as the scene rounds each clip
+each layer's clip rounded out before the next meets it, as the scene rounds each clip on
+the chain from the surface to a node
 when it culls: a pixel an anti-aliased clip's edge covers in
 part shows what lies in it), which an image filter between the clip and the filter
 widens to the input it requires; past that bound the source is transparent, as past

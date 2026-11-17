@@ -288,7 +288,8 @@ up to the root (O(depth)) and never shrinks them, so a footprint can over-report
 under-report. A clip on the chain from the surface to a node cuts the node's footprint by the whole
 pixels it touches once mapped to the surface, since
 an anti-aliased clip's edge can show content in a pixel it covers in part (for a hard clip,
-which snaps, that is an over-report). The engine culls with the
+which snaps, that is an over-report). A clip inside a node's own content cuts the node's stored
+bound exactly, in the node's space. The engine culls with the
 same bounds. A chain, placement or
 bound that is not finite makes the frame `Full(NonFinite)`; a singular chain draws nothing and
 contributes only its old footprint.

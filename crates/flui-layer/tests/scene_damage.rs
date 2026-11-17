@@ -1799,7 +1799,8 @@ pub(crate) fn damage_under_a_fractional_clip_edge_takes_the_shared_pixel() {
         covered(&damage, covering(89.0, 4.0, 90.0, 28.0)),
         "the pixel the clip's edge shares with the box: {damage:?}"
     );
-    // A partial frame redrawing only that pixel walks into the node.
+    // A cull of only that pixel keeps the node, which a clip in the root's
+    // content holds.
     assert!(
         owner
             .current()
