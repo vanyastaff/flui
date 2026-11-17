@@ -396,9 +396,22 @@ pub(super) struct TouchpadHost {
     /// The cursor where a frame last read it, in device pixels of the
     /// client area.
     cursor: Option<(f64, f64)>,
-    /// Reads the cursor as unreadable, as on another active desktop.
+    /// What a test reads as the cursor instead of the OS's: a test runs on a
+    /// desktop of its own, where the cursor cannot be read (docs/testing.md).
     #[cfg(test)]
-    cursor_unreadable: bool,
+    test_cursor: TestCursor,
+}
+
+/// The cursor a test hands a frame in place of `GetCursorPos`.
+#[cfg(all(windows, test))]
+#[derive(Clone, Copy, Debug)]
+enum TestCursor {
+    /// The OS's reading.
+    Os,
+    /// At this point of the client area, in device pixels.
+    At(f64, f64),
+    /// Unreadable, as on another active desktop.
+    Unreadable,
 }
 
 #[cfg(windows)]
@@ -416,7 +429,7 @@ impl TouchpadHost {
             paused: false,
             cursor: None,
             #[cfg(test)]
-            cursor_unreadable: false,
+            test_cursor: TestCursor::Os,
         })
     }
 
@@ -465,12 +478,16 @@ impl InputWindow {
             GetCursorPos(&raw mut cursor).is_ok()
                 && windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &raw mut cursor).as_bool()
         };
+        let reading = read.then(|| (f64::from(cursor.x), f64::from(cursor.y)));
         #[cfg(test)]
-        let read = read && !host.cursor_unreadable;
-        let position = if read {
-            (f64::from(cursor.x), f64::from(cursor.y))
-        } else {
-            host.cursor?
+        let reading = match host.test_cursor {
+            TestCursor::Os => reading,
+            TestCursor::At(x, y) => Some((x, y)),
+            TestCursor::Unreadable => None,
+        };
+        let position = match reading {
+            Some(position) => position,
+            None => host.cursor?,
         };
         host.cursor = Some(position);
         Some(TouchpadFrame {

@@ -51,9 +51,12 @@ mod cases {
     use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
     use raw_window_handle::{HandleError, HasWindowHandle as _, RawWindowHandle};
     use x11rb::connection::Connection as _;
+    use x11rb::protocol::Event;
+    use x11rb::protocol::sync::ConnectionExt as _;
     use x11rb::protocol::xproto::{
-        AtomEnum, ClientMessageEvent, ConnectionExt as _, CreateWindowAux, EventMask, MapState,
-        PropMode, WindowClass,
+        AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureNotifyEvent,
+        ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, MapState, PropMode,
+        WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
     use x11rb::wrapper::ConnectionExt as _;
@@ -167,6 +170,22 @@ mod cases {
         (
             "a_stream_of_events_leaves_the_frames_their_turns",
             a_stream_of_events_leaves_the_frames_their_turns,
+        ),
+        (
+            "a_window_answers_the_window_managers_ping",
+            a_window_answers_the_window_managers_ping,
+        ),
+        (
+            "a_synchronised_resize_is_answered_after_its_frame",
+            a_synchronised_resize_is_answered_after_its_frame,
+        ),
+        (
+            "a_window_manager_that_paces_frames_sees_each_one_drawn",
+            a_window_manager_that_paces_frames_sees_each_one_drawn,
+        ),
+        (
+            "a_frame_handlers_panic_leaves_the_other_windows_their_frames",
+            a_frame_handlers_panic_leaves_the_other_windows_their_frames,
         ),
     ];
 
@@ -1588,7 +1607,8 @@ mod cases {
     /// halves of `WM_CLASS` and as `_GTK_APPLICATION_ID`, which a desktop
     /// entry named by the id matches; a host started without one carries the
     /// executable's stem and claims no id. Either way the window says it takes
-    /// the input focus (`WM_HINTS`) and names its process.
+    /// the input focus (`WM_HINTS`) and names its process and the machine it
+    /// runs on.
     fn a_window_carries_the_application_id_it_was_started_with() {
         let stem = std::env::current_exe()
             .expect("the test's executable")
@@ -1641,11 +1661,29 @@ mod cases {
                 Some(&[1, 1][..]),
                 "{class}: InputHint set, input True"
             );
+            // The id, only from the initial PID namespace (a CI runner's),
+            // where a window manager's id for the process is the same; a
+            // WSL distribution or a container has a namespace of its own.
+            let initial = std::fs::read_link("/proc/self/ns/pid")
+                .is_ok_and(|link| link.as_os_str() == "pid:[4026531836]");
             let pid: Vec<u32> = read("_NET_WM_PID")
                 .value32()
-                .expect("a 32-bit pid")
-                .collect();
-            assert_eq!(pid, [std::process::id()], "{class}");
+                .map_or_default(Iterator::collect);
+            let expected = if initial {
+                vec![std::process::id()]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(pid, expected, "{class}: the process id");
+            // EWMH: the machine the process runs on, beside its id.
+            let machine = read("WM_CLIENT_MACHINE");
+            let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
+                .expect("the kernel names the host");
+            assert_eq!(
+                (machine.type_, machine.value),
+                (u32::from(AtomEnum::STRING), host.trim().as_bytes().to_vec()),
+                "{class}: the machine, as `uname` names it"
+            );
         }
     }
 
@@ -2304,5 +2342,491 @@ mod cases {
             frames_meanwhile.get()
         );
         fixture.settle();
+    }
+
+    /// The names of the atoms `xid` lists in `property`, in their order.
+    fn atom_names(server: &RustConnection, xid: u32, property: &str) -> Vec<String> {
+        let atoms: Vec<u32> = server
+            .get_property(false, xid, atom(server, property), AtomEnum::ATOM, 0, 64)
+            .expect("request")
+            .reply()
+            .expect("the property")
+            .value32()
+            .map_or_default(Iterator::collect);
+        atoms
+            .into_iter()
+            .map(|atom| {
+                let name = server
+                    .get_atom_name(atom)
+                    .expect("request")
+                    .reply()
+                    .expect("the name")
+                    .name;
+                String::from_utf8(name).expect("an atom name")
+            })
+            .collect()
+    }
+
+    /// The counters `xid` names in `_NET_WM_SYNC_REQUEST_COUNTER`: the one a
+    /// window manager without frame synchronisation waits on, then the
+    /// extended one.
+    pub(crate) fn resize_counters(server: &RustConnection, xid: u32) -> [u32; 2] {
+        let counters: Vec<u32> = server
+            .get_property(
+                false,
+                xid,
+                atom(server, "_NET_WM_SYNC_REQUEST_COUNTER"),
+                AtomEnum::CARDINAL,
+                0,
+                2,
+            )
+            .expect("request")
+            .reply()
+            .expect("the property")
+            .value32()
+            .map_or_default(Iterator::collect);
+        counters
+            .try_into()
+            .expect("a window on a server with SYNC names two counters")
+    }
+
+    /// A connection that reads counters as a window manager does, with the
+    /// SYNC extension initialised on it.
+    pub(crate) fn counter_reader() -> RustConnection {
+        let reader = RustConnection::connect(None)
+            .expect("the X server answers")
+            .0;
+        reader
+            .sync_initialize(3, 1)
+            .expect("request")
+            .reply()
+            .expect("Xvfb has SYNC");
+        reader
+    }
+
+    /// The value of `counter` on the server now.
+    pub(crate) fn counter_value(reader: &RustConnection, counter: u32) -> i64 {
+        let value = reader
+            .sync_query_counter(counter)
+            .expect("request")
+            .reply()
+            .expect("the counter")
+            .counter_value;
+        (i64::from(value.hi) << 32) | i64::from(value.lo)
+    }
+
+    /// Send `xid` the window manager's `_NET_WM_SYNC_REQUEST` for `value`,
+    /// waited for on the extended counter when `extended`.
+    fn send_sync_request(server: &RustConnection, xid: u32, value: i64, extended: bool) {
+        let bits = value.cast_unsigned();
+        let low = u32::try_from(bits & 0xFFFF_FFFF).expect("a low half");
+        let high = u32::try_from(bits >> 32).expect("a high half");
+        let message = ClientMessageEvent::new(
+            32,
+            xid,
+            atom(server, "WM_PROTOCOLS"),
+            [
+                atom(server, "_NET_WM_SYNC_REQUEST"),
+                x11rb::CURRENT_TIME,
+                low,
+                high,
+                u32::from(extended),
+            ],
+        );
+        server
+            .send_event(false, xid, EventMask::NO_EVENT, message)
+            .expect("request");
+        server.flush().expect("flush");
+    }
+
+    /// Turn the fixture's loop until `done` holds, bounded at 5 s.
+    fn turn_until(fixture: &X11Fixture, what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            run_for(&fixture.platform, Duration::from_millis(20)).expect("the loop turns");
+        }
+    }
+
+    /// A window lists the window manager's ping among its protocols and
+    /// answers it as its loop turns on the owner thread: the message goes back
+    /// to the root with nothing changed but its window, where a window manager
+    /// hears it, and nothing answers while the owner does not turn, so a
+    /// window manager sees an owner that hangs. The answer is on the wire
+    /// before the turn runs any application code: a frame's handler in the
+    /// same turn finds it already arrived.
+    fn a_window_answers_the_window_managers_ping() {
+        let handler = RecordingWindowHandler::new();
+        let fixture = X11Fixture::open_with("ping", Rc::clone(&handler));
+        let root = fixture.root();
+        assert_eq!(
+            atom_names(&fixture.server, fixture.xid, "WM_PROTOCOLS"),
+            ["WM_DELETE_WINDOW", "_NET_WM_PING", "_NET_WM_SYNC_REQUEST"],
+            "the protocols a window takes"
+        );
+        // A stand-in window manager, hearing the root's substructure.
+        let manager = Rc::new(
+            RustConnection::connect(None)
+                .expect("the X server answers")
+                .0,
+        );
+        manager
+            .change_window_attributes(
+                root,
+                &ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_NOTIFY),
+            )
+            .expect("request")
+            .check()
+            .expect("the root's substructure is heard");
+        let protocols = atom(&manager, "WM_PROTOCOLS");
+        let ping_atom = atom(&manager, "_NET_WM_PING");
+        let ping = |time: u32| [ping_atom, time, fixture.xid, 0, 0];
+        let send_ping = |time: u32| {
+            manager
+                .send_event(
+                    false,
+                    fixture.xid,
+                    EventMask::NO_EVENT,
+                    ClientMessageEvent::new(32, fixture.xid, protocols, ping(time)),
+                )
+                .expect("request");
+            // A round trip: the server has queued the ping for the window.
+            manager
+                .get_input_focus()
+                .expect("request")
+                .reply()
+                .expect("the focus");
+        };
+        let answers = {
+            let manager = Rc::clone(&manager);
+            move || {
+                // A round trip: what the server sent before it has arrived.
+                manager
+                    .get_input_focus()
+                    .expect("request")
+                    .reply()
+                    .expect("the focus");
+                let mut answers = Vec::new();
+                while let Some(event) = manager.poll_for_event().expect("the connection") {
+                    if let Event::ClientMessage(message) = event
+                        && message.window == root
+                        && message.type_ == protocols
+                        && message.format == 32
+                    {
+                        answers.push(message.data.as_data32());
+                    }
+                }
+                answers
+            }
+        };
+
+        send_ping(0x0BAD_CAFE);
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            answers(),
+            Vec::<[u32; 5]>::new(),
+            "nothing answers while the owner does not turn"
+        );
+        let mut heard = Vec::new();
+        turn_until(&fixture, "the ping's answer", || {
+            heard.extend(answers());
+            !heard.is_empty()
+        });
+        assert_eq!(heard, [ping(0x0BAD_CAFE)], "the ping goes back as it came");
+
+        // A ping, then the window manager's close, heard in one turn: the
+        // handler the close asks, which holds the owner thread, waits a
+        // bounded time for the answer to the ping heard just before.
+        let asked = Rc::new(RefCell::new(None));
+        handler.react_to_close_request({
+            let asked = Rc::clone(&asked);
+            move || {
+                let deadline = Instant::now() + Duration::from_millis(500);
+                let mut heard = answers();
+                while heard.is_empty() && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(10));
+                    heard = answers();
+                }
+                *asked.borrow_mut() = Some(heard);
+                CloseDecision::KeepOpen
+            }
+        });
+        send_ping(0x0000_F00D);
+        send_close(&manager, fixture.xid);
+        turn_until(&fixture, "the close request", || asked.borrow().is_some());
+        assert_eq!(
+            asked.borrow().clone(),
+            Some(vec![ping(0x0000_F00D)]),
+            "the answer was sent before the turn's next handler ran"
+        );
+    }
+
+    /// A window manager that waits for a window's counter before it draws a
+    /// resize sees the counter take the request's value once the window has
+    /// drawn the frame the resize asked for, at the new size, and not before:
+    /// that frame still reads the counter as it was. A configure that kept
+    /// the size asks for no frame and is answered at the loop's turn.
+    fn a_synchronised_resize_is_answered_after_its_frame() {
+        let handler = RecordingWindowHandler::new();
+        let fixture = X11Fixture::open_with("synchronised", Rc::clone(&handler));
+        let [basic, extended] = resize_counters(&fixture.server, fixture.xid);
+        let reader = Rc::new(counter_reader());
+        // What each frame finds: the counter, and the window's width.
+        let frames = Rc::new(RefCell::new(Vec::new()));
+        handler.react_to_frame({
+            let (reader, frames) = (Rc::clone(&reader), Rc::clone(&frames));
+            let window = Rc::downgrade(&fixture.window);
+            move |_| {
+                let width = window
+                    .upgrade()
+                    .map(|window| window.state().content_size.get().width);
+                frames
+                    .borrow_mut()
+                    .push((counter_value(&reader, basic), width));
+            }
+        });
+
+        // A value with a high word: the window manager asks, then resizes
+        // the window, which openbox carries out.
+        let resized = (1_i64 << 32) + 7;
+        send_sync_request(&fixture.server, fixture.xid, resized, false);
+        fixture
+            .server
+            .configure_window(
+                fixture.xid,
+                &ConfigureWindowAux::new().width(460).height(330),
+            )
+            .expect("request");
+        fixture.server.flush().expect("flush");
+        turn_until(&fixture, "the resize's answer", || {
+            counter_value(&reader, basic) == resized
+        });
+        // The first frame at the new size is the one the answer waits for;
+        // a later one (the resize's `Expose`) may already read it.
+        let seen = frames.borrow().clone();
+        let first_resized = seen
+            .iter()
+            .find(|(_, width)| *width == Some(460.0))
+            .unwrap_or_else(|| panic!("a frame at the new size: {seen:?}"));
+        assert_ne!(
+            first_resized.0, resized,
+            "the counter waits for the frame: {seen:?}"
+        );
+        assert_eq!(
+            counter_value(&reader, extended),
+            0,
+            "openbox synchronises no frames: the basic counter alone"
+        );
+
+        // A configure that kept the size, as a window manager sends for a
+        // move (ICCCM §4.1.5), asks for no frame.
+        let moved = resized + 1;
+        let frames_before = frames.borrow().len();
+        send_sync_request(&fixture.server, fixture.xid, moved, false);
+        let configure = ConfigureNotifyEvent {
+            response_type: x11rb::protocol::xproto::CONFIGURE_NOTIFY_EVENT,
+            sequence: 0,
+            event: fixture.xid,
+            window: fixture.xid,
+            above_sibling: x11rb::NONE,
+            x: 120,
+            y: 90,
+            width: 460,
+            height: 330,
+            border_width: 0,
+            override_redirect: false,
+        };
+        fixture
+            .server
+            .send_event(false, fixture.xid, EventMask::STRUCTURE_NOTIFY, configure)
+            .expect("request");
+        fixture.server.flush().expect("flush");
+        turn_until(&fixture, "the move's answer", || {
+            counter_value(&reader, basic) == moved
+        });
+        assert_eq!(
+            frames.borrow().len(),
+            frames_before,
+            "answered with no frame"
+        );
+    }
+
+    /// `_NET_SUPPORTED` with `name` added beside what the window manager lists,
+    /// put back as it drops.
+    struct Listed<'a> {
+        fixture: &'a X11Fixture,
+        supported: Vec<u32>,
+    }
+
+    impl<'a> Listed<'a> {
+        fn add(fixture: &'a X11Fixture, name: &str) -> Self {
+            let server = &fixture.server;
+            let supported_atom = atom(server, "_NET_SUPPORTED");
+            let supported: Vec<u32> = server
+                .get_property(
+                    false,
+                    fixture.root(),
+                    supported_atom,
+                    AtomEnum::ATOM,
+                    0,
+                    1024,
+                )
+                .expect("request")
+                .reply()
+                .expect("the property")
+                .value32()
+                .map_or_default(Iterator::collect);
+            let mut listed = supported.clone();
+            listed.push(atom(server, name));
+            server
+                .change_property32(
+                    PropMode::REPLACE,
+                    fixture.root(),
+                    supported_atom,
+                    AtomEnum::ATOM,
+                    &listed,
+                )
+                .expect("request");
+            server.flush().expect("flush");
+            Self { fixture, supported }
+        }
+    }
+
+    impl Drop for Listed<'_> {
+        fn drop(&mut self) {
+            let server = &self.fixture.server;
+            let _ = server.change_property32(
+                PropMode::REPLACE,
+                self.fixture.root(),
+                atom(server, "_NET_SUPPORTED"),
+                AtomEnum::ATOM,
+                &self.supported,
+            );
+            let _ = server.flush();
+        }
+    }
+
+    /// Under a window manager that synchronises frames (it lists
+    /// `_NET_WM_FRAME_DRAWN`), a window's extended counter is odd while each
+    /// frame draws and even once it is drawn, also after a frame whose
+    /// handler panicked, which would otherwise leave the compositor showing
+    /// the window frozen; a request on the extended counter is answered
+    /// there, even and no lower than its value, and never on the basic one.
+    fn a_window_manager_that_paces_frames_sees_each_one_drawn() {
+        let handler = RecordingWindowHandler::new();
+        let fixture = X11Fixture::open_with("paced", Rc::clone(&handler));
+        let [basic, extended] = resize_counters(&fixture.server, fixture.xid);
+        let reader = Rc::new(counter_reader());
+        let listed = Listed::add(&fixture, "_NET_WM_FRAME_DRAWN");
+        run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+        let during = Rc::new(RefCell::new(Vec::new()));
+        let panic_next = Rc::new(std::cell::Cell::new(false));
+        handler.react_to_frame({
+            let (reader, during) = (Rc::clone(&reader), Rc::clone(&during));
+            let panic_next = Rc::clone(&panic_next);
+            move |_| {
+                during.borrow_mut().push(counter_value(&reader, extended));
+                assert!(!panic_next.replace(false), "a frame's handler panics");
+            }
+        });
+        let drawn = |above: i64| {
+            let value = counter_value(&reader, extended);
+            value > above && value % 2 == 0
+        };
+
+        fixture.window.request_redraw();
+        turn_until(&fixture, "a frame drawn", || drawn(0));
+        assert!(
+            !during.borrow().is_empty() && during.borrow().iter().all(|value| value % 2 == 1),
+            "odd while each frame draws: {:?}",
+            during.borrow()
+        );
+
+        // A request on the extended counter, then the resize.
+        send_sync_request(&fixture.server, fixture.xid, 41, true);
+        fixture
+            .server
+            .configure_window(
+                fixture.xid,
+                &ConfigureWindowAux::new().width(480).height(340),
+            )
+            .expect("request");
+        fixture.server.flush().expect("flush");
+        turn_until(&fixture, "the extended answer", || drawn(40));
+        assert!(
+            during.borrow().iter().all(|value| value % 2 == 1),
+            "{:?}",
+            during.borrow()
+        );
+        assert_eq!(
+            counter_value(&reader, basic),
+            0,
+            "an extended request is not answered on the basic counter"
+        );
+
+        // A frame whose handler panics.
+        let before = counter_value(&reader, extended);
+        panic_next.set(true);
+        fixture.window.request_redraw();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            turn_until(&fixture, "the panicking frame", || false);
+        }))
+        .expect_err("the handler's panic goes on");
+        assert_eq!(
+            flui_foundation::panic::payload_text(unwound.as_ref()),
+            Some("a frame's handler panics"),
+            "the handler's own panic, not a timeout"
+        );
+        assert!(drawn(before), "the panicking frame ended even");
+        drop(listed);
+        run_for(&fixture.platform, Duration::from_millis(100)).expect("the loop turns");
+    }
+
+    /// Two windows of one platform whose frame handlers both panic in one
+    /// turn: each still gets its frame, and the panic that goes on is the one
+    /// raised first.
+    fn a_frame_handlers_panic_leaves_the_other_windows_their_frames() {
+        let platform = X11Platform::try_new().expect("the X11 platform");
+        let ran = Rc::new(RefCell::new(Vec::new()));
+        let windows: Vec<_> = ["first", "second"]
+            .into_iter()
+            .map(|name| {
+                let handler = RecordingWindowHandler::new();
+                let window = platform
+                    .open_window(
+                        WindowOptions::default().title(name),
+                        Rc::clone(&handler) as _,
+                    )
+                    .expect("an X11 window opens");
+                (name, handler, window)
+            })
+            .collect();
+        run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        for (name, handler, _) in &windows {
+            let ran = Rc::clone(&ran);
+            let name = *name;
+            handler.react_to_frame(move |_| {
+                ran.borrow_mut().push(name);
+                panic!("{name} panics");
+            });
+        }
+        for (_, _, window) in &windows {
+            window.request_redraw();
+        }
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_for(&platform, Duration::from_millis(200)).expect("the loop turns");
+        }))
+        .expect_err("a handler's panic goes on");
+        let ran = ran.borrow().clone();
+        assert_eq!(ran.len(), 2, "each window got its frame: {ran:?}");
+        assert_eq!(
+            flui_foundation::panic::payload_text(unwound.as_ref()),
+            Some(format!("{} panics", ran[0]).as_str()),
+            "the first panic goes on"
+        );
+        for (_, _, window) in windows {
+            window.close_for_cleanup();
+        }
+        run_for(&platform, Duration::from_millis(100)).expect("the loop turns");
     }
 }

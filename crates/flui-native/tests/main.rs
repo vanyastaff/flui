@@ -84,6 +84,9 @@ mod windows_foreground;
 #[path = "windows_host_events.rs"]
 #[cfg(target_os = "windows")]
 mod windows_host_events;
+#[path = "windows_test_desktop.rs"]
+#[cfg(target_os = "windows")]
+mod windows_test_desktop;
 #[path = "windows_window_commands.rs"]
 #[cfg(target_os = "windows")]
 mod windows_window_commands;
@@ -100,6 +103,95 @@ fn win32_handle(window: &dyn flui_native::HostWindow) -> windows::Win32::Foundat
         panic!("not a Win32 window");
     };
     windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut std::ffi::c_void)
+}
+
+/// Whether this test runs on the desktop that takes the user's input, the one
+/// the foreground, the cursor and `SendInput` belong to. nextest starts a test
+/// on a desktop of its own, which does not (docs/testing.md, "The Windows test
+/// desktop").
+#[cfg(target_os = "windows")]
+fn on_the_input_desktop() -> bool {
+    this_threads_desktop().takes_input
+}
+
+/// What the calling thread's desktop is: its name and whether it takes input.
+#[cfg(target_os = "windows")]
+struct ThreadDesktop {
+    name: String,
+    takes_input: bool,
+}
+
+#[cfg(target_os = "windows")]
+#[expect(
+    unsafe_code,
+    reason = "reads the thread's desktop, its name and whether it takes input"
+)]
+fn this_threads_desktop() -> ThreadDesktop {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::StationsAndDesktops::{
+        GetThreadDesktop, GetUserObjectInformationW, UOI_IO, UOI_NAME,
+    };
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    let unread = ThreadDesktop {
+        name: String::new(),
+        takes_input: false,
+    };
+    // SAFETY: the calling thread's own desktop, which is not closed.
+    let Ok(desktop) = (unsafe { GetThreadDesktop(GetCurrentThreadId()) }) else {
+        return unread;
+    };
+    let mut takes_input = windows::core::BOOL(0);
+    // SAFETY: `takes_input` is a writable `BOOL`, the size passed.
+    let io = unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_IO,
+            Some((&raw mut takes_input).cast()),
+            u32::try_from(std::mem::size_of::<windows::core::BOOL>()).expect("a BOOL's size"),
+            None,
+        )
+    };
+    let mut name = [0u16; 256];
+    // SAFETY: `name` is a writable buffer of the size passed.
+    let named = unsafe {
+        GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            u32::try_from(std::mem::size_of_val(&name)).expect("512 fits a u32"),
+            None,
+        )
+    };
+    let len = if named.is_ok() {
+        name.iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(name.len())
+    } else {
+        0
+    };
+    ThreadDesktop {
+        name: String::from_utf16_lossy(&name[..len]),
+        takes_input: io.is_ok() && takes_input.as_bool(),
+    }
+}
+
+/// Whether a case that needs the desktop taking input (`what`) runs here. Elsewhere it says it
+/// cannot verify and the case returns, or, under `FLUI_REQUIRE_INPUT_DESKTOP=1`, fails.
+#[cfg(target_os = "windows")]
+fn input_desktop_for(what: &str) -> bool {
+    if on_the_input_desktop() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("FLUI_REQUIRE_INPUT_DESKTOP").is_none_or(|required| required != "1"),
+        "{what} needs the desktop that takes the user's input, which this test does not run on \
+         (FLUI_REQUIRE_INPUT_DESKTOP=1)"
+    );
+    eprintln!(
+        "CANNOT_VERIFY {what}: it needs the desktop that takes the user's input \
+         (FLUI_TEST_VISIBLE_DESKTOP=1 runs it there)"
+    );
+    false
 }
 
 /// Runs every case even after one fails, then panics listing the failing case names.
