@@ -2178,6 +2178,7 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
+ "wayland-server",
  "web-sys",
  "web-time",
  "windows 0.62.2",
@@ -6616,6 +6617,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]

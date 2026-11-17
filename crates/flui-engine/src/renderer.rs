@@ -24,14 +24,14 @@
 //!
 //! ```rust,no_run
 //! # async fn render(
-//! #     window: impl flui_engine::WindowTarget,
+//! #     window: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
 //! #     scene: &flui_layer::Scene,
 //! # ) -> Result<(), flui_engine::EngineError> {
 //! use flui_engine::Renderer;
 //!
-//! // Create renderer (automatically selects backend). `window` is moved in
-//! // — an owned, `'static` handle source (see `WindowTarget`), not a
-//! // borrow — so the renderer can outlive the caller's stack frame.
+//! // Create renderer (automatically selects backend). `window` is the
+//! // window's surface target, which the renderer keeps for as long as its
+//! // surface lives, so it can outlive the caller's stack frame.
 //! let mut renderer = Renderer::new(window).await?;
 //!
 //! // Render frame. `true` means the frame reached the surface (a `false`
@@ -55,6 +55,7 @@ use crate::surface_present::{
     acquire_surface_texture_with, classify_frame, reconfigure_after_suboptimal_present,
 };
 use crate::window_target::{TargetDisplay, WindowTarget};
+use flui_platform::{FramePacing, SurfaceTarget};
 
 #[cfg(test)]
 mod new_probes_before_gpu_work_tests {
@@ -114,7 +115,9 @@ mod new_probes_before_gpu_work_tests {
     fn renderer_new_fails_before_instance_creation_when_target_is_unavailable() {
         let target = Arc::new(FakeTarget::unavailable());
 
-        let result = pollster::block_on(Renderer::new(Arc::clone(&target)));
+        let result = pollster::block_on(Renderer::new(
+            Arc::clone(&target) as Arc<dyn flui_platform::SurfaceTarget>
+        ));
 
         // `Renderer` carries no `Debug` impl (wgpu handles don't), so match
         // explicitly instead of formatting the whole `Result`.
@@ -271,7 +274,7 @@ struct WindowedGpuStack {
 /// Cross-platform GPU renderer
 ///
 /// `Send` by compiler derivation: every field is `Send`, including
-/// `gpu_stack_origin`'s `Arc<dyn WindowTarget>` (via [`WindowTarget`]'s own
+/// `gpu_stack_origin`'s `Arc<dyn WindowTarget>` (via the surface target's own
 /// `Send + Sync + 'static` bound) and its `wgpu::Surface<'static>` (`Send +
 /// Sync` per wgpu, on wasm32 via the crate's `fragile-send-sync-non-atomic-wasm`
 /// feature). Issue #1043 deleted the crate's one hand-written `unsafe impl
@@ -448,12 +451,12 @@ impl Renderer {
     /// # Example
     ///
     /// ```rust,no_run
-    /// # async fn run(window: impl flui_engine::WindowTarget)
+    /// # async fn run(window: std::sync::Arc<dyn flui_platform::SurfaceTarget>)
     /// #     -> Result<(), flui_engine::EngineError> {
     /// use flui_engine::Renderer;
     ///
-    /// // `window` is moved in — an owned, `'static` handle source (see
-    /// // `WindowTarget`), not a borrow.
+    /// // `window` is the window's surface target, moved in: the renderer
+    /// // keeps it for as long as its surface lives.
     /// let renderer = Renderer::new(window).await?;
     /// println!("Using backend: {:?}", renderer.capabilities().backend);
     /// # Ok(())
@@ -470,7 +473,7 @@ impl Renderer {
     /// several renderers share a device. That mechanism is not built, so
     /// this constructor is the one this crate ships; it is the advertised
     /// entry point, not a temporary beside an unwired shared value type.
-    pub async fn new(target: impl WindowTarget) -> EngineResult<Self> {
+    pub async fn new(target: Arc<dyn SurfaceTarget>) -> EngineResult<Self> {
         Self::with_surface_color(target, SurfaceColor::default(), None).await
     }
 
@@ -492,16 +495,18 @@ impl Renderer {
     /// # Errors
     /// As [`Self::new`].
     pub async fn with_surface_color(
-        target: impl WindowTarget,
+        target: Arc<dyn SurfaceTarget>,
         requested: SurfaceColor,
         display: Option<flui_platform::DisplayColor>,
     ) -> EngineResult<Self> {
         let color = ColorRequest { requested, display };
-        // An `Arc<dyn SurfaceTarget>` (the common caller shape, a window's
-        // surface target) becomes an `Arc<Arc<dyn SurfaceTarget>>` here:
-        // `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn WindowTarget>`:
-        // the contract's trait cannot name this crate's as a supertrait.
-        // One extra pointer chase per surface creation.
+        // Who paces the surface is the target's word, read once and kept by
+        // the lease for every surface made after (ADR-0356).
+        let pacing = target.frame_pacing();
+        // The `Arc<dyn SurfaceTarget>` becomes an `Arc<Arc<dyn SurfaceTarget>>`
+        // here: `Arc<dyn SurfaceTarget>` cannot upcast to `Arc<dyn
+        // WindowTarget>`, since the contract's trait cannot name this crate's
+        // as a supertrait. One extra pointer chase per surface creation.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
         let device_lost_hook = Arc::default();
         let (target, stack) = Self::probe_then_build(Arc::new(target), |target| {
@@ -510,6 +515,7 @@ impl Renderer {
                 let stack = Self::build_windowed_gpu_stack(
                     &crate::frame_protocol::FrameProtocol::new(),
                     &target,
+                    pacing,
                     w,
                     h,
                     &device_lost_hook,
@@ -521,7 +527,7 @@ impl Renderer {
             }
         })
         .await?;
-        let lease = SurfaceLease::from_parts(target, stack.surface);
+        let lease = SurfaceLease::from_parts(target, stack.surface, pacing);
 
         Ok(Self {
             instance: stack.instance,
@@ -604,6 +610,7 @@ impl Renderer {
     pub(crate) fn derive_surface_config(
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
+        pacing: FramePacing,
         width: u32,
         height: u32,
         latency: FrameLatency,
@@ -652,7 +659,7 @@ impl Renderer {
             color_space: surface_color.color_space(),
             width,
             height,
-            present_mode: Self::select_present_mode(&surface_caps),
+            present_mode: Self::select_present_mode(&surface_caps, pacing),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
             // The caller's `FrameLatency` (ADR-0347), `Balanced` unless the window asked for
@@ -707,9 +714,14 @@ impl Renderer {
     /// Adapter or device creation can fail (e.g. driver still resetting after
     /// a TDR). Returns the underlying [`EngineError`]; the caller may retry on
     /// the next frame.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every input of one GPU stack, each read at a different site of its two callers"
+    )]
     async fn build_windowed_gpu_stack(
         frame: &crate::frame_protocol::FrameProtocol,
         target: &Arc<dyn WindowTarget>,
+        pacing: FramePacing,
         width: u32,
         height: u32,
         device_lost_hook: &Arc<DeviceLostSlot>,
@@ -753,7 +765,7 @@ impl Renderer {
         let queue = Arc::new(queue);
 
         let (config, supports_copy_src, surface_color) =
-            Self::derive_surface_config(&surface, &adapter, width, height, latency, color)?;
+            Self::derive_surface_config(&surface, &adapter, pacing, width, height, latency, color)?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
@@ -873,7 +885,7 @@ impl Renderer {
 
     /// Rebuild the GPU device and surface after a device-lost event.
     ///
-    /// Re-probes the SAME retained [`WindowTarget`] the renderer was built
+    /// Re-probes the SAME retained surface target the renderer was built
     /// from, then — only if that probe succeeds — rebuilds the entire GPU
     /// stack (instance → adapter → device → surface → painter → offscreen)
     /// and swaps the new pieces into `self`. The recovered surface is
@@ -928,6 +940,7 @@ impl Renderer {
         let stack = Self::build_windowed_gpu_stack(
             &self.frame,
             released.target(),
+            self.lease.pacing(),
             width,
             height,
             &self.device_lost_hook,
@@ -1190,38 +1203,40 @@ impl Renderer {
         limits.or_worse_values_from(adapter_limits)
     }
 
-    /// Select present mode based on capabilities.
+    /// The present mode of a surface offering `surface_caps` and paced by
+    /// `pacing` (`surface_pacing::present_mode`, ADR-0356).
     ///
-    /// Fifo is the default. On the Vulkan/Wayland path `render_scene`'s
-    /// blocking `get_current_texture()`/`present()` pair against Fifo is the
-    /// steady-state pacing mechanism: every PRESENTED frame blocks at display
-    /// cadence, which is what lets `flui-app`'s runner drop its fixed
-    /// frame-budget sleep in favor of a real vsync block (see the frame-pacing
-    /// ADR). That is a per-backend fact, not a property of Fifo: measured
+    /// A surface the display paces presents in `Fifo`, and on X11 and Win32
+    /// `render_scene`'s blocking `get_current_texture()`/`present()` pair is
+    /// the steady-state pacer: a presented frame blocks at the display's
+    /// cadence, so `flui-app`'s runner needs no frame-budget sleep (ADR-0353).
+    /// That is a per-backend fact, not a property of `Fifo`: measured
     /// 2026-09-17 on the native AppKit backend, `queue.present()` returns in
-    /// ~42 µs and the display cadence comes from AppKit's display-pass
-    /// scheduling instead — same vsync-locked period, different mechanism
+    /// ~42 µs and the cadence comes from AppKit's display pass instead
     /// (ADR-0353's per-backend facts; Windows' native backend is unmeasured).
-    /// Mailbox (triple
-    /// buffering, uncapped present, lower latency) is a documented future
-    /// opt-in for latency-sensitive apps that accept trading pacing for
-    /// responsiveness — it is not the default because pairing an uncapped
-    /// present mode with a wake-driven redraw loop reproduces the exact
-    /// busy-spin (~30 000 fps, observed) this pacing model exists to avoid.
+    /// An uncapped mode there would spin the wake-driven loop (~30 000 fps,
+    /// observed). A Wayland surface is paced by its compositor's frame
+    /// callback, which the host waits for before it asks for the next frame,
+    /// so it presents without waiting on the compositor itself: a `Fifo`
+    /// present there waits for a callback a compositor never sends a surface
+    /// it does not draw.
     ///
-    /// NB: Fifo does not cure live-resize wobble either — it blocks on
-    /// vsync and ghosts a stale frame during the modal resize loop, same as
-    /// Mailbox stretching the in-flight frame. The wobble is inherent
-    /// flip-model DWM compositing; the only real fix is DXGI_SCALING_NONE,
-    /// which wgpu 30 still does not expose.
-    fn select_present_mode(surface_caps: &wgpu::SurfaceCapabilities) -> wgpu::PresentMode {
+    /// No mode cures Windows' live-resize wobble: `Fifo` blocks on vsync and
+    /// ghosts a stale frame during the modal resize loop, as `Mailbox`
+    /// stretches the in-flight one. The wobble is inherent to flip-model DWM
+    /// compositing; the only real fix is `DXGI_SCALING_NONE`, which wgpu 30
+    /// still does not expose.
+    fn select_present_mode(
+        surface_caps: &wgpu::SurfaceCapabilities,
+        pacing: FramePacing,
+    ) -> wgpu::PresentMode {
         debug_assert!(
             surface_caps
                 .present_modes
                 .contains(&wgpu::PresentMode::Fifo),
             "BUG: wgpu guarantees Fifo is always a supported present mode"
         );
-        wgpu::PresentMode::Fifo
+        crate::surface_pacing::present_mode(pacing, &surface_caps.present_modes)
     }
 
     /// Set how many frames this window's swapchain holds ahead of the display (ADR-0347).
@@ -1316,6 +1331,7 @@ impl Renderer {
         let (config, supports_copy_src, surface_color) = Self::derive_surface_config(
             surface,
             &self.adapter,
+            self.lease.pacing(),
             width,
             height,
             self.frame_latency,
@@ -1630,7 +1646,7 @@ impl Renderer {
     /// path and rebuilds the whole stack; a suspend never sets the device-lost
     /// flag, so routing a resume through it would discard a perfectly good
     /// device. The new surface is created from the lease's retained
-    /// [`WindowTarget`], so it binds to whatever native handle is current now,
+    /// surface target, so it binds to whatever native handle is current now,
     /// which after a real activity recreation is a different one from the
     /// released surface's.
     ///
@@ -1706,6 +1722,7 @@ impl Renderer {
         let (fresh_config, supports_copy_src, fresh_color) = Self::derive_surface_config(
             &surface,
             &self.adapter,
+            lease.pacing(),
             width,
             height,
             self.frame_latency,

@@ -385,6 +385,9 @@ wayland-protocols = { version = "0.32", features = ["client", "unstable", "stagi
 # pointers, which only the system library has, and the GPU driver reads events
 # on the same display from its own thread.
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+# The server half of the same family, in pure Rust: the compositor flui-native's
+# `testing` kit plays to its Wayland host over a socket (`testing::wayland_compositor`).
+wayland-server = "0.31"
 # Safe `poll` and `eventfd` for the display thread's connection and stop descriptors.
 rustix = { version = "1", default-features = false, features = ["std", "event"] }
 raw-window-handle = "0.6"

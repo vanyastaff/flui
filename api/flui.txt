@@ -2680,14 +2680,6 @@ impl PartialEq for flui::foundation::FrameStamp
 impl core::fmt::Debug for flui::foundation::FrameStamp
 impl core::marker::StructuralPartialEq for flui::foundation::FrameStamp
 pub fn flui::foundation::FrameStamp::new(address: flui::foundation::PresentationAddress, epoch: flui::foundation::FrameEpoch, surface_generation: flui::foundation::SurfaceGeneration) -> Self
-pub struct flui::foundation::GenerationGate(_)
-impl Clone for flui::foundation::GenerationGate
-impl Default for flui::foundation::GenerationGate
-impl core::fmt::Debug for flui::foundation::GenerationGate
-pub fn flui::foundation::GenerationGate::bump(&self) -> flui::foundation::ResourceGeneration
-pub fn flui::foundation::GenerationGate::current(&self) -> flui::foundation::ResourceGeneration
-pub fn flui::foundation::GenerationGate::is_current(&self, generation: flui::foundation::ResourceGeneration) -> bool
-pub fn flui::foundation::GenerationGate::new() -> Self
 #[repr(transparent)] pub struct flui::foundation::Id<T: flui::foundation::Marker>(_, _)
 impl From<flui::foundation::Id<flui::foundation::markers::Semantics>> for flui::foundation::inspect::InspectId
 impl<'de, T: flui::foundation::Marker> serde_core::de::Deserialize<'de> for flui::foundation::Id<T>
@@ -2771,38 +2763,6 @@ impl core::marker::StructuralPartialEq for flui::foundation::InputSequenceId
 impl flui::foundation::MintedId for flui::foundation::InputSequenceId
 impl flui_foundation::sequence::sealed::Sealed for flui::foundation::InputSequenceId
 pub const fn flui::foundation::InputSequenceId::get(self) -> u64
-#[repr(transparent)] pub struct flui::foundation::Key(_)
-impl Clone for flui::foundation::Key
-impl Copy for flui::foundation::Key
-impl Eq for flui::foundation::Key
-impl From<flui::foundation::Key> for flui::foundation::KeyRef
-impl PartialEq for flui::foundation::Key
-impl core::fmt::Debug for flui::foundation::Key
-impl core::fmt::Display for flui::foundation::Key
-impl core::hash::Hash for flui::foundation::Key
-impl core::marker::StructuralPartialEq for flui::foundation::Key
-impl flui::foundation::ViewKey for flui::foundation::Key
-impl serde_core::ser::Serialize for flui::foundation::Key
-impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::Key
-pub const fn flui::foundation::Key::as_u64(&self) -> u64
-pub const fn flui::foundation::Key::from_str(s: &str) -> Self
-pub const fn flui::foundation::Key::from_u64(n: u64) -> Option<Self>
-pub fn flui::foundation::Key::new() -> Self
-#[repr(transparent)] pub struct flui::foundation::KeyRef(_)
-impl Clone for flui::foundation::KeyRef
-impl Copy for flui::foundation::KeyRef
-impl Eq for flui::foundation::KeyRef
-impl From<flui::foundation::Key> for flui::foundation::KeyRef
-impl PartialEq for flui::foundation::KeyRef
-impl core::fmt::Debug for flui::foundation::KeyRef
-impl core::fmt::Display for flui::foundation::KeyRef
-impl core::hash::Hash for flui::foundation::KeyRef
-impl core::marker::StructuralPartialEq for flui::foundation::KeyRef
-impl serde_core::ser::Serialize for flui::foundation::KeyRef
-impl<'de> serde_core::de::Deserialize<'de> for flui::foundation::KeyRef
-pub const fn flui::foundation::KeyRef::as_u64(&self) -> u64
-pub const fn flui::foundation::KeyRef::key(&self) -> flui::foundation::Key
-pub const fn flui::foundation::KeyRef::new(key: flui::foundation::Key) -> Self
 pub type flui::foundation::LayerId = flui::foundation::Id<flui::foundation::markers::Layer>
 pub struct flui::foundation::Leaf;
 impl Clone for flui::foundation::Leaf
@@ -3028,21 +2988,6 @@ pub fn flui::foundation::RebuildReasons::insert(&mut self, reason: flui::foundat
 pub fn flui::foundation::RebuildReasons::iter(self) -> impl Iterator<Item = flui::foundation::RebuildReason>
 pub fn flui::foundation::RebuildReasons::merge(&mut self, other: Self)
 pub type flui::foundation::RenderId = flui::foundation::id::GenId<flui::foundation::markers::Render>
-pub struct flui::foundation::ResourceGeneration(_)
-impl Clone for flui::foundation::ResourceGeneration
-impl Copy for flui::foundation::ResourceGeneration
-impl Default for flui::foundation::ResourceGeneration
-impl Eq for flui::foundation::ResourceGeneration
-impl Ord for flui::foundation::ResourceGeneration
-impl PartialEq for flui::foundation::ResourceGeneration
-impl PartialOrd for flui::foundation::ResourceGeneration
-impl core::fmt::Debug for flui::foundation::ResourceGeneration
-impl core::fmt::Display for flui::foundation::ResourceGeneration
-impl core::hash::Hash for flui::foundation::ResourceGeneration
-impl core::marker::StructuralPartialEq for flui::foundation::ResourceGeneration
-pub const flui::foundation::ResourceGeneration::ZERO: Self = _
-pub const fn flui::foundation::ResourceGeneration::get(self) -> u64
-pub const fn flui::foundation::ResourceGeneration::next(self) -> Self
 pub struct flui::foundation::SaltedKey { .. }
 impl Clone for flui::foundation::SaltedKey
 impl core::fmt::Debug for flui::foundation::SaltedKey
@@ -3359,8 +3304,6 @@ pub const flui::foundation::diagnostics::PRESENTATION_ID: &str = "presentation_i
 pub const flui::foundation::diagnostics::REDACTED_VALUE: &str = "<private>"
 pub mod flui::foundation::epoch
 reexport flui::foundation::epoch::FrameEpoch => flui::foundation::FrameEpoch
-reexport flui::foundation::epoch::GenerationGate => flui::foundation::GenerationGate
-reexport flui::foundation::epoch::ResourceGeneration => flui::foundation::ResourceGeneration
 reexport flui::foundation::epoch::SurfaceGeneration => flui::foundation::SurfaceGeneration
 pub fn flui::foundation::event_epoch() -> std::time::Instant
 pub fn flui::foundation::executable_class(stem: &str) -> String
@@ -3918,8 +3861,6 @@ impl flui::foundation::key::AsViewKey for dyn flui::foundation::ViewKey
 impl<K: flui::foundation::ViewKey> flui::foundation::key::AsViewKey for K
 impl<K: flui::foundation::key::AsViewKey + ?Sized> flui::foundation::key::AsViewKey for alloc::rcs::rc::Rc<K>
 impl<K: flui::foundation::key::AsViewKey> flui::foundation::key::AsViewKey for Option<K>
-reexport flui::foundation::key::Key => flui::foundation::Key
-reexport flui::foundation::key::KeyRef => flui::foundation::KeyRef
 reexport flui::foundation::key::SaltedKey => flui::foundation::SaltedKey
 reexport flui::foundation::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::foundation::key::ValueKey => flui::foundation::ValueKey
@@ -4056,8 +3997,6 @@ reexport flui::foundation::prelude::EPSILON => flui::foundation::EPSILON
 reexport flui::foundation::prelude::ElementId => flui::foundation::ElementId
 reexport flui::foundation::prelude::Id => flui::foundation::Id
 reexport flui::foundation::prelude::Identifier => flui::foundation::Identifier
-reexport flui::foundation::prelude::Key => flui::foundation::Key
-reexport flui::foundation::prelude::KeyRef => flui::foundation::KeyRef
 reexport flui::foundation::prelude::LayerId => flui::foundation::LayerId
 reexport flui::foundation::prelude::Listenable => flui::foundation::Listenable
 reexport flui::foundation::prelude::ListenerCallback => flui::foundation::ListenerCallback
@@ -11990,6 +11929,16 @@ pub const fn flui::platform::Availability::is_available(self) -> bool
 variant flui::platform::Availability::Emulated // at 1
 variant flui::platform::Availability::Native // at 0
 variant flui::platform::Availability::Unavailable // at 2
+pub struct flui::platform::Backoff { .. }
+impl Clone for flui::platform::Backoff
+impl Copy for flui::platform::Backoff
+impl Eq for flui::platform::Backoff
+impl PartialEq for flui::platform::Backoff
+impl core::fmt::Debug for flui::platform::Backoff
+impl core::hash::Hash for flui::platform::Backoff
+impl core::marker::StructuralPartialEq for flui::platform::Backoff
+pub const fn flui::platform::Backoff::new(first: core::time::Duration, ceiling: core::time::Duration) -> Self
+pub fn flui::platform::Backoff::delay(self, misses: u32) -> core::time::Duration
 pub enum flui::platform::Brightness
 impl Clone for flui::platform::Brightness
 impl Copy for flui::platform::Brightness
@@ -12031,15 +11980,16 @@ field flui::platform::CapabilityParts::activates: flui::platform::WindowCapabili
 field flui::platform::CapabilityParts::app_title_bar: flui::platform::WindowCapability // at 6
 field flui::platform::CapabilityParts::closes: flui::platform::WindowCapability // at 13
 field flui::platform::CapabilityParts::enters_fullscreen: flui::platform::WindowCapability // at 9
-field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 21
+field flui::platform::CapabilityParts::frame_rate_hint: flui::platform::Availability // at 22
 field flui::platform::CapabilityParts::hides: flui::platform::WindowCapability // at 10
 field flui::platform::CapabilityParts::material: flui::platform::WindowCapability // at 14
 field flui::platform::CapabilityParts::maximizes: flui::platform::WindowCapability // at 8
 field flui::platform::CapabilityParts::minimizes: flui::platform::WindowCapability // at 7
-field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 19
-field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 18
-field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 20
+field flui::platform::CapabilityParts::observes_minimized: flui::platform::Availability // at 20
+field flui::platform::CapabilityParts::observes_position: flui::platform::Availability // at 19
+field flui::platform::CapabilityParts::places_at_open: flui::platform::Availability // at 21
 field flui::platform::CapabilityParts::reports_keyboard_inset: flui::platform::WindowCapability // at 16
+field flui::platform::CapabilityParts::reports_occlusion: flui::platform::WindowCapability // at 18
 field flui::platform::CapabilityParts::reports_presentation: flui::platform::WindowCapability // at 15
 field flui::platform::CapabilityParts::reports_system_gestures: flui::platform::WindowCapability // at 17
 field flui::platform::CapabilityParts::sets_constraints: flui::platform::WindowCapability // at 3
@@ -12422,6 +12372,16 @@ impl core::marker::StructuralPartialEq for flui::platform::FrameOutcome
 variant flui::platform::FrameOutcome::Declined // at 1
 variant flui::platform::FrameOutcome::Failed // at 2
 variant flui::platform::FrameOutcome::Produced // at 0
+#[non_exhaustive] pub enum flui::platform::FramePacing
+impl Clone for flui::platform::FramePacing
+impl Copy for flui::platform::FramePacing
+impl Default for flui::platform::FramePacing
+impl Eq for flui::platform::FramePacing
+impl PartialEq for flui::platform::FramePacing
+impl core::fmt::Debug for flui::platform::FramePacing
+impl core::marker::StructuralPartialEq for flui::platform::FramePacing
+variant flui::platform::FramePacing::Compositor // at 1
+variant flui::platform::FramePacing::Display // at 0
 #[non_exhaustive] pub struct flui::platform::FramePresented
 field flui::platform::FramePresented::at: flui::interaction::EventTime // at 1
 field flui::platform::FramePresented::frame: flui::foundation::FrameStamp // at 0
@@ -13329,6 +13289,7 @@ impl core::hash::Hash for flui::platform::SurfaceColorSpace
 impl core::marker::StructuralPartialEq for flui::platform::SurfaceColorSpace
 pub const fn flui::platform::SurfaceColorSpace::new(gamut: flui::platform::ColorGamut, dynamic_range: flui::platform::DynamicRange) -> Self
 pub trait flui::platform::SurfaceTarget: raw_window_handle::borrowed::HasWindowHandle + raw_window_handle::borrowed::HasDisplayHandle + Send + Sync + 'static
+fn flui::platform::SurfaceTarget::frame_pacing(&self) -> flui::platform::FramePacing { .. }
 fn flui::platform::SurfaceTarget::keep_past_close(&self)
 fn flui::platform::SurfaceTarget::pre_present_notify(&self, frame: Option<flui::foundation::FrameStamp>, statistics: flui::platform::SwapChainStatistics)
 #[non_exhaustive] pub enum flui::platform::SwapChainStatistics
@@ -13608,6 +13569,7 @@ pub const fn flui::platform::WindowCapabilities::observes_position(&self) -> flu
 pub const fn flui::platform::WindowCapabilities::permits(&self, command: &flui::platform::WindowCommand) -> bool
 pub const fn flui::platform::WindowCapabilities::places_at_open(&self) -> flui::platform::Availability
 pub const fn flui::platform::WindowCapabilities::reports_keyboard_inset(&self) -> flui::platform::WindowCapability
+pub const fn flui::platform::WindowCapabilities::reports_occlusion(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_presentation(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::reports_system_gestures(&self) -> flui::platform::WindowCapability
 pub const fn flui::platform::WindowCapabilities::revision(&self) -> flui::platform::WindowRevision
@@ -25323,9 +25285,7 @@ macro flui::view::impl_render_view!
 macro flui::view::impl_stateful_render_view!
 pub mod flui::view::key
 reexport flui::view::key::GlobalKey => flui::prelude::GlobalKey
-reexport flui::view::key::Key => flui::foundation::Key
 reexport flui::view::key::KeyLookup => flui::view::KeyLookup
-reexport flui::view::key::KeyRef => flui::foundation::KeyRef
 reexport flui::view::key::ObjectKey => flui::prelude::ObjectKey
 reexport flui::view::key::UniqueKey => flui::foundation::UniqueKey
 reexport flui::view::key::ValueKey => flui::foundation::ValueKey
@@ -33177,15 +33137,16 @@ field flui_protocol::native_recording::Capabilities::activates: flui_protocol::n
 field flui_protocol::native_recording::Capabilities::app_title_bar: flui_protocol::native_recording::Capability // at 6
 field flui_protocol::native_recording::Capabilities::closes: flui_protocol::native_recording::Capability // at 13
 field flui_protocol::native_recording::Capabilities::enters_fullscreen: flui_protocol::native_recording::Capability // at 9
-field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 21
+field flui_protocol::native_recording::Capabilities::frame_rate_hint: flui_protocol::native_recording::Availability // at 22
 field flui_protocol::native_recording::Capabilities::hides: flui_protocol::native_recording::Capability // at 10
 field flui_protocol::native_recording::Capabilities::material: flui_protocol::native_recording::Capability // at 14
 field flui_protocol::native_recording::Capabilities::maximizes: flui_protocol::native_recording::Capability // at 8
 field flui_protocol::native_recording::Capabilities::minimizes: flui_protocol::native_recording::Capability // at 7
-field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 19
-field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 18
-field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 20
+field flui_protocol::native_recording::Capabilities::observes_minimized: flui_protocol::native_recording::Availability // at 20
+field flui_protocol::native_recording::Capabilities::observes_position: flui_protocol::native_recording::Availability // at 19
+field flui_protocol::native_recording::Capabilities::places_at_open: flui_protocol::native_recording::Availability // at 21
 field flui_protocol::native_recording::Capabilities::reports_keyboard_inset: flui_protocol::native_recording::Capability // at 16
+field flui_protocol::native_recording::Capabilities::reports_occlusion: flui_protocol::native_recording::Capability // at 18
 field flui_protocol::native_recording::Capabilities::reports_presentation: flui_protocol::native_recording::Capability // at 15
 field flui_protocol::native_recording::Capabilities::reports_system_gestures: flui_protocol::native_recording::Capability // at 17
 field flui_protocol::native_recording::Capabilities::sets_constraints: flui_protocol::native_recording::Capability // at 3

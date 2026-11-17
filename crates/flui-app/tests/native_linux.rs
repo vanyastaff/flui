@@ -37,6 +37,11 @@ const CHILD_CASE: &str = "native_linux_child";
 /// How long the child may take to start, paint and quit.
 const CHILD_BUDGET: Duration = Duration::from_secs(90);
 
+/// Set in the child's environment to a number of milliseconds: the child's
+/// window animates without end, and the application asks to quit that long
+/// after it is ready, from another thread.
+const QUIT_AFTER: &str = "FLUI_NATIVE_LINUX_QUIT_AFTER_MS";
+
 /// Every display server variable a session can name; the child's session
 /// names only the server its case started.
 const SESSION_VARIABLES: [&str; 4] = [
@@ -51,11 +56,58 @@ pub(crate) fn an_app_runs_on_the_native_wayland_host() {
     let Some(compositor) = Weston::start() else {
         return;
     };
-    let child = run_child(&[
-        ("WAYLAND_DISPLAY", compositor.socket.as_str()),
-        ("XDG_RUNTIME_DIR", path_text(compositor.runtime.path())),
-    ]);
+    let child = run_child(
+        &[
+            ("WAYLAND_DISPLAY", compositor.socket.as_str()),
+            ("XDG_RUNTIME_DIR", path_text(compositor.runtime.path())),
+        ],
+        CHILD_BUDGET,
+    );
     assert_host(&child, "Wayland");
+}
+
+/// An application whose window its compositor never draws (it answers no
+/// frame callback, as for a minimized window or one on a hidden workspace)
+/// still turns its owner thread. Its window animates, so the host asks it for
+/// a frame once per callback grace, each a present on a swapchain whose last
+/// frame was never shown; none of them waits for the compositor, so the quit
+/// the application asks for four seconds after it is ready is carried out.
+/// The child draws through Vulkan, whose `Fifo` present on Wayland waits for
+/// that frame callback.
+pub(crate) fn an_app_whose_window_is_never_drawn_still_quits() {
+    use flui_native::testing::wayland_compositor::{Offer, ScriptedCompositor};
+
+    // The compositor offers `wl_shm` alone, which a software Vulkan driver
+    // presents to and a hardware one may not: the child is pinned to Mesa's
+    // lavapipe, and a machine without it fails here, naming it.
+    let lavapipe = [
+        "/usr/share/vulkan/icd.d/lvp_icd.json",
+        "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json",
+    ]
+    .into_iter()
+    .find(|path| Path::new(path).exists())
+    .expect(
+        "this case draws through Mesa's lavapipe Vulkan driver (mesa-vulkan-drivers), \
+         which is not installed",
+    );
+    let compositor = ScriptedCompositor::start(Offer::default().withhold_frame_callbacks())
+        .expect("the compositor starts");
+    let child = run_child(
+        &[
+            ("WAYLAND_DISPLAY", path_text(compositor.socket())),
+            (QUIT_AFTER, "4000"),
+            ("WGPU_BACKEND", "vulkan"),
+            ("VK_DRIVER_FILES", lavapipe),
+            ("VK_ICD_FILENAMES", lavapipe),
+        ],
+        Duration::from_secs(45),
+    );
+    assert_host(&child, "Wayland");
+    let heard = compositor.heard();
+    assert!(
+        heard.frames >= 3 && heard.withheld >= heard.frames,
+        "the window drew frame after frame, none of them shown: {heard:?}"
+    );
 }
 
 /// The application on an X11 session runs on the native X11 host.
@@ -63,31 +115,49 @@ pub(crate) fn an_app_runs_on_the_native_x11_host() {
     let Some(server) = Xvfb::start() else {
         return;
     };
-    let child = run_child(&[("DISPLAY", server.display.as_str())]);
+    let child = run_child(&[("DISPLAY", server.display.as_str())], CHILD_BUDGET);
     assert_host(&child, "X11");
 }
 
 /// The child's side: run the application with a window that quits once it
-/// paints, and print the host `current_platform` started. It does nothing
-/// unless [`CHILD`] is set.
+/// paints, or with an animating one that quits after [`QUIT_AFTER`], and
+/// print the host `current_platform` started. It does nothing unless
+/// [`CHILD`] is set.
 pub(crate) fn child() {
     if std::env::var_os(CHILD).is_none() {
         return;
     }
+    let quit_after = std::env::var(QUIT_AFTER)
+        .ok()
+        .and_then(|millis| millis.parse::<u64>().ok())
+        .map(Duration::from_millis);
     let (result, log) = flui_testing::log_capture::capture(|| {
-        Application::new()
+        let application = Application::new()
             .config(AppConfig::new().title("native linux"))
-            .on_ready(|handle| {
+            .on_ready(move |handle| {
                 drop(
                     handle
                         .request_show_main_window()
                         .expect("the ready application shows its main window"),
                 );
-            })
-            .run_resident(|handle: &AppHandle| QuitOnPaint {
+                if let Some(delay) = quit_after {
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(delay);
+                        handle
+                            .request_quit()
+                            .expect("the application accepts the quit while it runs");
+                    });
+                }
+            });
+        if quit_after.is_some() {
+            application.run_resident(|_: &AppHandle| flui_widgets::ActivityIndicator::new())
+        } else {
+            application.run_resident(|handle: &AppHandle| QuitOnPaint {
                 handle: handle.clone(),
                 asked: Arc::new(AtomicBool::new(false)),
             })
+        }
     });
     result.expect("the application runs, paints and quits");
     let host = log
@@ -99,8 +169,8 @@ pub(crate) fn child() {
 }
 
 /// Run this binary's [`CHILD_CASE`] in a session that names only
-/// `session`, bounded by [`CHILD_BUDGET`].
-fn run_child(session: &[(&str, &str)]) -> Output {
+/// `session`, bounded by `budget`.
+fn run_child(session: &[(&str, &str)], budget: Duration) -> Output {
     let mut command = Command::new(std::env::current_exe().expect("the test binary's path"));
     command
         .args([CHILD_CASE, "--exact", "--nocapture", "--test-threads=1"])
@@ -112,13 +182,13 @@ fn run_child(session: &[(&str, &str)]) -> Output {
     }
     command.envs(session.iter().copied());
     let mut child = command.spawn().expect("the test binary runs again");
-    let deadline = Instant::now() + CHILD_BUDGET;
+    let deadline = Instant::now() + budget;
     while child.try_wait().expect("the child's status").is_none() {
         if Instant::now() > deadline {
             let _ = child.kill();
             let output = child.wait_with_output().expect("the killed child's output");
             panic!(
-                "the application did not quit within {CHILD_BUDGET:?}:\n{}",
+                "the application did not quit within {budget:?}:\n{}",
                 describe(&output)
             );
         }
