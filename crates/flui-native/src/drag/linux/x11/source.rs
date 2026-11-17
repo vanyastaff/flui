@@ -66,7 +66,7 @@ use x11rb::{COPY_FROM_PARENT, CURRENT_TIME, NONE};
 use super::model::{self, IncrWrite, IncrWrites, Reply};
 use super::{Atoms, X11Drag};
 use crate::drag::offers::{bytes_of, names_of};
-use crate::owner::linux::x11::{PeerInterest, PeerSelect, WindowRef};
+use crate::owner::linux::x11::{PeerHeard, PeerInterest, PeerSelect, WindowRef};
 use crate::owner::panic_boundary::contain_owner_callback;
 
 /// How long a target has to finish a drop before the session ends as
@@ -1239,33 +1239,39 @@ impl X11Drag {
         // Heard before the announcement is written: the requestor's first
         // deletion may follow at once.
         // Selected only on a peer's window, beside what the platform's other
-        // features hear there (`X11Connection::hear_peer`).
-        let heard = match self.connection.hear_peer(
+        // features hear there (`X11Connection::hear_peer`). An answer whose
+        // deletions nobody hears would stall: it is refused.
+        match self.connection.hear_peer(
             requestor,
             PeerInterest::Transfer,
             EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY,
         ) {
-            PeerSelect::Sent(selected) => selected.map(drop),
-            PeerSelect::Unchanged => Ok(()),
-            PeerSelect::OffOwnerThread => {
-                // An answer whose deletions nobody hears would stall.
+            PeerHeard::Heard | PeerHeard::NotAPeer => {}
+            PeerHeard::Gone => {
+                session.incr.retire_window(requestor);
+                return Some("a drag's INCR answer is refused: its requestor is gone");
+            }
+            PeerHeard::Failed(_) => {
+                session.incr.retire(requestor, property);
+                return Some("a drag's INCR answer is refused: its requestor cannot be heard");
+            }
+            PeerHeard::OffOwnerThread => {
                 session.incr.retire(requestor, property);
                 return Some(
                     "a drag's INCR answer is refused: its requestor cannot be heard off the \
                      owner thread",
                 );
             }
-        };
-        let announced = heard.and_then(|()| {
-            xcb.change_property32(
+        }
+        let announced = xcb
+            .change_property32(
                 PropMode::REPLACE,
                 requestor,
                 property,
                 self.atoms.incr,
                 &[announcement],
             )
-            .map(drop)
-        });
+            .map(drop);
         if announced.is_err() {
             session.incr.retire(requestor, property);
             self.forget_requestor(session, requestor);

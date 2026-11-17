@@ -4441,15 +4441,19 @@ hearing it, asking for every movement; a drop resolves the action from that
 feedback, and a refusal answers `XdndFinished` at once while the window hears
 `Exited`. A source that crashes, or destroys its window without `XdndLeave`,
 says nothing else, so from its enter until its hover ends and its offers are
-concluded the drag hears its window's end (`PeerInterest::DropSource`, selected
-with a checked request, since a window already gone is told only by the
-refusal); the loop hands every `DestroyNotify` to `LoopDrag::window_destroyed`
-in its own containment, the hover ends as if the source left, and a dropped
-offer of it answers `SourceGone` until concluded
-(`a_source_that_goes_ends_its_hover`,
+concluded the drag hears its window's end (`PeerInterest::DropSource`). Every
+feature that hears another client's window for its end selects with a checked
+request (`select_checked`: a window already gone is told only by the refusal,
+and `hear_peer` then drops its entry), and a source whose `XdndSelection`
+nobody owns at its enter is taken as gone, which also covers a dead source's
+id reused by another client. The loop hands every `DestroyNotify` to
+`LoopDrag::window_destroyed` in its own containment; the hover ends as if the
+source left, and a dropped offer of it answers `SourceGone` until concluded
+(`the_loop_ends_a_drag_whose_source_goes`, `a_source_that_goes_ends_its_hover`,
 `a_dropped_offer_whose_source_goes_answers_gone_at_once`). The drag stops
 hearing a source nothing names at the end of the loop's turn, on the owner
-thread where the table of peer windows is. Types map to representations in the pure `drag::linux::x11::model`: text
+thread where the table of peer windows is. Types map to representations in the
+pure `drag::linux::x11::model`: text
 once, in the reader's preferred form, HTML (UTF-8, or UTF-16 behind its mark),
 every other media type as named. A request converts `XdndSelection` at the
 drag's last time into a window made for that fetch and destroyed as it ends,

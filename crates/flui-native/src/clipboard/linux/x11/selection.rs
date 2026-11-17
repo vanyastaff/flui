@@ -14,7 +14,8 @@
 //!   coming, and each time the requestor deletes it the next chunk is
 //!   written, a zero-length one last. At most [`MAX_WRITERS`] such
 //!   transfers run at once, each given [`TRANSFER_TIMEOUT`] between
-//!   chunks, and each ends as its requestor's window goes.
+//!   chunks, and each ends as its requestor's window goes; a requestor
+//!   already gone when its answer is written is refused.
 //! - **The primary selection is lazy.** The application offers it with a
 //!   closure the owner thread alone may call, so the thread holds only the
 //!   offer's [`Generation`]. A request for its text waits while the thread
@@ -53,7 +54,7 @@ use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use web_time::Instant;
 use x11rb::connection::{Connection, RequestConnection as _};
-use x11rb::errors::ReplyOrIdError;
+use x11rb::errors::{ReplyError, ReplyOrIdError};
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
     self, AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask,
@@ -67,6 +68,7 @@ use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, CURRENT_TIME, NONE};
 use crate::clipboard::linux::MAX_READERS;
 use crate::clipboard::text::{CONCEALED_HINT, CONCEALED_HINT_VALUE, TextForm};
 use crate::host::{MAX_TEXT, admit_text, owned_text};
+use crate::owner::linux::x11::{WindowSelection, select_checked};
 
 /// How long a transfer may wait for its peer: a whole read, the next chunk
 /// of an `INCR` write, or the owner thread's text for the primary
@@ -1323,12 +1325,19 @@ impl Selections {
             return Ok(false);
         };
         // The requestor's deletions of the property ask for each chunk, and
-        // its window's end ends the transfer.
-        self.connection.change_window_attributes(
+        // its window's end ends the transfer. A requestor gone before it is
+        // heard would hold a writer until the deadline: it is refused.
+        match select_checked(
+            &self.connection,
             request.requestor,
-            &ChangeWindowAttributesAux::new()
-                .event_mask(EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY),
-        )?;
+            EventMask::PROPERTY_CHANGE | EventMask::STRUCTURE_NOTIFY,
+        ) {
+            WindowSelection::Selected => {}
+            WindowSelection::Gone | WindowSelection::Failed(ReplyError::X11Error(_)) => {
+                return Ok(false);
+            }
+            WindowSelection::Failed(ReplyError::ConnectionError(error)) => return Err(error.into()),
+        }
         self.connection.change_property32(
             PropMode::REPLACE,
             request.requestor,

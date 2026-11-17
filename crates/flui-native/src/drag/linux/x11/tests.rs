@@ -1098,9 +1098,10 @@ fn settle(target: &Target, mut request: TransferRequest) -> Result<TransferPaylo
 
 /// A source that goes without `XdndLeave` (it crashes, or is killed) ends
 /// the drag over the window as if it left: hovering, the window hears
-/// `Exited` and the offer is stale; gone before its enter was heard, it
-/// leaves nothing hovering. Either way the window is free for the next
-/// drag, which no answer to the dead source holds up.
+/// `Exited` and the offer is stale; gone before its enter was heard, or
+/// owning no `XdndSelection` by then (as a dead source whose window's id
+/// another client took), it leaves nothing hovering. Either way the window
+/// is free for the next drag, which no answer to the dead source holds up.
 #[test]
 fn a_source_that_goes_ends_its_hover() {
     #[derive(Debug, Clone, Copy)]
@@ -1109,22 +1110,46 @@ fn a_source_that_goes_ends_its_hover() {
         WhileHovering,
         /// Before the target's connection read its enter.
         BeforeItsEnterIsHeard,
+        /// Its window stays, but nobody owns `XdndSelection` at its enter.
+        LeavingItsSelectionUnowned,
     }
 
     let _server = server();
-    for goes in [Goes::WhileHovering, Goes::BeforeItsEnterIsHeard] {
+    for goes in [
+        Goes::WhileHovering,
+        Goes::BeforeItsEnterIsHeard,
+        Goes::LeavingItsSelectionUnowned,
+    ] {
         let Some(target) = Target::open(1.0) else {
             return;
         };
         target.answer(Some(TransferActions::COPY));
         let source = Source::new();
         let (utf8, copy, status) = (source.atoms.utf8, source.atoms.copy, source.atoms.status);
+        if let Goes::LeavingItsSelectionUnowned = goes {
+            source
+                .connection
+                .set_selection_owner(NONE, source.atoms.selection, CURRENT_TIME)
+                .expect("the selection is let go of");
+        }
         source.enter(target.xid, &[utf8]);
         source.position(target.xid, (20, 30), 10, copy);
-        if let Goes::WhileHovering = goes {
-            source.expect_message(&target, status);
-        }
-        kill(source);
+        let kept = match goes {
+            Goes::WhileHovering => {
+                source.expect_message(&target, status);
+                kill(source);
+                None
+            }
+            Goes::BeforeItsEnterIsHeard => {
+                kill(source);
+                None
+            }
+            Goes::LeavingItsSelectionUnowned => {
+                // Its position is answered, so the enter before it was heard.
+                source.expect_message(&target, status);
+                Some(source)
+            }
+        };
 
         let hovering = |heard: &[DragDropEvent]| {
             matches!(
@@ -1157,10 +1182,11 @@ fn a_source_that_goes_ends_its_hover() {
                         .request(id, RepresentationIndex(0), TransferLimits::default());
                 assert_same!(settle(&target, request), Err(TransferError::StaleOffer(id)));
             }
-            Goes::BeforeItsEnterIsHeard => {
+            Goes::BeforeItsEnterIsHeard | Goes::LeavingItsSelectionUnowned => {
                 assert!(heard.is_empty(), "{goes:?}: nothing to tell: {heard:?}");
             }
         }
+        drop(kept);
 
         // The next drag is offered as any first one is.
         let next = Source::new();
@@ -1173,6 +1199,70 @@ fn a_source_that_goes_ends_its_hover() {
             "{goes:?}"
         );
     }
+}
+
+/// The loop itself hands a source's `DestroyNotify` to the drag: a window
+/// the platform opened, turned by the loop as `run` turns it, hears `Exited`
+/// when the source of the drag over it goes.
+#[test]
+fn the_loop_ends_a_drag_whose_source_goes() {
+    use flui_platform::WindowOptions;
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+
+    use crate::platform::Platform as _;
+
+    let _server = server();
+    let present = std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty());
+    let Some(platform) = present
+        .then(crate::X11Platform::try_new)
+        .and_then(Result::ok)
+    else {
+        eprintln!("skipped: no X server answers; CI runs this under xvfb-run");
+        return;
+    };
+    let handler = RecordingWindowHandler::new();
+    let window = platform
+        .open_window(WindowOptions::default(), handler.clone())
+        .expect("an X11 window opens");
+    let target = window.surface_target();
+    let handle = target.window_handle().expect("an open window has a handle");
+    let RawWindowHandle::Xcb(handle) = handle.as_raw() else {
+        panic!("an X11 window hands out an XCB handle");
+    };
+    let xid = handle.window.get();
+    let heard = || -> Vec<DragDropEvent> {
+        handler
+            .inputs()
+            .into_iter()
+            .filter_map(|input| match input {
+                PlatformInput::DragDrop(event) => Some(event),
+                _ => None,
+            })
+            .collect()
+    };
+    let turn_until = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + STEP;
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}: {:?}", heard());
+            platform
+                .owner()
+                .pump_for(Duration::from_millis(5))
+                .expect("the loop turns");
+        }
+    };
+
+    let source = Source::new();
+    source.enter(xid, &[source.atoms.utf8]);
+    source.position(xid, (20, 30), 10, source.atoms.copy);
+    turn_until("the window never heard the drag enter", &|| {
+        matches!(heard().first(), Some(DragDropEvent::Entered { .. }))
+    });
+    let id = entered(&heard());
+    kill(source);
+    turn_until("the window still hovers after its source went", &|| {
+        heard().len() > 1
+    });
+    assert_same!(heard().last(), Some(&DragDropEvent::Exited { id }));
 }
 
 /// A source that goes after its drop was accepted leaves the offer the

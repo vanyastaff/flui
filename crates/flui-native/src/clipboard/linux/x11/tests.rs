@@ -659,16 +659,7 @@ impl Requestor {
     fn ask(&self, owner: &X11Clipboard, property: xproto::Atom) -> xproto::Atom {
         use x11rb::protocol::Event;
 
-        self.connection
-            .convert_selection(
-                self.window,
-                xproto::Atom::from(xproto::AtomEnum::PRIMARY),
-                self.utf8,
-                property,
-                x11rb::CURRENT_TIME,
-            )
-            .expect("the request is sent");
-        self.connection.flush().expect("the request is sent");
+        self.send_request(property);
         let deadline = Instant::now() + STEP;
         loop {
             owner.deliver();
@@ -687,6 +678,20 @@ impl Requestor {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Ask for the text into `property`, waiting for nothing.
+    fn send_request(&self, property: xproto::Atom) {
+        self.connection
+            .convert_selection(
+                self.window,
+                xproto::Atom::from(xproto::AtomEnum::PRIMARY),
+                self.utf8,
+                property,
+                x11rb::CURRENT_TIME,
+            )
+            .expect("the request is sent");
+        self.connection.flush().expect("the request is sent");
     }
 
     /// Start every `INCR` transfer `owner` writes at once, and never take a
@@ -740,48 +745,74 @@ fn requests_while_every_transfer_is_held_do_not_ask_the_selection() {
     assert_eq!(asked.get(), writers, "the refused requests ask nothing");
 }
 
-/// A requestor that goes mid-transfer (it crashes, or is killed) lets go of
-/// the `INCR` transfers it held as its window goes, not at their timeout:
-/// the next client is served at once.
+/// A requestor that goes (it crashes, or is killed) holds none of the
+/// `INCR` transfers the clipboard writes at once: those under way end as its
+/// window goes, not at their timeout, and those asked before it went and
+/// answered after are refused, not started on a window that is not there.
+/// The next client is served at once either way.
 #[test]
 fn a_requestor_that_goes_lets_go_of_its_transfers() {
+    #[derive(Debug, Clone, Copy)]
+    enum Goes {
+        /// After every transfer it asked for started.
+        MidTransfer,
+        /// After it asked, before the owner's turn answered.
+        BeforeTheAnswer,
+    }
+
     let Some(_server) = server() else {
         return;
     };
-    let owner = clipboard();
-    let asked = Rc::new(Cell::new(0));
-    offer_primary(&owner, counted(&"x".repeat(1 << 20), &asked));
+    for goes in [Goes::MidTransfer, Goes::BeforeTheAnswer] {
+        let owner = clipboard();
+        let asked = Rc::new(Cell::new(0));
+        offer_primary(&owner, counted(&"x".repeat(1 << 20), &asked));
 
-    let gone = Requestor::new();
-    gone.hold_every_writer(&owner);
-    let window = gone.window;
-    drop(gone);
-    // Asked before the next requestor connects, by a client that makes no
-    // window: the server may give the next client the range of ids the gone
-    // one had, and its window the same id.
-    let (probe, _) = RustConnection::connect(None).expect("the X server answers");
-    let deadline = Instant::now() + STEP;
-    while probe
-        .get_window_attributes(window)
-        .expect("the request is sent")
-        .reply()
-        .is_ok()
-    {
-        assert!(
-            Instant::now() < deadline,
-            "the requestor's window outlived its connection"
+        let gone = Requestor::new();
+        match goes {
+            Goes::MidTransfer => gone.hold_every_writer(&owner),
+            Goes::BeforeTheAnswer => {
+                // Twice the writers: one asked before the thread holds the
+                // offer is refused at once, and enough are left to hold
+                // every writer were a gone requestor's transfer started.
+                for held in 0..2 * super::selection::MAX_WRITERS {
+                    gone.send_request(atom(&format!("FLUI_HELD_{held}")));
+                }
+            }
+        }
+        let window = gone.window;
+        drop(gone);
+        // Asked before the next requestor connects, by a client that makes
+        // no window: the server may give the next client the range of ids
+        // the gone one had, and its window the same id.
+        let (probe, _) = RustConnection::connect(None).expect("the X server answers");
+        let deadline = Instant::now() + STEP;
+        while probe
+            .get_window_attributes(window)
+            .expect("the request is sent")
+            .reply()
+            .is_ok()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "{goes:?}: the requestor's window outlived its connection"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let next = Requestor::new();
+        let started = Instant::now();
+        let property = atom("FLUI_AFTER");
+        assert_eq!(
+            next.ask(&owner, property),
+            property,
+            "{goes:?}: the next is served"
         );
-        std::thread::sleep(Duration::from_millis(2));
+        assert!(
+            started.elapsed() < super::selection::TRANSFER_TIMEOUT,
+            "{goes:?}: served at once, not at a transfer's timeout"
+        );
     }
-
-    let next = Requestor::new();
-    let started = Instant::now();
-    let property = atom("FLUI_AFTER");
-    assert_eq!(next.ask(&owner, property), property, "the next is served");
-    assert!(
-        started.elapsed() < super::selection::TRANSFER_TIMEOUT,
-        "served as the requestor went, not at its transfers' timeout"
-    );
 }
 
 /// Ask the `CLIPBOARD` selection's owner for `target` as another client
