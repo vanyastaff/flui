@@ -2830,7 +2830,9 @@ fn a_locked_session_or_a_cloak_occludes_a_shown_window() {
 /// window opened first still hears one after the other closed.
 fn each_window_hears_its_own_cloak() {
     let platform = platform();
-    let (first, second) = (open(&platform, options()), open(&platform, options()));
+    // Side by side: one over the other would read covered.
+    let beside = options().position(Some(Point::new(100.0 + CONTENT.width + 40.0, 80.0)));
+    let (first, second) = (open(&platform, options()), open(&platform, beside));
     settle();
     let (first_events, second_events) = (record_visibility(&first), record_visibility(&second));
     let cloak = |window: &Opened, on: bool| {
@@ -2875,6 +2877,78 @@ fn each_window_hears_its_own_cloak() {
     cloak(&first, false);
     assert!(heard(&first_events, 2));
     assert_eq!(*first_events.lock().expect("log"), [false, true]);
+}
+
+/// A window another window opens over reads occluded, still shown, once a
+/// frame is due for it, and seen again once the window over it is hidden,
+/// with no frame of its own: the desktop's change is heard while it is
+/// covered. The window over it is a plain Win32 popup that takes no
+/// activation, so nothing of FLUI's runs for it and the window under it is
+/// neither activated nor repainted when it goes. Red-check: drop the frame's
+/// `WindowStep::FrameDue` and the window never reads covered; hold no desktop
+/// hook and it never reads seen again.
+fn a_window_another_covers_reads_occluded_until_it_is_uncovered() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, SW_HIDE, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+    };
+
+    let platform = platform();
+    let under = open(&platform, options());
+    settle();
+    assert!(under.state().is_seen(), "nothing covers it yet");
+    let events = record_visibility(&under);
+    let below = rect(&under);
+    // SAFETY: a top-level popup of the system's `STATIC` class on this
+    // thread, with no parent, menu or creation data; destroyed below.
+    let over = unsafe {
+        CreateWindowExW(
+            WS_EX_NOACTIVATE,
+            w!("STATIC"),
+            w!("over"),
+            WS_POPUP | WS_VISIBLE,
+            below.left - 20,
+            below.top - 20,
+            below.right - below.left + 40,
+            below.bottom - below.top + 40,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .expect("a popup opens over the window");
+    settle();
+    under.request_redraw();
+    assert!(
+        pump_until(Duration::from_secs(2), || {
+            *events.lock().expect("log") == [false]
+        }),
+        "a frame due under another window finds it covered: {:?}",
+        events.lock().expect("log")
+    );
+    let covered = under.state();
+    assert!(
+        covered.visible && covered.occluded && !covered.is_seen(),
+        "covered, shown and not seen: {covered:?}"
+    );
+    assert_eq!(
+        covered.capabilities.reports_occlusion(),
+        flui_platform::WindowCapability::Emulated
+    );
+
+    // SAFETY: the popup made above, on this thread.
+    let _ = unsafe { ShowWindow(over, SW_HIDE) };
+    let uncovered = pump_until(Duration::from_secs(2), || {
+        *events.lock().expect("log") == [false, true]
+    });
+    // SAFETY: as above, destroyed once.
+    let _ = unsafe { DestroyWindow(over) };
+    assert!(
+        uncovered,
+        "hiding the window over it uncovers it: {:?}",
+        events.lock().expect("log")
+    );
+    assert!(under.state().is_seen());
 }
 
 /// A close command closes the window without asking the should-close veto: a
@@ -3201,6 +3275,10 @@ fn native_window_commands() {
         (
             "each_window_hears_its_own_cloak",
             each_window_hears_its_own_cloak,
+        ),
+        (
+            "a_window_another_covers_reads_occluded_until_it_is_uncovered",
+            a_window_another_covers_reads_occluded_until_it_is_uncovered,
         ),
         (
             "a_tree_published_inside_the_activation_answers_it",

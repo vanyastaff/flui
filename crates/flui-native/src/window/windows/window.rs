@@ -197,6 +197,9 @@ pub(crate) const fn window_capabilities(
     capabilities.observes_position = Availability::Native;
     capabilities.observes_minimized = Availability::Native;
     capabilities.places_at_open = Availability::Native;
+    // Win32 tells no covering: the walk reads it from the desktop's z-order
+    // (`cover`).
+    capabilities.reports_occlusion = Emulated;
     capabilities.material = Native;
     // From the frame statistics of the swap chain the renderer presents
     // through, which it hands the surface target before each present.

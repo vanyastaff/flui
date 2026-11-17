@@ -627,6 +627,8 @@ pub(crate) enum WindowStep {
     Minimized,
     /// It lost the keyboard focus, and published so.
     FocusLost,
+    /// A frame is due for it: the next thing it does is run one.
+    FrameDue,
     /// It is about to paint a frame.
     Painting,
     /// The system's modal size-and-move loop starts for it.

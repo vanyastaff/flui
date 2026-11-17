@@ -28,7 +28,7 @@ use crate::storage::UserDataDirs;
 use crate::text::windows::Tsf;
 use crate::version::gate::windows::WindowsBuild;
 use crate::window::windows::proc::WindowProc;
-use crate::window::windows::{CloakWatch, WindowSet, WindowsWindow};
+use crate::window::windows::{CloakWatch, CoverWatch, WindowSet, WindowsWindow};
 
 /// The Windows host's table.
 #[derive(Debug)]
@@ -61,6 +61,7 @@ impl WindowsHost for Windows {
     /// The text services, which hear a window's moves before its procedure
     /// answers them and answer nothing themselves; the window's own messages;
     /// the thread's one subscription to cloak changes, which answers nothing;
+    /// the thread's covering walk, which answers its own timer and notice;
     /// its input (the mouse, pointers, wheel, keyboard and keyboard layout,
     /// and the precision touchpad's hit test and pacing timer); the session,
     /// whose lock and unlock it answers; and the drop target, which answers
@@ -80,6 +81,7 @@ impl WindowsHost for Windows {
             Rc::clone(&text) as Rc<dyn WindowMessages>,
             Rc::clone(&window) as Rc<dyn WindowMessages>,
             Rc::new(CloakWatch::default()),
+            Rc::new(CoverWatch::default()),
             Rc::clone(&input) as Rc<dyn WindowMessages>,
             Rc::new(SessionWindows::default()),
             DropTargetRegistration::new(),
@@ -218,12 +220,15 @@ mod tests {
             );
         }
         // What the touchpad answers still reaches the input: the hit test,
-        // and two timers in all, the window's modal deadline and the
-        // touchpad's pump.
+        // and three timers in all, the window's modal deadline, the covering
+        // walk's and the touchpad's pump.
         assert_eq!(answering(DM_POINTERHITTEST, 0), 1);
         let timers = (0..=0xFFFF_usize)
             .filter(|&timer| answering(WM_TIMER, timer) == 1)
             .count();
-        assert_eq!(timers, 2, "the modal deadline timer and the touchpad's");
+        assert_eq!(
+            timers, 3,
+            "the modal deadline timer, the covering walk's and the touchpad's"
+        );
     }
 }

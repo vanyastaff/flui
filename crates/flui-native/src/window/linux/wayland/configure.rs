@@ -747,6 +747,7 @@ mod tests {
                 reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                 reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
+                reports_occlusion: WindowCapability::NOT_ON_THIS_PLATFORM,
                 observes_position: Availability::Unavailable,
                 observes_minimized: Availability::Unavailable,
                 places_at_open: Availability::Unavailable,

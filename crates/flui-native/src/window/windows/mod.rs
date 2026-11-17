@@ -41,6 +41,10 @@ pub(crate) mod backdrop;
 pub(crate) mod chrome;
 #[cfg(windows)]
 mod cloak;
+#[cfg(windows)]
+mod cover;
+#[cfg(any(windows, test))]
+mod coverage;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
@@ -59,6 +63,8 @@ mod delivery_tests;
 
 #[cfg(windows)]
 pub(crate) use cloak::CloakWatch;
+#[cfg(windows)]
+pub(crate) use cover::CoverWatch;
 #[cfg(windows)]
 pub(crate) use set::WindowSet;
 #[cfg(windows)]

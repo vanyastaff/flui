@@ -364,6 +364,7 @@ impl WindowMessages for Tsf {
             | WindowStep::Resized(_)
             | WindowStep::Minimized
             | WindowStep::FocusLost
+            | WindowStep::FrameDue
             | WindowStep::Painting
             | WindowStep::SizeMoveStarted
             | WindowStep::SizeMoveEnded

@@ -437,8 +437,15 @@ impl WindowContext {
     /// Runs this window's frame callback; its callbacks count it on the
     /// platform only if one is registered to run. The request carries the
     /// compositor's last and next refresh when DWM reports them, and the
-    /// event clock's reading otherwise.
-    pub(crate) fn request_frame(&self) {
+    /// event clock's reading otherwise. The class's hooks hear that the frame
+    /// is due first ([`WindowStep::FrameDue`]): the covering walk looks again
+    /// whether other windows cover this one, so a frame no one can see is not
+    /// drawn as if it were.
+    pub(crate) fn request_frame(&self, hwnd: HWND) {
+        self.step(hwnd, WindowStep::FrameDue);
+        if !self.still_owns(hwnd) {
+            return;
+        }
         match compositor_refresh() {
             Some(timing) => self.delivery.dispatch_frame(crate::frame_request_timed(
                 timing.since_refresh,
@@ -807,6 +814,7 @@ impl WindowMessages for WindowProc {
             WindowStep::Resized(_)
             | WindowStep::Minimized
             | WindowStep::FocusLost
+            | WindowStep::FrameDue
             | WindowStep::Painting
             | WindowStep::SizeMoveStarted
             | WindowStep::SizeMoveEnded
@@ -1107,7 +1115,7 @@ impl WindowProc {
                         // and timers without drawing, and a paint dropped here would
                         // strand the wake that asked for it.
                         if let Some(ctx) = ctx {
-                            ctx.request_frame();
+                            ctx.request_frame(hwnd);
                         }
                         let _ = EndPaint(hwnd, &raw const ps);
                     }
@@ -1247,7 +1255,7 @@ impl WindowProc {
                         // intermediate sizes. A minimized window has nothing to present.
                         if size_type != SIZE_MINIMIZED {
                             if ctx.in_size_move.get() {
-                                ctx.request_frame();
+                                ctx.request_frame(hwnd);
                             } else {
                                 ctx.redraw_if_still_owned(hwnd);
                             }
@@ -1401,7 +1409,7 @@ impl WindowProc {
                         && ctx.identity.halves() == (wparam.0, lparam.0)
                     {
                         ctx.frame_post.taken();
-                        ctx.request_frame();
+                        ctx.request_frame(hwnd);
                     }
                     LRESULT(0)
                 }
@@ -2503,6 +2511,9 @@ pub(crate) struct Occlusion {
     pub(crate) cloaked: bool,
     /// The user's session is locked.
     pub(crate) session_locked: bool,
+    /// The windows above it leave none of it on screen, as the thread's last
+    /// covering walk found (`cover::CoverWatch`).
+    pub(crate) covered: bool,
 }
 
 /// What occludes a shown window in its snapshot.
@@ -2517,6 +2528,7 @@ impl Visibility {
             occlusion: Cell::new(Occlusion {
                 cloaked: false,
                 session_locked: session_locked_now(),
+                covered: false,
             }),
         }
     }
@@ -2524,11 +2536,25 @@ impl Visibility {
     /// Whether something hides the window whatever its surface.
     pub(crate) fn occluded(&self) -> bool {
         let occlusion = self.occlusion.get();
-        occlusion.cloaked || occlusion.session_locked
+        occlusion.cloaked || occlusion.session_locked || occlusion.covered
     }
 }
 
 impl WindowContext {
+    /// Whether the windows above it cover the window, as the thread's
+    /// covering walk found: published when it changed.
+    pub(crate) fn set_covered(&self, covered: bool) {
+        let occlusion = self.visibility.occlusion.get();
+        if occlusion.covered == covered {
+            return;
+        }
+        self.visibility.occlusion.set(Occlusion {
+            covered,
+            ..occlusion
+        });
+        self.settle_visibility();
+    }
+
     /// The session locked (`true`) or unlocked, as the lifecycle's hook tells
     /// the window ([`WindowStep::SessionLocked`]).
     pub(crate) fn set_session_locked(&self, locked: bool) {

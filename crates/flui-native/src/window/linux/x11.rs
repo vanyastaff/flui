@@ -505,6 +505,9 @@ pub(crate) mod support {
         capabilities.closes = Native;
         capabilities.observes_position = Availability::Native;
         capabilities.places_at_open = Availability::Native;
+        // The server tells a covering (`VisibilityNotify`), except of a window a
+        // compositing manager redirects, which it reads unobscured.
+        capabilities.reports_occlusion = Native;
         capabilities.app_title_bar = from_the_window_manager(support.moves_and_resizes);
         capabilities.minimizes = from_the_window_manager(support.managed());
         capabilities.observes_minimized = if support.managed() {
@@ -747,6 +750,7 @@ pub(crate) mod support {
                     reports_presentation: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_keyboard_inset: WindowCapability::NOT_ON_THIS_PLATFORM,
                     reports_system_gestures: WindowCapability::NOT_ON_THIS_PLATFORM,
+                    reports_occlusion: Native,
                     observes_position: Availability::Native,
                     observes_minimized: Availability::Native,
                     places_at_open: Availability::Native,

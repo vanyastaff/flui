@@ -1406,6 +1406,16 @@ pub struct Capabilities {
         )
     )]
     pub reports_system_gestures: Capability,
+    /// Reporting a covering by other windows as occluded; read as
+    /// [`reports_keyboard_inset`](Self::reports_keyboard_inset) is.
+    #[cfg_attr(
+        feature = "serde",
+        serde(
+            default = "Capability::platform_absence",
+            skip_serializing_if = "Capability::is_platform_absence"
+        )
+    )]
+    pub reports_occlusion: Capability,
     /// Reporting its position.
     pub observes_position: Availability,
     /// Reporting that it is minimized.
