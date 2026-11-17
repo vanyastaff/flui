@@ -76,17 +76,17 @@ error: `#[inspect]` does nothing here: the derive reads the attributes of the ty
 error: expected `summary`, `detail` or `debug`
   --> tests/ui/inspect_unsupported_shape.rs:78:23
    |
-78 |     #[inspect(level = bogus, unit = bogus, nmae = "w")]
+78 |     #[inspect(level = bogus, unit = bogus, title = "w")]
    |                       ^^^^^
 
 error: expected `logical_px`, `device_px`, `seconds`, `degrees`, `radians` or `fraction`
   --> tests/ui/inspect_unsupported_shape.rs:78:37
    |
-78 |     #[inspect(level = bogus, unit = bogus, nmae = "w")]
+78 |     #[inspect(level = bogus, unit = bogus, title = "w")]
    |                                     ^^^^^
 
 error: unsupported inspect attribute; expected `skip`, `name`, `default`, `level`, `unit`, `with` or `debug`
   --> tests/ui/inspect_unsupported_shape.rs:78:44
    |
-78 |     #[inspect(level = bogus, unit = bogus, nmae = "w")]
-   |                                            ^^^^
+78 |     #[inspect(level = bogus, unit = bogus, title = "w")]
+   |                                            ^^^^^

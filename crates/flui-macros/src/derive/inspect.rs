@@ -672,7 +672,7 @@ mod tests {
                     c: T,
                     #[inspect(level = bogus, unit = bogus, level = detail, nonsense = out, name = "d")]
                     d: f64,
-                    #[inspect(nmae = HashMap::<u8, u8>::new(), with = <Map<K, V>>::describe, nmae = 1 < 2, nonsense)]
+                    #[inspect(title = HashMap::<u8, u8>::new(), with = <Map<K, V>>::describe, title = 1 < 2, nonsense)]
                     e: f64,
                     #[inspect(skip, name = 1)]
                     f: f64,

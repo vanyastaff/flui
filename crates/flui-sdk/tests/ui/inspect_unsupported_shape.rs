@@ -75,7 +75,7 @@ struct InAFieldsType {
 // A refused entry does not end its list: each one is reported.
 #[derive(Inspect)]
 struct EveryEntry {
-    #[inspect(level = bogus, unit = bogus, nmae = "w")]
+    #[inspect(level = bogus, unit = bogus, title = "w")]
     width: f64,
 }
 
