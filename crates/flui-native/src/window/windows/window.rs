@@ -22,8 +22,8 @@ use windows::{
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DestroyWindow, GCLP_HBRBACKGROUND, GWL_EXSTYLE,
-                GWL_STYLE, GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
+                CW_USEDEFAULT, CreateWindowExW, GCLP_HBRBACKGROUND, GWL_EXSTYLE, GWL_STYLE,
+                GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, GetWindowRect,
                 GetWindowThreadProcessId, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
                 IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
                 IDC_WAIT, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, SW_HIDE, SW_MAXIMIZE,
@@ -105,7 +105,7 @@ pub struct WindowsWindow {
     /// close whatever unrelated window, of this process or another, the OS
     /// recycled the handle value for — see
     /// [`handle_names`](super::proc::handle_names). The address dangles once
-    /// `WM_DESTROY` has run; that is fine for comparison.
+    /// the window retired; that is fine for comparison.
     installed: super::proc::InstalledWindow,
 
     /// What the table's positions made for this window at construction: its
@@ -430,9 +430,11 @@ impl WindowsWindow {
         // operate on that same freshly created, still-valid `hwnd`.
         // `Box::into_raw(context)` intentionally leaks the allocation into
         // the `GWLP_USERDATA` slot — ownership transfers to the window and is
-        // reclaimed by the `WM_DESTROY` arm of `WindowProc`, the hook every
-        // Windows host registers on the class (`platform.rs`, `Box::from_raw`);
-        // a window destroyed by any path that skips `WM_DESTROY`
+        // reclaimed after the window's retirement (`WindowContext::retire`:
+        // a granted close, or the `WM_DESTROY` arm of `WindowProc`, the hook
+        // every Windows host registers on the class), at the last borrow's
+        // `Box::from_raw`;
+        // a window destroyed by any path that skips the retirement
         // (process-exit teardown) leaks the
         // allocation rather than double-frees or dangles it. `ShowWindow`/
         // `UpdateWindow` again only need a valid `hwnd`, which holds here.
@@ -627,6 +629,7 @@ impl WindowsWindow {
                     Rc::clone(&modal_loops),
                 ),
                 ledger: std::cell::RefCell::new(crate::owner::hwnd_affinity::ContextLedger::new()),
+                retiring: std::cell::Cell::new(false),
                 identity,
                 displays: Arc::clone(&displays),
                 appearance: std::cell::Cell::new(appearance),
@@ -1768,19 +1771,9 @@ impl WindowsWindow {
     /// close request.
     fn close_window(&self) {
         match super::proc::handle_names(self.hwnd, self.installed) {
-            HandleNames::ItsWindow => {
-                // SAFETY: `DestroyWindow` takes `self.hwnd` by value; the
-                // handle names this wrapper's live window, and the wrapper is
-                // on the thread that created it (it is neither `Send` nor
-                // `Sync`), the only one Win32 permits the call from, where
-                // `WM_DESTROY` (reclaiming the `GWLP_USERDATA` allocation) is
-                // dispatched synchronously before the call returns.
-                unsafe {
-                    if let Err(error) = DestroyWindow(self.hwnd) {
-                        tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow (WindowCommand::Close) failed");
-                    }
-                }
-            }
+            // The wrapper is on the thread that created its window: it is
+            // neither `Send` nor `Sync`.
+            HandleNames::ItsWindow => self.close_on_owner(),
             HandleNames::Nothing => {
                 tracing::debug!(hwnd = ?self.hwnd, "close: the native window is already gone");
             }
@@ -1791,6 +1784,24 @@ impl WindowsWindow {
                      (recycled by the OS); leaving its new owner untouched"
                 );
             }
+        }
+    }
+
+    /// Close this window, whose handle still names it, on its owner thread:
+    /// retired, its handler let go of, then destroyed, or
+    /// kept hidden when a keep was recorded before the handler let go,
+    /// usually while the window was open
+    /// (`WindowContext::close_granted`).
+    fn close_on_owner(&self) {
+        let hwnd = self.hwnd;
+        let closed = super::proc::with_window_context(hwnd, "close", |ctx| {
+            // SAFETY: the gate handed the context `hwnd`'s slot holds, the one
+            // this wrapper installed (`handle_names` compared it, and no
+            // message was dispatched since), borrowed on its owner thread.
+            unsafe { ctx.close_granted(hwnd) };
+        });
+        if closed.is_none() {
+            tracing::debug!(?hwnd, "close: the window's context is gone already");
         }
     }
 }
@@ -1853,9 +1864,11 @@ fn ask_attention(hwnd: HWND) {
 /// context as plain integers, never dereferenced, and the window's
 /// [`Retirement`], so it is `Send + Sync` with no `unsafe impl` and keeps
 /// nothing of the window alive. The window is there while its retirement has
-/// not started (`WM_DESTROY` starts it) and the identity probe still finds
-/// this window behind the handle: a destroyed handle, or one the OS recycled
-/// for another window of any thread or process, is not this window.
+/// not started (a granted close or `WM_DESTROY` starts it) and the identity
+/// probe still finds this window behind the handle: a destroyed handle, a
+/// retired one kept hidden past its close (its slot is cleared), or one the
+/// OS recycled for another window of any thread or process, is not this
+/// window.
 ///
 /// [`Retirement`]: crate::owner::window_delivery::Retirement
 #[derive(Debug)]
@@ -1910,7 +1923,7 @@ impl HasWindowHandle for Win32Surface {
         // a pointer (`borrow_raw`'s guarantee covers only pointers): a window
         // destroyed after the probe makes later calls with it fail, and the
         // window's handler hears `surface_changed(Release)` before its
-        // `WM_DESTROY` runs.
+        // retirement lets go of it.
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
@@ -1994,6 +2007,16 @@ impl flui_platform::SurfaceTarget for Win32Surface {
         );
         self.presented.report(presented);
     }
+
+    /// Records the keep and changes nothing else: a window still open keeps
+    /// showing and taking input. Its granted close, whichever way it comes,
+    /// then hides the `HWND` and keeps it for the life of the process instead
+    /// of destroying it (`WindowContext::close_granted`), so a swap chain made
+    /// for it stays one over a live window. A keep after a `WM_DESTROY` the
+    /// OS sent on its own, or after the window was destroyed, does nothing.
+    fn keep_past_close(&self) {
+        let _first = self.retirement.keep_past_close();
+    }
 }
 
 impl flui_platform::RedrawRequester for Win32Surface {
@@ -2047,20 +2070,13 @@ impl Drop for WindowsWindow {
                     // elsewhere degrades to a no-op.
                     self.facets.accessibility.detach();
 
-                    // SAFETY: `DestroyWindow` takes `self.hwnd` by value;
-                    // the handle still names THIS wrapper's window (a
+                    // The handle still names THIS wrapper's window (a
                     // never-created or already-destroyed handle answers
-                    // `Nothing`, a recycled one `AnotherWindow`), and the
-                    // wrapper is on the thread that created it (it is
-                    // neither `Send` nor `Sync`), where `WM_DESTROY` retires
-                    // the `GWLP_USERDATA` allocation synchronously within
-                    // this call, the ledger freeing it at the outermost
-                    // borrow release.
-                    unsafe {
-                        if let Err(error) = DestroyWindow(self.hwnd) {
-                            tracing::warn!(hwnd = ?self.hwnd, ?error, "DestroyWindow failed in Drop");
-                        }
-                    }
+                    // `Nothing`, a retired or recycled one `AnotherWindow`),
+                    // and the wrapper is on the thread that created it (it
+                    // is neither `Send` nor `Sync`): the last wrapper closes
+                    // it as a close command does.
+                    self.close_on_owner();
                 }
                 HandleNames::Nothing => {
                     tracing::debug!(hwnd = ?self.hwnd, "Drop: the native window is already gone");

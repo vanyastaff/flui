@@ -1,20 +1,21 @@
 //! The Win32 HWND thread-affinity contract, in pure functions.
 //!
-//! An HWND is thread-affine: Win32 dispatches a window's messages — including
-//! the `WM_DESTROY` that frees the context allocation stored in its
-//! `GWLP_USERDATA` slot — on the thread that created the window, and
-//! `DestroyWindow` refuses to destroy a window created by a different thread
-//! (both are documented contracts: see MSDN's `DestroyWindow` remarks and the
-//! "About Messages and Message Queues" thread-affinity section). The platform
-//! and its windows are neither `Send` nor `Sync` (ADR-0327 §5), so their own
-//! calls are on that thread by construction; but the slot is read through a
-//! raw handle, and what another thread does hold of a window (its surface
-//! target, the requests its delivery takes) reaches the same handle. So every
-//! dereference of the raw context pointer read back from `GWLP_USERDATA`
-//! first decides whether the calling thread may touch it at all: a foreign
-//! thread's read races the owner thread's `WM_DESTROY` clear+free with no
-//! synchronization, and no ordering of the read alone can close that window
-//! (it is a time-of-check/time-of-use race).
+//! An HWND is thread-affine: Win32 dispatches a window's messages on the
+//! thread that created the window, and `DestroyWindow` refuses to destroy a
+//! window created by a different thread (both are documented contracts: see
+//! MSDN's `DestroyWindow` remarks and the "About Messages and Message Queues"
+//! thread-affinity section). The window's retirement, which clears its
+//! `GWLP_USERDATA` slot and frees the context allocation stored there, runs
+//! on that thread too: in a close the window granted, or in its `WM_DESTROY`.
+//! The platform and its windows are neither `Send` nor `Sync` (ADR-0327 §5),
+//! so their own calls are on that thread by construction; but the slot is
+//! read through a raw handle, and what another thread does hold of a window
+//! (its surface target, the requests its delivery takes) reaches the same
+//! handle. So every dereference of the raw context pointer read back from
+//! `GWLP_USERDATA` first decides whether the calling thread may touch it at
+//! all: a foreign thread's read races the owner thread's retirement
+//! clear+free with no synchronization, and no ordering of the read alone can
+//! close that window (it is a time-of-check/time-of-use race).
 //!
 //! Whether a handle still names a wrapper's window ([`handle_names`]) compares
 //! the window's thread with the one that created the wrapper's window, never
@@ -62,7 +63,7 @@ pub(crate) enum UserDataVerdict {
     /// Dereferencing is sound: the caller is on the window's owning thread,
     /// the window is alive and of this backend's own class, and the slot
     /// holds a pointer. On the owning thread the deref cannot race the free:
-    /// `WM_DESTROY` (the only path that frees the context) is dispatched on
+    /// the window's retirement (the only path that frees the context) runs on
     /// that same thread, serialized with the caller.
     Deref,
     /// Dereferencing must be refused; the reason says why. Callers fall back
@@ -85,7 +86,7 @@ pub(crate) enum UserDataRefusal {
     /// window; nothing read through it describes this wrapper's window.
     WindowGone,
     /// The calling thread is not the window's creating thread. A foreign
-    /// thread's dereference races the owner thread's `WM_DESTROY` clear+free
+    /// thread's dereference races the owner thread's retirement clear+free
     /// of the same allocation, so it is refused outright: what makes the
     /// dereference sound is this check, not who usually calls.
     ForeignThread,
@@ -94,7 +95,7 @@ pub(crate) enum UserDataRefusal {
     /// entirely. Reachable only through OS handle recycling: this wrapper's
     /// window died and its handle value now names a foreign window.
     ForeignClass,
-    /// The slot is null: the context was never installed, or `WM_DESTROY`
+    /// The slot is null: the context was never installed, or the retirement
     /// already cleared it (it zeroes the slot before freeing the box).
     EmptySlot,
 }
@@ -194,8 +195,11 @@ pub(crate) enum HandleNames {
 /// - `expected_slot` — the context pointer this wrapper's constructor
 ///   installed (never `0`, since it came from `Box::into_raw`). A live
 ///   window is this wrapper's only while `slot == expected_slot`; a cleared
-///   slot (`0`, mid-`WM_DESTROY`) or a recycled window's foreign value both
-///   answer [`HandleNames::AnotherWindow`].
+///   slot (`0`, once the window retired, a window kept hidden past its close
+///   included) or a recycled window's foreign value both answer
+///   [`HandleNames::AnotherWindow`]. The retirement itself, which settles the
+///   window it retired, asks with an `expected_slot` of `0`: the cleared slot
+///   of a live window of its own thread is then [`HandleNames::ItsWindow`].
 ///
 /// The caller's thread does not enter the answer: a wrapper is neither `Send`
 /// nor `Sync`, so its teardown is on the owner thread, and a surface target
@@ -229,11 +233,11 @@ pub(crate) fn handle_names(
 /// Win32 message dispatch re-enters: an outbound call made while a context
 /// borrow is live (`SetWindowPos` inside the fullscreen toggle, a callback
 /// dispatched from a `window_proc` arm) can synchronously run more
-/// `window_proc` frames — including `WM_DESTROY`, if a framework callback
+/// `window_proc` frames — including the window's retirement, if a framework callback
 /// closes the window from inside the dispatch. Freeing the context in the
-/// `WM_DESTROY` arm would therefore free it *under* the borrowing frames
+/// retirement would therefore free it *under* the borrowing frames
 /// further up the same stack. Instead, every borrow holds a guard counted
-/// here, `WM_DESTROY` only [`retire`]s the context after clearing the slot,
+/// here, the retirement only [`retire`]s the context after clearing the slot,
 /// and the free happens when the **outermost** guard releases — the same
 /// recursion-deferred user-data reclaim winit's wndproc uses.
 ///
@@ -277,7 +281,7 @@ impl ContextLedger {
 
     /// Marks the context retired: the `GWLP_USERDATA` slot has been cleared
     /// and no new borrow can be minted. The caller is itself a live
-    /// borrower (the `WM_DESTROY` frame), so the free always happens in a
+    /// borrower (the retiring frame), so the free always happens in a
     /// later [`release`](Self::release), never here.
     pub(crate) fn retire(&mut self) {
         self.retired = true;
@@ -371,6 +375,30 @@ mod tests {
                 ("recycled_for_a_window_of_another_process", || {
                     assert_eq!(
                         handle_names(OTHER_PROCESS, HW_OWNER, true, INSTALLED, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("retired_and_kept_hidden_is_not_the_wrappers", || {
+                    // A granted close cleared the slot and kept the window
+                    // alive, hidden: the wrapper reaches nothing through it.
+                    assert_eq!(
+                        handle_names(HW_OWNER, HW_OWNER, true, 0, INSTALLED),
+                        HandleNames::AnotherWindow
+                    );
+                }),
+                ("retired_window_as_its_retirement_names_it", || {
+                    // The retirement settles the window whose cleared slot
+                    // it left, on its own thread, and nothing else.
+                    assert_eq!(
+                        handle_names(HW_OWNER, HW_OWNER, true, 0, 0),
+                        HandleNames::ItsWindow
+                    );
+                    assert_eq!(
+                        handle_names(HW_OWNER, HW_OWNER, true, INSTALLED, 0),
+                        HandleNames::AnotherWindow
+                    );
+                    assert_eq!(
+                        handle_names(HW_FOREIGN, HW_OWNER, true, 0, 0),
                         HandleNames::AnotherWindow
                     );
                 }),

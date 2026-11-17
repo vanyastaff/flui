@@ -773,7 +773,9 @@ pub(super) fn create_host(
     #[cfg(not(test))]
     let refused = false;
     let created = if refused {
-        Err(windows_core::Error::from_hresult(windows::Win32::Foundation::E_FAIL))
+        Err(windows_core::Error::from_hresult(
+            windows::Win32::Foundation::E_FAIL,
+        ))
     } else {
         TouchpadHost::create(hwnd, size, apartment)
     };

@@ -23,6 +23,8 @@
 //! - `proc`: the window's context in its `GWLP_USERDATA` slot and the
 //!   window's own messages, the hook `WindowProc` the host registers on FLUI's
 //!   window class;
+//! - `close`: how a window ends, its retirement and the destruction or keep
+//!   of the native window after its handler let go;
 //! - `cloak`: the owner thread's one subscription to cloak changes, the hook
 //!   `CloakWatch` the host registers beside it;
 //! - `backdrop`: what the desktop window manager draws around and behind the
@@ -43,6 +45,8 @@ pub(crate) mod backdrop;
 pub(crate) mod chrome;
 #[cfg(windows)]
 mod cloak;
+#[cfg(windows)]
+mod close;
 pub(crate) mod frame_timing;
 pub(crate) mod limits;
 #[cfg(windows)]
