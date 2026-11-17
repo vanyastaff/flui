@@ -434,30 +434,28 @@ impl<'a> AppKitWindow<'a> {
     /// Order the window at `level` among the windows of every application.
     /// The window's state says where that stands it
     /// ([`WindowState::level`](flui_platform::WindowState::level)): above the
-    /// normal level is kept on top.
+    /// normal level is kept on top. A full-screen window stands at the normal
+    /// level while it lasts, and takes this one when it leaves.
     ///
     /// # Errors
     /// [`AppKitWindowError`]: the window is closed.
     pub fn set_window_level(self, level: MacOSWindowLevel) -> Result<(), AppKitWindowError> {
         let window = self.open()?;
-        let value = level.to_appkit();
-        // SAFETY: as in `set_tabbing_mode`.
-        unsafe {
-            let _: () = msg_send![window.ns_window, setLevel: value];
-        }
+        window.keep_level(level.to_appkit());
         window.publish_state();
         Ok(())
     }
 
-    /// The level the window is ordered at.
+    /// The level the window is ordered at outside full screen, which a
+    /// full-screen window keeps for when it leaves.
     ///
     /// # Errors
-    /// [`AppKitWindowError`]: the window is closed, or AppKit holds a level
-    /// no [`MacOSWindowLevel`] names.
+    /// [`AppKitWindowError`]: the window is closed, or it stands at a level
+    /// no [`MacOSWindowLevel`] names (the one under the normal level that
+    /// `WindowLevel::AlwaysOnBottom` sets).
     pub fn window_level(self) -> Result<MacOSWindowLevel, AppKitWindowError> {
         let window = self.open()?;
-        // SAFETY: as in `set_tabbing_mode`.
-        let value: NSWindowLevel = unsafe { msg_send![window.ns_window, level] };
+        let value: NSWindowLevel = window.state.lock().level;
         MacOSWindowLevel::from_appkit(value).ok_or(AppKitWindowError::UnnamedLevel)
     }
 

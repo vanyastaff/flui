@@ -810,6 +810,24 @@ fn a_headless_grab_ends_with_the_focus() {
         flui_platform::CursorGrab::None,
         "the focus coming back takes no grab of its own"
     );
+    // A grab a window without the focus asks for is refused by the window
+    // system: the command is carried out as a request, and the snapshot says
+    // nothing is held.
+    fixture.mock().simulate_focus(false);
+    let before = window.state().revision;
+    WindowCommand::SetCursorGrab(flui_platform::CursorGrab::Confined)
+        .admit_and_apply(&*window)
+        .expect("a grab is a request a window takes");
+    assert_eq!(window.state().cursor_grab, flui_platform::CursorGrab::None);
+    assert_eq!(
+        fixture.mock().window_system().cursor_grab,
+        flui_platform::CursorGrab::None
+    );
+    assert_eq!(
+        window.state().revision,
+        before,
+        "nothing held, nothing changed"
+    );
 }
 
 /// The snapshot's occlusion is the window system's, and is compared only

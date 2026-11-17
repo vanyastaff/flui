@@ -250,6 +250,21 @@ fn image_cursor(image: &CursorImage, scale: f64) -> Result<Retained<AnyObject>, 
     }
 }
 
+/// Move the cursor to `(x, y)`, global points from the primary screen's
+/// top-left corner, as Quartz measures them, without a mouse event: where a
+/// locked pointer is put back when its window moved.
+///
+/// # Errors
+/// [`PlatformFailure::Failed`] when Quartz refuses.
+pub(crate) fn warp_cursor(x: f64, y: f64) -> Result<(), PlatformFailure> {
+    core_graphics::display::CGDisplay::warp_mouse_cursor_position(
+        core_graphics::geometry::CGPoint::new(x, y),
+    )
+    .map_err(|error| PlatformFailure::Failed {
+        message: format!("Quartz refused to move the cursor: {error}"),
+    })
+}
+
 /// Detach the mouse from the cursor (`detached: true`), so its motion moves
 /// nothing on screen and reaches the window as the mouse events' deltas, or
 /// attach it again. The association is the whole process's.

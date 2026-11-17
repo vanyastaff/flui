@@ -19,10 +19,10 @@ use windows::Win32::{
     UI::{
         Input::{RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RIDEV_REMOVE, RegisterRawInputDevices},
         WindowsAndMessaging::{
-            ClipCursor, CreateIconIndirect, DestroyIcon, GetClientRect, GetCursorPos, HCURSOR,
-            HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO,
-            IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, LoadCursorW,
-            SetCursor,
+            ClipCursor, CreateIconIndirect, DestroyIcon, GetClientRect, GetCursor, GetCursorPos,
+            HCURSOR, HICON, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM,
+            IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT,
+            LoadCursorW, SetCursor,
         },
     },
 };
@@ -72,6 +72,16 @@ impl NativeCursor {
                 image: image.clone(),
             },
         })
+    }
+
+    /// Whether this is a cursor the window made and the one Win32 shows now,
+    /// which must not be destroyed before another is shown.
+    pub(crate) fn is_current(&self) -> bool {
+        match self {
+            // SAFETY: a plain query of this thread's cursor.
+            Self::Image { handle, .. } => (unsafe { GetCursor() }) == handle.0,
+            Self::System(_) | Self::Hidden => false,
+        }
     }
 
     /// Show this cursor now: what `WM_SETCURSOR` does over the client area,
@@ -202,7 +212,9 @@ impl Drop for OwnedCursor {
         // SAFETY: the handle is the icon `CreateIconIndirect` made for this
         // value alone, destroyed once here; the window shows another cursor
         // before it drops this one.
-        let _ = unsafe { DestroyIcon(HICON(self.0.0)) };
+        if let Err(error) = unsafe { DestroyIcon(HICON(self.0.0)) } {
+            tracing::warn!(%error, "an image cursor the window made was not destroyed");
+        }
     }
 }
 
@@ -210,52 +222,83 @@ impl Drop for OwnedCursor {
 const GENERIC_DESKTOP: u16 = 0x01;
 const MOUSE: u16 = 0x02;
 
-/// Hold the pointer as `grab` asks, for the focused window `hwnd`: inside its
-/// client area, or on the pixel it is on (the client area's centre when it
-/// is outside), registering for the mouse's raw input to read its motion.
+/// What a window holds of the pointer, in its client area's own coordinates,
+/// so the clip follows the window when it moves, resizes or changes scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Held {
+    /// The pointer stays inside the client area.
+    Confined,
+    /// The pointer stays on this pixel of the client area.
+    Locked(POINT),
+}
+
+/// Hold the pointer for the focused window `hwnd`: inside its client area,
+/// or (`locked`) on the pixel it is on, the client area's centre when it is
+/// outside, registering for the mouse's raw input to read its motion.
 ///
 /// # Errors
 /// [`PlatformFailure::Failed`] when Win32 refuses the clip or the
 /// registration; nothing is held then.
-pub(crate) fn hold(hwnd: HWND, locked: bool) -> Result<(), PlatformFailure> {
-    let client = client_on_screen(hwnd)?;
-    let clip = if locked {
+pub(crate) fn hold(hwnd: HWND, locked: bool) -> Result<Held, PlatformFailure> {
+    let held = if locked {
+        let client = client_on_screen(hwnd)?;
         let mut at = POINT::default();
         // SAFETY: a plain query into a live local.
         let inside = unsafe { GetCursorPos(&raw mut at) }.is_ok()
             && (client.left..client.right).contains(&at.x)
             && (client.top..client.bottom).contains(&at.y);
-        if !inside {
-            at = POINT {
-                x: client.left + (client.right - client.left) / 2,
-                y: client.top + (client.bottom - client.top) / 2,
-            };
-        }
-        RECT {
-            left: at.x,
-            top: at.y,
-            right: at.x + 1,
-            bottom: at.y + 1,
-        }
+        Held::Locked(if inside {
+            POINT {
+                x: at.x - client.left,
+                y: at.y - client.top,
+            }
+        } else {
+            POINT {
+                x: (client.right - client.left) / 2,
+                y: (client.bottom - client.top) / 2,
+            }
+        })
     } else {
-        client
+        Held::Confined
     };
-    // SAFETY: the rectangle is a live local the call reads.
-    unsafe { ClipCursor(Some(&raw const clip)) }.map_err(failed)?;
+    clip(hwnd, held)?;
     if locked && let Err(error) = register_raw_mouse(Some(hwnd)) {
         let_go(false);
         return Err(error);
     }
-    Ok(())
+    Ok(held)
 }
 
-/// Clip the pointer to `hwnd`'s client area again, after it moved or
-/// resized while it confines the pointer.
-pub(crate) fn confine_again(hwnd: HWND) {
-    if let Ok(client) = client_on_screen(hwnd) {
-        // SAFETY: as in `hold`.
-        let _ = unsafe { ClipCursor(Some(&raw const client)) };
-    }
+/// Clip the pointer as `held` says, where `hwnd`'s client area is now: what a
+/// window holding the pointer does after it moved, resized or changed scale.
+/// A lock point the client area no longer reaches is moved to its nearest
+/// pixel, so the pointer never rests over another window.
+///
+/// # Errors
+/// [`PlatformFailure::Failed`] when Win32 refuses the clip.
+pub(crate) fn clip(hwnd: HWND, held: Held) -> Result<(), PlatformFailure> {
+    let client = client_on_screen(hwnd)?;
+    let rect = match held {
+        Held::Confined => client,
+        Held::Locked(at) => {
+            let x = client
+                .left
+                .saturating_add(at.x)
+                .clamp(client.left, (client.right - 1).max(client.left));
+            let y = client
+                .top
+                .saturating_add(at.y)
+                .clamp(client.top, (client.bottom - 1).max(client.top));
+            RECT {
+                left: x,
+                top: y,
+                right: x.saturating_add(1),
+                bottom: y.saturating_add(1),
+            }
+        }
+    };
+    // SAFETY: the rectangle is a live local the call reads.
+    unsafe { ClipCursor(Some(&raw const rect)) }.map_err(failed)
 }
 
 /// Let the pointer go: no clip, and no raw input once a lock held it.

@@ -2329,6 +2329,134 @@ fn the_win32_window_conforms() {
     });
 }
 
+/// Whether `upper` is above `lower` in the desktop's stacking order.
+fn is_above(upper: HWND, lower: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GW_HWNDNEXT, GetWindow};
+    let mut next = upper;
+    // SAFETY: plain queries of the desktop's window list; a window that
+    // closes in between ends the walk.
+    while let Ok(below) = unsafe { GetWindow(next, GW_HWNDNEXT) } {
+        if below == lower {
+            return true;
+        }
+        next = below;
+    }
+    false
+}
+
+/// A window kept below the others is held on top by fullscreen while it
+/// lasts, keeps its level in the snapshot, and goes back under the others
+/// when it leaves fullscreen.
+fn fullscreen_wins_over_a_level_below_while_it_lasts() {
+    use flui_platform::WindowLevel;
+
+    let platform = platform();
+    let other = open(&platform, options());
+    let window = open(&platform, options());
+    settle();
+    let (hwnd, other_hwnd) = (hwnd_of(&window), hwnd_of(&other.window));
+    apply(
+        &window,
+        WindowCommand::SetLevel(WindowLevel::AlwaysOnBottom),
+    );
+    settle();
+    assert!(is_above(other_hwnd, hwnd), "kept below the other window");
+    // A restack to the top, as an activation or a click asks for, is put
+    // back under the others outside fullscreen and kept inside it.
+    let raised = |hwnd: HWND| {
+        use windows::Win32::UI::WindowsAndMessaging::{HWND_TOP, WINDOWPOS, WM_WINDOWPOSCHANGING};
+        let mut pending = WINDOWPOS {
+            hwnd,
+            hwndInsertAfter: HWND_TOP,
+            flags: SWP_NOMOVE | SWP_NOSIZE,
+            ..Default::default()
+        };
+        // SAFETY: `WM_WINDOWPOSCHANGING`'s `lParam` is the address of the
+        // pending `WINDOWPOS`, a live local the window reads and writes.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_WINDOWPOSCHANGING,
+                Some(WPARAM(0)),
+                Some(LPARAM((&raw mut pending) as isize)),
+            )
+        };
+        pending.hwndInsertAfter == HWND_TOP
+    };
+    assert!(
+        !raised(hwnd),
+        "a normal window kept below is put back under"
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Fullscreen));
+    settle();
+    assert!(
+        raised(hwnd),
+        "fullscreen keeps the window on top while it lasts"
+    );
+    assert_eq!(
+        window.state().level,
+        WindowLevel::AlwaysOnBottom,
+        "the level is kept"
+    );
+    apply(&window, WindowCommand::SetMode(WindowMode::Normal));
+    settle();
+    assert!(
+        is_above(other_hwnd, hwnd),
+        "under the others again once fullscreen ends"
+    );
+    assert_eq!(window.state().level, WindowLevel::AlwaysOnBottom);
+}
+
+/// Bring `hwnd` to the foreground as a user's click would, from a process the
+/// foreground rules do not favour: join the input of the thread in front for
+/// the call, then press and release Shift, which makes this process the one
+/// that received the last input (the foreground suite's way). Whether `hwnd`
+/// is in front.
+fn take_foreground(hwnd: HWND) -> bool {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+        VK_SHIFT,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
+    };
+
+    // SAFETY: plain calls on this thread's own window and the thread in
+    // front, whose input is joined only for the one call and let go after;
+    // the input array is a stack local of the size named.
+    unsafe {
+        if !SetForegroundWindow(hwnd).as_bool() {
+            let ours = GetCurrentThreadId();
+            let theirs = GetWindowThreadProcessId(GetForegroundWindow(), None);
+            let joined = theirs != 0
+                && theirs != ours
+                && windows::Win32::System::Threading::AttachThreadInput(ours, theirs, true)
+                    .as_bool();
+            let _ = SetForegroundWindow(hwnd);
+            if joined {
+                let _ = windows::Win32::System::Threading::AttachThreadInput(ours, theirs, false);
+            }
+        }
+        let key = |flags: KEYBD_EVENT_FLAGS| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_SHIFT,
+                    wScan: 0,
+                    dwFlags: flags,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        let tap = [key(KEYBD_EVENT_FLAGS(0)), key(KEYEVENTF_KEYUP)];
+        let _ = SendInput(&tap, std::mem::size_of::<INPUT>() as i32);
+        settle();
+        GetForegroundWindow() == hwnd
+    }
+}
+
 /// The grab the desktop's cursor clip holds for `hwnd`: its client area is a
 /// confined pointer, one pixel of it a locked one, anything else none.
 fn cursor_clip_of(hwnd: HWND) -> flui_platform::CursorGrab {
@@ -2374,21 +2502,44 @@ fn a_grab_is_held_while_focused_and_let_go_with_the_focus() {
     let window = open(&platform, options());
     settle();
     let hwnd = hwnd_of(&window);
+    // A grab is taken only by the window with the keyboard: the test takes
+    // the foreground as a click would, and cannot check anything without it.
+    assert!(
+        take_foreground(hwnd),
+        "the test window must be able to take the foreground to hold the pointer"
+    );
     // SAFETY: this thread's window.
     let _ = unsafe { SetFocus(Some(hwnd)) };
     settle();
     // SAFETY: a plain query of this thread's focus.
-    if unsafe { GetFocus() } != hwnd {
-        // The test process is not in the foreground: no window of it holds
-        // the keyboard, so no grab can be taken here.
-        return;
-    }
+    let focus = unsafe { GetFocus() };
+    assert_eq!(focus, hwnd, "the foreground window holds the keyboard");
     for grab in [CursorGrab::Confined, CursorGrab::Locked] {
         apply(&window, WindowCommand::SetCursorGrab(grab));
         settle();
         assert_eq!(window.state().cursor_grab, grab, "{grab:?} published");
         assert_eq!(cursor_clip_of(hwnd), grab, "{grab:?} held by the desktop");
     }
+    // A lock keeps its pixel of the client area when the window moves and
+    // resizes, never an old screen pixel over another window.
+    apply(
+        &window,
+        WindowCommand::SetPosition(Point::new(900.0, 700.0)),
+    );
+    settle();
+    assert_eq!(
+        cursor_clip_of(hwnd),
+        CursorGrab::Locked,
+        "the lock follows a move"
+    );
+    apply(&window, WindowCommand::SetSize(Size::new(200.0, 150.0)));
+    settle();
+    assert_eq!(
+        cursor_clip_of(hwnd),
+        CursorGrab::Locked,
+        "the lock stays inside a smaller client"
+    );
+    assert_eq!(window.state().cursor_grab, CursorGrab::Locked);
     apply(&window, WindowCommand::SetCursorGrab(CursorGrab::Confined));
     apply(&window, WindowCommand::SetSize(Size::new(500.0, 300.0)));
     settle();
@@ -3188,6 +3339,10 @@ fn native_window_commands() {
             a_frame_drag_keeps_the_steps_and_the_proportion,
         ),
         ("a_level_is_what_win32_holds", a_level_is_what_win32_holds),
+        (
+            "fullscreen_wins_over_a_level_below_while_it_lasts",
+            fullscreen_wins_over_a_level_below_while_it_lasts,
+        ),
         (
             "the_size_move_loop_states_the_users_placement_and_ends_it",
             the_size_move_loop_states_the_users_placement_and_ends_it,

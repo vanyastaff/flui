@@ -1530,16 +1530,25 @@ impl PlatformWindow for WebWindow {
             // the lock to such a page alone, and the window holds a grab only
             // while it has the focus. The browser answers later, with
             // `pointerlockchange`, or `pointerlockerror` for a refusal (no
-            // user gesture, a lock the user just left with Escape).
+            // user gesture, a lock the user just left with Escape), each of
+            // which publishes; a request this window does not send, or one the
+            // browser throws at, is published at once, so the snapshot says
+            // what is held on every path. The browser holds the locked pointer
+            // where it was, over the element, however the page lays the
+            // canvas out afterwards: there is no point to put back.
             WindowCommand::SetCursorGrab(CursorGrab::Locked) => {
                 let (focused, hidden) = {
                     let state = self.state.lock();
                     (state.focused, state.hidden)
                 };
-                if focused && !hidden && !holds_pointer_lock(&self.canvas) {
+                let asked = if focused && !hidden && !holds_pointer_lock(&self.canvas) {
                     request_pointer_lock(&self.canvas)
-                        .map_err(|error| ApplyError::failed(format!("{error:?}")))?;
-                }
+                        .map_err(|error| ApplyError::failed(format!("{error:?}")))
+                } else {
+                    Ok(())
+                };
+                self.publisher().publish();
+                return asked;
             }
             WindowCommand::SetCursorGrab(CursorGrab::None) => release_pointer_lock(&self.canvas),
             // A page has one level.

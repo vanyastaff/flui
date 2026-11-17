@@ -84,7 +84,11 @@ Every window system ends a grab when the user switches away (the browser ends a 
 Escape and blur and refuses to re-take it without a gesture), so re-taking it on focus (a) is not
 possible everywhere and would hold the pointer of a user who did not ask. `WindowState::successor`
 publishes `CursorGrab::None` for a window without the keyboard focus; every host lets the desktop's
-grab go on focus loss, hide and close. `SetCursorGrab(None)` has no slot, as the normal mode has
+grab go on focus loss, hide and close. A host commits what it holds and publishes on every exit of
+a grab or level command, a refusal included, so the snapshot says what is held, never what was
+asked. A lock keeps its point relative to the content: when the window moves, resizes or changes
+scale, the host holds the pointer at that point of the content (inside it, if the content shrank),
+never at an old screen point over another window. `SetCursorGrab(None)` has no slot, as the normal mode has
 none. A locked pointer is not shown, and its motion is a `RawMotion` built by the one registry
 function every host calls (`ContactRegistry::raw_motion`), carrying a checked `MotionDelta` and
 whether it is before or after the system's acceleration (`MotionAcceleration`).
@@ -102,7 +106,10 @@ WindowCommand::SetAspectRatio(Option<AspectRatio>)         // slot: sets_aspect_
 The user or another program changes a level (a window manager's "Always on Top", a Win32
 `WS_EX_TOPMOST` another process clears), so it is a snapshot fact. Steps and a proportion only
 the application sets and the window system holds during the user's resize; like the material
-they are requests, not facts. `AspectRatio` is two `NonZeroU32` terms in lowest terms. A host
+they are requests, not facts. `AspectRatio` is two `NonZeroU32` terms in lowest terms. Fullscreen
+wins over a level while it lasts: a window kept above or below the others is shown on top of its
+display while fullscreen, keeps its level in the snapshot, and is stacked by that level again
+when it leaves fullscreen, on every host that has both. A host
 without them natively builds them (`Emulated`: Win32 holds the `WM_SIZING` rectangle).
 
 ### 4. A live resize is the user's interaction

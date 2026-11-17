@@ -225,9 +225,21 @@ struct MacOSWindowState {
     cursor: cursor::NativeCursor,
 
     /// The grab the window holds: `Locked` while it detached the mouse
-    /// (`hold_pointer`), let go when it stops being key, is hidden,
+    /// (`lock_pointer`), let go when it stops being key, is hidden,
     /// miniaturized or closed.
     cursor_grab: CursorGrab,
+
+    /// Where a locked pointer rests, in the content view's coordinates: the
+    /// cursor stays at a screen point while the mouse is detached, so it is
+    /// put back here when the window moves, resizes or changes screen
+    /// (`keep_lock_point`). `None` while nothing is locked.
+    lock_at: Option<NSPoint>,
+
+    /// The AppKit level the window stands at outside full screen: what
+    /// `SetLevel` or `AppKitWindow::set_window_level` last set, published as
+    /// the snapshot's level. A full-screen window stands at the normal level
+    /// while it lasts, and takes this one again when it leaves (`apply_level`).
+    level: objc2_app_kit::NSWindowLevel,
 
     /// Whether the user is resizing the window by its frame: from
     /// `windowWillStartLiveResize:` to `windowDidEndLiveResize:`.
@@ -710,6 +722,8 @@ impl MacOSWindow {
                     layer_refresh: LayerRefresh::default(),
                     cursor: cursor::NativeCursor::ARROW,
                     cursor_grab: CursorGrab::None,
+                    lock_at: None,
+                    level: objc2_app_kit::NSNormalWindowLevel,
                     live_resize: false,
                     resize_increments: None,
                     aspect_ratio: None,
@@ -1588,8 +1602,16 @@ impl PlatformWindow for MacOSWindow {
             }
             // The material is no fact of the snapshot: nothing to publish.
             WindowCommand::SetMaterial(material) => return self.apply_material(material),
-            WindowCommand::SetCursorGrab(CursorGrab::Locked) => self.lock_pointer()?,
-            WindowCommand::SetCursorGrab(CursorGrab::None) => self.let_pointer_go(),
+            // The snapshot says what is held whatever the answer: a refused
+            // lock commits nothing and is published as no grab.
+            WindowCommand::SetCursorGrab(CursorGrab::Locked) => {
+                let locked = self.lock_pointer();
+                self.publish_state();
+                return locked;
+            }
+            WindowCommand::SetCursorGrab(CursorGrab::None) => {
+                self.let_pointer_go();
+            }
             WindowCommand::SetLevel(level) => self.set_level(level),
             // What the user's resize keeps is held by AppKit, and is no fact
             // of the snapshot: nothing to publish.
@@ -1778,12 +1800,93 @@ impl MacOSWindow {
         }
         let blank = cursor::blank_cursor().map_err(ApplyError::Platform)?;
         cursor::detach_mouse(true).map_err(ApplyError::Platform)?;
+        // The pointer rests where it is over the content, or at its centre
+        // when it is elsewhere, as the Win32 lock does.
+        // SAFETY: see the note above these bodies; `mouseLocation` is a class
+        // getter answering a point in screen coordinates.
+        let at = unsafe {
+            let screen: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            self.content_point_of_screen(screen)
+        };
         // Committed before anything else is told: the view's input reads
         // motion from the next mouse event on.
-        self.state.lock().cursor_grab = CursorGrab::Locked;
+        {
+            let mut state = self.state.lock();
+            state.cursor_grab = CursorGrab::Locked;
+            state.lock_at = at;
+        }
         content_view::set_pointer_locked(&self.view, true);
         cursor::set(&blank);
+        self.keep_lock_point();
         Ok(())
+    }
+
+    /// The content view's point under `screen`, a point in AppKit's screen
+    /// coordinates; the content's centre when `screen` is not over it.
+    ///
+    /// # Safety
+    ///
+    /// Owner lane only, like every AppKit message in this file.
+    unsafe fn content_point_of_screen(&self, screen: NSPoint) -> Option<NSPoint> {
+        let view = self.view_ptr();
+        // SAFETY: per the function contract; the window and its view are
+        // alive for the lifetime of `self`, and every message takes and
+        // answers plain geometry.
+        unsafe {
+            let in_window: NSPoint = msg_send![self.ns_window, convertPointFromScreen: screen];
+            let in_view: NSPoint = msg_send![view, convertPoint: in_window, fromView: NIL];
+            let bounds: NSRect = msg_send![view, bounds];
+            let inside = (bounds.origin.x..bounds.origin.x + bounds.size.width)
+                .contains(&in_view.x)
+                && (bounds.origin.y..bounds.origin.y + bounds.size.height).contains(&in_view.y);
+            let at = if inside {
+                in_view
+            } else {
+                NSPoint::new(
+                    bounds.origin.x + bounds.size.width / 2.0,
+                    bounds.origin.y + bounds.size.height / 2.0,
+                )
+            };
+            (at.x.is_finite() && at.y.is_finite()).then_some(at)
+        }
+    }
+
+    /// Put a locked pointer back on the point of the content it rests at:
+    /// the mouse is detached, so the cursor stays at a screen point while the
+    /// window moves, resizes or changes screen, and would rest outside the
+    /// content. The point is kept relative to the content view, held inside
+    /// it when the content shrank, and the snapshot stays `Locked`. A window
+    /// that holds no lock warps nothing.
+    fn keep_lock_point(&self) {
+        let Some(at) = self.state.lock().lock_at else {
+            return;
+        };
+        let view = self.view_ptr();
+        // SAFETY: see the note above these bodies; the conversions take and
+        // answer plain geometry.
+        let global = unsafe {
+            let bounds: NSRect = msg_send![view, bounds];
+            let held = NSPoint::new(
+                at.x.clamp(
+                    bounds.origin.x,
+                    bounds.origin.x + (bounds.size.width - 1.0).max(0.0),
+                ),
+                at.y.clamp(
+                    bounds.origin.y,
+                    bounds.origin.y + (bounds.size.height - 1.0).max(0.0),
+                ),
+            );
+            let in_window: NSPoint = msg_send![view, convertPoint: held, toView: NIL];
+            let screen: NSPoint = msg_send![self.ns_window, convertPointToScreen: in_window];
+            // Quartz measures from the primary screen's top-left corner.
+            primary_screen_height().map(|height| (screen.x, height - screen.y))
+        };
+        let Some((x, y)) = global.filter(|(x, y)| x.is_finite() && y.is_finite()) else {
+            return;
+        };
+        if let Err(error) = cursor::warp_cursor(x, y) {
+            tracing::debug!(%error, "a locked pointer could not be put back over the content");
+        }
     }
 
     /// Let the pointer go if the window holds it: attach the mouse to the
@@ -1792,11 +1895,13 @@ impl MacOSWindow {
     /// and when the window stops being key, is hidden, miniaturized or
     /// closed: the association is the process's, and no other window may be
     /// left with the mouse detached.
-    fn let_pointer_go(&self) {
+    /// Answers whether it let a lock go, which the caller publishes.
+    fn let_pointer_go(&self) -> bool {
         let shown = {
             let mut state = self.state.lock();
+            state.lock_at = None;
             if std::mem::replace(&mut state.cursor_grab, CursorGrab::None) != CursorGrab::Locked {
-                return;
+                return false;
             }
             state.cursor.clone()
         };
@@ -1808,11 +1913,13 @@ impl MacOSWindow {
             Ok(shown) => cursor::set(&shown),
             Err(error) => tracing::debug!(%error, "the window's cursor could not be shown again"),
         }
+        true
     }
 
     /// Keep the window above the other windows (the floating level), below
     /// them (one under the normal level, as AppKit has no level of its own
-    /// for it), or at the normal level.
+    /// for it), or at the normal level. A full-screen window takes it when it
+    /// leaves full screen (`apply_level`).
     fn set_level(&self, level: WindowLevel) {
         use objc2_app_kit::{NSFloatingWindowLevel, NSNormalWindowLevel};
         let value = match level {
@@ -1820,10 +1927,43 @@ impl MacOSWindow {
             WindowLevel::AlwaysOnTop => NSFloatingWindowLevel,
             WindowLevel::AlwaysOnBottom => NSNormalWindowLevel - 1,
         };
+        self.keep_level(value);
+    }
+
+    /// Stand the window at AppKit's `value` outside full screen: sent now
+    /// unless the window is full screen, then recorded (AppKit's `setLevel:`
+    /// refuses nothing), so the snapshot publishes what was set.
+    fn keep_level(&self, value: objc2_app_kit::NSWindowLevel) {
+        // SAFETY: see the note above these bodies.
+        if !unsafe { self.read_flags() }.fullscreen {
+            self.send_level(value);
+        }
+        self.state.lock().level = value;
+    }
+
+    /// Send AppKit the level the window stands at now: the normal level while
+    /// it is `fullscreen` (full screen wins over a level while it lasts, so a
+    /// window kept above or below the others still takes its own Space), its
+    /// own level otherwise. Run as the window enters full screen and as each
+    /// transition ends, so the level comes back when full screen is left.
+    fn apply_level(&self, fullscreen: bool) {
+        let value = if fullscreen {
+            objc2_app_kit::NSNormalWindowLevel
+        } else {
+            self.state.lock().level
+        };
+        self.send_level(value);
+    }
+
+    /// `setLevel:`, unless the window stands at `value` already.
+    fn send_level(&self, value: objc2_app_kit::NSWindowLevel) {
         // SAFETY: see the note above these bodies; `setLevel:` takes an
-        // `NSInteger`.
+        // `NSInteger`, and the getter answers one.
         unsafe {
-            let _: () = msg_send![self.ns_window, setLevel: value];
+            let current: objc2_app_kit::NSWindowLevel = msg_send![self.ns_window, level];
+            if current != value {
+                let _: () = msg_send![self.ns_window, setLevel: value];
+            }
         }
     }
 
@@ -1988,7 +2128,10 @@ impl MacOSWindow {
     /// The window as AppKit reports it now; rectangles that describe no
     /// window cost the sample its geometry and nothing else.
     fn sample_state(&self) -> Sample {
-        let (display, normal, scale, occlusion_visible, heading, asked_frame, grab, live_resize) = {
+        // With what the window holds: the grab it committed, and the level it
+        // stands at outside full screen, which a full-screen window keeps
+        // published while AppKit shows it at the normal level.
+        let (display, normal, scale, occlusion_visible, heading, asked_frame, held) = {
             let state = self.state.lock();
             (
                 state.display,
@@ -1997,10 +2140,10 @@ impl MacOSWindow {
                 state.occlusion_visible,
                 state.sequence.heading(std::time::Instant::now()),
                 state.frame,
-                state.cursor_grab,
-                state.live_resize,
+                (state.cursor_grab, state.level, state.live_resize),
             )
         };
+        let (grab, level, live_resize) = held;
         let hovered = self.delivery.hovered();
         // SAFETY: `ns_window` is alive for the lifetime of `self`, and a
         // window is used on its owner thread only. `title` returns an
@@ -2027,7 +2170,6 @@ impl MacOSWindow {
                 }
             };
             let mask: NSWindowStyleMask = msg_send![self.ns_window, styleMask];
-            let level: objc2_app_kit::NSWindowLevel = msg_send![self.ns_window, level];
             let mode = mode_of(flags.mode_flags());
             let position = primary_screen_height().and_then(|height| {
                 top_left_of_frame(crate::owner::apple::macos::bounds_of(frame), height)

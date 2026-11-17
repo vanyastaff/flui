@@ -586,7 +586,7 @@ impl WindowsWindow {
                 mode: std::cell::Cell::new(NativeMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 cursor: std::cell::RefCell::new(super::cursor::NativeCursor::ARROW),
-                cursor_grab: std::cell::Cell::new(flui_platform::CursorGrab::None),
+                pointer_hold: std::cell::Cell::new(None),
                 kept_below: std::cell::Cell::new(false),
                 resize_increments: std::cell::Cell::new(None),
                 aspect_ratio: std::cell::Cell::new(None),
@@ -1499,8 +1499,13 @@ impl PlatformWindow for WindowsWindow {
             }
             let next = super::cursor::NativeCursor::of(cursor)?;
             let replaced = ctx.cursor.replace(next);
-            let locked = ctx.cursor_grab.get() == flui_platform::CursorGrab::Locked;
-            let shown = if self.hovered() == Some(true) && !locked {
+            let locked = ctx.cursor_grab() == flui_platform::CursorGrab::Locked;
+            // The replaced cursor is destroyed below: show the new one first
+            // wherever the replaced one may still be the shown cursor (the
+            // pointer over the window, or outside it during a capture).
+            let shown = if locked {
+                Ok(())
+            } else if self.hovered() == Some(true) || replaced.is_current() {
                 ctx.cursor.borrow().show()
             } else {
                 Ok(())
@@ -1550,7 +1555,12 @@ impl PlatformWindow for WindowsWindow {
                 .unwrap_or(true);
                 self.restyle_frame(frame, resizable)?;
             }
-            WindowCommand::SetMode(mode) => self.set_mode(mode)?,
+            WindowCommand::SetMode(mode) => {
+                self.set_mode(mode)?;
+                // Fullscreen held a window kept below on top; leaving it puts
+                // the window back under the others.
+                self.keep_below_now()?;
+            }
             WindowCommand::Hide => self.hide_native(),
             WindowCommand::Show => self.show_window()?,
             WindowCommand::Activate => self.activate_window(),
@@ -1570,27 +1580,43 @@ impl PlatformWindow for WindowsWindow {
                 };
                 return super::backdrop::apply_material(self.hwnd, gate, material);
             }
+            // The snapshot says what the window holds on every exit, a
+            // refusal included: the grab let go before the refused one, the
+            // level Win32 kept.
             WindowCommand::SetCursorGrab(grab) => {
-                super::proc::with_window_context(self.hwnd, "set_cursor_grab", |ctx| {
-                    ctx.hold_pointer(self.hwnd, grab)
+                let held = super::proc::with_window_context(self.hwnd, "set_cursor_grab", |ctx| {
+                    let held = ctx.hold_pointer(self.hwnd, grab);
+                    ctx.publish_window_state(self.hwnd);
+                    held
                 })
-                .unwrap_or(Ok(()))
-                .map_err(ApplyError::Platform)?;
+                .ok_or(ApplyError::Closed)?;
+                return held.map_err(ApplyError::Platform);
             }
-            WindowCommand::SetLevel(level) => self.set_level(level)?,
+            WindowCommand::SetLevel(level) => {
+                let set = self.set_level(level);
+                super::proc::with_window_context(self.hwnd, "set_level", |ctx| {
+                    ctx.publish_window_state(self.hwnd);
+                })
+                .ok_or(ApplyError::Closed)?;
+                return set;
+            }
             // What the user's resize keeps is held in `WM_SIZING`, and is no
             // fact of the snapshot: nothing to publish.
             WindowCommand::SetResizeIncrements(step) => {
-                super::proc::with_window_context(self.hwnd, "set_resize_increments", |ctx| {
-                    ctx.resize_increments.set(step);
-                });
-                return Ok(());
+                return super::proc::with_window_context(
+                    self.hwnd,
+                    "set_resize_increments",
+                    |ctx| {
+                        ctx.resize_increments.set(step);
+                    },
+                )
+                .ok_or(ApplyError::Closed);
             }
             WindowCommand::SetAspectRatio(ratio) => {
-                super::proc::with_window_context(self.hwnd, "set_aspect_ratio", |ctx| {
+                return super::proc::with_window_context(self.hwnd, "set_aspect_ratio", |ctx| {
                     ctx.aspect_ratio.set(ratio);
-                });
-                return Ok(());
+                })
+                .ok_or(ApplyError::Closed);
             }
             other => return Err(crate::window::state::not_carried_out(&other)),
         }
@@ -1648,55 +1674,88 @@ impl PlatformWindow for WindowsWindow {
     }
 }
 
+/// Restack `hwnd` after `after` (a window or one of the `HWND_*` bands)
+/// without moving, sizing or activating it.
+///
+/// # Errors
+/// [`ApplyError::Platform`] when Win32 refuses the restack.
+fn restack(hwnd: HWND, after: HWND) -> Result<(), ApplyError> {
+    // SAFETY: a restack of this thread's live window; no pointer argument.
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            Some(after),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    }
+    .map_err(|error| ApplyError::failed(error.to_string()))
+}
+
 /// The bodies of the show, activate and close commands.
 impl WindowsWindow {
     /// Keep the window above the others (`WS_EX_TOPMOST`), below them (no
     /// style for it: `WM_WINDOWPOSCHANGING` keeps it at the bottom), or
-    /// neither, without activating it.
+    /// neither, without activating it. The window's level state changes only
+    /// as far as Win32 carried it out, so a refused restack leaves the
+    /// snapshot saying what Win32 holds. A fullscreen window keeps a level
+    /// below for when it leaves fullscreen (ADR-0354 §3).
     ///
     /// # Errors
     /// [`ApplyError::Platform`] when Win32 refuses the restack.
     fn set_level(&self, level: flui_platform::WindowLevel) -> Result<(), ApplyError> {
         use flui_platform::WindowLevel;
-        use windows::Win32::UI::WindowsAndMessaging::{HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST};
+        use windows::Win32::UI::WindowsAndMessaging::{HWND_NOTOPMOST, HWND_TOPMOST};
 
-        super::proc::with_window_context(self.hwnd, "set_level", |ctx| {
-            ctx.kept_below.set(level == WindowLevel::AlwaysOnBottom);
-        });
-        let after = match level {
-            WindowLevel::AlwaysOnTop => HWND_TOPMOST,
-            WindowLevel::Normal => HWND_NOTOPMOST,
-            WindowLevel::AlwaysOnBottom => {
-                // Out of the topmost band first, then under every window.
-                // SAFETY: a restack of this thread's live window; no pointer.
-                unsafe {
-                    SetWindowPos(
-                        self.hwnd,
-                        Some(HWND_NOTOPMOST),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                    )
-                }
-                .map_err(|error| ApplyError::failed(error.to_string()))?;
-                HWND_BOTTOM
-            }
+        let kept_below = |below: bool| {
+            super::proc::with_window_context(self.hwnd, "set_level", |ctx| {
+                ctx.kept_below.set(below);
+            });
         };
-        // SAFETY: as above.
-        unsafe {
-            SetWindowPos(
-                self.hwnd,
-                Some(after),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            )
+        match level {
+            // No longer below first, or `WM_WINDOWPOSCHANGING` would put the
+            // window back under the others.
+            WindowLevel::AlwaysOnTop | WindowLevel::Normal => {
+                kept_below(false);
+                restack(
+                    self.hwnd,
+                    if level == WindowLevel::AlwaysOnTop {
+                        HWND_TOPMOST
+                    } else {
+                        HWND_NOTOPMOST
+                    },
+                )
+            }
+            // Out of the topmost band, then under every window.
+            WindowLevel::AlwaysOnBottom => {
+                restack(self.hwnd, HWND_NOTOPMOST)?;
+                kept_below(true);
+                self.keep_below_now()
+            }
         }
-        .map_err(|error| ApplyError::failed(error.to_string()))
+    }
+
+    /// Put a window kept below the others under them now, unless fullscreen
+    /// holds it on top while it lasts: after the level is asked for, and
+    /// when the window leaves fullscreen.
+    ///
+    /// # Errors
+    /// [`ApplyError::Platform`] when Win32 refuses the restack.
+    fn keep_below_now(&self) -> Result<(), ApplyError> {
+        let below = super::proc::with_window_context(self.hwnd, "keep_below", |ctx| {
+            ctx.kept_below.get() && !ctx.mode.get().holds_fullscreen()
+        })
+        .unwrap_or(false);
+        if below {
+            restack(
+                self.hwnd,
+                windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM,
+            )?;
+        }
+        Ok(())
     }
 
     /// Show the window, unminimizing it and requesting foreground focus; the

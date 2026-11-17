@@ -9,8 +9,6 @@
 //! reads from the message and the window (`proc`).
 
 #![forbid(unsafe_code)]
-// Elsewhere than on Windows this module is compiled for its tests alone.
-#![cfg_attr(not(windows), allow(dead_code))]
 
 use flui_platform::AspectRatio;
 

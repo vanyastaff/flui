@@ -329,7 +329,7 @@ pub(crate) struct WindowContext {
     /// selected it.
     pub cursor: std::cell::RefCell<super::cursor::NativeCursor>,
     /// The grab the window holds; `None` whenever it lost the focus.
-    pub(crate) cursor_grab: Cell<flui_platform::CursorGrab>,
+    pub(crate) pointer_hold: Cell<Option<super::cursor::Held>>,
     /// Whether the window is kept below the others, a level Win32 has no
     /// style for: `WM_WINDOWPOSCHANGING` keeps it at the bottom.
     pub(crate) kept_below: Cell<bool>,
@@ -533,15 +533,25 @@ impl WindowContext {
             } else {
                 flui_platform::WindowInteraction::None
             },
-            cursor_grab: self.cursor_grab.get(),
+            cursor_grab: self.cursor_grab(),
             kept_below: self.kept_below.get(),
+        }
+    }
+
+    /// The grab the window holds.
+    pub(crate) fn cursor_grab(&self) -> flui_platform::CursorGrab {
+        match self.pointer_hold.get() {
+            None => flui_platform::CursorGrab::None,
+            Some(super::cursor::Held::Confined) => flui_platform::CursorGrab::Confined,
+            Some(super::cursor::Held::Locked(_)) => flui_platform::CursorGrab::Locked,
         }
     }
 
     /// Hold the pointer as `grab` asks: only while the window has the
     /// keyboard focus, which a grab ends with, as every window system ends
-    /// one. A grab the window cannot take is not held, and the snapshot says
-    /// so. Owner thread only.
+    /// one. A grab the window cannot take is not held. The window holds what
+    /// it holds when this returns, a refusal included, and its caller
+    /// publishes that. Owner thread only.
     ///
     /// # Errors
     /// [`PlatformFailure::Failed`](flui_platform::PlatformFailure::Failed)
@@ -562,8 +572,8 @@ impl WindowContext {
             return Ok(());
         }
         let locked = grab == CursorGrab::Locked;
-        super::cursor::hold(hwnd, locked)?;
-        self.cursor_grab.set(grab);
+        self.pointer_hold
+            .set(Some(super::cursor::hold(hwnd, locked)?));
         if locked {
             self.step(hwnd, WindowStep::PointerLocked(true));
             // A locked pointer is not shown; the next `WM_SETCURSOR` keeps it so.
@@ -579,16 +589,25 @@ impl WindowContext {
     /// is going, or holds another one now. The clip is the desktop's, so it
     /// must not outlive the window's focus.
     pub(crate) fn let_pointer_go(&self, hwnd: HWND) {
-        use flui_platform::CursorGrab;
-
-        let held = self.cursor_grab.replace(CursorGrab::None);
-        if held == CursorGrab::None {
+        let Some(held) = self.pointer_hold.take() else {
             return;
-        }
-        let locked = held == CursorGrab::Locked;
+        };
+        let locked = matches!(held, super::cursor::Held::Locked(_));
         super::cursor::let_go(locked);
         if locked {
             self.step(hwnd, WindowStep::PointerLocked(false));
+        }
+    }
+
+    /// The client area moved, resized or changed scale: clip the pointer the
+    /// window holds where the client area is now, a lock at its pixel of the
+    /// client area. A clip Win32 refuses lets the grab go, which the next
+    /// snapshot says.
+    pub(crate) fn hold_again(&self, hwnd: HWND) {
+        if let Some(held) = self.pointer_hold.get()
+            && super::cursor::clip(hwnd, held).is_err()
+        {
+            self.let_pointer_go(hwnd);
         }
     }
 
@@ -1263,9 +1282,8 @@ impl WindowProc {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
-                            if ctx.cursor_grab.get() == flui_platform::CursorGrab::Confined {
-                                super::cursor::confine_again(hwnd);
-                            }
+                            // The pointer the window holds follows its client area.
+                            ctx.hold_again(hwnd);
                             ctx.step(hwnd, WindowStep::Resized((width, height)));
                             ctx.update_window_state(|state| {
                                 state.bounds.size = Size::new(
@@ -1435,11 +1453,9 @@ impl WindowProc {
                                 y as f64 / ctx.scale.scale(),
                             );
                         });
-                        // A confined pointer follows the client area it is
-                        // confined to.
-                        if ctx.cursor_grab.get() == flui_platform::CursorGrab::Confined {
-                            super::cursor::confine_again(hwnd);
-                        }
+                        // The pointer the window holds follows its client
+                        // area, a lock at its pixel of it.
+                        ctx.hold_again(hwnd);
                         ctx.publish_window_state(hwnd);
                     }
 
@@ -1468,8 +1484,11 @@ impl WindowProc {
                         ctx.clamp_pending_size(hwnd, pending);
                         // A window kept below the others goes back under them
                         // whenever something would raise it (an activation, a
-                        // click): Win32 has no level for it.
+                        // click): Win32 has no level for it. Fullscreen wins
+                        // while it lasts (ADR-0354 §3), and the level applies
+                        // again when it ends.
                         if ctx.kept_below.get()
+                            && !ctx.mode.get().holds_fullscreen()
                             && !pending
                                 .flags
                                 .contains(windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER)
@@ -1638,7 +1657,7 @@ impl WindowProc {
                     {
                         // A locked pointer stays hidden whatever the hovered
                         // region asks for.
-                        let shown = if ctx.cursor_grab.get() == flui_platform::CursorGrab::Locked {
+                        let shown = if ctx.cursor_grab() == flui_platform::CursorGrab::Locked {
                             super::cursor::NativeCursor::Hidden.show()
                         } else {
                             ctx.cursor.borrow().show()

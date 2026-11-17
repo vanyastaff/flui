@@ -159,9 +159,12 @@ fn get_or_create_delegate_class() -> &'static Class {
                     // SAFETY: see the shared invariant above.
                     if let Some(window) = unsafe { get_window_from_delegate(this) } {
                         window.record_normal();
-                        // A window in the Dock holds no pointer.
-                        window.let_pointer_go();
                         window.handle_transition_started();
+                        // A window in the Dock holds no pointer, and its
+                        // snapshot says so.
+                        if window.let_pointer_go() {
+                            window.publish_state();
+                        }
                     }
                 },
             );
@@ -220,6 +223,9 @@ fn get_or_create_delegate_class() -> &'static Class {
                     // SAFETY: see the shared invariant above.
                     if let Some(window) = unsafe { get_window_from_delegate(this) } {
                         window.record_normal_entering_fullscreen();
+                        // Full screen wins over a level while it lasts; the
+                        // level comes back when the window leaves it.
+                        window.apply_level(true);
                         window.handle_transition_started();
                     }
                 },
@@ -554,6 +560,12 @@ impl MacOSWindow {
     /// dropped before that turn has no mode left to take.
     fn handle_transition_ended(self: &Rc<Self>) {
         self.state.lock().sequence.step_ended();
+        // A window that left full screen, or failed to enter it, stands at
+        // its own level again; one still full screen stays at the normal one.
+        // SAFETY: `ns_window` is alive for the lifetime of `self`, on the
+        // main thread AppKit sends its notifications on.
+        let fullscreen = unsafe { self.read_flags() }.fullscreen;
+        self.apply_level(fullscreen);
         self.publish_state();
         let window = crate::owner::slot::OwnerWeak::new(self);
         crate::owner::apple::macos::exec_async_on_owner(self.owner, move || {
@@ -606,6 +618,8 @@ impl MacOSWindow {
             if moved_controls {
                 self.place_system_controls();
             }
+            // A locked pointer rests over the content wherever it went.
+            self.keep_lock_point();
             self.publish_state();
 
             tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
@@ -626,6 +640,8 @@ impl MacOSWindow {
                 state.bounds.origin = new_origin;
             }
 
+            // A locked pointer rests over the content wherever it went.
+            self.keep_lock_point();
             self.publish_state();
 
             tracing::debug!("Window moved to ({}, {})", new_origin.x, new_origin.y);
@@ -814,6 +830,8 @@ impl MacOSWindow {
             // After the invalidation, so the snapshot read is the one with the
             // display the window moved to.
             self.sync_layer_refresh();
+            // On another screen a locked pointer is put back over the content.
+            self.keep_lock_point();
             self.publish_state();
         }
     }
